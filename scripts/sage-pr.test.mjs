@@ -202,6 +202,12 @@ function world() {
   return { at, env, git, p, sage, pr, logbook, mirror, route, mirrored, kills, bundle, commit, imports, review, calls, remote, task, forge, github };
 }
 
+/** The id of the latest run of a role, from runs.tsv. */
+function rowOfRole(w, role) {
+  const [head, ...rows] = readFileSync(join(w.logbook, "runs.tsv"), "utf8").trim().split("\n").map((l) => l.split("\t"));
+  return rows.findLast((r) => r[head.indexOf("role")] === role)[head.indexOf("id")];
+}
+
 /** A refusal: exit 1, and stderr starts with "sage-pr: refused:" and matches why. */
 function refused(r, why) {
   assert.equal(r.status, 1, `exit ${r.status}: ${r.stdout}${r.stderr}`);
@@ -428,6 +434,32 @@ test("T575: an adopted task lands on the branch that it adopted, and on no other
   const r = w.pr("merge", "T1");
   assert.equal(r.status, 0, r.stderr);
   assert.match(r.stdout, /^merged codex\/t95-x at /);
+});
+
+test("T584: merge refuses a candidate's branch, and merges the judge's branch at the same commit", () => {
+  const w = world();
+  w.sage("run", "add", "T1", "--role", "implementer", "--branch", "claude/t1", "--candidate", "1");
+  w.sage("run", "done", "R1", "--status", "done");
+  const head = w.commit("b.txt");
+  for (const kind of ["checks-pass", "review-clean", "qa-pass"]) w.sage("verdict", "T1", "--sha", head, "--kind", kind);
+  w.forge("T1", "state", "verified");
+  assert.equal(w.pr("create", "T1").status, 0);
+  refused(w.pr("merge", "T1"), /merge check: T1 would land claude\/t1, the branch of arena candidate 1 \(R1\), and a candidate's branch never merges\./);
+  assert.equal(w.calls().filter((c) => c.args[1] === "merge").length, 0, "no gh pr merge ran");
+  // A judge with no graft: its own branch at the candidate's commit, which keeps the candidate's reviews and review copy.
+  w.sage("run", "add", "T1", "--role", "arena-judge", "--branch", "claude/t1-judge");
+  w.sage("run", "done", rowOfRole(w, "arena-judge"), "--status", "done");
+  w.p("branch", "claude/t1-judge");
+  w.sage("task", "T1", "set", "branch=claude/t1-judge");
+  rmSync(w.bundle);
+  w.p("bundle", "create", "-q", w.bundle, "main..claude/t1-judge");
+  const made = w.pr("create", "T1");
+  assert.equal(made.status, 0, made.stderr);
+  assert.equal(w.task("T1").pr, "2", "the judge's pull request is a new one");
+  const r = w.pr("merge", "T1");
+  assert.equal(r.status, 0, r.stderr);
+  assert.match(r.stdout, /^merged claude\/t1-judge at /);
+  assert.equal(w.remote("refs/heads/claude/t1"), head, "the candidate's branch stays");
 });
 
 test("a reviewed head that is already on main refuses", () => {

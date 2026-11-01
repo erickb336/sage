@@ -213,6 +213,19 @@ const ofTask = (task, name) => BRANCH.test(name) && new RegExp(`^(?:[A-Za-z0-9_-
 const sameBranch = (a, b) => typeof a === "string" && typeof b === "string" && a.toLowerCase() === b.toLowerCase();
 /** A run of an arena's candidate, on its own branch. A review run may carry a candidate's number, but it writes nothing. */
 const isCandidate = (run) => !!run.candidate && !!run.branch && CANDIDATES.includes(run.role);
+/** Is a task's arena step open: its route has the block, and no judge of it ended done? A repair after that needs no number. */
+const arenaOpen = (task, runs) => list(task.route).includes("arena") && !runs.some((r) => r.task === task.id && r.role === "arena-judge" && r.status === "done");
+/**
+ * Why a task must not go on, or "": the branch that would land is an arena candidate's, or the task has candidates and
+ * names no branch. The rule reads the branch, not the SHA: a judge with no graft keeps the candidate's commit on its own
+ * branch. The move to verified and the merge check share it (T584), so a candidate's pull request never reaches the owner as ready.
+ */
+const candidateBar = (id, landing, candidates) => {
+  const entry = candidates.find((r) => (landing ? sameBranch(r.branch, landing) : r.task === id));
+  if (!entry) return "";
+  if (!landing) return `${id} has arena candidate runs and no branch=, so nothing says what would land, and a candidate's branch never merges. Run sage task ${id} set branch=<the judge's or the build's branch>, then try again.`;
+  return `${id} would land ${landing}, the branch of arena candidate ${entry.candidate} (${entry.id}), and a candidate's branch never merges. Open the pull request from the judge's or the build's branch, then run sage task ${id} set branch=<that branch>. With no such branch yet, start a judge: sage run add ${id} --role arena-judge --branch sage/${id.toLowerCase()}-judge.`;
+};
 const adoptionOf = task => {
   if (!task.adoption) return null;
   let a;
@@ -808,14 +821,16 @@ function runFrame(dir, task, role, branch, candidate, env) {
     if (leads.length >= LEADS) refuse(`the project has ${leads.length} running lead runs, the most it holds: ${leads.map((r) => `${r.id} on ${r.task}`).join(", ")}. Finish one of them first (sage run done <R> --status done, blocked, question or failed).`);
   }
   if (WRITERS.includes(role)) {
-    if (!branch) refuse(`a ${role} run needs --branch`);
-    const there = read(dir, "runs").filter(row => sameBranch(row.branch, branch));
+    if (!branch) refuse(`the ${role} run needs --branch`);
+    const runs = read(dir, "runs"), there = runs.filter(row => sameBranch(row.branch, branch));
+    if (CANDIDATES.includes(role) && !candidate && arenaOpen(task, runs)) refuse(`${task.id}'s arena step is open: its route has the arena block, and no arena-judge run of it ended done. So this ${role} run needs --candidate <k>, on its own branch. Nothing changed.`);
+    // An arena's branches are its evidence, so they stay apart after a run ends too (T584). This comes before the one-writer
+    // rule, so a refusal never says to wait for a run when the end of that run changes nothing.
+    const judge = role === "arena-judge", seat = !judge && candidate;
+    const clash = there.find(row => (seat && row.role === "arena-judge") || (isCandidate(row) && !(row.task === task.id && row.role === role && row.candidate === candidate)));
+    if (clash) refuse(`${clash.id} (${clash.role}${isCandidate(clash) ? `, candidate ${clash.candidate}` : ""}) is on ${branch}, and ${judge || !isCandidate(clash) ? "an arena's judge never shares a branch with a candidate" : seat ? "each candidate of an arena has its own branch" : "a candidate's branch stays as it is"}. Give this run a new branch. Nothing changed.`);
     const other = there.find(row => row.status === "running" && WRITERS.includes(row.role));
     if (other) refuse(`${other.id} (${other.role}) still writes ${branch}, and a branch has one writer. Finish that run first (sage run done ${other.id} --status done, blocked, question or failed), or give this run another branch.`);
-    // An arena's branches are its evidence, so they stay apart after a run ends too (T584).
-    const judge = role === "arena-judge";
-    const clash = judge ? there.find(isCandidate) : candidate && there.find(row => row.role === "arena-judge" || (isCandidate(row) && row.candidate !== candidate));
-    if (clash) refuse(`${clash.id} (${clash.role}${isCandidate(clash) ? `, candidate ${clash.candidate}` : ""}) is on ${branch}, and ${judge || !isCandidate(clash) ? "an arena's judge never shares a branch with a candidate" : "each candidate of an arena has its own branch"}. Give this run a new branch. Nothing changed.`);
   }
   return { id: nextId(dir, "R"), task: task.id, role, round: task.round, candidate, branch,
     status: "running", started: now(), model: modelFor(role, task.size, candidate, config(env), task.risk) };
@@ -1826,6 +1841,9 @@ function planTaskChanges(before, id, changes, at, facts, legacyRounds = false) {
       note += joined;
     } else refuse(`task set takes state=, branch=, pr=, title=, priority=, kind=, waits=, program= or approval=`);
   }
+  // After the loop, so that a branch= in the same command counts, in either order.
+  const bar = states.includes("state=verified") && candidateBar(task.id, task.branch, runs.filter(isCandidate));
+  if (bar) refuse(bar);
   return { task, tasks, runs, decisions: [...decisions, ...decided], note };
 }
 
@@ -2117,10 +2135,8 @@ function assessMerge(sha, env, { cycles, pr, readOnly, head, project }, logbook 
         // would pass, so a refusal still names an open finding first.
         const live = (runsOf.get(id) ?? []).filter((r) => r.status === "running" && CHECKERS.includes(r.role)).map((r) => `${r.id} (${r.role})`);
         const busy = verdict.ok && live.length > 0 && { ok: false, reason: `${id} has a review or QA run that still runs: ${live.join(", ")}. End it with its report's findings recorded, then check again.` };
-        // A candidate's branch never lands (T584). The rule reads the branch, not the SHA: a judge with no graft keeps the
-        // candidate's commit on its own branch. With no --head, the task's branch= says what would land.
-        const landing = head ?? task?.branch, entry = candidates.find((r) => sameBranch(r.branch, landing));
-        const arena = entry && { ok: false, reason: `${id} would land ${landing}, the branch of arena candidate ${entry.candidate} (${entry.id}), so the merge check refuses: a candidate never merges. Only the judge's branch merges: open the pull request from it, and set branch= of ${id} to it.` };
+        // With no --head, the task's branch= says what would land.
+        const bar = candidateBar(id, head ?? task?.branch, candidates), arena = bar && { ok: false, reason: bar };
         return { dir, id, ofPr: ofPr.has(id), owns: owns(id), back: !owns(id) && back(id), own: own.length, ...verdict, ...busy, ...arena, ...held };
       });
       // A task with an unmet wait does not merge. A wait on a task of the same PR is met when that task passes in this merge
