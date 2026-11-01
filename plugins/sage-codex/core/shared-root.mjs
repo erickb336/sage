@@ -171,7 +171,7 @@ export function createSharedRoot({ Refusal, refuse, listed, legacyRoots, makeLog
     if (read(["rev-parse", "--verify", "-q", "HEAD"]) !== undefined) refuse(`git cannot read the history of ${visible(checkout)}, which has a HEAD commit. sage made no row. Ask the user to repair the repository.`);
     if (read(["symbolic-ref", "-q", "HEAD"]) !== undefined) return "";
     const repository = gitEntry(checkout);
-    if (repository) refuse(`git cannot read the repository at ${visible(repository)}, so sage cannot find its first commit. sage made no row. Ask the user to repair the repository, or to remove its .git entry, then run the link again.`);
+    if (repository) refuse(`git cannot read the repository at ${visible(repository)}, so sage cannot find its first commit. sage made no row. Ask the user to repair the repository, then run the link again. Only a .git file that points to a removed worktree is safe to delete. Never delete a .git folder: it holds the history and any unpushed work.`);
     return "";
   }
 
@@ -216,7 +216,7 @@ export function createSharedRoot({ Refusal, refuse, listed, legacyRoots, makeLog
   function bind(shared, checkout, key, commits, { to }, env) {
     const rows = bindings(shared), row = rows.find((r) => r.root === key), folder = to ?? folderOf(checkout), dir = join(shared, folder);
     if (row && healthy(shared, rows, row)) {
-      if (to !== undefined && row.folder !== to) refuse(`${visible(checkout)} is already linked to ${row.folder}, and a checkout has one logbook. Nothing changed.`);
+      if (to !== undefined && row.folder !== to) refuse(`${visible(checkout)} is already linked to ${row.folder}, and a checkout has one logbook. Nothing changed. Keep using ${row.folder}. Only the move can take a checkout to another logbook, and no command does the move today: a later sage adds it.`);
       return `already linked: ${join(shared, row.folder)}. Nothing changed.`;
     }
     const old = folderOf(checkout), all = roots(env);
@@ -226,7 +226,7 @@ export function createSharedRoot({ Refusal, refuse, listed, legacyRoots, makeLog
     if (legacy) refuse(`this project has a logbook at ${legacy}. A link would hide its tasks, so sage made no row. Nothing changed. Keep using that logbook, and ask the user to wait for the move: only the move takes an existing project to the shared root.`);
     const others = rows.filter((r) => r !== row);
     if (to !== undefined) {
-      if (!lstatSync(dir, { throwIfNoEntry: false })?.isDirectory() || !present(join(dir, "tasks.tsv")) || !listed(shared)?.has(to)) refuse(`${dir} is not a logbook of the shared root. Nothing changed.`);
+      if (!lstatSync(dir, { throwIfNoEntry: false })?.isDirectory() || !present(join(dir, "tasks.tsv")) || !listed(shared)?.has(to)) refuse(`${dir} is not a logbook of the shared root. Nothing changed. List the logbook folders in ${join(shared, "projects.tsv")}, then run sage link --to <folder> with one of them, or run sage link --separate to start a new logbook.`);
       const owner = ownerOf(others, to);
       if (owner && disjoint(owner.commits, commits)) refuse(`${to} belongs to another project (${visible(owner.root)}): the two checkouts have no first commit in common. ${SHALLOW} Nothing changed. Use sage link --separate, or name the right folder.`);
     } else if (present(dir) || others.some((r) => r.folder === folder)) refuse(`the logbook folder ${dir} is already in use, so sage made no row. Nothing changed. Ask the user to link to it with sage link --to ${folder}, or to rename or remove it.`);
@@ -247,7 +247,7 @@ export function createSharedRoot({ Refusal, refuse, listed, legacyRoots, makeLog
    * system refuses (an unwritable shared root, a file at its path, a provider root that it may not read) makes no row.
    */
   function link(project, { to, separate }, env = process.env) {
-    if ((to === undefined) === (separate === undefined) || (separate !== undefined && separate !== true)) refuse("link takes exactly one of --to <folder> or --separate (the fields to and separate of the link tool); --separate takes no value.");
+    if ((to === undefined) === (separate === undefined) || (separate !== undefined && separate !== true)) refuse("link takes exactly one of --to <folder> or --separate; --separate takes no value. Nothing changed.");
     if (to !== undefined && !FOLDER.test(to)) refuse(`${JSON.stringify(visible(to))} is not a logbook folder: its name is <project>-<6 hex>, as sage link prints it. Nothing changed.`);
     const checkout = projectRoot(resolve(project)), key = realOf(checkout), shared = rootOf(env);
     if (!lstatSync(key, { throwIfNoEntry: false })?.isDirectory()) refuse(`${visible(key)} is not a folder, so it cannot be a row. Nothing changed.`);

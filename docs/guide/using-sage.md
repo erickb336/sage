@@ -289,9 +289,11 @@ A Codex chief calls the `link` tool of the same name. A retry changes nothing.
 | Situation | Result |
 | --- | --- |
 | The project has a logbook in the Claude or Codex root | The link refuses, because the link would hide its tasks. Keep using that logbook. A later command moves existing projects. |
-| The checkout is already linked to another logbook | The link refuses. A checkout has one logbook. |
+| The checkout is already linked to another logbook | The link refuses. A checkout has one logbook, so keep using that one. Only the move can take a checkout to another logbook, and no command does the move today: a later sage adds it. |
 | `--to` names a logbook whose oldest row with commits has no first commit in common with this checkout | The link refuses. A shallow clone needs its full history first: `git fetch --unshallow`. |
-| The Git call for the first commit takes more than 5 s, or Git cannot read the repository: for example a broken config, an unknown repository extension, a garbage HEAD or branch ref, or a linked worktree whose target is gone | The link refuses and makes no row. A later write of a row with no commits tries again. |
+| The Git call for the first commit takes more than 5 s | The link refuses and makes no row. Run the link again. A later write of a row with no commits tries again. |
+| Git cannot read the repository: for example a broken config, an unknown repository extension, or a garbage HEAD or branch ref | The link refuses and makes no row, and a later write of a row with no commits tries again. Repair the repository, then run the link again. Never delete a `.git` folder: it holds the history and any unpushed work. |
+| The checkout is a linked worktree whose target is gone: its `.git` is a file that points to a removed worktree | The link refuses and makes no row. Repair the worktree, or delete that `.git` file, then run the link again. |
 | The shared root cannot be written, or a provider root cannot be read | The link refuses, names the path and makes no row. |
 | A row names a missing logbook | Each read and write of that project refuses and offers the link. The link replaces that row. |
 | A logbook has rows with no first commit in common | The oldest row with commits owns the logbook, and it keeps working. Each read and write of a later row refuses in that checkout. The link replaces that row there. |

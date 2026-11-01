@@ -193,7 +193,7 @@ test("a retry of link is safe, and a checkout never holds two logbooks", (t) => 
   const other = w.repo("other");
   assert.match(claudeSage(["link", "--separate", "--project", other], w.env), /now uses the shared logbook/);
   const otherFolder = basename(tool.storeDir(other, w.env));
-  assert.throws(() => w.claude("link", "--to", otherFolder), /already linked to .* and a checkout has one logbook/);
+  assert.throws(() => w.claude("link", "--to", otherFolder), new RegExp(`already linked to ${folder}, and a checkout has one logbook\\. Nothing changed\\. Keep using ${folder}\\. Only the move can take a checkout to another logbook, and no command does the move today: a later sage adds it\\.$`));
   assert.equal(w.rows().find(([root]) => root === w.project)[1], folder);
   assert.ok(w.table("bindings.tsv").startsWith(before));
 });
@@ -207,16 +207,17 @@ test("link refuses a project with a legacy logbook in either root, and names the
 
 test("link takes exactly one form, and --to names a real logbook of the shared root", (t) => {
   const w = world(t);
-  const form = /link takes exactly one of --to <folder> or --separate \(the fields to and separate of the link tool\); --separate takes no value\.$/;
+  const form = /link takes exactly one of --to <folder> or --separate; --separate takes no value\. Nothing changed\.$/;
+  const notALogbook = /is not a logbook of the shared root\. Nothing changed\. List the logbook folders in .*\/shared\/projects\.tsv, then run sage link --to <folder> with one of them, or run sage link --separate to start a new logbook\.$/;
   assert.throws(() => w.claude("link"), form);
   assert.throws(() => w.claude("link", "--separate", "--to", "a-123456"), form);
   assert.throws(() => w.claude("link", "--separate=no"), form);
   assert.throws(() => w.claude("link", "--to", "../escape-123456"), /not a logbook folder/);
-  assert.throws(() => w.claude("link", "--to", "absent-123456"), /is not a logbook of the shared root/);
+  assert.throws(() => w.claude("link", "--to", "absent-123456"), notALogbook);
   assert.throws(() => claudeSage(["link", "--separate", "--project", join(w.base, "absent")], w.env), /is not a folder/);
   mkdirSync(join(w.shared, "planted-123456"), { recursive: true });
   writeFileSync(join(w.shared, "planted-123456", "tasks.tsv"), "");
-  assert.throws(() => w.claude("link", "--to", "planted-123456"), /is not a logbook of the shared root/, "a folder that link did not make is not listed");
+  assert.throws(() => w.claude("link", "--to", "planted-123456"), notALogbook, "a folder that link did not make is not listed");
   assert.equal(existsSync(join(w.shared, "bindings.tsv")), false);
 });
 
@@ -486,13 +487,33 @@ for (const [name, damage] of Object.entries(UNREADABLE)) {
     const before = w.table("bindings.tsv"), folder = w.name();
     const project = damage(w, w.repo("broken"));
     for (const how of [["--to", folder], ["--separate"]]) {
-      assert.throws(() => claudeSage(["link", ...how, "--project", project], w.env), /git cannot read the repository at .*made no row\. Ask the user to repair the repository, or to remove its \.git entry, then run the link again\./);
-      assert.throws(() => tool.sage(["link", ...how, "--project", project], w.env), /git cannot read the repository at .*made no row/);
+      const refusal = /git cannot read the repository at .*made no row\. Ask the user to repair the repository, then run the link again\. Only a \.git file that points to a removed worktree is safe to delete\. Never delete a \.git folder: it holds the history and any unpushed work\.$/;
+      assert.throws(() => claudeSage(["link", ...how, "--project", project], w.env), refusal);
+      assert.throws(() => tool.sage(["link", ...how, "--project", project], w.env), refusal);
     }
     assert.equal(w.table("bindings.tsv"), before);
     assert.deepEqual(readdirSync(w.shared).filter((entry) => /-[0-9a-f]{6}$/.test(entry)), [folder]);
   });
 }
+
+test("the refusal for a real repository that Git cannot read never tells the owner to remove its .git folder", (t) => {
+  const w = world(t);
+  const repo = w.repo("broken");
+  writeFileSync(join(repo, ".git", "config"), "[core\n");
+  assert.equal(statSync(join(repo, ".git")).isDirectory(), true);
+  let said;
+  try {
+    claudeSage(["link", "--separate", "--project", repo], w.env);
+  } catch (e) {
+    said = e.message;
+  }
+  const advice = said.slice(said.indexOf("sage made no row.")).split(/(?<=\.) /).filter((sentence) => /\b(?:delete|remove)\b/i.test(sentence));
+  assert.deepEqual(advice, [
+    "Only a .git file that points to a removed worktree is safe to delete.",
+    "Never delete a .git folder: it holds the history and any unpushed work.",
+  ]);
+  assert.equal(existsSync(join(repo, ".git", "HEAD")), true);
+});
 
 test("a row with no commits stays empty while Git cannot read the repository, its writes go on, and a repair fills it", (t) => {
   const w = world(t, { commit: false });
