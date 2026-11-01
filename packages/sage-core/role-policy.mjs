@@ -1,4 +1,5 @@
-const TEAM = new Set(["implementer", "code-reviewer", "security-reviewer", "ux-reviewer", "qa"]);
+/** The roles that a lead may start. */
+export const TEAM = new Set(["implementer", "code-reviewer", "security-reviewer", "ux-reviewer", "qa"]);
 const ROLES = new Set(["chief-of-staff", "lead", "pe", "designer", "arena-judge", ...TEAM]);
 
 /** Role identity comes from the trusted adapter, not an agent's name or message. */
