@@ -37,7 +37,7 @@ Use `role.mjs investigate` for the investigator and `role.mjs evidence-review` f
 
 Both roles use the existing assigned-project read approval. In Sage mode, the gate explicitly refuses their file changes. The existing configuration, logbook-write, child-spawn, messaging and foreign-project read refusals still apply. Keep native sandbox restrictions; the hook does not inspect every program's effects.
 
-Give each child its real task and run in the task name. The trusted start and stop hooks can retain its exact report only for the matching direct child, task, run and role. A no-build task can retain a report without a SHA. A missing or conflicting identity does not become a retained report. Incomplete reports continue once; a second stop preserves their limitations.
+Give each child its real task and run in the task name. The trusted start and stop hooks can retain its exact report only for the matching direct child, task, run and role. A no-build task can retain a report without a SHA. The hook also retains the exact report of an `implementer` and of an `arena-judge` run; no verdict depends on it. An `implementer`, `arena-judge` or `designer` run gets the head of its own branch at its stop, also when it committed during the run; a missing branch gives no SHA. Any other run reads the branch of its task, and that branch must not move during the run, or the run gets no SHA. A missing or conflicting identity does not become a retained report. Incomplete reports continue once; a second stop preserves their limitations.
 
 This support concerns the public skill-led helper. Protected native role support and installed execution remain unverified. A protected API refusal is not permission to switch paths.
 

@@ -56,7 +56,7 @@
 <path d="M892 506 L 936 506" fill="none" stroke="#FF6A0F" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" marker-end="url(#arena-d-hot)"/>
 <text x="946" y="500" font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', Inter, Helvetica, Arial, sans-serif" font-size="24" font-weight="400" fill="#CDB6A0" text-anchor="start"><tspan x="946" dy="0">reviews</tspan><tspan x="946" dy="30">and QA</tspan></text>
 <rect x="36" y="616" width="1028" height="101.19999999999999" rx="8" fill="#17100C" stroke="#8A705C" stroke-width="1.5"/>
-<text x="550" y="656" font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', Inter, Helvetica, Arial, sans-serif" font-size="24" font-weight="400" fill="#FFF3E6" text-anchor="middle"><tspan x="550" dy="0">All converge → keep the shared shape.</tspan><tspan x="550" dy="33.599999999999994">Wildly different → re-frame the brief once, then ask you.</tspan></text>
+<text x="550" y="656" font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', Inter, Helvetica, Arial, sans-serif" font-size="24" font-weight="400" fill="#FFF3E6" text-anchor="middle"><tspan x="550" dy="0">All converge → keep the shared shape.</tspan><tspan x="550" dy="33.599999999999994">Diverge on the product → the judge gives you both choices.</tspan></text>
 </g>
 <rect x="0.75" y="0.75" width="1098.5" height="738.5" rx="23.25" fill="none" stroke="#3A2414" stroke-width="1.5"/>
 </svg>

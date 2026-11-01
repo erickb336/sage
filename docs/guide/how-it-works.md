@@ -38,7 +38,7 @@ The state lives in the logbook: plain files in `~/.claude/sage/<project>-<hash>/
 | **QA** | Runs the checks and the real app, and tries to break it |
 | **Arena judge** | Scores an arena's candidates and grafts the best parts into one |
 
-Three agents change files: the designer and the implementer, each in its own git worktree, and the arena judge, which writes the final version. The others change no files.
+Three agents change files, each in its own git worktree: the designer, the implementer and the arena judge, which writes the final version on its own new branch. The others change no files.
 
 Only one agent writes on a branch at a time. Reviewers start fresh, so they don't share the builder's blind spots.
 
@@ -83,6 +83,15 @@ When a design has no clear answer, the chief can run an **arena**. You can also 
 </picture>
 </a>
 
-N candidates (3 by default) get the same brief, each with a different angle. A judge scores them against a rubric that they do not see, and grafts the best parts into one final version.
+N candidates (3 by default) get the same brief, each with a different angle and its own branch. Each commits its artifact and opens no pull request.
 
-That version goes through reviews and QA like any build. The candidates never merge.
+A judge scores them against a rubric that they do not see. It makes a new branch from the best candidate, and grafts the best parts of the others into one final version. If the candidates disagree on the product, the judge gives you both choices with a recommendation through the chief, and goes on with your answer.
+
+What happens next depends on the arena:
+
+- **A build:** the judge opens a pull request from its branch, and that version goes through reviews and QA like any build. A build arena runs only on a tiny or small task, or after a design that you approved.
+- **A design:** the judge saves the final design as a page, the PE checks it, you approve that page, and the build starts on a new branch from main. An arena on a large task is always a design arena: it stands for the task's design step.
+
+Until a judge ends done, the task cannot reach you as ready: the state tool, the merge check and `sage-pr create` refuse it. A candidate's branch never merges, for the same reason.
+
+Candidate branches and pages stay until you delete them, and so does the judge's branch of a design. A merge deletes the branch that it lands, and its commits are in main. Worktrees go at the end of the task.

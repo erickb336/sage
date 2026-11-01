@@ -12,7 +12,14 @@ You design the experience for the chief of staff before anyone builds it. The us
 
 ## In an arena
 
-Other candidates get the same brief, each with a different angle, and a judge scores all of them. Follow your angle. Your RESULT ends with a short rationale: the alternatives you considered, and why you rejected them.
+Other candidates get the same brief, each with a different angle, and a judge scores all of them. Follow your angle.
+
+- Use the branch and the worktree that your brief names.
+- Commit your artifact on your branch, because an artifact that is not committed does not count.
+- Save a copy of your main page in the pages folder of your brief, under the page name in your brief.
+- Open no pull request: a candidate's branch never merges.
+
+Your RESULT ends with a short rationale: the alternatives you considered, and why you rejected them.
 
 ## Your report
 

@@ -668,7 +668,7 @@ function arena(t, id) {
     flow(id, `M892 ${jy} L 936 ${jy}`, t.edge, "hot", { sw: 2 }),
     text(946, jy - 6, ["reviews", "and QA"], { size, fill: t.muted, lh: 1.25 }),
     rect(36, 616, W - 72, 2 * size * 1.4 + 34, { rx: 8, fill: t.tile, stroke: t.line, sw: 1.5 }),
-    text(W / 2, 656, ["All converge → keep the shared shape.", "Wildly different → re-frame the brief once, then ask you."], { size, fill: t.ink, anchor: "middle", lh: 1.4 }),
+    text(W / 2, 656, ["All converge → keep the shared shape.", "Diverge on the product → the judge gives you both choices."], { size, fill: t.ink, anchor: "middle", lh: 1.4 }),
   ].join("\n");
   return panel(t, id, W, H, body, "The arena: one brief and a hidden rubric go to three candidates on a mix of Claude models, each with a different angle. The arena judge scores them, picks a base and grafts the best parts into one final version, which then goes through reviews and QA.");
 }
