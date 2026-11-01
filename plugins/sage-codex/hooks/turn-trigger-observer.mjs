@@ -4,7 +4,7 @@
 import * as fs from 'node:fs';
 import { isAbsolute, normalize, parse, relative, resolve, sep } from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { isMainThread, parentPort, Worker, workerData } from 'node:worker_threads';
+import { spawn } from 'node:child_process';
 import { performance } from 'node:perf_hooks';
 
 const FILE_LIMIT = 256 * 1024;
@@ -216,7 +216,7 @@ function* splitLines(bytes) {
   }
 }
 
-/** Testable synchronous boundary. The command runs this inside a timed thread. */
+/** Testable synchronous boundary. The command runs this in a child process that it can kill. */
 export function inspectFixture(callback, options, io = fs, now = () => performance.now()) {
   const start = now();
   const checkTime = () => { if (now() - start >= DEADLINE_MS) refuse('time_bound'); };
@@ -227,13 +227,34 @@ export function inspectFixture(callback, options, io = fs, now = () => performan
   } catch (error) { return unavailable(error instanceof Refusal ? error.reason : 'file_unavailable'); }
 }
 
+// The reader runs in a child process. A blocking file call cannot be interrupted
+// inside a process, but the parent can kill the child at the deadline and leave.
+const READ_CHILD = '--read-child';
+const CHILD_OUTPUT_LIMIT = 4096;
+
+function readChild() {
+  setTimeout(() => process.exit(1), DEADLINE_MS);
+  const chunks = [];
+  process.stdin.on('data', chunk => chunks.push(chunk));
+  process.stdin.on('end', () => {
+    let result;
+    try {
+      const { callback, options } = JSON.parse(Buffer.concat(chunks));
+      result = inspectFixture(callback, options);
+    } catch { result = unavailable('file_unavailable'); }
+    process.stdout.write(JSON.stringify(result) + '\n', () => process.exit(0));
+  });
+}
+
 function command() {
   const started = performance.now();
   let finished = false;
+  let child;
   const finish = result => {
     if (finished) return;
     if (performance.now() - started >= DEADLINE_MS) result = unavailable('time_bound');
     finished = true;
+    try { child?.kill('SIGKILL'); } catch { /* the output below still ends the process */ }
     process.stdout.write(JSON.stringify(result) + '\n', () => process.exit(0));
   };
   const timer = setTimeout(() => finish(unavailable('time_bound')), DEADLINE_MS);
@@ -252,12 +273,32 @@ function command() {
     let callback;
     try { callback = json(Buffer.concat(chunks), 'invalid_callback'); }
     catch { return finish(unavailable('invalid_callback')); }
-    const thread = new Worker(new URL(import.meta.url), { workerData: { callback, options: { fixtureRoot: args[1], project: args[3] } } });
-    thread.once('message', result => { clearTimeout(timer); finish(result); });
-    thread.once('error', () => finish(unavailable('file_unavailable')));
-    thread.once('exit', () => { if (!finished) finish(unavailable('file_unavailable')); });
+    try { child = spawn(process.execPath, [fileURLToPath(import.meta.url), READ_CHILD], { stdio: ['pipe', 'pipe', 'ignore'] }); }
+    catch { return finish(unavailable('file_unavailable')); }
+    const out = [];
+    let size = 0;
+    child.stdout.on('data', chunk => { size += chunk.length; if (size <= CHILD_OUTPUT_LIMIT) out.push(chunk); });
+    child.stdin.on('error', () => {});
+    child.once('error', () => finish(unavailable('file_unavailable')));
+    child.once('close', code => {
+      let result = unavailable('file_unavailable');
+      try {
+        const parsed = JSON.parse(Buffer.concat(out));
+        if (code === 0 && size <= CHILD_OUTPUT_LIMIT && object(parsed)) result = parsed;
+      } catch { /* the fixed answer stays */ }
+      clearTimeout(timer);
+      finish(result);
+    });
+    child.stdin.end(JSON.stringify({ callback, options: { fixtureRoot: args[1], project: args[3] } }));
   });
 }
 
-if (!isMainThread) parentPort.postMessage(inspectFixture(workerData.callback, workerData.options));
-else if (process.argv[1] && resolve(process.argv[1]) === fileURLToPath(import.meta.url)) command();
+function isMain() {
+  try { return Boolean(process.argv[1]) && fs.realpathSync(process.argv[1]) === fileURLToPath(import.meta.url); }
+  catch { return false; }
+}
+
+if (isMain()) {
+  if (process.argv.length === 3 && process.argv[2] === READ_CHILD) readChild();
+  else command();
+}
