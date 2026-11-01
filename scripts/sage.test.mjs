@@ -376,6 +376,95 @@ test("T584: a candidate run opens the arena step of a route with no arena block,
   assert.equal(check.status, 0, check.stderr);
 });
 
+test("T591: an abandoned task has no open arena step, so the abandon exit passes on the same commit, and the refusals before it still name that exit", () => {
+  const s = store();
+  s.ok("task", "add", "--priority", "P2", "--title", "t", "--size", "small", "--add", "arena", "--why", "no clear answer");
+  s.ok("task", "T1", "set", "branch=sage/t1-build");
+  for (const change of ["state=briefed", "state=building", "state=reviewing pr=41"]) s.ok("task", "T1", "set", ...change.split(" "));
+  for (const k of ["checks-pass", "review-clean", "qa-pass"]) s.ok("verdict", "T1", "--sha", SHA, "--kind", k, "--cycle", "1", "--pr", "41");
+  const check = (...head) => s.run("merge-check", "--sha", SHA, "--pr", "41", ...head);
+  assert.equal(check("--head", "sage/t1-build").stderr.trim(), openStep, "the first refusal names the abandon exit");
+  s.ok("task", "T1", "set", "state=abandoned");
+  for (const head of [["--head", "sage/t1-build"], []]) {
+    const passed = check(...head);
+    assert.equal(passed.status, 0, passed.stderr);
+  }
+});
+
+test("T591: a candidate's branch never merges, also for an abandoned task, and a task with candidates and no branch= still refuses", () => {
+  const s = store();
+  s.ok("task", "add", "--priority", "P2", "--title", "t", "--size", "small");
+  s.ok("run", "add", "T1", "--role", "implementer", "--branch", "sage/t1-a", "--candidate", "1");
+  s.ok("run", "done", "R1", "--status", "done");
+  s.ok("task", "T1", "set", "pr=41");
+  for (const k of ["checks-pass", "review-clean", "qa-pass"]) s.ok("verdict", "T1", "--sha", SHA, "--kind", k, "--cycle", "1", "--pr", "41");
+  s.ok("task", "T1", "set", "state=abandoned");
+  const check = (...head) => s.run("merge-check", "--sha", SHA, "--pr", "41", ...head);
+  assert.equal(check("--head", "sage/t1-a").stderr.trim(), wouldLand("sage/t1-a", 1, "R1"));
+  assert.equal(check().stderr.trim(), noLanding);
+  s.ok("task", "T1", "set", "branch=sage/t1-a");
+  assert.equal(check().stderr.trim(), wouldLand("sage/t1-a", 1, "R1"));
+});
+
+test("T591: an investigation with an arena does not conclude while its arena step is open, and concludes after a judge ended done", () => {
+  const s = store();
+  s.ok("task", "add", "--priority", "P2", "--title", "t", "--size", "investigate", "--add", "arena", "--why", "no clear answer");
+  assert.equal(rows(s.dir, "tasks")[0].route, "arena,investigate,evidence-review");
+  toReviewing(s, "T1");
+  s.ok("task", "T1", "set", "state=verifying");
+  s.ok("verdict", "T1", "--kind", "evidence-clean");
+  assert.equal(s.no("task", "T1", "set", "state=concluded"), openStep, "no judge");
+  judged(s, "sage/t1-judge", "failed");
+  assert.equal(s.no("task", "T1", "set", "state=concluded"), openStep, "a judge that failed gives no result");
+  assert.equal(rows(s.dir, "tasks")[0].state, "verifying");
+  judged(s, "sage/t1-judge-2", "done");
+  assert.match(s.ok("task", "T1", "set", "state=concluded"), /^T1 concluded/);
+  assert.equal(rows(s.dir, "tasks")[0].state, "concluded");
+});
+
+test("T591: a candidate run opens the arena step of an investigation with no arena block, and its abandon exit ends the task", () => {
+  const s = store();
+  s.ok("task", "add", "--priority", "P2", "--title", "t", "--size", "investigate");
+  s.ok("run", "add", "T1", "--role", "designer", "--branch", "sage/t1-c1", "--candidate", "1");
+  toReviewing(s, "T1");
+  s.ok("task", "T1", "set", "state=verifying");
+  s.ok("verdict", "T1", "--kind", "evidence-clean");
+  assert.equal(s.no("task", "T1", "set", "state=concluded"), openStep);
+  assert.match(s.ok("task", "T1", "set", "state=abandoned"), /^T1 abandoned/);
+});
+
+test("T591: a tiny arena's route has the code review and no QA, so its one clean cycle wants review-clean and only that", () => {
+  const s = store();
+  assert.equal(s.ok("task", "add", "--priority", "P2", "--title", "t", "--size", "tiny", "--add", "arena", "--why", "no clear answer"), "T1 framed · tiny · route arena,build,code-review · P2");
+  s.ok("run", "add", "T1", "--role", "implementer", "--branch", "sage/t1-c1", "--candidate", "1");
+  s.ok("run", "done", "R1", "--status", "done");
+  judged(s, "sage/t1-judge", "done");
+  s.ok("task", "T1", "set", "branch=sage/t1-judge", "pr=41");
+  s.ok("verdict", "T1", "--sha", SHA, "--kind", "checks-pass", "--pr", "41");
+  const check = () => s.run("merge-check", "--sha", SHA, "--pr", "41", "--head", "sage/t1-judge");
+  assert.equal(check().stderr.trim(), "sage: T1: 0 of 1 clean cycles on this SHA; never recorded: review-clean. Run the next cycle of its reviews on this SHA and record each verdict.", "a graft that nobody read does not merge on its checks");
+  s.ok("verdict", "T1", "--sha", SHA, "--kind", "review-clean", "--cycle", "1", "--pr", "41");
+  const passed = check();
+  assert.equal(passed.status, 0, passed.stderr);
+  assert.match(passed.stdout, /^T1 may merge: 1 clean cycle on this SHA/, "no QA verdict, and no second cycle");
+
+  const risky = store();
+  risky.ok("task", "add", "--priority", "P2", "--title", "t", "--size", "tiny", "--risk", "data", "--add", "arena", "--why", "no clear answer");
+  assert.equal(rows(risky.dir, "tasks")[0].route, "arena,build,code-review,security-review");
+  risky.ok("task", "add", "--priority", "P2", "--title", "no arena", "--size", "tiny");
+  assert.equal(rows(risky.dir, "tasks")[1].route, "build", "a tiny task with no arena stays the build alone");
+});
+
+test("T591: a build route with no code review takes no arena candidate, so no tiny arena opens without the review; a review run and a judge are no candidates", () => {
+  const s = store();
+  s.ok("task", "add", "--priority", "P2", "--title", "t", "--size", "tiny");
+  const refusal = "sage: T1's route has no code review, so it takes no arena candidate: a judge's graft is new code that nobody read. Abandon T1: sage task T1 set state=abandoned. Then frame it again on a new branch with sage task add --add arena, which adds the code review. Nothing changed.";
+  for (const role of ["implementer", "designer"]) assert.equal(s.no("run", "add", "T1", "--role", role, "--branch", "sage/t1-c1", "--candidate", "1"), refusal, role);
+  assert.deepEqual(rows(s.dir, "runs"), [], "nothing changed");
+  assert.match(s.ok("run", "add", "T1", "--role", "code-reviewer", "--candidate", "1"), / code-reviewer on T1 /);
+  assert.match(s.ok("run", "add", "T1", "--role", "implementer", "--branch", "sage/t1"), / implementer on T1 /, "the build of a tiny task stays as it was");
+});
+
 test("T584: --candidate takes a whole number from 1, after the cleaning of every cell", () => {
   const s = store();
   s.ok("task", "add", "--priority", "P2", "--title", "t", "--size", "small", "--add", "arena", "--why", "no clear answer");

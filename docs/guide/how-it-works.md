@@ -70,7 +70,9 @@ A task is **verified** after 1 clean cycle. With autopilot on, it **merges** aft
 
 Every task has a priority, from P0 (your current focus and what blocks it) to P3 (parked but kept). The chief sets it when it adds the task.
 
-A tiny task's route is only the build: it has no review and no QA, so it has no cycle. It is clean when its checks pass on its commit. A risk flag adds the security review, and then a tiny task needs 2 clean cycles too.
+A tiny task's route is only the build: it has no review and no QA, so it has no cycle. It is clean when its checks pass on its commit.
+
+A risk flag adds the security review, and then a tiny task needs 2 clean cycles too. An arena adds the code review, and then a tiny task needs 1 clean cycle of that review, with no QA.
 
 ## The arena
 
@@ -87,11 +89,13 @@ N candidates (3 by default) get the same brief, each with a different angle and 
 
 A judge scores them against a rubric that they do not see. It makes a new branch from the best candidate, and grafts the best parts of the others into one final version. If the candidates disagree on the product, the judge gives you both choices with a recommendation through the chief, and goes on with your answer.
 
+When the judge ends done, the chief shows you its scores, its base, its grafts, what it rejected and any candidate that produced nothing. You see this before a lead starts on a build, and before the question that asks you to approve a design.
+
 What happens next depends on the arena:
 
-- **A build:** the judge opens a pull request from its branch, and that version goes through reviews and QA like any build. A build arena runs only on a tiny or small task, or after a design that you approved.
+- **A build:** the judge opens a pull request from its branch, and that version goes through the reviews and QA of its route, like any build. A build arena runs only on a tiny or small task, or after a design that you approved. A tiny arena gets the code review, because a graft is new code that nobody read.
 - **A design:** the judge saves the final design as a page, the PE checks it, you approve that page, and the build starts on a new branch from main. An arena on a large task is always a design arena: it stands for the task's design step.
 
-Until a judge ends done, the task cannot reach you as ready: the state tool, the merge check and `sage-pr create` refuse it. A candidate's branch never merges, for the same reason.
+Until a judge ends done, the task cannot reach you as ready, and an investigation cannot conclude: the state tool, the merge check and `sage-pr create` refuse it. An abandoned task has no open arena step. A candidate's branch never merges, also for an abandoned task.
 
 Candidate branches and pages stay until you delete them, and so does the judge's branch of a design. A merge deletes the branch that it lands, and its commits are in main. Worktrees go at the end of the task.

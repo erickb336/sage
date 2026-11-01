@@ -528,6 +528,17 @@ test("T584: create and merge refuse an open arena step and name its exits, and g
   assert.equal(made.status, 0, made.stderr);
 });
 
+test("T591: create takes the abandon exit of an arena: an abandoned task has no open step, so no second refusal names that same exit", () => {
+  const w = world();
+  w.forge("T1", "route", "arena,build,code-review,qa");
+  const head = w.commit("b.txt");
+  for (const kind of ["checks-pass", "review-clean", "qa-pass"]) w.sage("verdict", "T1", "--sha", head, "--kind", kind);
+  refused(w.pr("create", "T1"), /T1's arena step is open/);
+  w.sage("task", "T1", "set", "state=abandoned");
+  const made = w.pr("create", "T1");
+  assert.equal(made.status, 0, made.stderr);
+});
+
 test("T584: create and merge refuse a candidate's branch, and merge the judge's branch at the same commit", () => {
   const w = world();
   const head = w.commit("b.txt");
