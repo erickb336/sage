@@ -39,7 +39,11 @@ const ALLOW = { hookSpecificOutput: { hookEventName: "PermissionRequest", decisi
 const BAD_NAME = (name) => `sage: "${name}" starts with sage_ but is not a sage task name (sage_<role>_t<n>_r<k>), so this agent counts as a read-only role: it changes no files. Report instead`;
 const RO = (role) => `sage: in sage mode, the ${role} agent changes no files. Report the finding instead`;
 const LOGBOOK = "sage: role agents report; only the chief records the logbook. Put this in your report";
-const SPAWN = "sage: role agents start no agents; only the chief does. Put what you need in your report";
+const LEAD_EDIT = "sage: a lead changes no files. Start an implementer of your task to make this change";
+const SPAWN = "sage: role agents start no agents; only the chief and a lead do. Put what you need in your report";
+const LEAD_SPAWN = (task, name) => `sage: a lead starts only the team of its own task: sage_<role>_t${task}_r<k>, where the role is implementer, code_reviewer, security_reviewer, ux_reviewer or qa. ${name} is not one of these. Put what else you need in your report`;
+const BAD_CHAIN = (name) => `sage: "${name}" is above this agent in its agent path, and only a lead (sage_lead_t<n>) has sage agents under it, so this agent changes no files. Report instead`;
+const SEND = "sage: agents send no input to another thread, because a message to the chief's thread would count as the user's. Put it in your report";
 const CODEX_RUN = "sage: no agent runs codex from the shell, except codex --version and codex --help, because a new session runs outside these hooks, and Codex records the prompt of a resumed, forked or queued turn as the user's typed message, also a mode phrase. Ask the user";
 const UNREAD_CODEX = "sage: the hook could not read this shell command, and it names codex, so it refuses it. Write the command in a plainer form";
 /** A call of a tool of the plugin's sage MCP server, as Codex gives it to PreToolUse: mcp__sage__<tool>, with the call's arguments. */
@@ -458,7 +462,7 @@ test("in sage mode a child whose task name names a read-only role changes no fil
   const got = ["sage_code_reviewer_t3", "sage_security_reviewer_t3", "sage_ux_reviewer_t3", "sage_qa_t3", "sage_pe_t3", "sage_lead_t3", "sage_implementer_t3", "sage_designer_t3", "worker_1", "sage_unknown_t3"]
     .map((name) => [name, denied(w.send(pre("apply_patch", p, w.child(`/root/${name}`)))) ?? "edits"]);
   const ro = (role) => `sage: in sage mode, the ${role} agent changes no files. Report the finding instead`;
-  assert.deepEqual(got.slice(0, 9), [["sage_code_reviewer_t3", ro("code-reviewer")], ["sage_security_reviewer_t3", ro("security-reviewer")], ["sage_ux_reviewer_t3", ro("ux-reviewer")], ["sage_qa_t3", ro("qa")], ["sage_pe_t3", ro("pe")], ["sage_lead_t3", ro("lead")],
+  assert.deepEqual(got.slice(0, 9), [["sage_code_reviewer_t3", ro("code-reviewer")], ["sage_security_reviewer_t3", ro("security-reviewer")], ["sage_ux_reviewer_t3", ro("ux-reviewer")], ["sage_qa_t3", ro("qa")], ["sage_pe_t3", ro("pe")], ["sage_lead_t3", LEAD_EDIT],
     ["sage_implementer_t3", "edits"], ["sage_designer_t3", "edits"], ["worker_1", "edits"]]);
   assert.equal(got[9][1], BAD_NAME("sage_unknown_t3"), "a sage_ name with an unknown role fails closed");
   assert.match(denied(w.send(pre("apply_patch", p, { ...CHILD, transcript_path: join(w.dir, "none.jsonl") }))) ?? "", /^sage: the hook could not read this agent's task name/);
@@ -529,6 +533,69 @@ test("a role agent starts no agents, in any mode, and a thread under a read-only
   assert.deepEqual(got, [["/root/sage_code_reviewer_t1/helper", RO("code-reviewer"), RO("code-reviewer")], ["/root/sage_qa_t1/worker_2/helper", RO("qa"), RO("qa")],
     ["/root/worker_1/sage_pe_t2", RO("pe"), RO("pe")], ["/root/sage_implementer_t1/helper", "edits", "writes"], ["/root/worker_1/helper", "edits", "writes"]]);
   assert.equal(denied(w.send(pre("Bash", "codex exec hi", w.child("/root/worker_1/sage_implementer_t1/helper")))), CODEX_RUN, "a helper under a sage agent starts no Codex either");
+});
+
+const LEAD = "/root/sage_lead_t12_r1";
+const leadSpawn = (extra, task_name, tool_name = "collaborationspawn_agent") => ({ ...base, hook_event_name: "PreToolUse", tool_name, tool_use_id: "call_1", tool_input: { task_name, message: "go", fork_turns: "none" }, ...extra });
+
+test("T551: under a lead the leaf sage name decides the edit rule: an implementer edits, a reviewer or QA stays read-only, and the lead edits nothing", (t) => {
+  const w = world(t);
+  w.mode({ sage: true, autopilot: false });
+  const p = patch("*** Update File: src/a.js", "@@", "-a", "+b");
+  const edits = (path) => [denied(w.send(pre("apply_patch", p, w.child(path)))) ?? "edits", denied(w.send(pre("Bash", "echo x > notes.txt", w.child(path)))) ?? "writes"];
+  assert.deepEqual(edits(`${LEAD}/sage_implementer_t12_r2`), ["edits", "writes"]);
+  assert.deepEqual(edits(`${LEAD}/sage_implementer_t12`), ["edits", "writes"], "a name with no run");
+  for (const [name, role] of [["sage_code_reviewer_t12_r3", "code-reviewer"], ["sage_security_reviewer_t12_r4", "security-reviewer"], ["sage_ux_reviewer_t12_r5", "ux-reviewer"], ["sage_qa_t12_r6", "qa"]]) {
+    assert.deepEqual(edits(`${LEAD}/${name}`), [RO(role), RO(role)], name);
+  }
+  assert.deepEqual(edits(LEAD), [LEAD_EDIT, LEAD_EDIT], "the lead itself");
+  assert.deepEqual(edits(`${LEAD}/helper`), [LEAD_EDIT, LEAD_EDIT], "a thread under a lead with no sage name of its own has the lead's rule");
+  assert.equal(denied(w.send(pre("apply_patch", p, w.child(`${LEAD}/sage_unknown_t12`)))), BAD_NAME("sage_unknown_t12"), "an unknown role under a lead fails closed");
+  assert.equal(w.send(leadSpawn(w.child(LEAD), "sage_qa_t12_r7")), undefined, "the hook process lets a lead start its team");
+  assert.equal(denied(w.send(leadSpawn(w.child(LEAD), "sage_pe_t12_r7"))), LEAD_SPAWN(12, `"sage_pe_t12_r7"`), "and refuses any other role");
+  w.mode({ sage: false, autopilot: false });
+  assert.deepEqual(edits(LEAD), ["edits", "writes"], "outside sage mode the role rule does not act");
+});
+
+test("T551: a lead starts only implementer, reviewer and QA children of its own task, in any mode", async (t) => {
+  for (const sage of [false, true]) {
+    const g = fixed({ sage }), lead = sageChild(t, LEAD);
+    const allowed = ["sage_implementer_t12_r2", "sage_code_reviewer_t12_r3", "sage_security_reviewer_t12_r4", "sage_ux_reviewer_t12_r5", "sage_qa_t12_r6", "sage_qa_t12"];
+    for (const name of allowed) for (const tool of ["collaborationspawn_agent", "spawn_agent"]) assert.equal(await g.run(leadSpawn(lead, name, tool)), undefined, `${name} ${tool}`);
+    const refused = [["sage_pe_t12_r2", `"sage_pe_t12_r2"`], ["sage_designer_t12_r2", `"sage_designer_t12_r2"`], ["sage_arena_judge_t12_r2", `"sage_arena_judge_t12_r2"`], ["sage_lead_t12_r2", `"sage_lead_t12_r2"`],
+      ["sage_qa_t13_r2", `"sage_qa_t13_r2"`], ["sage_implementer_t1_r2", `"sage_implementer_t1_r2"`], ["sage_implementer_t121_r2", `"sage_implementer_t121_r2"`],
+      ["helper", `"helper"`], ["Sage_QA_t12", `"Sage_QA_t12"`], ["sage_qa_t12_r2/x", `"sage_qa_t12_r2/x"`], [undefined, `"no task_name"`], [["sage_qa_t12"], `["sage_qa_t12"]`]];
+    for (const [name, shown] of refused) assert.equal(denied(await g.run(leadSpawn(lead, name))), LEAD_SPAWN(12, shown), String(name));
+    // A lead name with no run: its own task number counts, and the refusal names it.
+    assert.equal(await g.run(leadSpawn(sageChild(t, "/root/sage_lead_t7"), "sage_qa_t7_r1")), undefined);
+    assert.equal(denied(await g.run(leadSpawn(sageChild(t, "/root/sage_lead_t7"), "sage_qa_t12_r1"))), LEAD_SPAWN(7, `"sage_qa_t12_r1"`));
+  }
+});
+
+test("T551: a sage name that is not a lead above the leaf is refused; the team under a lead starts nothing; a flat child behaves as before; sends stay refused", async (t) => {
+  const g = fixed({ sage: true });
+  const p = patch("*** Update File: src/a.js", "@@", "-a", "+b");
+  for (const [path, above] of [["/root/sage_qa_t1/sage_implementer_t1_r2", "sage_qa_t1"], ["/root/sage_implementer_t1/sage_implementer_t1_r2", "sage_implementer_t1"], ["/root/sage_pe_t1/sage_lead_t1", "sage_pe_t1"],
+    ["/root/sage_designer_t1/worker_1/sage_implementer_t1", "sage_designer_t1"], ["/root/Sage_Lead_T1/sage_implementer_t1", "Sage_Lead_T1"], [`${LEAD}/sage_qa_t12_r2/sage_implementer_t12_r3`, "sage_qa_t12_r2"]]) {
+    const child = sageChild(t, path);
+    assert.equal(denied(await g.run(pre("apply_patch", p, child))), BAD_CHAIN(above), path);
+    assert.equal(denied(await g.run(pre("Bash", "echo x > notes.txt", child))), BAD_CHAIN(above), path);
+    assert.equal(denied(await g.run(leadSpawn(child, "sage_qa_t1_r3"))), SPAWN, path);
+  }
+  for (const path of [`${LEAD}/sage_implementer_t12_r2`, `${LEAD}/sage_qa_t12_r3`, `${LEAD}/helper`]) assert.equal(denied(await g.run(leadSpawn(sageChild(t, path), "sage_qa_t12_r4"))), SPAWN, `${path} starts nothing`);
+  // A flat child, as today.
+  assert.equal(await g.run(pre("apply_patch", p, sageChild(t, "/root/sage_implementer_t1_r2"))), undefined);
+  assert.equal(denied(await g.run(pre("apply_patch", p, sageChild(t, "/root/sage_qa_t1_r2")))), RO("qa"));
+  assert.equal(denied(await g.run(leadSpawn(sageChild(t, "/root/sage_implementer_t1_r2"), "sage_qa_t1_r3"))), SPAWN);
+  assert.equal(await g.run(pre("apply_patch", p, sageChild(t, "/root/worker_1/helper"))), undefined);
+  assert.equal(await g.run(leadSpawn(sageChild(t, "/root/worker_1"), "helper")), undefined);
+  assert.equal(await g.run(leadSpawn({}, "sage_pe_t1_r1")), undefined, "the chief starts any role");
+  // Sends stay refused, for the lead and for its team.
+  for (const path of [LEAD, `${LEAD}/sage_implementer_t12_r2`]) {
+    for (const tool of ["collaborationsend_message", "collaborationfollowup_task"]) {
+      assert.equal(denied(await g.run({ ...base, hook_event_name: "PreToolUse", tool_name: tool, tool_use_id: "call_1", tool_input: { target: `${LEAD}/sage_qa_t12_r3`, message: "go" }, ...sageChild(t, path) })), SEND, `${path} ${tool}`);
+    }
+  }
 });
 
 test("a sage_ name that is not a sage task name counts as a read-only role; a name with a run is read by its role (R1664-6, R1663-2)", (t) => {
