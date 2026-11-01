@@ -9,7 +9,7 @@ import { test } from 'node:test';
 import { createStateTool } from '../packages/sage-core/state.mjs';
 import { reportFor } from './verdict-backing.mjs';
 
-const SHA = '1'.repeat(40), BRANCH = 'sage/t536-adopt';
+const SHA = '1'.repeat(40), BRANCH = 'sage/t536-adopt', OVERLAP = 'codex/t95-x';
 const tool = createStateTool({ defaultRoot: env => env.SAGE_HOME });
 
 for (const scenario of ['creation', 'review']) {
@@ -381,18 +381,61 @@ test('adoption refuses another task claim and another project', t => {
   before = s.bytes(s.dest); assert.match(s.no(...s.adopt), /project/); assert.deepEqual(s.bytes(s.dest), before);
 });
 
-test('adoption refuses destination ownership by task number without any mutation', t => {
-  const s = fixture(t, 'T2', 'sage/t2-existing');
+/** A source T95 on codex/t95-x, and a destination T95 of another feature: the same number, from the other provider's count. */
+function overlap(t, state = 'framed') {
+  const s = fixture(t, 'T95', OVERLAP);
   s.ok('task', 'add', '--title', 'Unrelated destination task', '--size', 'tiny', '--priority', 'P1');
-  const other = tool.read(s.dest, 'tasks').find(task => task.id === 'T2');
-  assert.equal(other.pr, ''); assert.equal(other.branch, '');
-  assert.deepEqual(tool.read(s.dest, 'runs'), []);
+  const file = join(s.dest, 'tasks.tsv'), [head, ...rows] = readFileSync(file, 'utf8').trimEnd().split('\n').map(line => line.split('\t'));
+  const other = rows.find(row => row[0] === 'T2');
+  other[0] = 'T95'; other[head.indexOf('state')] = state;
+  writeFileSync(file, `${[head, ...rows].map(row => row.join('\t')).join('\n')}\n`);
+  return s;
+}
+/** Takes the adopted T1 through fresh reviews and QA on the branch, to the point where the merge check judges the head. */
+function reviewed(s, branch) {
+  for (const state of ['briefed', 'building', 'reviewing']) s.ok('task', 'T1', 'set', `state=${state}`);
+  s.ok('verdict', 'T1', '--sha', SHA, '--pr', '362', '--kind', 'checks-pass');
+  for (const cycle of ['1', '2']) for (const [role, kind] of [['code-reviewer', 'review-clean'], ['security-reviewer', 'security-clean'], ['qa', 'qa-pass']]) {
+    const id = s.ok('run', 'add', 'T1', '--role', role, '--branch', branch).split(' ')[0];
+    tool.keepReport(s.project, { task: 'T1', run: id, role, sha: SHA, text: reportFor(kind) }, s.env);
+    s.ok('run', 'done', id, '--status', 'done', '--tokens', '1');
+    s.ok('verdict', 'T1', '--sha', SHA, '--pr', '362', '--kind', kind, '--cycle', cycle, '--run', id);
+  }
+}
+
+test('T575: an unrelated task with the source number claims nothing, from adoption to the merge check', t => {
+  const s = overlap(t, 'merged');
+  assert.match(s.ok(...s.adopt), /^T1 adopted · claude T95 · PR 362 · codex\/t95-x · round 4/);
+  assert.equal(s.task().branch, OVERLAP);
+  assert.equal(tool.read(s.dest, 'tasks').find(task => task.id === 'T95').branch, '', 'the unrelated task stays as it was');
+  reviewed(s, OVERLAP);
+  assert.equal(s.ok('merge-check', '--sha', SHA, '--pr', '362', '--head', OVERLAP), 'T1 may merge: 2 clean cycles on this SHA');
+});
+
+test('T575: an adopted branch stays the adopted task\'s own, and a later record of the other task still counts', t => {
+  const s = overlap(t);
+  s.ok(...s.adopt);
+  reviewed(s, OVERLAP);
+  const merge = ['merge-check', '--sha', SHA, '--pr', '362', '--head', OVERLAP];
+  assert.match(s.ok(...merge), /T1 may merge/);
+  const run = s.ok('run', 'add', 'T95', '--role', 'implementer', '--branch', OVERLAP).split(' ')[0];
+  s.ok('run', 'done', run, '--status', 'blocked');
+  assert.match(s.no(...merge), /also belongs to \S+ T95 \(by run R\d+ on it\), which is not on PR 362/);
+});
+
+for (const [record, claim] of [
+  ['recorded branch', s => s.ok('task', 'T95', 'set', `branch=${OVERLAP}`)],
+  ['recorded branch in another letter case', s => s.ok('task', 'T95', 'set', 'branch=CODEX/T95-X')],
+  ['current PR', s => s.ok('task', 'T95', 'set', 'pr=362')],
+  ['PR history', s => { s.ok('task', 'T95', 'set', 'pr=362'); s.ok('task', 'T95', 'set', 'pr=300'); }],
+  ['run on the branch', s => { const run = s.ok('run', 'add', 'T95', '--role', 'implementer', '--branch', OVERLAP).split(' ')[0]; s.ok('run', 'done', run, '--status', 'blocked'); }],
+]) test(`T575: a destination task's ${record} still refuses adoption without any mutation`, t => {
+  const s = overlap(t);
+  claim(s);
   const destination = snapshot(s.dest), source = snapshot(s.source);
-  const result = tool.command([...s.adopt, '--project', s.project], s.env);
-  assert.deepEqual(snapshot(s.dest), destination, `refused adoption must leave every destination file unchanged: ${result.text}`);
+  assert.match(s.no(...s.adopt), /T95 already claimed this PR or branch/);
+  assert.deepEqual(snapshot(s.dest), destination);
   assert.deepEqual(snapshot(s.source), source);
-  assert.equal(result.code, 1, result.text);
-  assert.match(result.text, /T2 already claimed this PR or branch/);
 });
 
 test('adoption refuses source run-only ownership without any mutation', t => {

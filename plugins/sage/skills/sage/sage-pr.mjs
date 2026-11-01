@@ -22,7 +22,7 @@ import { execFileSync } from "node:child_process";
 import { closeSync, constants, existsSync, fstatSync, lstatSync, mkdirSync, mkdtempSync, openSync, readFileSync, readSync, readdirSync, realpathSync, renameSync, rmSync, writeFileSync, writeSync } from "node:fs";
 import { basename, dirname, join, resolve, sep } from "node:path";
 import { fileURLToPath } from "node:url";
-import { PR, mergeCheck, ofTask, projectRoot, read, sage, storeDir, withLock, worktreeRoot } from "./sage.mjs";
+import { PR, branchOfTask, mergeCheck, projectRoot, read, sage, storeDir, withLock, worktreeRoot } from "./sage.mjs";
 
 const BASE = "main";
 /**
@@ -139,7 +139,7 @@ export function record(task, verb, env = process.env) {
   if (named !== root) no(`the logbook ${dir} is the logbook of ${named}, not of ${root}: run sage-pr from ${named}, or set SAGE_PROJECT=${named}`);
   const t = read(dir, "tasks").find((r) => r.id === task) ?? no(`no task ${task} in ${dir}: check the task id, or frame the task first (sage task add)`);
   const branch = t.branch || no(`${task} has no branch: sage task ${task} set branch=<branch>`);
-  if (!ofTask(task, branch)) no(`branch "${branch}" is not a branch of ${task} ([<prefix>/]${task.toLowerCase()}[-<words>]): sage task ${task} set branch=claude/${task.toLowerCase()}`);
+  if (!branchOfTask(t, branch)) no(`branch "${branch}" is not a branch of ${task} ([<prefix>/]${task.toLowerCase()}[-<words>]): sage task ${task} set branch=claude/${task.toLowerCase()}`);
   let head;
   if (verb === "create" || verb === "merge") {
     head = read(dir, "ledger").filter((r) => r.task === task && r.sha).at(-1)?.sha ?? no(`${task} has no verdict with a SHA, so it has no reviewed head: record the route's verdicts on the reviewed head (sage verdict ${task} --sha <sha> --kind <kind>)`);
