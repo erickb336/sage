@@ -259,6 +259,10 @@ test("T553: the chief role runs one lead for each task, starts the lead, PE and 
   assert.doesNotMatch(role, /team is flat|Leads come later/);
   const pages = readFileSync(new URL("../plugins/sage-codex/skills/sage/references/roles.md", import.meta.url), "utf8");
   for (const heading of ["## Start a lead", "## The lead's report", "## Thread limit"]) assert.ok(pages.includes(`\n${heading}\n`), heading);
+  // Each lead name that the chief reads has its run (F-T552-24): a second lead of a task needs its own name.
+  const names = [...`${role}\n${pages}`.matchAll(/sage_lead_t[^\s`)]*/g)].map(([name]) => name);
+  assert.ok(names.length >= 3, names.join(", "));
+  assert.deepEqual(names.filter((name) => !/_t(?:\d+|<n>)_r(?:\d+|<k>)$/.test(name)), []);
 });
 
 /** The shared chief text as the build writes it, after the Codex preface; the Markdown file adds its own final newline. */

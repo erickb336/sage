@@ -8,7 +8,7 @@ Your task name is `sage_lead_t<n>_r<k>`, where `<n>` is the number of your task.
 2. Run `node <role.mjs> <role>`, and keep the whole output.
 3. Write the helper's brief, with the fields `GOAL` to `STANDING`. Call `brief` with the task name of step 4 and the whole brief. Fix each missing field.
 4. Call `spawn_agent` in the `collaboration` namespace with:
-   - `task_name`: `sage_`, the role with `_` for `-`, then `_t<n>_r<k>`, for example `sage_code_reviewer_t12_r41`. The gate refuses another role, another task and another form.
+   - `task_name`: `sage_<role>_t<n>_r<k>`, with `_` for `-` in the role, for example `sage_code_reviewer_t12_r41`. The gate refuses another role, another task and another form. A name with no run still starts, but sage keeps no report for that run, and no verdict can use it, so always give the run.
    - `message`: the whole output of step 2, a blank line, then the brief.
    - `fork_turns: "none"`. Give no agent type and no model.
 
@@ -21,16 +21,16 @@ Your task name is `sage_lead_t<n>_r<k>`, where `<n>` is the number of your task.
 
 **Record your task.** You record only your own task, with the sage tools. The shell refuses a write of the logbook. `finding_move` stays the chief's tool: name a finding to move in your report.
 
-- `task_set`: give `task` and `fields`, with string values, for example `{"task": "T12", "fields": {"state": "reviewing"}}`. The fields are `state` (briefed to building, building to reviewing, reviewing to verifying, repairing to reviewing), `branch` and `pr`.
+- `task_set`: give `task` and `fields`, with string values, for example `{"task": "T12", "fields": {"state": "reviewing"}}`. The fields are `state` (briefed to building, building to reviewing, reviewing to verifying, verifying to reviewing, repairing to reviewing), `branch` and `pr`.
 - `verdict`: give `task`, `kind` (`review-clean`, `security-clean`, `ux-clean`, `qa-pass`, `qa-fail` or `findings`), `sha`, `cycle`, `pr` and the `run` whose kept report backs it, after you end that run. The `checks-pass` and `checks-fail` verdicts are the chief's.
 
-**A report with findings.** Do these steps in this order. Triage comes after the verdict, because after a `fix` triage of a medium or high finding, the gate refuses the verdict of that head until `round`.
+**A report with findings.** Do these steps in this order. Triage comes after the verdict, because after a `fix` triage of a medium or high finding, the gate refuses the first verdict of a head until `round`.
 
 1. `finding_add`: record every finding of the report, before you end its run. Give `task`, `source` (the role), `severity` (the report's, or above), `summary`, `run` and `class` (`state-edge`, `speed`, `copy`, `layout`, `security` or `other`). Nothing refuses a lead that leaves one out: Claude's hook checks the count of medium and high findings (its gap rule), and the Codex gate does not, so this rule is yours to keep.
 2. `run_done`: end the run.
 3. `verdict`: for a medium or high finding, give `findings`, or `qa-fail` for QA. For only low findings, give the clean kind.
 4. `finding_triage`: give `task`, `key` and `decision`: `fix` for a finding to repair, or `dismiss` with a `reason` for a low finding. Report a medium or high finding that you think is wrong. An open finding blocks the task, so a low finding that you keep needs a round.
-5. `round`: when a medium or high finding has `fix`, start the repair with it. Start an implementer on the same branch for the keys that it names. After the repair's commit, call `finding_close` for each key, then move the task to reviewing, and start the roles that `round` named.
+5. `round`: when a medium or high finding has `fix`, start the repair with it. First do steps 1 to 4 for each helper of the cycle: after `round`, the gate refuses a verdict on a run of an earlier round. When `round` prints held or replan, report blocked: the sage tools now refuse you. Start an implementer on the same branch for the keys that it names. After the repair's commit, call `finding_close` for each key, then move the task to reviewing, and start the roles that `round` named.
 
 **The pull request.** A Codex implementer commits and reports, and it does not push. After its first commit, send the branch with `git -C <worktree> push -u <remote> <branch>`, open the pull request with `gh pr create --head <branch> --title <title> --body <body>`, and record the number with `task_set`. Send the branch again after each repair. A verdict needs the pull request. Never merge.
 

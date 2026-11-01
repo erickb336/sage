@@ -326,7 +326,7 @@ test("F-T551-7: after a spawn with no checked brief, a lead gets the steps that 
   };
   const lead = warn({ agent_id: "agent-1" });
   assert.match(lead, /^sage: sage_qa_t1_r7 started with no checked brief: no brief is on record/);
-  assert.match(lead, /A lead sends no message, so this agent stays without the note\. Close it with `close_agent`, end its run as failed with the sage tool `run_done`, add a new run with `run_add`, run the sage tool `brief` with the new run's task name/);
+  assert.match(lead, /A lead sends no message, so this agent stays without the note\. Stop it with `interrupt_agent`, end its run as failed with the sage tool `run_done`, add a new run with `run_add`, run the sage tool `brief` with the new run's task name/);
   assert.doesNotMatch(lead, /with `send_message`/);
   assert.match(warn({}), /then send the agent the fixed brief with `send_message`\.$/, "the chief's steps stay");
 });
@@ -399,7 +399,7 @@ test("T553: role.mjs lead adds the Codex steps to the lead's text, and no other 
   assert.equal(r.status, 0, r.stderr);
   assert.match(r.stdout, /^# Lead\n\nYou coordinate one task[\s\S]*\n## Your steps in Codex\n[\s\S]*\n# The sage report\n/);
   // How a lead starts each helper: the name form, the role text from a command that it can run, and the brief.
-  assert.match(r.stdout, /`task_name`: `sage_`, the role with `_` for `-`, then `_t<n>_r<k>`, for example `sage_code_reviewer_t12_r41`/);
+  assert.match(r.stdout, /`task_name`: `sage_<role>_t<n>_r<k>`, with `_` for `-` in the role, for example `sage_code_reviewer_t12_r41`/);
   assert.match(r.stdout, /`message`: the whole output of step 2, a blank line, then the brief\./);
   const [, script] = /Run `node (\S+) <role>`/.exec(r.stdout) ?? [];
   assert.equal(script, join(ROOT, "plugins/sage-codex/skills/sage/role.mjs"), "the real path of the script");
@@ -435,6 +435,17 @@ test("T553: a lead's steps record a report's findings and verdict first, and tri
   assert.ok(steps.every((at) => at > 0), String(steps));
   assert.deepEqual(steps, [...steps].sort((a, b) => a - b), "the order of the steps");
   assert.match(text, /`finding_move` stays the chief's tool/);
+});
+
+test("T553: the helper name of a lead's steps is one that keeps the helper's report, and the same name with no run keeps none (F-T552-25)", async () => {
+  const { reviewChild } = await import(pathToFileURL(GATE));
+  const text = spawnSync("node", [ROLE, "lead"], { encoding: "utf8" }).stdout;
+  const [, name] = /`task_name`: `sage_<role>_t<n>_r<k>`.*?for example `(sage_[a-z_]+_t\d+_r\d+)`/.exec(text) ?? [];
+  assert.equal(name, "sage_code_reviewer_t12_r41");
+  const under = (child) => reviewChild({ id: "thread-1", agent_path: `/root/sage_lead_t12_r40/${child}` });
+  assert.deepEqual(under(name), { role: "code-reviewer", task: "T12", run: "R41", thread: "thread-1" });
+  assert.equal(under(name.replace(/_r\d+$/, "")), undefined, "the warning in the steps: no run, no kept report");
+  assert.match(text, /A name with no run still starts, but sage keeps no report for that run, and no verdict can use it/);
 });
 
 // T83: run the public renderer from the generated package, as the chief does.
