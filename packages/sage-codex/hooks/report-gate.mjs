@@ -8,7 +8,7 @@ import { spawnSync } from "node:child_process";
 import { closeSync, mkdirSync, openSync, readFileSync, readSync, realpathSync, writeFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
-import { REPORT_FIELDS, missingReportFields } from "sage-core";
+import { FINDING_FORM, REPORT_FIELDS, RESULT_WORDS, missingReportFields, readReport } from "sage-core";
 import { tool } from "../skills/sage/sage.mjs";
 
 const UNREAD = "sage: the report check could not read this agent's stop, so it did not check its report.";
@@ -52,7 +52,9 @@ export function reviewChild(meta) {
   if (!REPORT_ROLES[role] || path.length !== 2 || path[0] !== "root" || typeof meta.id !== "string" || !meta.id) return undefined;
   return { role: REPORT_ROLES[role], task: `T${number}`, run: run.toUpperCase(), thread: meta.id };
 }
-const bindingOf = (cwd, run, env) => join(tool.storeDir(cwd, env), "kept", `${run}.child`);
+/** The roles whose report the stop gate reads with the one reader (the Claude hook's REVIEWERS). */
+const REVIEWERS = ["code-reviewer", "security-reviewer", "ux-reviewer", "qa"];
+const bindingOf =(cwd, run, env) => join(tool.storeDir(cwd, env), "kept", `${run}.child`);
 /**
  * At a design, review, QA or investigation child's start (SubagentStart, from the brief hook): the first child of the chief that starts for a
  * running run binds the run to its thread, once (R1908-3), with the tip of its task's branch at the start: the commit that
@@ -103,6 +105,10 @@ export function reportGate(input, env = process.env) {
   let task, meta;
   try { meta = sessionMeta(input.agent_transcript_path); task = agentPathOf(meta).at(-1) ?? ""; } catch { return { systemMessage: UNREAD }; }
   const missing = sageName(task) ? missingReportFields(message ?? "") : [];
+  // A review or QA child's report is read with the one reader at its first stop, as the Claude stop gate does: an unreadable
+  // report gets one fix chance, and the second stop keeps it (T560).
+  const problem = !missing.length && !input.stop_hook_active && REVIEWERS.includes(reviewChild(meta)?.role) ? readReport(message).problem : undefined;
+  if (problem) return { decision: "block", reason: `sage: the report check cannot read your report: ${problem}. Give each field once, at the start of a line that is not in a list or a code block. Start RESULT with ${RESULT_WORDS.join(", ")}. Under FINDINGS write none alone, or one line for each finding in the form ${FINDING_FORM}, where the key has a digit (K1) and the severity is high, medium or low, with any detail on indented lines under it that do not start with a severity word. No line under FINDINGS has a severity word above the severity of the finding that it is under. RESULT FINDINGS or FAIL needs a finding.` };
   // A stop that goes through retains the bound child's exact report; the chief decides the outcome separately.
   const unkept = !missing.length || input.stop_hook_active ? keep(meta, message, input.cwd, env) : undefined;
   if (!missing.length) return unkept ? { systemMessage: unkept } : {};
