@@ -1,6 +1,7 @@
 import { join } from "node:path";
 import { readAdmission, completeAdmission, interruptAdmission, REPORT_FIELDS, missingReportFields } from "sage-core";
 import { checkPreparedRunTarget } from "./run-assignment.mjs";
+import { settleNativeWrites } from "./task-settle.mjs";
 import { nativeToolContext } from "./native-tool.mjs";
 import { readChildTurn, readNativeCompletion, readNativeInterruption, readNativeRecovery } from "./identity.mjs";
 import { bindNativeChildTranscript, recoverNativeChildDeliveries } from "./child-tool.mjs";
@@ -103,6 +104,7 @@ function completionEvidence(state, bound, session, options, suppliedPath) {
   // requires the child's own target, but not a currently authorized ancestor.
   if (recovery.compaction !== null && !interrupted
     && !state.completions?.some(row => row.assignment === bound.assignment)) {
+    settleNativeWrites(options);
     checkPreparedRunTarget(options, assigned, state.preparations.find(row => row.id === assigned.preparation));
   }
   return { directory, observations, completed, interrupted };

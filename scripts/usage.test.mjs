@@ -113,9 +113,10 @@ test('T28 usage recovery completes one interrupted transaction and refuses a dif
   // Simulate a crash after runs publishes, before decisions publishes.
   writeFileSync(join(s.dir,'decisions.tsv'),before[1]);
   writeFileSync(join(s.dir,'review-pending.json'),envelope({schema:7,receipt,tables}));
-  s.no('run','usage','R1','--tokens','51','--usage-source','export','--usage-evidence','pages/R1.json');
-  assert.throws(()=>s.run('status'),/incomplete|damaged/);
-  s.run(...command);assert.deepEqual(s.bytes(),after);
+  assert.throws(()=>s.run('status'),/incomplete/);
+  // The next writer settles the saved change from its marker alone, then its own command gets its own answer.
+  assert.throws(()=>s.run('run','usage','R1','--tokens','51','--usage-source','export','--usage-evidence','pages/R1.json'),/never changes/);
+  assert.deepEqual(s.bytes(),after);
   s.run(...command);assert.deepEqual(s.bytes(),after);
 });
 test('T28 old run-request pending bytes recover with their original header',t=>{
@@ -128,7 +129,7 @@ test('T28 old run-request pending bytes recover with their original header',t=>{
   const oldBefore=old(before), oldAfter=old(s.bytes()[0]);
   writeFileSync(join(s.dir,'runs.tsv'),oldBefore);
   writeFileSync(join(s.dir,'review-pending.json'),envelope({schema:3,receipt,tables:{runs:{before:oldBefore,after:oldAfter}}}));
-  const result=tool.createRequestedRun(input,env);assert.equal(result.decision,'run-created');assert.equal(result.run.id,'R1');
+  const result=tool.createRequestedRun(input,env);assert.equal(result.decision,'already-created');assert.equal(result.run.id,'R1');
   assert.equal(readFileSync(join(s.dir,'runs.tsv'),'utf8'),oldAfter);
   assert.equal(tool.createRequestedRun(input,env).decision,'already-created');
   s.no('run','done','R1','--status','done',...unavailable);
@@ -158,7 +159,7 @@ test('T28 modern run-request recovery never drops existing header columns',t=>{
   writeFileSync(join(s.dir,'runs.tsv'),before[0]);
   writeFileSync(join(s.dir,'review-pending.json'),envelope({schema:3,receipt,tables:{runs:{before:before[0],after:regressed}}}));
   const pending=readFileSync(join(s.dir,'review-pending.json'),'utf8');
-  assert.throws(()=>tool.createRequestedRun(input,env),/saved run update is damaged/);
+  assert.throws(()=>tool.createRequestedRun(input,env),{code:'stuck-write'});
   assert.deepEqual(s.bytes(),before);
   assert.equal(readFileSync(join(s.dir,'review-pending.json'),'utf8'),pending);
 });

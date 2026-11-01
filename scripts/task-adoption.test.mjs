@@ -49,7 +49,8 @@ for (const stage of ['receipt', 'pending', 'partly-published']) test(`T48 upgrad
     writeFileSync(join(dir, 'review-pending.json'), upgrade.pending);
   }
   const first = invoke();
-  assert.equal(first.decision, scenario === 'creation' ? stage === 'receipt' ? 'already-created' : 'task-created' : stage === 'receipt' ? 'already-accepted' : 'review-accepted');
+  // Any writer may have settled the saved change, so a retry always reads the committed result from its receipt.
+  assert.equal(first.decision, scenario === 'creation' ? 'already-created' : 'already-accepted');
   for (const [table, pair] of Object.entries(intent.tables)) assert.equal(readFileSync(join(dir, `${table}.tsv`), 'utf8'), pair.after);
   assert.equal(readFileSync(join(dir, upgrade.folder, upgrade.name), 'utf8'), upgrade.receipt);
   assert.equal(readdirSync(dir).includes('review-pending.json'), false);
@@ -82,7 +83,7 @@ for (const stage of ['receipt', 'pending', 'partly-published']) test(`T48 upgrad
   if (scenario !== 'base') {
     const untouched = snapshot(dir), current = tool.readTaskSnapshot({ project, task: 'T1' }, env);
     const forbidden = () => { throw Error('New request reached coordination'); };
-    const callbacks = { decide: forbidden, acknowledge: forbidden, release: forbidden, history: forbidden };
+    const callbacks = { decide: forbidden, acknowledge: forbidden, release: forbidden, void: forbidden, history: forbidden };
     for (const state of ['building', 'briefed']) {
       assert.throws(() => tool.updateRequestedTask({ project, ...upgrade.request,
         version: current.version, changes: { state } }, env, callbacks), { code: 'invalid-change' });
@@ -97,13 +98,14 @@ for (const stage of ['receipt', 'pending', 'partly-published']) test(`T48 upgrad
   } else {
     writeFileSync(join(dir, 'review-pending.json'), upgrade.pending);
     if (stage === 'partly-published') writeFileSync(join(dir, 'tasks.tsv'), intent.value.tables.tasks.after);
-    assert.throws(() => tool.readTaskSnapshot({ project, task: 'T1' }, env));
+    assert.throws(() => tool.assertTaskUpdateOpen({ project }, env));
   }
   let decisions = 0;
   const coordination = {
-    decide(digest) { assert.equal(digest, intent.hash); decisions++; return { digest, accepted: true, reason: '' }; },
-    acknowledge(digest, receiptHash) { assert.equal(receiptHash, receipt.hash); return { digest, receiptHash }; },
-    release(digest, receiptHash) { assert.equal(receiptHash, receipt.hash); return { digest, receiptHash }; },
+    decide(digest) { decisions++; return { digest, accepted: true, reason: '' }; },
+    acknowledge(digest, receiptHash) { return { digest, receiptHash }; },
+    release(digest, receiptHash) { return { digest, receiptHash }; },
+    void() { throw Error('An accepted write voids nothing'); },
     history(digest) { assert.equal(digest, intent.hash); return { digest, accepted: true, reason: '', receiptHash: receipt.hash }; },
   };
   const update = () => tool.updateRequestedTask({ project, ...upgrade.request }, env, coordination);
@@ -120,13 +122,23 @@ for (const stage of ['receipt', 'pending', 'partly-published']) test(`T48 upgrad
     envelope.hash = createHash('sha256').update(JSON.stringify(envelope.value)).digest('hex');
     writeFileSync(savedFile, JSON.stringify(envelope) + '\n');
     const damaged = snapshot(dir);
-    assert.throws(update, { code: 'invalid-state' });
+    // A damaged marker is a write that cannot finish; a damaged receipt is proof that this request cannot use.
+    assert.throws(update, { code: stage === 'receipt' ? 'invalid-state' : 'stuck-write' });
     assert.deepEqual(snapshot(dir), damaged);
     writeFileSync(savedFile, savedBytes);
   }
-  assert.equal(update().decision, stage === 'receipt' ? 'task-update-history' : 'task-updated');
+  if (stage !== 'receipt') {
+    // A saved change of the prior version with no receipt is not committed: any writer restores "before".
+    tool.readTaskSnapshot({ project, task: 'T1' }, env);
+    for (const [table, pair] of Object.entries(intent.value.tables)) assert.equal(readFileSync(join(dir, `${table}.tsv`), 'utf8'), pair.before);
+    assert.equal(readdirSync(dir).includes('review-pending.json'), false);
+    assert.equal(readdirSync(dir).includes('task-updates'), false);
+    assert.equal(decisions, 0);
+    return;
+  }
+  assert.equal(update().decision, 'task-update-history');
   for (const [table, pair] of Object.entries(intent.value.tables)) assert.equal(readFileSync(join(dir, `${table}.tsv`), 'utf8'), pair.after);
-  assert.equal(decisions, stage === 'receipt' ? 0 : 1);
+  assert.equal(decisions, 0);
   assert.equal(readFileSync(join(dir, 'task-updates', upgrade.name), 'utf8'), upgrade.receipt);
   assert.equal(readdirSync(dir).includes('review-pending.json'), false);
   const recovered = snapshot(dir);
@@ -138,7 +150,7 @@ for (const stage of ['receipt', 'pending', 'partly-published']) test(`T48 upgrad
   }
   assert.equal(update().decision, 'task-update-history');
   assert.deepEqual(snapshot(dir), recovered);
-  assert.equal(decisions, stage === 'receipt' ? 0 : 1);
+  assert.equal(decisions, 0);
   const current = tool.readTaskSnapshot({ project, task: 'T1' }, env);
   assert.equal(current.task.title, scenario === 'base' ? 'Recovered sample' : 'Upgrade sample');
   if (scenario !== 'base') {
@@ -181,6 +193,7 @@ for (const state of ['building', 'briefed']) test(`T48 upgrade: new ${state} gra
     decide(digest) { return { digest, accepted: true, reason: '' }; },
     acknowledge(digest, receiptHash) { return { digest, receiptHash }; },
     release(digest, receiptHash) { return { digest, receiptHash }; },
+    void() {},
     history() { throw Error('No earlier receipt'); },
   };
   const request = () => ({ project, ...upgrade.request, version: tool.readTaskSnapshot({ project, task: 'T1' }, env).version,

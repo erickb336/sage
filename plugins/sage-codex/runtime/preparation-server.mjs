@@ -19,7 +19,7 @@ export function createPreparationServer(options = {}) {
     }
   });
   server.registerTool("sage_update_task", {
-    description: "Chief only: update title, branch, PR or state using the version from sage_read_task. Changes use title, branch, PR, state order. Reuse the identical request UUID after an uncertain result. A recorded rejection needs a new UUID after settlement. This grants no dispatch or merge permission.",
+    description: "Chief only: update title, branch, PR or state using the version from sage_read_task. Changes use title, branch, PR, state order. Reuse the identical request UUID after an uncertain result. A rejected result writes no receipt: reconcile or interrupt the listed assignments, then retry, and the retry gets a fresh answer. This grants no dispatch or merge permission.",
     inputSchema: z.object({ request: z.string(), task: z.string(), version: z.string(), changes: z.object({
       title: z.string().optional(), branch: z.string().optional(), pr: z.string().optional(), state: z.string().optional(), approval: z.string().optional(),
     }).strict() }).strict(),

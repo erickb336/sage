@@ -462,8 +462,12 @@ function merge({ project, dir, t, branch, head, url, repo }, temp, env) {
   if (p.headRefOid !== head) no(`pull request #${pr} is at ${short(p.headRefOid)}, not at the reviewed head ${short(head)}. If ${short(head)} is a repair, push it first: sage-pr create ${t.id}. Else the branch moved after review: review ${short(p.headRefOid)} and record its verdicts`);
   imported({ dir, t, head });
   // The pull request's head branch is the task's branch (find() reads only PRs of it), so the owner rule runs as in the hook (R1708-1).
-  const r = mergeCheck(head, env, { pr, head: branch, project });
+  // sagePr holds this logbook's lock, and withLock is not reentrant.
+  const r = mergeCheck(head, env, { pr, head: branch, project, locked: true });
   if (!r.ok) no(`merge check: ${r.reason}`);
+  // The merge check can settle a saved change, and record() read the logbook before that: the settled records decide (R2087-1).
+  const now = record(t.id, "merge", env);
+  if (JSON.stringify([now.t, now.head]) !== JSON.stringify([t, head])) no(`a saved change finished and changed ${t.id}: run sage-pr merge ${t.id} again`);
   const moved = ". If GitHub says that the head changed, the branch moved after review: review the new head and record its verdicts";
   let out, failed;
   try {

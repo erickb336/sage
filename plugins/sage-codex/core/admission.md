@@ -322,17 +322,25 @@ review-cycle configuration. Recovery reconstructs the plan from these saved
 facts. It does not use today's Git head or configuration to change an old plan.
 
 The coordinated writer uses the common pending marker. It publishes this marker
-before admission decides the update. `decideTaskUpdate` records an immutable
-accepted or rejected decision for the exact owner, request and intent digest.
-An unknown result retains the marker. A known rejection preserves the before
-images and records a rejection receipt. The same UUID cannot later succeed.
+before admission decides the update. `decideTaskUpdate` records an accepted or
+rejected decision for the exact owner, request and intent digest. A rejection
+keeps the before images and writes no receipt. The writer removes the marker and
+calls `voidTaskUpdate`, so a retry gets a fresh decision.
 
 Acceptance fences new work. After table publication and the durable receipt,
 `acknowledgeTaskUpdate` saves its exact hash while keeping that fence. The writer
 checks all after images, durably removes the marker, then calls
 `releaseTaskUpdate`. Each callback must return its matching synchronous result.
-A retry finishes this sequence. An old receipt returns historical data without
-restoring old tables or clearing another update's fence.
+
+The receipt is the commit point, so recovery needs no journal. Any writer of the
+logbook takes the lock and settles the marker alone: a receipt rolls forward, and
+no receipt restores the before images. An old rejected receipt also restores them.
+The provider's settle step then closes each open row. A receipt acknowledges and
+releases it. No receipt and no marker voids it. `void` is one journal event:
+`taskFence`, `taskGeneration`, the prior lookup and the history proof skip a void
+row, and an interrupted finish uses the same event. `voidInterruptedRunFinish`
+voids a finish with no receipt, and `endInterruptedRunFinish` closes one with a
+receipt. Older readers refuse this event; update every participant together.
 
 Disruptive changes require every reservation for that project and task to have
 authentic completion, interruption or failed-dispatch evidence. This includes
@@ -345,10 +353,10 @@ run or review data. Pass it as the optional `generation` preparation option.
 Admission compares it again when it saves the preparation and reserves work.
 Legacy preparations remain readable; a missing generation means zero.
 
-`validateTerminalAssignment` grants no authority and writes no task data. During
-an interrupted publication, it validates the whole intent and reads its coherent
-before image. Outside that publication, exact accepted history can explain a
-retired target. Unchanged review targets still need the current branch head.
+`validateTerminalAssignment` grants no authority. It takes the lock, so it settles
+a saved change first, and it changes no other task data. Exact accepted history
+can explain a retired target. Unchanged review targets still need the current
+branch head.
 The provider supplies the exact owner, request and digest of the first disruptive
 update after the preparation's saved generation. Core checks that receipt and its
 coherent history. An explained retired target keeps its original candidate for
@@ -357,20 +365,11 @@ terminal evidence only. It cannot authorize tools, accept a review, or certify t
 Historical task-update receipts require a synchronous, read-only proof callback.
 It matches the exact owner, request, task, intent digest, disruptive flag and
 durable outcome. Accepted history also requires its acknowledged receipt hash.
-Missing proof refuses; history never creates a decision. An accepted retry may
-release only its own acknowledged fence after this check.
+Missing proof refuses; history never creates a decision.
 
 Terminal history uses the same callback as a separate trusted argument to
 `validateTerminalAssignment`. Core authenticates all receipts for the target task
 before selecting accepted transitions. A rejected receipt cannot become an
 accepted transition, and an altered rejection cannot hide a real transition.
-The pending coherent-before-image path does not require a prior acknowledgement.
 Stable snapshot version reads track receipt names; they do not authorize an
 outcome or terminal transition.
-
-When terminal validation uses a pending before-image, its exact pending receipt
-is separate from completed transition history. Core compares the entire intent
-and checks its durable journal outcome. Before acknowledgement, that exact
-pending receipt may lack a hash. After acknowledgement, its hash must match.
-The pending receipt never supplies a completed transition edge. Every other
-receipt retains full historical authentication, including its acknowledged hash.

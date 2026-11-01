@@ -18,7 +18,7 @@ The operation changes only the matching run's status and ending time. Its report
 
 A temporary admission record protects the interrupted actor's historical team while the run ending is saved. Admission checks and this record use the same atomic journal publication. An active descendant, unbound dispatch, or conflicting continuation prevents closure. While closure is pending, new work cannot wake or extend that team.
 
-The logbook operation holds its lock, saves a validated ending receipt and run update, then acknowledges that exact receipt in admission. A failed publication retains the pending record. Retry the identical request to recover; changing the status or evidence cannot clear it. No timeout silently releases it.
+The logbook operation holds its lock, saves a validated ending receipt and run update, then acknowledges that exact receipt in admission. A failed publication retains the pending record. No timeout silently releases it. Any writer can publish the saved ending, because the marker holds its whole receipt. The Codex settle step then closes the record, before the next decide, prepare, assign or finish: a receipt ends it, and no receipt and no marker voids it.
 
 An identical completed retry returns the original ending time and evidence without changing later work. After acknowledgement, ordinary admission rules can permit eligible child reuse. Missing or conflicting saved state is damage, not permission to rewrite history.
 

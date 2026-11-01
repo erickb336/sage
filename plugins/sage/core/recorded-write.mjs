@@ -3,15 +3,15 @@ import { createHash, randomUUID } from "node:crypto";
 import { closeSync, constants, fsyncSync, fstatSync, linkSync, lstatSync, mkdirSync, openSync, readSync, readdirSync, realpathSync, renameSync, unlinkSync, writeFileSync } from "node:fs";
 import { join, resolve } from "node:path";
 
-const PENDING = "review-pending.json";
+export const PENDING = "review-pending.json";
 const MAX = 64 * 1024 * 1024;
 export class RecordedWriteError extends Error {}
-const fail = () => { throw new RecordedWriteError("A recorded update is incomplete or damaged. Retry its original request before changing or merging this logbook."); };
+const fail = () => { throw new RecordedWriteError("The saved change or its receipt is damaged, or a table has neither its before nor its after text."); };
 const json = value => JSON.stringify(value);
 const hash = text => createHash("sha256").update(text).digest("hex");
 const keys = (value, names) => value && typeof value === "object" && !Array.isArray(value)
   && Object.keys(value).length === names.length && names.every(name => Object.hasOwn(value, name));
-const regular = file => {
+const raw = file => {
   let fd;
   try {
     fd = openSync(file, constants.O_RDONLY | constants.O_NOFOLLOW | constants.O_NONBLOCK);
@@ -25,11 +25,18 @@ const regular = file => {
       used += count;
     }
     if (used !== stat.size) fail();
-    const content = bytes.subarray(0, used);
-    if (!Buffer.from(content.toString("utf8")).equals(content)) fail();
-    return content.toString("utf8");
-  } catch (error) { if (error.code === "ENOENT") return undefined; throw error; }
-  finally { if (fd !== undefined) closeSync(fd); }
+    return bytes.subarray(0, used);
+  } catch (error) {
+    if (error.code === "ENOENT") return undefined;
+    if (error.code === "ELOOP") fail(); // a link where a logbook file must be: a retry cannot pass
+    throw error;
+  } finally { if (fd !== undefined) closeSync(fd); }
+};
+const regular = file => {
+  const content = raw(file);
+  if (content === undefined) return undefined;
+  if (!Buffer.from(content.toString("utf8")).equals(content)) fail();
+  return content.toString("utf8");
 };
 const sync = dir => { const fd = openSync(dir, "r"); try { fsyncSync(fd); } finally { closeSync(fd); } };
 const canonical = dir => { if (realpathSync(dir) !== resolve(dir)) fail(); };
@@ -37,7 +44,8 @@ const encode = value => json({ value, hash: hash(json(value)) }) + "\n";
 function decode(file) {
   const text = regular(file);
   if (text === undefined) return undefined;
-  const record = JSON.parse(text);
+  let record;
+  try { record = JSON.parse(text); } catch { fail(); }
   if (!keys(record, ["value", "hash"]) || record.hash !== hash(json(record.value))) fail();
   return record.value;
 }
@@ -57,10 +65,41 @@ function atomic(dir, name, text, immutable = false) {
     if (created && lstatSync(temporary, { throwIfNoEntry: false })) unlinkSync(temporary);
   }
 }
-export function assertNoPendingWrite(dir) {
-  if (lstatSync(join(dir, PENDING), { throwIfNoEntry: false })) fail();
+/** A logbook folder that does not open holds no marker: the reader of that folder names the fault. */
+export function hasPendingWrite(dir) {
+  try { return Boolean(lstatSync(join(dir, PENDING), { throwIfNoEntry: false })); }
+  catch (error) { if (["ENOTDIR", "ELOOP"].includes(error.code)) return false; throw error; }
 }
-/** Guarded core consumers share one pending marker and refuse partial recorded writes. */
+export function assertNoPendingWrite(dir) {
+  if (hasPendingWrite(dir)) throw new RecordedWriteError("A saved change is incomplete. Any write in this project finishes it or says what to do. Then run this command again.");
+}
+/** Do the marker's bytes hold this text? For a reader that must not settle it. A marker that is gone or not a plain file holds nothing here: its own project refuses it when it settles. Any other read error goes to the caller. */
+export function pendingNames(dir, text) {
+  try { return raw(join(dir, PENDING))?.includes(text) ?? false; }
+  catch (error) { if (error instanceof RecordedWriteError) return false; throw error; }
+}
+/** The request that a saved change names, as the marker has it, or undefined. A caller checks its form before it prints it. */
+export function pendingRequest(dir) {
+  try {
+    const { value } = JSON.parse(regular(join(dir, PENDING)));
+    const reference = value.reference ?? value.receipt.reference;
+    return reference.request ?? reference.run;
+  } catch { return undefined; }
+}
+/**
+ * Step 3 of a write: finish or undo a saved change from the marker alone, by its schema. Call under the logbook lock.
+ * The lock holder is the only writer that can work on the marker, so a marker that it sees belongs to a writer that stopped.
+ * Settling gives the caller no authority on the task. True when a marker was settled.
+ */
+export function settlePendingWrite(dir, writers) {
+  if (!hasPendingWrite(dir)) return false;
+  canonical(dir);
+  const saved = decode(join(dir, PENDING));
+  if (!Object.hasOwn(writers, String(saved?.schema))) fail();
+  writers[saved.schema].settle(dir, saved);
+  return true;
+}
+/** Guarded core consumers share one pending marker. Each saved change holds its whole receipt, so any writer publishes it. */
 export function recordedWrites({ schema, tables: TABLES, folder: FOLDER, name: NAME, receiptName, validate }) {
 function recordName(reference) {
   const name = receiptName(reference);
@@ -90,14 +129,12 @@ function readReceipt(dir, reference) {
   if (value !== undefined) validate(value);
   return value;
 }
-/** Pending intent preserves all before/after bytes. Recovery refuses any unrelated table edit. */
-function recover(dir, reference, beforePublish = () => {}) {
+/** Pending intent preserves all before/after bytes. Settling refuses any unrelated table edit. */
+function settle(dir, pending) {
   canonical(dir);
-  const pending = decode(join(dir, PENDING));
-  if (pending === undefined) return undefined;
   if (!keys(pending, ["schema", "receipt", "tables"]) || pending.schema !== schema
-    || !keys(pending.receipt, ["reference", "result"]) || json(pending.receipt.reference) !== json(reference)
-    || !keys(pending.tables, TABLES)) fail();
+    || !keys(pending.receipt, ["reference", "result"]) || !keys(pending.tables, TABLES)) fail();
+  const { reference } = pending.receipt;
   for (const table of TABLES) {
     const value = pending.tables[table];
     if (!keys(value, ["before", "after"]) || typeof value.before !== "string" || typeof value.after !== "string") fail();
@@ -109,7 +146,6 @@ function recover(dir, reference, beforePublish = () => {}) {
   const folder = receiptFolder(dir), receipt = encode(pending.receipt);
   const existing = regular(join(folder, recordName(reference)));
   if (existing !== undefined && existing !== receipt) fail();
-  beforePublish(pending.receipt);
   mkdirSync(folder, { recursive: true, mode: 0o700 }); canonical(folder); sync(dir);
   for (const table of TABLES) {
     const file = `${table}.tsv`, value = pending.tables[table];
@@ -134,13 +170,17 @@ function commit(dir, receipt, after, beforePublish = () => {}) {
   if (existing !== undefined && existing !== encode(receipt)) fail();
   beforePublish(receipt);
   atomic(dir, PENDING, bytes, true);
-  return recover(dir, receipt.reference, beforePublish);
+  return settle(dir, { schema, receipt, tables });
 }
 
-return { readVersion, readReceipt, recover, commit };
+return { readVersion, readReceipt, settle, commit };
 }
 
-/** A prepared intent precedes an external durable decision. Acknowledgement does not release its fence. */
+/**
+ * A prepared intent precedes an external durable decision. Acknowledgement does not release its fence.
+ * The receipt is the commit point: a marker with a receipt rolls forward, and a marker with no receipt restores "before".
+ * Neither needs the provider that decided, so any writer settles. A rejected decision writes no receipt.
+ */
 export function coordinatedWrites({ schema, previousSchemas = [], tables: TABLES, folder: FOLDER, validate }) {
   const name = reference => hash(json([reference.owner, reference.request])) + '.json';
   const folder = dir => {
@@ -178,12 +218,30 @@ export function coordinatedWrites({ schema, previousSchemas = [], tables: TABLES
     if (json(receipt.intent.reference) !== json(reference)) fail();
     return receipt;
   }
-  function pending(dir) {
+  /** What the receipt of one request says about the journal row with this digest, or undefined with no receipt. */
+  function outcome(dir, owner, request, digest) {
+    const receipt = decode(join(folder(dir), name({ owner, request })));
+    if (receipt === undefined) return;
+    checkReceipt(receipt);
+    if (hash(json(receipt.intent)) !== digest) fail();
+    return { accepted: receipt.outcome.accepted, receiptHash: hash(json(receipt)) };
+  }
+  const publishTables = (dir, intent, side) => {
+    for (const table of TABLES) {
+      const text = intent.tables[table][side];
+      if (regular(join(dir, `${table}.tsv`)) !== text) atomic(dir, `${table}.tsv`, text);
+    }
+  };
+  const clear = dir => { unlinkSync(join(dir, PENDING)); sync(dir); };
+  /** Step 3: the receipt decides. An old rejected receipt also restores "before". */
+  function settle(dir, saved) {
     canonical(dir);
-    const intent = decode(join(dir, PENDING));
-    if (intent === undefined) return;
-    checkIntent(intent); checkCurrent(dir, intent);
-    return intent;
+    const intent = checkIntent(saved);
+    checkCurrent(dir, intent);
+    const receipt = readReceipt(dir, intent.reference);
+    if (receipt && json(receipt.intent) !== json(intent)) fail();
+    publishTables(dir, intent, receipt?.outcome.accepted ? "after" : "before");
+    clear(dir);
   }
   function prepare(dir, reference, proposal, after) {
     canonical(dir); assertNoPendingWrite(dir);
@@ -213,47 +271,33 @@ export function coordinatedWrites({ schema, previousSchemas = [], tables: TABLES
     const proof = historyProof(receipt, history);
     if (proof.receiptHash !== (receipt.outcome.accepted ? hash(json(receipt)) : null)) fail();
   }
-  function authenticatePending(receipt, intent, history) {
-    checkIntent(intent); checkReceipt(receipt);
-    if (json(receipt.intent) !== json(intent)) fail();
-    const proof = historyProof(receipt, history);
-    // This exact intent still owns the pending marker. Its acknowledgement may not exist yet.
-    if (proof.receiptHash !== null && (!receipt.outcome.accepted || proof.receiptHash !== hash(json(receipt)))) fail();
-  }
-  function recover(dir, reference, coordination) {
-    const old = readReceipt(dir, reference);
-    const saved = decode(join(dir, PENDING));
-    if (old && (!saved || json(saved.reference) !== json(reference))) {
-      // Authenticate either historical outcome without creating a decision or inspecting current tables.
-      authenticate(old, coordination.history);
-      if (old.outcome.accepted) confirmed(coordination.release(hash(json(old.intent)), hash(json(old))), hash(json(old.intent)), hash(json(old)));
-      return old;
-    }
-    const intent = pending(dir);
-    if (!intent || json(intent.reference) !== json(reference)) fail();
-    if (old && json(old.intent) !== json(intent)) fail();
+  /** Decide the prepared intent of this request, then commit it or take it back. The outcome, or a stop that step 3 settles. */
+  function publish(dir, reference, coordination) {
+    const intent = checkIntent(decode(join(dir, PENDING)));
+    if (json(intent.reference) !== json(reference)) fail();
     const digest = hash(json(intent));
     const decision = coordination.decide(digest, intent.proposal);
     if (!keys(decision, ["digest", "accepted", "reason"]) || decision.digest !== digest) fail();
     const outcome = { accepted: decision.accepted, reason: decision.reason };
     const receipt = checkReceipt({ intent, outcome });
-    if (old && json(old) !== json(receipt)) fail();
     checkCurrent(dir, intent, !outcome.accepted);
+    if (!outcome.accepted) {
+      clear(dir);
+      coordination.void(digest);
+      return outcome;
+    }
     const destination = folder(dir);
     mkdirSync(destination, { recursive: true, mode: 0o700 }); canonical(destination); sync(dir);
-    if (outcome.accepted) for (const table of TABLES) {
-      const after = intent.tables[table].after;
-      if (regular(join(dir, `${table}.tsv`)) !== after) atomic(dir, `${table}.tsv`, after);
-    }
+    publishTables(dir, intent, "after");
     atomic(destination, name(reference), encode(receipt), true);
     const receiptHash = hash(json(receipt));
-    if (outcome.accepted) confirmed(coordination.acknowledge(digest, receiptHash), digest, receiptHash);
+    confirmed(coordination.acknowledge(digest, receiptHash), digest, receiptHash);
     // Revalidate after callbacks; no callback may change the saved tables or intent.
-    if (json(pending(dir)) !== json(intent)) fail();
-    for (const table of TABLES) if (regular(join(dir, `${table}.tsv`)) !== intent.tables[table][outcome.accepted ? "after" : "before"]) fail();
-    unlinkSync(join(dir, PENDING)); sync(dir);
-    if (outcome.accepted) confirmed(coordination.release(digest, receiptHash), digest, receiptHash);
-    return receipt;
+    if (json(decode(join(dir, PENDING))) !== json(intent)) fail();
+    for (const table of TABLES) if (regular(join(dir, `${table}.tsv`)) !== intent.tables[table].after) fail();
+    clear(dir);
+    confirmed(coordination.release(digest, receiptHash), digest, receiptHash);
+    return outcome;
   }
   function history(dir) {
     const path = folder(dir);
@@ -271,5 +315,5 @@ export function coordinatedWrites({ schema, previousSchemas = [], tables: TABLES
     assertNoPendingWrite(dir);
     return json(version);
   }
-  return { prepare, recover, pending, readReceipt, history, readVersion, authenticate, authenticatePending };
+  return { prepare, publish, settle, outcome, readReceipt, history, readVersion, authenticate };
 }

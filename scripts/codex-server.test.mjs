@@ -3541,21 +3541,20 @@ test('native task creation refuses foreign identity storage and invalid requests
   assert.deepEqual(Object.fromEntries(Object.keys(before).map(name => [name, readFileSync(join(f.logbook, name), 'utf8')])), before);
 });
 
-test('native task creation recovers partial publication and blocks unrelated writes until recovery', async t => {
+test('native task creation: the next unrelated writer finishes a partial publication, and the request reads its receipt', async t => {
   const f = await taskCreationFixture(t);
   const receipts = join(f.logbook, 'task-requests');
   const restore = await stopTaskWrite(t, f, 'decisions');
   assert.throws(() => f.create(), /Injected/);
+  restore();
   assert.equal(existsSync(join(f.logbook, 'review-pending.json')), true);
   assert.equal(f.tool.read(f.logbook, 'tasks').length, 1);
-  assert.throws(() => f.cli('task', 'add', '--priority', 'P2', '--title', 'unrelated', '--size', 'tiny'), /incomplete/);
   assert.equal(f.tool.mergeCheck('1'.repeat(40), f.env).ok, false);
-  assert.throws(() => f.create({ ...f.input, title: 'changed retry' }));
-  restore();
-  assert.equal(f.create().decision, 'task-created');
-  assert.equal(f.create().decision, 'already-created');
+  f.cli('task', 'add', '--priority', 'P2', '--title', 'unrelated', '--size', 'tiny');
   assert.equal(existsSync(join(f.logbook, 'review-pending.json')), false);
-  assert.equal(f.tool.read(f.logbook, 'tasks').length, 1);
+  assert.throws(() => f.create({ ...f.input, title: 'changed retry' }));
+  assert.equal(f.create().decision, 'already-created');
+  assert.deepEqual(f.tool.read(f.logbook, 'tasks').map(row => row.title), [f.input.title, 'unrelated']);
   assert.equal(f.tool.read(f.logbook, 'decisions').length, 1);
   assert.equal(readdirSync(receipts).length, 1);
 });
@@ -3634,7 +3633,7 @@ test('T56: task publication recovers every table receipt and pending-marker fail
     try {assert.throws(()=>f.create(),/Injected/);assert.equal(hit,true);}
     finally {t.mock.restoreAll();syncBuiltinESMExports();}
     if(boundary!=='intent') assert.throws(()=>f.create({...f.input,title:'Different request'}));
-    assert.equal(f.create().decision,'task-created');assert.equal(f.create().decision,'already-created');
+    assert.equal(f.create().decision,boundary==='intent'?'task-created':'already-created');assert.equal(f.create().decision,'already-created');
     assert.equal(f.tool.read(f.logbook,'tasks').length,1);assert.equal(f.tool.read(f.logbook,'decisions').length,1);
     assert.equal(existsSync(join(f.logbook,'review-pending.json')),false);
   }
@@ -3681,7 +3680,7 @@ test('T56: read-only aliases remain valid and missing task tables cannot approve
   writeFileSync(join(empty.logbook,'review-pending.json'),'{}');
   assert.equal(empty.tool.logbookView(empty.options.projectDirectory,empty.env).task('T1'),undefined);
   assert.equal(empty.tool.mergeCheck('1'.repeat(40),empty.env).ok,false);
-  assert.throws(()=>empty.cli('init'),/incomplete/);
+  assert.throws(()=>empty.cli('init'),/cannot save changes/);
 });
 
 
@@ -3830,15 +3829,14 @@ test('native run creation recovers a written run whose receipt publication faile
   syncBuiltinESMExports();
   const restore = () => { t.mock.restoreAll(); syncBuiltinESMExports(); }; t.after(restore);
   assert.throws(() => f.createRun(), /Injected/);
+  restore();
   assert.equal(f.tool.read(f.logbook, 'runs').length, 1);
   assert.equal(existsSync(join(f.logbook, 'review-pending.json')), true);
-  assert.throws(() => f.cli('run', 'add', 'T1', '--role', 'qa'), /incomplete/);
   assert.equal(f.tool.mergeCheck('1'.repeat(40), f.env).ok, false);
-  restore();
-  assert.throws(() => f.createRun({ ...f.input, request: turns[2] }));
-  assert.equal(f.createRun().decision, 'run-created'); assert.equal(f.createRun().decision, 'already-created');
-  assert.equal(f.tool.read(f.logbook, 'runs').length, 1);
+  f.cli('run', 'add', 'T1', '--role', 'qa');
   assert.equal(existsSync(join(f.logbook, 'review-pending.json')), false);
+  assert.equal(f.createRun().decision, 'already-created');
+  assert.deepEqual(f.tool.read(f.logbook, 'runs').map(row => row.role), ['lead', 'qa']);
 });
 
 test('native run creation preserves unrelated table edits after an interrupted run write', async t => {
@@ -4174,26 +4172,25 @@ async function stopReviewWrite(t, f, table) {
   t.after(restore);
   return restore;
 }
-for (const table of ["tasks", "findings", "ledger", "decisions"]) test(`T59: review acceptance recovers a failed ${table} write and blocks merging while incomplete`, async t => {
+for (const table of ["tasks", "findings", "ledger", "decisions"]) test(`T59: the next writer finishes a failed ${table} review write, and the merge check waits for it`, async t => {
   const f = await reviewAcceptanceFixture(t, { findings: [{ severity: "high", summary: "Preserve this finding" }] });
   fixtureTaskField(f, "state", "verified");
   for (const kind of ["checks-pass", "review-clean", "qa-pass"]) f.cli("verdict", "T1", "--sha", f.preparation.review.sha, "--kind", kind);
   assert.equal(f.tool.mergeCheck(f.preparation.review.sha, f.env).ok, true);
   const restore = await stopReviewWrite(t, f, table);
   assert.throws(() => f.accept(), /Injected review write failure/);
-  assert(existsSync(join(f.logbook, "review-pending.json")));
-  assert.match(f.tool.mergeCheck(f.preparation.review.sha, f.env).reason, /recorded update is incomplete/);
-  assert.throws(() => f.cli("log", "T1", "unrelated change", "--why", "must wait"), /recorded update is incomplete/);
   restore();
+  assert(existsSync(join(f.logbook, "review-pending.json")));
+  assert.match(f.tool.mergeCheck(f.preparation.review.sha, f.env).reason, /holds an incomplete saved change, and its ledger or that change names/);
   // A changed Git head does not erase a write intent already validated for the older commit.
   f.git("commit", "--quiet", "--allow-empty", "-m", "later head");
-  const result = f.accept();
-  assert.equal(result.decision, "review-accepted"); assert.equal(result.sha, f.preparation.review.sha);
+  f.cli("log", "T1", "unrelated change", "--why", "the next writer settles first");
   assert.equal(existsSync(join(f.logbook, "review-pending.json")), false);
+  const result = f.accept();
+  assert.equal(result.decision, "already-accepted"); assert.equal(result.sha, f.preparation.review.sha);
   assert.equal(f.tool.read(f.logbook, "findings").length, 1);
   assert.equal(f.tool.read(f.logbook, "ledger").filter(row => row.run === "R1").length, 1);
   assert.equal(f.tool.read(f.logbook, "tasks")[0].state, "reviewing");
-  assert.deepEqual(f.accept(), { ...result, decision: "already-accepted" });
 });
 
 test("T59: review acceptance recovery preserves unexpected table changes and refuses damaged pending evidence", async t => {
@@ -4212,7 +4209,7 @@ test("T59: review acceptance recovery preserves unexpected table changes and ref
   assert.throws(() => f.accept());
   assert.equal(f.tool.mergeCheck(f.preparation.review.sha, f.env).ok, false);
   writeFileSync(file, saved);
-  assert.equal(f.accept().decision, "review-accepted");
+  assert.equal(f.accept().decision, "already-accepted");
 });
 
 test("T59: packaged review acceptance requires the chief and preserves one verdict after reconnect", async t => {
@@ -4364,7 +4361,7 @@ for (const boundary of ['intent','receipt','cleanup']) test(`T59: review publica
   syncBuiltinESMExports();
   const restore=()=>{t.mock.restoreAll();syncBuiltinESMExports();};t.after(restore);
   assert.throws(()=>f.accept(),/Injected publication boundary/);restore();
-  const result=f.accept(); assert.equal(result.decision,'review-accepted');
+  const result=f.accept(); assert.equal(result.decision,boundary==='intent'?'review-accepted':'already-accepted');
   assert.equal(f.tool.read(f.logbook,'ledger').length,1);assert.equal(f.tool.read(f.logbook,'findings').length,1);
   assert.equal(f.tool.read(f.logbook,'tasks')[0].state,'reviewing');assert.equal(existsSync(join(f.logbook,'review-pending.json')),false);
   assert.deepEqual(f.accept(),{...result,decision:'already-accepted'});
@@ -4521,7 +4518,7 @@ const taskReadDiskSnapshot = f => {
     pending: existsSync(join(dir,'review-pending.json')) ? readFileSync(join(dir,'review-pending.json'),'utf8') : null,
     receipts: ['task-requests','run-requests','reviews','reports'].map(name=>[name,tree(join(dir,name))]), admission: journalBytes(f) };
 };
-for (const writer of ['task','run','review']) test(`T61: task reader refuses a valid recoverable ${writer} intent without publishing or recovery`, async t => {
+for (const writer of ['task','run','review']) test(`T578: task reader takes the lock, so it settles a saved ${writer} write`, async t => {
   const f = writer === 'task' ? await taskCreationFixture(t) : writer === 'run' ? await runCreationFixture(t) : await reviewAcceptanceFixture(t);
   if (writer === 'task') f.create();
   const {readNativeTask} = await import(pathToFileURL(join(f.plugin,'runtime/task-read.mjs')));
@@ -4533,9 +4530,8 @@ for (const writer of ['task','run','review']) test(`T61: task reader refuses a v
   const restore = await stopTaskWrite(t,f,writer === 'run' ? 'runs' : writer === 'review' ? 'ledger' : 'tasks');
   assert.throws(publish,/Injected/);restore();
   const pending=taskReadDiskSnapshot(f);assert.notEqual(pending.pending,null);
-  assert.throws(read);assert.deepEqual(taskReadDiskSnapshot(f),pending);
-  const result=publish();assert.equal(result.decision,writer === 'task' ? 'task-created' : writer === 'run' ? 'run-created' : 'review-accepted');
-  assert.equal(existsSync(join(f.logbook,'review-pending.json')),false,'the unchanged intent remains recoverable by its writer');
+  assert.equal(read().task.id,'T1');assert.equal(existsSync(join(f.logbook,'review-pending.json')),false);
+  const result=publish();assert.equal(result.decision,writer === 'review' ? 'already-accepted' : 'already-created');
   const completed=taskReadDiskSnapshot(f);assert.equal(read().task.id,'T1');assert.deepEqual(taskReadDiskSnapshot(f),completed);
 });
 
@@ -4746,13 +4742,12 @@ test('T63: interrupted finish retains its fence across failed publication and re
   const restore = await stopReviewWrite(t, f, 'runs');
   assert.throws(() => f.finish(), /Injected/); restore();
   assert.deepEqual(interruptedTables(f), before);
-  const pending = readFileSync(join(f.logbook, 'review-pending.json'), 'utf8');
   assert.equal(f.core.readAdmission(f.options.directory).interruptedFinishes[0].receiptHash, undefined);
   assert.throws(() => f.finish({ ...f.input, status: 'failed' }));
-  assert.equal(readFileSync(join(f.logbook, 'review-pending.json'), 'utf8'), pending);
-  const result = f.finish(); assert.equal(result.status, 'blocked');
   assert.equal(existsSync(join(f.logbook, 'review-pending.json')), false);
-  assert.deepEqual(f.finish(), { ...result, decision: 'already-finished' });
+  const result = f.finish(); assert.equal(result.status, 'blocked'); assert.equal(result.decision, 'already-finished');
+  assert.deepEqual(f.finish(), result);
+  assert.equal(f.core.readAdmission(f.options.directory).interruptedFinishes.length, 1);
 });
 
 test('T63: malformed interrupted recovery intent cannot publish tables or clear its fence', async t => {
@@ -4780,26 +4775,21 @@ test('T63: packaged finish tool accepts only exclusive report or interrupted inp
   await client.close();
 });
 
-test('T63: recovery refuses a missing subject and any changed or extra run-table delta before publication', async t => {
-  for (const damage of ['missing-task', 'other-row', 'remove-row', 'changed-started', 'changed-model', 'duplicate-row']) {
+test('T63: recovery refuses any changed or extra run-table delta before publication', async t => {
+  for (const damage of ['other-row', 'remove-row', 'changed-started', 'changed-model', 'duplicate-row']) {
     const f = await interruptedRunFixture(t), restore = await stopReviewWrite(t, f, 'runs');
     assert.throws(() => f.finish(), /Injected/); restore();
     const path = join(f.logbook, 'review-pending.json'), record = JSON.parse(readFileSync(path, 'utf8'));
-    if (damage === 'missing-task') {
-      const file = join(f.logbook, 'tasks.tsv'), lines = readFileSync(file, 'utf8').trimEnd().split('\n');
-      writeFileSync(file, lines.filter((line, index) => !index || !line.startsWith('T1\t')).join('\n') + '\n');
-    } else {
-      const lines = record.value.tables.runs.after.trimEnd().split('\n'), columns = lines[0].split('\t');
-      if (damage === 'remove-row') lines.pop();
-      else if (damage === 'duplicate-row') lines.push(lines[1]);
-      else {
-        const index = damage === 'other-row' ? 2 : 1, row = lines[index].split('\t');
-        const key = damage === 'changed-started' ? 'started' : 'model';
-        row[columns.indexOf(key)] = key === 'started' ? '2020-01-01T00:00:00Z' : 'changed';
-        lines[index] = row.join('\t');
-      }
-      record.value.tables.runs.after = lines.join('\n') + '\n';
+    const lines = record.value.tables.runs.after.trimEnd().split('\n'), columns = lines[0].split('\t');
+    if (damage === 'remove-row') lines.pop();
+    else if (damage === 'duplicate-row') lines.push(lines[1]);
+    else {
+      const index = damage === 'other-row' ? 2 : 1, row = lines[index].split('\t');
+      const key = damage === 'changed-started' ? 'started' : 'model';
+      row[columns.indexOf(key)] = key === 'started' ? '2020-01-01T00:00:00Z' : 'changed';
+      lines[index] = row.join('\t');
     }
+    record.value.tables.runs.after = lines.join('\n') + '\n';
     record.hash = createHash('sha256').update(JSON.stringify(record.value)).digest('hex');
     const bytes = JSON.stringify(record) + '\n'; writeFileSync(path, bytes);
     const before = interruptedTables(f), journal = f.core.readAdmission(f.options.directory);
@@ -5509,17 +5499,19 @@ test('T13: authenticated metadata update and historical retry preserve later tas
   assert.equal(state.taskUpdates.length, 2); assert.ok(state.taskUpdates.every(row => row.released));
 });
 
-test('T13: disruptive task update records immutable rejection for unresolved native work', async t => {
+test('T578: a rejected task update writes no receipt, and its retry gets a fresh answer', async t => {
   const f = await nativeTaskUpdateFixture(t);
   const request = f.request({ state: 'briefed' });
   const result = f.update(request);
   assert.equal(result.decision, 'task-update-rejected'); assert.match(result.reason, /Reconcile or interrupt/);
   assert.equal(f.snapshot().task.state, 'framed');
+  assert.equal(existsSync(join(f.assignmentLogbook, 'task-updates')), false);
+  assert.equal(existsSync(join(f.assignmentLogbook, 'review-pending.json')), false);
+  assert.deepEqual(f.update(request).decision, 'task-update-rejected', 'the task did not change, so the fresh answer is the same');
   appendReport(f); f.policy.completeChild(f.stop, f.native(childActor));
-  assert.deepEqual(f.update(request), result);
-  const accepted = f.update(f.request({ state: 'briefed' }, 'a3333333-3333-4333-8333-333333333333'));
-  assert.equal(accepted.task.state, 'briefed');
-  assert.equal(f.core.readAdmission(f.options.directory).taskUpdates.length, 2);
+  assert.equal(f.update(request).task.state, 'briefed');
+  assert.deepEqual(f.core.readAdmission(f.options.directory).taskUpdates.map(row => [row.accepted, row.void === true, row.released === true]),
+    [[false, true, false], [false, true, false], [true, false, true]]);
 });
 
 async function taskUpdateCoordinator(f, request) {
@@ -5527,17 +5519,9 @@ async function taskUpdateCoordinator(f, request) {
   const context = chiefLogbook(f.native(session), f.options);
   const [project, ownerSession, epoch] = JSON.parse(context.owner);
   let update;
-  const saved = digest => {
-    if (update?.digest === digest) return update;
-    const rows = f.core.readAdmission(f.options.directory).taskUpdates?.filter(row =>
-      Object.entries({ project, session: ownerSession, epoch, request: request.request, task: request.task, digest })
-        .every(([key, value]) => row.update[key] === value)) ?? [];
-    assert.equal(rows.length, 1, 'historical coordination requires the exact saved update');
-    return rows[0].update;
-  };
   const coordination = {
     history(digest, proposal) {
-      const row = f.core.readAdmission(f.options.directory).taskUpdates?.find(row =>
+      const row = f.core.readAdmission(f.options.directory).taskUpdates?.find(row => !row.void &&
         Object.entries({ project, session: ownerSession, epoch, request: request.request, task: request.task, digest, disruptive: proposal.disruptive })
           .every(([key, value]) => row.update[key] === value));
       if (!row) throw Error('Missing history');
@@ -5549,16 +5533,46 @@ async function taskUpdateCoordinator(f, request) {
       return { digest, accepted: row.accepted, reason: row.reason };
     },
     acknowledge(digest, receiptHash) {
-      const row = f.core.acknowledgeTaskUpdate(f.options.directory, saved(digest), receiptHash);
+      const row = f.core.acknowledgeTaskUpdate(f.options.directory, update, receiptHash);
       return { digest: row.update.digest, receiptHash: row.receiptHash };
     },
     release(digest, receiptHash) {
-      const row = f.core.releaseTaskUpdate(f.options.directory, saved(digest), receiptHash);
+      const row = f.core.releaseTaskUpdate(f.options.directory, update, receiptHash);
       return { digest: row.update.digest, receiptHash: row.receiptHash };
     },
+    void() { f.core.voidTaskUpdate(f.options.directory, update); },
   };
   const run = callbacks => context.tool.updateRequestedTask({ ...request, project: context.project, owner: context.owner }, context.env, callbacks);
   return { run, coordination };
+}
+
+test('T578: a task update behind an unresolved one gets a step that its chief can do', async t => {
+  const f = await nativeTaskUpdateFixture(t);
+  const first = await taskUpdateCoordinator(f, f.request({ title: 'First' }));
+  assert.equal(first.coordination.decide('a'.repeat(64), { disruptive: false }).accepted, true);
+  const second = await taskUpdateCoordinator(f, { ...f.request({ title: 'Second' }), request: '00000000-0000-4000-8000-000000000578' });
+  assert.deepEqual(second.coordination.decide('b'.repeat(64), { disruptive: false }), { digest: 'b'.repeat(64), accepted: false,
+    reason: 'Another task update is unresolved. Reconcile or interrupt the open assignments of this task, then retry.' });
+});
+
+/** An earlier version wrote a receipt for a rejection, and it left its journal row open. This keeps one, in those bytes. */
+async function oldRejection(f, request) {
+  const { run, coordination } = await taskUpdateCoordinator(f, request);
+  let intent, outcome;
+  const result = run({ ...coordination,
+    decide(...args) {
+      intent = JSON.parse(readFileSync(join(f.assignmentLogbook, 'review-pending.json'), 'utf8')).value;
+      const decision = coordination.decide(...args);
+      outcome = { accepted: decision.accepted, reason: decision.reason };
+      return decision;
+    },
+    void() {} });
+  assert.equal(result.decision, 'task-update-rejected');
+  const value = { intent, outcome }, folder = join(f.assignmentLogbook, 'task-updates');
+  mkdirSync(folder, { recursive: true });
+  const name = createHash('sha256').update(JSON.stringify([intent.reference.owner, request.request])).digest('hex') + '.json';
+  writeFileSync(join(folder, name), JSON.stringify({ value, hash: createHash('sha256').update(JSON.stringify(value)).digest('hex') }) + '\n');
+  return result;
 }
 
 for (const fault of ['unknown-decision', 'promise-ack', 'empty-ack', 'wrong-ack', 'reverted-after', 'release-crash']) {
@@ -5580,7 +5594,7 @@ for (const fault of ['unknown-decision', 'promise-ack', 'empty-ack', 'wrong-ack'
     assert.throws(() => run(callbacks));
     const pending = existsSync(join(f.assignmentLogbook, 'review-pending.json'));
     assert.equal(pending, fault !== 'release-crash');
-    if (pending) assert.throws(() => f.snapshot());
+    if (pending) assert.throws(() => f.assignmentTool.assertTaskUpdateOpen({ project: f.options.projectDirectory }, f.assignmentEnv));
     else assert.throws(() => f.core.assertTaskAdmissionOpen(f.options.directory, f.options.project, 'T1'));
     const recovered = f.update(request);
     assert.equal(recovered.task.title, 'Durable title');
@@ -5608,12 +5622,13 @@ for (const pending of [false, true]) test(`T13: recovered child terminal evidenc
   assert.equal(f.core.readAdmission(f.options.directory).completions.length, 1);
   assert.equal(f.assignmentTool.read(f.assignmentLogbook, 'runs').find(row => row.id === 'R1').status, 'running');
   if (pending) {
-    assert.equal(existsSync(join(f.assignmentLogbook, 'review-pending.json')), true);
-    f.update(request);
+    // The terminal check settles first, so the committed update closes and its retry reads the receipt.
+    assert.equal(existsSync(join(f.assignmentLogbook, 'review-pending.json')), false);
+    assert.equal(f.update(request).decision, 'task-update-history');
   } else assert.equal(f.snapshot().task.state, 'held');
 });
 
-test('T13: historical success does not validate or clear a later pending update', async t => {
+test('T578: a saved change that cannot finish stops even a historical retry, and it keeps its bytes', async t => {
   const f = await nativeTaskUpdateFixture(t), first = f.request({ title: 'First accepted title' });
   f.update(first);
   const second = f.request({ title: 'Later pending title' }, 'a4444444-4444-4444-8444-444444444444');
@@ -5621,7 +5636,10 @@ test('T13: historical success does not validate or clear a later pending update'
   assert.throws(() => run({ ...coordination, acknowledge() { throw Error('injected outage'); } }));
   appendFileSync(join(f.assignmentLogbook, 'tasks.tsv'), 'unrelated damaged row\n');
   const before = readFileSync(join(f.assignmentLogbook, 'tasks.tsv'), 'utf8');
-  assert.equal(f.update(first).decision, 'task-update-history');
+  assert.throws(() => f.update(first), { code: 'stuck-write' });
+  const client = await connect(t, f, '0.160.0', '', 'sage_update_task');
+  assert.equal((await client.call(first)).error, 'Sage could not update this task. [stuck-write] This command changed nothing. This project cannot save changes; other projects work. Tell the owner. The owner restores the folder that `sage logbook` prints from a backup; rows newer than the backup are lost. Do not remove review-pending.json alone: a half-published update then keeps mixed tables.');
+  await client.close();
   assert.equal(readFileSync(join(f.assignmentLogbook, 'tasks.tsv'), 'utf8'), before);
   assert.equal(existsSync(join(f.assignmentLogbook, 'review-pending.json')), true);
   assert.equal(f.core.readAdmission(f.options.directory).taskUpdates.at(-1).released, undefined);
@@ -5678,8 +5696,8 @@ for (const boundary of ['intent', 'tasks', 'runs', 'decisions', 'receipt', 'clea
     assert.equal(f.assignmentTool.read(f.assignmentLogbook, 'runs').find(row => row.id === 'R1').status, 'blocked');
     assert.equal(f.assignmentTool.read(f.assignmentLogbook, 'decisions').filter(row => row.decision === 'R1 blocked: T1 went back to briefed').length, 1);
     assert.equal(existsSync(join(f.assignmentLogbook, 'review-pending.json')), false);
-    assert.equal(f.core.readAdmission(f.options.directory).taskUpdates.length, 1);
-    assert.equal(f.core.readAdmission(f.options.directory).taskUpdates[0].released, true);
+    const live = f.core.readAdmission(f.options.directory).taskUpdates.filter(row => !row.void);
+    assert.equal(live.length, 1); assert.equal(live[0].released, true);
   });
 }
 
@@ -5723,10 +5741,11 @@ test('T13: preparation pins task generation before capture across branch away an
   f.assignmentCli('task', 'T1', 'set', 'branch=codex/t1-original');
   const fs = (await import('node:fs')).default;
   const { syncBuiltinESMExports } = await import('node:module');
-  const original = fs.rmdirSync; let captured = false;
+  // The first lock is the settle step. The second is the capture, after the generation is pinned.
+  const original = fs.rmdirSync; let captured = false, locks = 0;
   t.mock.method(fs, 'rmdirSync', (path, ...args) => {
     const result = original(path, ...args);
-    if (!captured && path === join(f.assignmentLogbook, '.lock')) {
+    if (!captured && path === join(f.assignmentLogbook, '.lock') && ++locks === 2) {
       captured = true;
       f.update(f.request({ branch: 'codex/t1-away' }));
       f.update(f.request({ branch: 'codex/t1-original' }, 'a5555555-5555-4555-8555-555555555555'));
@@ -5815,7 +5834,7 @@ test('T584: an update saved before the arena rules replays: a logbook check read
   assert.match(f.cli('merge-check', '--sha', f.head), /T1 may merge/);
 });
 
-for (const corruption of ['task-delta', 'run-delta', 'decision-delta', 'timestamp', 'identity']) test(`T13: valid checksum cannot authorize corrupted ${corruption}`, async t => {
+for (const corruption of ['task-delta', 'run-delta', 'decision-delta', 'timestamp']) test(`T13: valid checksum cannot authorize corrupted ${corruption}`, async t => {
   const f = await nativeTaskUpdateFixture(t), request = f.request({ title: 'Legal title' });
   const { run, coordination } = await taskUpdateCoordinator(f, request);
   assert.throws(() => run({ ...coordination, decide() { throw Error('injected unknown outcome'); } }));
@@ -5825,7 +5844,6 @@ for (const corruption of ['task-delta', 'run-delta', 'decision-delta', 'timestam
   if (corruption === 'run-delta') intent.tables.runs.after += 'forged run\n';
   if (corruption === 'decision-delta') intent.tables.decisions.after += 'forged decision\n';
   if (corruption === 'timestamp') intent.proposal.at = '2026-99-99T00:00:00Z';
-  if (corruption === 'identity') intent.reference.owner = 'different-owner';
   envelope.hash = createHash('sha256').update(JSON.stringify(intent)).digest('hex');
   writeFileSync(file, JSON.stringify(envelope) + '\n');
   const before = Object.fromEntries(['tasks', 'runs', 'decisions'].map(table => [table, readFileSync(join(f.assignmentLogbook, `${table}.tsv`), 'utf8')]));
@@ -5986,27 +6004,23 @@ test('UX-T13-1: MCP stale and invalid requests give safe corrective guidance wit
   assert.deepEqual(updateTableBytes(f), before); await client.close();
 });
 
-test('UX-T13-1: MCP distinguishes pending original request old owner and corrupt proof', async t => {
+test('T578: MCP settles a stopped update for another owner, and it names corrupt proof', async t => {
   const f = await nativeTaskUpdateFixture(t), request = f.request({ title: 'Pending title' });
-  const another = { ...request, request: 'c2222222-2222-4222-8222-222222222222' };
+  const another = { ...request, request: 'c2222222-2222-4222-8222-222222222222', changes: { title: 'Title of another owner' } };
   const { run, coordination } = await taskUpdateCoordinator(f, request);
   assert.throws(() => run({ ...coordination, decide() { throw Error('private uncertainty detail'); } }));
   const client = await connect(t, f, '0.160.0', '', 'sage_update_task'), before = updateTableBytes(f);
-  const pending = await client.call(another);
-  assert.match(pending.error, /\[pending-request\].*original request UUID and identical contents/);
-  f.core.activateAdmission(f.options.directory, { project: f.options.project, session: `codex:${turns[2]}`, activation: turns[0] });
-  const owner = await client.call(another, turns[2]);
-  assert.match(owner.error, /\[old-owner\].*original owner connection/);
   const file = join(f.assignmentLogbook, 'review-pending.json'), original = readFileSync(file, 'utf8');
   writeFileSync(file, '{}');
   const corrupt = await client.call(request);
-  assert.match(corrupt.error, /\[invalid-state\].*Preserve/);
-  for (const error of [pending.error, owner.error, corrupt.error]) {
-    assert.doesNotMatch(error, new RegExp(f.dir)); assert.doesNotMatch(error, /private uncertainty detail|codex:/);
-  }
+  assert.match(corrupt.error, /\[stuck-write\] This command changed nothing\. This project cannot save changes/);
+  assert.doesNotMatch(corrupt.error, new RegExp(f.dir)); assert.doesNotMatch(corrupt.error, /private uncertainty detail|codex:/);
   assert.deepEqual(updateTableBytes(f), before);
   writeFileSync(file, original);
-  assert.equal((await client.call(request)).decision, 'task-updated'); await client.close();
+  f.core.activateAdmission(f.options.directory, { project: f.options.project, session: `codex:${turns[2]}`, activation: turns[0] });
+  assert.equal((await client.call(another, turns[2])).task.title, 'Title of another owner');
+  assert.equal(existsSync(file), false);
+  await client.close();
 });
 
 test('UX-T13-1: actual MCP unknown publication response requires exact retry without leaking exception text', async t => {
@@ -6150,18 +6164,17 @@ for (const continued of [false, true]) for (const boundary of ['tasks', 'decisio
     assert.equal(f.policy.completeChild(f.stop, f.native(childActor)).decision, 'completed');
     assert.equal(f.policy.completeChild(f.stop, f.native(childActor)).decision, 'already-completed');
     assert.equal((f.core.readAdmission(f.options.directory).completions ?? []).length, before + 1);
+    // The terminal check settled the saved change: it had no receipt, so the tables are "before" again.
+    assert.equal(existsSync(pending.file), false);
+    assert.deepEqual(updateTableBytes(f), Object.fromEntries(['tasks', 'runs', 'decisions'].map(table => [table, pending.intent.tables[table].before])));
     const intake = await import(pathToFileURL(join(f.plugin, 'runtime/report-intake.mjs')));
     const receipt = intake.readChildReport({ name: f.name }, f.native(session), f.options);
     intake.recordChildReport({ name: f.name, reportHash: receipt.reportHash }, f.native(session), f.options);
     assert.equal(f.core.readAdmission(f.options.directory).reports.at(-1).text, reportText);
-    const api = await import(pathToFileURL(join(f.plugin, 'runtime/run-report.mjs')));
-    assert.throws(() => api.finishRecordedRun({ assignment: receipt.assignment, reportHash: receipt.reportHash }, f.native(session), f.options), /incomplete/);
-    assert.throws(() => f.assignmentCli('verdict', 'T1', '--kind', 'checks-pass', '--sha', 'a'.repeat(40)), /incomplete/);
-    assert.deepEqual(updateTableBytes(f), pending.tables);
     assert.equal(f.update(request).task.state, 'held');
     assert.equal(f.update(request).decision, 'task-update-history');
     assert.equal(f.assignmentTool.read(f.assignmentLogbook, 'runs').find(row => row.id === f.run).status, 'running');
-    assert.equal(f.core.readAdmission(f.options.directory).taskUpdates.length, 1);
+    assert.equal(f.core.readAdmission(f.options.directory).taskUpdates.filter(row => !row.void).length, 1);
   });
 }
 
@@ -6189,9 +6202,6 @@ for (const continued of [false, true]) for (const boundary of ['tasks', 'runs', 
     assert.equal(intake.recordChildReport(input, f.native(session), f.options).decision, 'report-recorded');
     assert.equal(intake.recordChildReport(input, f.native(session), f.options).decision, 'already-recorded');
     assert.equal(f.core.readAdmission(f.options.directory).reports.at(-1).text, reportText);
-    const api = await import(pathToFileURL(join(f.plugin, 'runtime/run-report.mjs')));
-    assert.throws(() => api.finishRecordedRun({ assignment: receipt.assignment, reportHash: receipt.reportHash }, f.native(session), f.options), /incomplete/);
-    assert.throws(() => f.assignmentCli('verdict', 'T1', '--kind', 'checks-pass', '--sha', 'a'.repeat(40)), /incomplete/);
     assert.deepEqual(updateTableBytes(f), pending.tables);
     assert.equal(f.update(request).task.state, 'briefed');
     assert.equal(f.update(request).decision, 'task-update-history');
@@ -6205,7 +6215,7 @@ for (const alteration of ['accepted-to-rejected', 'rejection-reason', 'rejected-
   test(`SEC-T13-1: historical receipt refuses ${alteration} without changing either store`, async t => {
     const f = await nativeTaskUpdateFixture(t), rejected = alteration !== 'accepted-to-rejected';
     let request = f.request(rejected ? { state: 'briefed' } : { title: 'Accepted title' });
-    const result = f.update(request);
+    const result = rejected ? await oldRejection(f, request) : f.update(request);
     assert.equal(result.decision, rejected ? 'task-update-rejected' : 'task-updated');
     const folder = join(f.assignmentLogbook, 'task-updates'), file = join(folder, readdirSync(folder)[0]);
     const envelope = JSON.parse(readFileSync(file, 'utf8'));
@@ -6235,9 +6245,9 @@ for (const alteration of ['accepted-to-rejected', 'rejection-reason', 'rejected-
   });
 }
 
-for (const rejected of [false, true]) test(`SEC-T13-1: actual MCP refuses a forged ${rejected ? 'rejected' : 'accepted'} historical reason and preserves a later pending update`, async t => {
+for (const rejected of [false, true]) test(`SEC-T13-1: actual MCP refuses a forged ${rejected ? 'rejected' : 'accepted'} historical reason and still settles a later saved update`, async t => {
   const f = await nativeTaskUpdateFixture(t), request = f.request(rejected ? { state: 'briefed' } : { title: 'Historical title' });
-  f.update(request);
+  if (rejected) await oldRejection(f, request); else f.update(request);
   const folder = join(f.assignmentLogbook, 'task-updates'), file = join(folder, readdirSync(folder)[0]);
   const envelope = JSON.parse(readFileSync(file, 'utf8'));
   envelope.value.outcome = { accepted: false, reason: 'private forged rejection /hidden/path' };
@@ -6246,13 +6256,13 @@ for (const rejected of [false, true]) test(`SEC-T13-1: actual MCP refuses a forg
   const later = f.request({ title: 'Later pending' }, 'e2222222-2222-4222-8222-222222222222');
   const { run, coordination } = await taskUpdateCoordinator(f, later);
   assert.throws(() => run({ ...coordination, acknowledge() { throw Error('injected ack outage'); } }));
-  const pending = join(f.assignmentLogbook, 'review-pending.json'), pendingBytes = readFileSync(pending, 'utf8');
-  const before = updateTableBytes(f), journal = journalBytes(f), client = await connect(t, f, '0.160.0', '', 'sage_update_task');
+  const pending = join(f.assignmentLogbook, 'review-pending.json');
+  const before = updateTableBytes(f), client = await connect(t, f, '0.160.0', '', 'sage_update_task');
   const response = await client.call(request);
   assert.match(response.error ?? '', /\[invalid-state\]/);
   assert.doesNotMatch(JSON.stringify(response), /private forged|hidden\/path/);
-  assert.equal(readFileSync(pending, 'utf8'), pendingBytes);
-  assert.deepEqual(updateTableBytes(f), before); assert.deepEqual(journalBytes(f), journal);
+  assert.equal(existsSync(pending), false, 'step 3 runs before the request, so the later update settled');
+  assert.deepEqual(updateTableBytes(f), before, 'the later update had a receipt, so its after tables stay');
   await client.close();
 });
 
@@ -6261,7 +6271,7 @@ test('SEC-T13-1: native recovered terminal refuses a rejected receipt forged int
   appendRecoveryCheckpoint(transcript);
   const read = await assignmentReader(f); appendAssignmentRecovery(transcript, read());
   const request = f.request({ branch: 'codex/t1-forged-history' });
-  assert.equal(f.update(request).decision, 'task-update-rejected');
+  await oldRejection(f, request);
   const folder = join(f.assignmentLogbook, 'task-updates'), file = join(folder, readdirSync(folder)[0]);
   const envelope = JSON.parse(readFileSync(file, 'utf8'));
   envelope.value.outcome = { accepted: true, reason: '' };
@@ -6292,32 +6302,182 @@ for (const fault of ['promise', 'thenable', 'missing-key', 'wrong-hash']) test(`
   assert.deepEqual(updateTableBytes(f), before); assert.deepEqual(journalBytes(f), journal);
 });
 
-for (const rejected of [false, true]) test(`SEC-T13-1: legitimate ${rejected ? 'rejected' : 'accepted'} history preserves later pending bytes`, async t => {
+for (const rejected of [false, true]) test(`T578: a ${rejected ? 'rejected' : 'accepted'} old result still reads after a later saved update settles`, async t => {
   const f = await nativeTaskUpdateFixture(t), request = f.request(rejected ? { state: 'briefed' } : { title: 'Original title' });
-  const first = f.update(request);
+  const first = rejected ? await oldRejection(f, request) : f.update(request);
   appendReport(f); f.policy.completeChild(f.stop, f.native(childActor));
   const later = f.request({ title: 'Later title' }, 'e3333333-3333-4333-8333-333333333333');
   const { run, coordination } = await taskUpdateCoordinator(f, later);
   assert.throws(() => run({ ...coordination, acknowledge() { throw Error('injected acknowledgement outage'); } }));
-  const pending = join(f.assignmentLogbook, 'review-pending.json'), marker = readFileSync(pending, 'utf8');
-  const before = updateTableBytes(f), journal = journalBytes(f);
   assert.deepEqual(f.update(request), rejected ? first : { ...first, decision: 'task-update-history' });
-  assert.deepEqual(updateTableBytes(f), before); assert.deepEqual(journalBytes(f), journal);
-  assert.equal(readFileSync(pending, 'utf8'), marker);
-  assert.equal(f.update(later).task.title, 'Later title');
+  assert.equal(existsSync(join(f.assignmentLogbook, 'review-pending.json')), false);
+  assert.equal(f.snapshot().task.title, 'Later title');
+  assert.equal(f.update(later).decision, 'task-update-history');
 });
 
-test('SEC-T13-1: historical accepted receipt without acknowledgement refuses without creating proof', async t => {
+test('T578: a receipt with no acknowledgement and no marker closes its row, as after a settle by the other provider', async t => {
   const f = await nativeTaskUpdateFixture(t), request = f.request({ title: 'Published but unacknowledged' });
   const { run, coordination } = await taskUpdateCoordinator(f, request);
   assert.throws(() => run({ ...coordination, acknowledge() { throw Error('injected acknowledgement outage'); } }));
-  // Removing the marker before acknowledgement is corruption, not a supported crash state.
   rmSync(join(f.assignmentLogbook, 'review-pending.json'));
-  const before = updateTableBytes(f), journal = journalBytes(f);
-  assert.throws(() => f.update(request), error => error.code === 'invalid-state');
-  assert.deepEqual(updateTableBytes(f), before); assert.deepEqual(journalBytes(f), journal);
-  assert.equal(f.core.readAdmission(f.options.directory).taskUpdates[0].receiptHash, undefined);
+  assert.equal(f.update(request).decision, 'task-update-history');
+  const row = f.core.readAdmission(f.options.directory).taskUpdates[0];
+  assert.equal(row.released, true); assert.match(row.receiptHash, /^[0-9a-f]{64}$/);
+  assert.throws(() => f.core.voidTaskUpdate(f.options.directory, row.update), /cannot be void/);
 });
+
+// T578: a write that one provider started and did not finish. Each test stops the write at one step, as a crash there
+// would. Then the Claude plugin, which has no journal, makes an ordinary write. Then Codex closes its journal row.
+const otherProviderWrite = async (f, env) => (await import('../plugins/sage/skills/sage/sage.mjs')).sage(['task', 'add', '--title', 'The other provider',
+  '--size', 'tiny', '--priority', 'P2', '--project', f.options.projectDirectory], { ...env, SAGE_TEST_PIDS: '{}' });
+async function stopFileWrite(t, logbook, folder, step, after) {
+  const fs = (await import('node:fs')).default, { syncBuiltinESMExports } = await import('node:module');
+  const method = ['intent', 'receipt'].includes(step) ? 'linkSync' : step === 'clear' ? 'unlinkSync' : 'renameSync';
+  const original = fs[method]; let hit = false;
+  t.mock.method(fs, method, (...args) => {
+    const to = String(args[method === 'unlinkSync' ? 0 : 1]);
+    const matches = step === 'receipt' ? to.startsWith(join(logbook, folder) + '/')
+      : to === join(logbook, ['intent', 'clear'].includes(step) ? 'review-pending.json' : `${step}.tsv`);
+    if (!hit && matches) {
+      hit = true;
+      if (after) original(...args);
+      throw Object.assign(Error('Injected stop'), { code: 'EIO' });
+    }
+    return original(...args);
+  }); syncBuiltinESMExports();
+  return () => { t.mock.restoreAll(); syncBuiltinESMExports(); assert.equal(hit, true, `the write reached ${step}`); };
+}
+const fileSteps = tables => ['intent', ...tables, 'receipt', 'clear'].flatMap(step => [[step, false], [step, true]]);
+
+for (const [step, after] of [...fileSteps(['tasks', 'runs', 'decisions']), ['decide', true], ['acknowledge', true], ['release', true]]) {
+  test(`T578: task update stopped ${after ? 'after' : 'before'} ${step} settles from Claude, then Codex closes its row`, async t => {
+    const f = await nativeTaskUpdateFixture(t), logbook = f.assignmentLogbook;
+    for (const state of ['briefed', 'building', 'held']) f.assignmentCli('task', 'T1', 'set', `state=${state}`);
+    appendReport(f); f.policy.completeChild(f.stop, f.native(childActor));
+    const request = f.request({ state: 'briefed' });
+    if (['decide', 'acknowledge', 'release'].includes(step)) {
+      const { run, coordination } = await taskUpdateCoordinator(f, request);
+      assert.throws(() => run({ ...coordination, [step](...args) { const result = coordination[step](...args); if (result !== undefined) throw Error('Injected stop'); } }), /uncertain|update/i);
+    } else {
+      const restore = await stopFileWrite(t, logbook, 'task-updates', step, after);
+      assert.throws(() => f.update(request), error => error.code === 'uncertain-outcome');
+      restore();
+    }
+    const committed = ['acknowledge', 'clear', 'release'].includes(step) || (step === 'receipt' && after);
+    await otherProviderWrite(f, f.assignmentEnv);
+    assert.equal(existsSync(join(logbook, 'review-pending.json')), false);
+    const tasks = f.assignmentTool.read(logbook, 'tasks'), run = () => f.assignmentTool.read(logbook, 'runs').find(row => row.id === 'R1');
+    assert.equal(tasks.find(row => row.id === 'T1').state, committed ? 'briefed' : 'held');
+    assert.equal(tasks.at(-1).title, 'The other provider');
+    assert.equal(run().status, committed ? 'blocked' : 'running');
+    const result = f.update(request);
+    assert.equal(result.decision, committed ? 'task-update-history' : 'task-updated');
+    assert.equal(f.assignmentTool.read(logbook, 'tasks').find(row => row.id === 'T1').state, 'briefed');
+    assert.equal(run().status, 'blocked');
+    assert.equal(f.assignmentTool.read(logbook, 'decisions').filter(row => row.decision === 'R1 blocked: T1 went back to briefed').length, 1);
+    const rows = f.core.readAdmission(f.options.directory).taskUpdates;
+    assert.equal(rows.filter(row => row.void).length, step === 'intent' || committed ? 0 : 1);
+    assert.deepEqual(rows.filter(row => !row.void).map(row => [row.accepted, row.released]), [[true, true]]);
+    assert.equal(f.core.assertTaskAdmissionOpen(f.options.directory, f.options.project, 'T1'), 1);
+  });
+}
+
+for (const committed of [false, true]) test(`T578: the settle step runs before prepare and assign after Claude settled a ${committed ? 'committed' : 'stopped'} update`, async t => {
+  const f = await nativeTaskUpdateFixture(t);
+  appendReport(f); f.policy.completeChild(f.stop, f.native(childActor));
+  f.assignmentCli('run', 'done', 'R1', '--status', 'done', '--tokens', '1');
+  f.assignmentCli('run', 'add', 'T1', '--role', 'lead');
+  const request = f.request({ branch: 'codex/t1-moved' }), { run, coordination } = await taskUpdateCoordinator(f, request);
+  const stop = committed ? 'acknowledge' : 'decide';
+  assert.throws(() => run({ ...coordination, [stop](...args) { coordination[stop](...args); throw Error('Injected stop'); } }));
+  await otherProviderWrite(f, f.assignmentEnv);
+  assert.throws(() => f.core.assertTaskAdmissionOpen(f.options.directory, f.options.project, 'T1'), /fenced/);
+  assert.equal(f.snapshot().task.branch, committed ? 'codex/t1-moved' : 'codex/t1-fixture');
+  const prepared = f.api.prepareNativeTask({ ...f.input, run: 'R4', name: 'after_settle' }, f.native(session), f.options);
+  const state = f.core.readAdmission(f.options.directory), row = state.taskUpdates[0];
+  assert.deepEqual([row.void === true, row.released === true], [!committed, committed]);
+  assert.equal(state.preparations.find(value => value.id === prepared.preparation).generation, committed ? 1 : 0);
+  assert.equal(f.api.reservePreparedSpawn(f.spawnInput('after_settle', 'after-settle-call'), f.native(session), f.options).decision, 'permit-once');
+});
+
+test('T578: a rejected update stopped before its void gets a fresh answer on retry', async t => {
+  const f = await nativeTaskUpdateFixture(t), request = f.request({ state: 'briefed' });
+  const { run, coordination } = await taskUpdateCoordinator(f, request);
+  assert.throws(() => run({ ...coordination, void() { throw Error('Injected stop'); } }));
+  await otherProviderWrite(f, f.assignmentEnv);
+  appendReport(f); f.policy.completeChild(f.stop, f.native(childActor));
+  assert.equal(f.update(request).task.state, 'briefed');
+  assert.deepEqual(f.core.readAdmission(f.options.directory).taskUpdates.map(row => [row.accepted, row.void === true]), [[false, true], [true, false]]);
+});
+
+for (const claudeFirst of [true, false]) test(`T578: a rejected update stopped before clear ${claudeFirst ? 'settles from Claude' : 'settles on the retry'}, and the retry gets a fresh answer`, async t => {
+  const f = await nativeTaskUpdateFixture(t), request = f.request({ state: 'briefed' }), logbook = f.assignmentLogbook, marker = join(logbook, 'review-pending.json');
+  const restore = await stopFileWrite(t, logbook, 'task-updates', 'clear', false);
+  assert.throws(() => f.update(request), error => error.code === 'uncertain-outcome');
+  restore();
+  assert.equal(existsSync(marker), true);
+  if (claudeFirst) { await otherProviderWrite(f, f.assignmentEnv); assert.equal(existsSync(marker), false); }
+  assert.equal(f.update(request).decision, 'task-update-rejected');
+  assert.equal(existsSync(marker), false);
+  assert.equal(f.snapshot().task.state, 'framed');
+  appendReport(f); f.policy.completeChild(f.stop, f.native(childActor));
+  assert.equal(f.update(request).task.state, 'briefed');
+  assert.deepEqual(f.core.readAdmission(f.options.directory).taskUpdates.map(row => [row.accepted, row.void === true, row.released === true]),
+    [[false, true, false], [false, true, false], [true, false, true]]);
+});
+
+// A stop during Claude's settle of a Codex update: Codex then closes one journal row, with one decision.
+for (const [first, committed] of [['decisions', false], ['receipt', true]]) for (const after of [false, true]) {
+  test(`T578: a settle of a ${committed ? 'committed' : 'stopped'} update stopped ${after ? 'after' : 'before'} ${committed ? 'clear' : 'tasks'}, then Codex retries`, async t => {
+    const f = await nativeTaskUpdateFixture(t), logbook = f.assignmentLogbook, marker = join(logbook, 'review-pending.json');
+    for (const state of ['briefed', 'building', 'held']) f.assignmentCli('task', 'T1', 'set', `state=${state}`);
+    appendReport(f); f.policy.completeChild(f.stop, f.native(childActor));
+    const request = f.request({ state: 'briefed' });
+    const stopped = await stopFileWrite(t, logbook, 'task-updates', first, true);
+    assert.throws(() => f.update(request), error => error.code === 'uncertain-outcome');
+    stopped();
+    const settling = await stopFileWrite(t, logbook, 'task-updates', committed ? 'clear' : 'tasks', after);
+    await assert.rejects(() => otherProviderWrite(f, f.assignmentEnv), /did not finish because of a file error \(EIO\)/);
+    settling();
+    await otherProviderWrite(f, f.assignmentEnv);
+    assert.equal(existsSync(marker), false);
+    assert.equal(f.assignmentTool.read(logbook, 'tasks').find(row => row.id === 'T1').state, committed ? 'briefed' : 'held');
+    assert.equal(f.update(request).decision, committed ? 'task-update-history' : 'task-updated');
+    assert.equal(f.assignmentTool.read(logbook, 'tasks').find(row => row.id === 'T1').state, 'briefed');
+    assert.equal(f.assignmentTool.read(logbook, 'decisions').filter(row => row.decision === 'R1 blocked: T1 went back to briefed').length, 1);
+    assert.deepEqual(f.core.readAdmission(f.options.directory).taskUpdates.filter(row => !row.void).map(row => [row.accepted, row.released]), [[true, true]]);
+  });
+}
+
+const STOPPED_WRITES = {
+  'task creation': { folder: 'task-requests', tables: ['tasks', 'decisions'], fixture: taskCreationFixture, start: f => f.create(), fresh: 'task-created', retried: 'already-created' },
+  'run creation': { folder: 'run-requests', tables: ['runs'], fixture: runCreationFixture, start: f => f.createRun(), fresh: 'run-created', retried: 'already-created' },
+  'review acceptance': { folder: 'reviews', tables: ['tasks', 'findings', 'ledger', 'decisions'], start: f => f.accept(), fresh: 'review-accepted', retried: 'already-accepted',
+    fixture: async t => { const f = await reviewAcceptanceFixture(t, { findings: [{ severity: 'high', summary: 'Keep this finding' }] }); fixtureTaskField(f, 'state', 'verified'); return f; } },
+  'interrupted finish': { folder: 'interrupted-runs', tables: ['runs'], fixture: interruptedRunFixture, start: f => f.finish(), fresh: 'run-finished', retried: 'already-finished' },
+};
+for (const [name, write] of Object.entries(STOPPED_WRITES)) for (const [step, after] of fileSteps(write.tables)) {
+  test(`T578: ${name} stopped ${after ? 'after' : 'before'} ${step} settles from Claude`, async t => {
+    const f = await write.fixture(t), marker = join(f.logbook, 'review-pending.json'), receipts = join(f.logbook, write.folder);
+    const restore = await stopFileWrite(t, f.logbook, write.folder, step, after);
+    assert.throws(() => write.start(f), /Injected|could not/);
+    restore();
+    const saved = step !== 'intent' || after;
+    assert.equal(existsSync(marker), saved && !(step === 'clear' && after));
+    await otherProviderWrite(f, f.env);
+    assert.equal(existsSync(marker), false);
+    assert.equal(existsSync(receipts) ? readdirSync(receipts).length : 0, saved ? 1 : 0, 'the marker holds the whole receipt');
+    assert.equal(write.start(f).decision, saved ? write.retried : write.fresh);
+    assert.equal(readdirSync(receipts).length, 1);
+    assert.equal(write.start(f).decision, write.retried);
+    if (name === 'interrupted finish') {
+      const rows = f.core.readAdmission(f.options.directory).interruptedFinishes;
+      assert.equal(rows.filter(row => row.void).length, saved ? 0 : 1);
+      assert.match(rows.at(-1).receiptHash, /^[0-9a-f]{64}$/);
+      assert.throws(() => f.core.voidInterruptedRunFinish(f.options.directory, rows.at(-1).request), /cannot be void/);
+    }
+  });
+}
 
 test('SEC-T13-1: MCP reports structurally corrupt journal as invalid saved state', async t => {
   const f = await nativeTaskUpdateFixture(t), request = f.request({ title: 'Saved title' });
@@ -6357,7 +6517,7 @@ test('CODE-T13-1: held recovered child without later pending receipt completes',
   assert.equal(f.assignmentTool.read(f.assignmentLogbook, 'runs').find(row => row.id === 'R1').status, 'running');
 });
 
-for (const acknowledged of [false, true]) for (const corruption of ['none', 'pending-outcome', 'pending-intent', 'marker', 'prior-history', ...(acknowledged ? ['ack-hash'] : [])]) {
+for (const acknowledged of [false, true]) for (const corruption of ['none', 'pending-intent', 'marker', 'prior-history', ...(acknowledged ? ['ack-hash'] : [])]) {
   test(`CODE-T13-1: held terminal ${acknowledged ? 'after' : 'before'} acknowledgement with ${corruption}`, async t => {
     const f = await heldRecoveredChild(t), request = f.request({ title: 'Held pending metadata' }, 'f3333333-3333-4333-8333-333333333333');
     const { run, coordination } = await taskUpdateCoordinator(f, request);
@@ -6388,12 +6548,15 @@ for (const acknowledged of [false, true]) for (const corruption of ['none', 'pen
       assert.equal(f.policy.completeChild(f.stop, f.native(childActor)).decision, 'completed');
       assert.equal(f.policy.completeChild(f.stop, f.native(childActor)).decision, 'already-completed');
       assert.equal(f.core.readAdmission(f.options.directory).completions.length, 1);
-      assert.deepEqual(f.core.readAdmission(f.options.directory).taskUpdates, before.taskUpdates);
+      assert.equal(f.core.readAdmission(f.options.directory).taskUpdates.at(-1).released, true);
     } else {
       assert.throws(() => f.policy.completeChild(f.stop, f.native(childActor)));
-      assert.deepEqual(f.core.readAdmission(f.options.directory), before);
+      assert.deepEqual(f.core.readAdmission(f.options.directory).completions, before.completions);
     }
-    assert.deepEqual(updateTableBytes(f), tables); assert.equal(readFileSync(marker, 'utf8'), pendingBytes);
+    // A marker with a receipt rolls forward, so the after tables stay. A marker that cannot finish keeps its bytes.
+    assert.deepEqual(updateTableBytes(f), tables);
+    if (['marker', 'pending-intent'].includes(corruption)) assert.equal(readFileSync(marker, 'utf8'), pendingBytes);
+    else assert.equal(existsSync(marker), false);
     assert.equal(f.assignmentTool.read(f.assignmentLogbook, 'runs').find(row => row.id === 'R1').status, 'running');
     if (restore.length) {
       for (const [file, bytes] of restore) writeFileSync(file, bytes);

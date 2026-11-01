@@ -13,7 +13,7 @@ export const taskUpdateHistory = options => (digest, proposal, reference) => {
   let state;
   try { state = readAdmission(options.directory); }
   catch (error) { if (error instanceof AdmissionError) invalid(); throw error; }
-  const rows = state.taskUpdates?.filter(row => Object.entries(expected).every(([key, value]) => row.update[key] === value)) ?? [];
+  const rows = state.taskUpdates?.filter(row => !row.void && Object.entries(expected).every(([key, value]) => row.update[key] === value)) ?? [];
   if (rows.length !== 1) invalid();
   const row = rows[0];
   return { digest: row.update.digest, accepted: row.accepted, reason: row.reason, receiptHash: row.receiptHash ?? null };
