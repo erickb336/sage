@@ -1634,7 +1634,7 @@ test("T578: the merge hook reads a saved change on disk: a stuck one refuses wit
   const other = join(s.vars.SAGE_HOME, "other-abc123");
   mkdirSync(other);
   writeFileSync(join(other, "review-pending.json"), `{"note":"${SHA}"}`);
-  assert.equal(denied(s.send(bash(MERGE))), `sage: the merge check refuses: the merge check refuses this merge: Project other-abc123 holds a saved change that names ${SHA.slice(0, 7)}. It is incomplete. Any write in that project finishes it or says what to do. Then check again.`);
+  assert.equal(denied(s.send(bash(MERGE))), `sage: the merge check refuses: the merge check refuses this merge: Project other-abc123 holds an incomplete saved change, and its ledger or that change names ${SHA.slice(0, 7)}. Any write in that project finishes it or says what to do. Then check again.`);
   writeFileSync(join(other, "review-pending.json"), "{}");
   assert.equal(s.send(bash(MERGE)), undefined, "a change that names another commit does not stop this merge");
 });

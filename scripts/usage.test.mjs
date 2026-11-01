@@ -159,7 +159,7 @@ test('T28 modern run-request recovery never drops existing header columns',t=>{
   writeFileSync(join(s.dir,'runs.tsv'),before[0]);
   writeFileSync(join(s.dir,'review-pending.json'),envelope({schema:3,receipt,tables:{runs:{before:before[0],after:regressed}}}));
   const pending=readFileSync(join(s.dir,'review-pending.json'),'utf8');
-  assert.throws(()=>tool.createRequestedRun(input,env),/saved run update is damaged/);
+  assert.throws(()=>tool.createRequestedRun(input,env),{code:'stuck-write'});
   assert.deepEqual(s.bytes(),before);
   assert.equal(readFileSync(join(s.dir,'review-pending.json'),'utf8'),pending);
 });

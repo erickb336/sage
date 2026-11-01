@@ -122,7 +122,8 @@ for (const stage of ['receipt', 'pending', 'partly-published']) test(`T48 upgrad
     envelope.hash = createHash('sha256').update(JSON.stringify(envelope.value)).digest('hex');
     writeFileSync(savedFile, JSON.stringify(envelope) + '\n');
     const damaged = snapshot(dir);
-    assert.throws(update, { code: 'invalid-state' });
+    // A damaged marker is a write that cannot finish; a damaged receipt is proof that this request cannot use.
+    assert.throws(update, { code: stage === 'receipt' ? 'invalid-state' : 'stuck-write' });
     assert.deepEqual(snapshot(dir), damaged);
     writeFileSync(savedFile, savedBytes);
   }

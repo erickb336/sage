@@ -4174,7 +4174,7 @@ for (const table of ["tasks", "findings", "ledger", "decisions"]) test(`T59: the
   assert.throws(() => f.accept(), /Injected review write failure/);
   restore();
   assert(existsSync(join(f.logbook, "review-pending.json")));
-  assert.match(f.tool.mergeCheck(f.preparation.review.sha, f.env).reason, /holds a saved change that names/);
+  assert.match(f.tool.mergeCheck(f.preparation.review.sha, f.env).reason, /holds an incomplete saved change, and its ledger or that change names/);
   // A changed Git head does not erase a write intent already validated for the older commit.
   f.git("commit", "--quiet", "--allow-empty", "-m", "later head");
   f.cli("log", "T1", "unrelated change", "--why", "the next writer settles first");

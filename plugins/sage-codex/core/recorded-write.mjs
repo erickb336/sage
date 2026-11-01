@@ -3,7 +3,7 @@ import { createHash, randomUUID } from "node:crypto";
 import { closeSync, constants, fsyncSync, fstatSync, linkSync, lstatSync, mkdirSync, openSync, readSync, readdirSync, realpathSync, renameSync, unlinkSync, writeFileSync } from "node:fs";
 import { join, resolve } from "node:path";
 
-const PENDING = "review-pending.json";
+export const PENDING = "review-pending.json";
 const MAX = 64 * 1024 * 1024;
 export class RecordedWriteError extends Error {}
 const fail = () => { throw new RecordedWriteError("The saved change or its receipt is damaged, or a table has neither its before nor its after text."); };

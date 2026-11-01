@@ -104,11 +104,13 @@ function passing(f) {
   f.run(claude, 'verdict', 'T1', '--kind', 'checks-pass', '--sha', SHA);
 }
 
-/** Open of one file fails with EACCES, as a folder with the wrong permissions does for any user. */
-function denyOpen(t, file) {
+const namedIn = dir => `the merge check refuses this merge: Project ${basename(dir)} holds an incomplete saved change, and its ledger or that change names ${SHA.slice(0, 7)}. Any write in that project finishes it or says what to do. Then check again.`;
+
+/** Open of one file fails with EACCES, as a folder with the wrong permissions does for any user, or with another file error. */
+function denyOpen(t, file, code = 'EACCES') {
   const { openSync: original } = fs;
   t.mock.method(fs, 'openSync', (...args) => {
-    if (args[0] === file) throw Object.assign(Error('Injected denial'), { code: 'EACCES', path: file });
+    if (args[0] === file) throw Object.assign(Error('Injected denial'), { code, path: file });
     return original(...args);
   });
   syncBuiltinESMExports();
@@ -157,7 +159,7 @@ test('T578 a saved change that names the commit refuses the merge with no ledger
     assert.equal(tool.read(two.dir, 'ledger').length, 0);
     const verdict = mergeCheck(SHA, env, { project: one.project });
     assert.equal(verdict.ok, false);
-    assert.equal(verdict.reason, `the merge check refuses this merge: Project ${basename(two.dir)} holds a saved change that names ${SHA.slice(0, 7)}. It is incomplete. Any write in that project finishes it or says what to do. Then check again.`);
+    assert.equal(verdict.reason, namedIn(two.dir));
   }
 });
 
@@ -170,6 +172,19 @@ test('T578 a marker of another project that the check cannot read refuses the me
   denied();
   assert.equal(verdict.ok, false);
   assert.match(verdict.reason, /^the merge check cannot read .*review-pending\.json \(EACCES\), so it refuses every merge\./);
+});
+
+for (const code of ['EIO', 'EMFILE', 'ESTALE']) test(`T578 ${code} on a marker never says to remove it, and its path prints with no hidden character`, t => {
+  const { env, one } = fixture(t);
+  passing(one);
+  const folder = 'two\x07-abc123', marker = join(env.SAGE_HOME, folder, MARKER);
+  mkdirSync(join(env.SAGE_HOME, folder));
+  writeFileSync(marker, '{}');
+  const denied = denyOpen(t, marker, code);
+  const verdict = mergeCheck(SHA, env, { project: one.project });
+  denied();
+  const shown = join(env.SAGE_HOME, 'two\\x07-abc123', MARKER);
+  assert.deepEqual(verdict, { ok: false, reason: `the merge check cannot read ${shown} (${code}), so it refuses every merge. Ask the user to fix ${shown}.` });
 });
 
 test('T578 the merge note names the project, not its path', t => {
@@ -339,15 +354,16 @@ test('T578 the merge check settles its own project first', t => {
   assert.equal(row(one.dir, 'runs', 'R1').tokens, '50');
 });
 
-test('T578 a read-only merge check never settles, and it counts a saved change that names the commit', t => {
+test('T578 a read-only merge check never settles, and it counts a project with the commit only in its ledger', t => {
   const f = fixture(t, ['one', 'two']), { env, one, two } = f;
   passing(one); passing(two);
   savedUsage(t, two);
   const before = readFileSync(join(two.dir, MARKER), 'utf8');
+  assert.equal(before.includes(SHA), false);
   for (const options of [{ readOnly: true }, { project: one.project }]) {
     const verdict = mergeCheck(SHA, env, options);
     assert.equal(verdict.ok, false);
-    assert.match(verdict.reason, new RegExp(`refuses this merge: .*${basename(two.dir)} holds a saved change that names ${SHA.slice(0, 7)}`));
+    assert.equal(verdict.reason, namedIn(two.dir));
   }
   assert.equal(readFileSync(join(two.dir, MARKER), 'utf8'), before);
   assert.deepEqual(readdirSync(two.dir).filter(name => name === '.lock'), []);

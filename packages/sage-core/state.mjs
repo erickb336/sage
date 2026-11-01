@@ -3,7 +3,7 @@ import { USAGE_FIELDS, tokenCount, usageText, usageRegistry, usageSnapshot, vali
 import { parseRunTarget } from "./run-target.mjs";
 import { readLocalGit } from "./local-git.mjs";
 import { STUCK_WRITE, TaskUpdateError } from "./task-update-error.mjs";
-import { recordedWrites, coordinatedWrites, assertNoPendingWrite, hasPendingWrite, pendingRequest, pendingNames, settlePendingWrite, RecordedWriteError } from "./recorded-write.mjs";
+import { PENDING, recordedWrites, coordinatedWrites, assertNoPendingWrite, hasPendingWrite, pendingRequest, pendingNames, settlePendingWrite, RecordedWriteError } from "./recorded-write.mjs";
 // sage: the state tool of sage mode. The chief of staff calls it through the shell: one command in, one line out.
 // The store is plain TSV and Markdown under the configured root ($SAGE_HOME overrides it), and every
 // table has one writer: this tool. It holds the rules that prompts alone did not hold in Orchestrator: no dropped
@@ -383,8 +383,8 @@ const cell = (v) => String(v ?? "").replace(/[\t\r\n]+/g, " ").replace(HIDDEN, "
 /** Text with each hidden character, tab and line feed shown as \xNN or \u{N}, so that a printed line never drives the terminal or hides text. */
 const visible = (s) => String(s).replace(new RegExp(`[\\t\\n]|${HIDDEN.source}`, "gu"), (c) => (c.codePointAt(0) < 0x100 ? `\\x${c.charCodeAt(0).toString(16).padStart(2, "0")}` : `\\u{${c.codePointAt(0).toString(16)}}`));
 
-/** What to ask the user about a file that cannot be read: never to remove the root, which holds every logbook, nor a file that a permission keeps shut, whose rows are there. */
-const fixIt = (at, why, root) => `Ask the user to ${["EACCES", "EPERM"].includes(why) ? "fix the permissions of " : at === root ? "fix " : "fix or remove "}${at}.`;
+/** What to ask the user about a file that cannot be read: never to remove the root, which holds every logbook, a saved change's marker, which the stuck line forbids, nor a file that a permission keeps shut, whose rows are there. */
+const fixIt = (at, why, root) => `Ask the user to ${["EACCES", "EPERM"].includes(why) ? "fix the permissions of " : at === root || basename(at) === PENDING ? "fix " : "fix or remove "}${visible(at)}.`;
 
 /**
  * The refusal for a table of a logbook that lost its rows: it is missing, or has no header line. It names both ways out,
@@ -2098,7 +2098,7 @@ function judgeMerge(sha, env, { cycles, pr, readOnly, head, project, locked }, l
       // A saved change stops the project that holds it: this check refuses for that logbook only when it names this commit, or when its marker cannot be read.
       if (hasPendingWrite(dir)) {
         if (!readRegular(join(dir, "ledger.tsv"))?.includes(sha) && !pendingNames(dir, sha)) return skipped.push(basename(dir)), [];
-        throw new RecordedWriteError(`Project ${visible(basename(dir))} holds a saved change that names ${sha.slice(0, 7)}. It is incomplete. Any write in that project finishes it or says what to do. Then check again.`);
+        throw new RecordedWriteError(`Project ${visible(basename(dir))} holds an incomplete saved change, and its ledger or that change names ${sha.slice(0, 7)}. Any write in that project finishes it or says what to do. Then check again.`);
       }
       // A folder with tasks.tsv, also a link, is a logbook, and it must pass the integrity check. A folder without it is
       // none: init has not finished it, or it lost its tasks. Its verdicts name tasks that it does not have, so they refuse.
@@ -2209,7 +2209,7 @@ function judgeMerge(sha, env, { cycles, pr, readOnly, head, project, locked }, l
     if (e instanceof Refusal) return { ok: false, reason: `the merge check refuses every merge, because ${e.message}` }; // it names the file and what to do
     const [at, why] = [e?.path, e?.code ?? e?.message ?? e];
     if (at === undefined) return { ok: false, reason: `the merge check failed (${why}), so it refuses every merge.` };
-    return { ok: false, reason: `the merge check cannot read ${at} (${why}), so it refuses every merge. ${fixIt(at, why, root)}` };
+    return { ok: false, reason: `the merge check cannot read ${visible(at)} (${why}), so it refuses every merge. ${fixIt(at, why, root)}` };
   }
 }
 
