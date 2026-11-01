@@ -1,0 +1,138 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<meta http-equiv="Content-Security-Policy" content="default-src 'none'; script-src 'unsafe-inline'; style-src 'unsafe-inline'; connect-src 'none'; img-src 'none'; font-src 'none'; media-src 'none'; object-src 'none'; base-uri 'none'; form-action 'none'">
+<title>Sage · Arena comparison · SAMPLE DATA</title>
+<style>
+:root{color-scheme:dark;--bg:#0c0c0d;--shell:#121213;--panel:#18181a;--text:#ededed;--muted:#a8a8ad;--line:#2e2e32;--accent:#86a2ff;--soft:#1f2747;--need:#ff8a52;--needsoft:#3b1e12;--ok:#4cc38a}
+*{box-sizing:border-box}body{margin:0;background:var(--bg);color:var(--text);font:15px/1.5 -apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif}button,select{font:inherit;color:inherit;background:var(--panel);border:1px solid #6e6e75;border-radius:9px;min-height:44px;padding:8px 13px}button{cursor:pointer}button:hover{border-color:var(--accent)}button:disabled{opacity:.45;cursor:default}button[aria-current="page"],button[aria-pressed="true"]{background:var(--soft);border-color:var(--accent)}:focus-visible{outline:3px solid var(--accent);outline-offset:3px}[hidden]{display:none!important}.sample{position:sticky;top:0;z-index:2;padding:9px 20px;background:#9b271e;color:#fff;font-size:13px;font-weight:750;letter-spacing:.02em}.wrap{max-width:1160px;margin:24px auto;padding:0 20px}.shell{border:1px solid var(--line);border-radius:22px;background:var(--shell);overflow:hidden}.top{padding:22px 26px;border-bottom:1px solid var(--line);display:flex;align-items:center;gap:14px;flex-wrap:wrap}.brand{font-size:20px;font-weight:750}.pill{display:inline-block;padding:4px 10px;border:1px solid var(--line);border-radius:99px;font-size:12px;color:var(--muted)}.tools{display:flex;gap:18px;flex-wrap:wrap;padding:18px 26px;background:var(--panel);border-bottom:1px solid var(--line)}label{display:grid;gap:5px;color:var(--muted);font-size:12px}main{padding:26px}.eyebrow{color:var(--accent);font-size:12px;font-weight:700;letter-spacing:.08em;text-transform:uppercase}h1{font-size:28px;line-height:1.2;margin:8px 0 12px;letter-spacing:-.025em}h2{font-size:20px;margin:0 0 10px}h3{font-size:16px;margin:0 0 8px}p{margin:8px 0 14px}.muted{color:var(--muted)}.lead{max-width:780px}.nav{display:flex;gap:8px;flex-wrap:wrap;margin:22px 0}.notice{padding:16px 18px;border:1px solid var(--need);border-radius:12px;background:var(--needsoft);margin:18px 0}.notice p:last-child{margin-bottom:0}.grid{display:grid;grid-template-columns:minmax(0,1.6fr) minmax(250px,1fr);gap:18px}.card{padding:20px;border:1px solid var(--line);border-radius:14px;background:var(--panel);min-width:0}.table-scroll{overflow-x:auto;border:1px solid var(--line);border-radius:12px}table{width:100%;border-collapse:collapse;font-size:13px}th,td{text-align:left;padding:14px 12px;border-bottom:1px solid var(--line);vertical-align:top}th{color:var(--muted);font-weight:600}tbody tr:last-child td{border-bottom:0}.candidate{font-weight:650;white-space:nowrap}.score{font-size:17px;font-weight:700}.small{font-size:12px}.actions{display:flex;gap:8px;flex-wrap:wrap;margin-top:16px}.primary{background:var(--accent);border-color:var(--accent);color:#101729;font-weight:650}.art{padding:20px;background:var(--shell);border-radius:10px;border:1px solid var(--line);margin:16px 0}.art strong{display:block;font-size:21px}.art-line{padding:12px 0;border-bottom:1px solid var(--line)}.art-line:last-child{border:0}dl{margin:12px 0;display:grid;grid-template-columns:110px minmax(0,1fr);gap:10px;font-size:13px}dt{color:var(--muted)}dd{margin:0;overflow-wrap:anywhere}code{font-size:12px;overflow-wrap:anywhere}ol,ul{padding-left:21px}li{margin:8px 0}.steps{display:grid;grid-template-columns:repeat(3,1fr);gap:10px;margin:20px 0}.step{border:1px solid var(--line);border-radius:10px;padding:14px}.step strong{display:block}.ok{color:var(--ok)}.route{display:flex;gap:8px;align-items:center;flex-wrap:wrap;font-size:13px;margin:16px 0}.route span{padding:9px;background:var(--soft);border-radius:8px}.foot{border-top:1px solid var(--line);padding:16px 26px;color:var(--muted);font-size:12px}.preserved{border-left:3px solid var(--accent);padding-left:12px}summary{cursor:pointer;min-height:44px;padding-top:10px}.result-tag{font-weight:700;color:var(--accent)}@media(max-width:760px){.wrap{padding:0 10px;margin:12px auto}.top,.tools,main{padding:18px}.grid,.steps{grid-template-columns:1fr}h1{font-size:25px}.nav button{flex:1;min-width:130px}.sample{padding:9px 12px;font-size:12px}dl{grid-template-columns:95px minmax(0,1fr)}th,td{padding:10px 8px}.table-scroll{max-width:100%}.foot{padding:16px 18px}}
+</style>
+</head>
+<body>
+<div class="sample" id="sample-label">SAMPLE DATA · Fictional task, reports and decisions · No real approval</div>
+<div class="wrap"><div class="shell">
+<header class="top"><span class="brand">Arena comparison</span><span class="pill">Shown in chat and in the judge’s report</span><span class="pill">Board view: later, not in this work</span></header>
+<div class="tools" aria-label="Sample controls">
+<label>Candidate role<select id="role"><option value="designer">Designer candidates</option><option value="implementer">Implementer candidates</option></select></label>
+<label>Sample situation<select id="scenario"><option value="success">Success · proposal ready</option><option value="empty">Empty · no candidates</option><option value="loading">Loading · runs incomplete</option><option value="failure">Failure · termination uncertain</option><option value="correction">Correction · evidence incomplete</option><option value="divergence">Divergence · owner choice needed</option></select></label>
+<button id="reset">Reset sample</button>
+<span class="muted small">Controls only change this page’s sample.<br>Actual decisions stay in the chat.</span>
+</div>
+<main>
+<div class="eyebrow">Fieldnotes (fictional) / T900 / candidate comparison</div>
+<h1 id="title">Make saved notes easy to find</h1>
+<p class="lead muted" id="intro">Compare the artifacts, read the judge’s reasons, then follow the next required review.</p>
+<nav class="nav" aria-label="Three sample screens"><button id="nav-compare" aria-current="page">1 · Compare candidates</button><button id="nav-result">2 · Proposed result</button><button id="nav-next">3 · Next review</button></nav>
+<div class="notice" role="status" aria-live="polite"><strong id="state-title"></strong><p id="state-body"></p><div class="actions"><button id="advance" hidden></button></div></div>
+<section id="screen-compare" aria-label="Compare candidates">
+<div id="empty-panel" class="card" hidden><h2>No candidates yet</h2><p>The chief records one task, the criteria and the candidate runs. Each writer gets a separate branch and worktree.</p><p class="muted">The chief names the judge’s branch when it adds the judge run. The judge creates that branch later. This page starts no agents.</p></div>
+<div id="comparison-content">
+<p class="small muted" id="capacity"></p>
+<div class="table-scroll"><table><caption class="small muted" style="text-align:left;padding:14px">Fictional judge scores · 1–4 per criterion · — means not assessed</caption><thead><tr><th>Candidate / angle</th><th>Find a note</th><th>Recover from no match</th><th>Easy to extend</th><th>Report / outcome</th></tr></thead><tbody>
+<tr><td><button class="candidate" id="pick-a" aria-pressed="true">A · List first</button></td><td class="score" id="a-score-1"></td><td class="score" id="a-score-2"></td><td class="score" id="a-score-3"></td><td id="a-status"></td></tr>
+<tr><td><button class="candidate" id="pick-b" aria-pressed="false">B · Search first</button></td><td class="score" id="b-score-1"></td><td class="score" id="b-score-2"></td><td class="score" id="b-score-3"></td><td id="b-status"></td></tr>
+<tr><td><button class="candidate" id="pick-c" aria-pressed="false">C · Tags first</button></td><td class="score">—</td><td class="score">—</td><td class="score">—</td><td id="c-status"></td></tr>
+</tbody></table></div>
+<p class="small muted">4 meets the criterion clearly · 3 meets it with a limit · 2 partly meets it · 1 misses it. Scores guide judgment; they grant no verdict.</p>
+<div class="grid"><article class="card"><span class="eyebrow">Selected candidate · fictional artifact</span><h2 id="artifact-title"></h2><div class="art"><strong id="artifact-heading"></strong><div class="art-line" id="artifact-line-1"></div><div class="art-line" id="artifact-line-2"></div><div class="art-line muted" id="artifact-line-3"></div></div><p id="artifact-reason"></p><p class="small muted" id="artifact-evidence"></p></article>
+<aside class="card"><h3>Preserved evidence</h3><dl><dt>Task / run</dt><dd id="detail-run"></dd><dt>Branch</dt><dd><code id="detail-branch"></code></dd><dt>Worktree</dt><dd><code id="detail-worktree"></code></dd><dt>Committed head</dt><dd><code id="detail-head"></code></dd><dt>Comparison</dt><dd id="detail-report"></dd></dl><p class="small preserved" id="detail-history"></p><p class="small muted">All identities and evidence here are fictional. Exact retention does not approve an artifact or prove native authenticity.</p></aside></div>
+<div class="actions"><button class="primary" id="open-result">Read the proposed result</button></div>
+</div>
+</section>
+<section id="screen-result" aria-label="Proposed result" hidden>
+<div id="result-hold" class="card" hidden><h2>No result can advance</h2><p id="hold-reason"></p></div>
+<div id="choice-panel" class="notice" hidden><h2>A product choice needs the owner</h2><p>A shows recent notes before a search. B opens with search and hides the list. The judge must not average these choices.</p><p><strong>Recommendation: list first.</strong> People can find a recent note when they cannot remember its words.</p><div class="actions"><button id="choose-a">Preview list-first choice (sample)</button><button id="choose-b">Preview search-first choice (sample)</button></div><p class="small">These controls illustrate a fictional owner response. No answer is sent or recorded.</p></div>
+<div id="result-content">
+<p class="result-tag">PROPOSED RESULT · SAMPLE DATA</p><h2 id="result-title"></h2><p id="result-reason"></p>
+<div class="grid"><article class="card"><h3>The chosen artifact</h3><div class="art"><strong id="final-heading"></strong><div class="art-line" id="final-line-1"></div><div class="art-line" id="final-line-2"></div><div class="art-line muted">No matches? Clear the search and return to all notes.</div></div><p class="small muted" id="result-proof"></p></article><aside class="card"><h3>What the judge keeps</h3><p id="adopted"></p><h3>What the judge leaves out</h3><p id="rejected"></p><p class="preserved small">C produced no artifact. Its failed run, branch, last known head and blocked report remain in the comparison.</p></aside></div>
+<details class="card" style="margin-top:18px"><summary>Final branch and preserved candidates</summary><dl><dt>Judge</dt><dd>T900 / R904 · arena-judge · fictional</dd><dt>Final branch</dt><dd><code>codex/sample-t900-final</code> · named by the chief at run add</dd><dt>Worktree</dt><dd><code>sample/t900-final</code> · fictional</dd><dt>Final head</dt><dd><code id="final-head"></code></dd></dl><p>The judge creates this branch from the chosen candidate’s head, then grafts selected content onto it. The judge refuses to start if the branch already exists. Candidate branches, reports and artifacts stay unchanged.</p><p class="small muted">A new final head needs fresh checks and all required reviews. Retention supplies no inferred reviewed SHA.</p></details>
+<div class="actions"><button id="go-next" class="primary">See the next required review</button></div>
+</div>
+</section>
+<section id="screen-next" aria-label="Next review" hidden>
+<label style="max-width:360px">Illustrative record, not an approval control<select id="record"><option value="proposed">Proposed result (sample)</option><option value="approved">Owner-approved design (fictional example)</option><option value="reviewed">Reviewed code (fictional example)</option></select></label>
+<div class="steps"><div class="step"><strong>Proposed result</strong><span class="small muted">Judge’s choice and reasons. No approval.</span></div><div class="step"><strong>Owner-approved design</strong><span class="small muted">PE completed. Actual owner answer required.</span></div><div class="step"><strong>Reviewed code</strong><span class="small muted">Required reviews and QA on the final head.</span></div></div>
+<article class="card"><span class="eyebrow" id="next-label"></span><h2 id="next-title"></h2><p id="next-body"></p><div class="route" aria-label="Required route"><span id="route-1"></span><b aria-hidden="true">→</b><span id="route-2"></span><b aria-hidden="true">→</b><span id="route-3"></span></div><p class="preserved" id="chat-action"></p><p class="small muted">The chief shows this in the chat and in the judge’s report, and records the actual answer. Board views come later.</p></article>
+<details class="card" style="margin-top:18px"><summary>What still counts as acceptance</summary><p>Separate installed acceptance must exercise real isolated designer and implementer candidates, a judge, and PE. Open their artifacts and compare exact retained reports through the chief-only status comparison.</p><p>Match, mismatch, missing and damaged are comparison results. Access failures remain errors. Neither a match nor a manual page grants approval or a verdict.</p><p>Existing review, cycle, dependency and merge checks still apply. This sample dispatches nothing and establishes no installed support.</p></details>
+</section>
+</main><footer class="foot">SAMPLE DATA throughout · Local, in-memory illustration · Reload resets every sample choice</footer>
+</div></div>
+<noscript><p style="padding:20px">SAMPLE DATA · Enable JavaScript to explore the sample. No network connection is needed.</p></noscript>
+<script>
+'use strict';
+const el = id => document.getElementById(id);
+const model = { scenario: 'success', role: 'designer', screen: 'compare', candidate: 'a', choice: null, corrected: false, record: 'proposed' };
+const heads = { a:'1111111111111111111111111111111111111111', b:'2222222222222222222222222222222222222222', c:'3333333333333333333333333333333333333333', final:'4444444444444444444444444444444444444444' };
+const situations = {
+ empty:['No candidates yet','The chief prepares one brief and separate candidate runs. No result or review exists.'],
+ loading:['Candidate runs are incomplete','A and B are active; C is queued. Wait for confirmed terminal outcomes. No timer finishes this sample.'],
+ failure:['Candidate B has an uncertain outcome','A returned a report. B stopped responding; termination is unconfirmed and its report is missing. Do not release its ownership or start an overlapping replacement. C failed and remains visible.'],
+ correction:['Evidence needs correction','A’s branch moved: no inferred reviewed SHA. B’s supplied report digest mismatches. Keep both first reports. The chief resolves identity and evidence before judgment.'],
+ success:['Proposed result ready for review','Two candidates supplied artifacts. C failed without an artifact and remains visible. The judge’s proposal is not owner approval or reviewed code.'],
+ divergence:['Owner choice needed · fictional example','The candidates disagree about the main experience. The judge stops with a question. The chief presents both choices and a recommendation.']
+};
+function put(id, value){el(id).textContent=value;}
+function ready(){return model.scenario==='success'||(model.scenario==='divergence'&&model.choice!==null);}
+function render(){
+ const s=model.scenario, assessed=s==='success'||s==='divergence', c=model.candidate;
+ el('scenario').value=s;el('role').value=model.role;el('record').value=model.record;
+ put('title',model.role==='designer'?'Make saved notes easy to find':'Build the approved saved-note design');
+ put('intro',model.role==='designer'?'Compare the artifacts, read the judge’s reasons, then follow the next required review.':'Fictional prior design approval is assumed only in this example. Compare implementations, then review the judge’s final code.');
+ put('state-title',situations[s][0]);put('state-body',situations[s][1]+(model.corrected?' This example uses new runs R911 and R912; the original reports remain preserved.':''));
+ for(const name of ['compare','result','next']){el('screen-'+name).hidden=model.screen!==name;el('nav-'+name).setAttribute('aria-current',model.screen===name?'page':'false');}
+ el('empty-panel').hidden=s!=='empty';el('comparison-content').hidden=s==='empty';
+ el('advance').hidden=!['empty','loading','correction'].includes(s);
+ put('advance',s==='empty'?'Show sample runs':s==='loading'?'Finish sample runs':'Show separate corrected runs (sample)');
+ put('capacity',s==='loading'?'SAMPLE capacity: 2 candidates run, 1 waits. At most 3 candidates run at once; the current host and project limits also apply.':'SAMPLE outcome: 2 artifacts + 1 empty candidate. At most 3 candidates run at once, so an arena of 4 runs in waves.');
+ const statuses=s==='loading'?['Running · no final report','Running · no final report','Queued · no artifact']:s==='failure'?['Reported done · compare match','Uncertain termination · missing report','Confirmed failed · blocked report matches']:s==='correction'?['Branch moved · no inferred SHA','Report mismatch · preserve original','Confirmed failed · no artifact']:['Done · report matches','Done · report matches','Confirmed failed · blocked report matches'];
+ ['a','b','c'].forEach((key,i)=>{put(key+'-status',statuses[i]);el('pick-'+key).setAttribute('aria-pressed',String(c===key));});
+ [4,3,4].forEach((n,i)=>put('a-score-'+(i+1),assessed?String(n):'—'));
+ [3,4,3].forEach((n,i)=>put('b-score-'+(i+1),assessed?String(n):'—'));
+ put('artifact-title',c==='a'?'A · List first':c==='b'?'B · Search first':'C · Tags first');
+ const artifactAvailable=c!=='c'&&!(s==='loading')&&!(s==='failure'&&c==='b');
+ put('artifact-heading',artifactAvailable?(c==='a'?'Your notes':'Find a note'):'No assessable artifact');
+ put('artifact-line-1',artifactAvailable?(c==='a'?'Weekend walk · edited today':'Search by title or text…'):'The run stays in the comparison.');
+ put('artifact-line-2',artifactAvailable?(c==='a'?'Book ideas · edited yesterday':'No matches · Clear search'):'No score is assigned.');
+ put('artifact-line-3',artifactAvailable?(c==='a'?'Search these notes…':'Recent notes appear after a search.'):'Missing work is never counted as success.');
+ put('artifact-reason',!artifactAvailable?'Keep the last known branch, report outcome and any partial files. Do not invent an artifact.':c==='a'?'Strong discovery: recent notes are visible. Recovery needs a clear-search control.':'Strong recovery: clear search restores the view. A blank start hides recent notes.');
+ put('artifact-evidence','SAMPLE artifact text only. Each candidate commits its artifact; the chief then records it with pages. These are static miniatures, not a running note application.');
+ const run=c==='a'?(model.corrected?'R911':'R901'):c==='b'?(model.corrected?'R912':'R902'):'R903';
+ put('detail-run','T900 / '+run+' / '+model.role+' / candidate '+c.toUpperCase());
+ put('detail-branch','codex/sample-t900-'+c+(model.corrected&&c!=='c'?'-correction':''));
+ put('detail-worktree','sample/t900-'+c+(model.corrected&&c!=='c'?'-correction':''));
+ put('detail-head',s==='loading'?'No final head yet':s==='correction'&&c==='a'?'Branch moved; inferred SHA absent. Final head requires an independent check.':s==='failure'&&c==='b'?'Unknown; last observed head preserved separately.':heads[c]+' (fictional)');
+ put('detail-report',s==='loading'?'Not received':s==='failure'&&c==='b'?'Missing':s==='correction'&&c==='b'?'Mismatch — first retained text stays unchanged':'Match (sample) — exact bytes only; no verdict');
+ put('detail-history',s==='loading'?'No terminal outcome is established. Preserve ownership until termination and capacity release are confirmed.':model.corrected&&c!=='c'?'Prior R901/R902 reports, branches and artifacts remain unchanged. These corrected records belong to new runs.':c==='c'?'R903 ended blocked without an artifact. Its branch and report remain available.':s==='failure'&&c==='b'?'Termination is uncertain. Preserve the last observation and do not replace this run.':'First report preserved. A different later report cannot replace it.');
+ el('open-result').disabled=!assessed;el('result-hold').hidden=ready()||s==='divergence';
+ put('hold-reason',situations[s][1]);el('choice-panel').hidden=s!=='divergence';el('result-content').hidden=!ready();
+ const base=model.choice||'a';put('result-title',base==='a'?'A’s visible list, with B’s clear-search control':'B’s search view, with A’s recent-note shortcut');
+ put('result-reason',base==='a'?'The judge recommends A because the list supports discovery and keeps the design small. Add B’s recovery control without adding a new screen.':'The fictional owner chose search first. Keep B’s main view and add A’s recent-note shortcut so an empty query still has a useful route.');
+ put('final-heading',base==='a'?'Your notes':'Find a note');put('final-line-1',base==='a'?'Search notes… · Clear':'Search by title or text… · Clear');put('final-line-2',base==='a'?'Weekend walk · Book ideas':'Recent notes: Weekend walk · Book ideas');
+ put('adopted',base==='a'?'From B: a clear-search control and a useful no-match message.':'From A: one recent-note shortcut under the search.');
+ put('rejected','Leave out C’s tag sidebar: no artifact supports assessment. Leave out a second navigation view: it adds a decision without helping the brief.');
+ put('result-proof',model.role==='designer'?'SAMPLE proposal only. PE and the owner have not approved this artifact.':'SAMPLE code proposal only. No checks, review cycle or QA result is established by this page.');put('final-head',heads.final+' (fictional; independently verify before review)');
+ const rec=model.record;
+ let label,title,body,route,action;
+ if(!ready()) {label='WAIT · SAMPLE DATA';title='Resolve the candidate evidence first';body='No result is ready for a dependent review. Preserve the runs and resolve the stated hold through the chief.';route=['Evidence unresolved','Chief resolves the hold','Judge can assess'];action='In the chat: discuss the stated hold. This page records nothing.';}
+ else if(rec==='approved') {label='OWNER-APPROVED DESIGN · FICTIONAL EXAMPLE';title='A design answer permits the next build';body='This separate example assumes completed PE assessment and an actual owner answer tied to this artifact. It does not describe the current task.';route=['PE completed','Owner approved this design','Build → required reviews'];action='In the chat: the chief records the actual answer and briefs implementation. Design approval is procedural, not an authenticated native gate.';}
+ else if(rec==='reviewed') {label='REVIEWED CODE · FICTIONAL EXAMPLE';title='Review evidence belongs to one final head';body='This separate example assumes passing checks, required code/security/UX reviews, QA and all required clean cycles on one final head. A new head requires fresh review.';route=['Final code checked','Required reviews + QA','Existing merge checks'];action='Next: the chief checks exact head, dependencies and existing merge rules. Publication still needs its own authorization.';}
+ else if(model.role==='designer') {label='PROPOSED DESIGN · SAMPLE DATA';title='Next: independent PE assessment';body='Give PE the combined artifact, every candidate report, the criteria, and the judge’s report. Resolve CHANGE, blocked and question outcomes before owner approval.';route=['Judge’s proposal','Independent PE','Actual owner approval'];action='In the chat: show the artifact and PE assessment; ask the owner to keep, change or drop the design. Build waits for the actual answer.';}
+ else {label='PROPOSED CODE · SAMPLE DATA';title='Next: checks and independent reviews';body='Review the judge’s final branch at its independently checked head. Run required code, security and UX reviews, then QA and the required clean cycles.';route=['Judge’s final code','Checks + required reviews','QA + clean cycles'];action='The chief records findings before verdicts. Candidate scores and retained reports cannot satisfy any required review.';}
+ put('next-label',label);put('next-title',title);put('next-body',body);route.forEach((v,i)=>put('route-'+(i+1),v));put('chat-action',action);
+}
+function show(screen){model.screen=screen;render();}
+['compare','result','next'].forEach(name=>el('nav-'+name).addEventListener('click',()=>show(name)));
+['a','b','c'].forEach(key=>el('pick-'+key).addEventListener('click',()=>{model.candidate=key;render();}));
+el('scenario').addEventListener('change',()=>{model.scenario=el('scenario').value;model.choice=null;model.corrected=false;model.record='proposed';model.screen='compare';render();});
+el('role').addEventListener('change',()=>{model.role=el('role').value;model.record='proposed';render();});
+el('record').addEventListener('change',()=>{model.record=el('record').value;render();});
+el('advance').addEventListener('click',()=>{if(model.scenario==='empty')model.scenario='loading';else if(model.scenario==='loading')model.scenario='success';else if(model.scenario==='correction'){model.scenario='success';model.corrected=true;}render();});
+el('open-result').addEventListener('click',()=>show('result'));el('go-next').addEventListener('click',()=>show('next'));
+['a','b'].forEach(key=>el('choose-'+key).addEventListener('click',()=>{model.choice=key;model.record='proposed';render();}));
+el('reset').addEventListener('click',()=>{Object.assign(model,{scenario:'success',role:'designer',screen:'compare',candidate:'a',choice:null,corrected:false,record:'proposed'});render();});
+render();
+</script>
+</body>
+</html>
