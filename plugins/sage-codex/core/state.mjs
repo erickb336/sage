@@ -220,7 +220,9 @@ const adoptionOf = task => {
     || !/^[a-f0-9]{64}$/.test(a.digest ?? "")) refuse(`${task.id} has a damaged adoption record.`);
   return a;
 };
-const mayName = (tasks, task, name) => ofTask(task.id, name) || adoptionOf(task)?.branch === name || tasks.some((other) => other.id !== task.id && other.branch === name);
+/** Is a branch this task's own: named for its id, or the branch that it adopted, which carries the source task's number. */
+const branchOfTask = (task, name) => ofTask(task.id, name) || adoptionOf(task)?.branch === name;
+const mayName = (tasks, task, name) => branchOfTask(task, name) || tasks.some((other) => other.id !== task.id && other.branch === name);
 const branchOf = (name) => (BRANCH.test(name) ? name : refuse(`${JSON.stringify(name)} is not a task branch: use letters, digits and . _ / - (for example sage/t12 or tool/t12-short-name), not main, master or HEAD in any case, not under refs/, heads/, remotes/ or origin/, and not a name that starts with - or holds .., @{ or a space.`));
 
 /** The project's name: its main checkout's folder name as a slug. The store's folder and the cap.<project> config key use it. */
@@ -972,6 +974,53 @@ function keptOf(dir, run) {
     if (kept && typeof kept.text === "string" && kept.run === run && /^(?:[0-9a-f]{40})?$/.test(kept.sha)) return kept;
   } catch {}
   return { damaged: true };
+}
+
+/** Compare one existing report. Admission belongs to the caller; this read creates no state or review authority. */
+function compareRetainedReport(input, env = process.env) {
+  if (!updateKeys(input, ["project", "task", "run", "sha256"])
+    || typeof input.project !== "string" || !isAbsolute(input.project)
+    || typeof input.task !== "string" || !/^T[1-9]\d*$/.test(input.task)
+    || typeof input.run !== "string" || !/^R[1-9]\d*$/.test(input.run)
+    || typeof input.sha256 !== "string" || !/^[0-9a-f]{64}$/.test(input.sha256)) refuse("Invalid retained report comparison input.");
+  const result = status => ({ status });
+  try {
+    const project = projectRoot(input.project), dir = storeDir(project, env);
+    if (realpathSync(dir) !== resolve(dir)
+      || readRegular(join(dir, "checkout.txt"), { link: false, max: 65536 }) !== `${project}\n`)
+      refuse("Invalid retained report comparison project.");
+    const tasks = read(dir, "tasks").filter(row => row.id === input.task);
+    const runs = read(dir, "runs").filter(row => row.id === input.run);
+    if (tasks.length !== 1 || runs.length !== 1 || runs[0].task !== input.task || !RUN_ROLES.includes(runs[0].role))
+      refuse("Invalid retained report comparison task or run association.");
+    const folder = join(dir, "kept"), folderStat = lstatSync(folder, { throwIfNoEntry: false });
+    if (!folderStat) return result("missing");
+    if (!folderStat.isDirectory()) return result("damaged");
+    let bytes;
+    try { bytes = readRegular(keptFile(dir, input.run), { link: false, max: 6 * KEPT_MAX + 4096, encoding: null }); }
+    catch (error) {
+      if (error instanceof Refusal || ["ELOOP", "ENOTDIR"].includes(error.code)) return result("damaged");
+      throw error;
+    }
+    if (bytes === undefined) return result("missing");
+    let kept;
+    try { kept = JSON.parse(new TextDecoder("utf-8", { fatal: true }).decode(bytes)); }
+    catch { return result("damaged"); }
+    // The existing format has no stored digest. Reject incomplete or unknown formats instead of guessing their meaning.
+    if (!updateKeys(kept, ["task", "run", "role", "sha", "text", "at"])
+      || kept.task !== input.task || kept.run !== input.run || kept.role !== runs[0].role
+      || typeof kept.sha !== "string" || !/^(?:[0-9a-f]{40})?$/.test(kept.sha)
+      || typeof kept.at !== "string" || !/^\d{4}-\d\d-\d\dT\d\d:\d\d:\d\dZ$/.test(kept.at)
+      || !Number.isFinite(Date.parse(kept.at)) || new Date(kept.at).toISOString() !== kept.at.replace("Z", ".000Z")
+      || typeof kept.text !== "string" || Buffer.byteLength(kept.text, "utf8") > KEPT_MAX
+      || Buffer.from(kept.text, "utf8").toString("utf8") !== kept.text) return result("damaged");
+    const digest = createHash("sha256").update(kept.text, "utf8").digest("hex");
+    return result(digest === input.sha256 ? "match" : "mismatch");
+  } catch (error) {
+    // Never disclose private storage paths or table contents, including through filesystem errors.
+    if (error instanceof Refusal && /^Invalid retained report comparison/.test(error.message)) throw error;
+    refuse("Retained report comparison cannot read the project or report; check access and permissions.");
+  }
 }
 
 /**
@@ -2035,8 +2084,11 @@ function assessMerge(sha, env, { cycles, pr, readOnly, head, project }, logbook 
       // there and then moved to another branch still owns it (R1709-1).
       const ranOn = new Map();
       for (const r of runs) if (sameBranch(r.branch, head) && !ranOn.has(r.task)) ranOn.set(r.task, r.id);
+      // An adopted branch carries the source task's number, so an unrelated task of that number owns it only by a record (T575).
+      const adopter = head === undefined ? undefined : tasks.find((t) => adoptionOf(t)?.branch === head);
+      const named = (id) => ofTask(id, String(head)) && (!adopter || adopter.id === id);
       // How a task owns the head: the refusal says what will work, for only a task that owns it by branch= alone can move off it (R1741-1).
-      const how = (id) => (ofTask(id, String(head)) ? "by its name" : ranOn.has(id) ? `by run ${ranOn.get(id)} on it` : byId.get(id)?.branch === head ? "by its branch=" : "");
+      const how = (id) => (named(id) ? "by its name" : ranOn.has(id) ? `by run ${ranOn.get(id)} on it` : byId.get(id)?.branch === head ? "by its branch=" : "");
       const owns = (id) => how(id) !== "";
       // The way back for a task of the PR that does not own the head (R1759-1): a rename leaves the other task behind, so
       // set its branch= to the head. A task shares only another task's branch= (mayName), so the task whose name the head
@@ -2463,7 +2515,8 @@ function act(cmd, pos, opt, dir, env, skip, project) {
       const broken = Object.keys(sourceConfig).find(k => sourceConfig[k] === "invalid");
       if (broken) refuse(`the source ${broken} is not a number. Nothing changed.`);
       const decisions = read(dir, "decisions"), ledger = read(dir, "ledger"), runs = read(dir, "runs");
-      const claims = (t, decisions, ledger, runs) => prsOf(t, decisions, ledger).has(pr) || ofTask(t.id, branch) || sameBranch(t.branch, branch)
+      // Only a record claims: provider task numbers overlap, so a branch name that looks like a task's number is no claim (T575).
+      const claims = (t, decisions, ledger, runs) => prsOf(t, decisions, ledger).has(pr) || sameBranch(t.branch, branch)
         || runs.some(r => r.task === t.id && sameBranch(r.branch, branch));
       const claimed = tasks.find(t => t.id !== task.id && claims(t, decisions, ledger, runs));
       if (claimed) refuse(`${claimed.id} already claimed this PR or branch. Nothing changed.`);
@@ -3195,5 +3248,5 @@ function runCli(argv = process.argv.slice(2)) {
 }
 
 const { board, answerPaths } = createBoard({ BLOCKS, BRANCH, RISKS, STATES, mergeCheck, optionsOf, projectName, projectRoot, read, sageRoot, slug, storeDir, withLock });
-return { SIZES, BLOCKS, RISKS, KINDS, STATES, DEFAULTS, PR, sageRoot, git, projectRoot, roleReadProject, optionsOf, slug, worktreeRoot, BRANCH, ofTask, projectName, storeDir, config, cyclesFor, modelFor, read, mergeCheck, boardLandingCheck, logbookView, sage, readTaskSnapshot, updateRequestedTask, assertTaskUpdateOpen, createRequestedTask, createRequestedRun, finishReportedRun, finishInterruptedRun, acceptReportedReview, keepReport, verdictBacking, captureRunAssignment, captureReviewTarget, validateTerminalAssignment, withLock, board, answerPaths, command, runCli };
+return { SIZES, BLOCKS, RISKS, KINDS, STATES, DEFAULTS, PR, sageRoot, git, projectRoot, roleReadProject, optionsOf, slug, worktreeRoot, BRANCH, ofTask, branchOfTask, projectName, storeDir, config, cyclesFor, modelFor, read, mergeCheck, boardLandingCheck, logbookView, sage, readTaskSnapshot, updateRequestedTask, assertTaskUpdateOpen, createRequestedTask, createRequestedRun, finishReportedRun, finishInterruptedRun, acceptReportedReview, keepReport, compareRetainedReport, verdictBacking, captureRunAssignment, captureReviewTarget, validateTerminalAssignment, withLock, board, answerPaths, command, runCli };
 }

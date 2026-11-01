@@ -7,6 +7,7 @@ import { dirname, join, relative, resolve } from "node:path";
 import { pathToFileURL } from "node:url";
 import { test } from "node:test";
 import { createInterface } from "node:readline";
+import { createHash } from "node:crypto";
 import { ROOT, filesUnder, outputs } from "./build.mjs";
 import { createStateTool, applyPrinciples } from "../packages/sage-core/index.mjs";
 import { handle, patchPaths, stateKey } from "../plugins/sage-codex/hooks/principles-hook.mjs";
@@ -15,6 +16,128 @@ const context = (output) => output?.hookSpecificOutput?.additionalContext ?? "";
 const state = () => ({ given: [], failures: {} });
 const source = (path) => readFileSync(join(ROOT, path), "utf8");
 const json = (path) => JSON.parse(source(path));
+
+// T91 fixtures contain only synthetic reports and disposable logbooks.
+const reportDigest = text => createHash("sha256").update(text, "utf8").digest("hex");
+function comparisonFixture(t) {
+  const home = realpathSync(mkdtempSync(join(tmpdir(), "sage-report-compare-")));
+  t.after(() => rmSync(home, { recursive: true, force: true }));
+  const project = join(home, "project"); mkdirSync(project);
+  const env = { ...process.env, SAGE_HOME: join(home, "store"), SAGE_TEST_PIDS: "{}" };
+  const tool = createStateTool({ defaultRoot: () => env.SAGE_HOME });
+  const command = (...args) => tool.command([...args, "--project", project], env);
+  assert.equal(command("init").code, 0);
+  assert.equal(command("task", "add", "--title", "Synthetic comparison", "--size", "large", "--priority", "P2").code, 0);
+  assert.equal(command("run", "add", "T1", "--role", "pe").code, 0);
+  const dir = tool.storeDir(project, env), file = join(dir, "kept/R1.json");
+  const input = { project, task: "T1", run: "R1", sha256: reportDigest("STATUS blocked\nRESULT café 🙂\r\n ") };
+  const compare = (change = {}) => tool.compareRetainedReport({ ...input, ...change }, env);
+  const retain = (text = "STATUS blocked\nRESULT café 🙂\r\n ") => tool.keepReport(project, { task: "T1", run: "R1", role: "pe", text }, env);
+  const snapshot = (path = home) => Object.fromEntries(readdirSync(path).sort().map(name => {
+    const child = join(path, name), st = lstatSync(child);
+    return [name, { mode: st.mode, mtime: st.mtimeMs, ino: st.ino,
+      content: st.isDirectory() ? snapshot(child) : st.isFile() ? readFileSync(child).toString("hex") : "link" }];
+  }));
+  return { home, project, env, tool, command, dir, file, input, compare, retain, snapshot };
+}
+
+test("T91: comparison returns only missing, match, mismatch and damaged without mutations", t => {
+  const f = comparisonFixture(t);
+  for (const [prepare, expected] of [
+    [() => {}, "missing"], [() => f.retain(), "match"],
+    [() => {}, "mismatch"], [() => writeFileSync(f.file, "{"), "damaged"],
+  ]) {
+    prepare(); const before = f.snapshot();
+    assert.deepEqual(f.compare(expected === "mismatch" ? { sha256: reportDigest("another report") } : {}), { status: expected });
+    assert.deepEqual(f.snapshot(), before);
+  }
+});
+
+test("T91: comparison preserves exact UTF-8, newline and whitespace bytes after an ended run", t => {
+  const f = comparisonFixture(t), text = "STATUS question\nRESULT café 🙂\r\n ";
+  f.retain(text);
+  assert.equal(f.command("run", "done", "R1", "--status", "question").code, 0);
+  const before = f.snapshot();
+  for (const candidate of [text, text.normalize("NFD"), text.replaceAll("\r\n", "\n"), text.trimEnd(), text + "\n", text.replace(" ", "  ")])
+    assert.deepEqual(f.compare({ sha256: reportDigest(candidate) }), { status: candidate === text ? "match" : "mismatch" });
+  assert.deepEqual(f.snapshot(), before);
+});
+
+test("T91: comparison validates stored identities, integrity and legacy records honestly", t => {
+  const f = comparisonFixture(t); f.retain();
+  const original = JSON.parse(readFileSync(f.file, "utf8"));
+  // Existing six-field records have no digest. Recompute it; do not invent a native authenticity claim.
+  assert.deepEqual(f.compare(), { status: "match" });
+  for (const changed of [{ task: "T2" }, { run: "R2" }, { role: "designer" }, { sha: "bad" }, { at: "yesterday" },
+    { text: 1 }, { text: "x".repeat((1 << 20) + 1) }, { reportHash: "0".repeat(64) }]) {
+    writeFileSync(f.file, JSON.stringify({ ...original, ...changed }));
+    const before = f.snapshot();
+    assert.deepEqual(f.compare(), { status: "damaged" }, JSON.stringify(Object.keys(changed)));
+    assert.deepEqual(f.snapshot(), before);
+  }
+  for (const value of [null, [], { text: original.text }, { ...original, at: undefined }, { ...original, text: "\ud800" }]) {
+    writeFileSync(f.file, JSON.stringify(value));
+    assert.deepEqual(f.compare(), { status: "damaged" });
+  }
+  writeFileSync(f.file, Buffer.from([0xff]));
+  assert.deepEqual(f.compare(), { status: "damaged" });
+});
+
+test("T91: invalid input, unknown associations and wrong project remain errors without writes", t => {
+  const f = comparisonFixture(t); f.retain();
+  assert.equal(f.command("task", "add", "--title", "Other", "--size", "tiny", "--priority", "P2").code, 0);
+  const before = f.snapshot();
+  for (const change of [{ task: "T2" }, { task: "T99" }, { run: "R99" }, { run: "../R1" },
+    { sha256: "bad" }, { sha256: "A".repeat(64) }, { project: "relative" }, { project: join(f.home, "absent") }, { extra: "no" }])
+    assert.throws(() => f.compare(change), /retained report|comparison/i);
+  assert.deepEqual(f.snapshot(), before);
+  writeFileSync(join(f.dir, "checkout.txt"), `${join(f.home, "foreign")}\n`);
+  assert.throws(() => f.compare(), /retained report|comparison/i);
+});
+
+test("T91: comparison rejects links, non-files and unreadable retained files without exposing paths", t => {
+  const f = comparisonFixture(t); f.retain();
+  const original = readFileSync(f.file);
+  rmSync(f.file); symlinkSync(join(f.home, "absent"), f.file);
+  assert.deepEqual(f.compare(), { status: "damaged" });
+  rmSync(f.file); mkdirSync(f.file);
+  assert.deepEqual(f.compare(), { status: "damaged" });
+  rmSync(f.file, { recursive: true }); writeFileSync(f.file, original, { mode: 0o000 });
+  try { assert.throws(() => f.compare(), error => /comparison.*(permission|read)/i.test(error.message) && !error.message.includes(f.home)); }
+  finally { chmodSync(f.file, 0o600); }
+});
+
+test("T91: comparison leaves first-report retention and verdict decisions unchanged", t => {
+  const f = comparisonFixture(t); f.retain("STATUS blocked\n");
+  assert.deepEqual(f.compare({ sha256: reportDigest("STATUS blocked\n") }), { status: "match" });
+  assert.throws(() => f.retain("STATUS done\nRESULT CLEAN\n"), /kept once/);
+  assert.equal(f.command("run", "done", "R1", "--status", "blocked").code, 0);
+  const before = f.snapshot();
+  assert.deepEqual(f.compare({ sha256: reportDigest("STATUS blocked\n") }), { status: "match" });
+  assert.deepEqual(f.snapshot(), before);
+  assert.equal(f.command("verdict", "T1", "--kind", "review-clean", "--sha", "1".repeat(40), "--run", "R1").text,
+    "sage: R1 is a pe run, so it backs no review-clean verdict: only a code-reviewer run does. Nothing changed.");
+});
+
+test("T91: a manual report page and legacy project listing never create retention during comparison", t => {
+  const f = comparisonFixture(t);
+  assert.equal(f.command("pages", "T1", "record", "--run", "R1", "--text", "STATUS done\n").code, 0);
+  for (const name of ["projects.tsv", "projects.made"]) rmSync(join(f.env.SAGE_HOME, name), { force: true });
+  const before = f.snapshot();
+  assert.deepEqual(f.compare(), { status: "missing" });
+  assert.deepEqual(f.snapshot(), before);
+});
+
+test("T91: bundled provider cores compare the same synthetic retained report", async t => {
+  for (const provider of ["claude", "codex"]) {
+    const f = comparisonFixture(t), { plugin } = isolated(t, provider);
+    const { createStateTool: bundled } = await import(pathToFileURL(join(plugin, "core/index.mjs")));
+    f.retain();
+    const before = f.snapshot();
+    assert.deepEqual(bundled({ defaultRoot: () => f.env.SAGE_HOME }).compareRetainedReport(f.input, f.env), { status: "match" });
+    assert.deepEqual(f.snapshot(), before);
+  }
+});
 /**
  * A fake readGit for the push policy (T536): the checkout's branch (a name, or a function of the folder), git's settings
  * with one remote named origin, and origin's default branch (main unless given; undefined when git cannot read it).

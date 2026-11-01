@@ -117,6 +117,7 @@ Send each phrase alone, as the whole message, in any letter case.
 | `sage help` | Every phrase, and whether sage mode and autopilot are on. |
 
 - To turn on autopilot after an install, send `sage mode`, then `autopilot on`, each alone: nothing else is needed.
+- When autopilot turns on, sage reads once per session (with `gh`, read only) whether the default branch requires a pull request, and warns in one line if not. Autopilot still runs. A failed read says "could not check".
 - The chief lands a verified pull request with the same `gh pr merge` command as in Claude Code, and the sage gate allows it only with autopilot on and a passing merge check. The gate reads your typed phrases from Codex's own record of the session, so a phrase in a tool output, an agent's report or a mode file that an agent writes does not count.
 - Send a phrase when Codex is idle. To stop merges at once, press Esc to stop Codex's turn, then send the off phrase for autopilot alone.
 - Only your own typed message switches a mode: Codex gives the hook no agent text. A Codex review or approval check sends its own prompt, and that prompt switches nothing.
@@ -236,13 +237,15 @@ node <installed-sage-script> task-adopt T42 --project /path/to/project --source-
 | The source belongs to the same project, in another provider root | Sage reads it without a lock or a write. A busy or changed source refuses adoption. |
 | The PR and branch match the source task | Sage checks the live PR head with the existing read-only PR helper. The branch must name the original task. An empty source branch field is allowed. |
 | The destination is framed or briefed, with no findings or verdicts | Sage records the original provider label, task number, logbook path, project, PR, branch, round count and source-task digest. Only ended blocked or failed runs may already exist; they never count as clean proof. |
-| Another task claims the PR or branch, including through a recorded run | Sage refuses adoption. Shared source work needs an explicit task mapping from the owner first. |
+| Another task claims the PR or branch by a record: its PR history, its recorded branch or a run on that branch | Sage refuses adoption. Shared source work needs an explicit task mapping from the owner first. A branch name that only looks like another task's number is no claim, because provider task numbers overlap. |
 | The source spent repair rounds | The destination retains at least that count. Adoption grants no extra repair allowance. Four spent rounds still need the owner's decision before another repair. |
 | The source required reviews or had risk flags | The destination keeps those requirements and the source's configured cycle minimum. Merge checks require the larger of that saved minimum and the current destination requirement. |
 | The source had clean verdicts | They stay in the source. Fresh destination runs must supply every required verdict on the final SHA. |
 | The same adoption is retried | Sage returns the existing record without changing the current task state, round count, saved cycle minimum or proof. A different identity refuses. |
 
-The adopted PR and branch stay bound to the destination task. Normal task state changes, runs, reviews and merge checks then use that branch. Ordinary tasks keep their existing branch-name rules.
+The adopted PR and branch stay bound to the destination task. Normal task state changes, runs, reviews, merge checks and `sage-pr` then use that branch.
+
+An unrelated destination task with the same number owns an adopted branch only by a record, so the merge check does not ask for it on the PR. Ordinary tasks keep their existing branch-name rules.
 
 The source provider name is a label supplied by the chief; the logbook path and project identify the actual source. This command does not install a plugin, change a PR, merge code, or copy source findings and verdicts.
 

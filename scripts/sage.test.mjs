@@ -4334,18 +4334,49 @@ test("T95: a folder name with a line break or a hidden character prints on one l
   assert.equal(s.no("merge-check", "--sha", SHA), stranger(s.home, [shown]));
 });
 
-test("T95: init adds the project's logbook to the known project list, under the root's lock, and keeps every line", async () => {
+for (const blockRoot of [false, true]) test(`T95: init adds the project's logbook to the known project list, under the root's lock, and keeps every line${blockRoot ? " after a busy refusal" : ""}`, async () => {
   const home = mkdtempSync(join(tmpdir(), "sage-home-"));
   const s = store(home);
   const first = readFileSync(join(home, "projects.tsv"), "utf8");
   assert.match(first, new RegExp(`^logbook\tat\thow\n${basename(s.dir)}\t\\d{4}-\\d\\d-\\d\\dT\\d\\d:\\d\\d:\\d\\dZ\tinit\n$`));
   s.ok("init");
   assert.equal(readFileSync(join(home, "projects.tsv"), "utf8"), first, "init again changes nothing");
-  // Five chief sessions make five logbooks at once: each line stays.
+  // Five chief sessions start together. A root-lock refusal permits one retry after all initial calls settle.
   const more = Array.from({ length: 5 }, () => mkdtempSync(join(tmpdir(), "sage-p-")));
-  const done = await Promise.all(more.map((p) => new Promise((ok) => execFile("node", [TOOL, "init", "--project", p], { env: testEnv({ SAGE_HOME: home }), timeout }, (err, out) => ok(err ? `failed: ${err.message}` : out.trim())))));
-  assert.ok(done.every((d) => d.startsWith("logbook ")), done.join("\n"));
-  assert.deepEqual(known(home).sort(), [basename(s.dir), ...done.map((d) => basename(d))].map((n) => `${n} init`).sort());
+  const init = (project) => new Promise((done) => execFile("node", [TOOL, "init", "--project", project], { env: testEnv({ SAGE_HOME: home }), timeout }, (err, stdout, stderr) => done({ status: err ? err.code : 0, stdout, stderr })));
+  const held = blockRoot ? await hold(home) : null;
+  let done;
+  try {
+    done = await Promise.all(more.map(init));
+    if (held) {
+      assert.deepEqual(done.map((r) => r.status), [1, 1, 1, 1, 1], "all five calls reach the held root lock");
+      assert.equal(readFileSync(join(home, "projects.tsv"), "utf8"), first, "refused calls leave the registry unchanged");
+    }
+  } finally {
+    if (held) {
+      held.release();
+      assert.deepEqual(await held.exited, [0, null], "the synthetic holder completed normally");
+      assert.equal(existsSync(join(home, ".lock")), false, "the synthetic holder released the root lock");
+    }
+  }
+  const lock = join(home, ".lock").replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+  const busy = new RegExp(`^sage: the logbook is busy: pid ${held ? held.pid : "[1-9]\\d*"} on (\\S+) has held ${lock} for \\d+\\.\\d s\\. Nothing changed\\. Run the command again; if no sage command runs on \\1, remove ${lock} first\\.\\n$`);
+  for (let i = 0; i < done.length; i++) {
+    if (done[i].status !== 0) {
+      assert.equal(done[i].status, 1, done[i].stderr);
+      assert.equal(done[i].stdout, "", "a refused init prints no success");
+      assert.match(done[i].stderr, busy, "only the documented refusal for this root lock permits a retry");
+      done[i] = await init(more[i]); // serial, once: no initial command or retry still holds the root lock
+    }
+    assert.equal(done[i].status, 0, done[i].stderr);
+    assert.equal(done[i].stderr, "");
+    assert.match(done[i].stdout, /^logbook [^\r\n]+\n$/);
+    assert.equal(readFileSync(join(done[i].stdout.trim().slice("logbook ".length), "checkout.txt"), "utf8"), `${more[i]}\n`);
+  }
+  const names = [basename(s.dir), ...done.map((r) => basename(r.stdout.trim()))];
+  assert.equal(new Set(names).size, 6, "each independent project has its own logbook");
+  assert.deepEqual(known(home).sort(), names.map((n) => `${n} init`).sort());
+  assert.ok(readFileSync(join(home, "projects.tsv"), "utf8").startsWith(first), "the original registry line stays unchanged");
 });
 
 test("T95: the first command with no projects.tsv lists today's logbooks once (how: migration), a ledger-only folder too, and a second run changes nothing", async () => {

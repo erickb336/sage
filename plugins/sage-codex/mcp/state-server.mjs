@@ -135,7 +135,7 @@ export function createStateServer({ env = process.env } = {}) {
   const server = new McpServer({ name: "sage", version: "0.1.0" });
   // Each tool runs only for a call that sage's gate saw (R1916-2): Codex runs no plugin hook that the user has not
   // trusted, also after each sage update, and then no sage rule holds.
-  const registerTool = (name, spec, run) => server.registerTool(name, spec, async (input, extra) => (takeProof(extra?.mcpReq?._meta, name, env)
+  const registerTool = (name, spec, run) => server.registerTool(name, spec, async (input, extra) => (takeProof(extra?.mcpReq?._meta, name, env, input)
     ? run(input) : { isError: true, content: [{ type: "text", text: NO_GATE }] }));
   const project = z.string().refine(isAbsolute, "an absolute path").describe("the absolute path of the project's checkout");
   for (const [name, spec] of Object.entries(TOOLS)) {
@@ -148,6 +148,14 @@ export function createStateServer({ env = process.env } = {}) {
       return { ...(code ? { isError: true } : {}), content: [{ type: "text", text }] };
     });
   }
+  registerTool("report_compare", {
+    description: "Chief only: compare an existing retained role report with the SHA256 of exact UTF-8 text. Returns only match, mismatch, missing or damaged. This observed snapshot grants no review approval or native authenticity.",
+    inputSchema: z.object({ project, task, run: id("R", "the run id"), sha256: z.string().regex(/^[0-9a-f]{64}$/).describe("SHA256 of the exact UTF-8 report text, without normalization") }).strict(),
+    annotations: { readOnlyHint: true, destructiveHint: false },
+  }, async input => {
+    try { return { content: [{ type: "text", text: JSON.stringify(tool.compareRetainedReport(input, env)) }] }; }
+    catch (error) { return { isError: true, content: [{ type: "text", text: `sage: ${error.message}` }] }; }
+  });
   // The brief check (T462): no state-tool command, because the hooks read the record by task name.
   registerTool("brief", {
     description: `Check a role agent's brief before you spawn it: it names each missing field of ${BRIEF_FIELDS.join(", ")}, and keeps the brief for the agent's start note. Fix the brief and run it again until no field is missing, then spawn the agent with the same task name and brief.`,

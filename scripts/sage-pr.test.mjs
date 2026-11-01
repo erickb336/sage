@@ -408,6 +408,28 @@ test("T165-G: a forged branch in the logbook: the base branch or a branch outsid
   assert.equal(w.remote("refs/heads/main"), w.git("-C", w.at("project"), "rev-parse", "main"));
 });
 
+test("T575: an adopted task lands on the branch that it adopted, and on no other", () => {
+  const w = world();
+  const head = w.commit("b.txt", { imported: false });
+  w.p("branch", "codex/t95-x");
+  rmSync(w.bundle);
+  w.p("bundle", "create", "-q", w.bundle, "main..codex/t95-x");
+  w.forge("T1", "adoption", JSON.stringify({ version: 1, provider: "codex", task: "T95", logbook: w.logbook, project: w.at("project"), pr: "1", branch: "codex/t95-x", round: 0, cycles: 1, digest: "0".repeat(64) }));
+  w.forge("T1", "pr", "1");
+  w.forge("T1", "branch", "codex/t95-y");
+  refused(w.pr("import", "T1"), /branch "codex\/t95-y" is not a branch of T1/);
+  w.forge("T1", "branch", "codex/t95-x");
+  w.imports();
+  for (const kind of ["checks-pass", "review-clean", "qa-pass"]) w.sage("verdict", "T1", "--sha", head, "--kind", kind);
+  w.forge("T1", "state", "verified");
+  const made = w.pr("create", "T1");
+  assert.equal(made.status, 0, made.stderr);
+  assert.equal(w.remote("refs/heads/codex/t95-x"), head);
+  const r = w.pr("merge", "T1");
+  assert.equal(r.status, 0, r.stderr);
+  assert.match(r.stdout, /^merged codex\/t95-x at /);
+});
+
 test("a reviewed head that is already on main refuses", () => {
   const w = world();
   const main = w.p("rev-parse", "main"); // claude/t1 starts at main, with no commit of its own

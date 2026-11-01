@@ -162,7 +162,7 @@ export function promptOf(input) {
  * Switches the modes, and returns the notes for the chief: the mode rules of core (switchModes, T240), with this hook's
  * frames (promptOf) and the autopilot note from its state tool. When the mode rules cannot load, autopilot turns off.
  */
-function switchModes(prompt, state) {
+function switchModes(prompt, state, cwd) {
   if (modePolicy.error) {
     state.autopilot = false;
     return ["sage: the mode policy cannot load. Autopilot is off. Reinstall or update the sage plugin."];
@@ -172,7 +172,7 @@ function switchModes(prompt, state) {
     const broken = Object.keys(c).find((k) => c[k] === "invalid");
     const [small, large, risky] = [{}, { size: "large" }, { risk: "auth" }].map((task) => stateTool.cyclesFor(task, c));
     if (broken) return `sage: autopilot is on. ${broken} in config.json is not a number: no merge until it is fixed (sage config ${broken}=<n>).`;
-    return `sage: autopilot is on. A pull request merges on its head SHA after ${small} clean cycle${small === 1 ? "" : "s"} for a small task, ${large} for a large task and ${risky} for a task with a risk flag; a large task with a risk flag needs the larger count. A task with no review or QA in its route needs only checks-pass; a tiny task with an added review needs ${small}. Merge with gh pr merge <n> --squash --delete-branch --match-head-commit <sha>.`;
+    return `sage: autopilot is on. A pull request merges on its head SHA after ${small} clean cycle${small === 1 ? "" : "s"} for a small task, ${large} for a large task and ${risky} for a task with a risk flag; a large task with a risk flag needs the larger count. A task with no review or QA in its route needs only checks-pass; a tiny task with an added review needs ${small}. Merge with gh pr merge <n> --squash --delete-branch --match-head-commit <sha>.${core.protectionNote?.(state, cwd) ?? ""}`;
   } });
 }
 
@@ -227,7 +227,7 @@ export function handle(input, state, slots) {
 
   if (event === "UserPromptSubmit") {
     const prompt = promptOf(input);
-    const notes = switchModes(prompt, state);
+    const notes = switchModes(prompt, state, input.cwd);
     const asked = main && prompt.owner && !core.error && core.parseBoardIntent(prompt.text);
     if (asked) notes.push(boardText(asked, input.cwd));
     if (state.sage && !state.given) {
@@ -990,7 +990,7 @@ const LEAD_PAIRS = {
   // A branch that another task uses, by its branch= or by a run on it, is shared too, also when it carries this task's
   // name: only the sage moves a task off it or onto it, so no lead brings another task's commits to its own PR (R1740-1).
   branch: (branch, task, view, own) => {
-    if (!(branch !== "" && stateTool.ofTask(own, branch) && (!task.branch || stateTool.ofTask(own, task.branch)))) return false;
+    if (!(branch !== "" && stateTool.branchOfTask(task, branch) && (!task.branch || stateTool.branchOfTask(task, task.branch)))) return false;
     if (branch === task.branch) return true; // no move: the lead's build step names the branch that it has
     const shared = [task.branch, branch].find((name) => name && [...view.branchTasks(name)].some((id) => id !== own));
     return !shared || `${shared} is shared with ${[...view.branchTasks(shared)].filter((id) => id !== own).join(", ")}: only the sage moves a task onto a shared branch or off it.`;

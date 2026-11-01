@@ -54,6 +54,8 @@ So "sage mode. Fix the crash" switches nothing. Send "sage mode" first, then the
 
 Autopilot turns on only while sage mode is on. "sage mode off" also turns autopilot off.
 
+When autopilot turns on, sage reads once per session (with `gh`, read only) whether the default branch of the repository requires a pull request, through a ruleset or a branch protection rule. If not, the confirmation adds one warning line with the steps to turn it on. Autopilot still runs, and a failed read says "could not check".
+
 ### A message near a phrase
 
 A message near a phrase switches nothing. Instead, the hook gives the chief a note with the exact phrase to ask you for. The chief tells you only when your message was not a question.

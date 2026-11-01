@@ -459,19 +459,21 @@ export function stateToolWrites(command, cwd = "/", env = process.env) {
  * it again), the server refuses. The proofs live in the mode folder, which the shell rules keep from every agent.
  */
 const proofFile = (env, id) => join(modeDirectory(env), "proofs", `${createHash("sha256").update(id).digest("hex")}.json`);
-export function writeProof({ tool_use_id: id, session_id: session, tool_name: tool }, env = process.env) {
+const comparisonHash = input => createHash("sha256").update(JSON.stringify([input?.project, input?.task, input?.run, input?.sha256])).digest("hex");
+export function writeProof({ tool_use_id: id, session_id: session, tool_name: tool, tool_input: input }, env = process.env) {
   if (!text(id)) throw Error("the call has no tool_use_id");
   const file = proofFile(env, id);
   mkdirSync(dirname(file), { recursive: true, mode: 0o700 });
-  writeFileSync(file, JSON.stringify({ session, tool }), { mode: 0o600 });
+  writeFileSync(file, JSON.stringify({ session, tool, ...(tool === "mcp__sage__report_compare" ? { comparison: comparisonHash(input) } : {}) }), { mode: 0o600 });
 }
 /** Whether the gate saw this MCP call of the sage tool name, from its _meta; the proof serves one call only. */
-export function takeProof(meta, name, env = process.env) {
+export function takeProof(meta, name, env = process.env, input) {
   if (!record(meta) || !text(meta.callId)) return false;
   const file = proofFile(env, meta.callId);
   let proof;
   try { proof = JSON.parse(readFileSync(file, "utf8")); rmSync(file); } catch { return false; }
-  return proof?.tool === `mcp__sage__${name}` && proof.session === meta.sessionId;
+  return proof?.tool === `mcp__sage__${name}` && proof.session === meta.sessionId
+    && (name !== "report_compare" || proof.comparison === comparisonHash(input));
 }
 export const NO_GATE = "sage's gate is not running: trust sage's hooks with /hooks in the Codex CLI (or the app's hook review), then try again.";
 
@@ -552,6 +554,11 @@ export async function gate(input, { mode = readMode, check = checkMerge, env = p
   const sageTool = SAGE_TOOL.exec(f.tool);
   if (sageTool) {
     if (thread.child && !childMayCall(sageTool[1], f.input)) return refuse(thread, CHILD_LOGBOOK);
+    if (sageTool[1] === "report_compare") {
+      const requested = typeof f.input.project === "string" && isAbsolute(f.input.project) ? real(tool.projectRoot(f.input.project)) : undefined;
+      const assigned = real(tool.projectRoot(f.cwd));
+      if (!assigned || requested !== assigned) return deny("sage: report comparison requires the chief's assigned absolute project");
+    }
     try { writeProof(input, env); } catch (error) { return deny(`sage: the gate could not save its proof of this call (${error?.message ?? error}), so the sage server would refuse it. Check the folder ${modeDirectory(env)}`); }
     return undefined;
   }
