@@ -2560,7 +2560,7 @@ test("shared role instructions require exact packaged provider bindings and refu
     Object.create(f.bindings.implementer)]) assert.throws(() => f.api.renderRoleInstructions("implementer", bindings), /exact provider bindings/);
   const text = f.api.renderRoleInstructions("implementer", f.bindings.implementer);
   assert.match(text, /Never run `gh`/);
-  assert.match(text, /The chief handles the pull request/);
+  assert.match(text, /The chief or the lead handles the pull request/);
   assert.doesNotMatch(text, /\.claude|CLAUDE\.md|gh pr create/);
 });
 
@@ -2660,8 +2660,8 @@ test("shared chief Codex instructions keep unsupported routes inactive, and merg
   assert.match(prepared, /prepared native adapter renders these shared rules on verified owner\s+activation and restores them after supported native compaction/);
   assert.match(prepared, /installed manual preview does not load this automatic chief role/);
   assert.match(prepared, /Full automatic Sage remains disabled/);
-  assert.match(text, /you start every agent yourself, and you do the lead's work/);
-  assert.match(text, /a tiny task goes to an implementer/);
+  assert.match(text, /do the lead's work yourself, and start each role agent/);
+  assert.match(text, /a tiny task goes through a lead to an implementer/);
   assert.match(text, /call `spawn_agent` in the `collaboration` namespace/);
   assert.match(text, /`fork_turns: "none"`/);
   assert.doesNotMatch(text, /sage_prepare_task|admission|preparation/i);

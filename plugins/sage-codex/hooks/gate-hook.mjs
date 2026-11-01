@@ -105,7 +105,9 @@ const LEAD_LOGBOOK = (name) => `sage: a lead records only its own task, and ${na
 const CHILD_SPAWN = "sage: role agents start no agents; only the chief and a lead do. Put what you need in your report.";
 const TEAM_NAMES = [...TEAM].map((role) => role.replaceAll("-", "_")).join(", ").replace(/, (?=[^,]*$)/, " or ");
 const LEAD_SPAWN = (task, name) => `sage: a lead starts only the team of its own task: sage_<role>_t${task}_r<k>, where the role is ${TEAM_NAMES}. ${JSON.stringify(name ?? "no task_name")} is not one of these. Put what else you need in your report.`;
+const LEAD_RESUME = "sage: a lead restarts no agent, because each agent works only from its checked brief. To go on with its work, start a new agent on a new run, with a new brief.";
 const CHILD_SEND = "sage: agents send no input to another thread, because a message to the chief's thread would count as the user's. Put it in your report.";
+const LEAD_SEND = "sage: a lead sends no message to an agent, because each agent works only from its checked brief. To steer your team, start a new agent on a new run, with a new brief.";
 const ROOT_SEND = "sage: no thread sends input to the session's main thread, because Codex counts that message as the user's own typed message, also a mode phrase. Put it in your reply or your report.";
 const V1_REFUSED = "sage: in sage mode, no thread uses multi-agent v1's send_input, because Codex can deliver it to the main thread as the user's typed message. sage sends with multi-agent v2.";
 const GH_LITERAL = "sage: in sage mode, run gh by its name or by a path that ends in /gh, not from a variable or a substitution, so that the gate can read the command.";
@@ -115,8 +117,11 @@ const GH_PATH = (path) => `sage: in sage mode, gh runs only the commands that sa
 /** The sage MCP tools that only read the logbook: a child may call these, and pages without record, run or text. */
 export const CHILD_READS = new Set(["status", "standing", "merge_check"]);
 const SAGE_TOOL = /^mcp__sage__(.+)$/;
-/** Codex's hook name of the spawn tool: spawn_agent (the default and the multi_agent_v1 forms), or with its namespace before it (collaborationspawn_agent). */
-const SPAWN = /spawn_agent$/;
+/**
+ * Codex's hook names of the tools that start an agent: spawn_agent (the default and the multi_agent_v1 forms), or with its
+ * namespace before it (collaborationspawn_agent), and resume_agent (multi_agent_v1resume_agent), which restarts a closed agent.
+ */
+const SPAWN = /(?:spawn|resume)_agent$/;
 /**
  * Codex's hook names of the tools that send a message to another thread: multi-agent v1's send_input (with its
  * namespace or not), and v2's send_message and followup_task in any namespace (Codex 0.164.0 spec_plan.rs:1489-1508;
@@ -387,6 +392,8 @@ const underSage = (t) => (t.codex ? true : t.parts?.some(sageName));
 const isLead = (name) => taskRole(name) === "lead";
 /** The first sage name above the leaf of an agent path that is not a lead's, or undefined. */
 const notLeadAbove = (parts) => parts.filter(sageName).slice(0, -1).find((name) => !isLead(name));
+/** A lead with only leads above it. */
+const realLead = (t) => isLead(t.parts?.at(-1)) && !notLeadAbove(t.parts);
 
 /** Why the gate refuses a child's change of files in sage mode, or undefined: the leaf sage name decides. */
 function childChange(t, sage) {
@@ -733,10 +740,12 @@ export async function gate(input, { mode = readMode, check = checkMerge, env = p
     const targets = V1_SEND.test(f.tool) ? [f.input.target, f.input.id].filter((target) => target !== undefined) : [f.input.target];
     if (targets.some((target) => sendsToRoot(target, f.session))) return deny(ROOT_SEND);
     const under = thread.child && underSage(thread);
-    return under === false ? undefined : refuse(thread, under ? CHILD_SEND : UNREAD_ROLE);
+    if (under === false) return undefined;
+    return refuse(thread, !under ? UNREAD_ROLE : realLead(thread) ? LEAD_SEND : CHILD_SEND);
   }
   if (SPAWN.test(f.tool)) {
     const under = thread.child && underSage(thread);
+    if (under && realLead(thread) && f.tool.endsWith("resume_agent")) return refuse(thread, LEAD_RESUME);
     if (under === false) return undefined;
     const why = under ? childSpawn(thread, f.input.task_name, f.cwd, env) : UNREAD_ROLE;
     return why ? refuse(thread, why) : undefined;

@@ -70,7 +70,7 @@ function spawnWarning(input, env) {
   if (brief && !brief.missing.length) return {};
   const missing = brief ? `the recorded brief has no ${brief.missing.join(", ")}` : `no brief is on record, so ${BRIEF_FIELDS.join(", ")} are not checked`;
   const next = Object.hasOwn(input, "agent_id")
-    ? "A lead sends no message, so this agent stays without the note. Close it with `close_agent`, end its run as failed with the sage tool `run_done`, add a new run with `run_add`, run the sage tool `brief` with the new run's task name and the whole brief, fix each missing field, then spawn the new agent."
+    ? "A lead sends no message, so this agent stays without the note. Stop it with `interrupt_agent`, end its run as failed with the sage tool `run_done`, add a new run with `run_add`, run the sage tool `brief` with the new run's task name and the whole brief, fix each missing field, then spawn the new agent."
     : "Run the brief check: the sage tool `brief` with this task name and the whole brief, fix each missing field, then send the agent the fixed brief with `send_message`.";
   return { hookSpecificOutput: { hookEventName: "PostToolUse", additionalContext: `sage: ${task} started with no checked brief: ${missing}. ${next}` } };
 }

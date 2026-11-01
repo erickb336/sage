@@ -44,6 +44,8 @@ const SPAWN = "sage: role agents start no agents; only the chief and a lead do. 
 const LEAD_SPAWN = (task, name) => `sage: a lead starts only the team of its own task: sage_<role>_t${task}_r<k>, where the role is implementer, code_reviewer, security_reviewer, ux_reviewer or qa. ${name} is not one of these. Put what else you need in your report`;
 const BAD_CHAIN = (name) => `sage: "${name}" is above this agent in its agent path, and only a lead (sage_lead_t<n>) has sage agents under it, so this agent changes no files. Report instead`;
 const SEND = "sage: agents send no input to another thread, because a message to the chief's thread would count as the user's. Put it in your report";
+const LEAD_SEND = "sage: a lead sends no message to an agent, because each agent works only from its checked brief. To steer your team, start a new agent on a new run, with a new brief";
+const LEAD_RESUME = "sage: a lead restarts no agent, because each agent works only from its checked brief. To go on with its work, start a new agent on a new run, with a new brief";
 const CODEX_RUN = "sage: no agent runs codex from the shell, except codex --version and codex --help, because a new session runs outside these hooks, and Codex records the prompt of a resumed, forked or queued turn as the user's typed message, also a mode phrase. Ask the user";
 const UNREAD_CODEX = "sage: the hook could not read this shell command, and it names codex, so it refuses it. Write the command in a plainer form";
 /** A call of a tool of the plugin's sage MCP server, as Codex gives it to PreToolUse: mcp__sage__<tool>, with the call's arguments. */
@@ -628,12 +630,33 @@ test("T551: a sage name that is not a lead above the leaf is refused; the team u
   assert.equal(await g.run(pre("apply_patch", p, sageChild(t, "/root/worker_1/helper"))), undefined);
   assert.equal(await g.run(leadSpawn(sageChild(t, "/root/worker_1"), "helper")), undefined);
   assert.equal(await g.run(leadSpawn({}, "sage_pe_t1_r1")), undefined, "the chief starts any role");
-  // Sends stay refused, for the lead and for its team.
-  for (const path of [LEAD, `${LEAD}/sage_implementer_t12_r2`]) {
+  // Sends stay refused, for the lead and for its team, each with its own reason and step (F-T597-1).
+  for (const [path, why] of [[LEAD, LEAD_SEND], [`${LEAD}/sage_implementer_t12_r2`, SEND], ["/root/sage_pe_t1/sage_lead_t1", SEND], ["/root/sage_qa_t12_r2", SEND]]) {
     for (const tool of ["collaborationsend_message", "collaborationfollowup_task"]) {
-      assert.equal(denied(await g.run({ ...base, hook_event_name: "PreToolUse", tool_name: tool, tool_use_id: "call_1", tool_input: { target: `${LEAD}/sage_qa_t12_r3`, message: "go" }, ...sageChild(t, path) })), SEND, `${path} ${tool}`);
+      assert.equal(denied(await g.run({ ...base, hook_event_name: "PreToolUse", tool_name: tool, tool_use_id: "call_1", tool_input: { target: `${LEAD}/sage_qa_t12_r3`, message: "go" }, ...sageChild(t, path) })), why, `${path} ${tool}`);
     }
   }
+});
+
+test("T553: the gate runs for v1's resume_agent: a role agent restarts no closed agent, and the chief and a plain child are not judged (F-T551-8)", async (t) => {
+  assert.equal(gateMatcher().test("multi_agent_v1resume_agent"), true, "Codex runs the gate for it");
+  assert.equal(gateMatcher().test("mcp__other__resume_agent_x"), false);
+  for (const sage of [false, true]) {
+    const g = fixed({ sage });
+    const resume = (extra) => g.run({ ...base, hook_event_name: "PreToolUse", tool_name: "multi_agent_v1resume_agent", tool_use_id: "call_1", tool_input: { id: "019a0000-0000-7000-8000-000000000000" }, ...extra });
+    assert.equal(denied(await resume(sageChild(t, "/root/sage_qa_t12_r2"))), SPAWN);
+    assert.equal(denied(await resume(sageChild(t, LEAD))), LEAD_RESUME, "a lead starts a new agent instead");
+    assert.equal(denied(await resume(sageChild(t, "/root/sage_pe_t1/sage_lead_t1"))), SPAWN, "a bad chain is no lead");
+    assert.equal(await resume({}), undefined, "the chief");
+    assert.equal(await resume(sageChild(t, "/root/worker_1")), undefined, "a child that is not a sage role agent");
+  }
+});
+
+test("T553: the commands of a lead's steps pass the gate: it prints a helper's role text, opens the pull request and stops a helper", async (t) => {
+  const g = fixed({ sage: true }), lead = sageChild(t, LEAD);
+  for (const command of ["node /plugin/skills/sage/role.mjs code-reviewer", "gh pr create --head sage/t12-a --title T12 --body done", "gh pr view 7 --json headRefOid"]) assert.equal(await g.run(pre("Bash", command, lead)), undefined, command);
+  assert.equal(denied(await g.run(pre("Bash", "gh pr merge 7 --squash --delete-branch --match-head-commit " + "a".repeat(40), lead))), "sage: an agent never merges. Report the pull request as ready", "and it never merges");
+  assert.equal(gateMatcher().test("collaborationinterrupt_agent"), false, "the gate does not judge the stop tool of the steps");
 });
 
 test("a sage_ name that is not a sage task name counts as a read-only role; a name with a run is read by its role (R1664-6, R1663-2)", (t) => {
@@ -961,6 +984,16 @@ test("in sage mode a push takes core's push form, as in the Claude hook; outside
   }
   w.mode({ sage: false, autopilot: false });
   assert.equal(w.send(pre("Bash", "git push --force origin sage/t1")), undefined, "outside sage mode");
+});
+
+test("T553: a lead's push of the steps' form passes the gate, and its force-push and a push to main stay refused (F-T553-6)", (t) => {
+  const w = world(t);
+  w.mode({ sage: true, autopilot: false });
+  spawnSync("git", ["-C", w.project, "remote", "add", "origin", "https://github.com/acme/project.git"]);
+  const lead = w.child(LEAD);
+  assert.equal(w.send(pre("Bash", `git -C ${w.project} push -u origin sage/t12-a`, lead)), undefined, "the push form of the steps");
+  assert.match(denied(w.send(pre("Bash", `git -C ${w.project} push --force origin sage/t12-a`, lead))) ?? "runs", /^sage: sage mode never force-pushes/);
+  assert.match(denied(w.send(pre("Bash", `git -C ${w.project} push origin main`, lead))) ?? "runs", /^sage: work reaches main only through a pull request/);
 });
 
 test("T536: in sage mode no push reaches the default branch, whatever the remote's name or the command's form; the task's branch goes to any remote", (t) => {
