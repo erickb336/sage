@@ -436,15 +436,37 @@ test("T575: an adopted task lands on the branch that it adopted, and on no other
   assert.match(r.stdout, /^merged codex\/t95-x at /);
 });
 
-test("T584: merge refuses a candidate's branch, and merges the judge's branch at the same commit", () => {
+test("T584: create and merge refuse an open arena step and name its exits, and go on after a judge ended done", () => {
   const w = world();
-  w.sage("run", "add", "T1", "--role", "implementer", "--branch", "claude/t1", "--candidate", "1");
-  w.sage("run", "done", "R1", "--status", "done");
+  w.forge("T1", "route", "arena,build,code-review,qa");
   const head = w.commit("b.txt");
   for (const kind of ["checks-pass", "review-clean", "qa-pass"]) w.sage("verdict", "T1", "--sha", head, "--kind", kind);
   w.forge("T1", "state", "verified");
-  assert.equal(w.pr("create", "T1").status, 0);
-  refused(w.pr("merge", "T1"), /merge check: T1 would land claude\/t1, the branch of arena candidate 1 \(R1\), and a candidate's branch never merges\./);
+  const open = /T1's arena step is open: its route has the arena block or it has a candidate run, and no arena-judge run of it ended done, so T1 has no final version yet\. Finish a judge: .* A task that needs no arena: sage task T1 set state=abandoned/;
+  refused(w.pr("create", "T1"), open);
+  assert.deepEqual(w.calls().filter((c) => c.args[1] === "create"), [], "no gh pr create ran");
+  assert.equal(w.remote("refs/heads/claude/t1"), "", "nothing was pushed");
+  w.sage("run", "add", "T1", "--role", "arena-judge", "--branch", "claude/t1-judge");
+  w.sage("run", "done", rowOfRole(w, "arena-judge"), "--status", "failed");
+  refused(w.pr("create", "T1"), open);
+  w.sage("run", "add", "T1", "--role", "arena-judge", "--branch", "claude/t1-judge-2");
+  w.sage("run", "done", rowOfRole(w, "arena-judge"), "--status", "done");
+  const made = w.pr("create", "T1");
+  assert.equal(made.status, 0, made.stderr);
+});
+
+test("T584: create and merge refuse a candidate's branch, and merge the judge's branch at the same commit", () => {
+  const w = world();
+  const head = w.commit("b.txt");
+  for (const kind of ["checks-pass", "review-clean", "qa-pass"]) w.sage("verdict", "T1", "--sha", head, "--kind", kind);
+  w.forge("T1", "state", "verified");
+  assert.equal(w.pr("create", "T1").status, 0, "a pull request that an older sage opened");
+  w.sage("run", "add", "T1", "--role", "implementer", "--branch", "claude/t1", "--candidate", "1");
+  const candidate = rowOfRole(w, "implementer");
+  w.sage("run", "done", candidate, "--status", "done");
+  const land = new RegExp(`T1 would land claude/t1, the branch of arena candidate 1 \\(${candidate}\\), and a candidate's branch never merges\\.`);
+  refused(w.pr("create", "T1"), land);
+  refused(w.pr("merge", "T1"), new RegExp(`merge check: ${land.source}`));
   assert.equal(w.calls().filter((c) => c.args[1] === "merge").length, 0, "no gh pr merge ran");
   // A judge with no graft: its own branch at the candidate's commit, which keeps the candidate's reviews and review copy.
   w.sage("run", "add", "T1", "--role", "arena-judge", "--branch", "claude/t1-judge");

@@ -180,12 +180,12 @@ test("T585: an arena keeps the reports of its candidates and its judge, and a ca
     assert.deepEqual(finish(file, report(id)), {});
   };
   // A candidate on its own branch: its report is kept exactly, with the head of that branch, not of the task's branch.
-  const a = add("implementer", "--branch", "codex/t1-a", "--candidate", "A");
+  const a = add("implementer", "--branch", "codex/t1-a", "--candidate", "1");
   play("implementer", a);
   assert.deepEqual([kept(a).text, kept(a).sha, kept(a).role], [report(a), headA, "implementer"]);
   assert.notEqual(headA, base);
   // A candidate that commits during its run keeps the head of its branch at the stop.
-  const b = add("implementer", "--branch", "codex/t1-b", "--candidate", "B");
+  const b = add("implementer", "--branch", "codex/t1-b", "--candidate", "2");
   let headB;
   play("implementer", b, () => { headB = commit("candidate b moves"); });
   assert.deepEqual([kept(b).text, kept(b).sha], [report(b), headB]);
@@ -195,6 +195,7 @@ test("T585: an arena keeps the reports of its candidates and its judge, and a ca
   let headJudge;
   play("arena_judge", judgeRun, () => { git("checkout", "-q", "codex/t1-judge"); headJudge = commit("the judge grafts"); });
   assert.deepEqual([kept(judgeRun).text, kept(judgeRun).sha, kept(judgeRun).role], [report(judgeRun), headJudge, "arena-judge"]);
+  ok("run", "done", judgeRun, "--status", "done"); // closes the arena step, so the runs below need no number
   // A branch that the run creates keeps its head at the stop.
   const c = add("designer", "--branch", "codex/t1-c");
   let headC;
@@ -202,7 +203,7 @@ test("T585: an arena keeps the reports of its candidates and its judge, and a ca
   assert.deepEqual([kept(c).sha, kept(c).role], [headC, "designer"]);
   // A branch that is gone at the stop gives no SHA. The gate never reads the task's branch instead.
   git("branch", "-q", "codex/t1-d");
-  const d = add("implementer", "--branch", "codex/t1-d", "--candidate", "D");
+  const d = add("implementer", "--branch", "codex/t1-d", "--candidate", "3");
   play("implementer", d, () => git("branch", "-q", "-D", "codex/t1-d"));
   assert.equal(kept(d).sha, "");
   // A review or QA run with --branch of another branch reads the branch of its task, and the other branch does not matter.

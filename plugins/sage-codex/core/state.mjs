@@ -213,18 +213,36 @@ const ofTask = (task, name) => BRANCH.test(name) && new RegExp(`^(?:[A-Za-z0-9_-
 const sameBranch = (a, b) => typeof a === "string" && typeof b === "string" && a.toLowerCase() === b.toLowerCase();
 /** A run of an arena's candidate, on its own branch. A review run may carry a candidate's number, but it writes nothing. */
 const isCandidate = (run) => !!run.candidate && !!run.branch && CANDIDATES.includes(run.role);
-/** Is a task's arena step open: its route has the block, and no judge of it ended done? A repair after that needs no number. */
-const arenaOpen = (task, runs) => list(task.route).includes("arena") && !runs.some((r) => r.task === task.id && r.role === "arena-judge" && r.status === "done");
+/** Is a task's arena step open: its route has the block or it has a candidate run, and no judge of it ended done? A repair after that needs no number. */
+const arenaOpen = (task, runs) => (list(task.route).includes("arena") || runs.some((r) => r.task === task.id && isCandidate(r)))
+  && !runs.some((r) => r.task === task.id && r.role === "arena-judge" && r.status === "done");
+const ARENA_STEP = "its route has the arena block or it has a candidate run, and no arena-judge run of it ended done";
+/** The ways out of an open arena step. --candidate is none of them for a task with no arena: it marks the build's branch as a candidate's. */
+const arenaExits = (id) => `Finish a judge: sage run add ${id} --role arena-judge --branch sage/${id.toLowerCase()}-judge, then sage run done <R> --status done. A task that needs no arena: sage task ${id} set state=abandoned, then frame it again with sage task add, on a new branch.`;
 /**
- * Why a task must not go on, or "": the branch that would land is an arena candidate's, or the task has candidates and
- * names no branch. The rule reads the branch, not the SHA: a judge with no graft keeps the candidate's commit on its own
- * branch. The move to verified and the merge check share it (T584), so a candidate's pull request never reaches the owner as ready.
+ * Why a task must not go on, or "": the branch that would land is an arena candidate's, its arena step is open, or it
+ * has candidates and names no branch. The rule reads the branch, not the SHA: a judge with no graft keeps the candidate's
+ * commit on its own branch. The move to verified, the merge check and sage-pr create share it (T584), so no task reaches
+ * the owner as ready before a judge ended done. runs holds at least the task's own runs.
  */
-const candidateBar = (id, landing, candidates) => {
-  const entry = candidates.find((r) => (landing ? sameBranch(r.branch, landing) : r.task === id));
-  if (!entry) return "";
-  if (!landing) return `${id} has arena candidate runs and no branch=, so nothing says what would land, and a candidate's branch never merges. Run sage task ${id} set branch=<the judge's or the build's branch>, then try again.`;
-  return `${id} would land ${landing}, the branch of arena candidate ${entry.candidate} (${entry.id}), and a candidate's branch never merges. Open the pull request from the judge's or the build's branch, then run sage task ${id} set branch=<that branch>. With no such branch yet, start a judge: sage run add ${id} --role arena-judge --branch sage/${id.toLowerCase()}-judge.`;
+const candidateBar = (task, landing, candidates, runs) => {
+  const { id } = task, entry = landing && candidates.find((r) => sameBranch(r.branch, landing));
+  if (entry) return `${id} would land ${landing}, the branch of arena candidate ${entry.candidate} (${entry.id}), and a candidate's branch never merges. Open the pull request from the judge's or the build's branch, then run sage task ${id} set branch=<that branch>. With no such branch yet, start a judge: sage run add ${id} --role arena-judge --branch sage/${id.toLowerCase()}-judge.`;
+  if (arenaOpen(task, runs)) return `${id}'s arena step is open: ${ARENA_STEP}, so ${id} has no final version yet. ${arenaExits(id)}`;
+  if (!landing && candidates.some((r) => r.task === id)) return `${id} has arena candidate runs and no branch=, so nothing says what would land, and a candidate's branch never merges. Run sage task ${id} set branch=<the judge's or the build's branch>, then try again.`;
+  return "";
+};
+/** The bar on what a task's branch= would land, for a new command only. A replay of a saved update keeps the rules of its writer. */
+const landingBar = (task, runs) => candidateBar(task, task.branch, runs.filter(isCandidate), runs);
+/** A planned move to verified that the bar refuses. Planning replays saved updates, so each new command calls this, and planTaskChanges does not. */
+const barVerified = (moved, planned) => {
+  const bar = moved && landingBar(planned.task, planned.runs);
+  if (bar) refuse(bar);
+};
+/** An arena candidate's number as the table stores it: a whole number from 1, after the same cleaning as every cell. */
+const candidateOf = (value) => {
+  const k = cell(value);
+  return /^[1-9]\d*$/.test(k) ? k : refuse(`--candidate is a whole number from 1, not ${JSON.stringify(visible(String(value)))}. Nothing changed.`);
 };
 const adoptionOf = task => {
   if (!task.adoption) return null;
@@ -651,6 +669,7 @@ function updateRequestedTask(input, env, coordination) {
       if (needsReady && openFindings.length) throw new TaskUpdateError("readiness-findings", openFindings.map(row => row.key));
       const at = now();
       const preliminary = planTaskChanges(before, reference.task, Object.entries(reference.changes).map(([key, value]) => `${key}=${value}`), at, facts);
+      barVerified(reference.changes.state === "verified", preliminary);
       if (["verified", "pr-ready"].includes(preliminary.task.state)) {
         const cfg = config(env);
         if (Object.values(cfg).includes("invalid")) throw new TaskUpdateError("readiness-config");
@@ -800,6 +819,7 @@ function createRequestedRun(input, env = process.env) {
     const matches = read(dir, "tasks").filter(row => row.id === input.task);
     if (matches.length !== 1 || !/^(0|[1-9]\d*)$/.test(matches[0].round) || !Number.isSafeInteger(Number(matches[0].round))) deny();
     notHeld(matches[0], "run add");
+    if (input.candidate && candidateOf(input.candidate) !== input.candidate) deny();
     const run = runFrame(dir, matches[0], input.role, input.branch, input.candidate, env);
     runWrites.commit(dir, { reference, result: run }, { runs: tableText("runs", [...read(dir, "runs"), run]) });
     status(dir, true);
@@ -823,12 +843,14 @@ function runFrame(dir, task, role, branch, candidate, env) {
   if (WRITERS.includes(role)) {
     if (!branch) refuse(`the ${role} run needs --branch`);
     const runs = read(dir, "runs"), there = runs.filter(row => sameBranch(row.branch, branch));
-    if (CANDIDATES.includes(role) && !candidate && arenaOpen(task, runs)) refuse(`${task.id}'s arena step is open: its route has the arena block, and no arena-judge run of it ended done. So this ${role} run needs --candidate <k>, on its own branch. Nothing changed.`);
     // An arena's branches are its evidence, so they stay apart after a run ends too (T584). This comes before the one-writer
     // rule, so a refusal never says to wait for a run when the end of that run changes nothing.
     const judge = role === "arena-judge", seat = !judge && candidate;
     const clash = there.find(row => (seat && row.role === "arena-judge") || (isCandidate(row) && !(row.task === task.id && row.role === role && row.candidate === candidate)));
     if (clash) refuse(`${clash.id} (${clash.role}${isCandidate(clash) ? `, candidate ${clash.candidate}` : ""}) is on ${branch}, and ${judge || !isCandidate(clash) ? "an arena's judge never shares a branch with a candidate" : seat ? "each candidate of an arena has its own branch" : "a candidate's branch stays as it is"}. Give this run a new branch. Nothing changed.`);
+    if (CANDIDATES.includes(role) && !candidate && arenaOpen(task, runs)) refuse(`${task.id}'s arena step is open: ${ARENA_STEP}. So this ${role} run needs --candidate <k>, on its own branch. ${arenaExits(task.id)} Nothing changed.`);
+    // An arena on a large task is a design arena: arena, PE, the owner's approval, build. So its build waits for briefed.
+    if (role === "implementer" && candidate && task.size === "large" && ["framed", "designing", "awaiting-you"].includes(task.state)) refuse(`${task.id} is large and ${task.state}, so its arena is a design arena, and an implementer is no candidate of it: use --role designer. A build arena runs on a tiny or small task, or on a briefed task after an approved design. Nothing changed.`);
     const other = there.find(row => row.status === "running" && WRITERS.includes(row.role));
     if (other) refuse(`${other.id} (${other.role}) still writes ${branch}, and a branch has one writer. Finish that run first (sage run done ${other.id} --status done, blocked, question or failed), or give this run another branch.`);
   }
@@ -1841,9 +1863,6 @@ function planTaskChanges(before, id, changes, at, facts, legacyRounds = false) {
       note += joined;
     } else refuse(`task set takes state=, branch=, pr=, title=, priority=, kind=, waits=, program= or approval=`);
   }
-  // After the loop, so that a branch= in the same command counts, in either order.
-  const bar = states.includes("state=verified") && candidateBar(task.id, task.branch, runs.filter(isCandidate));
-  if (bar) refuse(bar);
   return { task, tasks, runs, decisions: [...decisions, ...decided], note };
 }
 
@@ -2136,7 +2155,7 @@ function assessMerge(sha, env, { cycles, pr, readOnly, head, project }, logbook 
         const live = (runsOf.get(id) ?? []).filter((r) => r.status === "running" && CHECKERS.includes(r.role)).map((r) => `${r.id} (${r.role})`);
         const busy = verdict.ok && live.length > 0 && { ok: false, reason: `${id} has a review or QA run that still runs: ${live.join(", ")}. End it with its report's findings recorded, then check again.` };
         // With no --head, the task's branch= says what would land.
-        const bar = candidateBar(id, head ?? task?.branch, candidates), arena = bar && { ok: false, reason: bar };
+        const bar = candidateBar(task ?? { id }, head ?? task?.branch, candidates, runsOf.get(id) ?? []), arena = bar && { ok: false, reason: bar };
         return { dir, id, ofPr: ofPr.has(id), owns: owns(id), back: !owns(id) && back(id), own: own.length, ...verdict, ...busy, ...arena, ...held };
       });
       // A task with an unmet wait does not merge. A wait on a task of the same PR is met when that task passes in this merge
@@ -2672,6 +2691,7 @@ function act(cmd, pos, opt, dir, env, skip, project) {
       if (id === "set") {
         const before = { tasks, runs: read(dir, "runs"), decisions: read(dir, "decisions") };
         const planned = planTaskChanges(before, task.id, more, now(), { ...Object.fromEntries(["findings", "ledger", "gates", "programs"].map((t) => [t, read(dir, t)])), maxRounds: config(env).max_rounds });
+        barVerified(more.includes("state=verified"), planned); // after the plan, so that a branch= in the same command counts, in either order
         if (JSON.stringify(planned.decisions) !== JSON.stringify(before.decisions)) write(dir, "decisions", planned.decisions);
         if (JSON.stringify(planned.runs) !== JSON.stringify(before.runs)) write(dir, "runs", planned.runs);
         write(dir, "tasks", planned.tasks);
@@ -2801,7 +2821,7 @@ function act(cmd, pos, opt, dir, env, skip, project) {
         // The role as the table stores it, in lower case, so that every check below sees the stored value ("Lead " is lead).
         const role = cell(need(opt.role, "--role")).toLowerCase();
         const branch = opt.branch === undefined ? "" : branchOf(opt.branch);
-        const candidate = opt.candidate ?? "";
+        const candidate = opt.candidate === undefined ? "" : candidateOf(opt.candidate);
         const run = runFrame(dir, task, role, branch, candidate, env);
         if (opt["usage-interface"] !== undefined) {
           const entry = USAGE_INTERFACES.get(opt["usage-interface"]);
@@ -3277,5 +3297,5 @@ function runCli(argv = process.argv.slice(2)) {
 }
 
 const { board, answerPaths } = createBoard({ BLOCKS, BRANCH, RISKS, STATES, mergeCheck, optionsOf, projectName, projectRoot, read, sageRoot, slug, storeDir, withLock });
-return { SIZES, BLOCKS, RISKS, KINDS, STATES, DEFAULTS, PR, sageRoot, git, projectRoot, roleReadProject, optionsOf, slug, worktreeRoot, BRANCH, ofTask, branchOfTask, projectName, storeDir, config, cyclesFor, modelFor, read, mergeCheck, boardLandingCheck, logbookView, sage, readTaskSnapshot, updateRequestedTask, assertTaskUpdateOpen, createRequestedTask, createRequestedRun, finishReportedRun, finishInterruptedRun, acceptReportedReview, keepReport, compareRetainedReport, verdictBacking, captureRunAssignment, captureReviewTarget, validateTerminalAssignment, withLock, board, answerPaths, command, runCli };
+return { SIZES, BLOCKS, RISKS, KINDS, STATES, DEFAULTS, PR, sageRoot, git, projectRoot, roleReadProject, optionsOf, slug, worktreeRoot, BRANCH, ofTask, branchOfTask, projectName, storeDir, config, cyclesFor, modelFor, read, mergeCheck, landingBar, boardLandingCheck, logbookView, sage, readTaskSnapshot, updateRequestedTask, assertTaskUpdateOpen, createRequestedTask, createRequestedRun, finishReportedRun, finishInterruptedRun, acceptReportedReview, keepReport, compareRetainedReport, verdictBacking, captureRunAssignment, captureReviewTarget, validateTerminalAssignment, withLock, board, answerPaths, command, runCli };
 }
