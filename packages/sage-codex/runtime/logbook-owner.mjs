@@ -1,4 +1,5 @@
-import { createStateTool, readAdmission } from "sage-core";
+import { readAdmission } from "sage-core";
+import { logbookEnv, logbookTool } from "./logbook-env.mjs";
 import { nativeToolContext } from "./native-tool.mjs";
 import { validateLogbookLocation } from "./run-report.mjs";
 
@@ -9,7 +10,7 @@ export function chiefLogbook(context, options) {
   const state = readAdmission(options.directory);
   const owner = state.sessions.find(row => row.project === options.project && row.session === `codex:${native.actor}`);
   if (!owner) throw Error("Logbook changes need the current root owner");
-  const tool = createStateTool({ defaultRoot: () => { throw Error("No ambient logbook"); } });
+  const tool = logbookTool(() => { throw Error("No ambient logbook"); });
   return { tool, project: options.projectDirectory, owner: JSON.stringify([owner.project, owner.session, owner.epoch]),
-    env: { ...process.env, SAGE_HOME: options.logbookRoot } };
+    env: logbookEnv(options) };
 }

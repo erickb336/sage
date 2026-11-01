@@ -9,9 +9,9 @@ import "./fixtures/codex-native/restart-result.test.mjs";
 import "./fixtures/codex-native/restart-binary.test.mjs";
 import assert from "node:assert/strict";
 import { spawn, execFileSync } from "node:child_process";
-import { appendFileSync, cpSync, existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, realpathSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
+import { appendFileSync, cpSync, existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, realpathSync, renameSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { basename, dirname, join } from "node:path";
 import { createInterface } from "node:readline";
 import { test } from "node:test";
 import { pathToFileURL } from "node:url";
@@ -2981,7 +2981,11 @@ test("native logbook configuration fixes an external location and refuses redire
   writeFileSync(file, JSON.stringify(config));
   assert.deepEqual(readHookConfiguration(file), f.options);
   const alias = join(f.dir, "logbook-link"); symlinkSync(f.options.logbookRoot, alias);
-  for (const bad of [{ ...config, version: 4 }, { ...config, version: 2 },
+  // Version 4 adds the launcher's root: the one that the environment gives, so that the hooks protect it too.
+  const fixed = { version: 4, mode: { ...f.options, sharedRoot: process.env.SAGE_SHARED_HOME } };
+  writeFileSync(file, JSON.stringify(fixed));
+  assert.deepEqual(readHookConfiguration(file), fixed.mode);
+  for (const bad of [{ ...config, version: 5 }, { ...config, version: 4 }, { ...fixed, mode: { ...fixed.mode, sharedRoot: join(f.dir, "another-root") } }, { ...config, version: 2 },
     { ...config, mode: { ...f.options, logbookRoot: undefined } },
     ...[alias, f.options.projectDirectory, f.options.directory, f.options.observationsRoot, f.options.sessionsDir, join(f.options.projectDirectory, "..")].map(logbookRoot =>
       ({ ...config, mode: { ...f.options, logbookRoot } }))]) {
@@ -5672,6 +5676,25 @@ async function taskUpdateCoordinator(f, request) {
   const run = callbacks => context.tool.updateRequestedTask({ ...request, project: context.project, owner: context.owner }, context.env, callbacks);
   return { run, coordination };
 }
+
+test('T594: a chief with another logbook root settles a committed row of a shared project, and does not void it', async t => {
+  const f = await nativeTaskUpdateFixture(t);
+  const { settleNativeWrites } = await import(pathToFileURL(join(f.plugin, 'runtime/task-settle.mjs')));
+  const shared = process.env.SAGE_SHARED_HOME, folder = join(shared, basename(f.assignmentLogbook));
+  t.after(() => { rmSync(join(shared, 'bindings.tsv'), { force: true }); rmSync(folder, { recursive: true, force: true }); });
+  mkdirSync(shared, { recursive: true });
+  renameSync(f.assignmentLogbook, folder);
+  writeFileSync(join(shared, 'bindings.tsv'), `root\tfolder\tcommits\tat\n${realpathSync(f.options.projectDirectory)}\t${basename(folder)}\t\t2026-11-01T00:00:00Z\n`);
+  const { run, coordination } = await taskUpdateCoordinator(f, f.request({ title: 'Shared' }));
+  // The chief stops after the commit: its journal row stays open, and only the shared logbook holds the receipt.
+  assert.throws(() => run({ ...coordination, release() { throw Error('Injected stop'); } }), { code: 'uncertain-outcome' });
+  assert.equal(f.core.readAdmission(f.options.directory).taskUpdates.at(-1).released, undefined);
+  const otherRoot = join(dirname(f.options.logbookRoot), 'other-logbook-root');
+  mkdirSync(otherRoot);
+  settleNativeWrites({ ...f.options, logbookRoot: realpathSync(otherRoot) });
+  const row = f.core.readAdmission(f.options.directory).taskUpdates.at(-1);
+  assert.deepEqual([row.void, row.released], [undefined, true]);
+});
 
 test('T578: a task update behind an unresolved one gets a step that its chief can do', async t => {
   const f = await nativeTaskUpdateFixture(t);

@@ -348,7 +348,7 @@ test("the state server lists one tool for each state-tool command, and marks onl
   const s = await connect(t);
   const tools = await s.tools();
   assert.deepEqual(tools.map((tool) => tool.name).sort(), ["brief", "finding_add", "finding_close", "finding_move", "finding_triage", "gate_add", "gate_answer",
-    "init", "log", "merge_check", "pages", "report_compare", "round", "run_add", "run_done", "standing", "standing_add", "status", "task_add", "task_adopt", "task_set", "verdict"]);
+    "init", "link", "log", "merge_check", "pages", "report_compare", "round", "run_add", "run_done", "standing", "standing_add", "status", "task_add", "task_adopt", "task_set", "verdict"]);
   assert.deepEqual(tools.filter((tool) => tool.annotations.readOnlyHint).map((tool) => tool.name).sort(), ["merge_check", "report_compare", "standing", "status"]);
   assert.ok(tools.every((tool) => tool.inputSchema.required.includes("project") && tool.inputSchema.additionalProperties === false));
   // T500: a task_add needs its priority, from the scale.
@@ -417,6 +417,55 @@ test("T48: task_adopt and approved repair reach the shared rule through Codex MC
   await s.call('task_set', { task: 'T1', fields: { state: 'reviewing' } });
   assert.match(await s.call('round', { task: 'T1' }), /held: 5 repair rounds/);
   assert.match((await s.call('task_set', { task: 'T1', fields: { state: 'building', approval: 'G1' } })).error, /approval/);
+});
+
+test("T594: the link tool starts a shared logbook or joins one, with the CLI's refusals, and the server finds both roots", async (t) => {
+  const shared = realpathSync(mkdtempSync(join(tmpdir(), "sage-state-mcp-shared-")));
+  t.after(() => rmSync(shared, { recursive: true, force: true }));
+  const s = await connect(t, { SAGE_SHARED_HOME: shared });
+  // The same refusal as the CLI's, with no tool-side rule in front of it.
+  const form = /^(?:.*: )?link takes exactly one of --to <folder> or --separate; --separate takes no value\. Nothing changed\.$/;
+  assert.match((await s.call("link", {})).error, form);
+  assert.match((await s.call("link", { to: "a-123456", separate: true })).error, form);
+  assert.match((await s.call("link", { to: "Not A Folder" })).error, /"Not A Folder" is not a logbook folder: its name is <project>-<6 hex>, as sage link prints it/);
+  assert.match((await s.call("link", { to: "absent-123456" })).error, /is not a logbook of the shared root\. Nothing changed\. List the logbook folders in .*projects\.tsv, then run sage link --to <folder> with one of them, or run sage link --separate to start a new logbook\.$/);
+  assert.match(await s.call("link", { separate: true }), new RegExp(`now uses the shared logbook ${shared}/project-[0-9a-f]{6}$`));
+  assert.match(await s.call("link", { separate: true }), /^already linked: /);
+  assert.match(await s.call("task_add", { title: "Shared", size: "tiny", priority: "P2" }), /T1/);
+  assert.deepEqual(readdirSync(join(s.env.CODEX_HOME, "sage")).filter((name) => name.startsWith("project-")), [], "no Codex logbook");
+  assert.equal(readFileSync(join(shared, "plugins.tsv"), "utf8").split("\n")[1].split("\t").slice(0, 2).join(" "), "codex 1");
+});
+
+test("T594 with T552: a lead's rules read the shared logbook, and only the chief links", async (t) => {
+  const shared = realpathSync(mkdtempSync(join(tmpdir(), "sage-state-mcp-shared-")));
+  t.after(() => rmSync(shared, { recursive: true, force: true }));
+  const s = await connect(t, { SAGE_SHARED_HOME: shared });
+  const folder = (await s.call("link", { separate: true })).split(" ").at(-1);
+  await s.call("task_add", { title: "Shared", size: "small", priority: "P2" });
+  await s.call("task_set", { task: "T1", fields: { state: "briefed", branch: "sage/t1-a" } });
+  await s.call("run_add", { task: "T1", role: "lead" });
+  // The lead's rule finds T1 and its lead run only in the shared logbook: the provider root has none.
+  assert.match(await s.call("run_add", { task: "T1", role: "qa" }, { agent: LEAD }), /^R2 running/);
+  assert.match(readFileSync(join(folder, "runs.tsv"), "utf8"), /\nR2\tT1\tqa\t/);
+  const bindings = readFileSync(join(shared, "bindings.tsv"), "utf8");
+  const LINK_LEAD = "sage: a lead records only its own task, and link is not one of its tools. Put what the logbook needs in your report";
+  const LINK_CHILD = "sage: role agents report; only the chief records the logbook. Put this in your report";
+  for (const [agent, reason, caller] of [[LEAD, LINK_LEAD, { role: "lead", task: "T1", run: "R1", project: s.project }], ["/root/sage_qa_t1_r2", LINK_CHILD, { role: "child" }]]) {
+    assert.equal((await s.call("link", { separate: true }, { agent })).denied, reason, `the gate, ${agent}`);
+    s.writeProof("link", `forced_${agent}`, caller);
+    assert.equal((await s.call("link", { separate: true }, { gate: false, callId: `forced_${agent}` })).error, `${reason}.`, `the server, ${agent}`);
+  }
+  assert.equal(readFileSync(join(shared, "bindings.tsv"), "utf8"), bindings, "no refused call changes the table");
+});
+
+test("the Codex chief's list of tools names the link tool, with the owner's answer first", () => {
+  const { PROJECT_SETUP } = JSON.parse(readFileSync(join(ROOT, "plugins/sage-codex/chief-bindings.json"), "utf8"));
+  assert.match(PROJECT_SETUP, /`link`\. Call `link` only after the owner's answer in the chat\./);
+});
+
+test("the Codex settings pass both roots to the state server", () => {
+  const { env_vars: vars } = JSON.parse(readFileSync(join(ROOT, "plugins/sage-codex/.mcp.json"), "utf8")).mcpServers.sage;
+  assert.deepEqual(vars, ["CODEX_HOME", "SAGE_HOME", "SAGE_SHARED_HOME", "CLAUDE_CONFIG_DIR"]);
 });
 
 test("each tool writes the Codex logbook in CODEX_HOME/sage, and returns each refusal as a tool error with its reason", async (t) => {
