@@ -1,23 +1,23 @@
 # The team workflow
 
-The parent is the chief and the sole logbook writer. The chief frames work, asks product questions and shows results. One lead coordinates each build task and its PR. Specialists implement or review. This is a procedure followed by agents; it is not strict runtime admission.
+The parent is the chief. It writes the logbook, and a lead writes only the records of its own task. The chief frames work, asks product questions and shows results. One lead coordinates each build task and its PR. Specialists implement or review. This is a procedure followed by agents; it is not strict runtime admission.
 
 1. Resolve the project and inspect current tasks, standing orders, worktrees and known active ownership. Preserve other sessions' work.
 2. Frame a task through the CLI. Follow its route and risks. Resolve product decisions before dependent implementation.
 3. Confirm the host supports the required hierarchy and roles. Use its actual agent tools and capacity, not tool names from another provider.
-4. Keep one active build team per project. Give each writer exclusive paths or a separate worktree. Known checks do not provide atomic exclusion across sessions.
-5. The team is flat for now: the chief does the lead's work and starts every role agent (designers, PE, implementers, arena judges, code reviewers, security reviewers, UX reviewers and QA), as [start a role agent](roles.md) says. Leads come later. Role agents start no agents and record nothing in the logbook; the plugin's hook refuses both. Keep at most three agents for one task, within the lower host, project and owner limit.
-6. The chief records each run before its work starts and sends the complete brief. Role agents never write logbook tables or invoke state mutations.
+4. Keep one active build team per task. Give each writer exclusive paths or a separate worktree. Known checks do not provide atomic exclusion across sessions.
+5. The chief starts one lead for each task with a build, and starts designers, PE, arena judges and investigators itself. The lead starts the implementers, code reviewers, security reviewers, UX reviewers and QA of its task, as [start a role agent](roles.md) says. On multi-agent v1 a child cannot start agents, so the chief starts no lead: it does the lead's work and starts every role agent. Other role agents start no agents and record nothing in the logbook; the plugin's hook refuses both. Keep at most three leads for one project and nine helpers for one lead, within the lower host, project and owner limit.
+6. The chief or the lead records each run before its work starts and sends the complete brief. Other role agents never write logbook tables or invoke state mutations.
 7. The implementer makes the scoped change and runs appropriate checks. An independent reviewer examines the change; the implementer cannot certify its own review.
 8. Record findings before verdicts. Repair on the same task branch. Use the CLI's repair/held/replan rules, not a new task to hide unresolved findings.
 9. Run every required clean cycle on the final commit. A new commit restarts cycles. Use configured counts: default one for tiny/small, two for large or risk-flagged tasks, or more when required.
 10. QA checks acceptance against the final head. Show the user the artifact, evidence, limitations and any needed decision. Stop at verified unless separately authorized publication is available.
 
-Tiny work still needs an independent code review under this workflow; add that block with a reason if the framed route lacks it. Run security review for applicable risks and UX review when the experience changes. PE and designer use the public helper after installed acceptance. The lead route remains unavailable. An arena follows [run an arena](arena.md), and its real run in an installed Codex is the pilot that remains to do. Do not silently skip required review or rename a missing role. Stop the dependent phase and explain the gap.
+Tiny work still needs an independent code review under this workflow; add that block with a reason if the framed route lacks it. Run security review for applicable risks and UX review when the experience changes. PE and designer use the public helper after installed acceptance. A lead uses it too, and its real run in an installed Codex is a pilot that remains to do. An arena follows [run an arena](arena.md), and its real run in an installed Codex is the pilot that remains to do. Do not silently skip required review or rename a missing role. Stop the dependent phase and explain the gap.
 
 ## Capacity, failures and recovery
 
-Use current host limits. Five subagents in one environment is not a portable limit. If capacity is full, wait or use supported lifecycle controls. Completion does not prove that a slot was released. Continue only independent work that fits the available capability.
+Use current host limits. Five subagents in one environment is not a portable limit. If capacity is full, wait or use supported lifecycle controls. A spawn that fails with `AgentLimitReached` is this case: see [the thread limit](roles.md#thread-limit). Completion does not prove that a slot was released. Continue only independent work that fits the available capability.
 
 A failed skill read stops the work that depends on it. An unsupported state transition remains blocked. A child's success report remains reported until supported by evidence; obtain the missing check rather than invent it. Preserve native API refusals and permission boundaries.
 
@@ -61,6 +61,6 @@ The chief keeps this order: designer → PE → owner’s design approval → bu
 4. Start a distinct PE child with its own run, the saved prototype, screenshots and designer report. Save its complete report and actual outcome. Resolve PE `CHANGE`, `blocked` and `question` outcomes before acceptance.
 5. Show the design and PE report to the owner. Record the owner’s actual design approval before starting dependent implementation. A stored report supplies no approval.
 
-An ordinary open design gate is not a general merge refusal. The chief must preserve the design procedure. Existing missing-review and program-wait refusals still apply. Lead dispatch and protected native completion remain outside this support. A design arena keeps the same order: candidates and a judge stand for the designer, then PE, owner’s design approval and build.
+An ordinary open design gate is not a general merge refusal. The chief must preserve the design procedure. Existing missing-review and program-wait refusals still apply. Protected native completion remains outside this support. A design arena keeps the same order: candidates and a judge stand for the designer, then PE, owner’s design approval and build.
 
 Label local fixture artifacts and synthetic hook events as sample data. They demonstrate storage and sequencing, not actual designer creation, independent PE work or installed acceptance.

@@ -1,5 +1,6 @@
 // Public API. Providers import this entry point only.
 export { createStateTool } from "./state.mjs";
+export { sharedRoot } from "./shared-root.mjs";
 export { readLocalGit } from "./local-git.mjs";
 export { applyPrinciples, MOMENTS, fingerprint } from "./principles.mjs";
 export { shellCommands, programsRun, commandText } from "./command-reader.mjs";
@@ -7,7 +8,7 @@ export { createCommandPolicy, mentionsMerge, gitSubcommand, programName } from "
 export { createPushPolicy, gitHubRepository, gitInternalPath } from "./push-policy.mjs";
 export { PR, pullRequestHead } from "./pull-request.mjs";
 export { branchProtection, protectionNote } from "./branch-protection.mjs";
-export { fileWriteOutsideRoots } from "./protected-paths.mjs";
+export { fileWriteOutsideRoots, partNames } from "./protected-paths.mjs";
 export { commandWrites } from "./shell-write-policy.mjs";
 export { shellWriteOutsideRoots } from "./shell-path-policy.mjs";
 export { chiefEditDenied } from "./file-policy.mjs";

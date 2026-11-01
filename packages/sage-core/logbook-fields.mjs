@@ -93,8 +93,8 @@ export const TABLES = {
   decisions: ["at", "task", "decision", "why"],
   programs: ["id", "name", "goal", "pilot", "gate", "at"],
 };
-/** Every file of a logbook that only the state tool writes, by name: each table and the logbook's other records (K2). */
-export const LOGBOOK_FILES = [...Object.keys(TABLES).map((t) => `${t}.tsv`), "config.json", "standing.md", "status.md", "observations.json"];
+/** Every file that only the state tool writes, by name: each table and record of a logbook (K2), and the tables of a sage root. */
+export const LOGBOOK_FILES = [...Object.keys(TABLES).map((t) => `${t}.tsv`), "config.json", "standing.md", "status.md", "observations.json", "moved.json", "bindings.tsv", "bindings.made", "plugins.tsv", "projects.tsv", "projects.made"];
 
 /**
  * The owner's settings of one logbook from its parsed config.json: its display name (null for none) and its archived

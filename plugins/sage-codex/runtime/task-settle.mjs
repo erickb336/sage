@@ -1,4 +1,5 @@
-import { acknowledgeTaskUpdate, createStateTool, endInterruptedRunFinish, readAdmission, releaseTaskUpdate, voidInterruptedRunFinish, voidTaskUpdate } from "../core/index.mjs";
+import { acknowledgeTaskUpdate, endInterruptedRunFinish, readAdmission, releaseTaskUpdate, voidInterruptedRunFinish, voidTaskUpdate } from "../core/index.mjs";
+import { logbookEnv, logbookTool } from "./logbook-env.mjs";
 import { validateLogbookLocation } from "./run-report.mjs";
 
 /**
@@ -7,8 +8,8 @@ import { validateLogbookLocation } from "./run-report.mjs";
  */
 export function settleNativeWrites(options) {
   validateLogbookLocation(options);
-  const tool = createStateTool({ defaultRoot: () => { throw Error("No ambient logbook"); } });
-  tool.settleWrites({ project: options.projectDirectory }, { ...process.env, SAGE_HOME: options.logbookRoot }, receipts => {
+  const tool = logbookTool(() => { throw Error("No ambient logbook"); });
+  tool.settleWrites({ project: options.projectDirectory }, logbookEnv(options), receipts => {
     const state = readAdmission(options.directory);
     for (const { update, accepted, released, void: voided } of state.taskUpdates ?? []) {
       if (update.project !== options.project || voided || released) continue;

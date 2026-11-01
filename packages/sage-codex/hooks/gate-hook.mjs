@@ -60,7 +60,7 @@ import { closeSync, existsSync, mkdirSync, openSync, readdirSync, readSync, real
 import { homedir } from "node:os";
 import { basename, dirname, isAbsolute, join, relative, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
-import { chiefEditDenied, commandWrites, createCommandPolicy, createPushPolicy, gitInternalPath, PR, programName, programsRun, pullRequestHead, readModeFile, roleEditDenied, shellCommands, switchModes, TEAM } from "sage-core";
+import { chiefEditDenied, commandWrites, createCommandPolicy, createPushPolicy, gitInternalPath, LOGBOOK_FILES, partNames, PR, programName, programsRun, pullRequestHead, readModeFile, roleEditDenied, sharedRoot, shellCommands, switchModes, TEAM } from "sage-core";
 import { tool } from "../skills/sage/sage.mjs";
 import { verificationOptions } from "../skills/sage/verify-install.mjs";
 import { patchPaths, readState, stateKey } from "./principles-hook.mjs";
@@ -92,7 +92,8 @@ const CODEX_SETTINGS = "sage: no agent writes Codex's config file or the sage pl
 const CHIEF = 'sage: sage mode is on, so the chief does not change files. Brief an implementer to make this change. The user ends sage mode with the message "sage mode off", alone.';
 const AGENT_MERGE = "sage: an agent never merges. Report the pull request as ready.";
 const AUTOPILOT_OFF = 'sage: autopilot is off, so the user merges. Report the pull request as ready. The user turns it on with the message "autopilot on", alone.';
-const SAGE_FOLDER = "sage: no agent runs a shell command that names the Codex sage folder or the Codex sessions folder, because the logbook, the mode files and the user's typed messages are there. Use the sage MCP tools for the logbook.";
+const LOGBOOK_FILE = "sage: in sage mode, no agent writes a logbook file by its name outside the project. Use the sage MCP tools for the logbook.";
+const SAGE_FOLDER = "sage: no agent runs a shell command that names the Codex sage folder, the shared root or the Codex sessions folder, and no patch changes them, because the logbook, the mode files and the user's typed messages are there. Use the sage MCP tools for the logbook.";
 const CODEX_RUN = "sage: no agent runs codex from the shell, except codex --version and codex --help, because a new session runs outside these hooks, and Codex records the prompt of a resumed, forked or queued turn as the user's typed message, also a mode phrase. Ask the user.";
 const READ_ONLY = (role) => `sage: in sage mode, the ${role} agent changes no files. Report the finding instead.`;
 const LEAD_EDIT = "sage: a lead changes no files. Start an implementer of your task to make this change.";
@@ -105,7 +106,9 @@ const LEAD_LOGBOOK = (name) => `sage: a lead records only its own task, and ${na
 const CHILD_SPAWN = "sage: role agents start no agents; only the chief and a lead do. Put what you need in your report.";
 const TEAM_NAMES = [...TEAM].map((role) => role.replaceAll("-", "_")).join(", ").replace(/, (?=[^,]*$)/, " or ");
 const LEAD_SPAWN = (task, name) => `sage: a lead starts only the team of its own task: sage_<role>_t${task}_r<k>, where the role is ${TEAM_NAMES}. ${JSON.stringify(name ?? "no task_name")} is not one of these. Put what else you need in your report.`;
+const LEAD_RESUME = "sage: a lead restarts no agent, because each agent works only from its checked brief. To go on with its work, start a new agent on a new run, with a new brief.";
 const CHILD_SEND = "sage: agents send no input to another thread, because a message to the chief's thread would count as the user's. Put it in your report.";
+const LEAD_SEND = "sage: a lead sends no message to an agent, because each agent works only from its checked brief. To steer your team, start a new agent on a new run, with a new brief.";
 const ROOT_SEND = "sage: no thread sends input to the session's main thread, because Codex counts that message as the user's own typed message, also a mode phrase. Put it in your reply or your report.";
 const V1_REFUSED = "sage: in sage mode, no thread uses multi-agent v1's send_input, because Codex can deliver it to the main thread as the user's typed message. sage sends with multi-agent v2.";
 const GH_LITERAL = "sage: in sage mode, run gh by its name or by a path that ends in /gh, not from a variable or a substitution, so that the gate can read the command.";
@@ -115,8 +118,11 @@ const GH_PATH = (path) => `sage: in sage mode, gh runs only the commands that sa
 /** The sage MCP tools that only read the logbook: a child may call these, and pages without record, run or text. */
 export const CHILD_READS = new Set(["status", "standing", "merge_check"]);
 const SAGE_TOOL = /^mcp__sage__(.+)$/;
-/** Codex's hook name of the spawn tool: spawn_agent (the default and the multi_agent_v1 forms), or with its namespace before it (collaborationspawn_agent). */
-const SPAWN = /spawn_agent$/;
+/**
+ * Codex's hook names of the tools that start an agent: spawn_agent (the default and the multi_agent_v1 forms), or with its
+ * namespace before it (collaborationspawn_agent), and resume_agent (multi_agent_v1resume_agent), which restarts a closed agent.
+ */
+const SPAWN = /(?:spawn|resume)_agent$/;
 /**
  * Codex's hook names of the tools that send a message to another thread: multi-agent v1's send_input (with its
  * namespace or not), and v2's send_message and followup_task in any namespace (Codex 0.164.0 spec_plan.rs:1489-1508;
@@ -387,6 +393,8 @@ const underSage = (t) => (t.codex ? true : t.parts?.some(sageName));
 const isLead = (name) => taskRole(name) === "lead";
 /** The first sage name above the leaf of an agent path that is not a lead's, or undefined. */
 const notLeadAbove = (parts) => parts.filter(sageName).slice(0, -1).find((name) => !isLead(name));
+/** A lead with only leads above it. */
+const realLead = (t) => isLead(t.parts?.at(-1)) && !notLeadAbove(t.parts);
 
 /** Why the gate refuses a child's change of files in sage mode, or undefined: the leaf sage name decides. */
 function childChange(t, sage) {
@@ -453,12 +461,40 @@ function wordsOf(command, cwd, env) {
 
 const codexHome = (env) => resolve(env.CODEX_HOME ?? join(homedir(), ".codex"));
 /**
- * Whether a shell command names the Codex sage folder (also from ~ or $HOME, $SAGE_HOME or $CODEX_HOME/sage) or the
- * Codex sessions folder: in its text, or in a word as the shell reads it (without quotes, R1669-4), also as a path
- * from the folder the word runs in.
+ * Whether a shell command names the Codex sage folder (also from ~ or $HOME, $SAGE_HOME or $CODEX_HOME/sage), the
+ * shared root (also from $SAGE_SHARED_HOME) or the Codex sessions folder: in its text, or in a word as the shell reads
+ * it (without quotes, R1669-4), also as a path from the folder the word runs in. A .sage folder outside the project
+ * counts too, by name, also as a pattern: a project's own .sage folder stays free.
  */
 export const namesSageFolder = (command, env = process.env, cwd = "/") => names(command, env, cwd,
-  [dirname(dirname(modeDirectory(env))), join(codexHome(env), "sessions")], ["\\$\\{?SAGE_HOME\\b", "\\$\\{?CODEX_HOME\\}?/(?:sage|sessions)(?![\\w.-])", "\\.hooks/codex"]);
+  [dirname(dirname(modeDirectory(env))), sharedRoot(env), join(codexHome(env), "sessions")], ["\\$\\{?SAGE_HOME\\b", "\\$\\{?SAGE_SHARED_HOME\\b", "\\$\\{?CODEX_HOME\\}?/(?:sage|sessions)(?![\\w.-])", "\\.hooks/codex"])
+  || leavingPaths(command, env, cwd).some((path) => partsOf(path).some((part) => part.startsWith(".") && partNames(part, ".sage")));
+/** Whether a shell command or a patch names a logbook file outside the project: the Claude hook's list. A project's own config.json stays free. */
+const namesLogbookFile = (command, env, cwd) => leavingPaths(command, env, cwd).some((path) => partsOf(path).some((part) => /[a-z]/.test(part) && LOGBOOK_FILES.some((name) => partNames(part, name))));
+const partsOf = (path) => path.toLowerCase().split("/");
+/** A patch's path as a shell command, so that the shell rules read it as one word from the patch's folder. */
+const asWord = (path) => `: '${path.replaceAll("'", "'\\''")}'`;
+/**
+ * The words of a command that may lead out of the project, as paths. A word with a variable has no known place, and
+ * neither has any word of a line that the reader cannot read (it stops at "cd ~"), so each of those counts. A checkout
+ * of the same repository, such as a task worktree in a sibling folder, is the project.
+ */
+function leavingPaths(command, env, cwd) {
+  const home = env.HOME || homedir(), root = projectRoot(cwd), read = wordsOf(command, cwd, env);
+  const start = (word) => word.replace(/^(?:~|\$HOME|\$\{HOME\})(?=\/|$)/, home);
+  if (!read.length) return command.split(/[\s;&|()<>`'"=]+/).filter(Boolean).map(start);
+  return read.flatMap(({ word, dir }) => {
+    const path = start(word);
+    if (/[$`]/.test(path)) return [path];
+    const place = relative(root, resolve(dir, path));
+    return (place === ".." || place.startsWith("../") || isAbsolute(place)) && !sameRepository(resolve(dir, path), cwd) ? [resolve(dir, path)] : [];
+  });
+}
+/** Whether a path's nearest .git entry is a checkout of the cwd's repository. Core verifies it: a planted .git file is a project of its own. */
+function sameRepository(path, cwd) {
+  const top = projectRoot(path);
+  return existsSync(join(top, ".git")) && real(tool.projectRoot(top)) === real(tool.projectRoot(cwd));
+}
 /**
  * Whether a shell command names Codex's config file, which keeps the trust records of the hooks, or the folder of this
  * installed plugin, whose hooks are the gate (R1916-2): the same forms as the sage folder.
@@ -733,10 +769,12 @@ export async function gate(input, { mode = readMode, check = checkMerge, env = p
     const targets = V1_SEND.test(f.tool) ? [f.input.target, f.input.id].filter((target) => target !== undefined) : [f.input.target];
     if (targets.some((target) => sendsToRoot(target, f.session))) return deny(ROOT_SEND);
     const under = thread.child && underSage(thread);
-    return under === false ? undefined : refuse(thread, under ? CHILD_SEND : UNREAD_ROLE);
+    if (under === false) return undefined;
+    return refuse(thread, !under ? UNREAD_ROLE : realLead(thread) ? LEAD_SEND : CHILD_SEND);
   }
   if (SPAWN.test(f.tool)) {
     const under = thread.child && underSage(thread);
+    if (under && realLead(thread) && f.tool.endsWith("resume_agent")) return refuse(thread, LEAD_RESUME);
     if (under === false) return undefined;
     const why = under ? childSpawn(thread, f.input.task_name, f.cwd, env) : UNREAD_ROLE;
     return why ? refuse(thread, why) : undefined;
@@ -746,7 +784,9 @@ export async function gate(input, { mode = readMode, check = checkMerge, env = p
     if (!paths.length) return deny("sage: the hook could not read this patch, so it refuses it. Send one patch from *** Begin Patch to *** End Patch.");
     const root = projectRoot(f.cwd);
     if (paths.some((path) => codexPath(root, resolve(f.cwd, path)))) return deny(CODEX_FOLDER);
+    if (paths.some((path) => namesSageFolder(asWord(path), env, f.cwd))) return deny(SAGE_FOLDER);
     const { sage } = mode(f, env);
+    if (sage && paths.some((path) => namesLogbookFile(asWord(path), env, f.cwd))) return deny(LOGBOOK_FILE);
     // git's own files: a git hook or a setting there can push outside the push rule (T536).
     if (sage && paths.some((path) => gitInternalPath(resolve(f.cwd, path)))) return deny(GIT_FOLDER);
     if (!thread.child) return chiefEditDenied({ sage, chief: true }) ? deny(CHIEF) : undefined;
@@ -775,6 +815,7 @@ export async function gate(input, { mode = readMode, check = checkMerge, env = p
   if (commandWrites(f.command, f.cwd) && namesCodexSettings(f.command, env, f.cwd)) return deny(CODEX_SETTINGS);
   const now = mode(f, env);
   if (!now.sage) return undefined; // outside sage mode the gate does not judge pushes or merges, as in the Claude hook
+  if (commandWrites(f.command, f.cwd) && namesLogbookFile(f.command, env, f.cwd)) return deny(LOGBOOK_FILE);
   const gh = ghProblem(f.command, f.cwd, env);
   if (gh) return deny(gh);
   const push = pushes.pushProblem(f.command, f.cwd);

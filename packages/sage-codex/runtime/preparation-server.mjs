@@ -4,7 +4,7 @@ import { McpServer, serveStdio, z } from "./mcp-sdk.mjs";
 /** Keep visible tools off the hidden hook server so native children start their hooks eagerly. */
 export function createPreparationServer(options = {}) {
   const fixed = Object.freeze({ directory: options.directory, project: options.project, observationsRoot: options.observationsRoot, sessionsDir: options.sessionsDir,
-    projectDirectory: options.projectDirectory, logbookRoot: options.logbookRoot });
+    projectDirectory: options.projectDirectory, logbookRoot: options.logbookRoot, sharedRoot: options.sharedRoot });
   const server = new McpServer({ name: "sage-preparation", version: "0.1.0" });
   server.registerTool("sage_read_task", {
     description: "Chief only: read one recorded task and its task-metadata SHA-256 token. This token does not cover findings, runs, reviews or branch HEAD and grants no workflow permission.",

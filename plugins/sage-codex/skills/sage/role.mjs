@@ -15,8 +15,11 @@ export function roleMessage(role) {
   const local = localRoles.get(role);
   const instructions = local ? readFileSync(new URL(local, import.meta.url), "utf8").trim()
     : renderRoleInstructions(role, { ...bindings.common, ...bindings[role] });
-  return `${instructions}\n\n${renderReportInstructions(bindings.report)}\n`;
+  return `${instructions}${role === "lead" ? leadSteps() : ""}\n\n${renderReportInstructions(bindings.report)}\n`;
 }
+
+/** The shared lead text names no tool, so Codex adds its own dispatch steps, with the real path of this script for each helper's role text. */
+const leadSteps = () => `\n\n${readFileSync(new URL("references/lead-steps.md", import.meta.url), "utf8").trim().replaceAll("<role.mjs>", fileURLToPath(import.meta.url))}`;
 
 if (process.argv[1] && realpathSync(process.argv[1]) === realpathSync(fileURLToPath(import.meta.url))) {
   try { process.stdout.write(roleMessage(process.argv[2])); } catch (error) {

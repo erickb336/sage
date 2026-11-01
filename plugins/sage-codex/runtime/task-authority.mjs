@@ -1,11 +1,12 @@
-import { assertTaskAdmissionOpen, createStateTool, readAdmission } from "../core/index.mjs";
+import { assertTaskAdmissionOpen, readAdmission } from "../core/index.mjs";
+import { logbookEnv, logbookTool } from "./logbook-env.mjs";
 import { validateLogbookLocation } from "./run-report.mjs";
 
 /** A publication transaction fences managed work even when ordinary Sage policy is off. */
 export function assertNativeTaskOpen(options, task, preparation) {
   validateLogbookLocation(options);
-  const tool = createStateTool({ defaultRoot: () => { throw Error("No ambient logbook"); } });
-  tool.assertTaskUpdateOpen({ project: options.projectDirectory, task }, { ...process.env, SAGE_HOME: options.logbookRoot });
+  const tool = logbookTool(() => { throw Error("No ambient logbook"); });
+  tool.assertTaskUpdateOpen({ project: options.projectDirectory, task }, logbookEnv(options));
   return assertTaskAdmissionOpen(options.directory, options.project, task, preparation);
 }
 

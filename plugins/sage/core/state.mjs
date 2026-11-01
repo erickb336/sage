@@ -28,9 +28,11 @@ import { ROLES } from "./roles.mjs";
 import { AGENT_CAPS, BREAKS, FINDING_CLASSES, HIDDEN, LINE, NAME_MAX, PRIORITIES, PRIORITY_SCALE, TABLES, TASK_KINDS, countOf, nameProblem, proposalOf } from "./logbook-fields.mjs";
 import { BREAKDOWN, ENDED, MET, PROGRAM_ID, TASK_ID, breakdownGate, byIds, dead, droppedBy, gateLines, lostClause, programState, progressOf, progressText, shownGraph, shownWaits, unmetWaits, waitGraph, waitWords, waitsOf, waitsWithState } from "./program-rules.mjs";
 import { OBSERVATIONS_MAX_BYTES, OBSERVATION_DATA_MAX_BYTES, validateObservation, validateObservations } from "./observations.mjs";
+import { createSharedRoot, sharedRoot } from "./shared-root.mjs";
 
-export function createStateTool({ defaultRoot, models = ["inherit"], modelDefaults = {}, usageInterfaces = [] }) {
+export function createStateTool({ defaultRoot, legacyRoots = () => [], provider, models = ["inherit"], modelDefaults = {}, usageInterfaces = [] }) {
 if (typeof defaultRoot !== "function") throw new TypeError("defaultRoot must be a function");
+if (typeof legacyRoots !== "function") throw new TypeError("legacyRoots must be a function");
 const MODELS = [...models];
 const USAGE_INTERFACES = usageRegistry(usageInterfaces);
 
@@ -93,10 +95,11 @@ const MODEL = /^model\.(pe|designer|implementer|code-reviewer|security-reviewer|
 const KEYS = "max_agents, cycles.small, cycles.large, cycles.risk, max_rounds, arena and cap_total as key=number, cap.<project>=number for one project's cap, model.<role>.<size>=<model>, model.<role>.risk=<model> or model.<role>=<model> for an agent role's model";
 /** The columns that a later version added: an older table without them reads with them empty, and its next write adds them. */
 const ADDED = { runs: ["model", ...USAGE_FIELDS], tasks: ["hold", "extra", "priority", "kind", "waits", "program", "adoption", "approvals"], findings: ["run", "class"] };
-const COMMANDS = ["init", "logbook", "standing", "pages", "task", "task-adopt", "program", "round", "run", "finding", "verdict", "gate", "log", "status", "stats", "merge-check", "config", "projects", "board", "observe"];
+const COMMANDS = ["init", "logbook", "standing", "pages", "task", "task-adopt", "program", "round", "run", "finding", "verdict", "gate", "log", "status", "stats", "merge-check", "config", "projects", "board", "observe", "link"];
 /** The options of each command, by its name or by its name and first word. Every command also takes --project. */
 const OPTIONS = {
   "logbook repair": ["accept-loss", "accept-change-loss"],
+  link: ["to", "separate"],
   "projects rebuild": ["accept-listing"],
   "task add": ["title", "size", "risk", "add", "why", "priority", "kind", "waits", "program"],
   "task-adopt": ["source-logbook", "source-provider", "source-task", "pr", "branch"],
@@ -179,8 +182,10 @@ const unhex = (hex) => {
   } catch {} // invalid UTF-8
 };
 const looks = (s) => String(s).normalize("NFKC").replace(/[\p{Cc}\p{Cf}]/gu, "").replace(/\s+/g, " ").trim().toLowerCase();
-/** Names the project's main checkout in its logbook (checkout.txt), so a session of another project can answer its gates. */
-const checkout = (dir, project) => put(join(dir, "checkout.txt"), `${projectRoot(resolve(project))}\n`);
+/** Names the project's main checkout in a legacy logbook (checkout.txt), so a session of another project can answer its gates. A shared logbook has bindings.tsv instead: it may have several checkouts. */
+const checkout = (dir, project, env) => {
+  if (!isShared(dir, env)) put(join(dir, "checkout.txt"), `${projectRoot(resolve(project))}\n`);
+};
 
 /** A name as a slug: lower case, each run of other characters than a-z and 0-9 as one "-", or "project" when nothing is left. */
 const slug = (name) => String(name).toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/^-+|-+$/g, "") || "project";
@@ -272,10 +277,13 @@ function projectName(path) {
   return slug(basename(projectRoot(resolve(path))));
 }
 
+/** The logbook of a project: every caller finds it again through the one resolver (shared-root.mjs). */
 function storeDir(project, env = process.env) {
-  const root = projectRoot(resolve(project));
-  return join(sageRoot(env), `${projectName(root)}-${createHash("sha1").update(root).digest("hex").slice(0, 6)}`);
+  return locate(project, env).dir;
 }
+
+/** Is this logbook folder in the shared root? */
+const isShared = (dir, env) => !!dir && dirname(dir) === sharedRoot(env);
 
 /**
  * A config value in its stored form, or undefined when it has no number. One rule reads every count: a finite number,
@@ -334,14 +342,24 @@ function readRegular(path, { link = true, max = Infinity, encoding = "utf8" } = 
   }
 }
 
-/** config.json as an object, or {} when it is missing, torn, not an object or not a regular file. It never throws or waits. */
-function saved(env) {
+/** A root's config.json as an object, or {} when it is missing, torn, not an object or not a regular file. It never throws or waits. */
+function savedIn(root) {
   try {
-    const value = JSON.parse(readRegular(join(sageRoot(env), "config.json")));
+    const value = JSON.parse(readRegular(join(root, "config.json")));
     return value && typeof value === "object" && !Array.isArray(value) ? value : {};
   } catch {
     return {};
   }
+}
+/** The keys that the shared root holds for a shared project: one project needs the same clean cycles from either chief. */
+const SHARED_KEYS = ["cycles.small", "cycles.large", "cycles.risk", "max_rounds"];
+const pick = (object, keys) => Object.fromEntries(Object.entries(object).filter(([k]) => keys.includes(k)));
+/** The saved config for a logbook: the provider root's, and for a shared logbook the shared root's SHARED_KEYS in place of the provider's. */
+function saved(env, dir) {
+  const own = savedIn(sageRoot(env));
+  if (!isShared(dir, env)) return own;
+  const { "cycles.small": _s, "cycles.large": _l, "cycles.risk": _r, max_rounds: _m, autopilot_cycles: _a, ...rest } = own;
+  return { ...rest, ...pick(savedIn(sharedRoot(env)), SHARED_KEYS) };
 }
 
 /**
@@ -350,11 +368,12 @@ function saved(env) {
  * never below its floor, and never more agents or rounds, or fewer cycles, than written. A cycles key that is there but
  * has no number (Infinity, [3], true, "abc") reads as "invalid", and the merge check refuses every merge. A file of
  * an older sage holds autopilot_cycles for cycles.large: it counts, or reads as invalid, when cycles.large is absent, never below the floor.
+ * With dir, a logbook's folder: a shared logbook reads SHARED_KEYS from the shared root.
  */
-function config(env = process.env) {
+function config(env = process.env, dir) {
   let c = { ...DEFAULTS };
   try {
-    const s = saved(env);
+    const s = saved(env, dir);
     if (!Object.hasOwn(s, "cycles.large") && Object.hasOwn(s, "autopilot_cycles")) s["cycles.large"] = s.autopilot_cycles; // a broken one is an invalid cycles.large
     const extra = Object.keys(s).filter((k) => (CAP.test(k) || MODEL.test(k)) && !Object.hasOwn(DEFAULTS, k)).map((k) => [k, valid(k, s[k])]).filter(([, v]) => v !== undefined);
     c = Object.fromEntries([...Object.entries(DEFAULTS).map(([k, d]) => [k, valid(k, s[k]) ?? (k.startsWith("cycles.") && Object.hasOwn(s, k) ? "invalid" : d)]), ...extra]); // the defaults, then the caps and models without one
@@ -676,7 +695,7 @@ function updateRequestedTask(input, env, coordination) {
     if (current.length !== 1) throw new TaskUpdateError("invalid-state");
     if (taskVersion(current[0]) !== reference.version) throw new TaskUpdateError("stale-version");
     const facts = updateFacts(Object.fromEntries(["findings", "ledger", "gates", "programs"].map(table => [table, read(dir, table)])), null,
-      Object.hasOwn(reference.changes, "approval") ? config(env).max_rounds : undefined);
+      Object.hasOwn(reference.changes, "approval") ? config(env, dir).max_rounds : undefined);
     const needsReady = ["verified", "pr-ready"].includes(reference.changes.state ?? current[0].state);
     phase = needsReady ? "readiness" : "plan";
     const openFindings = facts.findings.filter(row => row.task === reference.task && row.status === "open");
@@ -686,7 +705,7 @@ function updateRequestedTask(input, env, coordination) {
     const preliminary = planTaskChanges(before, reference.task, changes, at, facts);
     if (moveBar(changes, preliminary)) throw new TaskUpdateError("arena-open"); // a native refusal has only its fixed text
     if (["verified", "pr-ready"].includes(preliminary.task.state)) {
-      const cfg = config(env);
+      const cfg = config(env, dir);
       if (Object.values(cfg).includes("invalid")) throw new TaskUpdateError("readiness-config");
       const branch = branchOf(preliminary.task.branch);
       let head;
@@ -1051,7 +1070,7 @@ function compareRetainedReport(input, env = process.env) {
   try {
     const project = projectRoot(input.project), dir = storeDir(project, env);
     if (realpathSync(dir) !== resolve(dir)
-      || readRegular(join(dir, "checkout.txt"), { link: false, max: 65536 }) !== `${project}\n`)
+      || (!isShared(dir, env) && readRegular(join(dir, "checkout.txt"), { link: false, max: 65536 }) !== `${project}\n`))
       refuse("Invalid retained report comparison project.");
     const tasks = read(dir, "tasks").filter(row => row.id === input.task);
     const runs = read(dir, "runs").filter(row => row.id === input.run);
@@ -1609,8 +1628,9 @@ function parse(cmd, args) {
     else {
       const eq = a.includes("=");
       const o = a.slice(2, eq ? a.indexOf("=") : undefined);
-      const v = eq ? a.slice(a.indexOf("=") + 1) : args[++i];
-      if (!eq) spaced.push(o);
+      const flag = !eq && cmd === "link" && o === "separate"; // the one option with no value
+      const v = flag ? true : eq ? a.slice(a.indexOf("=") + 1) : args[++i];
+      if (!eq && !flag) spaced.push(o);
       if (o in opt) refuse(`--${o} is given twice. Give it once${o === "accept-loss" ? `, with the tables joined by a comma: --accept-loss ${opt[o]},${v}` : ""}.`);
       opt[o] = v;
     }
@@ -2109,9 +2129,11 @@ function enlist(root, rows) {
  * migration). After that, a missing list refuses, and only the owner's rebuild lists the folders again. The list must be
  * a regular file, not a link, with its header line; anything else refuses. It never removes a line. With add (init),
  * make runs under the root's lock after the list passed and before add joins it, so a refusal here changes nothing.
- * With readOnly, it takes no lock and writes nothing: a missing list gives undefined.
+ * With readOnly, it takes no lock and writes nothing: a missing list gives undefined. With fresh (the first link of a
+ * shared root), the caller already holds the root's lock, and a new list starts empty: that root has no logbook of an
+ * older version to list, so a folder planted there before the link stays out.
  */
-function known(root, add, make, readOnly) {
+function known(root, add, make, readOnly, fresh) {
   const file = join(root, "projects.tsv");
   const names = () => {
     let text;
@@ -2131,17 +2153,18 @@ function known(root, add, make, readOnly) {
   if (list) return new Set(list.map((r) => r.logbook));
   if (readOnly) return undefined;
   if (add) mkdirSync(root, { recursive: true });
-  return withLock(root, () => {
+  const change = () => {
     const was = names();
     if (!was && lstatSync(join(root, "projects.made"), { throwIfNoEntry: false }))
       refuse(`${file}, the known project list, is missing, but sage made it before (${join(root, "projects.made")}). Every merge and every init refuses until it is back, because a list made again without the user could take in a forged logbook. Ask the user to restore it from a copy, or to run ${REBUILD} and check each folder that it prints.`);
-    const rows = was ?? logbooks(root).filter((name) => name !== add).map((logbook) => ({ at: now(), logbook, how: "migration" }));
+    const rows = was ?? (fresh ? [] : logbooks(root).filter((name) => name !== add).map((logbook) => ({ at: now(), logbook, how: "migration" })));
     make?.();
     const more = add && !rows.some((r) => r.logbook === add);
     if (more) rows.push({ at: now(), logbook: add, how: "init" });
     if (!was || more) enlist(root, rows);
     return new Set(rows.map((r) => r.logbook));
-  });
+  };
+  return fresh ? change() : withLock(root, change);
 }
 
 /** The owner's rebuild of the known project list: each logbook folder of the root now, printed so that the owner checks each one. */
@@ -2194,19 +2217,20 @@ function assessMerge(sha, env, options, logbook = null) {
 }
 
 function judgeMerge(sha, env, { cycles, pr, readOnly, head, project, locked }, logbook, skipped) {
-  const root = sageRoot(env);
+  let root = sageRoot(env);
   try {
     if (notFull(sha)) return { ok: false, reason: notFull(sha) };
     if (head !== undefined && !pr) return { ok: false, reason: "--head needs --pr: the head branch is the pull request's." };
     if (head === "") return { ok: false, reason: "--head is empty: give the pull request's head branch (F-T273-10)." };
-    const mine = project === undefined ? undefined : basename(storeDir(project, env)); // the merged project's logbook
-    if (mine !== undefined && !readOnly && hasPendingWrite(join(root, mine))) {
-      if (locked) settle(join(root, mine));
-      else withLock(join(root, mine), () => settle(join(root, mine)));
+    const home = project === undefined ? undefined : storeDir(project, env), mine = home && basename(home); // the merged project's logbook
+    if (home) root = dirname(home); // the check reads the logbooks and the known project list of the logbook's root
+    if (mine !== undefined && !readOnly && hasPendingWrite(home)) {
+      if (locked) settle(home);
+      else withLock(home, () => settle(home));
     }
     sha = String(sha).toLowerCase(); // the ledger holds SHAs as git prints them
     pr &&= prNumber(String(pr)); // the tasks table holds it as text; "040" is PR 40
-    const cfg = config(env); // once: the merge check may judge thousands of tasks
+    const cfg = config(env, home); // once: the merge check may judge thousands of tasks
     const broken = Object.keys(cfg).find((k) => cfg[k] === "invalid"); // fail closed: a default would ask fewer cycles than the owner meant
     if (broken) return { ok: false, reason: `the merge check refuses every merge, because ${broken} in ${join(root, "config.json")} is not a number. Set it with sage config ${broken}=<n> (a whole number from ${floor(broken)} to 10), or remove the key.` };
     const [listed, strangers, absent] = [known(root, undefined, undefined, readOnly), [], []];
@@ -2552,7 +2576,7 @@ function sage(argv, env = process.env) {
   if (!COMMANDS.includes(cmd)) refuse(`unknown command "${cmd ?? ""}". Commands: ${COMMANDS.join(", ")}`);
   const { pos, opt } = parse(cmd, rest);
   const readOnly = scopedRead(cmd, pos, opt);
-  const root = sageRoot(env);
+  const root = sageRoot(env), project = resolve(opt.project ?? env.SAGE_PROJECT ?? process.cwd());
   if (cmd === "board" && opt.view !== undefined) {
     if (pos.length > 1 || opt.remember !== undefined) refuse("rich board takes one scope or task id and never remembers state");
     const scope = opt["name-hex"] !== undefined ? unhex(opt["name-hex"]) : /^T[1-9]\d*$/.test(pos[0] ?? "") ? "this" : pos[0] ?? "this";
@@ -2560,13 +2584,17 @@ function sage(argv, env = process.env) {
     try {
       if (env.SAGE_BOARD_ROOTS && Buffer.byteLength(env.SAGE_BOARD_ROOTS) > 65536) throw new Error("root configuration is too large");
       sources = env.SAGE_BOARD_ROOTS ? JSON.parse(env.SAGE_BOARD_ROOTS) : [{ id: "current", label: "Current provider", path: root }];
-      const project = opt.project ?? env.PWD;
-      const logbookKey = readOnly && !env.SAGE_BOARD_ROOTS && project ? `current/${basename(storeDir(project, env))}` : null;
-      return boardView({ sources, scope, project, logbookKey, taskId: /^T[1-9]\d*$/.test(pos[0] ?? "") ? pos[0] : null, format: opt.view });
+      const folder = opt.project ?? env.PWD;
+      const logbookKey = readOnly && !env.SAGE_BOARD_ROOTS && folder ? `current/${basename(storeDir(folder, env))}` : null;
+      return boardView({ sources, scope, project: folder, logbookKey, taskId: /^T[1-9]\d*$/.test(pos[0] ?? "") ? pos[0] : null, format: opt.view });
     } catch (error) { refuse(error.message); }
   }
   if (!readOnly && statSync(root, { throwIfNoEntry: false })?.isDirectory() && ["projects.tsv", "projects.made"].every((f) => !lstatSync(join(root, f), { throwIfNoEntry: false }))) known(root); // the first writing command of this version lists today's logbooks
-  if (cmd === "projects") return pos.join(" ") === "rebuild" && opt["accept-listing"] === "yes" ? rebuild(root) : refuse(`projects takes only: ${REBUILD.slice(5)}. It lists each logbook folder that is in ${root} now as a known project, so that its verdicts count in the merge check. Run it only when the user asks for it, and show the user the folders that it prints.`);
+  if (cmd === "projects") return pos.join(" ") === "rebuild" && opt["accept-listing"] === "yes" ? rebuild(dirname(storeDir(project, env))) : refuse(`projects takes only: ${REBUILD.slice(5)}. It lists each logbook folder that is in ${root} now as a known project, so that its verdicts count in the merge check. Run it only when the user asks for it, and show the user the folders that it prints.`);
+  if (cmd === "link") {
+    if (pos.length) refuse("link takes one of --to <folder> or --separate, and no other words.");
+    return link(project, opt, env);
+  }
   if (cmd === "merge-check") {
     const cycles = opt.cycles === undefined ? undefined : (typed("cycles.small", opt.cycles) ?? refuse("--cycles is a whole number from 1 to 10")); // the chief's explicit count: it only raises a task's own count
     if (opt.pr !== undefined && !PR.test(opt.pr)) refuse("--pr is the pull request's number, with no leading zero, for example --pr 5");
@@ -2574,7 +2602,7 @@ function sage(argv, env = process.env) {
     return r.ok ? r.reason : refuse(r.reason);
   }
   if (cmd === "config" && !pos.some(ownKey)) {
-    const set = {};
+    const home = storeDir(project, env), set = {};
     for (const kv of pos) {
       const [k, v = "", ...more] = kv.split("=");
       if (more.length) refuse(`${JSON.stringify(k)} has more than one "=": write key=value`);
@@ -2585,19 +2613,16 @@ function sage(argv, env = process.env) {
       set[k] = (count ? typed(k, v) : valid(k, v)) ?? refuse(`config takes ${KEYS}, and arena_models as a list of ${MODELS.join(", ")}`);
     }
     if (pos.length) {
-      const file = join(sageRoot(env), "config.json");
-      mkdirSync(sageRoot(env), { recursive: true });
-      withLock(sageRoot(env), () => {
-        const st = lstatSync(file, { throwIfNoEntry: false });
-        fileOrNone(file);
-        swap(file, JSON.stringify({ ...saved(env), ...set }, null, 2) + "\n"); // a key of a newer version stays
-      });
+      notePlugin(env);
+      // A shared project has one home for its cycle counts: a value that it writes never lands in a provider root.
+      const common = isShared(home, env) ? pick(set, SHARED_KEYS) : {}, own = Object.fromEntries(Object.entries(set).filter(([k]) => !Object.hasOwn(common, k)));
+      if (Object.keys(common).length) writeConfig(sharedRoot(env), common);
+      if (Object.keys(own).length) writeConfig(sageRoot(env), own);
     }
-    const c = { ...config(env), ...set };
+    const c = { ...config(env, home), ...set };
     const models = Object.keys(c).filter((k) => MODEL.test(k));
     return [...Object.keys(c).filter((k) => !models.includes(k)), ...models].map((k) => `${k}=${c[k]}`).join(" "); // the numbers, then the models
   }
-  const project = resolve(opt.project ?? env.SAGE_PROJECT ?? process.cwd());
   // The board reads every logbook and takes no lock. --remember no leaves board.json as it is. --name-hex gives the scope
   // as the hex of its UTF-8 bytes, so that the hook's command line holds no text that the owner typed.
   if (cmd === "board") {
@@ -2606,7 +2631,7 @@ function sage(argv, env = process.env) {
       refuse("board takes one scope (this, all or a project's name, or --name-hex with the name's UTF-8 bytes in hex) and --remember yes or no");
     return board({ scope: hex === undefined ? pos[0] : unhex(hex), project, env, save: opt.remember !== "no" });
   }
-  const dir = storeDir(project, env);
+  const place = locate(project, env), { dir } = place;
   const repair = cmd === "logbook" && pos[0] === "repair";
   const skip = repair ? [...new Set(list(opt["accept-loss"]))] : [];
   const odd = skip.filter((t) => !Object.hasOwn(TABLES, t));
@@ -2619,21 +2644,14 @@ function sage(argv, env = process.env) {
   }
   // A read takes no lock: every file is replaced whole, so it sees the store before or after a change, never half of one.
   if (readOnly || (cmd === "logbook" && !repair) || cmd === "status" || cmd === "stats" || (cmd === "standing" && pos[0] !== "add") || (cmd === "pages" && pos[1] !== "record")) return act(cmd, pos, opt, dir, env, [], project);
-  const run = () =>
-    withLock(dir, () => {
-      // A stuck saved change stops ready and status, so its repair runs them itself, after the marker moves.
-      if (!changeLoss) ready(dir, skip);
-      const out = act(cmd, pos, opt, dir, env, skip, project);
-      if (!changeLoss) status(dir, true);
-      return out;
-    });
+  notePlugin(env);
+  if (place.row && !place.row.commits && fillCommits(place.checkout, env)) locate(project, env); // the filled row may show a folder of another project
+  const run = () => change(cmd, pos, opt, dir, env, skip, project);
   if (cmd !== "init") return run();
   // init takes the root's lock and checks the known project list first, so a refusal there makes no logbook.
   let out;
-  known(root, basename(dir), () => {
-    mkdirSync(join(dir, "briefs"), { recursive: true });
-    mkdirSync(join(dir, "reports"), { recursive: true });
-    out = run();
+  known(dirname(dir), basename(dir), () => {
+    out = makeLogbook(dir, project, env);
   });
   return out;
 }
@@ -2649,6 +2667,54 @@ function lostChangeLine(dir, { request, aside }) {
     if (!(error instanceof Refusal || error instanceof RecordedWriteError)) throw error;
     return `${loss} The logbook check fails, so writes still stop: ${error.message}`;
   }
+}
+
+/** One command that changes a logbook: its lock, the settle step and the integrity check, the command, then the status file. */
+function change(cmd, pos, opt, dir, env, skip, project) {
+  const changeLoss = opt["accept-change-loss"] !== undefined;
+  return withLock(dir, () => {
+    // A stuck saved change stops ready and status, so its repair runs them itself, after the marker moves.
+    if (!changeLoss) ready(dir, skip);
+    const out = act(cmd, pos, opt, dir, env, skip, project);
+    if (!changeLoss) status(dir, true);
+    return out;
+  });
+}
+
+/** Makes a new logbook's folders and tables, or checks an existing one, as init does. */
+function makeLogbook(dir, project, env) {
+  mkdirSync(join(dir, "briefs"), { recursive: true });
+  mkdirSync(join(dir, "reports"), { recursive: true });
+  return change("init", [], Object.create(null), dir, env, [], project);
+}
+
+/** Writes keys into a root's config.json under its lock. A key of a newer version stays. */
+function writeConfig(root, values) {
+  const file = join(root, "config.json");
+  mkdirSync(root, { recursive: true });
+  withLock(root, () => {
+    fileOrNone(file);
+    swap(file, JSON.stringify({ ...savedIn(root), ...values }, null, 2) + "\n");
+  });
+}
+
+/**
+ * At the first shared write: the shared root takes the largest value of each SHARED_KEYS count of the provider roots, so
+ * a project never needs fewer cycles than the owner wrote. After that the shared root's counts are the owner's, and a
+ * later link leaves them. The caller holds the root's lock. A count that has no number refuses, and no row is made,
+ * because no largest value exists.
+ */
+function raiseCounts(shared, env) {
+  const file = join(shared, "config.json"), held = savedIn(shared), roots = [...new Set([sageRoot(env), ...legacyRoots(env)])];
+  if (SHARED_KEYS.some((key) => Object.hasOwn(held, key))) return;
+  const next = Object.fromEntries(SHARED_KEYS.map((key) => {
+    const values = roots.map((root) => [root, config({ ...env, SAGE_HOME: root })[key]]);
+    const bad = values.find(([, value]) => value === "invalid");
+    if (bad) refuse(`${key} in ${join(bad[0], "config.json")} is not a number, so sage cannot take the largest count for the shared root. Nothing changed. Set it to a whole number first.`);
+    return [key, Math.max(...values.map(([, value]) => value))];
+  }));
+  fileOrNone(file);
+  swap(file, JSON.stringify({ ...held, ...next }, null, 2) + "\n");
 }
 
 function act(cmd, pos, opt, dir, env, skip, project) {
@@ -2717,7 +2783,7 @@ function act(cmd, pos, opt, dir, env, skip, project) {
       // logbook passed the integrity check (ready), so init makes no table there.
       for (const t of Object.keys(TABLES).reverse()) if (!existsSync(join(dir, `${t}.tsv`))) write(dir, t, []);
       if (!existsSync(join(dir, "standing.md"))) put(join(dir, "standing.md"), STANDING);
-      checkout(dir, project);
+      checkout(dir, project, env);
       return `logbook ${dir}`;
     case "logbook": {
       if (sub !== "repair") return dir;
@@ -2804,7 +2870,7 @@ function act(cmd, pos, opt, dir, env, skip, project) {
         if (opt.waits !== undefined) tags.waits = waitsValue(next, opt.waits, [...graph.byId.values()]);
         if (opt.program !== undefined) tags.program = programValue(next, opt.program, graph); // no loop: no task or pilot cell names a new id (IDS)
         const task = frame(dir, need(opt.title, "--title"), size, risk, list(opt.add), tags);
-        checkout(dir, project);
+        checkout(dir, project, env);
         const at = now(), joined = programDecision(task, "", at, "task add", graph);
         const decided = [...(opt.add ? [{ at, task: task.id, decision: `added ${opt.add}`, why }] : []), ...waitsDecision(task, "", at, "task add"), ...joined.rows];
         if (decided.length) write(dir, "decisions", [...read(dir, "decisions"), ...decided]);
@@ -2814,7 +2880,7 @@ function act(cmd, pos, opt, dir, env, skip, project) {
       let note = "";
       if (id === "set") {
         const before = { tasks, runs: read(dir, "runs"), decisions: read(dir, "decisions") };
-        const planned = planTaskChanges(before, task.id, more, now(), { ...Object.fromEntries(["findings", "ledger", "gates", "programs"].map((t) => [t, read(dir, t)])), maxRounds: config(env).max_rounds });
+        const planned = planTaskChanges(before, task.id, more, now(), { ...Object.fromEntries(["findings", "ledger", "gates", "programs"].map((t) => [t, read(dir, t)])), maxRounds: config(env, dir).max_rounds });
         const bar = moveBar(more, planned); // after the plan, so that a branch= in the same command counts, in either order
         if (bar) refuse(bar);
         if (JSON.stringify(planned.decisions) !== JSON.stringify(before.decisions)) write(dir, "decisions", planned.decisions);
@@ -2919,7 +2985,7 @@ function act(cmd, pos, opt, dir, env, skip, project) {
       if (!keys) refuse(`${task.id} has no open findings marked fix`);
       if (fix.every((f) => f.severity === "low")) refuse(`${task.id}: only low findings are marked fix (${keys}). A repair round needs a medium or high finding. Dismiss the low ones with a reason, or let them join the next round.`);
       const round = Number(task.round) + 1;
-      const limit = config(env).max_rounds + extraOf(task); // the extra rounds of earlier holds by round (F-T284-14)
+      const limit = config(env, dir).max_rounds + extraOf(task); // the extra rounds of earlier holds by round (F-T284-14)
       if (round > limit) {
         Object.assign(task, { state: "held", hold: "round" });
         write(dir, "tasks", tasks);
@@ -3423,5 +3489,8 @@ function runCli(argv = process.argv.slice(2)) {
 }
 
 const { board, answerPaths } = createBoard({ BLOCKS, BRANCH, RISKS, STATES, mergeCheck, optionsOf, projectName, projectRoot, read, sageRoot, slug, storeDir, withLock });
-return { SIZES, BLOCKS, RISKS, KINDS, STATES, DEFAULTS, PR, sageRoot, git, projectRoot, roleReadProject, optionsOf, slug, worktreeRoot, BRANCH, ofTask, branchOfTask, projectName, storeDir, config, cyclesFor, modelFor, read, mergeCheck, landingBar, boardLandingCheck, logbookView, sage, readTaskSnapshot, updateRequestedTask, assertTaskUpdateOpen, settleWrites, createRequestedTask, createRequestedRun, finishReportedRun, finishInterruptedRun, acceptReportedReview, keepReport, compareRetainedReport, verdictBacking, captureRunAssignment, captureReviewTarget, validateTerminalAssignment, withLock, board, answerPaths, command, runCli };
+const { fillCommits, link, locate, notePlugin } = createSharedRoot({ Refusal, refuse, legacyRoots, makeLogbook, now, projectRoot, provider, raiseCounts, readRegular, rowsOf, sageRoot, sheetText, slug, swap, visible, withLock,
+  listed: (root) => known(root, undefined, undefined, true),
+  enroll: (root, folder, make) => known(root, folder, make, false, true) });
+return { SIZES, BLOCKS, RISKS, KINDS, STATES, DEFAULTS, PR, sageRoot, locate, git, projectRoot, roleReadProject, optionsOf, slug, worktreeRoot, BRANCH, ofTask, branchOfTask, projectName, storeDir, config, cyclesFor, modelFor, read, mergeCheck, landingBar, boardLandingCheck, logbookView, sage, readTaskSnapshot, updateRequestedTask, assertTaskUpdateOpen, settleWrites, createRequestedTask, createRequestedRun, finishReportedRun, finishInterruptedRun, acceptReportedReview, keepReport, compareRetainedReport, verdictBacking, captureRunAssignment, captureReviewTarget, validateTerminalAssignment, withLock, board, answerPaths, command, runCli };
 }

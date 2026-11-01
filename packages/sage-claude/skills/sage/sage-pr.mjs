@@ -22,7 +22,7 @@ import { execFileSync } from "node:child_process";
 import { closeSync, constants, existsSync, fstatSync, lstatSync, mkdirSync, mkdtempSync, openSync, readFileSync, readSync, readdirSync, realpathSync, renameSync, rmSync, writeFileSync, writeSync } from "node:fs";
 import { basename, dirname, join, resolve, sep } from "node:path";
 import { fileURLToPath } from "node:url";
-import { PR, branchOfTask, landingBar, mergeCheck, projectRoot, read, sage, storeDir, withLock, worktreeRoot } from "./sage.mjs";
+import { PR, branchOfTask, landingBar, locate, mergeCheck, projectRoot, read, sage, withLock, worktreeRoot } from "./sage.mjs";
 
 const BASE = "main";
 /**
@@ -128,15 +128,18 @@ export function record(task, verb, env = process.env) {
   const root = projectRoot(project);
   const trees = real(worktreeRoot(env));
   if (`${real(root)}${sep}`.startsWith(`${trees}${sep}`)) no(`the project ${project} is in the worktree root ${trees}, where agents write: run sage-pr from the project's main checkout, or set SAGE_PROJECT=<that folder>`);
-  const dir = storeDir(project, env);
+  const { dir, shared } = locate(project, env);
   if (!existsSync(join(dir, "tasks.tsv"))) no(`no logbook for the project ${project}: run sage-pr from the project's main checkout, or set SAGE_PROJECT=<that folder>`);
-  // The logbook's key is short, so another folder can have the same one: the logbook must name this folder as its checkout.
-  let named;
-  try {
-    named = readFileSync(join(dir, "checkout.txt"), "utf8").trim();
-  } catch {}
-  if (named === undefined) no(`the logbook ${dir} does not name its project's main checkout: run sage init --project <main checkout> once, from the main checkout`);
-  if (named !== root) no(`the logbook ${dir} is the logbook of ${named}, not of ${root}: run sage-pr from ${named}, or set SAGE_PROJECT=${named}`);
+  // The logbook's key is short, so another folder can have the same one: a legacy logbook must name this folder as its
+  // checkout. A shared logbook has a row for this checkout instead.
+  if (!shared) {
+    let named;
+    try {
+      named = readFileSync(join(dir, "checkout.txt"), "utf8").trim();
+    } catch {}
+    if (named === undefined) no(`the logbook ${dir} does not name its project's main checkout: run sage init --project <main checkout> once, from the main checkout`);
+    if (named !== root) no(`the logbook ${dir} is the logbook of ${named}, not of ${root}: run sage-pr from ${named}, or set SAGE_PROJECT=${named}`);
+  }
   const t = read(dir, "tasks").find((r) => r.id === task) ?? no(`no task ${task} in ${dir}: check the task id, or frame the task first (sage task add)`);
   const branch = t.branch || no(`${task} has no branch: sage task ${task} set branch=<branch>`);
   if (!branchOfTask(t, branch)) no(`branch "${branch}" is not a branch of ${task} ([<prefix>/]${task.toLowerCase()}[-<words>]): sage task ${task} set branch=claude/${task.toLowerCase()}`);
