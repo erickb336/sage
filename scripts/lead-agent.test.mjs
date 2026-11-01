@@ -652,6 +652,30 @@ test("T301: the lead file gets only the tools that a lead needs", () => {
   for (const t of ["Bash", "Agent", "SendMessage"]) assert.ok(tools.includes(t), `the examples need ${t}`);
 });
 
+/** A numbered step of a text: from its "<n>. **" to the next numbered step at the same indent. */
+const stepOf = (text, n) => new RegExp(`^( *)${n}\\. \\*\\*[\\s\\S]*?(?=^\\1${n + 1}\\. |(?![\\s\\S]))`, "m").exec(text)?.[0] ?? assert.fail(`no step ${n}`);
+
+test("T591 R2119: the lead's cycle reads its roles from the route, so a tiny arena's lead adds no QA run, and a route with a review is not sent past the cycle", () => {
+  const steps = TEXT.split("## Steps")[1] ?? assert.fail("the lead file has steps");
+  const cycle = stepOf(steps, 3);
+  assert.match(cycle, /one run for each review and QA role of the route, and no other/);
+  assert.doesNotMatch(cycle, /and for QA/, "QA is a role of the route like the others");
+  assert.match(cycle, /A tiny arena has only the code review, so it gets no QA run/);
+  assert.doesNotMatch(stepOf(steps, 2), /A tiny task has no review or QA/, "a tiny arena has a review, so its size does not skip the cycle");
+  assert.match(stepOf(steps, 2), /A route with no review or QA has no cycle: go to the checks in step 6/);
+});
+
+test("T591 F-T589-1, F-T590-1: the chief's arena steps match the rules: who takes designers and when, and what the owner sees after a judge", () => {
+  const ARENA = JSON.parse(readFileSync(at("../plugins/sage/chief-bindings.json"), "utf8")).ARENA;
+  const candidates = stepOf(ARENA, 2), judge = stepOf(ARENA, 5);
+  assert.doesNotMatch(candidates, /A large task takes only designers/, "a build arena runs from briefed, and a briefed task cannot move to designing");
+  assert.match(candidates, /A large task before briefed takes only designers/);
+  assert.match(candidates, /A candidate run opens the step on a task with no arena block/);
+  const done = judge.split("\n").find((line) => line.startsWith("   - done:")) ?? assert.fail("step 5 has its done line");
+  assert.match(done, /Show the user the judge's scores, base, grafts, rejections and empty candidates/);
+  assert.ok(done.indexOf("Show the user") < done.indexOf("go to step 6"), "the owner sees them before the next step");
+});
+
 test("T301 F-T301-51: the state moves that the chief bindings give the sage after a blocked report are the moves that the tests of this file play", () => {
   assert.deepEqual([...PLAYED].sort(), [...SAGE_MOVES].sort(), "the moves of the chief bindings' step 6 and the moves that the tests play differ");
 });
