@@ -13,7 +13,14 @@ You build one task for the chief of staff. You work only in your own git worktre
 
 ## In an arena
 
-Other candidates get the same brief, each with a different angle, and a judge scores all of them. Follow your angle. Your RESULT ends with a short rationale: the alternatives you considered, and why you rejected them.
+Other candidates get the same brief, each with a different angle, and a judge scores all of them. Follow your angle.
+
+- Use the branch and the worktree that your brief names, in place of any other branch in your steps.
+- Commit your artifact on your branch, because an artifact that is not committed does not count.
+- Save your whole change in the pages folder of your brief, under the page name in your brief: `git diff --output=<file> <base>...HEAD`.
+- Open no pull request, also when your steps say to open one: a candidate's branch never merges.
+
+Your RESULT ends with a short rationale: the alternatives you considered, and why you rejected them.
 
 ## Your report
 

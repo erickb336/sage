@@ -22,7 +22,7 @@ import { execFileSync } from "node:child_process";
 import { closeSync, constants, existsSync, fstatSync, lstatSync, mkdirSync, mkdtempSync, openSync, readFileSync, readSync, readdirSync, realpathSync, renameSync, rmSync, writeFileSync, writeSync } from "node:fs";
 import { basename, dirname, join, resolve, sep } from "node:path";
 import { fileURLToPath } from "node:url";
-import { PR, branchOfTask, mergeCheck, projectRoot, read, sage, storeDir, withLock, worktreeRoot } from "./sage.mjs";
+import { PR, branchOfTask, landingBar, mergeCheck, projectRoot, read, sage, storeDir, withLock, worktreeRoot } from "./sage.mjs";
 
 const BASE = "main";
 /**
@@ -391,13 +391,16 @@ function mine(repo, branch, temp, env) {
  * only GitHub tells. A recorded number that is not a pull request of the branch counts as none.
  */
 function create(rec, temp, env) {
-  const { t, branch, head, url, repo } = rec;
+  const { dir, t, branch, head, url, repo } = rec;
   const prs = mine(repo, branch, temp, env);
   const merged = prs.filter((p) => p.state === "MERGED");
   if (merged.length) {
     const done = merged.find((p) => p.headRefOid === head) ?? sameHead(merged[0], head); // sameHead refuses here
     no(`already merged as PR #${done.number}: nothing to create. Mark the task merged: sage task ${t.id} set state=merged`);
   }
+  // A pull request from here is ready, not a draft: the same bar as the move to verified (T584).
+  const bar = landingBar(t, read(dir, "runs"));
+  if (bar) no(bar);
   const { mirror, path, tip } = fetchBundle(rec, temp, env);
   if (tip !== head) no(`the bundle tip ${short(tip)} is not the reviewed head ${short(head)}. Review ${short(tip)} and record its verdicts, or write the bundle with ${branch} at ${short(head)}: git bundle create ${path} main..${branch}`);
   if (ancestor(mirror, head, `refs/heads/${BASE}`, env)) no(`the head ${short(head)} is already on ${BASE}: the task's work is on ${BASE}, so mark the task merged: sage task ${t.id} set state=merged`);

@@ -222,6 +222,323 @@ test("one writer per branch", () => {
   assert.match(s.ok("run", "add", "T1", "--role", "implementer", "--branch", "claude/t1"), /R3 running/);
 });
 
+test("T584: a judge needs --branch, and a branch has one writer in any letter case, a judge too", () => {
+  const s = store();
+  s.ok("task", "add", "--priority", "P2", "--title", "t", "--size", "small");
+  assert.equal(s.no("run", "add", "T1", "--role", "arena-judge"), "sage: the arena-judge run needs --branch");
+  assert.equal(s.ok("run", "add", "T1", "--role", "arena-judge", "--branch", "sage/t1-judge"), "R1 running · arena-judge on T1 · sage/t1-judge · model opus");
+  assert.match(s.no("run", "add", "T1", "--role", "arena-judge", "--branch", "sage/t1-judge"), /^sage: R1 \(arena-judge\) still writes sage\/t1-judge, and a branch has one writer\./, "two judges");
+  assert.match(s.no("run", "add", "T1", "--role", "arena-judge", "--branch", "SAGE/T1-Judge"), /^sage: R1 \(arena-judge\) still writes SAGE\/T1-Judge/, "git on a Mac reads these two names as one branch");
+  assert.match(s.no("run", "add", "T1", "--role", "implementer", "--branch", "Sage/T1-judge"), /^sage: R1 \(arena-judge\) still writes/, "a judge against another writer");
+  assert.deepEqual(rows(s.dir, "runs").map((r) => r.id), ["R1"], "a refused run is not written");
+});
+
+test("T584: a judge's branch differs from each candidate run's branch, in both orders, also after the other run ended and in any letter case", () => {
+  const s = store();
+  for (const title of ["first", "second"]) s.ok("task", "add", "--priority", "P2", "--title", title, "--size", "small");
+  s.ok("run", "add", "T1", "--role", "designer", "--branch", "sage/t1-a", "--candidate", "1");
+  s.ok("run", "add", "T1", "--role", "implementer", "--branch", "sage/t1-b", "--candidate", "2");
+  const refused = "and an arena's judge never shares a branch with a candidate. Give this run a new branch. Nothing changed.";
+  assert.equal(s.no("run", "add", "T1", "--role", "arena-judge", "--branch", "sage/t1-a"), `sage: R1 (designer, candidate 1) is on sage/t1-a, ${refused}`, "the candidate runs: the refusal names a new branch, not the end of that run, which changes nothing");
+  s.ok("run", "done", "R1", "--status", "done");
+  assert.equal(s.no("run", "add", "T1", "--role", "arena-judge", "--branch", "SAGE/t1-A"), `sage: R1 (designer, candidate 1) is on SAGE/t1-A, ${refused}`, "the candidate ended, and its branch stays its own");
+  assert.equal(s.no("run", "add", "T2", "--role", "arena-judge", "--branch", "sage/t1-a"), `sage: R1 (designer, candidate 1) is on sage/t1-a, ${refused}`, "a judge of another task of the logbook");
+  assert.match(s.ok("run", "add", "T1", "--role", "arena-judge", "--branch", "sage/t1-judge"), /^R3 running · arena-judge on T1 · sage\/t1-judge/);
+  assert.equal(s.no("run", "add", "T1", "--role", "implementer", "--branch", "sage/t1-judge", "--candidate", "3"), `sage: R3 (arena-judge) is on sage/t1-judge, ${refused}`, "the judge runs");
+  s.ok("run", "done", "R3", "--status", "done");
+  assert.equal(s.no("run", "add", "T1", "--role", "designer", "--branch", "Sage/T1-Judge", "--candidate", "3"), `sage: R3 (arena-judge) is on Sage/T1-Judge, ${refused}`, "the judge ended: the other order");
+  assert.match(s.ok("run", "add", "T1", "--role", "implementer", "--branch", "sage/t1-judge"), /^R4 running/, "a repair of the judge's branch is no candidate");
+  assert.deepEqual(rows(s.dir, "runs").map((r) => r.id), ["R1", "R2", "R3", "R4"], "a refused run is not written");
+});
+
+test("T584: candidate branches stay apart: a new candidate never takes the branch of another candidate, and a correction may stay on its own", () => {
+  const s = store();
+  s.ok("task", "add", "--priority", "P2", "--title", "t", "--size", "small");
+  s.ok("run", "add", "T1", "--role", "designer", "--branch", "sage/t1-a", "--candidate", "1");
+  s.ok("run", "done", "R1", "--status", "failed");
+  const taken = (mine) => `sage: R1 (designer, candidate 1) is on sage/t1-a, and ${mine}. Give this run a new branch. Nothing changed.`;
+  const own = taken("each candidate of an arena has its own branch");
+  assert.equal(s.no("run", "add", "T1", "--role", "designer", "--branch", "sage/t1-a", "--candidate", "2"), own);
+  s.ok("task", "add", "--priority", "P2", "--title", "second", "--size", "small");
+  assert.equal(s.no("run", "add", "T2", "--role", "designer", "--branch", "sage/t1-a", "--candidate", "1"), own, "candidate 1 of another task is another candidate");
+  assert.equal(s.no("run", "add", "T1", "--role", "implementer", "--branch", "sage/t1-a", "--candidate", "1"), own, "an implementer candidate 1 is not the designer candidate 1 of the same task");
+  assert.equal(s.no("run", "add", "T1", "--role", "implementer", "--branch", "sage/t1-a"), taken("a candidate's branch stays as it is"), "a run with no number takes a candidate's branch neither");
+  assert.equal(s.no("run", "add", "T2", "--role", "designer", "--branch", "SAGE/T1-A"), taken("a candidate's branch stays as it is").replace("on sage/t1-a", "on SAGE/T1-A"), "in any letter case");
+  assert.match(s.ok("run", "add", "T1", "--role", "designer", "--branch", "sage/t1-a", "--candidate", "1"), /^R2 running/, "the same candidate of the same task and role");
+  assert.equal(s.no("run", "add", "T1", "--role", "designer", "--branch", "sage/t1-a", "--candidate", "1"), "sage: R2 (designer) still writes sage/t1-a, and a branch has one writer. Finish that run first (sage run done R2 --status done, blocked, question or failed), or give this run another branch.", "it still has one writer at a time");
+});
+
+/** The ways out of an open arena step, which each refusal names. */
+const arenaExits = (task = "T1") => `Finish a judge: sage run add ${task} --role arena-judge --branch sage/${task.toLowerCase()}-judge, then sage run done <R> --status done. A task that needs no arena: sage task ${task} set state=abandoned, then frame it again with sage task add, on a new branch.`;
+const openStep = `sage: T1's arena step is open: its route has the arena block or it has a candidate run, and no arena-judge run of it ended done, so T1 has no final version yet. ${arenaExits()}`;
+/** A judge run of T1 on a branch, from its start to its end. */
+const judged = (s, branch, status) => s.ok("run", "done", s.ok("run", "add", "T1", "--role", "arena-judge", "--branch", branch).split(" ")[0], "--status", status);
+
+test("T584: while a task's arena step is open, a writer run needs --candidate, except the judge; a judge that ended done closes the step", () => {
+  const s = store();
+  s.ok("task", "add", "--priority", "P2", "--title", "t", "--size", "small", "--add", "arena", "--why", "no clear answer");
+  const open = (role) => `sage: T1's arena step is open: its route has the arena block or it has a candidate run, and no arena-judge run of it ended done. So this ${role} run needs --candidate <k>, on its own branch. ${arenaExits()} Nothing changed.`;
+  assert.equal(s.no("run", "add", "T1", "--role", "implementer", "--branch", "sage/t1-a"), open("implementer"), "a candidate recorded with no number would turn off every arena rule for its branch");
+  assert.equal(s.no("run", "add", "T1", "--role", "designer", "--branch", "sage/t1-a"), open("designer"));
+  assert.deepEqual(rows(s.dir, "runs"), [], "a refused run is not written");
+  s.ok("run", "add", "T1", "--role", "implementer", "--branch", "sage/t1-a", "--candidate", "1");
+  s.ok("run", "done", "R1", "--status", "done");
+  s.ok("run", "add", "T1", "--role", "arena-judge", "--branch", "sage/t1-judge");
+  assert.equal(s.no("run", "add", "T1", "--role", "implementer", "--branch", "sage/t1-other"), open("implementer"), "a running judge has not closed the step");
+  for (const status of ["question", "blocked", "failed"]) {
+    s.ok("run", "done", rows(s.dir, "runs").at(-1).id, "--status", status);
+    assert.equal(s.no("run", "add", "T1", "--role", "implementer", "--branch", "sage/t1-other"), open("implementer"), `a judge that ended ${status}`);
+    s.ok("run", "add", "T1", "--role", "arena-judge", "--branch", "sage/t1-judge"); // a new judge may take the branch name of an ended judge
+  }
+  s.ok("run", "done", rows(s.dir, "runs").at(-1).id, "--status", "done");
+  assert.match(s.ok("run", "add", "T1", "--role", "implementer", "--branch", "sage/t1-judge"), / implementer on T1 · sage\/t1-judge · /, "a repair on the judge's branch needs no number");
+  s.ok("task", "add", "--priority", "P2", "--title", "no arena", "--size", "small");
+  assert.match(s.ok("run", "add", "T2", "--role", "implementer", "--branch", "sage/t2"), / implementer on T2 /, "a route with no arena block needs no number");
+  s.ok("task", "add", "--priority", "P2", "--title", "other arena", "--size", "small", "--add", "arena", "--why", "no clear answer");
+  assert.match(s.no("run", "add", "T3", "--role", "implementer", "--branch", "sage/t3"), /^sage: T3's arena step is open/, "the judge of another task closes nothing here");
+});
+
+test("T584: a review with --candidate is not a candidate: its branch takes a judge, lands and passes the move to verified", () => {
+  const s = store();
+  s.ok("task", "add", "--priority", "P2", "--title", "t", "--size", "small");
+  s.ok("run", "add", "T1", "--role", "code-reviewer", "--branch", "sage/t1-a", "--candidate", "1");
+  s.ok("run", "done", "R1", "--status", "done", "--tokens", "1");
+  assert.match(s.ok("run", "add", "T1", "--role", "arena-judge", "--branch", "sage/t1-a"), /^R2 running/);
+  s.ok("run", "done", "R2", "--status", "done");
+  // A candidate of the same shape, on another branch: only its role differs, and it is refused.
+  s.ok("run", "add", "T1", "--role", "designer", "--branch", "sage/t1-b", "--candidate", "1");
+  s.ok("run", "done", "R3", "--status", "done");
+  assert.match(s.no("run", "add", "T1", "--role", "arena-judge", "--branch", "sage/t1-b"), /^sage: R3 \(designer, candidate 1\) is on sage\/t1-b/);
+  s.ok("task", "T1", "set", "branch=sage/t1-a", "pr=41");
+  for (const k of ["checks-pass", "review-clean", "qa-pass"]) s.ok("verdict", "T1", "--sha", SHA, "--kind", k, "--cycle", "1", "--pr", "41");
+  const check = s.run("merge-check", "--sha", SHA, "--pr", "41", "--head", "sage/t1-a");
+  assert.equal(check.status, 0, check.stderr);
+  for (const state of ["briefed", "building", "reviewing", "verifying", "verified"]) s.ok("task", "T1", "set", `state=${state}`);
+  assert.equal(rows(s.dir, "tasks")[0].state, "verified");
+});
+
+/** The refusal of a task with candidates that would land one of them. */
+const wouldLand = (branch, k, run, task = "T1") => `sage: ${task} would land ${branch}, the branch of arena candidate ${k} (${run}), and a candidate's branch never merges. Open the pull request from the judge's or the build's branch, then run sage task ${task} set branch=<that branch>. With no such branch yet, start a judge: sage run add ${task} --role arena-judge --branch sage/${task.toLowerCase()}-judge.`;
+const noLanding = "sage: T1 has arena candidate runs and no branch=, so nothing says what would land, and a candidate's branch never merges. Run sage task T1 set branch=<the judge's or the build's branch>, then try again.";
+
+test("T584: the move to verified refuses a candidate's branch and a task with candidates and no branch=, so no candidate reaches the owner as ready", () => {
+  const s = store();
+  s.ok("task", "add", "--priority", "P2", "--title", "t", "--size", "small");
+  s.ok("run", "add", "T1", "--role", "implementer", "--branch", "sage/t1-a", "--candidate", "1");
+  s.ok("run", "done", "R1", "--status", "done");
+  for (const state of ["briefed", "building", "reviewing"]) s.ok("task", "T1", "set", `state=${state}`);
+  for (const k of ["checks-pass", "review-clean", "qa-pass"]) s.ok("verdict", "T1", "--sha", SHA, "--kind", k, "--cycle", "1");
+  s.ok("task", "T1", "set", "state=verifying");
+  assert.equal(s.no("task", "T1", "set", "state=verified"), openStep, "no judge ended done");
+  judged(s, "sage/t1-judge", "done");
+  assert.equal(s.no("task", "T1", "set", "state=verified"), noLanding, "the runs say that T1 has candidates, and no branch= says what lands");
+  s.ok("task", "T1", "set", "branch=SAGE/t1-A");
+  assert.equal(s.no("task", "T1", "set", "state=verified"), wouldLand("SAGE/t1-A", 1, "R1"), "branch= is a candidate's, in another letter case");
+  assert.equal(s.no("task", "T1", "set", "state=verified", "branch=sage/t1-a"), wouldLand("sage/t1-a", 1, "R1"), "a branch= after the state in one command");
+  assert.equal(rows(s.dir, "tasks")[0].state, "verifying", "a refused move changes nothing");
+  assert.match(s.ok("task", "T1", "set", "branch=sage/t1-judge", "state=verified"), /^T1 verified /, "another branch passes");
+});
+
+test("T584: with no judge that ended done, the move to verified and the merge check refuse, whatever branch and pull request the task names", () => {
+  const s = store();
+  s.ok("task", "add", "--priority", "P2", "--title", "t", "--size", "small", "--add", "arena", "--why", "no clear answer");
+  s.ok("task", "T1", "set", "branch=sage/t1-judge"); // step 4 of the arena ran, and no judge did
+  for (const change of ["state=briefed", "state=building", "state=reviewing pr=41"]) s.ok("task", "T1", "set", ...change.split(" "));
+  for (const k of ["checks-pass", "review-clean", "qa-pass"]) s.ok("verdict", "T1", "--sha", SHA, "--kind", k, "--cycle", "1", "--pr", "41");
+  s.ok("task", "T1", "set", "state=verifying");
+  const refusedNow = (why) => {
+    assert.equal(s.no("task", "T1", "set", "state=verified"), openStep, why);
+    for (const head of [["--head", "sage/t1-judge"], []]) assert.equal(s.run("merge-check", "--sha", SHA, "--pr", "41", ...head).stderr.trim(), openStep, why);
+  };
+  refusedNow("a task with the arena block and no arena names its exits");
+  judged(s, "sage/t1-judge", "failed");
+  refusedNow("a judge that ended failed leaves a branch and no final version");
+  assert.equal(rows(s.dir, "tasks")[0].state, "verifying");
+  judged(s, "sage/t1-judge-2", "done"); // a new run on a new name
+  s.ok("task", "T1", "set", "branch=sage/t1-judge-2", "state=verified");
+  const check = s.run("merge-check", "--sha", SHA, "--pr", "41", "--head", "sage/t1-judge-2");
+  assert.equal(check.status, 0, check.stderr);
+});
+
+test("T584: a candidate run opens the arena step of a route with no arena block, and a judge that ended done closes it", () => {
+  const s = store();
+  s.ok("task", "add", "--priority", "P2", "--title", "t", "--size", "small");
+  assert.equal(rows(s.dir, "tasks")[0].route, "build,code-review,qa");
+  s.ok("run", "add", "T1", "--role", "implementer", "--branch", "sage/t1-c1", "--candidate", "1");
+  s.ok("run", "done", "R1", "--status", "done");
+  assert.match(s.no("run", "add", "T1", "--role", "implementer", "--branch", "sage/t1-build"), /^sage: T1's arena step is open: .*Finish a judge/);
+  s.ok("task", "T1", "set", "branch=sage/t1-build", "pr=41");
+  for (const k of ["checks-pass", "review-clean", "qa-pass"]) s.ok("verdict", "T1", "--sha", SHA, "--kind", k, "--cycle", "1", "--pr", "41");
+  assert.equal(s.run("merge-check", "--sha", SHA, "--pr", "41", "--head", "sage/t1-build").stderr.trim(), openStep);
+  judged(s, "sage/t1-build", "done");
+  assert.match(s.ok("run", "add", "T1", "--role", "implementer", "--branch", "sage/t1-build"), / implementer on T1 /);
+  const check = s.run("merge-check", "--sha", SHA, "--pr", "41", "--head", "sage/t1-build");
+  assert.equal(check.status, 0, check.stderr);
+});
+
+test("T584: --candidate takes a whole number from 1, after the cleaning of every cell", () => {
+  const s = store();
+  s.ok("task", "add", "--priority", "P2", "--title", "t", "--size", "small", "--add", "arena", "--why", "no clear answer");
+  for (const k of ["   ", "", "0", "1.5", "-1", "01", "a"]) assert.match(s.no("run", "add", "T1", "--role", "implementer", "--branch", "sage/t1-c1", `--candidate=${k}`), /^sage: --candidate is a whole number from 1, not ".*"\. Nothing changed\.$/, JSON.stringify(k));
+  assert.deepEqual(rows(s.dir, "runs"), [], "a refused run is not written");
+  assert.match(s.ok("run", "add", "T1", "--role", "implementer", "--branch", "sage/t1-c1", "--candidate", " 2 "), / · candidate 2 · /);
+  assert.equal(rows(s.dir, "runs")[0].candidate, "2");
+});
+
+test("T584: a large arena is a design arena: candidates, a judge's page, the PE, the owner's approval, then the build on its own branch", () => {
+  const s = store();
+  s.ok("task", "add", "--priority", "P2", "--title", "t", "--size", "large", "--add", "arena", "--why", "no clear answer");
+  assert.equal(rows(s.dir, "tasks")[0].route, "design,arena,pe,build,code-review,security-review,ux-review,qa");
+  s.ok("task", "T1", "set", "state=designing");
+  const candidate = (role, k) => ["run", "add", "T1", "--role", role, "--branch", `sage/t1-c${k}`, "--candidate", String(k)];
+  assert.equal(s.no(...candidate("implementer", 1)), "sage: T1 is large and designing, so its arena is a design arena, and an implementer is no candidate of it: use --role designer. A build arena runs on a tiny or small task, or on a briefed task after an approved design. Nothing changed.");
+  assert.match(s.no("run", "add", "T1", "--role", "designer", "--branch", "sage/t1-design"), /^sage: T1's arena step is open/, "the arena stands for the design block: a plain designer waits");
+  const pages = s.ok("pages", "T1");
+  for (const k of [1, 2]) {
+    s.ok(...candidate("designer", k));
+    writeFileSync(join(pages, `R${k}-artifact.html`), `<p>candidate ${k}</p>\n`);
+    s.ok("run", "done", `R${k}`, "--status", "done", "--tokens", "1");
+    s.ok("pages", "T1", "record", join(pages, `R${k}-artifact.html`));
+  }
+  s.ok("run", "add", "T1", "--role", "arena-judge", "--branch", "sage/t1-judge");
+  writeFileSync(join(pages, "R3-final.html"), "<p>final</p>\n");
+  s.ok("run", "done", "R3", "--status", "done", "--tokens", "1");
+  assert.match(s.ok("pages", "T1", "record", join(pages, "R3-final.html")), /^page .* · sha256 [0-9a-f]{64}$/);
+  s.ok("run", "add", "T1", "--role", "pe");
+  s.ok("run", "done", "R4", "--status", "done", "--tokens", "1");
+  s.ok("task", "T1", "set", "state=awaiting-you");
+  s.ok("gate", "add", "T1", "--question", "Approve the design at R3-final.html?", "--options", "approve|change", "--recommend", "approve");
+  s.ok("gate", "answer", "G1", "--option", "1");
+  s.ok("task", "T1", "set", "state=briefed");
+  // The build: one lead, on a new branch, with no number.
+  s.ok("task", "T1", "set", "branch=sage/t1");
+  s.ok("run", "add", "T1", "--role", "lead");
+  assert.match(s.ok("run", "add", "T1", "--role", "implementer", "--branch", "sage/t1"), /^R6 running · implementer on T1 · sage\/t1 /);
+  s.ok("run", "done", "R6", "--status", "done");
+  for (const change of ["state=building", "state=reviewing pr=41"]) s.ok("task", "T1", "set", ...change.split(" "));
+  s.ok("verdict", "T1", "--sha", SHA, "--kind", "checks-pass", "--cycle", "1", "--pr", "41");
+  for (const cycle of ["1", "2"]) for (const k of ["review-clean", "security-clean", "ux-clean", "qa-pass"]) s.ok("verdict", "T1", "--sha", SHA, "--kind", k, "--cycle", cycle, "--pr", "41");
+  s.ok("task", "T1", "set", "state=verifying");
+  s.ok("run", "done", "R5", "--status", "done");
+  s.ok("task", "T1", "set", "state=verified");
+  const check = (head) => s.run("merge-check", "--sha", SHA, "--pr", "41", "--head", head);
+  assert.equal(check("sage/t1").status, 0, check("sage/t1").stderr);
+  assert.equal(check("sage/t1-c1").stderr.trim(), wouldLand("sage/t1-c1", 1, "R1"));
+});
+
+test("T584: a build arena on a large task waits for briefed, after an approved design", () => {
+  const s = store();
+  s.ok("task", "add", "--priority", "P2", "--title", "t", "--size", "large", "--add", "arena", "--why", "no clear answer");
+  const candidate = ["run", "add", "T1", "--role", "implementer", "--branch", "sage/t1-c1", "--candidate", "1"];
+  assert.match(s.no(...candidate), /^sage: T1 is large and framed, so its arena is a design arena/);
+  s.ok("task", "T1", "set", "state=briefed");
+  assert.match(s.ok(...candidate), /^R1 running · implementer on T1 · sage\/t1-c1 · candidate 1/);
+});
+
+test("T584: a full arena: two candidates, a judge on a third branch, the verdicts, then the merge check passes the judge and refuses each candidate", () => {
+  const s = store();
+  s.ok("task", "add", "--priority", "P2", "--title", "t", "--size", "small", "--add", "arena", "--why", "no clear answer");
+  assert.equal(rows(s.dir, "tasks")[0].route, "arena,build,code-review,qa");
+  // The chief's steps, in the order of the arena binding.
+  s.ok("log", "T1", "rubric: fewest steps; smallest change", "--why", "arena rubric");
+  assert.match(s.ok("run", "add", "T1", "--role", "implementer", "--branch", "sage/t1-c1", "--candidate", "1"), /^R1 running · implementer on T1 · sage\/t1-c1 · candidate 1 · model opus$/);
+  assert.match(s.ok("run", "add", "T1", "--role", "implementer", "--branch", "sage/t1-c2", "--candidate", "2"), /^R2 running · implementer on T1 · sage\/t1-c2 · candidate 2 · model sonnet$/);
+  const pages = s.ok("pages", "T1");
+  for (const [run, id] of [["R1", 1], ["R2", 2]]) {
+    writeFileSync(join(pages, `${run}-artifact.diff`), `candidate ${id}\n`);
+    s.ok("run", "done", run, "--status", "done", "--tokens", "1");
+    assert.match(s.ok("pages", "T1", "record", join(pages, `${run}-artifact.diff`)), /^page .* · sha256 [0-9a-f]{64}$/);
+  }
+  s.ok("task", "T1", "set", "branch=sage/t1-judge");
+  assert.match(s.ok("run", "add", "T1", "--role", "arena-judge", "--branch", "sage/t1-judge"), /^R3 running · arena-judge on T1 · sage\/t1-judge · model opus$/);
+  s.ok("run", "done", "R3", "--status", "done", "--tokens", "1");
+  // The judge's pull request goes on through the route: the chief moves the task, and the lead starts at reviewing.
+  for (const change of ["state=briefed", "state=building", "state=reviewing pr=41"]) s.ok("task", "T1", "set", ...change.split(" "));
+  assert.match(s.ok("run", "add", "T1", "--role", "lead"), /^R4 running · lead on T1/);
+  assert.match(s.ok("run", "add", "T1", "--role", "implementer", "--branch", "sage/t1-judge"), /^R5 running · implementer on T1/, "a repair on the judge's branch");
+  s.ok("run", "done", "R5", "--status", "done");
+  for (const k of ["review-clean", "qa-pass"]) s.ok("verdict", "T1", "--sha", SHA, "--kind", k, "--cycle", "1", "--pr", "41");
+  s.ok("task", "T1", "set", "state=verifying");
+  s.ok("run", "done", "R4", "--status", "done");
+  s.ok("verdict", "T1", "--sha", SHA, "--kind", "checks-pass", "--cycle", "1", "--pr", "41");
+  s.ok("task", "T1", "set", "state=verified");
+  const check = (...head) => s.run("merge-check", "--sha", SHA, "--pr", "41", ...head);
+  assert.equal(check("--head", "sage/t1-judge").status, 0, check("--head", "sage/t1-judge").stderr);
+  assert.equal(check().status, 0, "the chief's form: the task's branch= is the judge's");
+  for (const [branch, k, run] of [["sage/t1-c1", 1, "R1"], ["sage/t1-c2", 2, "R2"]]) {
+    assert.equal(check("--head", branch).status, 1);
+    assert.equal(check("--head", branch).stderr.trim(), wouldLand(branch, k, run));
+  }
+});
+
+test("T584: a retry on a new branch after a failed candidate: the old run and branch stay, the failed branch stays apart, and the arena goes on", () => {
+  const s = store();
+  s.ok("task", "add", "--priority", "P2", "--title", "t", "--size", "small", "--add", "arena", "--why", "no clear answer");
+  s.ok("run", "add", "T1", "--role", "implementer", "--branch", "sage/t1-c1", "--candidate", "1");
+  s.ok("run", "add", "T1", "--role", "implementer", "--branch", "sage/t1-c2", "--candidate", "2");
+  s.ok("run", "done", "R1", "--status", "failed");
+  s.ok("run", "done", "R2", "--status", "done");
+  assert.match(s.ok("run", "add", "T1", "--role", "implementer", "--branch", "sage/t1-c1-2", "--candidate", "1"), /^R3 running · implementer on T1 · sage\/t1-c1-2 · candidate 1/);
+  s.ok("run", "done", "R3", "--status", "done");
+  assert.match(s.no("run", "add", "T1", "--role", "arena-judge", "--branch", "sage/t1-c1"), /^sage: R1 \(implementer, candidate 1\) is on sage\/t1-c1, and an arena's judge/, "the failed candidate's branch is evidence too");
+  assert.deepEqual(rows(s.dir, "runs").map((r) => [r.id, r.candidate, r.branch, r.status]), [["R1", "1", "sage/t1-c1", "failed"], ["R2", "2", "sage/t1-c2", "done"], ["R3", "1", "sage/t1-c1-2", "done"]], "a correction keeps the old run");
+  s.ok("task", "T1", "set", "branch=sage/t1-judge", "pr=41");
+  s.ok("run", "add", "T1", "--role", "arena-judge", "--branch", "sage/t1-judge");
+  s.ok("run", "done", "R4", "--status", "done");
+  for (const k of ["checks-pass", "review-clean", "qa-pass"]) s.ok("verdict", "T1", "--sha", SHA, "--kind", k, "--cycle", "1", "--pr", "41");
+  assert.equal(s.run("merge-check", "--sha", SHA, "--pr", "41", "--head", "sage/t1-judge").status, 0);
+  assert.equal(s.run("merge-check", "--sha", SHA, "--pr", "41", "--head", "sage/t1-c1").stderr.trim(), wouldLand("sage/t1-c1", 1, "R1"), "a failed candidate's branch never merges either");
+});
+
+test("T584: a logbook that an older sage wrote still reads and writes: its candidate rows count, and the arena rules add no column", () => {
+  const home = mkdtempSync(join(tmpdir(), "sage-home-")), project = mkdtempSync(join(tmpdir(), "sage-project-"));
+  const env = testEnv({ SAGE_HOME: home, SAGE_TEST_PIDS: "{}" });
+  const old = (...args) => {
+    const r = spawnSync("node", [OLD_TOOL, ...args, "--project", project], { encoding: "utf8", env, timeout });
+    assert.equal(r.status, 0, r.stderr);
+    return r.stdout.trim();
+  };
+  const now = (...args) => spawnSync("node", [TOOL, ...args, "--project", project], { encoding: "utf8", env, timeout });
+  const dir = old("init").replace(/^\S+ /, "");
+  old("task", "add", "--title", "t", "--size", "small", "--add", "arena", "--why", "no clear answer");
+  old("run", "add", "T1", "--role", "designer", "--branch", "sage/t1-c1", "--candidate", "1");
+  old("run", "done", "R1", "--status", "done");
+  assert.match(now("run", "add", "T1", "--role", "arena-judge", "--branch", "sage/t1-c1").stderr, /^sage: R1 \(designer, candidate 1\) is on sage\/t1-c1, and an arena's judge/, "the old row counts as a candidate");
+  assert.match(now("run", "add", "T1", "--role", "implementer", "--branch", "sage/t1-x").stderr, /^sage: T1's arena step is open/, "and the old task's arena step is open");
+  assert.equal(now("run", "add", "T1", "--role", "arena-judge", "--branch", "sage/t1-judge").status, 0);
+  assert.equal(now("run", "done", "R2", "--status", "done").status, 0);
+  assert.match(now("task", "T1", "set", "branch=sage/t1-judge").stdout, /^T1 framed .*sage\/t1-judge/);
+  assert.deepEqual(rows(dir, "runs").map((r) => [r.id, r.role, r.candidate, r.branch, r.status]), [["R1", "designer", "1", "sage/t1-c1", "done"], ["R2", "arena-judge", "", "sage/t1-judge", "done"]]);
+  assert.equal(readFileSync(join(dir, "runs.tsv"), "utf8").split("\n")[0], "id\ttask\trole\tround\tcandidate\tbranch\tstatus\ttokens\treport\tstarted\tended\tmodel\tusage_provider\tusage_interface\tusage_capability\tusage_binding\tusage_reason\tusage_basis\tusage_status\tusage_source\tusage_evidence");
+});
+
+test("T584: the merge check refuses a candidate's head branch, in any letter case, and passes the judge's branch on the same commit", () => {
+  const s = store();
+  s.ok("task", "add", "--priority", "P2", "--title", "t", "--size", "small");
+  s.ok("run", "add", "T1", "--role", "implementer", "--branch", "sage/t1-a", "--candidate", "1");
+  s.ok("run", "done", "R1", "--status", "done");
+  s.ok("run", "add", "T1", "--role", "arena-judge", "--branch", "sage/t1-judge");
+  s.ok("run", "done", "R2", "--status", "done");
+  s.ok("task", "T1", "set", "pr=41");
+  for (const k of ["checks-pass", "review-clean", "qa-pass"]) s.ok("verdict", "T1", "--sha", SHA, "--kind", k, "--cycle", "1", "--pr", "41");
+  const check = (head) => s.run("merge-check", "--sha", SHA, "--pr", "41", ...head);
+  const refusal = (branch) => wouldLand(branch, 1, "R1");
+  const candidate = check(["--head", "sage/t1-a"]);
+  assert.equal(candidate.status, 1);
+  assert.equal(candidate.stderr.trim(), refusal("sage/t1-a"));
+  assert.equal(check(["--head", "SAGE/T1-A"]).stderr.trim(), refusal("SAGE/T1-A"), "the same branch on a Mac");
+  // A judge with no graft keeps the candidate's commit: the check is by branch, so the same SHA lands from the judge's branch.
+  const judge = check(["--head", "sage/t1-judge"]);
+  assert.equal(judge.status, 0, judge.stderr);
+  // With no --head, as in the chief's read before a merge, the task's branch= says what would land.
+  assert.equal(check([]).stderr.trim(), noLanding, "no branch recorded: T1's runs say that it has candidates, so the chief's form never passes on a candidate's commit");
+  assert.equal(check([]).status, 1);
+  s.ok("task", "T1", "set", "branch=sage/t1-a");
+  assert.equal(check([]).stderr.trim(), refusal("sage/t1-a"));
+  s.ok("task", "T1", "set", "branch=sage/t1-judge");
+  assert.equal(check([]).status, 0);
+});
+
 test("T266-LEAD-ONE: run add --role lead records a lead run, and a task has one running lead run; the refusal names it", () => {
   const s = store();
   s.ok("task", "add", "--priority", "P2", "--title", "t", "--size", "small");
@@ -2723,7 +3040,7 @@ test("T336: a task with an unmet wait takes no lead, implementer, investigate or
   stateIs(s, "T1", "building");
   const runs = () => readFileSync(join(s.dir, "runs.tsv"), "utf8");
   const before = runs();
-  for (const [role, more] of [["lead", []], ["Lead", []], ["implementer", ["--branch", "sage/t2"]], ["investigate", []], ["arena-judge", []]]) {
+  for (const [role, more] of [["lead", []], ["Lead", []], ["implementer", ["--branch", "sage/t2"]], ["investigate", []], ["arena-judge", ["--branch", "sage/t2-judge"]]]) {
     assert.equal(s.no("run", "add", "T2", "--role", role, ...more), UNMET("T2", "T1 (building)", `${role.toLowerCase()} run`), role);
   }
   assert.equal(runs(), before, "a refused run is not written");
@@ -3894,7 +4211,7 @@ test("Balanced defaults cover every role and size without a config file", () => 
       const expected = role === "ux-reviewer" || (role === "qa" && ["tiny", "small"].includes(size))
         || (["implementer", "code-reviewer"].includes(role) && size === "tiny") ? "sonnet" : "opus";
       const args = ["run", "add", task, "--role", role];
-      if (["implementer", "designer"].includes(role)) args.push("--branch", `sample/${task}-${role}`);
+      if (["implementer", "designer", "arena-judge"].includes(role)) args.push("--branch", `sample/${task}-${role}`);
       assert.ok(s.ok(...args).endsWith(` · model ${expected}`), `${role} on ${size}`);
     }
   }
@@ -3958,7 +4275,7 @@ test("T40: each agent role gets its model by task size; run add prints it and re
 
   // An arena candidate takes its place in arena_models.
   s.ok("config", "arena_models=opus,fable");
-  assert.equal(s.ok("run", "add", "T3", "--role", "implementer", "--branch", "a/2", "--candidate", "2"), "R26 running · implementer on T3 · a/2 · candidate 2 · model fable");
+  assert.equal(s.ok("run", "add", "T3", "--role", "designer", "--branch", "a/2", "--candidate", "2"), "R26 running · designer on T3 · a/2 · candidate 2 · model fable");
   assert.equal(s.ok("run", "add", "T3", "--role", "designer", "--branch", "a/1", "--candidate", "1"), "R27 running · designer on T3 · a/1 · candidate 1 · model opus");
 
   // An older sage's runs.tsv, without the model column: it reads, and the next write adds the column and keeps every row.
@@ -4079,6 +4396,9 @@ test("R1708-2: a run on its task's shared branch is a valid assignment for a pro
   const capture = (task, run, role) => tool.captureRunAssignment({ project: s.project, task, run, role }, testEnv({ SAGE_HOME: s.home }));
   assert.deepEqual(capture("T1", "R1", "implementer"), { task: "T1", run: "R1", role: "implementer", round: 0, taskBranch: "sage/t2", runBranch: "sage/t2", candidate: "" });
   assert.throws(() => capture("T1", "R1", "qa"), /The assignment needs one active run on its current task, role, branch, and round\./, "another role refuses");
+  s.ok("run", "add", "T2", "--role", "arena-judge", "--branch", "sage/t2-judge"); // R2
+  byHand(s.dir, "runs", 0, "R2", (cells) => cells.with(5, "SAGE/T2")); // an older logbook can hold two writers on one branch in two letter cases
+  assert.throws(() => capture("T1", "R1", "implementer"), /The assignment needs one active run on its current task, role, branch, and round\./, "T584: a judge in another letter case is a second writer");
 });
 
 test("R1741-1: a refusal for a task of the head branch that is not on the PR says how it owns the branch, and says to move it only when that works", () => {

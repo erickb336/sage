@@ -202,6 +202,12 @@ function world() {
   return { at, env, git, p, sage, pr, logbook, mirror, route, mirrored, kills, bundle, commit, imports, review, calls, remote, task, forge, github };
 }
 
+/** The id of the latest run of a role, from runs.tsv. */
+function rowOfRole(w, role) {
+  const [head, ...rows] = readFileSync(join(w.logbook, "runs.tsv"), "utf8").trim().split("\n").map((l) => l.split("\t"));
+  return rows.findLast((r) => r[head.indexOf("role")] === role)[head.indexOf("id")];
+}
+
 /** A refusal: exit 1, and stderr starts with "sage-pr: refused:" and matches why. */
 function refused(r, why) {
   assert.equal(r.status, 1, `exit ${r.status}: ${r.stdout}${r.stderr}`);
@@ -428,6 +434,54 @@ test("T575: an adopted task lands on the branch that it adopted, and on no other
   const r = w.pr("merge", "T1");
   assert.equal(r.status, 0, r.stderr);
   assert.match(r.stdout, /^merged codex\/t95-x at /);
+});
+
+test("T584: create and merge refuse an open arena step and name its exits, and go on after a judge ended done", () => {
+  const w = world();
+  w.forge("T1", "route", "arena,build,code-review,qa");
+  const head = w.commit("b.txt");
+  for (const kind of ["checks-pass", "review-clean", "qa-pass"]) w.sage("verdict", "T1", "--sha", head, "--kind", kind);
+  w.forge("T1", "state", "verified");
+  const open = /T1's arena step is open: its route has the arena block or it has a candidate run, and no arena-judge run of it ended done, so T1 has no final version yet\. Finish a judge: .* A task that needs no arena: sage task T1 set state=abandoned/;
+  refused(w.pr("create", "T1"), open);
+  assert.deepEqual(w.calls().filter((c) => c.args[1] === "create"), [], "no gh pr create ran");
+  assert.equal(w.remote("refs/heads/claude/t1"), "", "nothing was pushed");
+  w.sage("run", "add", "T1", "--role", "arena-judge", "--branch", "claude/t1-judge");
+  w.sage("run", "done", rowOfRole(w, "arena-judge"), "--status", "failed");
+  refused(w.pr("create", "T1"), open);
+  w.sage("run", "add", "T1", "--role", "arena-judge", "--branch", "claude/t1-judge-2");
+  w.sage("run", "done", rowOfRole(w, "arena-judge"), "--status", "done");
+  const made = w.pr("create", "T1");
+  assert.equal(made.status, 0, made.stderr);
+});
+
+test("T584: create and merge refuse a candidate's branch, and merge the judge's branch at the same commit", () => {
+  const w = world();
+  const head = w.commit("b.txt");
+  for (const kind of ["checks-pass", "review-clean", "qa-pass"]) w.sage("verdict", "T1", "--sha", head, "--kind", kind);
+  w.forge("T1", "state", "verified");
+  assert.equal(w.pr("create", "T1").status, 0, "a pull request that an older sage opened");
+  w.sage("run", "add", "T1", "--role", "implementer", "--branch", "claude/t1", "--candidate", "1");
+  const candidate = rowOfRole(w, "implementer");
+  w.sage("run", "done", candidate, "--status", "done");
+  const land = new RegExp(`T1 would land claude/t1, the branch of arena candidate 1 \\(${candidate}\\), and a candidate's branch never merges\\.`);
+  refused(w.pr("create", "T1"), land);
+  refused(w.pr("merge", "T1"), new RegExp(`merge check: ${land.source}`));
+  assert.equal(w.calls().filter((c) => c.args[1] === "merge").length, 0, "no gh pr merge ran");
+  // A judge with no graft: its own branch at the candidate's commit, which keeps the candidate's reviews and review copy.
+  w.sage("run", "add", "T1", "--role", "arena-judge", "--branch", "claude/t1-judge");
+  w.sage("run", "done", rowOfRole(w, "arena-judge"), "--status", "done");
+  w.p("branch", "claude/t1-judge");
+  w.sage("task", "T1", "set", "branch=claude/t1-judge");
+  rmSync(w.bundle);
+  w.p("bundle", "create", "-q", w.bundle, "main..claude/t1-judge");
+  const made = w.pr("create", "T1");
+  assert.equal(made.status, 0, made.stderr);
+  assert.equal(w.task("T1").pr, "2", "the judge's pull request is a new one");
+  const r = w.pr("merge", "T1");
+  assert.equal(r.status, 0, r.stderr);
+  assert.match(r.stdout, /^merged claude\/t1-judge at /);
+  assert.equal(w.remote("refs/heads/claude/t1"), head, "the candidate's branch stays");
 });
 
 test("a reviewed head that is already on main refuses", () => {

@@ -2506,7 +2506,7 @@ test('native child sandbox escalation refuses an unassigned off-mode child', asy
 function recordedFixtureRole(f, role) {
   f.input.role = role;
   if (role !== "lead") {
-    f.assignmentCli("run", "add", "T1", "--role", role, ...(role === "implementer" || role === "designer" ? ["--branch", "codex/t1-fixture"] : []));
+    f.assignmentCli("run", "add", "T1", "--role", role, ...(["implementer", "designer", "arena-judge"].includes(role) ? ["--branch", "codex/t1-fixture"] : []));
     f.input.run = "R4";
   }
   if (f.core.REVIEW_ROLES.includes(role)) f.input.reviewCycle = 1;
@@ -3800,6 +3800,13 @@ test('native run creation shares the CLI single-writer rule and never revives a 
   assert.equal(f.tool.read(f.logbook, 'runs').length, 3);
 });
 
+test('T584: native run creation takes only a whole candidate number, as the CLI does', async t => {
+  const f = await runCreationFixture(t);
+  for (const candidate of ['   ', ' 1', '0', 'candidate-a']) assert.throws(() => f.createRun({ ...f.input, role: 'qa', candidate }), /whole number from 1|complete, unchanged request/);
+  assert.deepEqual(f.tool.read(f.logbook, 'runs'), []);
+  assert.equal(f.createRun({ ...f.input, role: 'qa', candidate: '2' }).run.candidate, '2');
+});
+
 test('native run creation refuses missing tasks malformed fields and foreign owners without writes', async t => {
   const f = await runCreationFixture(t);
   for (const data of [{ ...f.input, task: 'T999' }, { ...f.input, task: '../other' }, { ...f.input, owner: session },
@@ -3901,15 +3908,15 @@ test('T57: held tasks refuse new runs while exact historical retries remain unch
 test('T57: run framing matches CLI normalization and preserves saved model round candidate and time', async t => {
   const f = await runCreationFixture(t);
   f.cli('config', 'cycles.small=2');
-  f.cli('run', 'add', 'T1', '--role', 'QA ', '--candidate', 'candidate-a');
-  const first = f.createRun({ ...f.input, role: 'qa', candidate: 'candidate-a' });
+  f.cli('run', 'add', 'T1', '--role', 'QA ', '--candidate', '2');
+  const first = f.createRun({ ...f.input, role: 'qa', candidate: '2' });
   const cli = f.tool.read(f.logbook, 'runs')[0];
   for (const key of ['task', 'role', 'round', 'candidate', 'branch', 'status', 'model']) assert.equal(first.run[key], cli[key]);
   assert.equal(first.run.model, '');
   f.cli('run', 'done', first.run.id, '--status', 'done', '--tokens', '1');
   f.cli('config', 'cycles.small=3');
   const before = readFileSync(join(f.logbook, 'runs.tsv'), 'utf8');
-  assert.deepEqual(f.createRun({ ...f.input, role: 'qa', candidate: 'candidate-a' }), { ...first, decision: 'already-created' });
+  assert.deepEqual(f.createRun({ ...f.input, role: 'qa', candidate: '2' }), { ...first, decision: 'already-created' });
   assert.equal(readFileSync(join(f.logbook, 'runs.tsv'), 'utf8'), before);
 });
 
@@ -5780,6 +5787,32 @@ for (const obstacle of ['none', 'old-head', 'configured-cycles', 'gate', 'runnin
     writeFileSync(join(f.env.SAGE_HOME, 'config.json'), JSON.stringify({ 'cycles.small': 3 }));
     assert.equal(f.update().decision, 'task-update-history');
   }
+});
+
+test('T584: a native move to verified refuses an open arena step, and goes on after a judge ended done', async t => {
+  const f = await taskUpdateReadinessFixture(t);
+  f.cli('run', 'add', 'T1', '--role', 'implementer', '--branch', 'codex/t1-c1', '--candidate', '1');
+  assert.throws(() => f.update(), /required clean checks/); // a native refusal has only its fixed text
+  assert.equal(f.snapshot().task.state, 'verifying');
+  assert.equal(existsSync(join(f.logbook, 'review-pending.json')), false);
+  f.cli('run', 'add', 'T1', '--role', 'arena-judge', '--branch', 'codex/t1-judge');
+  for (const row of f.tool.read(f.logbook, 'runs').filter(row => row.status === 'running')) f.cli('run', 'done', row.id, '--status', 'done');
+  assert.equal(f.update().task.state, 'verified');
+});
+
+test('T584: an update saved before the arena rules replays: a logbook check reads it, and a merge goes on', async t => {
+  const f = await taskUpdateReadinessFixture(t);
+  assert.equal(f.update().task.state, 'verified');
+  const folder = join(f.logbook, 'task-updates'), file = join(folder, readdirSync(folder)[0]);
+  const envelope = JSON.parse(readFileSync(file, 'utf8')), runs = envelope.value.intent.tables.runs;
+  // The saved tables of an update that an older sage accepted: a candidate of the task's branch is in the runs.
+  const cols = runs.before.split('\n')[0].split('\t');
+  const fields = { id: 'R9', task: 'T1', role: 'implementer', round: '0', candidate: '1', branch: 'codex/t1-review', status: 'done' };
+  const row = cols.map(key => fields[key] ?? '').join('\t') + '\n';
+  runs.before += row; runs.after += row;
+  envelope.hash = createHash('sha256').update(JSON.stringify(envelope.value)).digest('hex');
+  writeFileSync(file, JSON.stringify(envelope) + '\n');
+  assert.match(f.cli('merge-check', '--sha', f.head), /T1 may merge/);
 });
 
 for (const corruption of ['task-delta', 'run-delta', 'decision-delta', 'timestamp', 'identity']) test(`T13: valid checksum cannot authorize corrupted ${corruption}`, async t => {
