@@ -5772,10 +5772,11 @@ test('T578: a saved change that cannot finish stops even a historical retry, and
   assert.equal(f.core.readAdmission(f.options.directory).taskUpdates.at(-1).released, undefined);
 });
 
-test('T593: after the owner accepts the loss of a stuck update, its journal row closes and the next update saves', async t => {
+for (const receipt of [true, false]) test(`T593: after the owner accepts the loss of a stuck update ${receipt ? 'with' : 'with no'} receipt, its journal row closes and the next update saves`, async t => {
   const f = await nativeTaskUpdateFixture(t), second = f.request({ title: 'Lost title' }, 'a4444444-4444-4444-8444-444444444444');
   const { run, coordination } = await taskUpdateCoordinator(f, second);
   assert.throws(() => run({ ...coordination, acknowledge() { throw Error('injected outage'); } }));
+  if (!receipt) rmSync(join(f.assignmentLogbook, 'task-updates'), { recursive: true }); // as a stop before the receipt leaves it
   appendFileSync(join(f.assignmentLogbook, 'tasks.tsv'), 'unrelated damaged row\n');
   assert.throws(() => f.update(f.request({ title: 'Stopped' }, 'a5555555-5555-4555-8555-555555555555')), { code: 'stuck-write' });
   f.assignmentCli('logbook', 'repair', '--accept-change-loss', 'yes');
@@ -5784,7 +5785,9 @@ test('T593: after the owner accepts the loss of a stuck update, its journal row 
   assert.equal(existsSync(`${marker}.lost-1`), true);
   assert.equal(f.update(f.request({ title: 'After the repair' }, 'a6666666-6666-4666-8666-666666666666')).decision, 'task-updated');
   assert.equal(f.snapshot().task.title, 'After the repair');
-  assert.equal(f.core.readAdmission(f.options.directory).taskUpdates.find(row => row.update.request === second.request).void !== undefined, true);
+  const row = f.core.readAdmission(f.options.directory).taskUpdates.find(({ update }) => update.request === second.request);
+  assert.equal(row.void, receipt ? undefined : true);
+  assert.equal(Boolean(row.released), receipt);
 });
 
 for (const sage of [true, false]) test(`T13: managed ${sage ? 'on' : 'off'} tool refuses a transaction begun during evaluation`, async t => {
