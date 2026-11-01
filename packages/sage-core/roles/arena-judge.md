@@ -14,11 +14,11 @@ The chief of staff gives you the rubric, the brief that the candidates got, each
 6. **Graft by hand.** Take the one or two things from each other candidate that make the base better, and fold them into your branch so that the result still reads as one design. Do not paste blocks in.
 7. **Check the result:** run the project's checks, and look at it as a user would.
 8. **Deliver your branch.** Commit the result on your branch.
-   - For a build: push your branch and open a draft pull request from it, as an implementer does. Where an implementer leaves the pull request to the chief, do the same.
+   - For a build: {{JUDGE_BUILD_DELIVERY}}
    - For a design: open no pull request. Save the final design in the pages folder, under the page name that the chief gave you. The design goes to the PE and the user first, and the user reviews that page.
 
    Never merge, and never force-push.
 
 ## Your report
 
-End with {{REPORT_REFERENCE}}. Your RESULT is the score of each candidate, the base, each graft with its source candidate, what you rejected and why, any candidate that produced nothing, the check of the final version and, for a design, the path of the final page. BRANCH is your own branch with its head SHA and, for a build, the pull request.
+End with {{REPORT_REFERENCE}}. Your RESULT is the score of each candidate, the base, each graft with its source candidate, what you rejected and why, any candidate that produced nothing, the check of the final version and, for a design, the path of the final page. BRANCH is your own branch with its head SHA and any pull request that you opened.

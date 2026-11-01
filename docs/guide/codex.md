@@ -16,7 +16,7 @@ The design of the two provider plugins is in [Separate provider packages](../des
 | The logbook and the board | Yes | Yes: the plugin's `sage` MCP tools write the logbook, and the `sage` skill's commands read it and show the board |
 | The stop check | Yes | No, until native captures prove it |
 | sage mode: the chief's role | Yes | Yes: the `sage mode` phrase gives it, and it comes back after a compaction |
-| Role agents | Yes: the lead, the implementer, the reviewers, QA, the PE, the designer and the arena judge | The public helper supports the implementer, PE, designer, the three reviewers, QA and investigation roles. The chief starts each agent and does the lead's work; role agents start no agents and record nothing in the logbook. PE/designer source tests do not establish installed acceptance; lead and arena routes remain unavailable (see [start a role agent](../../packages/sage-codex/skills/sage/references/roles.md)). |
+| Role agents | Yes: the lead, the implementer, the reviewers, QA, the PE, the designer and the arena judge | The public helper supports the implementer, PE, designer, arena judge, the three reviewers, QA and investigation roles. The chief starts each agent and does the lead's work; role agents start no agents and record nothing in the logbook. PE, designer and arena source tests do not establish installed acceptance; the lead route remains unavailable (see [start a role agent](../../packages/sage-codex/skills/sage/references/roles.md)). |
 | The brief check | Yes: the hook refuses a brief without every field | Yes, as a check, not a block: the chief runs the `brief` tool before each spawn. Each role agent starts with the project's standing orders and its checked brief, and a spawn with no checked brief gives the chief a warning ([The brief check](#the-brief-check)) |
 | The report check | Yes | Yes, for a role agent whose task name starts with `sage_`: a report without every field gets one more turn, then the agent stops with one plain line. It does not check a review's findings yet |
 | sage mode: the push rule in code | Yes | Yes: the same push form as in Claude Code ([The rules in Codex](#the-rules-in-codex)) |
@@ -207,7 +207,7 @@ Ordinary open design gates do not generally prevent merge in code. The chief mus
 
 Generated-package tests use labelled synthetic artifacts and hook events. Installed acceptance still needs the reviewed package, updated hook trust, both role texts, actual child runs, permission refusals, report retention and the saved prototype.
 
-Protected native completion, lead dispatch and arena dispatch remain unverified. See the [design procedure](../../packages/sage-codex/skills/sage/references/workflow.md#design-before-build).
+Protected native completion and lead dispatch remain unverified. An arena runs in Codex from [the arena steps](../../packages/sage-codex/skills/sage/references/arena.md); a synthetic test plays it, and its first real run is the installed pilot. See the [design procedure](../../packages/sage-codex/skills/sage/references/workflow.md#design-before-build).
 
 ## Task adoption
 

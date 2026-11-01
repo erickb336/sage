@@ -19,7 +19,7 @@ Autopilot is off until you send `autopilot on` alone, while sage mode is on. Tex
 
 **Does it work in Codex?** In part, and the work goes on. In the Codex CLI, sage mode, autopilot, the implementer, the three reviewers, QA and the logbook tools work through the sage plugin.
 
-No lead, PE, designer or arena judge yet, and the agent caps and the board phrases do not work in Codex yet. The desktop app is not checked yet. See [sage in Codex](codex.md).
+No lead yet, and the PE, the designer and the arena have not run in an installed Codex yet. The agent caps and the board phrases do not work in Codex yet, and the desktop app is not checked yet. See [sage in Codex](codex.md).
 
 **How mature is it?** Early. I use it every day to build sage itself.
 

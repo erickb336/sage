@@ -621,7 +621,7 @@ function lifecycle(t, id) {
   const held = { w: tw("held", size, true) + 64 }, rep = { w: tw("repairing", size, true) + 64 };
   held.x = f1(bu.cx - held.w / 2);
   rep.x = f1((re.cx + ve.cx) / 2 - rep.w / 2);
-  const fy = 384, fh = 7 * size * 1.4 + 32, H = Math.round(fy + fh + 36);
+  const fy = 384, fh = 8 * size * 1.4 + 32, H = Math.round(fy + fh + 36);
   const body = [
     backdrop(t, id, W, H, { moon: [990, 250, 100], seeds: [17, 52, 4], far: [H - 60, 60, 180, 70, 140], near: [H + 60, 90, 220, 80, 170], mist: [140, 280, H - 130], mistK: 0.6 }),
     heading(t, 36, 62, "THE STATES OF A TASK"),
@@ -645,10 +645,10 @@ function lifecycle(t, id) {
     // The rules of the states.
     rect(36, fy, W - 72, fh, { rx: 8, fill: t.tile, stroke: t.edge, sw: 1.5 }),
     text(64, fy + 40, ["Verified needs 1 clean cycle. Autopilot merges after the task's clean cycles:", "1 for a tiny or small task, 2 for a large task or a task with a risk flag."], { size, weight: 700, fill: t.ink, lh: 1.4 }),
-    text(64, f1(fy + 40 + 2 * size * 1.4), ["A tiny task has no review and no QA: it is clean when its checks pass.", "The state tool checks each move. A new commit voids the verdicts.",
+    text(64, f1(fy + 40 + 2 * size * 1.4), ["A tiny task has no review and no QA: it is clean when its checks pass.", "A tiny arena has the code review.", "The state tool checks each move. A new commit voids the verdicts.",
       "Other states: designing and awaiting you (a large task's design), pr-ready", "(it waits for your merge), replan (a new plan), concluded (an investigation),", "and abandoned (from any state)."], { size, fill: t.muted, lh: 1.4 }),
   ].join("\n");
-  return panel(t, id, W, H, body, "A task's life: framed, briefed, building, reviewing, verifying, verified, merged. A product question holds the task until your answer. Findings to fix in review, or a QA failure, send it to repairing, then to review again: 3 rounds by default, then the task is held. Verified needs one clean cycle; autopilot merges after one for a tiny or small task, two for a large or risky one. A tiny task has no review and no QA: it is clean when its checks pass. Other states: designing, awaiting you, pr-ready, replan, concluded and abandoned.");
+  return panel(t, id, W, H, body, "A task's life: framed, briefed, building, reviewing, verifying, verified, merged. A product question holds the task until your answer. Findings to fix in review, or a QA failure, send it to repairing, then to review again: 3 rounds by default, then the task is held. Verified needs one clean cycle; autopilot merges after one for a tiny or small task, two for a large or risky one. A tiny task has no review and no QA: it is clean when its checks pass. A tiny arena has the code review. Other states: designing, awaiting you, pr-ready, replan, concluded and abandoned.");
 }
 
 /** The arena: one brief, N candidates on a mix of Claude models, a judge, one final version. */

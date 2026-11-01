@@ -2521,6 +2521,84 @@ async function roleEditFixture(t, role) {
   return { ...f, editInput: { ...patch(turns[1]), tool_input: { command: '*** Begin Patch\n*** Add File: example.txt\n+fixed\n*** End Patch' }, transcript_path: f.childTranscript() } };
 }
 
+test('T586: a native candidate and a native judge prepare, spawn and keep their target on their own branches', async t => {
+  for (const [role, args, name] of [
+    ['implementer', ['--branch', 'codex/t1-c1', '--candidate', '1'], 'codex_candidate'],
+    ['designer', ['--branch', 'codex/t1-c2', '--candidate', '2'], 'codex_design_candidate'],
+    ['arena-judge', ['--branch', 'codex/t1-judge'], 'codex_judge'],
+  ]) {
+    const f = await composedPolicyFixture(t);
+    f.assignmentCli('run', 'add', 'T1', '--role', role, ...args);
+    const input = { ...f.input, run: 'R4', role, name };
+    const prepared = f.api.prepareNativeTask(input, f.native(session), f.options);
+    assert.equal(prepared.decision, 'prepared', role);
+    assert.match(prepared.message, new RegExp(`Task branch: codex/t1-fixture\\nRun branch: ${args[1]}\\n`), role);
+    assert.equal(f.api.reservePreparedSpawn(f.spawnInput(name, `${name}-call`), f.native(session), f.options).decision, 'permit-once', role);
+    const saved = f.core.readAdmission(f.options.directory).preparations.find(row => row.id === prepared.preparation);
+    assert.deepEqual([saved.runTarget.taskBranch, saved.runTarget.runBranch], ['codex/t1-fixture', args[1]], role);
+  }
+});
+
+test('T586: a design arena has no task branch, and a run of a role with no arena branch stays on the branch of its task', async t => {
+  const f = await composedPolicyFixture(t);
+  const capture = (task, run, role) => f.assignmentTool.captureRunAssignment({ project: f.options.projectDirectory, task, run, role }, f.assignmentEnv);
+  // The design arena: T2 has no branch= before the judge's page goes on to the build.
+  f.assignmentCli('run', 'add', 'T2', '--role', 'designer', '--branch', 'codex/t2-c1', '--candidate', '1'); // R4
+  assert.deepEqual(capture('T2', 'R4', 'designer'), { task: 'T2', run: 'R4', role: 'designer', round: 0, taskBranch: '', runBranch: 'codex/t2-c1', candidate: '1' });
+  f.assignmentCli('run', 'done', 'R4', '--status', 'done');
+  f.assignmentCli('run', 'add', 'T2', '--role', 'arena-judge', '--branch', 'codex/t2-judge'); // R5
+  assert.equal(capture('T2', 'R5', 'arena-judge').runBranch, 'codex/t2-judge');
+  // A writer that is no candidate, and a reader that names a branch, still need the branch of their task.
+  f.assignmentCli('run', 'add', 'T1', '--role', 'pe', '--branch', 'codex/t1-other'); // R6
+  assert.throws(() => capture('T1', 'R6', 'pe'), /needs one active run on its current task, role, branch, and round/);
+  f.assignmentCli('task', 'add', '--priority', 'P2', '--title', 'No arena', '--size', 'small');
+  f.assignmentCli('task', 'T3', 'set', 'branch=codex/t3-main');
+  f.assignmentCli('run', 'add', 'T3', '--role', 'implementer', '--branch', 'codex/t3-other'); // R7
+  assert.throws(() => capture('T3', 'R7', 'implementer'), /needs one active run on its current task, role, branch, and round/);
+});
+
+test("T586: a candidate or a judge passes on a branch of its own task, and is refused on another task's branch", async t => {
+  const f = await composedPolicyFixture(t);
+  const capture = (task, run, role) => f.assignmentTool.captureRunAssignment({ project: f.options.projectDirectory, task, run, role }, f.assignmentEnv);
+  const refused = (task, run, role) => assert.throws(() => capture(task, run, role), /needs one active run on its current task, role, branch, and round/, `${run} ${role}`);
+  // T2 has no branch=. A name of T1, a task's own named branch, and a task that does not exist are all another task's.
+  f.assignmentCli('run', 'add', 'T2', '--role', 'implementer', '--branch', 'codex/t1-c9', '--candidate', '1'); // R4
+  refused('T2', 'R4', 'implementer');
+  f.assignmentCli('run', 'add', 'T2', '--role', 'designer', '--branch', 'codex/t1-fixture', '--candidate', '2'); // R5
+  refused('T2', 'R5', 'designer');
+  f.assignmentCli('run', 'add', 'T2', '--role', 'arena-judge', '--branch', 'codex/t5-judge'); // R6
+  refused('T2', 'R6', 'arena-judge');
+  // The shared case: T3 joins T1's branch. It may use that branch as its task branch, and a name of its own, but no other name of T1.
+  f.assignmentCli('task', 'add', '--priority', 'P2', '--title', 'Shared', '--size', 'small', '--add', 'arena', '--why', 'open design');
+  f.assignmentCli('task', 'T3', 'set', 'branch=codex/t1-fixture');
+  f.assignmentCli('run', 'add', 'T3', '--role', 'implementer', '--branch', 'codex/t3-c1', '--candidate', '1'); // R7
+  assert.equal(capture('T3', 'R7', 'implementer').runBranch, 'codex/t3-c1');
+  f.assignmentCli('run', 'add', 'T3', '--role', 'implementer', '--branch', 'codex/t1-c8', '--candidate', '2'); // R8
+  refused('T3', 'R8', 'implementer');
+  f.assignmentCli('run', 'done', 'R7', '--status', 'done');
+  f.assignmentCli('run', 'done', 'R8', '--status', 'failed');
+  f.assignmentCli('run', 'add', 'T3', '--role', 'arena-judge', '--branch', 'codex/t3-judge'); // R9
+  assert.equal(capture('T3', 'R9', 'arena-judge').runBranch, 'codex/t3-judge');
+  f.assignmentCli('run', 'done', 'R9', '--status', 'done');
+  // A second arena after a done judge has no open step, and its runs on their own branches still pass.
+  f.assignmentCli('run', 'add', 'T3', '--role', 'implementer', '--branch', 'codex/t3-c1-2', '--candidate', '1'); // R10
+  assert.equal(capture('T3', 'R10', 'implementer').runBranch, 'codex/t3-c1-2');
+  f.assignmentCli('run', 'done', 'R10', '--status', 'done');
+  f.assignmentCli('run', 'add', 'T3', '--role', 'arena-judge', '--branch', 'codex/t3-judge-2'); // R11
+  assert.equal(capture('T3', 'R11', 'arena-judge').runBranch, 'codex/t3-judge-2');
+});
+
+test("T586: a review reads its task's branch: it passes on the judge's branch, and a run on a candidate's branch is refused", async t => {
+  const f = await composedPolicyFixture(t);
+  const review = run => f.assignmentTool.captureReviewTarget({ project: f.options.projectDirectory, task: 'T1', run, role: 'code-reviewer', cycle: 1 }, f.assignmentEnv);
+  f.assignmentCli('run', 'add', 'T1', '--role', 'implementer', '--branch', 'codex/t1-c1', '--candidate', '1'); // R4
+  f.assignmentCli('run', 'add', 'T1', '--role', 'code-reviewer', '--branch', 'codex/t1-c1'); // R5
+  assert.throws(() => review('R5'), /The review needs an active run on its task's current branch and round/);
+  f.assignmentCli('run', 'add', 'T1', '--role', 'code-reviewer'); // R6, on the task's branch
+  assert.equal(review('R6').branch, 'codex/t1-fixture');
+  assert.equal(review('R6').sha, execFileSync('git', ['-C', f.options.projectDirectory, 'rev-parse', 'HEAD'], { encoding: 'utf8' }).trim());
+});
+
 test('native role edit enforcement denies read-only children before a permissive evaluator runs', async t => {
   for (const role of ['lead', 'pe', 'code-reviewer', 'security-reviewer', 'ux-reviewer', 'qa']) {
     const f = await roleEditFixture(t, role); let evaluated = 0;
@@ -3561,6 +3639,55 @@ test('native task creation: the next unrelated writer finishes a partial publica
   assert.deepEqual(f.tool.read(f.logbook, 'tasks').map(row => row.title), [f.input.title, 'unrelated']);
   assert.equal(f.tool.read(f.logbook, 'decisions').length, 1);
   assert.equal(readdirSync(receipts).length, 1);
+});
+
+test('T586: a tiny arena that an older sage saved settles across the update, with its saved route', async t => {
+  const tiny = { request: turns[1], title: 'Older tiny arena', size: 'tiny', risk: [], add: ['arena'], why: 'No clear answer' };
+  const older = text => text.replaceAll('build,code-review', 'build');
+  const route = (f, id = 'T1') => f.tool.read(f.logbook, 'tasks').find(row => row.id === id).route;
+  // The record as the older writer saved it: the same tables and receipt, with the route it had before T591.
+  const asOlder = record => {
+    const receipt = record.value.receipt ?? record.value;
+    receipt.result.route = older(receipt.result.route);
+    if (record.value.tables) for (const pair of Object.values(record.value.tables)) pair.after = older(pair.after);
+    record.hash = createHash('sha256').update(JSON.stringify(record.value)).digest('hex');
+    return JSON.stringify(record) + '\n';
+  };
+  await t.test('a retry reads the saved receipt', async t => {
+    const f = await taskCreationFixture(t);
+    assert.equal(route(f, f.create(tiny).task.id), 'arena,build,code-review');
+    const folder = join(f.logbook, 'task-requests'), file = join(folder, readdirSync(folder)[0]);
+    writeFileSync(file, asOlder(JSON.parse(readFileSync(file, 'utf8'))));
+    writeFileSync(join(f.logbook, 'tasks.tsv'), older(readFileSync(join(f.logbook, 'tasks.tsv'), 'utf8')));
+    const retry = f.create(tiny);
+    assert.deepEqual([retry.decision, retry.task.route], ['already-created', 'arena,build']);
+    assert.equal(route(f), 'arena,build');
+  });
+  await t.test('a pending marker settles on the next write, and the retry reads it', async t => {
+    const f = await taskCreationFixture(t);
+    const restore = await stopTaskWrite(t, f, 'tasks');
+    assert.throws(() => f.create(tiny), /Injected/);
+    restore();
+    const pending = join(f.logbook, 'review-pending.json');
+    writeFileSync(pending, asOlder(JSON.parse(readFileSync(pending, 'utf8'))));
+    f.cli('task', 'add', '--priority', 'P2', '--title', 'unrelated', '--size', 'tiny');
+    assert.equal(existsSync(pending), false);
+    assert.equal(route(f), 'arena,build');
+    assert.equal(f.create(tiny).decision, 'already-created');
+  });
+  await t.test('the older route is one exact form: a route with another change stays damaged', async t => {
+    const f = await taskCreationFixture(t);
+    const restore = await stopTaskWrite(t, f, 'tasks');
+    assert.throws(() => f.create(tiny), /Injected/);
+    restore();
+    const pending = join(f.logbook, 'review-pending.json'), record = JSON.parse(readFileSync(pending, 'utf8'));
+    record.value.receipt.result.route = 'arena,build,qa';
+    record.hash = createHash('sha256').update(JSON.stringify(record.value)).digest('hex');
+    const damaged = JSON.stringify(record) + '\n';
+    writeFileSync(pending, damaged);
+    assert.throws(() => f.create(tiny));
+    assert.equal(readFileSync(pending, 'utf8'), damaged);
+  });
 });
 
 test('native task creation refuses recovery after an unrelated partial-table edit', async t => {
@@ -5834,7 +5961,7 @@ for (const obstacle of ['none', 'old-head', 'configured-cycles', 'gate', 'runnin
 test('T584: a native move to verified refuses an open arena step, and goes on after a judge ended done', async t => {
   const f = await taskUpdateReadinessFixture(t);
   f.cli('run', 'add', 'T1', '--role', 'implementer', '--branch', 'codex/t1-c1', '--candidate', '1');
-  assert.throws(() => f.update(), /required clean checks/); // a native refusal has only its fixed text
+  assert.throws(() => f.update(), error => error.code === 'arena-open' && /Finish an arena-judge run on its own branch/.test(error.message)); // T586: the fixed text names the way out
   assert.equal(f.snapshot().task.state, 'verifying');
   assert.equal(existsSync(join(f.logbook, 'review-pending.json')), false);
   f.cli('run', 'add', 'T1', '--role', 'arena-judge', '--branch', 'codex/t1-judge');
@@ -5850,7 +5977,7 @@ test('T591: a native move to concluded refuses an open arena step, and goes on a
   const { updateNativeTask } = await import(pathToFileURL(join(f.plugin, 'runtime/task-update.mjs')));
   const stateOf = () => f.tool.readTaskSnapshot({ project: f.options.projectDirectory, task: 'T2' }, f.env);
   const conclude = () => updateNativeTask({ request: 'a7777777-7777-4777-8777-777777777777', task: 'T2', version: stateOf().version, changes: { state: 'concluded' } }, f.native(session), f.options);
-  assert.throws(conclude, /not allowed from the current task state/); // a native refusal has only its fixed text
+  assert.throws(conclude, error => error.code === 'arena-open' && /Finish an arena-judge run on its own branch/.test(error.message)); // T586: the fixed text names the way out
   assert.equal(stateOf().task.state, 'verifying');
   assert.equal(existsSync(join(f.logbook, 'review-pending.json')), false);
   f.cli('run', 'add', 'T2', '--role', 'arena-judge', '--branch', 'codex/t2-judge');

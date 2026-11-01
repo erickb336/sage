@@ -419,6 +419,101 @@ test("T83 sample investigation and independent evidence check retain real output
   console.log("T83 SAMPLE: investigate R1 answer=42; independent evidence-review R2 PASS; exact reports retained; chief evidence-clean without SHA; T1 concluded; merge refused");
 });
 
+test("T586 SYNTHETIC: candidates, a judge and the landing play through the Codex path, with fixture commits and fixture reports", async t => {
+  const s = await connect(t);
+  const { briefHook } = await import(pathToFileURL(join(s.dir, "plugin/hooks/brief-hook.mjs")));
+  const { reportGate } = await import(pathToFileURL(join(s.dir, "plugin/hooks/report-gate.mjs")));
+  const { gate } = await import(pathToFileURL(join(s.dir, "plugin/hooks/gate-hook.mjs")));
+  const { tool } = await import(pathToFileURL(join(s.dir, "plugin/skills/sage/sage.mjs")));
+  const git = (...args) => execFileSync("git", ["-C", s.project, "-c", "user.name=t", "-c", "user.email=t@t", ...args], { encoding: "utf8" }).trim();
+  const commit = (message) => { git("commit", "-q", "--allow-empty", "-m", message); return git("rev-parse", "HEAD"); };
+  git("checkout", "-q", "-b", "main");
+  const base = commit("SAMPLE base");
+  const book = (await s.call("init")).slice(8);
+  assert.match(await s.call("task_add", { title: "SAMPLE: arena", size: "small", add: "arena", why: "no clear answer", priority: "P2" }), /route arena,build,code-review,qa/);
+  const pages = await s.call("pages", { task: "T1" });
+  assert.equal(typeof pages, "string");
+  assert.equal(await s.call("log", { task: "T1", decision: "SAMPLE rubric: smallest change", why: "arena rubric" }), "logged");
+
+  // The chief's hook decisions, by thread: the root thread and a child under its sage task name.
+  const hookEvent = (toolName, input, transcript, cwd = s.project) => ({ hook_event_name: "PreToolUse", session_id: "019a0000-0000-7000-8000-0000000000aa", turn_id: "t1",
+    transcript_path: transcript, cwd, model: "m", permission_mode: "default", tool_name: toolName, tool_use_id: `hook_${toolName}`, tool_input: input,
+    ...(transcript ? { agent_id: "child" } : {}) });
+  const sageOn = { mode: () => ({ sage: true, autopilot: false }), env: s.env };
+  const USAGE = { usage: "unavailable", "usage-source": "codex collaboration-tools", "usage-evidence": "SAMPLE: wait_agent gives no token count" };
+  const report = (run, branch, sha) => `STATUS done\nRESULT SYNTHETIC SAMPLE ${run}\nEVIDENCE SYNTHETIC SAMPLE ${run}: fixture commit\nFINDINGS none\nQUESTIONS none\nNOT VERIFIED actual role dispatch, installed hooks\nBRANCH ${branch} head ${sha}\n`;
+
+  // One agent's life as the chief plays it: run_add, the spawn, the start hook, its commit, the stop hook, pages, run_done.
+  const play = async (role, branch, candidate, work) => {
+    const added = await s.call("run_add", { task: "T1", role, branch, "usage-interface": "collaboration-tools", ...(candidate ? { candidate } : {}) });
+    const run = /^R\d+/.exec(added)[0], name = `sage_${role.replaceAll("-", "_")}_t1_${run.toLowerCase()}`;
+    assert.equal(await gate(hookEvent("collaborationspawn_agent", { task_name: name, fork_turns: "none", message: "SAMPLE" }, null), sageOn), undefined, "the chief spawns it");
+    // The native run check reads the same logbook: this run's branch differs from the task's, and it passes.
+    const target = tool.captureRunAssignment({ project: s.project, task: "T1", run, role }, s.env);
+    assert.deepEqual([target.runBranch, target.candidate], [branch, String(candidate ?? "")]);
+    const file = join(s.dir, `${run}-synthetic-transcript.jsonl`);
+    writeFileSync(file, JSON.stringify({ type: "session_meta", payload: { id: `sample-${run}`, agent_path: `/root/${name}`, source: { subagent: { thread_spawn: {} } } } }) + "\n");
+    briefHook({ hook_event_name: "SubagentStart", session_id: "sample-root", transcript_path: file, cwd: s.project }, s.env);
+    // The agent may edit, starts no agent and writes no logbook.
+    const edit = await gate(hookEvent("apply_patch", { command: "*** Begin Patch\n*** Add File: sample.txt\n+SAMPLE\n*** End Patch" }, file), sageOn);
+    assert.equal(edit, undefined, `${role} writes its own branch`);
+    assert.match((await gate(hookEvent("collaborationspawn_agent", { task_name: "sage_qa_t1_r9", message: "SAMPLE" }, file), sageOn)).hookSpecificOutput.permissionDecisionReason, /role agents start no agents/);
+    assert.match((await gate(hookEvent("mcp__sage__run_done", { project: s.project, run, status: "done" }, file), sageOn)).hookSpecificOutput.permissionDecisionReason, /only the chief records the logbook/);
+    const sha = work();
+    const text = report(run, branch, sha);
+    assert.deepEqual(reportGate({ hook_event_name: "SubagentStop", stop_hook_active: false, agent_transcript_path: file, cwd: s.project, last_assistant_message: text }, s.env), {});
+    const kept = JSON.parse(readFileSync(join(book, "kept", `${run}.json`), "utf8"));
+    assert.deepEqual([kept.text, kept.sha, kept.role], [text, sha, role], "the report is kept with the head of its own branch");
+    await s.call("pages", { task: "T1", run, text });
+    assert.equal(await s.call("run_done", { run, status: "done", report: join(pages, `${run}-report.md`), ...USAGE }), `${run} done`);
+    return { run, sha };
+  };
+  const onBranch = (name, from, message) => () => { git("checkout", "-q", "-b", name, from); return commit(message); };
+
+  // A run with no candidate number has no place while the step is open.
+  assert.match((await s.call("run_add", { task: "T1", role: "implementer", branch: "sage/t1-extra" })).error, /arena step is open/);
+  const one = await play("implementer", "sage/t1-c1", 1, onBranch("sage/t1-c1", base, "SAMPLE candidate 1"));
+  const two = await play("implementer", "sage/t1-c2", 2, onBranch("sage/t1-c2", base, "SAMPLE candidate 2"));
+  assert.notEqual(one.sha, two.sha);
+  writeFileSync(join(pages, `${one.run}-artifact.diff`), "SAMPLE DATA\n");
+  assert.match(await s.call("pages", { task: "T1", record: join(pages, `${one.run}-artifact.diff`) }), /sha256 [0-9a-f]{64}$/);
+
+  // Before a judge ends done, nothing lands, also with a checks verdict that a chief records on a candidate's head by mistake.
+  await s.call("verdict", { task: "T1", kind: "checks-pass", sha: one.sha, pr: 7 });
+  assert.match((await s.call("merge_check", { sha: one.sha, pr: 7, head: "sage/t1-c1" })).error, /a candidate's branch never merges/);
+  assert.match((await s.call("merge_check", { sha: one.sha, pr: 7, head: "sage/t1-other" })).error, /arena step is open[\s\S]*Finish a judge/);
+
+  // The judge: the chief names its branch, and it refuses a candidate's branch. The judge grafts from the base's head.
+  assert.match((await s.call("run_add", { task: "T1", role: "arena-judge", branch: "sage/t1-c1" })).error, /never shares a branch with a candidate/);
+  assert.match(await s.call("task_set", { task: "T1", fields: { branch: "sage/t1-judge" } }), /sage\/t1-judge/);
+  const judge = await play("arena-judge", "sage/t1-judge", undefined, onBranch("sage/t1-judge", one.sha, "SAMPLE graft from candidate 2"));
+  assert.equal(git("merge-base", "--is-ancestor", one.sha, judge.sha), "", "the judge's branch starts at the base's head");
+  assert.equal(git("rev-parse", "sage/t1-c1"), one.sha, "a candidate's branch stays as it is");
+
+  // The chief opens the pull request from the judge's branch (a fixture number here) and moves the task one state at a
+  // time. The reviews read the judge's branch, and it lands. A candidate's head never does.
+  const pr = 7;
+  for (const fields of [{ state: "briefed" }, { state: "building" }, { state: "reviewing", pr: String(pr) }]) assert.match(await s.call("task_set", { task: "T1", fields }), /^T1 /);
+  for (const [kind, role] of [["review-clean", "code-reviewer"], ["qa-pass", "qa"]]) {
+    const run = /^R\d+/.exec(await s.call("run_add", { task: "T1", role, "usage-interface": "collaboration-tools" }))[0];
+    assert.equal(tool.captureReviewTarget({ project: s.project, task: "T1", run, role, cycle: 1 }, s.env).sha, judge.sha, "a review reads the judge's head");
+    const name = `sage_${role.replaceAll("-", "_")}_t1_${run.toLowerCase()}`, file = join(s.dir, `${run}-synthetic-transcript.jsonl`);
+    writeFileSync(file, JSON.stringify({ type: "session_meta", payload: { id: `sample-${run}`, agent_path: `/root/${name}`, source: { subagent: { thread_spawn: {} } } } }) + "\n");
+    briefHook({ hook_event_name: "SubagentStart", session_id: "sample-root", transcript_path: file, cwd: s.project }, s.env);
+    const text = `STATUS done\nRESULT CLEAN\nEVIDENCE SYNTHETIC SAMPLE ${run}: fixture check\nFINDINGS none\nQUESTIONS none\nNOT VERIFIED installed hooks\nBRANCH sage/t1-judge head ${judge.sha}\n`;
+    assert.deepEqual(reportGate({ hook_event_name: "SubagentStop", stop_hook_active: false, agent_transcript_path: file, cwd: s.project, last_assistant_message: text }, s.env), {});
+    await s.call("pages", { task: "T1", run, text });
+    assert.equal(await s.call("run_done", { run, status: "done", report: join(pages, `${run}-report.md`), ...USAGE }), `${run} done`);
+    await s.call("verdict", { task: "T1", kind, sha: judge.sha, run, pr, cycle: 1 });
+  }
+  await s.call("verdict", { task: "T1", kind: "checks-pass", sha: judge.sha, pr, cycle: 1 });
+  assert.match(await s.call("task_set", { task: "T1", fields: { state: "verifying" } }), /^T1 verifying/);
+  assert.match(await s.call("task_set", { task: "T1", fields: { state: "verified" } }), /^T1 verified/);
+  assert.match((await s.call("merge_check", { sha: one.sha, pr, head: "sage/t1-c1" })).error, /a candidate's branch never merges/);
+  assert.match(await s.call("merge_check", { sha: judge.sha, pr, head: "sage/t1-judge" }), /T1 may merge/);
+  console.log("T586 SYNTHETIC SAMPLE: candidates R1 and R2 on their own branches → judge R3 on its own branch → review and QA of the judge's head → merge check passes for the judge's branch and refuses a candidate's; fixture commits and reports; no installed Codex, no real agent, no real pull request");
+});
+
 test("T85 synthetic designer prototype, separate PE report and chief artifact records preserve authority", async t => {
   const s = await connect(t);
   const book = (await s.call("init")).slice(8);

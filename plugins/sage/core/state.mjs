@@ -249,12 +249,9 @@ const landingBar = (task, runs) => candidateBar(task, task.branch, runs.filter(i
 /**
  * A planned move that the arena refuses: to verified, by what would land; to concluded, by the open step, because an
  * investigation lands nothing. changes are the command's key=value pairs. Planning replays saved updates, so each new
- * command calls this, and planTaskChanges does not.
+ * command calls this, and planTaskChanges does not. It gives the reason, or "".
  */
-const barMove = (changes, { task, runs }) => {
-  const bar = changes.includes("state=verified") ? landingBar(task, runs) : changes.includes("state=concluded") && openBar(task, runs);
-  if (bar) refuse(bar);
-};
+const moveBar = (changes, { task, runs }) => (changes.includes("state=verified") ? landingBar(task, runs) : changes.includes("state=concluded") ? openBar(task, runs) : "");
 /** An arena candidate's number as the table stores it: a whole number from 1, after the same cleaning as every cell. */
 const candidateOf = (value) => {
   const k = cell(value);
@@ -705,7 +702,7 @@ function updateRequestedTask(input, env, coordination) {
     const at = now();
     const changes = Object.entries(reference.changes).map(([key, value]) => `${key}=${value}`);
     const preliminary = planTaskChanges(before, reference.task, changes, at, facts);
-    barMove(changes, preliminary);
+    if (moveBar(changes, preliminary)) throw new TaskUpdateError("arena-open"); // a native refusal has only its fixed text
     if (["verified", "pr-ready"].includes(preliminary.task.state)) {
       const cfg = config(env, dir);
       if (Object.values(cfg).includes("invalid")) throw new TaskUpdateError("readiness-config");
@@ -753,11 +750,18 @@ function savedWriteColumns(tables, deny) {
   }));
 }
 
-/** Validate saved task publication as one pure update before any recovery write. */
+/** The frames that a saved create may hold. Before T591, a tiny arena's route had the code review only when the request added it. */
+function savedFrames(id, { title, size, risk, add }) {
+  const current = taskFrame(id, title, size, risk, add);
+  if (size !== "tiny" || !add.includes("arena") || add.includes("code-review")) return [current];
+  return [current, { ...current, route: list(current.route).filter(block => block !== "code-review").join(",") }];
+}
+
+/** Validate saved task publication as one pure update before any recovery write. A replay keeps the route of its writer. */
 function validateTaskWrite({ reference, result }, tables) {
   const deny = () => refuse("The saved task update is damaged. No task table changed.");
   if (!result || typeof result.id !== "string" || !/^T[1-9]\d*$/.test(result.id)
-    || JSON.stringify(result) !== JSON.stringify(taskFrame(result.id, reference.title, reference.size, reference.risk, reference.add))) deny();
+    || !savedFrames(result.id, reference).some(frame => JSON.stringify(frame) === JSON.stringify(result))) deny();
   if (!tables) return;
   const columns = savedWriteColumns(tables, deny);
   const rows = (table, text) => {
@@ -1407,7 +1411,11 @@ function reviewHead(project, branch, env) {
   return git(["-C", project, "rev-parse", "--verify", `refs/heads/${branch}^{commit}`], clean).trim();
 }
 
-/** Validate recorded work immediately before provider preparation or dispatch. This grants no role authority. */
+/**
+ * Validate recorded work immediately before provider preparation or dispatch. This grants no role authority. An arena's
+ * candidate and its judge each work on their own branch, so only they may differ from the task's branch, and only on a
+ * branch of that task. A branch that another task names is not theirs, as mayName alone would let it be.
+ */
 function captureRunAssignment(input, env = process.env) {
   const keys = ["project", "task", "run", "role"];
   const deny = () => refuse("The assignment needs one active run on its current task, role, branch, and round.");
@@ -1430,7 +1438,8 @@ function captureRunAssignment(input, env = process.env) {
       || run.report || run.ended || !/^(0|[1-9]\d*)$/.test(task.round)
       || !Number.isSafeInteger(Number(task.round))
       || (task.branch && !mayName(all, task, branchOf(task.branch)))
-      || (run.branch && run.branch !== task.branch) || (WRITERS.includes(run.role) && !run.branch)) deny();
+      || (run.branch && run.branch !== task.branch && !((isCandidate(run) || run.role === "arena-judge") && branchOfTask(task, run.branch)))
+      || (WRITERS.includes(run.role) && !run.branch)) deny();
     if (WRITERS.includes(run.role) && read(dir, "runs").some(row => row.id !== run.id
       && row.status === "running" && WRITERS.includes(row.role) && sameBranch(row.branch, run.branch))) deny();
     return { task: task.id, run: run.id, role: run.role, round: Number(task.round),
@@ -2803,7 +2812,8 @@ function act(cmd, pos, opt, dir, env, skip, project) {
       if (id === "set") {
         const before = { tasks, runs: read(dir, "runs"), decisions: read(dir, "decisions") };
         const planned = planTaskChanges(before, task.id, more, now(), { ...Object.fromEntries(["findings", "ledger", "gates", "programs"].map((t) => [t, read(dir, t)])), maxRounds: config(env, dir).max_rounds });
-        barMove(more, planned); // after the plan, so that a branch= in the same command counts, in either order
+        const bar = moveBar(more, planned); // after the plan, so that a branch= in the same command counts, in either order
+        if (bar) refuse(bar);
         if (JSON.stringify(planned.decisions) !== JSON.stringify(before.decisions)) write(dir, "decisions", planned.decisions);
         if (JSON.stringify(planned.runs) !== JSON.stringify(before.runs)) write(dir, "runs", planned.runs);
         write(dir, "tasks", planned.tasks);

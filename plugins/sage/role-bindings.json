@@ -8,7 +8,9 @@
     "PROJECT_GUIDANCE": "`AGENTS.md`, `CLAUDE.md` or `README.md`"
   },
   "designer": {},
-  "arena-judge": {},
+  "arena-judge": {
+    "JUDGE_BUILD_DELIVERY": "push your branch and open a draft pull request from it, as an implementer does."
+  },
   "code-reviewer": {},
   "security-reviewer": {},
   "ux-reviewer": {},
