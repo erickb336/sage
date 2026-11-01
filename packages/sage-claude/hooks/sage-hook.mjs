@@ -644,15 +644,15 @@ const canonicalRoots = (roots) => roots.filter((_, k) => k % 2 === 1);
 /** A cd to the home folder, after which a relative .sage is the home's. */
 const CD_HOME = /(?:^|[\s;&|(])(?:cd|pushd)(?:[ \t]+(?:~|\$\{?home\}?)\/?)?[ \t]*(?:$|[;&|)])/m;
 /** Does a word name the .sage folder of the home folder? A project's own .sage folder, from the cwd, stays free. */
-const homeSage = ({ low, parts }, text) => {
+const homeSage = ({ low, parts }, cdHome) => {
   const [first = "", second = ""] = parts.filter((p) => p !== ".");
-  return (HOME.test(low) && names(second, ".sage")) || (CD_HOME.test(text) && first.startsWith(".") && names(first, ".sage"));
+  return (HOME.test(low) && names(second, ".sage")) || (cdHome && first.startsWith(".") && names(first, ".sage"));
 };
 /** The word that names a root: its path or a variable that sets it, .claude then sage in one path, or the home's .sage, in any case or as a pattern. */
 function namesRoot(text, words, roots, cwd) {
   const low = fold(unquote(text));
-  const root = roots.find((r) => low.includes(r));
-  return usesRootVar(text, canonicalRoots(roots), cwd) ?? (root && (words.find((w) => w.low.includes(root))?.word ?? root)) ?? words.find((w) => homeSage(w, low) || w.parts.some((p, k) => names(p, ".claude") && names(w.parts[k + 1] ?? "", "sage")))?.word;
+  const root = roots.find((r) => low.includes(r)), cdHome = CD_HOME.test(low); // once: a text may have a million words
+  return usesRootVar(text, canonicalRoots(roots), cwd) ?? (root && (words.find((w) => w.low.includes(root))?.word ?? root)) ?? words.find((w) => homeSage(w, cdHome) || w.parts.some((p, k) => names(p, ".claude") && names(w.parts[k + 1] ?? "", "sage")))?.word;
 }
 /**
  * The first use in the text of a variable that sets a root (sageRoot: SAGE_HOME, CLAUDE_CONFIG_DIR; sharedRoot: SAGE_SHARED_HOME), or undefined.
