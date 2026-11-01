@@ -50,7 +50,8 @@ const FOUND = ["findings", "qa-fail"];
 const NOT_CLEAN = ["checks-fail", ...FOUND];
 const CLEAN = Object.values(VERDICT).filter((k) => k !== "checks-pass");
 const KINDS = [...Object.values(VERDICT), ...NOT_CLEAN];
-const WRITERS = ["implementer", "designer"];
+const CANDIDATES = ["implementer", "designer"];
+const WRITERS = [...CANDIDATES, "arena-judge"];
 /** The most running lead runs in one logbook: the owner's limit of 3 leads per project (#62, section 6). The hook holds the same limit for the agents. */
 const LEADS = 3;
 /** The roles of a run: sage's child roles (roles.mjs), and the steps of an investigation, whose runs the board reads by the step's name. */
@@ -210,6 +211,8 @@ const ofTask = (task, name) => BRANCH.test(name) && new RegExp(`^(?:[A-Za-z0-9_-
  */
 /** Is it the same branch: letters in any case, as ofTask reads a task's name (R1740-3). */
 const sameBranch = (a, b) => typeof a === "string" && typeof b === "string" && a.toLowerCase() === b.toLowerCase();
+/** A run of an arena's candidate, on its own branch. A review run may carry a candidate's number, but it writes nothing. */
+const isCandidate = (run) => !!run.candidate && !!run.branch && CANDIDATES.includes(run.role);
 const adoptionOf = task => {
   if (!task.adoption) return null;
   let a;
@@ -806,8 +809,13 @@ function runFrame(dir, task, role, branch, candidate, env) {
   }
   if (WRITERS.includes(role)) {
     if (!branch) refuse(`a ${role} run needs --branch`);
-    const other = read(dir, "runs").find(row => row.branch === branch && row.status === "running" && WRITERS.includes(row.role));
+    const there = read(dir, "runs").filter(row => sameBranch(row.branch, branch));
+    const other = there.find(row => row.status === "running" && WRITERS.includes(row.role));
     if (other) refuse(`${other.id} (${other.role}) still writes ${branch}, and a branch has one writer. Finish that run first (sage run done ${other.id} --status done, blocked, question or failed), or give this run another branch.`);
+    // An arena's branches are its evidence, so they stay apart after a run ends too (T584).
+    const judge = role === "arena-judge";
+    const clash = judge ? there.find(isCandidate) : candidate && there.find(row => row.role === "arena-judge" || (isCandidate(row) && row.candidate !== candidate));
+    if (clash) refuse(`${clash.id} (${clash.role}${isCandidate(clash) ? `, candidate ${clash.candidate}` : ""}) is on ${branch}, and ${judge || !isCandidate(clash) ? "an arena's judge never shares a branch with a candidate" : "each candidate of an arena has its own branch"}. Give this run a new branch. Nothing changed.`);
   }
   return { id: nextId(dir, "R"), task: task.id, role, round: task.round, candidate, branch,
     status: "running", started: now(), model: modelFor(role, task.size, candidate, config(env), task.risk) };
@@ -1325,7 +1333,7 @@ function captureRunAssignment(input, env = process.env) {
       || (task.branch && !mayName(all, task, branchOf(task.branch)))
       || (run.branch && run.branch !== task.branch) || (WRITERS.includes(run.role) && !run.branch)) deny();
     if (WRITERS.includes(run.role) && read(dir, "runs").some(row => row.id !== run.id
-      && row.status === "running" && WRITERS.includes(row.role) && row.branch === run.branch)) deny();
+      && row.status === "running" && WRITERS.includes(row.role) && sameBranch(row.branch, run.branch))) deny();
     return { task: task.id, run: run.id, role: run.role, round: Number(task.round),
       taskBranch: task.branch, runBranch: run.branch, candidate: run.candidate };
   });
@@ -2080,6 +2088,7 @@ function assessMerge(sha, env, { cycles, pr, readOnly, head, project }, logbook 
       const ofPr = pr && (mine === undefined || basename(dir) === mine) ? prHistory(pr, tasks, decisions, ledger) : new Set();
       // Each table is grouped by task once, so thousands of tasks on one SHA take linear time, not the square of it.
       const [byId, ownOf, findingsOf, runsOf] = [new Map(tasks.map((t) => [t.id, t])), group(rows), group(findings), group(runs)];
+      const candidates = runs.filter(isCandidate);
       // A task owns the head branch by its branch=, by its name, or by a run of it on that branch: a task that ran work
       // there and then moved to another branch still owns it (R1709-1).
       const ranOn = new Map();
@@ -2108,7 +2117,11 @@ function assessMerge(sha, env, { cycles, pr, readOnly, head, project }, logbook 
         // would pass, so a refusal still names an open finding first.
         const live = (runsOf.get(id) ?? []).filter((r) => r.status === "running" && CHECKERS.includes(r.role)).map((r) => `${r.id} (${r.role})`);
         const busy = verdict.ok && live.length > 0 && { ok: false, reason: `${id} has a review or QA run that still runs: ${live.join(", ")}. End it with its report's findings recorded, then check again.` };
-        return { dir, id, ofPr: ofPr.has(id), owns: owns(id), back: !owns(id) && back(id), own: own.length, ...verdict, ...busy, ...held };
+        // A candidate's branch never lands (T584). The rule reads the branch, not the SHA: a judge with no graft keeps the
+        // candidate's commit on its own branch. With no --head, the task's branch= says what would land.
+        const landing = head ?? task?.branch, entry = candidates.find((r) => sameBranch(r.branch, landing));
+        const arena = entry && { ok: false, reason: `${id} would land ${landing}, the branch of arena candidate ${entry.candidate} (${entry.id}), so the merge check refuses: a candidate never merges. Only the judge's branch merges: open the pull request from it, and set branch= of ${id} to it.` };
+        return { dir, id, ofPr: ofPr.has(id), owns: owns(id), back: !owns(id) && back(id), own: own.length, ...verdict, ...busy, ...arena, ...held };
       });
       // A task with an unmet wait does not merge. A wait on a task of the same PR is met when that task passes in this merge
       // too, its own waits included: else two tasks of one PR could never merge. The same PR is the PR of --pr for both

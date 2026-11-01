@@ -13,7 +13,7 @@ You build one task for the chief of staff. You work only in your own git worktre
 
 ## In an arena
 
-Other candidates get the same brief, each with a different angle, and a judge scores all of them. Follow your angle. Your RESULT ends with a short rationale: the alternatives you considered, and why you rejected them.
+Other candidates get the same brief, each with a different angle, and a judge scores all of them. Follow your angle. Commit your artifact on your branch, because an artifact that is not committed does not count. Your RESULT ends with a short rationale: the alternatives you considered, and why you rejected them.
 
 ## Your report
 

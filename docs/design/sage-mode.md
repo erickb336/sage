@@ -94,7 +94,7 @@ The chief of staff never edits files. It writes briefs, records verdicts and ask
 | **security-reviewer** | Input at the boundaries, injection, secrets, access, dependencies | No | boundary-discipline |
 | **ux-reviewer** | The flow, the states, the copy and accessibility, against the design | No | experience-first |
 | **qa** | Runs the checks and the real app, tries to break it. Verdict: PASS or FAIL with evidence | No | prove-it-works, test-behaviour |
-| **arena-judge** | Scores an arena's candidates against the rubric, picks the base, grafts the best parts of the others into it, and checks the result (Opus) | The base branch | exhaust-the-design-space, experience-first, laziness, prove-it-works |
+| **arena-judge** | Scores an arena's candidates against the rubric, picks the base, grafts the best parts of the others into it, and checks the result (Opus) | Its own new branch | exhaust-the-design-space, experience-first, laziness, prove-it-works |
 | **lead** | Runs one task's pull request from the build to its clean cycles: briefs the implementer, runs the reviews and QA in cycles and the repair rounds, records its own task's runs, findings and verdicts, and reports once to the chief | No: the state tool, on its own task only | never-block-on-the-human, prove-it-works |
 
 <a id="lead-loop"></a>
@@ -157,9 +157,9 @@ For a design with no clear answer, or for an implementation that's hard to undo,
 
 1. **The rubric first.** The chief writes 3 to 6 criteria that a judge can grade. The candidates don't see it.
 
-2. **N candidates** (3 by default) get the same brief with a different angle each, on a mix of models (`arena_models`, by default Opus, Sonnet, Sonnet), each in its own worktree. Each ends with a rationale: what it considered and rejected.
+2. **N candidates** (3 by default) get the same brief with a different angle each, on a mix of models (`arena_models`, by default Opus, Sonnet, Sonnet), each on its own branch, in its own worktree. Each commits its artifact, and the chief records it with `pages`. Each ends with a rationale: what it considered and rejected.
 
-3. **The arena judge** (Opus) scores each candidate, picks the base, and grafts the best parts of the others into it by hand. If all candidates converge, it keeps the shared shape. If they diverge wildly, it stops: the chief re-frames the brief once, then asks you.
+3. **The arena judge** (Opus) scores each candidate and picks the base. The chief names a new branch at `run add`. The judge makes that branch from the base's head, and it stops if the branch exists. It grafts the best parts of the others onto that branch by hand. If all candidates converge, it keeps the shared shape. If they diverge wildly, it stops: the chief re-frames the brief once, then asks you.
 
 4. **The final version** then goes through reviews and QA like any build.
 
@@ -171,12 +171,12 @@ flowchart TB
   C1 --> J{"The arena judge scores against the rubric"}
   C2 --> J
   C3 --> J
-  J -->|"base + grafts, on the base branch"| G["The arena judge makes the final version"]
+  J -->|"base + grafts, on the judge's own branch"| G["The arena judge makes the final version"]
   G --> N["Normal route: review, QA, land"]
   J -.->|"screenshots and scores"| T[("Trail")]
 ```
 
-Candidates never merge. Only the final version goes on. Their branches are deleted after the PE's verdict, and their screenshots stay in the trail.
+Candidates never merge. Only the judge's branch goes on. Branches and pages stay until you delete them, and worktrees go at the end of the task.
 
 | Question | Design |
 | --- | --- |
@@ -185,7 +185,7 @@ Candidates never merge. Only the final version goes on. Their branches are delet
 | How are the candidates different? | The chief gives each one an angle, for example "fewest taps", "most control", "reuse existing screens". N copies of one prompt give N similar answers |
 | What does the judge return? | A score per candidate against each rubric line, the base, each graft with its source, what it rejected, and the check of the final version |
 | For a design, who decides? | The arena judge makes the final version. You then keep, change or drop it, as in every design round |
-| Why is this safe now? | Orchestrator removed best-of copies (ORC-025) because they caused many edge-case bugs in the app's state. Here a candidate is only a throwaway branch and a report, and nothing else depends on it |
+| Why is this safe now? | Orchestrator removed best-of copies (ORC-025) because they caused many edge-case bugs in the app's state. Here a candidate is only a branch and a report, and nothing else depends on it |
 
 <a id="life"></a>
 
@@ -313,7 +313,8 @@ About 2,000 tokens or fewer, with long material in files. The hook reads a revie
 | An agent never merges. The merge rule and the push rule hold for every command tool: Bash, Monitor, PowerShell and the terminal tool | **Code:** the hook refuses a merge from any agent, whatever the tool | A second tool must not be a way around the rule |
 | Only a message of the owner that is exactly a switch phrase switches sage mode or autopilot: the whole message, in any letter case, with at most one full stop. A near miss switches nothing and gives the chief a note with the exact phrase to ask for | **Code:** the hook and the shared mode policy | Your decision: a deterministic rule never guesses from free text, and an agent's text never turns a mode on. Text in the shape of a queued message can turn autopilot off, which fails safe |
 | Autopilot merges only through a pull request, after the set number of clean cycles on the current head SHA | **Code:** the same hook counts the cycles in the ledger | Your decision. Merge only the checked commit |
-| An arena candidate never merges, and its branch is deleted after the verdict | **Code:** the state tool marks candidates; the merge check refuses them | Keep best-of simple (ORC-025) |
+| An arena candidate never merges, and its branch stays until you delete it | **Code:** the state tool marks candidates (`--candidate`); the merge check refuses a candidate's branch | Keep best-of simple (ORC-025) |
+| The arena judge works on its own new branch, and candidate branches stay apart | **Code:** a judge needs `--branch`. The state tool refuses a judge on a candidate's branch and a candidate on a judge's or another candidate's branch, in both orders, also after a run ended | A candidate's branch is evidence, so no run changes it |
 | A fresh agent for each round, with the consolidated brief | **Prompt:** | Resumed agents drop directives (pstack) |
 | Product questions go to you, with a default | **Prompt:** + the QUESTIONS report field | Orchestrator's designer invented answers |
 | A PE pass checks its earlier asks first. Only new risks may add asks | **Prompt:** in v1 | PE loop convergence (ORC-029) |

@@ -38,7 +38,7 @@ The state lives in the logbook: plain files in `~/.claude/sage/<project>-<hash>/
 | **QA** | Runs the checks and the real app, and tries to break it |
 | **Arena judge** | Scores an arena's candidates and grafts the best parts into one |
 
-Three agents change files: the designer and the implementer, each in its own git worktree, and the arena judge, which writes the final version. The others change no files.
+Three agents change files, each in its own git worktree: the designer, the implementer and the arena judge, which writes the final version on its own new branch. The others change no files.
 
 Only one agent writes on a branch at a time. Reviewers start fresh, so they don't share the builder's blind spots.
 
@@ -83,6 +83,10 @@ When a design has no clear answer, the chief can run an **arena**. You can also 
 </picture>
 </a>
 
-N candidates (3 by default) get the same brief, each with a different angle. A judge scores them against a rubric that they do not see, and grafts the best parts into one final version.
+N candidates (3 by default) get the same brief, each with a different angle and its own branch. Each commits its artifact.
 
-That version goes through reviews and QA like any build. The candidates never merge.
+A judge scores them against a rubric that they do not see. It makes a new branch from the best candidate, and grafts the best parts of the others into one final version.
+
+That version goes through reviews and QA like any build. The candidates never merge: the merge check refuses a candidate's branch.
+
+Branches and pages stay until you delete them. Worktrees go at the end of the task.

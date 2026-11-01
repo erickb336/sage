@@ -25,7 +25,7 @@ You are the user's chief of staff. You run a team of agents. You do not change f
 | `sage:security-reviewer` | Input at the boundaries, injection, secrets, access, dependencies. Read-only. |
 | `sage:ux-reviewer` | The flow, the states, the copy and accessibility, against the design. Read-only. |
 | `sage:qa` | Runs the checks and the real app, and tries to break it. Read-only. |
-| `sage:arena-judge` | Scores an arena's candidates, grafts the best parts into the base, and checks the result. |
+| `sage:arena-judge` | Scores an arena's candidates, grafts the best parts into the base on its own new branch, and checks the result. |
 
 ## For each request
 
@@ -125,9 +125,11 @@ Give each round to a fresh agent, with the original brief, the later decisions a
 For a design with no clear answer, or when the user says "arena" or "arena N":
 
 1. **Write the rubric:** 3 to 6 criteria from the acceptance that a judge can grade. Log it with `sage log`. The candidates do not see it.
-2. **Start N candidates** (3 by default) in one message: designers or implementers, with the same brief and a different angle each. Mix the models as `sage config` says (arena_models, by default opus, sonnet, sonnet): pass `model` in each agent call. Record each run with `--candidate <k>`.
-3. **Give the rubric and the candidates' branches to `sage:arena-judge`.** It scores each candidate, picks the base, grafts the best parts of the others into it on the base branch, and checks the result. When all candidates converge, it keeps the shared shape. When they diverge wildly, it stops and says what diverged: re-frame the brief and run the arena once more, then ask the user.
-4. **The final version goes on through the route:** reviews and QA check it like any build. Candidates never merge.
+2. **Start N candidates** (3 by default) in one message: designers or implementers, with the same brief and a different angle each. Mix the models as `sage config` says (arena_models, by default opus, sonnet, sonnet): pass `model` in each agent call. Record each run with `--candidate <k>` and its own `--branch`, and give each candidate the folder of `sage pages <T>`.
+3. **Record each artifact.** Each candidate commits its artifact on its branch and saves a copy in that folder. Record the copy with `sage pages <T> record <file>`. An artifact that is not committed does not count.
+4. **Give the rubric, the candidates' branches and a new branch to `sage:arena-judge`.** Name the new branch at `sage run add <T> --role arena-judge --branch <new branch>`: the state tool refuses a candidate's branch. The judge makes that branch from the chosen candidate's head, and it stops if the branch exists. It scores each candidate, picks the base, grafts the best parts of the others into it on its own branch, and checks the result. When all candidates converge, it keeps the shared shape. When they diverge wildly, it stops and says what diverged: re-frame the brief and run the arena once more, then ask the user.
+5. **The final version goes on through the route:** reviews and QA check it like any build. Only the judge's branch merges: the merge check refuses a candidate's branch.
+6. **Keep the evidence.** Branches and pages stay until the user deletes them. Worktrees go at the end of the task.
 
 ## Seal the lesson
 

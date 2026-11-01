@@ -222,6 +222,70 @@ test("one writer per branch", () => {
   assert.match(s.ok("run", "add", "T1", "--role", "implementer", "--branch", "claude/t1"), /R3 running/);
 });
 
+test("T584: a judge needs --branch, and a branch has one writer in any letter case, a judge too", () => {
+  const s = store();
+  s.ok("task", "add", "--priority", "P2", "--title", "t", "--size", "small");
+  assert.match(s.no("run", "add", "T1", "--role", "arena-judge"), /arena-judge run needs --branch/);
+  assert.equal(s.ok("run", "add", "T1", "--role", "arena-judge", "--branch", "sage/t1-judge"), "R1 running · arena-judge on T1 · sage/t1-judge · model opus");
+  assert.match(s.no("run", "add", "T1", "--role", "arena-judge", "--branch", "sage/t1-judge"), /^sage: R1 \(arena-judge\) still writes sage\/t1-judge, and a branch has one writer\./, "two judges");
+  assert.match(s.no("run", "add", "T1", "--role", "arena-judge", "--branch", "SAGE/T1-Judge"), /^sage: R1 \(arena-judge\) still writes SAGE\/T1-Judge/, "git on a Mac reads these two names as one branch");
+  assert.match(s.no("run", "add", "T1", "--role", "implementer", "--branch", "Sage/T1-judge"), /^sage: R1 \(arena-judge\) still writes/, "a judge against another writer");
+  assert.deepEqual(rows(s.dir, "runs").map((r) => r.id), ["R1"], "a refused run is not written");
+});
+
+test("T584: a judge's branch differs from each candidate run's branch, in both orders, also after the other run ended and in any letter case", () => {
+  const s = store();
+  for (const title of ["first", "second"]) s.ok("task", "add", "--priority", "P2", "--title", title, "--size", "small");
+  s.ok("run", "add", "T1", "--role", "designer", "--branch", "sage/t1-a", "--candidate", "1");
+  s.ok("run", "add", "T1", "--role", "implementer", "--branch", "sage/t1-b", "--candidate", "2");
+  const refused = "and an arena's judge never shares a branch with a candidate. Give this run a new branch. Nothing changed.";
+  assert.equal(s.no("run", "add", "T1", "--role", "arena-judge", "--branch", "sage/t1-a"), `sage: R1 (designer) still writes sage/t1-a, and a branch has one writer. Finish that run first (sage run done R1 --status done, blocked, question or failed), or give this run another branch.`, "the candidate runs");
+  s.ok("run", "done", "R1", "--status", "done");
+  assert.equal(s.no("run", "add", "T1", "--role", "arena-judge", "--branch", "SAGE/t1-A"), `sage: R1 (designer, candidate 1) is on SAGE/t1-A, ${refused}`, "the candidate ended, and its branch stays its own");
+  assert.equal(s.no("run", "add", "T2", "--role", "arena-judge", "--branch", "sage/t1-a"), `sage: R1 (designer, candidate 1) is on sage/t1-a, ${refused}`, "a judge of another task of the logbook");
+  assert.match(s.ok("run", "add", "T1", "--role", "arena-judge", "--branch", "sage/t1-judge"), /^R3 running · arena-judge on T1 · sage\/t1-judge/);
+  assert.equal(s.no("run", "add", "T1", "--role", "implementer", "--branch", "sage/t1-judge", "--candidate", "3"), "sage: R3 (arena-judge) still writes sage/t1-judge, and a branch has one writer. Finish that run first (sage run done R3 --status done, blocked, question or failed), or give this run another branch.", "the judge runs");
+  s.ok("run", "done", "R3", "--status", "done");
+  assert.equal(s.no("run", "add", "T1", "--role", "designer", "--branch", "Sage/T1-Judge", "--candidate", "3"), `sage: R3 (arena-judge) is on Sage/T1-Judge, ${refused}`, "the judge ended: the other order");
+  assert.match(s.ok("run", "add", "T1", "--role", "implementer", "--branch", "sage/t1-judge"), /^R4 running/, "a repair of the judge's branch is no candidate");
+  assert.deepEqual(rows(s.dir, "runs").map((r) => r.id), ["R1", "R2", "R3", "R4"], "a refused run is not written");
+});
+
+test("T584: candidate branches stay apart: a new candidate never takes the branch of another candidate, and a correction may stay on its own", () => {
+  const s = store();
+  s.ok("task", "add", "--priority", "P2", "--title", "t", "--size", "small");
+  s.ok("run", "add", "T1", "--role", "designer", "--branch", "sage/t1-a", "--candidate", "1");
+  s.ok("run", "done", "R1", "--status", "failed");
+  assert.equal(s.no("run", "add", "T1", "--role", "designer", "--branch", "sage/t1-a", "--candidate", "2"), "sage: R1 (designer, candidate 1) is on sage/t1-a, and each candidate of an arena has its own branch. Give this run a new branch. Nothing changed.");
+  assert.match(s.ok("run", "add", "T1", "--role", "designer", "--branch", "sage/t1-a", "--candidate", "1"), /^R2 running/);
+});
+
+test("T584: the merge check refuses a candidate's head branch, in any letter case, and passes the judge's branch on the same commit", () => {
+  const s = store();
+  s.ok("task", "add", "--priority", "P2", "--title", "t", "--size", "small");
+  s.ok("run", "add", "T1", "--role", "implementer", "--branch", "sage/t1-a", "--candidate", "1");
+  s.ok("run", "done", "R1", "--status", "done");
+  s.ok("run", "add", "T1", "--role", "arena-judge", "--branch", "sage/t1-judge");
+  s.ok("run", "done", "R2", "--status", "done");
+  s.ok("task", "T1", "set", "pr=41");
+  for (const k of ["checks-pass", "review-clean", "qa-pass"]) s.ok("verdict", "T1", "--sha", SHA, "--kind", k, "--cycle", "1", "--pr", "41");
+  const check = (head) => s.run("merge-check", "--sha", SHA, "--pr", "41", ...head);
+  const refusal = (branch) => `sage: T1 would land ${branch}, the branch of arena candidate 1 (R1), so the merge check refuses: a candidate never merges. Only the judge's branch merges: open the pull request from it, and set branch= of T1 to it.`;
+  const candidate = check(["--head", "sage/t1-a"]);
+  assert.equal(candidate.status, 1);
+  assert.equal(candidate.stderr.trim(), refusal("sage/t1-a"));
+  assert.equal(check(["--head", "SAGE/T1-A"]).stderr.trim(), refusal("SAGE/T1-A"), "the same branch on a Mac");
+  // A judge with no graft keeps the candidate's commit: the check is by branch, so the same SHA lands from the judge's branch.
+  const judge = check(["--head", "sage/t1-judge"]);
+  assert.equal(judge.status, 0, judge.stderr);
+  // With no --head, as in the chief's read before a merge, the task's branch= says what would land.
+  assert.equal(check([]).status, 0, "no branch recorded");
+  s.ok("task", "T1", "set", "branch=sage/t1-a");
+  assert.equal(check([]).stderr.trim(), refusal("sage/t1-a"));
+  s.ok("task", "T1", "set", "branch=sage/t1-judge");
+  assert.equal(check([]).status, 0);
+});
+
 test("T266-LEAD-ONE: run add --role lead records a lead run, and a task has one running lead run; the refusal names it", () => {
   const s = store();
   s.ok("task", "add", "--priority", "P2", "--title", "t", "--size", "small");
@@ -2723,7 +2787,7 @@ test("T336: a task with an unmet wait takes no lead, implementer, investigate or
   stateIs(s, "T1", "building");
   const runs = () => readFileSync(join(s.dir, "runs.tsv"), "utf8");
   const before = runs();
-  for (const [role, more] of [["lead", []], ["Lead", []], ["implementer", ["--branch", "sage/t2"]], ["investigate", []], ["arena-judge", []]]) {
+  for (const [role, more] of [["lead", []], ["Lead", []], ["implementer", ["--branch", "sage/t2"]], ["investigate", []], ["arena-judge", ["--branch", "sage/t2-judge"]]]) {
     assert.equal(s.no("run", "add", "T2", "--role", role, ...more), UNMET("T2", "T1 (building)", `${role.toLowerCase()} run`), role);
   }
   assert.equal(runs(), before, "a refused run is not written");
@@ -3894,7 +3958,7 @@ test("Balanced defaults cover every role and size without a config file", () => 
       const expected = role === "ux-reviewer" || (role === "qa" && ["tiny", "small"].includes(size))
         || (["implementer", "code-reviewer"].includes(role) && size === "tiny") ? "sonnet" : "opus";
       const args = ["run", "add", task, "--role", role];
-      if (["implementer", "designer"].includes(role)) args.push("--branch", `sample/${task}-${role}`);
+      if (["implementer", "designer", "arena-judge"].includes(role)) args.push("--branch", `sample/${task}-${role}`);
       assert.ok(s.ok(...args).endsWith(` · model ${expected}`), `${role} on ${size}`);
     }
   }
@@ -4079,6 +4143,9 @@ test("R1708-2: a run on its task's shared branch is a valid assignment for a pro
   const capture = (task, run, role) => tool.captureRunAssignment({ project: s.project, task, run, role }, testEnv({ SAGE_HOME: s.home }));
   assert.deepEqual(capture("T1", "R1", "implementer"), { task: "T1", run: "R1", role: "implementer", round: 0, taskBranch: "sage/t2", runBranch: "sage/t2", candidate: "" });
   assert.throws(() => capture("T1", "R1", "qa"), /The assignment needs one active run on its current task, role, branch, and round\./, "another role refuses");
+  s.ok("run", "add", "T2", "--role", "arena-judge", "--branch", "sage/t2-judge"); // R2
+  byHand(s.dir, "runs", 0, "R2", (cells) => cells.with(5, "SAGE/T2")); // an older logbook can hold two writers on one branch in two letter cases
+  assert.throws(() => capture("T1", "R1", "implementer"), /The assignment needs one active run on its current task, role, branch, and round\./, "T584: a judge in another letter case is a second writer");
 });
 
 test("R1741-1: a refusal for a task of the head branch that is not on the PR says how it owns the branch, and says to move it only when that works", () => {

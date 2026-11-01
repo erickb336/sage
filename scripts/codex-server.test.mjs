@@ -2506,7 +2506,7 @@ test('native child sandbox escalation refuses an unassigned off-mode child', asy
 function recordedFixtureRole(f, role) {
   f.input.role = role;
   if (role !== "lead") {
-    f.assignmentCli("run", "add", "T1", "--role", role, ...(role === "implementer" || role === "designer" ? ["--branch", "codex/t1-fixture"] : []));
+    f.assignmentCli("run", "add", "T1", "--role", role, ...(["implementer", "designer", "arena-judge"].includes(role) ? ["--branch", "codex/t1-fixture"] : []));
     f.input.run = "R4";
   }
   if (f.core.REVIEW_ROLES.includes(role)) f.input.reviewCycle = 1;
