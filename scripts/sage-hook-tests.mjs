@@ -1628,7 +1628,7 @@ test("T578: the merge hook reads a saved change on disk: a stuck one refuses wit
   const s = autopilotSession();
   const marker = join(s.sage("logbook").trim(), "review-pending.json");
   writeFileSync(marker, "{}");
-  assert.equal(denied(s.send(bash(MERGE))), "sage: the merge check refuses: the merge check refuses this merge: This command changed nothing. This project cannot save changes; other projects work. Tell the owner. There are two ways out. With a backup: the owner restores the folder that `sage logbook` prints; rows newer than the backup are lost. With no backup: after the owner accepts the loss of this saved change, the chief, or the owner in a terminal, runs `sage logbook repair --accept-change-loss yes --project <the project>`; it keeps the file, and a half-published update keeps mixed tables. Do not remove review-pending.json by hand.");
+  assert.equal(denied(s.send(bash(MERGE))), "sage: the merge check refuses: the merge check refuses this merge: This command changed nothing. This project cannot save changes; other projects work. Tell the owner. There are two ways out. With a backup: the owner restores the folder that `sage logbook` prints; rows newer than the backup are lost. With no backup: after the owner accepts the loss of this saved change, the chief runs `sage logbook repair --accept-change-loss yes --project <the project>`, or the owner runs it in a terminal when the chief cannot; it keeps the file, and a half-published update keeps mixed tables. Do not remove review-pending.json by hand.");
   assert.equal(readFileSync(marker, "utf8"), "{}", "the check keeps the change");
   rmSync(marker);
   const other = join(s.vars.SAGE_HOME, "other-abc123");
