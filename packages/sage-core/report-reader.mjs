@@ -1,5 +1,6 @@
 // The one reader of a sage report (T483): the Claude hook's stop gate and lead rules, the Codex stop hook and the state
 // tool's verdict check read a review's or QA's report with it, so that each of them reads the same RESULT and severities.
+// Both stop gates ask for missing fields by its one field rule too (T461).
 import { REPORT_FIELDS } from "./report.mjs";
 
 const SP = String.raw`[^\S\r\n  ]`; // a space, a tab or an NBSP, never a line break
@@ -21,6 +22,11 @@ export function fieldsOf(text, names) {
     else out.at(-1)?.lines.push(line);
   }
   return out;
+}
+/** The fields that a brief or a report does not give, by the one field rule. It does not read their values or accept a report. */
+export function missingFields(names, text) {
+  const given = new Set(fieldsOf(text, names).map((field) => field.name));
+  return names.filter((name) => !given.has(name));
 }
 /**
  * The lines of a text, each with whether it is in a code block or is one of its fences. A fence counts as CommonMark
