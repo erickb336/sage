@@ -1388,11 +1388,12 @@ test("native report correction requires typed native fields and the admitted chi
 
 test("native report correction matches Claude field presence without accepting invalid field values", async t => {
   const f = await completionFixture(t), client = await stopReportClient(t, f);
-  assert.equal(typeof f.core.missingReportFields, "function");
+  const missing = text => f.core.missingFields(f.core.REPORT_FIELDS, text);
   const headings = f.core.REPORT_FIELDS.map(field => `| **${field}** |`).join("\n");
-  assert.deepEqual(f.core.missingReportFields(headings), []);
-  assert.deepEqual(f.core.missingReportFields("prefix STATUS\nRESULTS"), f.core.REPORT_FIELDS);
-  assert.deepEqual(f.core.missingReportFields("\u00a0STATUS done"), f.core.REPORT_FIELDS.slice(1));
+  assert.deepEqual(missing(headings), []);
+  assert.deepEqual(missing("prefix STATUS\nRESULTS"), f.core.REPORT_FIELDS);
+  // An NBSP indents the line, so it is no field, as in the Claude stop gate (T461).
+  assert.deepEqual(missing("\u00a0STATUS done\nRESULT PASS"), f.core.REPORT_FIELDS.filter(field => field !== "RESULT"));
   assert.deepEqual(await client.call({ ...f.stop, stop_hook_active: false, last_assistant_message: headings }, childActor), {});
   assert.equal((f.core.readAdmission(f.options.directory).completions ?? []).length, 0);
   await client.close();

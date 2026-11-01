@@ -2,13 +2,14 @@
 // The report check of Codex, on SubagentStop. A sage role agent is a child whose task name (the last part of
 // its agent path) starts with "sage_" in any letter case, as skills/sage/references/roles.md tells the chief.
 // Its first stop without every report field continues it once with the missing fields; the second stop
-// goes through with one plain line, as the Claude stop gate. Other agents pass. An input that the gate
-// cannot read stops nothing: it gives one plain line, and the gate never reads it as a checked report.
+// goes through with one plain line, as the Claude stop gate. A review or QA child's first stop also goes through
+// the one reader of core. Other agents pass. An input that the gate cannot read stops nothing: it gives one
+// plain line, and the gate never reads it as a checked report.
 import { spawnSync } from "node:child_process";
 import { closeSync, mkdirSync, openSync, readFileSync, readSync, realpathSync, writeFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
-import { FINDING_FORM, REPORT_FIELDS, RESULT_WORDS, TEAM, missingReportFields, readReport } from "sage-core";
+import { FINDING_FORM, REPORT_FIELDS, RESULT_WORDS, TEAM, missingFields, readReport } from "sage-core";
 import { tool } from "../skills/sage/sage.mjs";
 
 const UNREAD = "sage: the report check could not read this agent's stop, so it did not check its report.";
@@ -54,8 +55,9 @@ export function reviewChild(meta) {
   if (!REPORT_ROLES[role] || (path.length !== 2 && !underLead) || path[0] !== "root" || typeof meta.id !== "string" || !meta.id) return undefined;
   return { role: REPORT_ROLES[role], task: `T${number}`, run: run.toUpperCase(), thread: meta.id };
 }
-/** The roles whose report the stop gate reads with the one reader (the Claude hook's REVIEWERS). */
-const REVIEWERS = ["code-reviewer", "security-reviewer", "ux-reviewer", "qa"];
+/** The name of a role whose report the stop gate reads with the one reader (the Claude hook's REVIEWERS). It takes any letter
+ * case, and it needs no task or run: as Claude reads an agent by its role, not by the run that keeps its report (T461). */
+const REVIEW_NAME = /^sage_(?:code_reviewer|security_reviewer|ux_reviewer|qa)(?:_|$)/i;
 const bindingOf =(cwd, run, env) => join(tool.storeDir(cwd, env), "kept", `${run}.child`);
 /**
  * At a design, review, QA or investigation child's start (SubagentStart, from the brief hook): the first such child (reviewChild) that starts for a
@@ -112,10 +114,10 @@ export function reportGate(input, env = process.env) {
     || !(message === null || typeof message === "string") || typeof input.agent_transcript_path !== "string") return { systemMessage: UNREAD };
   let task, meta;
   try { meta = sessionMeta(input.agent_transcript_path); task = agentPathOf(meta).at(-1) ?? ""; } catch { return { systemMessage: UNREAD }; }
-  const missing = sageName(task) ? missingReportFields(message ?? "") : [];
+  const missing = sageName(task) ? missingFields(REPORT_FIELDS, message ?? "") : [];
   // A review or QA child's report is read with the one reader at its first stop, as the Claude stop gate does: an unreadable
   // report gets one fix chance, and the second stop keeps it (T560).
-  const problem = !missing.length && !input.stop_hook_active && REVIEWERS.includes(reviewChild(meta)?.role) ? readReport(message).problem : undefined;
+  const problem = !missing.length && !input.stop_hook_active && REVIEW_NAME.test(task) ? readReport(message).problem : undefined;
   if (problem) return { decision: "block", reason: `sage: the report check cannot read your report: ${problem}. Give each field once, at the start of a line that is not in a list or a code block. Start RESULT with ${RESULT_WORDS.join(", ")}. Under FINDINGS write none alone, or one line for each finding in the form ${FINDING_FORM}, where the key has a digit (K1) and the severity is high, medium or low, with any detail on indented lines under it that do not start with a severity word. No line under FINDINGS has a severity word above the severity of the finding that it is under. RESULT FINDINGS or FAIL needs a finding.` };
   // A stop that goes through retains the bound child's exact report; the chief decides the outcome separately.
   const unkept = !missing.length || input.stop_hook_active ? keep(meta, message, input.cwd, env) : undefined;

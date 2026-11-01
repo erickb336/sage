@@ -50,6 +50,8 @@ When a spawn of the chief fails so, wait for a running agent with `wait_agent`, 
 
 The plugin's report check (a `SubagentStop` hook) reads each agent whose task name starts with `sage_`. When the agent stops and its last message has no field of the report (`STATUS` to `BRANCH`), the check continues the agent once and names the missing fields. At the second stop, the agent stops, and you see one plain line that names the fields that are still missing. Read that report as it is. Other agents pass.
 
+A field counts only at the start of a line that is not indented, not a list item and not in a code block. The report of a code, security or UX reviewer or of QA also goes through the reader of Claude Code, also when its task name has no run. When the reader cannot read that report, the check continues the agent once with the reason. At the second stop, the agent stops.
+
 The check runs only after you trust the plugin hooks in Codex.
 
 ## Compare a retained report

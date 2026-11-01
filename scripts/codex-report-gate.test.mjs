@@ -341,6 +341,27 @@ test("T560: a review child's unreadable report gets one fix chance at its first 
   for (const role of ["implementer", "arena_judge"]) assert.equal(gate(stop({ agent_transcript_path: transcript(`/root/sage_${role}_t12_r40`), last_assistant_message: unreadable })).decision, undefined, `${role} backs no verdict, so it is not read`);
 });
 
+test("T461: a report that the Claude stop gate refuses cannot pass in Codex: the name of a review child does not matter, and a field obeys the one field rule", () => {
+  const stopOf = (path, message, again = false) => gate(stop({ agent_transcript_path: transcript(path), last_assistant_message: message, stop_hook_active: again }));
+  // A high finding with no list mark: the reader cannot read it. Each name is a review child that the gate cannot bind to a run.
+  const hidden = "STATUS done\nRESULT PASS\nEVIDENCE x\nFINDINGS\nK1 high a.js:1 data loss\nQUESTIONS none\nNOT VERIFIED none\nBRANCH none";
+  for (const path of ["/root/sage_qa_t12", "/root/sage_code_reviewer_t12", "/root/sage_security_reviewer_t12", "/root/sage_ux_reviewer_t12", "/root/Sage_QA_T12_R40", "/root/SAGE_CODE_REVIEWER_T12", "/root/sage_pe_t12/sage_qa_t12_r40", "/root/sage_qa"]) {
+    const message = stopOf(path, hidden);
+    assert.equal(message.decision, "block", path);
+    assert.match(message.reason, /^sage: the report check cannot read your report: a line under FINDINGS is not none alone and not a finding in the form - <key> <severity> <summary>: "K1 high a\.js:1 data loss"\./, path);
+    assert.equal(stopOf(path, hidden, true).decision, undefined, `${path}: the second stop goes through`);
+    assert.deepEqual(stopOf(path, FULL), {}, `${path}: a report that the reader can read passes`);
+  }
+  for (const path of ["/root/sage_implementer_t12", "/root/sage_pe_t12", "/root/sage_lead_t12", "/root/sage_quality_t12", "/root/explorer"]) assert.deepEqual(stopOf(path, hidden), {}, `${path} backs no verdict, so its FINDINGS are not read`);
+  // A field in a list item, on an indented line or in a code block is not a field, for each sage role.
+  const noStatus = (form) => FULL.replace("STATUS done", form);
+  for (const path of ["/root/sage_implementer_t12", "/root/sage_qa_t12_r40"]) {
+    for (const [why, message] of [["a list item", noStatus("- STATUS done")], ["an indented line", noStatus("  STATUS done")], ["a numbered list item", noStatus("1. STATUS done")], ["a code block", noStatus("```\nSTATUS done\n```")]]) {
+      assert.equal(stopOf(path, message).reason, BLOCK.reason.replace("no EVIDENCE, FINDINGS, QUESTIONS, NOT VERIFIED, BRANCH", "no STATUS"), `${path}: ${why}`);
+    }
+  }
+});
+
 test("an agent without the sage_ task name passes, with or without a report", () => {
   assert.deepEqual(gate(stop({ agent_transcript_path: transcript("/root/explorer") })), {});
   assert.deepEqual(gate(stop({ agent_transcript_path: transcript("/root/explorer_sage_t1"), last_assistant_message: null })), {});

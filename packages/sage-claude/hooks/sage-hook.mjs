@@ -82,11 +82,6 @@ const reservedName = (name) => /^(?:main|lead-t\d+)$/i.test(String(name ?? "").t
 const agentEvent = (input) => "agent_id" in (input ?? {}) || (OURS.test(input?.agent_type ?? "") && !CHIEF.test(input.agent_type));
 export const BRIEF_FIELDS = ["GOAL", "SCOPE", "CONTEXT", "DECISIONS", "ACCEPTANCE", "VERIFY", "BUDGET", "FORBIDDEN", "REPORT", "STANDING"];
 export const REPORT_FIELDS = ["STATUS", "RESULT", "EVIDENCE", "FINDINGS", "QUESTIONS", "NOT VERIFIED", "BRANCH"];
-/** The fields of a template that the text does not give, by the one field rule. */
-function missingFields(fields, text) {
-  const given = new Set(core.fieldsOf(text, fields).map((x) => x.name));
-  return fields.filter((f) => !given.has(f));
-}
 
 /**
  * A prompt: whether the owner wrote it, and the owner's text. Claude Code sends no sender field: a live capture of a
@@ -256,7 +251,7 @@ export function handle(input, state, slots) {
     if (live.length) return { decision: "block", reason: `sage: your helper${live.length === 1 ? "" : "s"} ${live.join(", ")} still run${live.length === 1 ? "s" : ""}, and a lead does not end while a helper runs. Run ${waitStep(lead.task)}: it returns at once with each helper that stopped and whose run you end, else when a helper stops or none runs, and after ${WAIT_MS / 60_000} minutes at the latest. It names once each run whose report the hook cannot read: the sage ends that run, so do not end it, and name it in FINDINGS of your report. Then go on with your steps.` };
     // A sage agent finishes only with the full report. The second stop goes through, so this cannot loop.
     if (ours && !input.stop_hook_active && typeof input.last_assistant_message === "string") {
-      const missing = missingFields(REPORT_FIELDS, input.last_assistant_message);
+      const missing = core.missingFields(REPORT_FIELDS, input.last_assistant_message);
       if (missing.length) return { decision: "block", reason: `sage: your report has no ${missing.join(", ")}. End with the report of the sage:report skill: ${REPORT_FIELDS.join(", ")}, each at the start of a line that is not in a list or a code block, with "none" where a field has nothing.` };
       // The stop gate and the lead rules read a review's or QA's report with one reader, so a report that passes here is
       // one they read (F-T289-24, F-T289-39). The lead rules read no other role's report, so its FINDINGS may list what it
@@ -413,7 +408,7 @@ export function handle(input, state, slots) {
     slots.prune(view.endedLeadRuns().map((r) => digest(`${leadMark.logbook}:${r.id}`)));
   }
   if (AGENT_TOOLS.test(tool) && OURS.test(spawned)) {
-    const missing = missingFields(BRIEF_FIELDS, ti.prompt);
+    const missing = core.missingFields(BRIEF_FIELDS, ti.prompt);
     if (missing.length) return deny(event, `the brief has no ${missing.join(", ")}. Every brief has all of ${BRIEF_FIELDS.join(", ")}, each at the start of a line that is not in a list or a code block. A tiny task may keep each field to one line.`);
     let caps, project;
     try {
