@@ -1,7 +1,8 @@
 import { assertNativeTaskOpen } from "./task-authority.mjs";
 import { createHash } from "node:crypto";
 import { join } from "node:path";
-import { readAdmission, prepareAdmission, reservePreparedAdmission, reservePreparedContinuation, createStateTool, REVIEW_ROLES } from "../core/index.mjs";
+import { readAdmission, prepareAdmission, reservePreparedAdmission, reservePreparedContinuation, REVIEW_ROLES } from "../core/index.mjs";
+import { logbookEnv, logbookTool } from "./logbook-env.mjs";
 import { nativeToolContext, nativeToolEvent } from "./native-tool.mjs";
 import { bindings, decodeEvent, publish, readObservations } from "./events.mjs";
 
@@ -50,9 +51,9 @@ function actorScope(options, native) {
 
 function captureReview(options, input, cycle) {
   validateLogbookLocation(options);
-  const tool = createStateTool({ defaultRoot: refuse });
+  const tool = logbookTool(refuse);
   return tool.captureReviewTarget({ project: options.projectDirectory, task: input.task, run: input.run,
-    role: input.role, cycle }, { ...process.env, SAGE_HOME: options.logbookRoot });
+    role: input.role, cycle }, logbookEnv(options));
 }
 
 /** Fixed launcher options select storage. This operation saves work but never permits a native spawn. */

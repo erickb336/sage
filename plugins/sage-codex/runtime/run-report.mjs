@@ -1,6 +1,7 @@
-import { realpathSync, statSync } from "node:fs";
-import { isAbsolute, relative, resolve, sep } from "node:path";
-import { createStateTool, readAdmission } from "../core/index.mjs";
+import { lstatSync, realpathSync, statSync } from "node:fs";
+import { basename, dirname, isAbsolute, join, relative, resolve, sep } from "node:path";
+import { readAdmission, sharedRoot } from "../core/index.mjs";
+import { logbookEnv, logbookTool } from "./logbook-env.mjs";
 import { nativeToolContext } from "./native-tool.mjs";
 import { finishNativeInterruptedRun } from "./interrupted-run.mjs";
 import { hasReportRecovery } from "./report-recovery.mjs";
@@ -21,6 +22,29 @@ export function validateLogbookLocation(options) {
   if (typeof sessions !== "string" || sessions.length > 4096 || /\p{Cc}/u.test(sessions)
     || !isAbsolute(sessions) || resolve(sessions) !== sessions) refuse();
   if ([...paths.slice(1), sessions].some(path => contains(paths[0], path) || contains(path, paths[0]))) refuse();
+  validateSharedRoot(options, [...paths, sessions]);
+}
+
+/** A path as the system sees it, also when its last parts do not exist yet. A dangling link has no answer. */
+function realTarget(path) {
+  try { return realpathSync(path); } catch (error) {
+    if (error.code !== "ENOENT" || lstatSync(path, { throwIfNoEntry: false })) refuse();
+    return join(realTarget(dirname(path)), basename(path));
+  }
+}
+
+/**
+ * The launcher's root, or SAGE_SHARED_HOME: an absolute path outside every other location, also through a link. A root
+ * in the project would give agents with workspace write the tables. The hooks read the environment, not this file, so a
+ * fixed root must be the root that the environment gives, or they would not protect it.
+ */
+function validateSharedRoot(options, paths) {
+  const shared = options.sharedRoot ?? (process.env.SAGE_SHARED_HOME || undefined);
+  if (shared === undefined) return;
+  if (typeof shared !== "string" || shared.length > 4096 || /\p{Cc}/u.test(shared) || !isAbsolute(shared) || resolve(shared) !== shared
+    || shared !== sharedRoot(process.env)) refuse();
+  const real = realTarget(shared);
+  if (paths.some(path => contains(real, path) || contains(path, real))) refuse();
 }
 
 /** Only the current root chief can finish a run from a receipt already saved by its verified parent. */
@@ -40,10 +64,10 @@ function recordedRun(input, context, options) {
     || !state.sessions.some(row => row.project === options.project && row.session === session && row.epoch === saved.binding.epoch)) refuse();
   const assigned = state.reservations.find(row => row.assignment.id === input.assignment);
   if (!assigned?.rolePlan?.role || !hasReportRecovery(saved, options)) refuse();
-  const tool = createStateTool({ defaultRoot: () => { refuse(); } });
+  const tool = logbookTool(() => { refuse(); });
   return { tool, state, assigned, work: { project: options.projectDirectory, task: saved.task, run: saved.run,
     role: assigned.rolePlan.role, assignment: input.assignment, reportHash: saved.reportHash, text: saved.text },
-    env: { ...process.env, SAGE_HOME: options.logbookRoot } };
+    env: logbookEnv(options) };
 }
 
 

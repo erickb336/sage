@@ -43,14 +43,15 @@ export function readHookConfiguration(file) {
     }
     if (used > LIMIT) refuse();
     const config = JSON.parse(new TextDecoder("utf-8", { fatal: true }).decode(bytes.subarray(0, used)));
-    if (!fields(config, ["version", "mode"]) || ![1, 2, 3].includes(config.version)
+    if (!fields(config, ["version", "mode"]) || ![1, 2, 3, 4].includes(config.version)
       || !fields(config.mode, ["directory", "project", "projectDirectory", "sessionsDir",
-        ...(config.version >= 2 ? ["observationsRoot"] : []), ...(config.version === 3 ? ["logbookRoot"] : [])])) refuse();
+        ...(config.version >= 2 ? ["observationsRoot"] : []), ...(config.version >= 3 ? ["logbookRoot"] : []),
+        ...(config.version === 4 ? ["sharedRoot"] : [])])) refuse();
     const mode = config.mode;
     for (const key of ["directory", "projectDirectory", ...(config.version >= 2 ? ["observationsRoot"] : [])]) {
       if (!canonical(mode[key]) || !statSync(mode[key]).isDirectory()) refuse();
     }
-    if (config.version === 3) validateLogbookLocation(mode);
+    if (config.version >= 3) validateLogbookLocation(mode);
     if (!nativeSessions(mode.sessionsDir)) refuse();
     if (config.version >= 2 && (contains(mode.directory, mode.observationsRoot)
       || contains(mode.observationsRoot, mode.directory))) refuse();

@@ -1,0 +1,266 @@
+// The shared root and the one rule that finds a project's logbook (T306 design, PR 2). The root holds one logbook for
+// each project that both providers use, with three tables that only the state tool writes, under the root's lock:
+//   bindings.tsv: one row for each checkout: root (the validated project root), folder, commits (its first commits), at.
+//     Its marker bindings.made says that sage made it, so a table that goes missing refuses and never reads as no rows.
+//   plugins.tsv: one row for each provider that ran: provider, contract, at.
+//   projects.tsv: the known project list of this root, as in each provider root.
+// Every command finds its logbook again. A row means shared. No row means legacy, as before this root existed.
+import { createHash } from "node:crypto";
+import { lstatSync, mkdirSync, realpathSync } from "node:fs";
+import { homedir } from "node:os";
+import { basename, dirname, isAbsolute, join, resolve } from "node:path";
+import { readLocalGit } from "./local-git.mjs";
+
+const BINDINGS = ["root", "folder", "commits", "at"];
+const PLUGINS = ["provider", "contract", "at"];
+/** What plugins.tsv says that a provider's state tool understands. Raise it only when a change needs both providers to update. */
+const CONTRACT = "1";
+/** A logbook's folder name: today's rule, computed once and saved in the row. */
+const FOLDER = /^[a-z0-9-]+-[0-9a-f]{6}$/;
+const COMMITS = /^(?:[0-9a-f]{40,64}(?:,[0-9a-f]{40,64})*)?$/;
+/** What a refusal about first commits adds: a shallow clone's first commit is its newest one, so it matches no other checkout. */
+const SHALLOW = "A shallow clone needs its full history here: run git fetch --unshallow in it, then try again.";
+/** The largest table that the tool reads: a checkout row is short, so a bigger file is not a table of this tool. */
+const TABLE_MAX = 1024 * 1024;
+
+/**
+ * The one function that picks the shared root: the launcher's fixed option, SAGE_SHARED_HOME, <SAGE_HOME>/shared, then
+ * ~/.sage. SAGE_HOME alone does not mean a test: the Codex runtime sets it in production, so it passes the fixed option.
+ */
+export const sharedRoot = (env = process.env, fixed) => resolve(fixed || env.SAGE_SHARED_HOME || (env.SAGE_HOME ? join(env.SAGE_HOME, "shared") : join(env.HOME || homedir(), ".sage")));
+
+export function createSharedRoot({ Refusal, refuse, listed, legacyRoots, makeLogbook, enroll, now, projectRoot, provider, raiseCounts, readRegular, rowsOf, sageRoot, sheetText, slug, swap, visible, withLock }) {
+  const realOf = (path) => {
+    try { return realpathSync.native(path); } catch { return path; }
+  };
+  /** The shared root of a command. A relative SAGE_SHARED_HOME would name another root from another folder, and a project would lose its row in silence. */
+  const rootOf = (env) => {
+    if (env.SAGE_SHARED_HOME && !isAbsolute(env.SAGE_SHARED_HOME)) refuse(`SAGE_SHARED_HOME is ${JSON.stringify(visible(env.SAGE_SHARED_HOME))}, but it must be an absolute path, so that each folder finds the same shared root. Nothing changed. Ask the user to fix it.`);
+    return sharedRoot(env);
+  };
+  /** Today's folder name: from the checkout's main root, as it was before any row. */
+  const folderOf = (checkout) => `${slug(basename(checkout))}-${createHash("sha1").update(checkout).digest("hex").slice(0, 6)}`;
+  /** Every root that may hold this project's legacy logbook: this tool's own, then what the adapter names. */
+  const roots = (env) => [...new Set([sageRoot(env), ...legacyRoots(env)].map((root) => resolve(root)))];
+  /** Is something at the path? A folder on the way that is no folder holds nothing: the later read names it, as before this root. */
+  const present = (path) => {
+    try {
+      return !!lstatSync(path, { throwIfNoEntry: false });
+    } catch (e) {
+      if (["ENOTDIR", "ELOOP"].includes(e.code)) return false;
+      throw e;
+    }
+  };
+  /**
+   * What the resolver sees in a provider root that it may not read: nothing. A project with a row never looks there, and
+   * a project with no row keeps today's result, because today's commands never read the other root. Only the link stays
+   * strict (present), because a link over a logbook that it cannot see would hide that logbook.
+   */
+  const seen = (path) => {
+    try {
+      return present(path);
+    } catch (e) {
+      if (["EACCES", "EPERM"].includes(e.code)) return false;
+      throw e;
+    }
+  };
+
+  /** A table of the root as rows. A missing file has no rows. Anything else that does not read as the table refuses. */
+  function table(shared, name, columns, check = () => true) {
+    const file = join(shared, `${name}.tsv`);
+    const damaged = (why) => refuse(`${file} ${why}, so sage cannot tell which logbook a project uses. Nothing changed. Ask the user to fix it, or update the sage plugin if a newer sage wrote it.`);
+    let text;
+    try {
+      text = readRegular(file, { link: false, max: TABLE_MAX });
+    } catch (e) {
+      damaged(`cannot be read (${e.code ?? "not a regular file under 1 MiB"})`);
+    }
+    if (text === undefined) return [];
+    const { cols, lines } = sheetText(text);
+    if (cols.join("\t") !== columns.join("\t")) damaged(`does not start with the column names ${columns.join(", ")}`);
+    const rows = rowsOf({ cols, lines });
+    if (lines.some((line) => line.split("\t").length !== columns.length) || !rows.every(check)) damaged("has a damaged row");
+    return rows;
+  }
+  const writeTable = (shared, name, columns, rows) => swap(join(shared, `${name}.tsv`), [columns.join("\t"), ...rows.map((r) => columns.map((c) => r[c]).join("\t"))].join("\n") + "\n");
+
+  /** bindings.tsv: root is the key, so a path on two rows is a damaged table. A table that sage made and that is gone refuses. */
+  function bindings(shared) {
+    const rows = table(shared, "bindings", BINDINGS, (r) => isAbsolute(r.root) && FOLDER.test(r.folder) && COMMITS.test(r.commits));
+    const file = join(shared, "bindings.tsv"), made = join(shared, "bindings.made");
+    if (!rows.length && !present(file) && present(made)) refuse(`${file} is missing, but sage made it before (${made}), so sage cannot tell which logbook a project uses. Nothing changed. Ask the user to restore it from a copy. If no project uses the shared root, the user removes ${made}.`);
+    const seenRoots = new Set();
+    for (const { root } of rows) {
+      if (seenRoots.has(root)) refuse(`${file} has two rows for ${visible(root)}, but a checkout has one row, so sage cannot tell which logbook it uses. Nothing changed. Ask the user to keep the right row.`);
+      seenRoots.add(root);
+    }
+    return rows;
+  }
+  /** The table, then its marker: a stop between the two leaves a working table, and the next write adds the marker. */
+  function writeBindings(shared, rows) {
+    writeTable(shared, "bindings", BINDINGS, rows);
+    const made = join(shared, "bindings.made");
+    if (!present(made)) swap(made, `${now()}\n`);
+  }
+
+  const disjoint = (a, b) => !!a && !!b && !a.split(",").some((commit) => b.split(",").includes(commit));
+  /** The row that a logbook belongs to: its oldest row with first commits. A later row with none of them is the foreign one, so the owner keeps working. */
+  const ownerOf = (rows, folder) => rows.filter((r) => r.folder === folder && r.commits).sort((a, b) => a.at.localeCompare(b.at))[0];
+  const offer = (checkout) => `Nothing changed. Ask the user, then run sage link --to <folder> or sage link --separate, in ${visible(checkout)}.`;
+  /** The logbook of a row. A row that names a missing folder, or a folder that another project owns, refuses and offers the link. */
+  function boundFolder(shared, rows, row) {
+    const dir = join(shared, row.folder);
+    if (!lstatSync(dir, { throwIfNoEntry: false })?.isDirectory()) refuse(`the row of ${visible(row.root)} in ${join(shared, "bindings.tsv")} names the logbook ${row.folder}, which is missing. ${offer(row.root)}`);
+    const owner = ownerOf(rows, row.folder);
+    if (owner && disjoint(owner.commits, row.commits)) refuse(`the row of ${visible(row.root)} in ${join(shared, "bindings.tsv")} names the logbook ${row.folder}, which belongs to another project (${visible(owner.root)}): the two checkouts have no first commit in common. ${SHALLOW} ${offer(row.root)}`);
+    return dir;
+  }
+  const healthy = (shared, rows, row) => {
+    try {
+      return !!boundFolder(shared, rows, row);
+    } catch (e) {
+      if (e instanceof Refusal) return false;
+      throw e;
+    }
+  };
+
+  /**
+   * The one resolver, the same order for both providers. A row means shared. No row and a moved marker in a provider
+   * root refuses. No row and no marker is this provider's legacy path, whether a logbook is there or not: rule 3 stays
+   * off, so the caller keeps today's refusal or today's init. legacy says whether either provider root holds one.
+   */
+  function locate(project, env = process.env) {
+    const checkout = projectRoot(resolve(project)), shared = rootOf(env), rows = bindings(shared);
+    const row = rows.find((r) => r.root === realOf(checkout));
+    if (row) return { dir: boundFolder(shared, rows, row), row, checkout, shared: true };
+    const folder = folderOf(checkout), all = roots(env);
+    const moved = all.map((root) => join(root, folder, "moved.json")).find(seen);
+    if (moved) refuse(`this project's logbook moved to the shared root, but the move did not finish (${moved}). Nothing changed. Run the move again.`);
+    return { dir: join(sageRoot(env), folder), checkout, shared: false, legacy: all.some((root) => seen(join(root, folder, "tasks.tsv"))) };
+  }
+
+  /** The nearest folder, from the checkout up, with a .git entry: where Git looks for a repository. A path that cannot be read counts as one. */
+  const gitEntry = (checkout) => {
+    for (let dir = realOf(checkout); ; dir = dirname(dir)) {
+      try {
+        if (present(join(dir, ".git"))) return dir;
+      } catch {
+        return dir;
+      }
+      if (dir === dirname(dir)) return undefined;
+    }
+  };
+
+  /**
+   * The first commits of a checkout, sorted, or "" when HEAD has no commit yet or no repository is there. The call is the
+   * hardened local read, because the folder may be a planted one. Replace refs do not count, and no missing object is
+   * fetched. Every other failed read refuses, because a repository that Git cannot read may have commits. symbolic-ref
+   * tells a branch with no commit yet from a garbage ref: it fails on the garbage ref, and rev-parse fails on both.
+   */
+  function firstCommits(checkout) {
+    const read = (args) => {
+      try {
+        return readLocalGit(checkout, args).toString();
+      } catch (e) {
+        if (typeof e.status === "number") return undefined;
+        refuse(e.code === "ETIMEDOUT" ? `git took more than 5 s to find the first commit of ${visible(checkout)}. sage made no row. Run the command again.` : `git cannot run on ${visible(checkout)} (${e.code ?? e.message}). sage made no row. Ask the user to check the Git install.`);
+      }
+    };
+    const out = read(["rev-list", "--max-parents=0", "HEAD"]);
+    if (out !== undefined) return out.split("\n").filter(Boolean).sort().join(",");
+    if (read(["rev-parse", "--verify", "-q", "HEAD"]) !== undefined) refuse(`git cannot read the history of ${visible(checkout)}, which has a HEAD commit. sage made no row. Ask the user to repair the repository.`);
+    if (read(["symbolic-ref", "-q", "HEAD"]) !== undefined) return "";
+    const repository = gitEntry(checkout);
+    if (repository) refuse(`git cannot read the repository at ${visible(repository)}, so sage cannot find its first commit. sage made no row. Ask the user to repair the repository, then run the link again. Only a .git file that points to a removed worktree is safe to delete. Never delete a .git folder: it holds the history and any unpushed work.`);
+    return "";
+  }
+
+  /** The provider's row in plugins.tsv, under the root's lock. */
+  function writePlugin(shared) {
+    const rows = table(shared, "plugins", PLUGINS);
+    writeTable(shared, "plugins", PLUGINS, [...rows.filter((r) => r.provider !== provider), { provider, contract: CONTRACT, at: now() }]);
+  }
+  /**
+   * The provider's row at its first command that takes a lock, never at a read. It only tells a later move what ran, so
+   * a failure stops nothing: a legacy project works as before, also when the shared root cannot be written.
+   */
+  function notePlugin(env) {
+    if (!provider) return;
+    try {
+      const shared = rootOf(env);
+      if (table(shared, "plugins", PLUGINS).some((r) => r.provider === provider && r.contract === CONTRACT)) return;
+      mkdirSync(shared, { recursive: true });
+      withLock(shared, () => writePlugin(shared));
+    } catch {}
+  }
+
+  /** The next write of a row made before the first commit fills its commits. True when it wrote them, so the caller finds the logbook again. */
+  function fillCommits(checkout, env) {
+    let commits;
+    try {
+      commits = firstCommits(checkout);
+    } catch (e) {
+      if (e instanceof Refusal) return false; // a later write tries again
+      throw e;
+    }
+    if (!commits) return false;
+    const shared = sharedRoot(env), key = realOf(checkout);
+    withLock(shared, () => {
+      const rows = bindings(shared);
+      if (rows.some((r) => r.root === key && !r.commits)) writeBindings(shared, rows.map((r) => (r.root === key ? { ...r, commits } : r)));
+    });
+    return true;
+  }
+
+  /** The link's work under the root's lock. See link. */
+  function bind(shared, checkout, key, commits, { to }, env) {
+    const rows = bindings(shared), row = rows.find((r) => r.root === key), folder = to ?? folderOf(checkout), dir = join(shared, folder);
+    if (row && healthy(shared, rows, row)) {
+      if (to !== undefined && row.folder !== to) refuse(`${visible(checkout)} is already linked to ${row.folder}, and a checkout has one logbook. Nothing changed. Keep using ${row.folder}. Only the move can take a checkout to another logbook, and no command does the move today: a later sage adds it.`);
+      return `already linked: ${join(shared, row.folder)}. Nothing changed.`;
+    }
+    const old = folderOf(checkout), all = roots(env);
+    const moved = all.map((root) => join(root, old, "moved.json")).find(present);
+    if (moved) refuse(`this project's logbook moved to the shared root, but the move did not finish (${moved}). Nothing changed. Run the move again.`);
+    const legacy = !row && all.map((root) => join(root, old)).find((path) => present(join(path, "tasks.tsv")));
+    if (legacy) refuse(`this project has a logbook at ${legacy}. A link would hide its tasks, so sage made no row. Nothing changed. Keep using that logbook, and ask the user to wait for the move: only the move takes an existing project to the shared root.`);
+    const others = rows.filter((r) => r !== row);
+    if (to !== undefined) {
+      if (!lstatSync(dir, { throwIfNoEntry: false })?.isDirectory() || !present(join(dir, "tasks.tsv")) || !listed(shared)?.has(to)) refuse(`${dir} is not a logbook of the shared root. Nothing changed. List the logbook folders in ${join(shared, "projects.tsv")}, then run sage link --to <folder> with one of them, or run sage link --separate to start a new logbook.`);
+      const owner = ownerOf(others, to);
+      if (owner && disjoint(owner.commits, commits)) refuse(`${to} belongs to another project (${visible(owner.root)}): the two checkouts have no first commit in common. ${SHALLOW} Nothing changed. Use sage link --separate, or name the right folder.`);
+    } else if (present(dir) || others.some((r) => r.folder === folder)) refuse(`the logbook folder ${dir} is already in use, so sage made no row. Nothing changed. Ask the user to link to it with sage link --to ${folder}, or to rename or remove it.`);
+    raiseCounts(shared, env);
+    if (to === undefined) enroll(shared, folder, () => makeLogbook(dir, checkout, env));
+    try { if (provider) writePlugin(shared); } catch {} // only for a later move, as in notePlugin
+    writeBindings(shared, [...others, { root: key, folder, commits, at: now() }]); // last: a stop before it leaves no row to a half-made logbook
+    const twin = to === undefined && commits ? others.find((r) => r.commits.split(",").some((commit) => commits.split(",").includes(commit))) : undefined;
+    return `${visible(checkout)} now uses the shared logbook ${dir}${twin ? `, apart from ${twin.folder}, which has the same first commit` : ""}`;
+  }
+
+  /**
+   * sage link: the explicit join. It runs only after the owner's answer in the chat. --to adds a row for an existing
+   * shared logbook; --separate makes a new one. The first commits are read here, at the write that makes the row, and
+   * never at a read. A match never joins a logbook, and a mismatch with the logbook's owner refuses a --to. A healthy row
+   * stays, so a retry is safe. A row that names a missing or foreign folder is the one that link replaces. A project with
+   * a legacy logbook refuses: its tasks would disappear from view, and only the move carries them over. A path that the
+   * system refuses (an unwritable shared root, a file at its path, a provider root that it may not read) makes no row.
+   */
+  function link(project, { to, separate }, env = process.env) {
+    if ((to === undefined) === (separate === undefined) || (separate !== undefined && separate !== true)) refuse("link takes exactly one of --to <folder> or --separate; --separate takes no value. Nothing changed.");
+    if (to !== undefined && !FOLDER.test(to)) refuse(`${JSON.stringify(visible(to))} is not a logbook folder: its name is <project>-<6 hex>, as sage link prints it. Nothing changed.`);
+    const checkout = projectRoot(resolve(project)), key = realOf(checkout), shared = rootOf(env);
+    if (!lstatSync(key, { throwIfNoEntry: false })?.isDirectory()) refuse(`${visible(key)} is not a folder, so it cannot be a row. Nothing changed.`);
+    if (/\p{Cc}/u.test(key)) refuse(`the path of ${visible(key)} has control characters, so it cannot be a row. Rename the folder. Nothing changed.`);
+    const commits = firstCommits(checkout); // before the lock: Git may take seconds
+    try {
+      mkdirSync(shared, { recursive: true });
+      return withLock(shared, () => bind(shared, checkout, key, commits, { to }, env));
+    } catch (e) {
+      if (e instanceof Refusal || !/^E[A-Z]+$/.test(e.code ?? "")) throw e;
+      refuse(`sage cannot use ${visible(e.path && !e.path.startsWith(`${shared}/`) ? e.path : shared)} (${e.code}), so it made no row. Ask the user to fix that path or its rights, then run the link again.`);
+    }
+  }
+
+  return { bindings, fillCommits, link, locate, notePlugin };
+}

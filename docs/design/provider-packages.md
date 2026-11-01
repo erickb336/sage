@@ -37,7 +37,7 @@ The existing Claude marketplace name, plugin name, source path and command paths
 
 Codex's patch decoder selects advice; it is not a write authorization parser. Unknown tools/events produce no result. Advice state is partitioned by provider and a hash of session/child identity. Concurrent advice callbacks can repeat a hint; no capacity or authorization decision depends on that state.
 
-Claude keeps its current models and `CLAUDE_CONFIG_DIR` / `~/.claude/sage` default. Codex accepts only `inherit` and uses `CODEX_HOME` / `~/.codex/sage`. `SAGE_HOME` remains an explicit override. There is no automatic migration or mixed-provider orchestration. The data format, project keys, task rules and locking stay shared. Error examples use neutral `sage/t1` branch names; existing branch names remain valid.
+Claude keeps its current models and `CLAUDE_CONFIG_DIR` / `~/.claude/sage` default. Codex accepts only `inherit` and uses `CODEX_HOME` / `~/.codex/sage`. `SAGE_HOME` remains an explicit override. Each adapter also passes `legacyRoots(env)`, the provider roots that may hold a project's legacy logbook, so that core names no provider setting. A project with a row in `bindings.tsv` uses a logbook of the shared root (`~/.sage`, or `SAGE_SHARED_HOME`). There is no automatic migration or mixed-provider orchestration. The data format, project keys, task rules and locking stay shared. Error examples use neutral `sage/t1` branch names; existing branch names remain valid.
 
 ## Try the Codex package
 

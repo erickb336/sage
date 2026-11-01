@@ -4,6 +4,13 @@
 // Two stay, SAGE_HOME and GH_CONFIG_DIR: a test that forgot its own must not fall back to the real ~/.claude or gh login.
 const LEAKS = /^(?:SAGE_(?!HOME$)|GIT_|GH_(?!CONFIG_DIR$)|GITHUB_|CLAUDE_|AGENT_KIT_|FAKE_GH_|PSTACK_)/;
 for (const name of Object.keys(process.env)) if (LEAKS.test(name)) delete process.env[name];
+// A test that sets only CODEX_HOME or CLAUDE_CONFIG_DIR must not reach the real ~/.sage: this process and its children get
+// a shared root of their own, which goes at exit. A test of the root's order deletes the variable from its own env.
+import { realpathSync, rmSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
+process.env.SAGE_SHARED_HOME = join(realpathSync(tmpdir()), `sage-test-shared-${process.pid}`);
+process.on("exit", () => rmSync(process.env.SAGE_SHARED_HOME, { recursive: true, force: true }));
 // Git reads the developer's global config (~/.gitconfig or $XDG_CONFIG_HOME/git/config) and the system one: a
 // commit.gpgsign or core.hooksPath there fails every commit a test makes (R679). /dev/null replaces both global files.
 process.env.GIT_CONFIG_GLOBAL = "/dev/null";

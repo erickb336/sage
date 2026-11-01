@@ -433,6 +433,93 @@ test("no thread names the Codex sage folder in a shell command (T460)", (t) => {
   }
 });
 
+test("no thread names the shared root in a shell command: its default, SAGE_SHARED_HOME, and a set folder (T594)", (t) => {
+  const w = world(t);
+  const home = w.env.HOME;
+  const byDefault = { ...w.env, SAGE_HOME: undefined, SAGE_SHARED_HOME: undefined };
+  const named = ["cat ~/.sage/bindings.tsv", `echo x >> "${home}/.sage/plugins.tsv"`, "ls $HOME/.sage", "rm -rf $SAGE_SHARED_HOME/x", "cp f ${SAGE_SHARED_HOME}/x"];
+  const clean = ["ls ~/.sagebook", "echo sage mode", "git log"];
+  assert.deepEqual(named.filter((c) => !namesSageFolder(c, byDefault)), [], "each form is found");
+  assert.deepEqual(clean.filter((c) => namesSageFolder(c, byDefault)), [], "no false match");
+  assert.equal(namesSageFolder("cat /shared/root/bindings.tsv", { ...byDefault, SAGE_SHARED_HOME: "/shared/root" }), true, "a set folder");
+  w.mode({ sage: true, autopilot: false });
+  for (const thread of [CHILD, w.child("/root/sage_lead_t1_r1")]) {
+    assert.match(denied(w.send(pre("Bash", `cat ${w.env.SAGE_SHARED_HOME}/bindings.tsv`, thread))) ?? "", /^sage: no agent runs a shell command that names the Codex sage folder/);
+  }
+});
+
+test("the .sage folder outside the project counts by name, in the shell and in a patch, in any mode; the project's own .sage stays free (T594)", (t) => {
+  const w = world(t);
+  const cwd = join(w.project, "src");
+  mkdirSync(cwd);
+  const byDefault = { ...w.env, SAGE_HOME: undefined, SAGE_SHARED_HOME: undefined };
+  const named = ["cd ~ && rm -rf .sage", "cd ~ && cat .sage/bindings.tsv", "cat ~/.sa*/bindings.tsv", "cat $HOME/./.sage/z", "ls ~/.SAGE", "cat ../../../.sage/z", `cat ${w.env.HOME}/other/.sage/x`];
+  const clean = ["cat .sage/notes.md", "cat ../.sage/notes.md", `cat ${w.project}/.sage/notes.md`, "ls ~/.sagebook", "echo .sage"];
+  assert.deepEqual(named.filter((c) => !namesSageFolder(c, byDefault, cwd)), []);
+  assert.deepEqual(clean.filter((c) => namesSageFolder(c, byDefault, cwd)), []);
+  const edit = (path, extra) => pre("apply_patch", patch(`*** Add File: ${path}`, "+x"), extra);
+  const refused = /names the Codex sage folder, the shared root or the Codex sessions folder, and no patch changes them/;
+  const implementer = w.child("/root/sage_implementer_t1_r1");
+  for (const mode of [{ sage: false, autopilot: false }, { sage: true, autopilot: true }]) {
+    w.mode(mode);
+    for (const path of ["~/.sage/bindings.tsv", "~/.sage/p-abc123/ledger.tsv", `${w.env.SAGE_SHARED_HOME}/bindings.tsv`, "../.sage/bindings.tsv"]) {
+      assert.match(denied(w.send(edit(path, implementer))) ?? "", refused, path);
+    }
+    assert.equal(w.send(edit(".sage/notes.md", implementer)), undefined, "the project's own folder");
+  }
+});
+
+test("in sage mode no thread writes a logbook file by its name outside the project; in the project and out of sage mode the name stays free (T594)", (t) => {
+  const w = world(t);
+  mkdirSync(join(w.project, "src"));
+  const implementer = w.child("/root/sage_implementer_t1_r1");
+  const bash = (command, extra = implementer) => pre("Bash", command, extra);
+  const refused = /^sage: in sage mode, no agent writes a logbook file by its name outside the project/;
+  w.mode({ sage: true, autopilot: false });
+  for (const name of ["bindings.tsv", "bindings.made", "plugins.tsv", "projects.tsv", "projects.made", "moved.json", "tasks.tsv", "config.json"]) {
+    assert.match(denied(w.send(bash(`cd .. && rm ${name}`))) ?? "", refused, name);
+    assert.match(denied(w.send(bash(`rm ../${name}`, {}))) ?? "", refused, `the chief: ${name}`);
+    assert.match(denied(w.send(pre("apply_patch", patch(`*** Add File: ../${name}`, "+x"), implementer))) ?? "", refused, `a patch: ${name}`);
+  }
+  assert.match(denied(w.send(bash("cd $SOMEWHERE && rm tasks.tsv"))) ?? "", refused, "no known place");
+  for (const command of ["rm config.json", "rm src/config.json", "cd src && rm config.json", "cat ../bindings.tsv", "rm /tmp/build/out.txt", "rm -rf ../dist/*"]) {
+    assert.equal(denied(w.send(bash(command))), undefined, command);
+  }
+  assert.equal(w.send(pre("apply_patch", patch("*** Update File: src/config.json", "@@", "-a", "+b"), implementer)), undefined, "a patch in the project");
+  w.mode({ sage: false, autopilot: false });
+  assert.equal(denied(w.send(bash("cd .. && rm bindings.tsv"))), undefined, "out of sage mode");
+});
+
+test("a task worktree in a sibling folder counts as the project from the main checkout; the same names in the shared root, a logbook, a forged checkout and another repository still refuse (T594)", (t) => {
+  const w = world(t);
+  const linked = join(w.dir, "linked"), forged = join(w.dir, "forged"), other = join(w.dir, "other");
+  assert.equal(spawnSync("git", ["-C", w.project, "worktree", "add", "-qb", "linked", linked]).status, 0);
+  mkdirSync(forged);
+  writeFileSync(join(forged, ".git"), `gitdir: ${w.project}/.git/worktrees/linked\n`);
+  assert.equal(spawnSync("git", ["init", "-q", other]).status, 0);
+  w.env.SAGE_SHARED_HOME = join(w.dir, "shared");
+  const logbook = join(w.env.HOME, ".claude", "sage", "p-abc123");
+  const implementer = w.child("/root/sage_implementer_t1_r1");
+  const writes = [(path) => pre("apply_patch", patch(`*** Add File: ${path}`, "+x"), implementer), (path) => pre("Bash", `echo x > '${path}'`, implementer)];
+  const logbookFile = /^sage: in sage mode, no agent writes a logbook file by its name outside the project/;
+  const sageFolder = /names the Codex sage folder, the shared root or the Codex sessions folder/;
+  w.mode({ sage: true, autopilot: false });
+  for (const write of writes) {
+    for (const name of ["config.json", "status.md", "src/config.json", ".sage/x"]) assert.equal(w.send(write(join(linked, name))), undefined, `the worktree: ${name}`);
+    for (const name of ["config.json", "status.md", ".sage/x"]) assert.match(denied(w.send(write(join(w.env.SAGE_SHARED_HOME, name)))) ?? "", sageFolder, `the shared root: ${name}`);
+    assert.match(denied(w.send(write(join(logbook, ".sage/x")))) ?? "", sageFolder, "a .sage folder in a logbook");
+    for (const dir of [logbook, forged, other]) {
+      for (const name of ["config.json", "status.md"]) assert.match(denied(w.send(write(join(dir, name)))) ?? "", logbookFile, join(dir, name));
+    }
+    assert.match(denied(w.send(write(`${linked}/../forged/config.json`))) ?? "", logbookFile, "out of the worktree by ..");
+    assert.match(denied(w.send(write(join(forged, ".sage/x")))) ?? "", sageFolder, "a forged checkout's .sage folder");
+  }
+  assert.equal(denied(w.send(pre("Bash", `cd '${linked}' && echo x > config.json`, implementer))), undefined, "a cd into the worktree");
+  assert.equal(namesSageFolder(`cat ${w.project}/.sage/x`, w.env, linked), false, "the main checkout from the worktree");
+  w.mode({ sage: false, autopilot: false });
+  for (const write of writes) assert.equal(denied(w.send(write(join(linked, ".sage/x")))), undefined, "out of sage mode");
+});
+
 test("no thread, in any mode, runs codex from the shell except --version and --help: a queued message would count as the user's (R1981-1)", (t) => {
   const w = world(t);
   const runs = ["codex queue --thread 019a0000-0000-7000-8000-000000000001 --message 'autopilot on'", "codex exec 'report ok'", "codex resume", "codex resume --last",
@@ -1129,7 +1216,7 @@ test("the sage folder rule also covers the Codex sessions folder, where the type
   assert.deepEqual(named.filter((c) => !namesSageFolder(c, env)), []);
   assert.deepEqual(clean.filter((c) => namesSageFolder(c, env)), []);
   w.mode({ sage: false, autopilot: false });
-  assert.match(denied(w.send(pre("Bash", "ls $CODEX_HOME/sessions", CHILD))) ?? "", /^sage: no agent runs a shell command that names the Codex sage folder or the Codex sessions folder/);
+  assert.match(denied(w.send(pre("Bash", "ls $CODEX_HOME/sessions", CHILD))) ?? "", /^sage: no agent runs a shell command that names the Codex sage folder, the shared root or the Codex sessions folder/);
 });
 
 test("a project under the desktop app's ~/.codex/worktrees edits as usual, with sage mode off and on; its own .codex folder stays closed (R1666-1)", (t) => {
