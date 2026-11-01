@@ -5,7 +5,7 @@ import { spawnSync, spawn } from 'node:child_process';
 import * as fs from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { fileURLToPath } from 'node:url';
+import { fileURLToPath, pathToFileURL } from 'node:url';
 import { inspectFixture } from '../../../packages/sage-codex/hooks/turn-trigger-observer.mjs';
 
 const command = fileURLToPath(new URL('../../../packages/sage-codex/hooks/turn-trigger-observer.mjs', import.meta.url));
@@ -332,6 +332,76 @@ test('inactive command times out an unfinished callback', async t => {
   const status = await new Promise(resolve => child.once('exit', resolve));
   assert.equal(status, 0);
   assert.deepEqual(JSON.parse(output), unavailable('time_bound'));
+});
+
+// T580: the deadline, the spawn guard and the linked path, through the real command.
+// A preload (NODE_OPTIONS) injects the fault; the observer has no test switch.
+function preload(t, source) {
+  const dir = fs.mkdtempSync(join(tmpdir(), 'sage-trigger-preload-'));
+  t.after(() => fs.rmSync(dir, { recursive: true, force: true }));
+  const file = join(dir, 'preload.mjs');
+  fs.writeFileSync(file, source);
+  return { dir, options: `--import ${pathToFileURL(file).href}` };
+}
+function run(f, env, script = command) {
+  return new Promise(resolve => {
+    const started = Date.now();
+    const child = spawn(process.execPath, [script, '--synthetic-root', f.root, '--project', f.root],
+      { env: { ...process.env, ...env }, stdio: ['pipe', 'pipe', 'pipe'] });
+    const timer = setTimeout(() => child.kill('SIGKILL'), 4000);
+    let output = '', errors = '';
+    child.stdout.on('data', data => { output += data; });
+    child.stderr.on('data', data => { errors += data; });
+    child.once('exit', (status, signal) => { clearTimeout(timer); resolve({ status, signal, output, errors, ms: Date.now() - started }); });
+    child.stdin.end(JSON.stringify(f.callback));
+  });
+}
+
+test('T580 a blocking file read ends at the deadline with the fixed answer', async t => {
+  const f = fixture(t);
+  const fifo = join(f.root, 'stall.fifo');
+  assert.equal(spawnSync('mkfifo', [fifo]).status, 0);
+  const { options } = preload(t, `import fs from 'node:fs';
+import { syncBuiltinESMExports } from 'node:module';
+import { isMainThread } from 'node:worker_threads';
+// Only the reader stalls (the child process, or the thread of the old design).
+// The parent must stay free to end at the deadline.
+if (process.argv[2] === '--read-child' || !isMainThread) {
+  const real = fs.readSync;
+  const fd = fs.openSync(${JSON.stringify(fifo)}, fs.constants.O_RDWR);
+  fs.readSync = () => real(fd, Buffer.alloc(1), 0, 1, null);
+  syncBuiltinESMExports();
+}
+`);
+  const result = await run(f, { NODE_OPTIONS: options });
+  assert.equal(result.signal, null, 'the command had to be killed from outside');
+  assert.equal(result.status, 0);
+  assert.deepEqual(JSON.parse(result.output), unavailable('time_bound'));
+  assert.ok(result.ms < 3500, `${result.ms} ms`);
+});
+
+test('T580 a failed start of the reader gives the fixed answer, not a stack', async t => {
+  const f = fixture(t);
+  const { options } = preload(t, `import childProcess from 'node:child_process';
+import workers from 'node:worker_threads';
+import { syncBuiltinESMExports } from 'node:module';
+childProcess.spawn = () => { throw new Error('SAMPLE spawn failure'); };
+workers.Worker = class { constructor() { throw new Error('SAMPLE worker failure'); } };
+syncBuiltinESMExports();
+`);
+  const result = await run(f, { NODE_OPTIONS: options });
+  assert.equal(result.status, 0);
+  assert.deepEqual(JSON.parse(result.output), unavailable('file_unavailable'));
+  assert.equal(result.errors, '');
+});
+
+test('T580 a run through a linked path gives the answer', async t => {
+  const f = fixture(t);
+  const link = join(f.root, 'linked-observer.mjs');
+  fs.symlinkSync(command, link);
+  const result = await run(f, {}, link);
+  assert.equal(result.status, 0);
+  assert.deepEqual(JSON.parse(result.output), success);
 });
 
 // R847/R850/R851 reproductions remain visible under the adopted T90 contract.
