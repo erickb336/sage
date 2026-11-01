@@ -574,7 +574,7 @@ test("T506: the chief saves a report with pages, and each run_done example ends 
     assert.match(runDone.inputSchema.properties[field].description, /needed with usage unavailable|it needs status done/, field);
   }
   const chief = readFileSync(join(ROOT, "plugins/sage-codex/runtime/chief-instructions.md"), "utf8").replace(/\s+/g, " ");
-  const examples = { description: runDone.description.match(/for example (\{.*\})\.$/)?.[1], dispatch: chief.match(/`run_done`, no `tokens` and the path that `pages` printed as `report`, for example `(\{.*?\})`/)?.[1] };
+  const examples = { description: runDone.description.match(/for example (\{.*\})\.$/)?.[1], dispatch: chief.match(/`run_done`, no `tokens`, for example `(\{.*?\})`/)?.[1] };
   const usageInterface = JSON.parse(`{${chief.match(/`run_add` `("usage-interface": "[a-z-]+")`/)?.[1]}}`)["usage-interface"];
   assert.equal(usageInterface, "collaboration-tools");
   // Step 6 sends a run without a token count to the dispatch step (R1798-2).

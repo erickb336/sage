@@ -100,10 +100,10 @@ test("the SessionStart hook gives a trusted install on a tested Codex no warning
 });
 
 test("the SessionStart hook warns the user for hooks without trust and outside the tested Codex range", (t) => {
-  const { run } = installed(t, { trust: ["session_start:0:0"], cliVersion: "0.165.0" });
-  assert.deepEqual(run({ hook_event_name: "SessionStart", source: "resume" }), output(`sage 0.1.0 is installed. Codex 0.165.0. sage hooks: 1 of 10 have a trust record (Codex checks each hash).\n${START}`,
+  const { run } = installed(t, { trust: ["session_start:0:0"], cliVersion: "0.167.0" });
+  assert.deepEqual(run({ hook_event_name: "SessionStart", source: "resume" }), output(`sage 0.1.0 is installed. Codex 0.167.0. sage hooks: 1 of 10 have a trust record (Codex checks each hash).\n${START}`,
     "sage: 9 of the 10 sage hooks are not trusted yet, so some sage rules do not run. To trust them, type /hooks in the Codex CLI.\n" +
-    "sage: this is Codex 0.165.0, and sage is tested only with Codex 0.160 to 0.164. Some sage rules may not run."));
+    "sage: this is Codex 0.167.0, and sage is tested only with Codex 0.160 to 0.166. Some sage rules may not run."));
 });
 
 test("on resume of a session over Node's string limit, the SessionStart hook still reads the Codex version (F-T473-1)", (t) => {
@@ -115,7 +115,7 @@ test("on resume of a session over Node's string limit, the SessionStart hook sti
 test("the SessionStart hook says when it cannot read the Codex version, and ignores other events", (t) => {
   const { run } = installed(t, { trust: ALL });
   assert.deepEqual(run({ hook_event_name: "SessionStart", source: "startup" }), output(`sage 0.1.0 is installed. Codex version unknown. sage hooks: 10 of 10 have a trust record (Codex checks each hash).\n${START}`,
-    "sage: the hook could not read the Codex version, and sage is tested only with Codex 0.160 to 0.164. Some sage rules may not run."));
+    "sage: the hook could not read the Codex version, and sage is tested only with Codex 0.160 to 0.166. Some sage rules may not run."));
   assert.equal(run({ hook_event_name: "UserPromptSubmit", prompt: "hello" }), "");
 });
 
@@ -137,7 +137,7 @@ test("the Codex guide carries the owner's lines for install, trust, removal, the
     "A reviewer's commit through these forms can also be pushed to the task's branch. Read the branch's commits before a merge, or keep autopilot off for such a task.", // R1670-6
     "when no sage hook is trusted, no sage hook runs, so you see no sage line at all, also no warning. If sage mode does not start, type `/hooks` in the Codex CLI", // R1671-1
     "Codex keeps the trust records of the sage hooks in your Codex config", // R1671-3
-    "sage: this is Codex 0.165.0, and sage is tested only with Codex 0.160 to 0.164. Some sage rules may not run.", // R1670-7
+    "sage: this is Codex 0.167.0, and sage is tested only with Codex 0.160 to 0.166. Some sage rules may not run.", // R1670-7
     "Codex 0.164.0 runs no hook for text that an agent types into a shell that still runs (`write_stdin`, for example after `zsh -i`). That text passes every sage rule", // R1675-2
   ]) assert.ok(guide.includes(line), line);
   assert.match(readFileSync(join(ROOT, "CHANGELOG.md"), "utf8"), /- A limit: Codex 0\.164\.0 runs no hook for text that an agent types into a shell that still runs \(`write_stdin`\)/, "R1675-2");

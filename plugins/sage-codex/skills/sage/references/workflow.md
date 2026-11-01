@@ -6,7 +6,7 @@ The parent is the chief. It writes the logbook, and a lead writes only the recor
 2. Frame a task through the CLI. Follow its route and risks. Resolve product decisions before dependent implementation.
 3. Confirm the host supports the required hierarchy and roles. Use its actual agent tools and capacity, not tool names from another provider.
 4. Keep one active build team per task. Give each writer exclusive paths or a separate worktree. Known checks do not provide atomic exclusion across sessions.
-5. The chief starts one lead for each task with a build, and starts designers, PE, arena judges and investigators itself. The lead starts the implementers, code reviewers, security reviewers, UX reviewers and QA of its task, as [start a role agent](roles.md) says. On multi-agent v1 a child cannot start agents, so the chief starts no lead: it does the lead's work and starts every role agent. Other role agents start no agents and record nothing in the logbook; the plugin's hook refuses both. Keep at most three leads for one project and nine helpers for one lead, within the lower host, project and owner limit.
+5. The chief starts one lead for each task with a build, and starts designers, PE, arena judges and investigators itself. The lead starts the implementers, code reviewers, security reviewers, UX reviewers and QA of its task, as [start a role agent](roles.md) says. Other role agents start no agents and record nothing in the logbook; the plugin's hook refuses both. Keep at most three leads for one project and nine helpers for one lead, within the lower host, project and owner limit.
 6. The chief or the lead records each run before its work starts and sends the complete brief. Other role agents never write logbook tables or invoke state mutations.
 7. The implementer makes the scoped change and runs appropriate checks. An independent reviewer examines the change; the implementer cannot certify its own review.
 8. Record findings before verdicts. Repair on the same task branch. Use the CLI's repair/held/replan rules, not a new task to hide unresolved findings.
@@ -17,7 +17,7 @@ Tiny work still needs an independent code review under this workflow; add that b
 
 ## Capacity, failures and recovery
 
-Use current host limits. Five subagents in one environment is not a portable limit. If capacity is full, wait or use supported lifecycle controls. A spawn that fails with `AgentLimitReached` is this case: see [the thread limit](roles.md#thread-limit). Completion does not prove that a slot was released. Continue only independent work that fits the available capability.
+Use current host limits. Five subagents in one environment is not a portable limit. If capacity is full, wait or use supported lifecycle controls. A spawn that fails with `collab spawn failed: agent thread limit reached` is this case: see [the thread limit](roles.md#thread-limit). Continue only independent work that fits the available capability.
 
 A failed skill read stops the work that depends on it. An unsupported state transition remains blocked. A child's success report remains reported until supported by evidence; obtain the missing check rather than invent it. Preserve native API refusals and permission boundaries.
 
