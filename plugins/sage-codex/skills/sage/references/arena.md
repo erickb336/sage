@@ -39,7 +39,7 @@ Frame the task with `task_add`, with `add: "arena"` and the reason as `why`.
    - failed: there is no result, and the arena step stays open. Do the same: a new judge run on a new name, set with `task_set` for a build.
 6. **A build goes on from the judge's branch.** A Codex judge leaves the pull request to you: push its branch and open a draft pull request from it. Move the task one state at a time to briefed, building and reviewing, with `pr` on the last move. Then do the lead's work: the reviews and QA of the route check the branch like any build, and a repair needs no `candidate`. At verified, run `gh pr ready <n>`, then merge or tell the user as usual.
 7. **A design goes to the PE.** The judge opens no pull request. It saves the final design in the pages folder, and its RESULT gives the page's path.
-   - Record the page with `pages` and `record`. Run the PE on the judge's branch and that page.
+   - Record the page with `pages` and `record`. Run the PE with the judge's branch and page in its brief. Give its `run_add` no `branch`: a design arena's task has none, and a PE run on any other branch is refused.
    - Move the task to awaiting-you, through designing when it is framed. Then ask the user to approve the design with `gate_add`, and name the page in the question: the user reviews the page, not a branch.
    - After the approval, move the task to briefed. The build starts as for any approved design: one implementer, on a new branch from main (`sage/t<n>`), not on the judge's branch, so that the prototype and its sample data stay out of main. The implementer's brief names the judge's branch as the design to build.
 8. **A candidate's branch never merges,** also for an abandoned task: `task_set` to verified and `merge_check` refuse it.

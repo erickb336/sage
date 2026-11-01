@@ -312,6 +312,9 @@ test("role.mjs prints the role text and the sage report, and refuses an unknown 
   assert.equal(judge.status, 0, judge.stderr);
   assert.match(judge.stdout, /^# Arena judge\n[\s\S]*End with the report format included below\.[\s\S]*\n# The sage report\n/);
   assert.doesNotMatch(judge.stdout, /\{\{/);
+  // T586: a judge's spawn message holds only this text, so the text itself leaves the pull request to the chief.
+  assert.match(judge.stdout, /\n {3}- For a build: leave the pull request to the chief\. Report your branch and head SHA: the chief pushes the branch and opens the pull request\. Do not push, and never run `gh`\.\n/);
+  assert.doesNotMatch(judge.stdout, /push your branch|open a draft pull request|as an implementer does|, the pull request\./);
   const bad = spawnSync("node", [ROLE, "chief"], { encoding: "utf8" });
   assert.equal(bad.status, 1);
   assert.equal(bad.stdout, "");

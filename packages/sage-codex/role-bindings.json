@@ -8,7 +8,9 @@
     "PROJECT_GUIDANCE": "`AGENTS.md` or `README.md`"
   },
   "designer": {},
-  "arena-judge": {},
+  "arena-judge": {
+    "JUDGE_BUILD_DELIVERY": "leave the pull request to the chief. Report your branch and head SHA: the chief pushes the branch and opens the pull request. Do not push, and never run `gh`."
+  },
   "code-reviewer": {},
   "security-reviewer": {},
   "ux-reviewer": {},

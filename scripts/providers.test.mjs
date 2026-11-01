@@ -2640,6 +2640,13 @@ test("T586: the Codex arena steps come in Claude's order, and the Codex steps na
   // Two titles differ by provider: Claude names its agent, and its judge opens the pull request.
   assert.deepEqual(titles(steps), claude.map((title) => title.replace("`sage:arena-judge`", "the arena judge").replace("draft pull request", "branch")));
   assert.doesNotMatch(steps, /sage:arena-judge|sage run add|sage task|sage-pr|\bopus\b|\bsonnet\b/);
+  // A design arena's task has no branch, and the state tool refuses a PE run on any other branch.
+  assert.match(steps, /Run the PE with the judge's branch and page in its brief\. Give its `run_add` no `branch`/);
+  assert.doesNotMatch(steps, /PE on the judge's branch/);
+  // Claude's judge still opens its draft pull request, and its text no longer says anything about the chief's work.
+  const judge = source("plugins/sage/agents/arena-judge.md");
+  assert.match(judge, /\n {3}- For a build: push your branch and open a draft pull request from it, as an implementer does\.\n/);
+  assert.doesNotMatch(judge, /leaves? the pull request to the chief/);
 });
 
 test("shared chief Codex instructions keep unsupported routes inactive, and merge only by autopilot through the plugin's hook", async t => {
