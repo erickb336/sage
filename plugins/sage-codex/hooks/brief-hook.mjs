@@ -6,8 +6,8 @@
 //   - SubagentStart, for a sage child (task name sage_..., from the first line of its transcript, as the report gate
 //     reads it): a developer note with the project's standing orders, the FORBIDDEN field of the checked brief and the
 //     brief itself, or one line that no checked brief is on record.
-//   - PostToolUse of spawn_agent: when no checked brief is on record for the task name, a warning to the chief that
-//     names the missing fields and says to run the brief check.
+//   - PostToolUse of spawn_agent: when no checked brief is on record for the task name, a warning to the chief or the
+//     lead that names the missing fields and gives the next steps.
 // The project is the folder that Codex gives the hook (cwd), as for the state tool's --project.
 import { existsSync, readFileSync, realpathSync, renameSync, writeFileSync } from "node:fs";
 import { dirname, join } from "node:path";
@@ -50,7 +50,7 @@ function startNote(input, env) {
   let task;
   try { task = childTask(input.transcript_path); } catch { return { systemMessage: UNREAD }; }
   if (!sageName(task)) return {};
-  bindChild(input.transcript_path, input.cwd, env); // a report child of the chief: only its own report is retained
+  bindChild(input.transcript_path, input.cwd, env); // a report child of the chief or a lead: only its own report is retained
   const standing = tool.command(["standing", `--project=${input.cwd}`], env);
   const brief = readBrief(input.cwd, task, env);
   const parts = standing.code === 0 ? [`sage: the standing orders of this project, from its logbook. Follow each one.\n\n${standing.text}`] : [];
@@ -59,14 +59,20 @@ function startNote(input, env) {
   return { hookSpecificOutput: { hookEventName: "SubagentStart", additionalContext: parts.join("\n\n") } };
 }
 
-/** The warning to the chief after a spawn of a sage child with no checked brief on record. */
+/**
+ * The warning after a spawn of a sage child with no checked brief on record. The chief sends the fixed brief. A spawner with
+ * an agent_id is a lead, and the gate refuses its messages, so its way out is a fresh agent on a new run.
+ */
 function spawnWarning(input, env) {
   const task = typeof input.tool_input?.task_name === "string" ? input.tool_input.task_name.split("/").at(-1) : "";
   if (!/spawn_agent$/.test(String(input.tool_name)) || !sageName(task) || typeof input.cwd !== "string") return {};
   const brief = readBrief(input.cwd, task, env);
   if (brief && !brief.missing.length) return {};
   const missing = brief ? `the recorded brief has no ${brief.missing.join(", ")}` : `no brief is on record, so ${BRIEF_FIELDS.join(", ")} are not checked`;
-  return { hookSpecificOutput: { hookEventName: "PostToolUse", additionalContext: `sage: ${task} started with no checked brief: ${missing}. Run the brief check: the sage tool \`brief\` with this task name and the whole brief, fix each missing field, then send the agent the fixed brief with \`send_message\`.` } };
+  const next = Object.hasOwn(input, "agent_id")
+    ? "A lead sends no message, so this agent stays without the note. Close it with `close_agent`, end its run as failed with the sage tool `run_done`, add a new run with `run_add`, run the sage tool `brief` with the new run's task name and the whole brief, fix each missing field, then spawn the new agent."
+    : "Run the brief check: the sage tool `brief` with this task name and the whole brief, fix each missing field, then send the agent the fixed brief with `send_message`.";
+  return { hookSpecificOutput: { hookEventName: "PostToolUse", additionalContext: `sage: ${task} started with no checked brief: ${missing}. ${next}` } };
 }
 
 /** The hook's answer to one SubagentStart or PostToolUse event. env names the logbook (CODEX_HOME or SAGE_HOME), for tests. */
