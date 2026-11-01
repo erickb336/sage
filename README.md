@@ -66,7 +66,7 @@ claude plugin update sage@sage
 
 ### In Codex
 
-Use the Codex CLI 0.160 to 0.164; the desktop app should work the same way, but it is not checked yet, and it needs the CLI for these commands. You also need Node.js 20 or later, `gh` logged in, and a GitHub remote for the project (see [What you need](docs/guide/codex.md#what-you-need)).
+Use the Codex CLI 0.160 to 0.166, and a multi-agent v2 model; the desktop app should work the same way, but it is not checked yet, and it needs the CLI for these commands. You also need Node.js 20 or later, `gh` logged in, and a GitHub remote for the project (see [What you need](docs/guide/codex.md#what-you-need)).
 
 1. Add the sage marketplace and install sage, in a terminal:
    ```sh
@@ -76,7 +76,7 @@ Use the Codex CLI 0.160 to 0.164; the desktop app should work the same way, but 
    codex plugin add sage@sage
    ```
 2. Run `codex` in a project folder, choose **Trust all and continue** at the "Hooks need review" screen, and send `sage mode` alone ([sage in Codex](docs/guide/codex.md)). The chief starts one lead for each task, and the lead starts the implementer, the reviewers and QA. Each report goes in the task's pages folder.
-3. With autopilot on, Codex still asks you 4 times in each task: before the worktree, the commit, the push and the pull request. Choose **Yes, and don't ask again** the first time each one comes, or **Yes, proceed** to be asked each time; read the trade-off first ([The approval prompts of each task](docs/guide/codex.md#the-approval-prompts-of-each-task)).
+3. With autopilot on, Codex still asks you at least 5 times in each small task: before the worktree, the add, the commit, the push and the pull request. Approve each one; read the choices first ([The approval prompts of each task](docs/guide/codex.md#the-approval-prompts-of-each-task)).
 
 ## The board
 

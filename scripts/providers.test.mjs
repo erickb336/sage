@@ -2660,7 +2660,7 @@ test("shared chief Codex instructions keep unsupported routes inactive, and merg
   assert.match(prepared, /prepared native adapter renders these shared rules on verified owner\s+activation and restores them after supported native compaction/);
   assert.match(prepared, /installed manual preview does not load this automatic chief role/);
   assert.match(prepared, /Full automatic Sage remains disabled/);
-  assert.match(text, /do the lead's work yourself, and start each role agent/);
+  assert.match(text, /sage on Codex needs a multi-agent v2 model for the chief and each child/);
   assert.match(text, /a tiny task goes through a lead to an implementer/);
   assert.match(text, /call `spawn_agent` in the `collaboration` namespace/);
   assert.match(text, /`fork_turns: "none"`/);
@@ -5237,7 +5237,9 @@ test("T85 isolated public PE and designer helpers render shared contracts and tr
   for (const role of ["pe", "designer"]) {
     const result = spawnSync(process.execPath, [helper, role], { encoding: "utf8", cwd: f.dir });
     assert.equal(result.status, 0, result.stderr);
-    assert.equal(result.stdout, `${f.api.renderRoleInstructions(role, f.bindings[role])}\n\n${f.api.renderReportInstructions(f.bindings.report)}\n`);
+    // T603: the designer writes git, so it gets the approval line; the PE gets the short line.
+    const approvals = readFileSync(join(f.plugin, `skills/sage/references/${role === "designer" ? "approvals" : "sandbox-refusal"}.md`), "utf8").trim();
+    assert.equal(result.stdout, `${f.api.renderRoleInstructions(role, f.bindings[role])}\n\n${approvals}\n\n${f.api.renderReportInstructions(f.bindings.report)}\n`);
     for (const field of f.api.REPORT_FIELDS) assert.match(result.stdout, new RegExp(`^${field} +`, "m"));
     assert.match(result.stdout, role === "pe" ? /You change nothing/ : /Use sample data, and label it as sample data/);
     assert.doesNotMatch(result.stdout, /\{\{|sage:report|CLAUDE_CONFIG_DIR/);

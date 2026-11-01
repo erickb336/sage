@@ -134,7 +134,7 @@ test("T453: a subagent's prompt switches nothing and gets no role, also with the
   assert.equal(await modes(s), "sage mode on, autopilot off");
 });
 
-const UNKNOWN = { systemMessage: "sage: the sage hook did not recognise this Codex event, so it switched no mode, and autopilot is off. Update the sage plugin, and keep Codex in the tested range (0.160 to 0.164)." };
+const UNKNOWN = { systemMessage: "sage: the sage hook did not recognise this Codex event, so it switched no mode, and autopilot is off. Update the sage plugin, and keep Codex in the tested range (0.160 to 0.166)." };
 
 test("T453: an unknown input shape switches nothing, turns autopilot off, and shows one plain line", async () => {
   const s = session();
@@ -230,7 +230,7 @@ test("T462: the guide, the README and the CHANGELOG say what is checked in Codex
   assert.deepEqual({
     "guide: the Codex CLI on PATH, also for a desktop app user": /The Codex CLI on your PATH, in that range, also when you use only the desktop app: .*`npm install -g @openai\/codex@0\.164\.0`/.test(guide),
     "guide: the app's own plugin list is not checked": /An install from the app's own plugin list is not checked yet\./.test(guide),
-    "guide: checked on 0.164.0": /checked with the Codex CLI 0\.160\.0 and 0\.164\.0/.test(guide),
+    "guide: checked on 0.164.0": /checked with the Codex CLI 0\.160\.0, 0\.164\.0 and 0\.166\.0/.test(guide),
     "CHANGELOG: the desktop app should work the same way, not checked yet": /The Codex desktop app should work the same way, but it is not checked yet\./.test(entry) && !/in the CLI and the desktop app/.test(entry),
     "README: no claim that the desktop app is checked": !/the CLI or the desktop app: run/.test(readme),
     "guide: the reviewer writes that the hook does not block": /A write through `git apply`, `git commit`, a script file that `node` or `python` runs, or `make` is not blocked\./.test(guide),
@@ -254,8 +254,7 @@ test("T553: the chief role runs one lead for each task, starts the lead, PE and 
   assert.match(role, /with the task name `sage_lead_t12_r40` for run R40 \(`sage_lead_t<n>_r<k>`\)/);
   assert.match(role, /The `message` starts with the whole output of `role\.mjs lead`, then the brief/);
   assert.match(role, /You record only this run of the task: the lead records its team's runs, findings and verdicts/);
-  assert.match(role, /only on multi-agent v1, a child cannot start agents, so start no lead: do the lead's work yourself/);
-  assert.match(role, /For `AgentLimitReached`, read its \*\*Thread limit\*\*/);
+  assert.match(role, /For `collab spawn failed: agent thread limit reached`, read its \*\*Thread limit\*\*/);
   assert.doesNotMatch(role, /team is flat|Leads come later/);
   const pages = readFileSync(new URL("../plugins/sage-codex/skills/sage/references/roles.md", import.meta.url), "utf8");
   for (const heading of ["## Start a lead", "## The lead's report", "## Thread limit"]) assert.ok(pages.includes(`\n${heading}\n`), heading);
@@ -263,6 +262,50 @@ test("T553: the chief role runs one lead for each task, starts the lead, PE and 
   const names = [...`${role}\n${pages}`.matchAll(/sage_lead_t[^\s`)]*/g)].map(([name]) => name);
   assert.ok(names.length >= 3, names.join(", "));
   assert.deepEqual(names.filter((name) => !/_t(?:\d+|<n>)_r(?:\d+|<k>)$/.test(name)), []);
+});
+
+test("T603: the chief role holds the pilot's rules: a v2 model only, no fresh lead with no spawn tools, its turn stays open, the real limit message, the approvals", async () => {
+  const role = contextOf(await session().prompt("sage mode")).replace(/\s+/g, " ");
+  assert.match(role, /sage on Codex needs a multi-agent v2 model for the chief and each child\. With no `spawn_agent` in the `collaboration` namespace, start no agent, and tell the owner to start a new session on a v2 model \(see the guide's What you need\)\./);
+  assert.match(role, /Never switch the model during a run/);
+  assert.match(role, /When a lead reports that it has no spawn tools, end its run, start no fresh lead, and tell the owner the same fix\./);
+  assert.match(role, /Do not end your turn while a child runs: a child's report starts no turn\./);
+  assert.match(role, /Call `wait_agent` \(only `timeout_ms`, at most 3600000\) until the report comes as a message in your next input/);
+  assert.match(role, /"A child still runs\. Send any message, and one more if its report has not come\."/);
+  assert.match(role, /collab spawn failed: agent thread limit reached/);
+  assert.match(role, /Git writes and network steps ask the owner for approval, at least 5 clicks in each small task/);
+  assert.doesNotMatch(role, /AgentLimitReached|multi-agent v1|do the lead's work/);
+  const roles = readFileSync(new URL("../plugins/sage-codex/skills/sage/references/roles.md", import.meta.url), "utf8").replace(/\s+/g, " ");
+  assert.match(roles, /A lead that has no spawn tools is the exception: start no fresh lead until the owner says that the session runs on a v2 model\./);
+  // F-T603-1: the line comes before the steps that it guards, so a refused `gh pr checks` never reaches the checks-fail step.
+  const report = roles.slice(roles.indexOf("## The lead's report"));
+  const refusal = report.search(/When the sandbox refuses one, run the same command again with escalated permissions, and wait for the owner\. A sandbox refusal is not a failed check: a check fails only when `gh pr checks` lists it as failed\. When the approval policy is `never` or the owner says no, record no verdict, and tell the owner which step stopped\./);
+  assert.ok(refusal > 0 && refusal < report.indexOf("When a check fails, record `checks-fail`"), String(refusal));
+});
+
+test("T603: the Codex pages hold no v1 path for a task, and the guide gives the approval count, what the pilot did not prove and the turn rule", () => {
+  const read = (path) => readFileSync(new URL(path, import.meta.url), "utf8").replace(/\s+/g, " ");
+  const guide = read("../docs/guide/codex.md"), readme = read("../README.md");
+  for (const [name, text] of Object.entries({ guide, readme,
+    roles: read("../plugins/sage-codex/skills/sage/references/roles.md"), workflow: read("../plugins/sage-codex/skills/sage/references/workflow.md"),
+    steps: read("../plugins/sage-codex/skills/sage/references/lead-steps.md"), chief: read("../plugins/sage-codex/runtime/chief-instructions.md") })) {
+    assert.doesNotMatch(text, /AgentLimitReached|does the lead's work|do the lead's work|On multi-agent v1|Multi-agent v1\.|only in the `multi_agent_v1`|4 times/, name);
+  }
+  assert.match(guide, /sage on Codex needs a multi-agent v2 model for the chief and each child\./);
+  assert.match(guide, /each small task still asks you at least 5 times before its merge/);
+  assert.match(guide, /\| Read the pull request and its checks \(`gh pr view`, `gh pr checks`\) \| The chief's check of a ready task, before the merge \| It needs the network \|/);
+  assert.match(guide, /- A multi-agent v2 model for the chief and each child\. In Codex 0\.164\.0's bundled catalog, the `gpt-6-sol` models are v2, and `gpt-5\.6-luna` is not/);
+  const needs = guide.slice(guide.indexOf("## What you need"), guide.indexOf("## Install"));
+  assert.doesNotMatch(needs, /gpt-5\.5/, "seen only from one spawn output");
+  assert.match(guide, /\*\*`writable_roots` and the network: not proved\.\*\* sage keeps Codex's defaults, and it does not recommend this option/);
+  assert.match(guide, /`git worktree add -b` failed in the sandbox, but it left the branch\. 2\. The escalated retry stopped with `a branch named 'sage\/t1-demo' already exists`, so no worktree came to exist\./);
+  assert.match(guide, /\*\*Not proved yet:\*\* - An escalated push under a strict sandbox\./);
+  assert.doesNotMatch(guide, /Opt in to fewer prompts|writable_roots = /);
+  assert.doesNotMatch(readme, /option for fewer prompts/);
+  assert.match(guide, /With `approval_policy = "never"`, Codex refuses each escalation, so a build cannot commit/);
+  assert.match(guide, /A child's report starts no turn in Codex\./);
+  assert.match(guide, /fails with `collab spawn failed: agent thread limit reached`/);
+  assert.match(readme, /at least 5 times in each small task/);
 });
 
 /** The shared chief text as the build writes it, after the Codex preface; the Markdown file adds its own final newline. */

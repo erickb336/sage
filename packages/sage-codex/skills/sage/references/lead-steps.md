@@ -12,14 +12,14 @@ Your task name is `sage_lead_t<n>_r<k>`, where `<n>` is the number of your task.
    - `message`: the whole output of step 2, a blank line, then the brief.
    - `fork_turns: "none"`. Give no agent type and no model.
 
-**Wait and read.** Do not end while a helper runs.
+**Wait and read.** Do not end your turn while a helper runs: a helper's report starts no turn, so you would never read it.
 
-1. Call `wait_agent` for the helper, and read its report.
+1. Call `wait_agent`. It takes only `timeout_ms` (at most 3600000, one hour), and it has no target. It wakes on any message or at the time-out, and it returns no report. The report comes as a message in your next input, with the helper's path as its sender. Call `wait_agent` again until that helper's report comes.
 2. Save the whole report with `pages`: `task`, `run`, and the report as `text`. It prints a path.
 3. For a review or QA, record the report's findings (step 1 of **A report with findings**).
 4. End the run with `run_done`. For a done run, give `"status": "done"`, `"usage": "unavailable"`, `"usage-source": "codex collaboration-tools"`, `"usage-evidence": "wait_agent gives no token count"` and the path as `report`. For another status, give `status` and `report`. For a helper with no report, give `"status": "failed"`.
 
-**Record your task.** You record only your own task, with the sage tools. The shell refuses a write of the logbook. `finding_move` stays the chief's tool: name a finding to move in your report.
+**Record your task.** You record only your own task, with the sage tools. They ask for no approval. The shell refuses a write of the logbook. `finding_move` stays the chief's tool: name a finding to move in your report.
 
 - `task_set`: give `task` and `fields`, with string values, for example `{"task": "T12", "fields": {"state": "reviewing"}}`. The fields are `state` (briefed to building, building to reviewing, reviewing to verifying, verifying to reviewing, repairing to reviewing), `branch` and `pr`.
 - `verdict`: give `task`, `kind` (`review-clean`, `security-clean`, `ux-clean`, `qa-pass`, `qa-fail` or `findings`), `sha`, `cycle`, `pr` and the `run` whose kept report backs it, after you end that run. The `checks-pass` and `checks-fail` verdicts are the chief's.
@@ -36,8 +36,8 @@ Your task name is `sage_lead_t<n>_r<k>`, where `<n>` is the number of your task.
 
 **Steer by a new agent.** The gate refuses `send_message`, `followup_task` and `send_input` from a lead, because each agent works only from its checked brief. To change a helper's work, stop it with `interrupt_agent`, end its run as failed, then start a new agent on a new run with a new brief. The gate also refuses `resume_agent`.
 
-**Thread limit.** `AgentLimitReached` means that no thread is free. Call `list_agents`, wait for a helper that runs, then call `spawn_agent` again with the same task name. When no helper runs and it still fails, end the run as blocked, and report STATUS blocked: the chief asks the owner to raise `agents.max_concurrent_threads_per_session`.
+**Thread limit.** `collab spawn failed: agent thread limit reached` means that no thread is free. Codex allows 4 threads by default: the chief, you and 2 helpers, so a third helper at the same time fails. A finished or interrupted helper frees its thread. Call `list_agents`, wait for a helper that runs, then call `spawn_agent` again with the same task name. When no helper runs and it still fails, end the run as blocked, and report STATUS blocked: the chief asks the owner to raise `agents.max_concurrent_threads_per_session`.
 
-**Multi-agent v1.** A v1 child cannot start agents. When your tools have no `spawn_agent` in the `collaboration` namespace, report STATUS blocked at once: the chief does the lead's work.
+**No spawn tools.** sage on Codex needs a multi-agent v2 model for the chief and each child. When your tools have no `spawn_agent` in the `collaboration` namespace, start nothing, and report STATUS blocked at once with the reason that you have no spawn tools. The chief tells the owner the fix.
 
 **End.** Stop at verifying with a ready report, or report blocked and name what is left. The chief records the checks, moves the task to verified and merges.
