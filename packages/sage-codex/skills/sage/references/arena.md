@@ -2,7 +2,7 @@
 
 An arena gives one task to several candidates, each on its own branch. A judge then scores them, picks the base and grafts the best parts of the others onto its own new branch. Use it for a design with no clear answer, or when the user says "arena" or "arena N".
 
-The steps come in the same order as in Claude Code. You run the arena yourself: in Codex the team is flat, so you also do the lead's work after it. Each `run_add`, `spawn_agent` and `run_done` goes as **Run the route** says in the chief's instructions, also with its `usage-interface`.
+The steps come in the same order as in Claude Code. You run the arena yourself, before any lead. Each `run_add`, `spawn_agent` and `run_done` goes as **Run the route** says in the chief's instructions, also with its `usage-interface`.
 
 Frame the task with `task_add`, with `add: "arena"` and the reason as `why`.
 
@@ -37,7 +37,7 @@ Frame the task with `task_add`, with `add: "arena"` and the reason as `why`.
    - blocked, with no usable candidate: there is no winner and no result. Resolve the brief: start new candidates on new branches, or abandon the task.
    - blocked, because its branch exists: take a new name, such as `sage/t<n>-judge-2`, set it with `task_set` for a build, and add a new judge run.
    - failed: there is no result, and the arena step stays open. Do the same: a new judge run on a new name, set with `task_set` for a build.
-6. **A build goes on from the judge's branch.** A Codex judge leaves the pull request to you: push its branch and open a draft pull request from it. Move the task one state at a time to briefed, building and reviewing, with `pr` on the last move. Then do the lead's work: the reviews and QA of the route check the branch like any build, and a repair needs no `candidate`. At verified, run `gh pr ready <n>`, then merge or tell the user as usual.
+6. **A build goes on from the judge's branch.** A Codex judge leaves the pull request to you: push its branch and open a draft pull request from it. Move the task one state at a time to briefed, building and reviewing, with `pr` on the last move. Then record a lead run and start one lead, as **Run the route** says, with the judge's branch and PR in CONTEXT. It starts at reviewing. The reviews and QA of the route check the branch like any build, and a repair needs no `candidate`. At verified, run `gh pr ready <n>`, then merge or tell the user as usual.
 7. **A design goes to the PE.** The judge opens no pull request. It saves the final design in the pages folder, and its RESULT gives the page's path.
    - Record the page with `pages` and `record`. Run the PE with the judge's branch and page in its brief. Give its `run_add` no `branch`: a design arena's task has none, and a PE run on any other branch is refused.
    - Move the task to awaiting-you, through designing when it is framed. Then ask the user to approve the design with `gate_add`, and name the page in the question: the user reviews the page, not a branch.

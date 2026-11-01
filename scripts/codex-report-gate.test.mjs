@@ -321,6 +321,31 @@ test("role.mjs prints the role text and the sage report, and refuses an unknown 
   assert.equal(bad.stderr, "sage: Unknown child role. Give one role from references/roles.md.\n");
 });
 
+test("T553: role.mjs lead adds the Codex steps to the lead's text, and no other role gets them", () => {
+  const r = spawnSync("node", [ROLE, "lead"], { encoding: "utf8" });
+  assert.equal(r.status, 0, r.stderr);
+  assert.match(r.stdout, /^# Lead\n\nYou coordinate one task[\s\S]*\n## Your steps in Codex\n[\s\S]*\n# The sage report\n/);
+  // How a lead starts each helper: the name form, the role text from a command that it can run, and the brief.
+  assert.match(r.stdout, /`task_name`: `sage_`, the role with `_` for `-`, then `_t<n>_r<k>`, for example `sage_code_reviewer_t12_r41`/);
+  assert.match(r.stdout, /`message`: the whole output of step 2, a blank line, then the brief\./);
+  const [, script] = /Run `node (\S+) <role>`/.exec(r.stdout) ?? [];
+  assert.equal(script, join(ROOT, "plugins/sage-codex/skills/sage/role.mjs"), "the real path of the script");
+  assert.match(spawnSync("node", [script, "qa"], { encoding: "utf8" }).stdout, /^# QA\n/, "the command that the lead runs prints a helper's role text");
+  // How it waits, reads and records, and that its messages are refused.
+  assert.match(r.stdout, /Call `wait_agent` for the helper, and read its report\./);
+  assert.match(r.stdout, /Save the whole report with `pages`/);
+  for (const tool of ["run_add", "run_done", "brief", "finding_add", "finding_triage", "finding_close", "round", "verdict", "task_set"]) assert.ok(r.stdout.includes(`\`${tool}\``), tool);
+  assert.match(r.stdout, /The gate refuses `send_message`, `followup_task` and `send_input` from a lead/);
+  assert.match(r.stdout, /The `checks-pass` and `checks-fail` verdicts are the chief's/);
+  // The carried limits, each with what to do.
+  assert.match(r.stdout, /Claude's hook checks this count \(its gap rule\), and the Codex gate does not/);
+  assert.match(r.stdout, /`AgentLimitReached` means that no thread is free/);
+  assert.match(r.stdout, /A v1 child cannot start agents\./);
+  assert.doesNotMatch(r.stdout, /\{\{|<role\.mjs>/);
+  assert.deepEqual(named(r.stdout).filter((name) => !STOCK.includes(name) && !MCP.includes(name)), [], "each tool that the steps name exists");
+  for (const role of ["implementer", "qa", "pe"]) assert.doesNotMatch(spawnSync("node", [ROLE, role], { encoding: "utf8" }).stdout, /Your steps in Codex/, role);
+});
+
 // T83: run the public renderer from the generated package, as the chief does.
 for (const [role, heading] of [["investigate", "# Investigate"], ["evidence-review", "# Evidence review"]]) {
   test(`T83 public role renderer supplies ${role} and the report contract`, () => {

@@ -240,11 +240,25 @@ test("T462: the guide, the README and the CHANGELOG say what is checked in Codex
     "README: no claim that the desktop app is checked", "guide: the reviewer writes that the hook does not block", "guide: full access gives no mode guarantee", "guide: the sessions folder"].map((k) => [k, true])));
 });
 
-test("T462: the chief role says what the hooks hold: role agents start no agents and record nothing, and each spawn names its run (R1664-3, R1663-2)", async () => {
+test("T462: the chief role says what the hooks hold: role agents other than a lead start no agents and record nothing, and each spawn names its run (R1664-3, R1663-2)", async () => {
   const role = contextOf(await session().prompt("sage mode")).replace(/\s+/g, " ");
-  assert.match(role, /Role agents start no agents and record nothing in the logbook: the plugin's hook refuses a role agent's `spawn_agent` and its sage tools that write/);
+  assert.match(role, /Other role agents start no agents and record nothing in the logbook: the plugin's hook refuses a role agent's `spawn_agent` and its sage tools that write/);
   assert.match(role, /the task and the run id that `run_add` printed \(for example `sage_implementer_t12_r40` for run R40\)/);
   assert.doesNotMatch(role, /cannot start more agents/);
+});
+
+test("T553: the chief role runs one lead for each task, starts the lead, PE and designer, and says what to do on v1 and at the thread limit", async () => {
+  const role = contextOf(await session().prompt("sage mode")).replace(/\s+/g, " ");
+  for (const row of ["lead", "pe", "designer", "arena-judge"]) assert.match(role, new RegExp(`\\| ${row} \\| `), row);
+  assert.match(role, /One lead for each task with a build/);
+  assert.match(role, /with the task name `sage_lead_t12_r40` for run R40 \(`sage_lead_t<n>_r<k>`\)/);
+  assert.match(role, /The `message` starts with the whole output of `role\.mjs lead`, then the brief/);
+  assert.match(role, /You record only this run of the task: the lead records its team's runs, findings and verdicts/);
+  assert.match(role, /only on multi-agent v1, a child cannot start agents, so start no lead: do the lead's work yourself/);
+  assert.match(role, /For `AgentLimitReached`, read its \*\*Thread limit\*\*/);
+  assert.doesNotMatch(role, /team is flat|Leads come later/);
+  const pages = readFileSync(new URL("../plugins/sage-codex/skills/sage/references/roles.md", import.meta.url), "utf8");
+  for (const heading of ["## Start a lead", "## The lead's report", "## Thread limit"]) assert.ok(pages.includes(`\n${heading}\n`), heading);
 });
 
 /** The shared chief text as the build writes it, after the Codex preface; the Markdown file adds its own final newline. */

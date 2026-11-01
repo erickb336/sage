@@ -164,7 +164,7 @@ test("T470: the Codex guide, the README and the CHANGELOG carry the owner's copy
     ],
     readme: [
       "**sage is a Claude Code and Codex plugin for developers who", // F-T470-11
-      "and the lead and the board phrases do not work there yet ([sage in Codex](docs/guide/codex.md))", // F-T470-11
+      "the lead has source tests but no real run yet, and the board phrases do not work there yet ([sage in Codex](docs/guide/codex.md))", // F-T470-11
       "You also need Node.js 20 or later, `gh` logged in, and a GitHub remote for the project (see [What you need](docs/guide/codex.md#what-you-need)).", // F-T470-15, T467
     ],
     changelog: [

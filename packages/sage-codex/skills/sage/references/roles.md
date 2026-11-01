@@ -1,8 +1,10 @@
 # Start a role agent
 
-The chief starts each supported role agent (implementer, pe, designer, arena-judge, code-reviewer, security-reviewer, ux-reviewer, qa, investigate, evidence-review) as a Codex child agent. The lead route remains unavailable. Codex plugins cannot ship agent roles, so the role text goes at the top of the spawn message. The plugin writes no role files into your Codex home.
+Each role agent (lead, implementer, pe, designer, arena-judge, code-reviewer, security-reviewer, ux-reviewer, qa, investigate, evidence-review) is a Codex child agent. Codex plugins cannot ship agent roles, so the role text goes at the top of the spawn message. The plugin writes no role files into your Codex home.
 
-**The shape is flat for now.** The chief starts every role agent and does the lead's work (the briefs, the review cycles and the repair rounds). Leads come later. Role agents start no agents and record nothing in the logbook: the plugin's hook refuses their `spawn_agent` and the sage tools that write, so the chief records what their reports say. Record each run with the `run_add` tool of the sage MCP server before the spawn.
+**The shape.** The chief starts each lead, one for each task with a build, and each pe, designer, arena-judge, investigate and evidence-review agent. A lead starts the implementer, the reviewers and QA of its own task, and records that task: `role.mjs lead` prints its steps. Other role agents start no agents and record nothing in the logbook: the plugin's hook refuses their `spawn_agent` and the sage tools that write, so the chief or the lead records what their reports say. Record each run with the `run_add` tool of the sage MCP server before the spawn.
+
+**Multi-agent v1.** A v1 child gets no spawn tools, so a lead cannot start helpers there. On v1 the chief starts no lead: it starts every role agent and does the lead's work (the briefs, the review cycles and the repair rounds).
 
 ## Steps
 
@@ -16,6 +18,35 @@ The chief starts each supported role agent (implementer, pe, designer, arena-jud
 4. Wait for the agent with `wait_agent`, and read its report.
 
 When your tool list has `spawn_agent` only in the `multi_agent_v1` namespace (an older model), give `message` alone. That spawn form has no task name, so the report check does not check the agent: read its report yourself.
+
+## Start a lead
+
+The chief's steps are in **Run the route**. The task name is `sage_lead_t<n>_r<k>`, with the run id that `run_add` printed. The CONTEXT of the lead's brief gives:
+
+- the absolute project folder;
+- the task's state, its branch and its PR when it has one;
+- the pages folder that `pages` prints;
+- the count of clean cycles: 1 with autopilot off, else the task's count;
+- each upstream report that `run_add` names, in full.
+
+The gate lets a lead start only `sage_<role>_t<n>_r<k>`, with its own task number, for the roles implementer, code_reviewer, security_reviewer, ux_reviewer and qa. Its agent path must have only leads above it. A lead changes no files and sends no message: to steer its team, it starts a new agent on a new run.
+
+The chief records the lead run, the checks verdicts, the move to verified, and its own design, PE, arena and investigation runs. The lead records the runs of its team, their findings, their verdicts, and the task's moves through the cycle. It also sends the branch and opens the pull request, because a Codex implementer does neither.
+
+## The lead's report
+
+1. Check the report against `status`: each run, finding and verdict that it names is in the logbook.
+2. Do what only you do: ask its QUESTIONS with `gate_add`, dismiss each medium or high finding that it names as wrong, when you agree, and end each run that it names as never started.
+3. For a ready report (the task at verifying), take the PR number from the logbook, never from the report. Take the head SHA from `gh pr view <n> --json headRefOid`, and compare it with the SHA in the report. When they differ, or a run of the task other than the lead run still runs, record no verdict: start a fresh lead.
+4. Run `gh pr checks <n>`. When every check passes on that SHA, record `checks-pass` with `verdict`, then move the task to verified with `task_set`. Then merge (autopilot on), or tell the user that the pull request is ready.
+5. When a check fails, record `checks-fail`, add a finding with `finding_add` (`source` qa, `run` the lead run), triage it fix, then start a fresh lead.
+6. For a blocked report, take no state from it. Read the task's state, round and findings with `status`, decide from them, and start a fresh lead on a new lead run, with the original brief, the decision and the earlier report. It goes on from the logbook.
+
+## Thread limit
+
+Codex v2 allows 4 threads in a session by default: the chief and 3 children. So a lead and 2 helpers fill the default. When no thread is idle, a spawn fails with `AgentLimitReached`, and the setting is `agents.max_concurrent_threads_per_session`.
+
+When a spawn of the chief fails so, wait for a running agent with `wait_agent`, then call `spawn_agent` again with the same task name. Ask the owner to set the limit to 10 before a task with a full team. An agent never changes that setting.
 
 ## The report check
 
@@ -59,4 +90,4 @@ Each candidate and the judge write on their own branch, in their own worktree, s
 
 ## Before installed acceptance
 
-Generated-package tests establish source support only. Before installed acceptance, verify the package version, both public role texts, actual child runs, permission refusals, exact retention and the saved prototype. Synthetic hook events do not prove installed execution or protected native completion. Stop at a protected denial; do not try another path.
+Generated-package tests establish source support only. Before installed acceptance, verify the package version, the public role texts, actual child and lead runs, permission refusals, exact retention and the saved prototype. Synthetic hook events do not prove installed execution or protected native completion. Stop at a protected denial; do not try another path.
