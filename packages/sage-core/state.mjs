@@ -3,7 +3,7 @@ import { USAGE_FIELDS, tokenCount, usageText, usageRegistry, usageSnapshot, vali
 import { parseRunTarget } from "./run-target.mjs";
 import { readLocalGit } from "./local-git.mjs";
 import { TaskUpdateError } from "./task-update-error.mjs";
-import { recordedWrites, coordinatedWrites, assertNoPendingWrite, hasPendingWrite, pendingRequest, pendingText, settlePendingWrite, RecordedWriteError } from "./recorded-write.mjs";
+import { recordedWrites, coordinatedWrites, assertNoPendingWrite, hasPendingWrite, pendingRequest, pendingNames, settlePendingWrite, RecordedWriteError } from "./recorded-write.mjs";
 // sage: the state tool of sage mode. The chief of staff calls it through the shell: one command in, one line out.
 // The store is plain TSV and Markdown under the configured root ($SAGE_HOME overrides it), and every
 // table has one writer: this tool. It holds the rules that prompts alone did not hold in Orchestrator: no dropped
@@ -656,7 +656,7 @@ function updateRequestedTask(input, env, coordination) {
     return reply(taskUpdates.publish(dir, reference, coordination), proposal, "task-updated");
   }); } catch (error) {
     if (error instanceof TaskUpdateError) throw error;
-    throw new TaskUpdateError(error instanceof RecordedWriteError || phase === "state" ? "invalid-state"
+    throw new TaskUpdateError((error instanceof RecordedWriteError && !error.code) || phase === "state" ? "invalid-state"
       : phase === "publish" ? "uncertain-outcome" : phase === "readiness" ? "readiness" : "invalid-change");
   }
 }
@@ -1128,13 +1128,17 @@ const interruptedWrites = recordedWrites({ schema: 5, tables: ["runs"], folder: 
   name: /^[0-9a-f-]{36}\.json$/, receiptName: reference => `${reference.binding.assignment}.json`, validate: validateInterruptedWrite });
 /** The consumer of each schema of a saved change. Schema 6 is the old marker of a task update. */
 const SAVED = { 2: taskWrites, 3: runWrites, 4: reviewWrites, 5: interruptedWrites, 6: taskUpdates, 7: usageWrites, 8: taskUpdates };
-/** Step 3 of every writer, and of a read that takes the lock. Call under the lock. An I/O fault leaves the marker for the next writer. */
+/**
+ * Step 3 of every writer, and of a read that takes the lock. Call under the lock. A file fault leaves the marker for the
+ * next writer, and its error keeps the code, so that a caller reads the outcome as uncertain.
+ */
 function settle(dir) {
   let settled;
   try { settled = settlePendingWrite(dir, SAVED); }
   catch (error) {
-    if (error.code && !(error instanceof TaskUpdateError)) throw error;
-    throw new RecordedWriteError(`A saved change (request ${pendingRequest(dir)}) cannot finish, so writes and merges of this project stop until the owner repairs it. Keep the saved change. Other projects continue. ${error.message}`);
+    const request = pendingRequest(dir), unknown = request === "unknown", change = unknown ? "A saved change" : `A saved change (request ${request})`;
+    if (error.code && !(error instanceof TaskUpdateError)) throw Object.assign(new RecordedWriteError(`${change} did not finish because of a file error (${error.code}). The saved change stays. Run the command again.`), { code: error.code });
+    throw new RecordedWriteError(`${change} cannot finish${unknown ? ", and sage cannot read its request" : ""}. ${error.message} The saved change stays in review-pending.json, and sage does not delete it. Writes and merges of this project stop. Other projects continue. Next step for the owner: run sage logbook in this project to find the folder, repair that file or the table, then run this command again.`);
   }
   if (settled) status(dir, true);
 }
@@ -2054,6 +2058,7 @@ function rebuild(root) {
  * pull request (F-T273-8). Each task of the logbook that owns it must be on the pull request too (T439).
  * With project, the folder of the project being merged: only a task of its logbook counts as a task of the pull request
  * that may approve the merge. A task of another logbook with verdicts on the SHA must still pass (F-T273-9).
+ * With locked, the caller already holds that project's lock, so the check finishes its saved change without taking it.
  */
 function mergeCheck(sha, env = process.env, options = {}) {
   return assessMerge(sha, env, options);
@@ -2067,17 +2072,20 @@ function boardLandingCheck(sha, env, logbook, pr) {
 
 function assessMerge(sha, env, options, logbook = null) {
   const skipped = [], verdict = judgeMerge(sha, env, options, logbook, skipped);
-  return skipped.length ? { ...verdict, reason: `${verdict.reason} Skipped ${skipped.map(visible).join(", ")}: a saved change waits there, and it has no row for this commit.` } : verdict;
+  return skipped.length ? { ...verdict, reason: `${verdict.reason} Skipped ${skipped.map(visible).join(", ")}: a saved change waits there, and it has no row for this commit. No action is needed. Any write there finishes the change.` } : verdict;
 }
 
-function judgeMerge(sha, env, { cycles, pr, readOnly, head, project }, logbook, skipped) {
+function judgeMerge(sha, env, { cycles, pr, readOnly, head, project, locked }, logbook, skipped) {
   const root = sageRoot(env);
   try {
     if (notFull(sha)) return { ok: false, reason: notFull(sha) };
     if (head !== undefined && !pr) return { ok: false, reason: "--head needs --pr: the head branch is the pull request's." };
     if (head === "") return { ok: false, reason: "--head is empty: give the pull request's head branch (F-T273-10)." };
     const mine = project === undefined ? undefined : basename(storeDir(project, env)); // the merged project's logbook
-    if (mine !== undefined && !readOnly && hasPendingWrite(join(root, mine))) withLock(join(root, mine), () => settle(join(root, mine)));
+    if (mine !== undefined && !readOnly && hasPendingWrite(join(root, mine))) {
+      if (locked) settle(join(root, mine));
+      else withLock(join(root, mine), () => settle(join(root, mine)));
+    }
     sha = String(sha).toLowerCase(); // the ledger holds SHAs as git prints them
     pr &&= prNumber(String(pr)); // the tasks table holds it as text; "040" is PR 40
     const cfg = config(env); // once: the merge check may judge thousands of tasks
@@ -2088,8 +2096,8 @@ function judgeMerge(sha, env, { cycles, pr, readOnly, head, project }, logbook, 
     const each = (logbook === null ? folders(root) : [join(root, logbook)]).flatMap((dir) => {
       // A saved change stops only the project that holds it: this check looks at that logbook only when it names this commit.
       if (hasPendingWrite(dir)) {
-        if (![readRegular(join(dir, "ledger.tsv")), pendingText(dir)].some((text) => text?.includes(sha))) return skipped.push(dir), [];
-        throw new RecordedWriteError(`${visible(dir)} holds a saved change that names ${sha.slice(0, 7)}. Any write of that project settles it. Then check again.`);
+        if (!readRegular(join(dir, "ledger.tsv"))?.includes(sha) && !pendingNames(dir, sha)) return skipped.push(basename(dir)), [];
+        throw new RecordedWriteError(`Project ${visible(basename(dir))} holds a saved change that names ${sha.slice(0, 7)}. Run sage init in that project to finish the change, then check again.`);
       }
       // A folder with tasks.tsv, also a link, is a logbook, and it must pass the integrity check. A folder without it is
       // none: init has not finished it, or it lost its tasks. Its verdicts name tasks that it does not have, so they refuse.
@@ -3255,7 +3263,8 @@ function command(argv, env = process.env) {
   try {
     return { code: 0, text: (argv[0] === "standing" ? orders : shown)(sage(argv, env)) };
   } catch (err) {
-    return { code: err instanceof Refusal ? 1 : 2, text: `sage: ${shown(err instanceof Refusal ? err.message : err.stack)}` };
+    const said = err instanceof Refusal || err instanceof RecordedWriteError; // its text is for a person
+    return { code: said ? 1 : 2, text: `sage: ${shown(said ? err.message : err.stack)}` };
   }
 }
 

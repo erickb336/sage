@@ -271,7 +271,7 @@ function apply(state, event, replay = false) {
     const live = copy.reservations.filter(row => row.assignment.project === value.project && row.assignment.task === value.task
       && !ended.has(row.assignment.id));
     const conflict = taskFence(copy, value.project, value.task);
-    const reason = conflict ? "Another task update is unresolved. Retry its original request."
+    const reason = conflict ? "Another task update is unresolved. Reconcile or interrupt the open assignments of this task, then retry."
       : value.disruptive && live.length ? `Reconcile or interrupt these assignments first: ${live.map(row => row.assignment.id).join(", ")}` : "";
     const decision = { update: value, accepted: !reason, reason };
     copy.taskUpdates = [...(copy.taskUpdates ?? []), decision];

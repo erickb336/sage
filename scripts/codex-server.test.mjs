@@ -5539,6 +5539,15 @@ async function taskUpdateCoordinator(f, request) {
   return { run, coordination };
 }
 
+test('T578: a task update behind an unresolved one gets a step that its chief can do', async t => {
+  const f = await nativeTaskUpdateFixture(t);
+  const first = await taskUpdateCoordinator(f, f.request({ title: 'First' }));
+  assert.equal(first.coordination.decide('a'.repeat(64), { disruptive: false }).accepted, true);
+  const second = await taskUpdateCoordinator(f, { ...f.request({ title: 'Second' }), request: '00000000-0000-4000-8000-000000000578' });
+  assert.deepEqual(second.coordination.decide('b'.repeat(64), { disruptive: false }), { digest: 'b'.repeat(64), accepted: false,
+    reason: 'Another task update is unresolved. Reconcile or interrupt the open assignments of this task, then retry.' });
+});
+
 /** An earlier version wrote a receipt for a rejection, and it left its journal row open. This keeps one, in those bytes. */
 async function oldRejection(f, request) {
   const { run, coordination } = await taskUpdateCoordinator(f, request);

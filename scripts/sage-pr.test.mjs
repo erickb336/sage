@@ -4,14 +4,14 @@
 import "./test-env.mjs"; // first: no variable of the developer's shell changes a result
 import assert from "node:assert/strict";
 import { execFileSync, spawn, spawnSync } from "node:child_process";
-import { chmodSync, existsSync, linkSync, utimesSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, realpathSync, renameSync, rmSync, statSync, symlinkSync, truncateSync, writeFileSync } from "node:fs";
+import fs, { chmodSync, existsSync, linkSync, utimesSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, realpathSync, renameSync, rmSync, statSync, symlinkSync, truncateSync, writeFileSync } from "node:fs";
 import { createRequire, syncBuiltinESMExports } from "node:module";
 import { hostname, tmpdir } from "node:os";
 import { basename, delimiter, dirname, join } from "node:path";
 import { test } from "node:test";
 import { fileURLToPath } from "node:url";
 import { deflateSync } from "node:zlib";
-import { keepReport } from "../plugins/sage/skills/sage/sage.mjs";
+import { keepReport, sage as sageTool } from "../plugins/sage/skills/sage/sage.mjs";
 import { backed } from "./verdict-backing.mjs";
 
 const TOOL = fileURLToPath(new URL("../plugins/sage/skills/sage/sage.mjs", import.meta.url));
@@ -292,6 +292,51 @@ test("merge runs the merge check, merges only the reviewed head, and fetches the
   assert.equal(w.calls().at(-1).args[1], "list", "the script reads the pull request again after the merge");
   assert.equal(w.git("--git-dir", join(w.logbook, "mirror.git"), "rev-parse", "refs/heads/main"), main);
   assert.notEqual(main, head); // the stand-in squashed: the new main is a new commit that the mirror fetched
+});
+
+/** A task ready to merge, with a project write of a finished run stopped half way: a saved change waits in the logbook. */
+function savedChange(t) {
+  const w = world();
+  const head = w.commit("b.txt");
+  w.sage("verdict", "T1", "--sha", head, "--kind", "checks-pass");
+  w.pr("create", "T1");
+  w.forge("T1", "state", "verified");
+  w.sage("verdict", "T1", "--sha", head, "--kind", "review-clean");
+  w.sage("verdict", "T1", "--sha", head, "--kind", "qa-pass");
+  const run = /R\d+/.exec(w.sage("run", "add", "T1", "--role", "qa"))[0];
+  w.sage("run", "done", run, "--status", "blocked");
+  const { renameSync: rename } = fs;
+  let hit = false;
+  t.mock.method(fs, "renameSync", (...args) => {
+    if (hit || args[1] !== join(w.logbook, "runs.tsv")) return rename(...args);
+    hit = true;
+    throw Object.assign(Error("Injected stop"), { code: "EIO" });
+  });
+  syncBuiltinESMExports();
+  assert.throws(() => sageTool(["run", "usage", run, "--tokens", "50", "--usage-source", "export", "--usage-evidence", "pages/R1.json", "--project", w.at("project")], w.env), /Injected stop/);
+  t.mock.restoreAll();
+  syncBuiltinESMExports();
+  assert.equal(existsSync(join(w.logbook, "review-pending.json")), true);
+  return { w, head, run };
+}
+
+test("T578: merge finishes the project's saved change under its own lock, then merges", (t) => {
+  const { w, head, run } = savedChange(t);
+  const r = w.pr("merge", "T1");
+  assert.equal(r.status, 0, r.stderr);
+  assert.match(r.stdout, new RegExp(`^merged claude/t1 at ${head.slice(0, 7)}`));
+  assert.equal(existsSync(join(w.logbook, "review-pending.json")), false);
+  const [columns, ...rows] = readFileSync(join(w.logbook, "runs.tsv"), "utf8").trim().split("\n").map((l) => l.split("\t"));
+  assert.equal(rows.find((row) => row[0] === run)[columns.indexOf("tokens")], "50");
+});
+
+test("T578: merge refuses a saved change that cannot finish, and it keeps the change", (t) => {
+  const { w } = savedChange(t);
+  const marker = join(w.logbook, "review-pending.json");
+  writeFileSync(marker, "{}");
+  refused(w.pr("merge", "T1"), /merge check: the merge check refuses this merge: A saved change cannot finish, and sage cannot read its request\./);
+  assert.equal(readFileSync(marker, "utf8"), "{}");
+  assert.equal(w.calls().filter((c) => c.args[1] === "merge").length, 0);
 });
 
 test("R1708-1: merge runs the head branch rule too: a task that shares the branch but is not on the pull request refuses it", () => {

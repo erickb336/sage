@@ -1,6 +1,6 @@
 import './test-env.mjs';
 import assert from 'node:assert/strict';
-import fs, { existsSync, mkdtempSync, mkdirSync, readFileSync, readdirSync, realpathSync, rmSync, writeFileSync } from 'node:fs';
+import fs, { existsSync, mkdtempSync, mkdirSync, readFileSync, readdirSync, realpathSync, rmSync, symlinkSync, truncateSync, writeFileSync } from 'node:fs';
 import { syncBuiltinESMExports } from 'node:module';
 import { tmpdir } from 'node:os';
 import { basename, join } from 'node:path';
@@ -113,14 +113,88 @@ test('T578 the merge check skips another project that holds a saved change, with
   assert.equal(readFileSync(join(two.dir, MARKER), 'utf8'), before, 'the merge check of a project settles only that project');
 });
 
-test('T578 a damaged saved change of another project does not stop this merge', t => {
+const DAMAGE = {
+  'text with no fields': file => writeFileSync(file, '{}'),
+  'text that is not JSON': file => writeFileSync(file, 'not json'),
+  'bytes that are not UTF-8': file => writeFileSync(file, Buffer.from([0xff, 0xfe, 0x7b])),
+  'a folder': file => mkdirSync(file),
+  'a link to a file that names the commit': file => {
+    writeFileSync(`${file}.target`, SHA);
+    symlinkSync(`${file}.target`, file);
+  },
+  'a size over the limit': file => { writeFileSync(file, ''); truncateSync(file, 65 * 1024 * 1024); },
+};
+for (const [name, damage] of Object.entries(DAMAGE)) test(`T578 a saved change that is ${name} stops only its own project`, t => {
   const f = fixture(t, ['one', 'two']), { env, one, two } = f;
   passing(one);
-  writeFileSync(join(two.dir, MARKER), '{}');
-  assert.equal(mergeCheck(SHA, env, { project: one.project }).ok, true);
+  damage(join(two.dir, MARKER));
+  const other = mergeCheck(SHA, env, { project: one.project });
+  assert.equal(other.ok, true, other.reason);
+  assert.match(other.reason, new RegExp(`Skipped ${basename(two.dir)}: a saved change waits there`));
   const own = mergeCheck(SHA, env, { project: two.project });
   assert.equal(own.ok, false);
-  assert.match(own.reason, /refuses this merge: A saved change \(request unknown\) cannot finish/);
+  assert.equal(own.reason, 'the merge check refuses this merge: A saved change cannot finish, and sage cannot read its request. The saved change or its receipt is damaged, or a table has neither its before nor its after text. The saved change stays in review-pending.json, and sage does not delete it. Writes and merges of this project stop. Other projects continue. Next step for the owner: run sage logbook in this project to find the folder, repair that file or the table, then run this command again.');
+});
+
+test('T578 a saved change that names the commit refuses the merge with no ledger row, also with bad bytes', t => {
+  const f = fixture(t, ['one', 'two']), { env, one, two } = f;
+  passing(one);
+  for (const marker of [JSON.stringify({ value: { note: SHA } }), Buffer.concat([Buffer.from([0xff]), Buffer.from(SHA)])]) {
+    writeFileSync(join(two.dir, MARKER), marker);
+    assert.equal(tool.read(two.dir, 'ledger').length, 0);
+    const verdict = mergeCheck(SHA, env, { project: one.project });
+    assert.equal(verdict.ok, false);
+    assert.equal(verdict.reason, `the merge check refuses this merge: Project ${basename(two.dir)} holds a saved change that names ${SHA.slice(0, 7)}. Run sage init in that project to finish the change, then check again.`);
+  }
+});
+
+test('T578 the merge note names the project, not its path, and asks for nothing', t => {
+  const f = fixture(t, ['one', 'two']), { env, one, two } = f;
+  passing(one);
+  savedUsage(t, two);
+  const { reason } = mergeCheck(SHA, env, { project: one.project });
+  assert.ok(reason.endsWith(`Skipped ${basename(two.dir)}: a saved change waits there, and it has no row for this commit. No action is needed. Any write there finishes the change.`), reason);
+  assert.equal(reason.includes(two.dir), false);
+});
+
+test('T578 the refusals name a command that finishes the change, and the CLI prints no stack', t => {
+  const { env, one } = fixture(t);
+  savedUsage(t, one);
+  const asked = tool.command(['status', '--project', one.project], env);
+  assert.deepEqual(asked, { code: 1, text: 'sage: A saved change is incomplete. Run any write command in this project, such as sage init, to finish it. Then run this command again.' });
+  one.run(claude, 'init');
+  assert.equal(existsSync(join(one.dir, MARKER)), false);
+  assert.equal(row(one.dir, 'runs', 'R1').tokens, '50');
+  writeFileSync(join(one.dir, MARKER), '{}');
+  const stuck = tool.command(['task', 'add', '--priority', 'P2', '--title', 'Stopped', '--size', 'tiny', '--project', one.project], env);
+  assert.equal(stuck.code, 1);
+  assert.match(stuck.text, /^sage: A saved change cannot finish, /);
+  assert.doesNotMatch(stuck.text, /\n\s+at /);
+  assert.equal(tool.command(['logbook', '--project', one.project], env).text, one.dir, 'the refusal sends the owner to this command');
+});
+
+test('T578 a file error while a saved change finishes keeps the change, and the command can run again', t => {
+  const { one } = fixture(t);
+  savedUsage(t, one);
+  const stop = stopAt(t, one.dir, 'runs', false);
+  assert.throws(() => one.run(claude, 'init'), /^Error: A saved change \(request R1\) did not finish because of a file error \(EIO\)\. The saved change stays\. Run the command again\.$/);
+  stop();
+  assert.equal(existsSync(join(one.dir, MARKER)), true);
+  one.run(claude, 'init');
+  assert.equal(existsSync(join(one.dir, MARKER)), false);
+  assert.equal(row(one.dir, 'runs', 'R1').tokens, '50');
+});
+
+test('T578 a file error before a task update stays an uncertain outcome, and damage stays invalid state', t => {
+  const { env, one } = fixture(t);
+  savedUsage(t, one);
+  const input = { project: one.project, owner: 'chief', request: '00000000-0000-4000-8000-000000000578', task: 'T1', version: '0'.repeat(64), changes: { title: 'New' } };
+  const callbacks = Object.fromEntries(['decide', 'acknowledge', 'release', 'void', 'history'].map(name => [name, () => {}]));
+  const stop = stopAt(t, one.dir, 'runs', false);
+  assert.throws(() => tool.updateRequestedTask(input, env, callbacks), { code: 'uncertain-outcome' });
+  stop();
+  writeFileSync(join(one.dir, MARKER), '{}');
+  assert.throws(() => tool.updateRequestedTask(input, env, callbacks), { code: 'invalid-state' });
 });
 
 test('T578 the merge check settles its own project first', t => {

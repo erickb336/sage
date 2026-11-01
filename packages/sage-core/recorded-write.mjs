@@ -11,7 +11,7 @@ const json = value => JSON.stringify(value);
 const hash = text => createHash("sha256").update(text).digest("hex");
 const keys = (value, names) => value && typeof value === "object" && !Array.isArray(value)
   && Object.keys(value).length === names.length && names.every(name => Object.hasOwn(value, name));
-const regular = file => {
+const raw = file => {
   let fd;
   try {
     fd = openSync(file, constants.O_RDONLY | constants.O_NOFOLLOW | constants.O_NONBLOCK);
@@ -25,11 +25,18 @@ const regular = file => {
       used += count;
     }
     if (used !== stat.size) fail();
-    const content = bytes.subarray(0, used);
-    if (!Buffer.from(content.toString("utf8")).equals(content)) fail();
-    return content.toString("utf8");
-  } catch (error) { if (error.code === "ENOENT") return undefined; throw error; }
-  finally { if (fd !== undefined) closeSync(fd); }
+    return bytes.subarray(0, used);
+  } catch (error) {
+    if (error.code === "ENOENT") return undefined;
+    if (error.code === "ELOOP") fail(); // a link where a logbook file must be: a retry cannot pass
+    throw error;
+  } finally { if (fd !== undefined) closeSync(fd); }
+};
+const regular = file => {
+  const content = raw(file);
+  if (content === undefined) return undefined;
+  if (!Buffer.from(content.toString("utf8")).equals(content)) fail();
+  return content.toString("utf8");
 };
 const sync = dir => { const fd = openSync(dir, "r"); try { fsyncSync(fd); } finally { closeSync(fd); } };
 const canonical = dir => { if (realpathSync(dir) !== resolve(dir)) fail(); };
@@ -37,7 +44,8 @@ const encode = value => json({ value, hash: hash(json(value)) }) + "\n";
 function decode(file) {
   const text = regular(file);
   if (text === undefined) return undefined;
-  const record = JSON.parse(text);
+  let record;
+  try { record = JSON.parse(text); } catch { fail(); }
   if (!keys(record, ["value", "hash"]) || record.hash !== hash(json(record.value))) fail();
   return record.value;
 }
@@ -63,10 +71,13 @@ export function hasPendingWrite(dir) {
   catch (error) { if (["ENOTDIR", "ELOOP"].includes(error.code)) return false; throw error; }
 }
 export function assertNoPendingWrite(dir) {
-  if (hasPendingWrite(dir)) throw new RecordedWriteError("A saved change is incomplete. The next write of this project settles it. Retry after that write, or make one now.");
+  if (hasPendingWrite(dir)) throw new RecordedWriteError("A saved change is incomplete. Run any write command in this project, such as sage init, to finish it. Then run this command again.");
 }
-/** The text of the marker, for a reader that must not settle it. */
-export const pendingText = dir => regular(join(dir, PENDING));
+/** Do the marker's bytes hold this text? For a reader that must not settle it. A marker that does not open as a plain file holds nothing here: its own project refuses it when it settles. */
+export function pendingNames(dir, text) {
+  try { return raw(join(dir, PENDING))?.includes(text) ?? false; }
+  catch { return false; }
+}
 /** The request that a saved change names, for the refusal that stops its project. */
 export function pendingRequest(dir) {
   try {
