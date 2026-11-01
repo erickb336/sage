@@ -14,10 +14,13 @@
 //     file, with apply_patch or with a shell write form (core's commandWrites, or Codex's own apply_patch program).
 //     Each sage name above the leaf must be a lead's, or the child changes no file. A part that starts with sage_ but
 //     is not a sage task name counts as a read-only role.
-//   - The logbook: only the chief records it. A child, in any mode, calls only the sage MCP tools that read, and runs
-//     only the read commands of the plugin's state tool from the shell (never its MCP server).
+//   - The logbook: the chief records it, and a lead (a child of the root thread named sage_lead_t<n>, while its task's lead
+//     run runs) records its own task with the sage MCP tools of LEAD_RULES. Any other child, in any mode, calls only the
+//     tools that read, also a child named like a chief: only the root thread is the chief. No child writes with the
+//     plugin's state tool from the shell (never its MCP server).
 //   - Only a lead starts agents: a child under a sage_ name, in any mode, gets no spawn_agent. The one exception is a
-//     lead (sage_lead_t<n>, with only leads above it), which starts core's TEAM roles with its own t<n>.
+//     lead (sage_lead_t<n>, with only leads above it), which starts core's TEAM roles with its own t<n>, while its lead
+//     run runs and its task can move.
 //   - No sage child, in any mode, sends a message to another thread (multi-agent v1's send_input, v2's send_message
 //     and followup_task): its message to the root thread would start a root turn as if the user typed it. No thread,
 //     in any mode, also the root, sends to the root thread: Codex records it as the user's typed message (R1940-1).
@@ -33,8 +36,9 @@
 //     its name, or the real file of a Codex executable (not every program of its package: Codex puts its own rg first
 //     on PATH).
 //   - A push (sage mode): only core's push form, as in the Claude hook.
-//   - The gate's proof: for each sage MCP call that it lets through, the gate saves a proof by the call's id, and the
-//     sage MCP server serves no call without one, so sage does not work while Codex runs no sage hook.
+//   - The gate's proof: for each sage MCP call that it lets through, the gate saves a proof by the call's id, with the
+//     caller's role and task, and the sage MCP server serves no call without one, so sage does not work while Codex runs
+//     no sage hook. The server applies the caller's rule again (callerRefusal).
 //   - Codex's settings: no thread, in any mode, writes Codex's config file (the hook trust) or this plugin's folder
 //     from the shell.
 //   - Code mode: Codex runs no hook for its exec tool, but each tool call inside the code comes here with its own name,
@@ -97,6 +101,7 @@ const BAD_CHAIN = (name) => `sage: "${name}" is above this agent in its agent pa
 const UNREAD_ROLE = "sage: the hook could not read this agent's task name from Codex's record of its thread, so it refuses this call. Tell the user.";
 const UNREAD_CODEX = "sage: the hook could not read this shell command, and it names codex, so it refuses it. Write the command in a plainer form.";
 const CHILD_LOGBOOK = "sage: role agents report; only the chief records the logbook. Put this in your report.";
+const LEAD_LOGBOOK = (name) => `sage: a lead records only its own task, and ${name} is not one of its tools. Put what the logbook needs in your report.`;
 const CHILD_SPAWN = "sage: role agents start no agents; only the chief and a lead do. Put what you need in your report.";
 const TEAM_NAMES = [...TEAM].map((role) => role.replaceAll("-", "_")).join(", ").replace(/, (?=[^,]*$)/, " or ");
 const LEAD_SPAWN = (task, name) => `sage: a lead starts only the team of its own task: sage_<role>_t${task}_r<k>, where the role is ${TEAM_NAMES}. ${JSON.stringify(name ?? "no task_name")} is not one of these. Put what else you need in your report.`;
@@ -175,6 +180,116 @@ function ghProblem(command, cwd, env) {
   return undefined;
 }
 const childMayCall = (name, input) => CHILD_READS.has(name) || (name === "pages" && ["record", "run", "text"].every((key) => input[key] === undefined));
+
+/** The verdict kinds that a lead records: each has a kept report behind it. A checks verdict is the chief's. */
+const LEAD_KINDS = new Set(["review-clean", "security-clean", "ux-clean", "qa-pass", "qa-fail", "findings"]);
+/** The state moves of a cycle that a lead makes, by the task's state, as in the Claude hook. A held task moves only by the chief. */
+const LEAD_MOVES = { briefed: ["building"], building: ["reviewing"], reviewing: ["verifying"], repairing: ["reviewing"], verifying: ["verified", "reviewing"], verified: ["reviewing"] };
+/** The states in which a lead records nothing. */
+const LEAD_STOPS = ["held", "replan", "merged", "concluded", "abandoned"];
+const roundKeys = (task) => String(task.keys ?? "").split(",").filter(Boolean);
+/** An open fix finding of the task's current round, at any severity, as the Claude hook's roundFixOpen. */
+const roundFixOpen = ({ own, task, view }) => view.findings(own).some((f) => f.status === "open" && f.triage === "fix" && roundKeys(task).includes(f.key));
+const notOwn = (id, own) => `${id} is not of ${own}, and a lead records only its own task`;
+/** A repair goes through round, so the rounds count and a task can reach held: no close and no verdict on a new commit before it. */
+const roundFirst = ({ own, task, view }) => (task.state !== "repairing" && view.findings(own).some((f) => f.status === "open" && f.triage === "fix" && f.severity !== "low")
+  ? `${own} has a medium or high finding triaged fix and is not repairing: ${["reviewing", "verifying"].includes(task.state) ? "run round first" : "move it to reviewing, run round"}, then repair` : undefined);
+/** The fields that a lead sets with task_set. A lead sets a branch or a PR only of its own task, and moves no task onto a shared branch. */
+const LEAD_FIELDS = {
+  state: (state, context) => {
+    const { own, task } = context;
+    if (!(LEAD_MOVES[task.state] ?? []).includes(state)) return `${own} is ${task.state}: ${LEAD_MOVES[task.state] ? `a lead moves it only to ${LEAD_MOVES[task.state].join(" or ")}` : "only the chief moves it from there"}`;
+    return task.state === "repairing" && roundFixOpen(context) ? `${own} has an open fix finding of its round: close each one after the repair's commit (finding_close), then move it to reviewing` : undefined;
+  },
+  branch: (branch, { own, task, view }) => {
+    if (!tool.branchOfTask(task, branch) || (task.branch && !tool.branchOfTask(task, task.branch))) return `${JSON.stringify(branch)} is not a branch named for ${own}, or ${own} is on a branch of another task: only the chief sets that`;
+    const shared = branch !== task.branch && [task.branch, branch].find((name) => name && [...view.branchTasks(name)].some((id) => id !== own));
+    return shared ? `${shared} is shared with another task: only the chief moves a task onto a shared branch or off it` : undefined;
+  },
+  pr: (pr, { own, task, view }) => (/^[1-9]\d*$/.test(pr) && !task.pr && [...view.prTasks(pr)].every((id) => id === own) ? undefined : `a lead gives ${own} one PR, once, that no other task has or had`),
+};
+/**
+ * What a lead may record, by sage tool, as the Claude hook's LEAD_WRITES, with fewer rules (the owner's rule of
+ * 2026-10-26: the flow and the clean cycles must hold; trust agents otherwise). Each rule takes the call's input and
+ * { own, task, view }, and gives the reason for a refusal, or undefined. callerRefusal checks the input's task first.
+ * The state tool holds the rest for every caller: a verdict needs a kept report of its run, and one run backs one verdict.
+ */
+const LEAD_RULES = {
+  run_add: ({ role, branch }, { own, task }) => {
+    if (!TEAM.has(role)) return `a lead adds only runs of its team (${[...TEAM].join(", ")}), not ${JSON.stringify(role)}`;
+    return branch === undefined || tool.ofTask(own, branch) || branch === task.branch ? undefined : `${branch} is not a branch of ${own}`;
+  },
+  run_done: ({ run }, { own, view }) => {
+    const row = view.row(run);
+    if (row?.task !== own) return notOwn(run, own);
+    return TEAM.has(row.role) ? undefined : `${run} is a ${row.role} run: only the chief ends it`;
+  },
+  finding_add: ({ key }) => (key === undefined ? undefined : "only the chief opens a known finding again: leave out key"),
+  finding_triage: ({ key, decision }, { own, task, view }) => {
+    const row = view.row(key);
+    if (row?.task !== own) return notOwn(key, own);
+    if (row.triage === "ask") return `${key} is triaged ask: only the chief changes it, with the owner's answer`;
+    if (decision === "fix") return undefined;
+    if (decision === "ask") return "a lead asks the owner nothing: report the question";
+    if (row.severity !== "low") return `${key} is ${row.severity}: a lead dismisses only a low finding. Report it, or triage it fix`;
+    return row.triage === "fix" && (roundKeys(task).includes(key) || Number(row.round) < Number(task.round)) ? `${key} is a fix key of a round: only the chief dismisses it` : undefined;
+  },
+  finding_close: ({ key }, context) => {
+    const { own, task, view } = context, row = view.row(key);
+    if (row?.task !== own) return notOwn(key, own);
+    if (row.triage !== "fix") return `${key} is not triaged fix, so a lead does not close it`;
+    if (task.state === "repairing" && !roundKeys(task).includes(key)) return `${key} is not a fix of ${own}'s round: it waits for the next round`;
+    return roundFirst(context);
+  },
+  verdict: ({ kind, pr, run, sha }, context) => {
+    const { own, task, view } = context, row = view.row(run);
+    if (!LEAD_KINDS.has(kind)) return `the ${kind} verdict is the chief's: give what it needs in your report`;
+    if (!task.pr || String(pr) !== task.pr) return `a lead's verdict names its task's PR (${task.pr ? `pr ${task.pr}` : `${own} has none yet: set it with task_set`})`;
+    if (row?.task !== own || row.round !== task.round) return `a lead's verdict names a run of ${own} in its current round ${task.round}, whose kept report backs it; ${JSON.stringify(run ?? "no run")} is not one`;
+    return view.shas(own).has(String(sha ?? "").toLowerCase()) ? undefined : roundFirst(context);
+  },
+  round: () => undefined,
+  pages: () => undefined,
+  task_set: ({ fields }, context) => {
+    for (const [key, value] of Object.entries(fields ?? {})) {
+      const why = Object.hasOwn(LEAD_FIELDS, key) ? LEAD_FIELDS[key](value, context) : `a lead sets only ${Object.keys(LEAD_FIELDS).join(", ")} of its task, not ${key}`;
+      if (why) return why;
+    }
+    return undefined;
+  },
+  brief: ({ task_name: name }, { own }) => (TEAM.has(taskRole(String(name))) && `T${taskNumber(name)}` === own ? undefined : `a lead records a brief only for the team of ${own}, not for ${JSON.stringify(name)}`),
+};
+const LEAD_SHELL = `sage: a lead records with the sage MCP tools (${Object.keys(LEAD_RULES).join(", ")}), not from the shell. Use one of these, or put what the logbook needs in your report.`;
+/** Why a lead of this task and run neither records nor starts agents now, or undefined: its lead run ended, or its task cannot move. */
+function leadStopped({ task: own, run }, view) {
+  const task = view.task(own), lead = view.leadRun(own);
+  if (!task || !lead || (run && lead.id !== run)) return `sage: ${own} has no running lead run${run ? ` ${run}` : ""}, so this lead records nothing and starts no agent. Report to the chief.`;
+  return LEAD_STOPS.includes(task.state) ? `sage: ${own} is ${task.state}, so its lead records nothing and starts no agent. Report to the chief.` : undefined;
+}
+const UNREAD_LOGBOOK = (error) => `sage: the gate could not read the logbook for this lead (${error?.message ?? error}), so it refuses this call. Tell the chief.`;
+
+/**
+ * Why a caller may not make this sage tool call, or undefined. The gate asks it before it saves its proof, and the server
+ * asks it again with the proof's caller, because the logbook can change between the two. The chief makes every call. A
+ * lead's call must name its project and its task, while its lead run runs and its task can move. Any other child reads.
+ * A logbook that the rule cannot read refuses.
+ */
+export function callerRefusal(caller, name, input, env = process.env) {
+  if (caller.role === "chief") return undefined;
+  const rule = caller.role === "lead" && Object.hasOwn(LEAD_RULES, name) ? LEAD_RULES[name] : undefined;
+  if (!rule) return childMayCall(name, input) ? undefined : caller.role === "lead" ? LEAD_LOGBOOK(name) : CHILD_LOGBOOK;
+  const own = caller.task;
+  if (input.task !== undefined && input.task !== own) return `sage: ${notOwn(input.task, own)}. Report to the chief what ${input.task} needs.`;
+  try {
+    if (!caller.project || real(tool.projectRoot(input.project)) !== caller.project) return `sage: a lead records only the logbook of its own project, and ${JSON.stringify(input.project)} is not that project.`;
+    const view = tool.logbookView(input.project, env), stopped = leadStopped(caller, view);
+    if (stopped) return stopped;
+    const why = rule(input, { own, task: view.task(own), view });
+    return why && `sage: ${why}.`;
+  } catch (error) {
+    return UNREAD_LOGBOOK(error);
+  }
+}
 
 /** A path segment named .codex, in any letter case (the Mac file system ignores case). */
 const CODEX_SEGMENT = /(?:^|[\s/\\'"=:<>])\.codex(?=$|[\s/\\'"<>;|&)])/i;
@@ -291,17 +406,35 @@ function childChange(t, sage) {
   return denied ? READ_ONLY(role) : undefined;
 }
 
-/** The task number of a sage task name. */
-const taskNumber = (name) => /_t(\d+)(?:_r\d+)?$/.exec(name)[1];
+/** The task number and the run number (or undefined) of a sage task name. */
+const taskParts = (name) => /_t(\d+)(?:_r(\d+))?$/.exec(name).slice(1);
+const taskNumber = (name) => taskParts(name)[0];
+/** The task and the run (when the name has one) of a lead's name. */
+const leadOf = (name) => {
+  const [task, run] = taskParts(name);
+  return { task: `T${task}`, ...(run ? { run: `R${run}` } : {}) };
+};
+/** Whether a thread records as a lead: only a child of the root thread is a lead, because only the chief starts one. */
+const recordsAsLead = (t) => t.parts?.length === 2 && t.parts[0] === "root" && isLead(t.parts[1]);
+/**
+ * Who makes a sage tool call, as its proof says: { role: "chief" } for the root thread and no other, whatever a child's
+ * name says; { role: "lead", task, run, project } for a lead; or { role: "child" }.
+ */
+function callerOf(t, cwd) {
+  if (!t.child) return { role: "chief" };
+  return recordsAsLead(t) ? { role: "lead", ...leadOf(t.parts[1]), project: real(tool.projectRoot(cwd)) } : { role: "child" };
+}
 /**
  * Why the gate refuses a spawn by a child under a sage name: only a lead, with only leads above it, starts agents, and
- * only core's TEAM roles with its own task number. The name of the new agent is the spawn's task_name.
+ * only core's TEAM roles with its own task number, while it could record (leadStopped). The name of the new agent is the
+ * spawn's task_name. A logbook that the rule cannot read, or a project with none, refuses.
  */
-function childSpawn(t, name) {
+function childSpawn(t, name, cwd, env) {
   const self = t.parts?.at(-1);
   if (!isLead(self) || notLeadAbove(t.parts)) return CHILD_SPAWN;
   const fits = typeof name === "string" && TEAM.has(taskRole(name)) && taskNumber(name) === taskNumber(self);
-  return fits ? undefined : LEAD_SPAWN(taskNumber(self), name);
+  if (!fits) return LEAD_SPAWN(taskNumber(self), name);
+  try { return leadStopped(leadOf(self), tool.logbookView(cwd, env)); } catch (error) { return UNREAD_LOGBOOK(error); }
 }
 
 const escape = (text) => text.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
@@ -481,24 +614,28 @@ export function stateToolWrites(command, cwd = "/", env = process.env) {
  * tool_use_id and the sage MCP server the same id as _meta.callId, with the session id in both (Codex 0.164.0
  * registry.rs:701-706, hook_runtime.rs:195-206, mcp_tool_call.rs:542-553 and 1323-1334). So the server serves a call
  * only when the gate saw it: when Codex runs no sage hook (a sage update makes every hook Modified until the user trusts
- * it again), the server refuses. The proofs live in the mode folder, which the shell rules keep from every agent.
+ * it again), the server refuses. The proofs live in the mode folder, which the shell rules keep from every agent. A
+ * proof also carries the caller (callerOf): the hook knows the thread, and the server does not.
  */
 const proofFile = (env, id) => join(modeDirectory(env), "proofs", `${createHash("sha256").update(id).digest("hex")}.json`);
 const comparisonHash = input => createHash("sha256").update(JSON.stringify([input?.project, input?.task, input?.run, input?.sha256])).digest("hex");
-export function writeProof({ tool_use_id: id, session_id: session, tool_name: tool, tool_input: input }, env = process.env) {
+export function writeProof({ tool_use_id: id, session_id: session, tool_name: tool, tool_input: input }, env = process.env, caller) {
   if (!text(id)) throw Error("the call has no tool_use_id");
   const file = proofFile(env, id);
   mkdirSync(dirname(file), { recursive: true, mode: 0o700 });
-  writeFileSync(file, JSON.stringify({ session, tool, ...(tool === "mcp__sage__report_compare" ? { comparison: comparisonHash(input) } : {}) }), { mode: 0o600 });
+  writeFileSync(file, JSON.stringify({ session, tool, caller, ...(tool === "mcp__sage__report_compare" ? { comparison: comparisonHash(input) } : {}) }), { mode: 0o600 });
 }
-/** Whether the gate saw this MCP call of the sage tool name, from its _meta; the proof serves one call only. */
+/** Whether a proof's caller has a form that callerOf gives. */
+const callerForm = (c) => record(c) && (c.role === "chief" || c.role === "child" || (c.role === "lead" && /^T[1-9]\d*$/.test(c.task) && text(c.project) && (c.run === undefined || /^R[1-9]\d*$/.test(c.run))));
+/** The caller of this MCP call of the sage tool name, from its _meta, or null when the gate did not see it; the proof serves one call only. */
 export function takeProof(meta, name, env = process.env, input) {
-  if (!record(meta) || !text(meta.callId)) return false;
+  if (!record(meta) || !text(meta.callId)) return null;
   const file = proofFile(env, meta.callId);
   let proof;
-  try { proof = JSON.parse(readFileSync(file, "utf8")); rmSync(file); } catch { return false; }
-  return proof?.tool === `mcp__sage__${name}` && proof.session === meta.sessionId
+  try { proof = JSON.parse(readFileSync(file, "utf8")); rmSync(file); } catch { return null; }
+  const seen = proof?.tool === `mcp__sage__${name}` && proof.session === meta.sessionId
     && (name !== "report_compare" || proof.comparison === comparisonHash(input));
+  return seen && callerForm(proof.caller) ? proof.caller : null;
 }
 export const NO_GATE = "sage's gate is not running: trust sage's hooks with /hooks in the Codex CLI (or the app's hook review), then try again.";
 
@@ -578,13 +715,14 @@ export async function gate(input, { mode = readMode, check = checkMerge, env = p
   }
   const sageTool = SAGE_TOOL.exec(f.tool);
   if (sageTool) {
-    if (thread.child && !childMayCall(sageTool[1], f.input)) return refuse(thread, CHILD_LOGBOOK);
+    const caller = callerOf(thread, f.cwd), why = callerRefusal(caller, sageTool[1], f.input, env);
+    if (why) return refuse(thread, why);
     if (sageTool[1] === "report_compare") {
       const requested = typeof f.input.project === "string" && isAbsolute(f.input.project) ? real(tool.projectRoot(f.input.project)) : undefined;
       const assigned = real(tool.projectRoot(f.cwd));
       if (!assigned || requested !== assigned) return deny("sage: report comparison requires the chief's assigned absolute project");
     }
-    try { writeProof(input, env); } catch (error) { return deny(`sage: the gate could not save its proof of this call (${error?.message ?? error}), so the sage server would refuse it. Check the folder ${modeDirectory(env)}`); }
+    try { writeProof(input, env, caller); } catch (error) { return deny(`sage: the gate could not save its proof of this call (${error?.message ?? error}), so the sage server would refuse it. Check the folder ${modeDirectory(env)}`); }
     return undefined;
   }
   // A sage child's message to another thread would start a turn there, as the user's on the root thread (F-T471-4),
@@ -600,7 +738,7 @@ export async function gate(input, { mode = readMode, check = checkMerge, env = p
   if (SPAWN.test(f.tool)) {
     const under = thread.child && underSage(thread);
     if (under === false) return undefined;
-    const why = under ? childSpawn(thread, f.input.task_name) : UNREAD_ROLE;
+    const why = under ? childSpawn(thread, f.input.task_name, f.cwd, env) : UNREAD_ROLE;
     return why ? refuse(thread, why) : undefined;
   }
   if (f.tool === "apply_patch") {
@@ -630,7 +768,7 @@ export async function gate(input, { mode = readMode, check = checkMerge, env = p
   }
   if (thread.child) {
     const knownThread = thread.codex || thread.parts?.length;
-    if (stateToolWrites(f.command, f.cwd, env) && !(knownThread && scopedStateRead(f.command, f.cwd, env))) return refuse(thread, CHILD_LOGBOOK);
+    if (stateToolWrites(f.command, f.cwd, env) && !(knownThread && scopedStateRead(f.command, f.cwd, env))) return refuse(thread, recordsAsLead(thread) ? LEAD_SHELL : CHILD_LOGBOOK);
     const why = commandWrites(f.command, f.cwd) || runsPatch(f.command, f.cwd, env) ? childChange(thread, mode(f, env).sage) : undefined;
     if (why) return refuse(thread, why);
   }

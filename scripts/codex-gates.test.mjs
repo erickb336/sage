@@ -75,11 +75,11 @@ test("T91: comparison admission cannot be reused for changed input or another ca
   const g = fixed();
   for (const changed of [{ project: SCRATCH_HOME }, { task: "T2" }, { run: "R2" }, { sha256: "2".repeat(64) }]) {
     assert.equal(await g.run(mcp("report_compare", args, { cwd: project, tool_use_id: "compare" })), undefined);
-    assert.equal(takeProof(meta, "report_compare", process.env, { ...args, ...changed }), false);
+    assert.equal(takeProof(meta, "report_compare", process.env, { ...args, ...changed }), null);
   }
   assert.equal(await g.run(mcp("report_compare", args, { cwd: project, tool_use_id: "compare" })), undefined);
-  assert.equal(takeProof(meta, "report_compare", process.env, args), true);
-  assert.equal(takeProof(meta, "report_compare", process.env, args), false);
+  assert.deepEqual(takeProof(meta, "report_compare", process.env, args), { role: "chief" });
+  assert.equal(takeProof(meta, "report_compare", process.env, args), null);
 });
 
 test("an input shape that the gate does not know is denied with one line, and a request gets no decision", async () => {
@@ -537,6 +537,15 @@ test("a role agent starts no agents, in any mode, and a thread under a read-only
 
 const LEAD = "/root/sage_lead_t12_r1";
 const leadSpawn = (extra, task_name, tool_name = "collaborationspawn_agent") => ({ ...base, hook_event_name: "PreToolUse", tool_name, tool_use_id: "call_1", tool_input: { task_name, message: "go", fork_turns: "none" }, ...extra });
+/** A world's logbook with T1 and T2, each briefed with its running lead run: R1 on T1, R2 on T2. */
+const leadOnT1 = (w) => {
+  w.sage("init");
+  for (const n of [1, 2]) {
+    w.sage("task", "add", "--title", `task ${n}`, "--size", "small", "--priority", "P2");
+    w.sage("task", `T${n}`, "set", "state=briefed");
+    w.sage("run", "add", `T${n}`, "--role", "lead");
+  }
+};
 
 test("T551: under a lead the leaf sage name decides the edit rule: an implementer edits, a reviewer or QA stays read-only, and the lead edits nothing", (t) => {
   const w = world(t);
@@ -551,31 +560,60 @@ test("T551: under a lead the leaf sage name decides the edit rule: an implemente
   assert.deepEqual(edits(LEAD), [LEAD_EDIT, LEAD_EDIT], "the lead itself");
   assert.deepEqual(edits(`${LEAD}/helper`), [LEAD_EDIT, LEAD_EDIT], "a thread under a lead with no sage name of its own has the lead's rule");
   assert.equal(denied(w.send(pre("apply_patch", p, w.child(`${LEAD}/sage_unknown_t12`)))), BAD_NAME("sage_unknown_t12"), "an unknown role under a lead fails closed");
-  assert.equal(w.send(leadSpawn(w.child(LEAD), "sage_qa_t12_r7")), undefined, "the hook process lets a lead start its team");
-  assert.equal(denied(w.send(leadSpawn(w.child(LEAD), "sage_pe_t12_r7"))), LEAD_SPAWN(12, `"sage_pe_t12_r7"`), "and refuses any other role");
+  leadOnT1(w);
+  assert.equal(w.send(leadSpawn(w.child("/root/sage_lead_t1_r1"), "sage_qa_t1_r7")), undefined, "the hook process lets a lead start its team");
+  assert.equal(denied(w.send(leadSpawn(w.child("/root/sage_lead_t1_r1"), "sage_pe_t1_r7"))), LEAD_SPAWN(1, `"sage_pe_t1_r7"`), "and refuses any other role");
   w.mode({ sage: false, autopilot: false });
   assert.deepEqual(edits(LEAD), ["edits", "writes"], "outside sage mode the role rule does not act");
 });
 
 test("T551: a lead starts only implementer, reviewer and QA children of its own task, in any mode", async (t) => {
+  const w = world(t);
+  leadOnT1(w);
   for (const sage of [false, true]) {
     const g = fixed({ sage }), lead = sageChild(t, LEAD);
-    const allowed = ["sage_implementer_t12_r2", "sage_code_reviewer_t12_r3", "sage_security_reviewer_t12_r4", "sage_ux_reviewer_t12_r5", "sage_qa_t12_r6", "sage_qa_t12"];
-    for (const name of allowed) for (const tool of ["collaborationspawn_agent", "spawn_agent"]) assert.equal(await g.run(leadSpawn(lead, name, tool)), undefined, `${name} ${tool}`);
+    const started = (input) => gate({ ...input, cwd: w.project }, { mode: () => ({ sage }), env: w.env });
+    const allowed = ["sage_implementer_t1_r2", "sage_code_reviewer_t1_r3", "sage_security_reviewer_t1_r4", "sage_ux_reviewer_t1_r5", "sage_qa_t1_r6", "sage_qa_t1"];
+    for (const name of allowed) for (const tool of ["collaborationspawn_agent", "spawn_agent"]) assert.equal(await started(leadSpawn(sageChild(t, "/root/sage_lead_t1_r1"), name, tool)), undefined, `${name} ${tool}`);
     const refused = [["sage_pe_t12_r2", `"sage_pe_t12_r2"`], ["sage_designer_t12_r2", `"sage_designer_t12_r2"`], ["sage_arena_judge_t12_r2", `"sage_arena_judge_t12_r2"`], ["sage_lead_t12_r2", `"sage_lead_t12_r2"`],
       ["sage_qa_t13_r2", `"sage_qa_t13_r2"`], ["sage_implementer_t1_r2", `"sage_implementer_t1_r2"`], ["sage_implementer_t121_r2", `"sage_implementer_t121_r2"`],
       ["helper", `"helper"`], ["Sage_QA_t12", `"Sage_QA_t12"`], ["sage_qa_t12_r2/x", `"sage_qa_t12_r2/x"`], [undefined, `"no task_name"`], [["sage_qa_t12"], `["sage_qa_t12"]`]];
     for (const [name, shown] of refused) assert.equal(denied(await g.run(leadSpawn(lead, name))), LEAD_SPAWN(12, shown), String(name));
     // A lead name with no run: its own task number counts, and the refusal names it.
-    assert.equal(await g.run(leadSpawn(sageChild(t, "/root/sage_lead_t7"), "sage_qa_t7_r1")), undefined);
+    assert.equal(await started(leadSpawn(sageChild(t, "/root/sage_lead_t2"), "sage_qa_t2_r1")), undefined);
     assert.equal(denied(await g.run(leadSpawn(sageChild(t, "/root/sage_lead_t7"), "sage_qa_t12_r1"))), LEAD_SPAWN(7, `"sage_qa_t12_r1"`));
   }
+});
+
+test("F-T552-8: a lead starts its team only while its lead run runs and its task can move; a logbook that it cannot read fails closed", async (t) => {
+  const w = world(t), lead = (path) => w.send(leadSpawn(w.child(path), "sage_qa_t1_r9"));
+  assert.match(denied(lead("/root/sage_lead_t1_r1")), /^sage: T1 has no running lead run R1, so this lead records nothing and starts no agent/, "no logbook yet");
+  leadOnT1(w);
+  assert.equal(lead("/root/sage_lead_t1_r1"), undefined);
+  assert.match(denied(lead("/root/sage_lead_t1_r9")), /^sage: T1 has no running lead run R9, so this lead records nothing and starts no agent/, "another lead run's name");
+  w.sage("run", "done", "R1", "--status", "failed");
+  assert.match(denied(lead("/root/sage_lead_t1_r1")), /^sage: T1 has no running lead run R1, so this lead records nothing and starts no agent/, "a lead run that ended");
+  w.sage("run", "add", "T1", "--role", "lead"); // R3
+  assert.equal(lead("/root/sage_lead_t1_r3"), undefined);
+  assert.equal(w.sage("task", "T1", "set", "state=abandoned").status, 0);
+  assert.match(denied(lead("/root/sage_lead_t1_r3")), /^sage: T1 is abandoned, so its lead records nothing and starts no agent/, "a finished task");
+  writeFileSync(join(w.env.SAGE_HOME, readdirSync(w.env.SAGE_HOME).find((name) => name.startsWith("project-")), "tasks.tsv"), "not a table\n");
+  assert.match(denied(w.send(leadSpawn(w.child("/root/sage_lead_t2_r2"), "sage_qa_t2_r9"))), /^sage: the gate could not read the logbook for this lead/, "a damaged logbook");
+});
+
+test("F-T552-15: a lead's shell write of the state tool names the sage MCP tools; a role agent's keeps its own line", (t) => {
+  const w = world(t), command = `node ${TOOL} verdict T1 --kind qa-pass`;
+  assert.equal(denied(w.send(pre("Bash", command, w.child("/root/sage_lead_t1_r1")))),
+    "sage: a lead records with the sage MCP tools (run_add, run_done, finding_add, finding_triage, finding_close, verdict, round, pages, task_set, brief), not from the shell. Use one of these, or put what the logbook needs in your report");
+  assert.equal(denied(w.send(pre("Bash", command, w.child("/root/sage_lead_t1_r1/sage_qa_t1_r2")))), LOGBOOK);
+  assert.equal(denied(w.send(pre("Bash", command, w.child("/root/sage_pe_t1/sage_lead_t1")))), LOGBOOK, "a lead's name below another sage name is no lead");
 });
 
 test("T551: a sage name that is not a lead above the leaf is refused; the team under a lead starts nothing; a flat child behaves as before; sends stay refused", async (t) => {
   const g = fixed({ sage: true });
   const p = patch("*** Update File: src/a.js", "@@", "-a", "+b");
   for (const [path, above] of [["/root/sage_qa_t1/sage_implementer_t1_r2", "sage_qa_t1"], ["/root/sage_implementer_t1/sage_implementer_t1_r2", "sage_implementer_t1"], ["/root/sage_pe_t1/sage_lead_t1", "sage_pe_t1"],
+    ["/root/sage_pe_t1/sage_lead_t1/sage_implementer_t1", "sage_pe_t1"], ["/root/sage_qa_t1/sage_lead_t1/sage_lead_t1/sage_implementer_t1_r2", "sage_qa_t1"], ["/root/sage_lead_t1/sage_pe_t1/sage_implementer_t1", "sage_pe_t1"],
     ["/root/sage_designer_t1/worker_1/sage_implementer_t1", "sage_designer_t1"], ["/root/Sage_Lead_T1/sage_implementer_t1", "Sage_Lead_T1"], [`${LEAD}/sage_qa_t12_r2/sage_implementer_t12_r3`, "sage_qa_t12_r2"]]) {
     const child = sageChild(t, path);
     assert.equal(denied(await g.run(pre("apply_patch", p, child))), BAD_CHAIN(above), path);
@@ -1191,17 +1229,42 @@ test("the gate saves a proof of each sage tool call that it lets through, and no
   const meta = (callId) => ({ callId, sessionId: base.session_id });
   const g = fixed({ sage: true });
   assert.equal(await g.run(mcp("verdict", { task: "T1" }, { tool_use_id: "call_chief" })), undefined);
-  assert.equal(takeProof(meta("call_chief"), "status"), false, "a proof names its tool");
+  assert.equal(takeProof(meta("call_chief"), "status"), null, "a proof names its tool");
   assert.equal(await g.run(mcp("verdict", { task: "T1" }, { tool_use_id: "call_chief" })), undefined);
-  assert.equal(takeProof({ callId: "call_chief", sessionId: "019a0000-0000-7000-8000-0000000000ff" }, "verdict"), false, "and its session");
+  assert.equal(takeProof({ callId: "call_chief", sessionId: "019a0000-0000-7000-8000-0000000000ff" }, "verdict"), null, "and its session");
   assert.equal(await g.run(mcp("verdict", { task: "T1" }, { tool_use_id: "call_chief" })), undefined);
-  assert.equal(takeProof(meta("call_chief"), "verdict"), true, "the chief's call");
-  assert.equal(takeProof(meta("call_chief"), "verdict"), false, "once");
+  assert.deepEqual(takeProof(meta("call_chief"), "verdict"), { role: "chief" }, "the chief's call");
+  assert.equal(takeProof(meta("call_chief"), "verdict"), null, "once");
   assert.equal(denied(await g.run(mcp("verdict", { task: "T1" }, { ...sageChild(t, "/root/sage_qa_t1_r1"), tool_use_id: "call_child" }))), LOGBOOK);
-  assert.equal(takeProof(meta("call_child"), "verdict"), false, "no proof of a refused call");
+  assert.equal(takeProof(meta("call_child"), "verdict"), null, "no proof of a refused call");
   assert.equal(await g.run(mcp("status", {}, { ...sageChild(t, "/root/sage_qa_t1_r1"), tool_use_id: "call_read" })), undefined);
-  assert.equal(takeProof(meta("call_read"), "status"), true, "a child's read");
-  assert.equal(takeProof(undefined, "status"), false, "a call with no _meta");
+  assert.deepEqual(takeProof(meta("call_read"), "status"), { role: "child" }, "a child's read");
+  for (const [i, path] of ["/root/sage_chief_t1", "/root/worker/sage_chief_t1", "/root/sage_chief_t1_r9"].entries()) {
+    assert.equal(denied(await g.run(mcp("verdict", { task: "T1" }, { ...sageChild(t, path), tool_use_id: `call_named_${i}` }))), LOGBOOK, `F-T552-5: ${path}`);
+    assert.equal(await g.run(mcp("status", {}, { ...sageChild(t, path), tool_use_id: `call_named_${i}` })), undefined, path);
+    assert.deepEqual(takeProof(meta(`call_named_${i}`), "status"), { role: "child" }, `F-T552-5: only the root thread is the chief, not ${path}`);
+  }
+  assert.equal(await g.run(mcp("status", {}, { ...sageChild(t, "/root/worker_1"), tool_use_id: "call_plain" })), undefined);
+  assert.deepEqual(takeProof(meta("call_plain"), "status"), { role: "child" }, "a child with no sage task name");
+  assert.equal(await g.run(mcp("status", {}, { ...sageChild(t, "/root/sage_pe_t1/sage_lead_t1"), tool_use_id: "call_nested" })), undefined);
+  assert.deepEqual(takeProof(meta("call_nested"), "status"), { role: "child" }, "a lead's name below another sage name is no lead");
+  assert.equal(takeProof(undefined, "status"), null, "a call with no _meta");
+});
+
+test("T552: the proof of a lead's call carries its role, task, run and project, and a call that the gate refuses leaves none", (t) => {
+  const w = world(t);
+  w.sage("init");
+  w.sage("task", "add", "--title", "a", "--size", "small", "--priority", "P2");
+  w.sage("task", "add", "--title", "b", "--size", "small", "--priority", "P2");
+  w.sage("task", "T1", "set", "state=briefed");
+  w.sage("run", "add", "T1", "--role", "lead");
+  const proofs = () => { try { return readdirSync(join(w.env.SAGE_HOME, ".hooks", "codex", "proofs")); } catch { return []; } };
+  const call = (args, tool_use_id) => w.send(mcp("run_add", { project: w.project, ...args }, { ...w.child("/root/sage_lead_t1_r1"), tool_use_id }));
+  assert.match(denied(call({ task: "T2", role: "qa" }, "call_other")), /^sage: T2 is not of T1, and a lead records only its own task/);
+  assert.deepEqual(proofs(), [], "no proof of a refused call");
+  assert.equal(call({ task: "T1", role: "qa" }, "call_own"), undefined);
+  const [file] = proofs();
+  assert.deepEqual(JSON.parse(readFileSync(join(w.env.SAGE_HOME, ".hooks", "codex", "proofs", file), "utf8")), { session: base.session_id, tool: "mcp__sage__run_add", caller: { role: "lead", task: "T1", run: "R1", project: w.project } });
 });
 
 test("no thread writes Codex's config file or the sage plugin's folder from the shell, in any mode; reads run (R1916-3)", async () => {
