@@ -100,6 +100,7 @@ const CHILD_LOGBOOK = "sage: role agents report; only the chief records the logb
 const CHILD_SPAWN = "sage: role agents start no agents; only the chief and a lead do. Put what you need in your report.";
 const TEAM_NAMES = [...TEAM].map((role) => role.replaceAll("-", "_")).join(", ").replace(/, (?=[^,]*$)/, " or ");
 const LEAD_SPAWN = (task, name) => `sage: a lead starts only the team of its own task: sage_<role>_t${task}_r<k>, where the role is ${TEAM_NAMES}. ${JSON.stringify(name ?? "no task_name")} is not one of these. Put what else you need in your report.`;
+const LEAD_RESUME = "sage: a lead restarts no agent, because each agent works only from its checked brief. To go on with its work, start a new agent on a new run, with a new brief.";
 const CHILD_SEND = "sage: agents send no input to another thread, because a message to the chief's thread would count as the user's. Put it in your report.";
 const LEAD_SEND = "sage: a lead sends no message to an agent, because each agent works only from its checked brief. To steer your team, start a new agent on a new run, with a new brief.";
 const ROOT_SEND = "sage: no thread sends input to the session's main thread, because Codex counts that message as the user's own typed message, also a mode phrase. Put it in your reply or your report.";
@@ -276,6 +277,8 @@ const underSage = (t) => (t.codex ? true : t.parts?.some(sageName));
 const isLead = (name) => taskRole(name) === "lead";
 /** The first sage name above the leaf of an agent path that is not a lead's, or undefined. */
 const notLeadAbove = (parts) => parts.filter(sageName).slice(0, -1).find((name) => !isLead(name));
+/** A lead with only leads above it. */
+const realLead = (t) => isLead(t.parts?.at(-1)) && !notLeadAbove(t.parts);
 
 /** Why the gate refuses a child's change of files in sage mode, or undefined: the leaf sage name decides. */
 function childChange(t, sage) {
@@ -600,12 +603,12 @@ export async function gate(input, { mode = readMode, check = checkMerge, env = p
     if (targets.some((target) => sendsToRoot(target, f.session))) return deny(ROOT_SEND);
     const under = thread.child && underSage(thread);
     if (under === false) return undefined;
-    return refuse(thread, !under ? UNREAD_ROLE : isLead(thread.parts?.at(-1)) && !notLeadAbove(thread.parts) ? LEAD_SEND : CHILD_SEND);
+    return refuse(thread, !under ? UNREAD_ROLE : realLead(thread) ? LEAD_SEND : CHILD_SEND);
   }
   if (SPAWN.test(f.tool)) {
     const under = thread.child && underSage(thread);
     if (under === false) return undefined;
-    const why = under ? childSpawn(thread, f.input.task_name) : UNREAD_ROLE;
+    const why = !under ? UNREAD_ROLE : realLead(thread) && f.tool.endsWith("resume_agent") ? LEAD_RESUME : childSpawn(thread, f.input.task_name);
     return why ? refuse(thread, why) : undefined;
   }
   if (f.tool === "apply_patch") {

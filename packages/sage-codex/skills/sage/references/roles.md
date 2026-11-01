@@ -39,7 +39,7 @@ The chief records the lead run, the checks verdicts, the move to verified, and i
 2. Do what only you do: ask its QUESTIONS with `gate_add`, dismiss each medium or high finding that it names as wrong, when you agree, and end each run that it names as never started.
 3. For a ready report (the task at verifying), take the PR number from the logbook, never from the report. Take the head SHA from `gh pr view <n> --json headRefOid`, and compare it with the SHA in the report. When they differ, or a run of the task other than the lead run still runs, record no verdict: start a fresh lead.
 4. Run `gh pr checks <n>`. When every check passes on that SHA, record `checks-pass` with `verdict`, then move the task to verified with `task_set`. Then merge (autopilot on), or tell the user that the pull request is ready.
-5. When a check fails, record `checks-fail`, add a finding with `finding_add` (`source` qa, `run` the lead run), triage it fix, then start a fresh lead.
+5. When a check fails, record `checks-fail`, add a finding with `finding_add` (`source` qa, `class` the problem's class, `run` the lead run), triage it fix, then start a fresh lead.
 6. For a blocked report, take no state from it. Read the task's state, round and findings with `status`, decide from them, and start a fresh lead on a new lead run, with the original brief, the decision and the earlier report. It goes on from the logbook.
 
 ## Thread limit
@@ -86,7 +86,7 @@ Incomplete reports continue once, then remain incomplete if the child stops agai
 
 An arena candidate is a designer or an implementer with `candidate` on its `run_add`. Use its usual `role.mjs` text and task name, such as `sage_designer_t12_r40`. The arena judge uses `role.mjs arena-judge` and a name such as `sage_arena_judge_t12_r44`. The steps are in [run an arena](arena.md).
 
-Each candidate and the judge write on their own branch, in their own worktree, so that branch differs from the task's branch. The start and stop hooks bind each one and keep its report, with the head of its own branch. The judge makes its branch and commits on it. It leaves the pull request to the chief, as an implementer does. A kept report grants no verdict, and a score replaces no review.
+Each candidate and the judge write on their own branch, in their own worktree, so that branch differs from the task's branch. The start and stop hooks bind each one and keep its report, with the head of its own branch. The judge makes its branch and commits on it. It leaves the pull request to the chief, as an implementer leaves it to the chief or the lead. A kept report grants no verdict, and a score replaces no review.
 
 ## Before installed acceptance
 

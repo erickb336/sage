@@ -2560,7 +2560,7 @@ test("shared role instructions require exact packaged provider bindings and refu
     Object.create(f.bindings.implementer)]) assert.throws(() => f.api.renderRoleInstructions("implementer", bindings), /exact provider bindings/);
   const text = f.api.renderRoleInstructions("implementer", f.bindings.implementer);
   assert.match(text, /Never run `gh`/);
-  assert.match(text, /The chief handles the pull request/);
+  assert.match(text, /The chief or the lead handles the pull request/);
   assert.doesNotMatch(text, /\.claude|CLAUDE\.md|gh pr create/);
 });
 

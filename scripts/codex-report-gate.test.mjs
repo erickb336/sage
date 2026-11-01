@@ -286,9 +286,11 @@ test("an input that the gate cannot read stops nothing and gives one plain line"
 // The tools that the chief and role texts may name. STOCK: the tool lists of stock Codex 0.160.0 in run R1648
 // (gpt-6.1-sol: functions, clock and collaboration namespaces; fake-model: the multi_agent_v1 list), with the
 // spawn_agent parameters. MCP: the tools of the plugin's sage MCP server (T454, PR 327), read from the server itself.
-const STOCK = ["exec", "wait", "request_user_input", "request_user_input_async", "sleep", "followup_task", "interrupt_agent",
+// V2: the gpt-6.1-sol part of that list, with the tools of multi-agent v2, the only place where a lead runs.
+const V2 = ["exec", "wait", "request_user_input", "request_user_input_async", "sleep", "followup_task", "interrupt_agent",
   "list_agents", "send_message", "spawn_agent", "wait_agent", "task_name", "fork_turns", "reasoning_effort", "exec_command",
-  "write_stdin", "view_image", "close_agent", "resume_agent", "send_input", "fork_context", "get_goal", "create_goal", "update_goal", "web_search"];
+  "write_stdin", "view_image"];
+const STOCK = [...V2, "close_agent", "resume_agent", "send_input", "fork_context", "get_goal", "create_goal", "update_goal", "web_search"];
 const MCP = Object.keys((await import(pathToFileURL(join(ROOT, "plugins/sage-codex/mcp/state-server.mjs")))).TOOLS);
 /** Each tool-like name (snake case in a code span) that a binding text names, except an example sage task name. */
 const named = (text) => [...text.matchAll(/`([a-z][a-z0-9]*(?:_[a-z0-9]+)+)`/g)].map((m) => m[1]).filter((name) => !/^sage_[a-z_]+_t\d+(?:_r\d+)?$/.test(name));
@@ -338,12 +340,30 @@ test("T553: role.mjs lead adds the Codex steps to the lead's text, and no other 
   assert.match(r.stdout, /The gate refuses `send_message`, `followup_task` and `send_input` from a lead/);
   assert.match(r.stdout, /The `checks-pass` and `checks-fail` verdicts are the chief's/);
   // The carried limits, each with what to do.
-  assert.match(r.stdout, /Claude's hook checks this count \(its gap rule\), and the Codex gate does not/);
+  assert.match(r.stdout, /record every finding of the report, before you end its run/);
+  assert.match(r.stdout, /Nothing refuses a lead that leaves one out: Claude's hook checks the count of medium and high findings \(its gap rule\), and the Codex gate does not/);
   assert.match(r.stdout, /`AgentLimitReached` means that no thread is free/);
   assert.match(r.stdout, /A v1 child cannot start agents\./);
   assert.doesNotMatch(r.stdout, /\{\{|<role\.mjs>/);
-  assert.deepEqual(named(r.stdout).filter((name) => !STOCK.includes(name) && !MCP.includes(name)), [], "each tool that the steps name exists");
+  // Each tool that the steps give a lead exists on v2. The two v1 names are there only as refusals (F-T553-1).
+  assert.deepEqual(named(r.stdout).filter((name) => !V2.includes(name) && !MCP.includes(name)), ["send_input", "resume_agent"], "each tool that the steps name exists on v2");
+  assert.match(r.stdout, /stop it with `interrupt_agent`, end its run as failed/);
+  assert.match(r.stdout, /wait for a helper that runs, then call `spawn_agent` again/);
+  // The tools' real inputs (F-T553-2, F-T553-3, F-T553-8).
+  assert.match(r.stdout, /For an implementer, also give `branch`, the task's branch\./);
+  assert.match(r.stdout, /`\{"task": "T12", "fields": \{"state": "reviewing"\}\}`/);
+  assert.match(r.stdout, /`finding_triage`: give `task`, `key` and `decision`: `fix`/);
+  assert.match(r.stdout, /`gh pr create --head <branch> --title <title> --body <body>`/);
   for (const role of ["implementer", "qa", "pe"]) assert.doesNotMatch(spawnSync("node", [ROLE, role], { encoding: "utf8" }).stdout, /Your steps in Codex/, role);
+});
+
+test("T553: a lead's steps record a report's findings and verdict first, and triage fix after (F-T552-22)", () => {
+  const text = spawnSync("node", [ROLE, "lead"], { encoding: "utf8" }).stdout;
+  const section = text.slice(text.indexOf("**A report with findings.**"), text.indexOf("**The pull request.**"));
+  const steps = ["1. `finding_add`", "2. `run_done`", "3. `verdict`: for a medium or high finding, give `findings`", "4. `finding_triage`", "5. `round`"].map((step) => section.indexOf(step));
+  assert.ok(steps.every((at) => at > 0), String(steps));
+  assert.deepEqual(steps, [...steps].sort((a, b) => a - b), "the order of the steps");
+  assert.match(text, /`finding_move` stays the chief's tool/);
 });
 
 // T83: run the public renderer from the generated package, as the chief does.
