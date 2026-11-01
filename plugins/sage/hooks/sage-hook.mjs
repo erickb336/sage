@@ -373,7 +373,7 @@ export function handle(input, state, slots) {
     const lead = slots.leadOf(input.agent_id);
     if (!lead) return deny(event, "this lead holds no bound lead slot, so it starts no agent. Report to the sage.");
     if (!LEAD_CHILDREN.has(spawned)) return deny(event, "a lead starts only an implementer, code reviewer, security reviewer, UX reviewer or QA agent. Report to the sage.");
-    const why = leadSpawnProblem(lead, spawned, spawnName, slots);
+    const why = leadSpawnProblem(lead, spawned, spawnName, slots, ti.prompt);
     if (typeof why === "string") return deny(event, `${why} Report to the sage.`);
     helperKey = why?.helper;
   }
@@ -433,7 +433,7 @@ export function handle(input, state, slots) {
       if (r.refused === "ended") return deny(event, "this lead or spawn already ended, so it cannot start another agent. Report to the sage.");
       if (r.refused === "leads") return deny(event, `3 leads are running for ${project}. Wait for one to finish. Report to the sage.`);
       if (r.refused === "children") return deny(event, `this lead already has ${LEAD_HELPERS} children. ${helperWait}`);
-      if (r.refused === "helper") return deny(event, `${spawnName} already has its helper: one run is backed by one child (F-T284-9). Report to the sage.`);
+      if (r.refused === "helper") return deny(event, `${helperKey.run} already has its helper: one run is backed by one child (F-T284-9). Report to the sage.`);
       // A lead that started with no name field stops only by its agent id: a stop by name is refused (T434).
       const stop = () => slots.unnamedLead(leadMark.task) ? "by its agent id, from its start's result: it started with no name field, so a stop by its name is refused" : `by its agent id or by its name lead-${leadMark.task}`;
       // A slot of another session: this session's TaskStop cannot reach it, so the reason names what frees it (R1762-2).
@@ -1069,11 +1069,12 @@ function headOf(folder, task) {
 /**
  * The checks of a lead's spawn of a child (F-T284-11, F-T284-9): its lead slot's logbook still runs its lead run, and its
  * task is not held, in replan or ended. The child's name is a run id (R<n>), and the child is that run's helper: a running
- * run of the task in its current round, of the child's role, that this lead added (F-T301-57). The helper keeps the
- * branch's tip at its start (F-T289-14). The reason, or the helper to record ({ helper }). It throws when it cannot read
- * the logbook, and the hook refuses the spawn then.
+ * run of the task in its current round, of the child's role, that this lead added (F-T301-57). The brief's first line
+ * (BRIEF_LINE), when it has one, gives the run too: it names this lead's task, and a name that is a run id agrees with it
+ * (T581). The helper keeps the branch's tip at its start (F-T289-14). The reason, or the helper to record ({ helper }).
+ * It throws when it cannot read the logbook, and the hook refuses the spawn then.
  */
-function leadSpawnProblem(lead, spawned, name, slots) {
+function leadSpawnProblem(lead, spawned, given, slots, prompt) {
   let view;
   try {
     view = logbookOf(lead.folder);
@@ -1084,7 +1085,11 @@ function leadSpawnProblem(lead, spawned, name, slots) {
   if (view.leadRun(lead.task)?.id !== lead.run) return `${lead.task}'s lead run ${lead.run} no longer runs, so this lead starts no agent (F-T284-11).`;
   const task = view.task(lead.task);
   if (!task || LEAD_STOPS.includes(task.state)) return `${lead.task} is ${task ? task.state : "not in the logbook"}, so this lead starts no agent (F-T284-11, F-T289-7).`;
-  // A helper's name is its run id: a child with another name would count for no run (F-T301-57).
+  const [, lineRun, lineTask] = BRIEF_LINE.exec(String(prompt ?? "").split("\n", 1)[0]) ?? [];
+  if (lineTask && lineTask !== lead.task) return `the brief's first line names ${lineTask}, and this lead runs ${lead.task}: a lead helps only with its own task.`;
+  if (lineRun && /^R[1-9]\d*$/.test(String(given ?? "")) && given !== lineRun) return `the helper's name ${given} and the brief's first line ${lineRun} name two runs: give both the same run id.`;
+  const name = lineRun ?? given;
+  // A helper's run id comes from its name or its brief: a child with neither would count for no run (F-T301-57).
   if (!/^R[1-9]\d*$/.test(String(name ?? ""))) return `a lead names each helper by its run id (R<n>, the id that run add printed), and ${JSON.stringify(String(name ?? "").slice(0, 40))} is not one.`;
   const run = view.row(name), role = spawned.slice("sage:".length);
   if (run?.task !== lead.task || run.status !== "running" || run.role !== role || String(run.round) !== String(task.round)) {
@@ -2370,8 +2375,9 @@ const briefRun = (prompt) => BRIEF_LINE.exec(String(prompt ?? "").split("\n", 1)
 /**
  * All sessions share numbered capacity slots. One short filesystem transaction protects allocation and lifecycle
  * changes, including legacy slots: a released slot number must never be mistaken for its next reservation.
- * New lead and child slots retain exact call identities and bind only from Agent's structured result. Start order
- * is not parent evidence. Incomplete marks count conservatively; unconfirmed launches retain a one-hour lease.
+ * New lead and child slots retain exact call identities and bind from Agent's structured result, or a lead's helper at
+ * its SubagentStart when its call is the only pending one of its role (T581). Start order is not parent evidence.
+ * Incomplete marks count conservatively; unconfirmed launches retain a one-hour lease.
  */
 export function slotsFor(dir, session, now = Date.now(), rawSession = session, leadRuns = liveLeadRun) {
   const STALE = { pending: 10 * 60_000, agent: 60 * 60_000 };
@@ -2505,6 +2511,17 @@ export function slotsFor(dir, session, now = Date.now(), rawSession = session, l
     const parents = new Set(slots.map(slot => mark(slot, "parent-")).filter(Boolean));
     for (const slot of [...slots, ...ofSession().filter(slot => parents.has(mark(slot, "bound-")))]) utimesSync(join(dir, slot), new Date(now), new Date(now));
   };
+  /** Joins an agent to its call's pending slot, once. False when the slot has no pending call. */
+  const bindTo = (slot, agent) => {
+    const pending = mark(slot, "pending-");
+    if (!pending) return false;
+    note(`binding-${hash(agent)}`, mark(slot, "call-"));
+    renameSync(join(dir, slot, `pending-${pending}`), join(dir, slot, `bound-${hash(agent)}`));
+    if (mark(slot, "role-") === "sage_lead") note(`lead-${hash(agentName(agent))}`); // the agent is a lead, also after its slot frees (T482); case-folded (R1763-3)
+    if (!has(slot, "exact")) add(slot, `agent-${id(agent)}`);
+    add(slot, `folded-${hash(agentName(agent))}`); // holds compares agent ids case-folded (F-T301-53)
+    return true;
+  };
   const lease = (key) => Math.max(0, ...list().filter((slot) => mark(slot, "helper-") === key).map((slot) => STALE.agent - (now - statSync(join(dir, slot)).mtimeMs)));
   const touch = (agent, role) => {
     if (!valid(agent) || stopped(agent)) return;
@@ -2590,8 +2607,10 @@ export function slotsFor(dir, session, now = Date.now(), rawSession = session, l
       const observation = observe(agent, role);
       note(`started-${hash(agent)}`); // event identity survives capacity release and lease expiry
       touch(agent, role);
-      if (!observation.legacyOnly) return;
       const pending = pendingFor(role).filter(slot => observation.calls.includes(mark(slot, "call-")));
+      // A foreground helper's result comes only after its stop, and no start event names its call (T581). So a lead's helper
+      // binds here when its call is the only pending one of the role. Two such calls stay unbound, for the result alone.
+      if (!observation.legacyOnly) return void (observation.calls.length === 1 && pending.length === 1 && mark(pending[0], "helper-") && bindTo(pending[0], agent));
       if (pending.some(slot => has(slot, "exact"))) return;
       const slot = pending[0];
       if (slot) renameSync(join(dir, slot, `pending-${mark(slot, "pending-")}`), join(dir, slot, `agent-${id(agent)}`));
@@ -2612,16 +2631,7 @@ export function slotsFor(dir, session, now = Date.now(), rawSession = session, l
       const observation = observationOf(agent);
       if (observation && !observation.calls.includes(call)) return;
       if (bound !== undefined && bound !== hash(agent)) return;
-      if (bound === undefined) {
-        if (ofSession().some(other => other !== slot && ownsAgent(other, agent))) return;
-        const pending = mark(slot, "pending-");
-        if (!pending) return;
-        note(binding, call);
-        renameSync(join(dir, slot, `pending-${pending}`), join(dir, slot, `bound-${hash(agent)}`));
-        if (mark(slot, "role-") === "sage_lead") note(`lead-${hash(agentName(agent))}`); // the agent is a lead, also after its slot frees (T482); case-folded (R1763-3)
-        if (!has(slot, "exact")) add(slot, `agent-${id(agent)}`);
-        add(slot, `folded-${hash(agentName(agent))}`); // holds compares agent ids case-folded (F-T301-53)
-      }
+      if (bound === undefined && (ofSession().some(other => other !== slot && ownsAgent(other, agent)) || !bindTo(slot, agent))) return;
       if (response.status === "completed") note(`ended-${hash(agent)}`);
       // Recheck the child after binding. An async result after parent cleanup may describe a later launch; keep it charged.
       if (stopped(agent)) release(agent);
@@ -2633,9 +2643,10 @@ export function slotsFor(dir, session, now = Date.now(), rawSession = session, l
         ?? (caller === undefined ? ofSession().find(slot => !has(slot, "exact") && mark(slot, "pending-") === id(tool)) : undefined);
       // A failed exact call launched no agent that still runs, so its slot frees even when another start marked it (T255 L2).
       // An old-format call keeps the slot after a possible start: its agent cannot be told from another spawn's.
-      if (slot && mark(slot, "pending-") !== undefined && (has(slot, "exact") || !has(slot, "possible-launch"))) {
+      if (slot && (has(slot, "exact") || (mark(slot, "pending-") !== undefined && !has(slot, "possible-launch")))) {
         // A failed call started no helper, so its run may get one (F-T284-9).
         if (mark(slot, "helper-")) rmSync(join(helpers, `started-${mark(slot, "helper-")}`), { force: true });
+        if (mark(slot, "bound-")) note(`ended-${mark(slot, "bound-")}`); // a helper that its start bound (T581)
         free(slot);
       }
     }),
