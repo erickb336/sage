@@ -3,7 +3,7 @@ import { USAGE_FIELDS, tokenCount, usageText, usageRegistry, usageSnapshot, vali
 import { parseRunTarget } from "./run-target.mjs";
 import { readLocalGit } from "./local-git.mjs";
 import { STUCK_WRITE, TaskUpdateError } from "./task-update-error.mjs";
-import { PENDING, recordedWrites, coordinatedWrites, assertNoPendingWrite, hasPendingWrite, pendingRequest, pendingNames, settlePendingWrite, RecordedWriteError } from "./recorded-write.mjs";
+import { PENDING, recordedWrites, coordinatedWrites, assertNoPendingWrite, hasPendingWrite, pendingRequest, pendingNames, settlePendingWrite, verifyPendingWrite, RecordedWriteError } from "./recorded-write.mjs";
 // sage: the state tool of sage mode. The chief of staff calls it through the shell: one command in, one line out.
 // The store is plain TSV and Markdown under the configured root ($SAGE_HOME overrides it), and every
 // table has one writer: this tool. It holds the rules that prompts alone did not hold in Orchestrator: no dropped
@@ -98,7 +98,7 @@ const ADDED = { runs: ["model", ...USAGE_FIELDS], tasks: ["hold", "extra", "prio
 const COMMANDS = ["init", "logbook", "standing", "pages", "task", "task-adopt", "program", "round", "run", "finding", "verdict", "gate", "log", "status", "stats", "merge-check", "config", "projects", "board", "observe", "link"];
 /** The options of each command, by its name or by its name and first word. Every command also takes --project. */
 const OPTIONS = {
-  "logbook repair": ["accept-loss"],
+  "logbook repair": ["accept-loss", "accept-change-loss"],
   link: ["to", "separate"],
   "projects rebuild": ["accept-listing"],
   "task add": ["title", "size", "risk", "add", "why", "priority", "kind", "waits", "program"],
@@ -538,10 +538,11 @@ function ready(dir, skip = []) {
     if (skip.length || hasRows(dir)) throw lost(dir, "tasks", "is missing", skip);
     return;
   }
-  for (const [table, { cols }] of Object.entries(check(dir, skip))) {
-    const extra = cols.filter((c) => c && !TABLES[table].includes(c));
-    if (extra.length) refuse(`${join(dir, `${table}.tsv`)} has columns that this version of sage does not know (${extra.join(", ")}): a newer sage wrote this logbook, and a write of this version would lose them. Update the sage plugin and restart this session. Nothing changed; status, logbook, standing and merge-check still work.`);
-  }
+  for (const [table, { cols }] of Object.entries(check(dir, skip))) knownColumns(dir, table, cols);
+}
+function knownColumns(dir, table, cols) {
+  const extra = cols.filter((c) => c && !TABLES[table].includes(c));
+  if (extra.length) refuse(`${join(dir, `${table}.tsv`)} has columns that this version of sage does not know (${extra.join(", ")}): a newer sage wrote this logbook, and a write of this version would lose them. Update the sage plugin and restart this session. Nothing changed; status, logbook, standing and merge-check still work.`);
 }
 
 const taskVersion = task => createHash("sha256").update(JSON.stringify(task)).digest("hex");
@@ -1218,12 +1219,51 @@ const SAVED = { 2: taskWrites, 3: runWrites, 4: reviewWrites, 5: interruptedWrit
 function settle(dir) {
   let settled;
   try { settled = settlePendingWrite(dir, SAVED); }
-  catch (error) {
-    if (!error.code || error instanceof TaskUpdateError) throw Object.assign(new RecordedWriteError(STUCK_WRITE), { code: "stuck-write" });
-    const request = pendingRequest(dir), named = new RegExp(`^(?:R[1-9]\\d{0,9}|${UUID})$`).test(request);
-    throw Object.assign(new RecordedWriteError(`A saved change${named ? ` (request ${visible(request)})` : ""} did not finish because of a file error (${error.code}). The saved change stays. Run the command again. If it repeats, check the logbook folder permissions.`), { code: error.code });
-  }
+  catch (error) { throw settleFailure(dir, error); }
   if (settled) status(dir, true);
+}
+/** The request of a saved change, for a line that names it, only in a form that prints safely. */
+const savedRequest = (dir) => {
+  const request = pendingRequest(dir);
+  return new RegExp(`^(?:R[1-9]\\d{0,9}|${UUID})$`).test(request) ? ` (request ${visible(request)})` : "";
+};
+function settleFailure(dir, error) {
+  if (!error.code || error instanceof TaskUpdateError) return Object.assign(new RecordedWriteError(STUCK_WRITE), { code: "stuck-write" });
+  return Object.assign(new RecordedWriteError(`A saved change${savedRequest(dir)} did not finish because of a file error (${error.code}). The saved change stays. Run the command again. If it repeats, check the logbook folder permissions.`), { code: error.code });
+}
+/**
+ * The one way past a stuck saved change: the owner accepts its loss. It refuses, with no change, unless the marker truly
+ * cannot finish, here or from the real folder or on a newer sage, the next write can work, and decisions.tsv can take the
+ * decision row. It writes nothing itself.
+ */
+function stuckChange(dir, skip, env) {
+  if (!hasPendingWrite(dir)) refuse("This logbook has no saved change, so there is nothing to repair. Nothing changed.");
+  const real = realpathSync(dir);
+  if (real !== resolve(dir)) refuse(`This logbook is reached through a link, so its saved change may finish from the real folder ${visible(real)}. Nothing changed. Run sage on a path with no link. When ${visible(dir)} is the link itself, move the real folder there, in place of the link. When a folder above it is the link, set ${isShared(dir, env) ? "SAGE_SHARED_HOME" : "SAGE_HOME"} to ${visible(realpathSync(dirname(dir)))}. Then any write finishes the change or says what to do.`);
+  try { verifyPendingWrite(dir, SAVED); }
+  catch (error) {
+    const failure = settleFailure(dir, error);
+    if (failure.code !== "stuck-write") throw failure;
+    const newest = Math.max(...Object.keys(SAVED));
+    if (Number.isSafeInteger(error.schema) && error.schema > newest) refuse(`This saved change has schema ${error.schema}, and this version of sage knows schemas up to ${newest}: a newer sage wrote it and may finish it. Nothing changed. Update the sage plugin and restart this session. Then any write finishes the change or says what to do.`);
+    for (const table of Object.keys(TABLES)) {
+      let cols = [];
+      try { ({ cols } = sheet(dir, table)); }
+      catch (damaged) {
+        if (!(damaged instanceof Refusal)) throw damaged;
+        if (table === "decisions" && !skip.includes(table)) refuse(`The repair records its decision first, and decisions.tsv fails the logbook check: ${damaged.message} Nothing changed. If the owner accepts the loss of those rows too, run: sage logbook repair --accept-change-loss yes --accept-loss decisions --project <the project>.`);
+      }
+      knownColumns(dir, table, cols);
+    }
+    try { taskUpdates.history(dir); }
+    catch (damaged) {
+      if (!(damaged instanceof RecordedWriteError || damaged instanceof TaskUpdateError)) throw settleFailure(dir, damaged);
+      refuse("A receipt in task-updates fails its check, so writes would still stop after this repair. Nothing changed. Only a backup helps here: the owner restores the folder that `sage logbook` prints; rows newer than the backup are lost.");
+    }
+    const marker = join(dir, PENDING);
+    return { request: savedRequest(dir), marker, aside: lostName(marker) };
+  }
+  refuse("This saved change can finish, so it needs no repair: any write in this project finishes it. Nothing changed.");
 }
 /** Settle for a provider that has its own journal: journal runs under the same lock, and reads each receipt through its two readers. */
 function settleWrites({ project }, env, journal) {
@@ -1563,6 +1603,12 @@ function nextId(dir, prefix) {
   }
   return `${prefix}${max + 1n}`;
 }
+/** The next free name beside a file that a repair moves aside, under the logbook lock: an old file stays, however fast two repairs run. */
+const lostName = (file) => {
+  let n = 1;
+  while (lstatSync(`${file}.lost-${n}`, { throwIfNoEntry: false })) n++;
+  return `${file}.lost-${n}`;
+};
 const list = (s) => (s ? s.split(",").map((x) => x.trim()).filter(Boolean) : []);
 /** Does a task build code? Only a route with build has commits, a pull request and a merge. */
 const builds = (task) => list(task.route).includes("build");
@@ -2589,7 +2635,9 @@ function sage(argv, env = process.env) {
   const repair = cmd === "logbook" && pos[0] === "repair";
   const skip = repair ? [...new Set(list(opt["accept-loss"]))] : [];
   const odd = skip.filter((t) => !Object.hasOwn(TABLES, t));
-  if (repair && (odd.length || !skip.length)) refuse(`logbook repair needs --accept-loss with the tables whose rows the user accepts to lose, joined by a comma: ${Object.keys(TABLES).join(", ")}.${odd.length ? ` Not ${odd.join(", ")}.` : ""}`);
+  const changeLoss = repair && opt["accept-change-loss"] !== undefined;
+  if (changeLoss && opt["accept-change-loss"] !== "yes") refuse("--accept-change-loss takes only yes. Run it only after the owner accepts the loss of the saved change.");
+  if (repair && (odd.length || (!skip.length && !changeLoss))) refuse(`logbook repair needs --accept-loss with the tables whose rows the user accepts to lose, joined by a comma: ${Object.keys(TABLES).join(", ")}.${odd.length ? ` Not ${odd.join(", ")}.` : ""}`);
   if (cmd !== "init" && !(repair && existsSync(dir)) && !existsSync(join(dir, "tasks.tsv"))) {
     const printed = visible(project); // a path with control characters prints otherwise than it is, so it gets no line to paste
     refuse(`no logbook for the project ${printed}. ${printed === project ? `Run: sage init --project ${shell(project)}` : "Its path has control characters, so no command is printed to paste. Rename the folder, or run sage init from inside it."}`);
@@ -2608,12 +2656,27 @@ function sage(argv, env = process.env) {
   return out;
 }
 
+/** What a repair of a stuck saved change says: the loss in plain words, then the logbook check of what stays. */
+function lostChangeLine(dir, { request, aside }) {
+  const loss = `The saved change${request} is lost: ${PENDING} moved to ${aside}, and the decision is in decisions.tsv. A half-published update can leave mixed tables, where some tables hold the change and others do not. Sage does not repair them, so read the rows of the last work.`;
+  try {
+    ready(dir);
+    status(dir, true);
+    return `${loss} The logbook check passes, and writes work again. The check reads each table alone, so it cannot show that the tables agree.`;
+  } catch (error) {
+    if (!(error instanceof Refusal || error instanceof RecordedWriteError)) throw error;
+    return `${loss} The logbook check fails, so writes still stop: ${error.message}`;
+  }
+}
+
 /** One command that changes a logbook: its lock, the settle step and the integrity check, the command, then the status file. */
 function change(cmd, pos, opt, dir, env, skip, project) {
+  const changeLoss = opt["accept-change-loss"] !== undefined;
   return withLock(dir, () => {
-    ready(dir, skip);
+    // A stuck saved change stops ready and status, so its repair runs them itself, after the marker moves.
+    if (!changeLoss) ready(dir, skip);
     const out = act(cmd, pos, opt, dir, env, skip, project);
-    status(dir, true);
+    if (!changeLoss) status(dir, true);
     return out;
   });
 }
@@ -2727,27 +2790,33 @@ function act(cmd, pos, opt, dir, env, skip, project) {
       // The user accepts the loss of the rows of each table in skip: its old file goes aside, never away, and the table
       // starts again. The decisions come first, so a write that fails or is stopped leaves no table reset without its
       // decision; a table reset without the others leaves the check failing, so nothing passes before the repair is whole.
+      // A stuck saved change takes the same order: its decision, then its marker goes aside. A table that it left damaged
+      // stays damaged, and the check says so.
+      const change = opt["accept-change-loss"] ? stuckChange(dir, skip, env) : undefined;
       const tables = skip.map((table) => {
         const file = join(dir, `${table}.tsv`);
         try {
           sheet(dir, table);
         } catch {
-          const aside = lstatSync(file, { throwIfNoEntry: false }) ? `${file}.lost-${Date.now()}` : "";
+          const aside = lstatSync(file, { throwIfNoEntry: false }) ? lostName(file) : "";
           return { table, file, aside, was: aside ? `; its old file is ${aside}` : "" };
         }
         return refuse(`${file} passes the logbook check, so it has nothing to repair. Nothing changed.`);
       });
       const decided = tables.map(({ table, was }) => ({ at: now(), task: "", decision: `${table}.tsv started again without rows${was}`, why: "the user accepts the loss of its rows" }));
+      if (change) decided.push({ at: now(), task: "", decision: `saved change${change.request} moved aside to ${change.aside}`, why: "the owner accepts the loss of this saved change" });
       const trail = tables.find((t) => t.table === "decisions");
       if (trail?.aside) renameSync(trail.file, trail.aside);
       write(dir, "decisions", [...(trail ? [] : read(dir, "decisions")), ...decided]);
+      if (change) renameSync(change.marker, change.aside);
       for (const { table, file, aside } of tables.filter((t) => t !== trail)) {
         if (aside) renameSync(file, aside);
         write(dir, table, []);
       }
       const kept = tables.filter((t) => t.aside);
       const old = kept.length === 1 ? (tables.length === 1 ? `; its old file is ${kept[0].aside}` : `; the old file of ${kept[0].table}.tsv is ${kept[0].aside}`) : kept.length ? `; the old files are ${kept.map((t) => t.aside).join(" and ")}` : "";
-      return `${tables.map((t) => `${t.table}.tsv`).join(" and ")} started again without rows${old}. The decision${tables.length === 1 ? " is" : "s are"} in decisions.tsv.`;
+      const restarted = tables.length ? `${tables.map((t) => `${t.table}.tsv`).join(" and ")} started again without rows${old}. The decision${tables.length === 1 ? " is" : "s are"} in decisions.tsv.` : "";
+      return change ? [restarted, lostChangeLine(dir, change)].filter(Boolean).join(" ") : restarted;
     }
     case "observe": {
       if (pos.length !== 1) refuse("observe takes one task id and explicit observation options");

@@ -216,6 +216,10 @@ The plugin starts a local MCP server, `sage`, in the desktop app and in the CLI.
 - Codex starts the server outside the shell sandbox. Under `workspace-write`, the logbook is not a writable folder of an agent's shell, so only the server writes it.
 - Under full access (`danger-full-access`), an agent's shell can write any file, also the logbook, the mode files and Codex's record of your messages. So sage mode gives no guarantee there.
 - The plugin approves its own tools, so the logbook writes do not ask you each time. To be asked, set `default_tools_approval_mode = "prompt"` under `[plugins."sage@sage".mcp_servers.sage]` in your Codex config.
+- Limit: `logbook repair` has no tool, and the sandbox keeps the logbook closed to the chief's shell. So the Codex chief cannot run either repair.
+- When a saved change cannot finish and you have no backup, accept the loss, then run this yourself in a terminal, outside Codex: `node ~/.codex/plugins/cache/sage/sage/<version>/skills/sage/sage.mjs logbook repair --accept-change-loss yes --project <project>`.
+- To find `<version>`, run `ls ~/.codex/plugins/cache/sage/sage/` and use the current one. When you set `CODEX_HOME`, use that folder in place of `~/.codex`.
+- Limit: the repair cannot compare a receipt with Codex's journal. A receipt that differs from its journal row still stops Codex writes after the repair, and that case needs a backup.
 
 ## Design roles and acceptance
 

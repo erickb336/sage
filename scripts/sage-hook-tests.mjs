@@ -1628,7 +1628,7 @@ test("T578: the merge hook reads a saved change on disk: a stuck one refuses wit
   const s = autopilotSession();
   const marker = join(s.sage("logbook").trim(), "review-pending.json");
   writeFileSync(marker, "{}");
-  assert.equal(denied(s.send(bash(MERGE))), "sage: the merge check refuses: the merge check refuses this merge: This command changed nothing. This project cannot save changes; other projects work. Tell the owner. The owner restores the folder that `sage logbook` prints from a backup; rows newer than the backup are lost. Do not remove review-pending.json alone: a half-published update then keeps mixed tables.");
+  assert.equal(denied(s.send(bash(MERGE))), "sage: the merge check refuses: the merge check refuses this merge: This command changed nothing. This project cannot save changes; other projects work. Tell the owner. There are two ways out. With a backup: the owner restores the folder that `sage logbook` prints; rows newer than the backup are lost. With no backup: after the owner accepts the loss of this saved change, the chief runs `sage logbook repair --accept-change-loss yes --project <the project>`, or the owner runs it in a terminal when the chief cannot; it keeps the file, and a half-published update keeps mixed tables. Do not remove review-pending.json by hand.");
   assert.equal(readFileSync(marker, "utf8"), "{}", "the check keeps the change");
   rmSync(marker);
   const other = join(s.vars.SAGE_HOME, "other-abc123");
@@ -1784,6 +1784,7 @@ const FORGERIES = [
   `${TOOL} gate answer G1 yes`,
   `${TOOL} log T2 --why forged`,
   `${TOOL} logbook repair --accept-loss tasks`,
+  `${TOOL} logbook repair --accept-change-loss yes`,
   `${TOOL} standing add never review`,
   `${TOOL} round T2`,
   `${TOOL} program propose --name x --goal y --pilot T2`,
@@ -5642,7 +5643,7 @@ test("T273: each command that is not on the lead's list is refused, with the sen
     ...["merged", "pr-ready", "held", "abandoned", "briefed", "concluded", "replan", "repairing", "reviewing", "verified"].map((state) => `task T1 set state=${state}`),
     "task T1 set title=x", "task T1 set", "task T1 set state=building title=x", "task T1 set states=building", "task T1 frob state=building"];
   const notListed = ["finding triage T1 F-T1-1 --reason=x", "finding move T1 F-T1-1 --to x", "gate add T1 --question q --options a,b --recommend a", "gate answer G1 --option 1",
-    "log T1 --why x", "config cycles.small=1", "init", "standing add never", "logbook repair --accept-loss tasks", "pages T1", "pages T1 record x", "observe T1 --kind x",
+    "log T1 --why x", "config cycles.small=1", "init", "standing add never", "logbook repair --accept-loss tasks", "logbook repair --accept-change-loss yes", "pages T1", "pages T1 record x", "observe T1 --kind x",
     "newcommand T1", "run frob T1", "round T1 T2", `verdict T1 T2 --kind qa-pass --sha ${SHA}`, "run add T1 T2 --role qa", "finding close T1 F-T1-2 F-T1-1", "run done R2 R3 --status done"];
   for (const args of notOwn) {
     const why = denied(stateRun(s, args)) ?? "";
