@@ -9,13 +9,15 @@
 //     thread, guardian) shares the session id and has no agent_id, but its record names a subagent source or another
 //     thread id: it counts as a read-only role agent. A child whose record cannot be read is read-only and starts nothing.
 //   - The chief: in sage mode the root thread changes no file with apply_patch. A child may.
-//   - A read-only role: in sage mode a child under a role that core keeps from editing (a reviewer, QA, the PE), at
-//     any part of its agent path, changes no file, with apply_patch or with a shell write form (core's commandWrites,
-//     or Codex's own apply_patch program). A part that starts with sage_ but is not a sage task name counts as a
-//     read-only role.
+//   - A read-only role: in sage mode the leaf sage name (the last part of the agent path that starts with sage_) decides
+//     the edit rule. Under a role that core keeps from editing (a reviewer, QA, the PE, the lead), a child changes no
+//     file, with apply_patch or with a shell write form (core's commandWrites, or Codex's own apply_patch program).
+//     Each sage name above the leaf must be a lead's, or the child changes no file. A part that starts with sage_ but
+//     is not a sage task name counts as a read-only role.
 //   - The logbook: only the chief records it. A child, in any mode, calls only the sage MCP tools that read, and runs
 //     only the read commands of the plugin's state tool from the shell (never its MCP server).
-//   - No role agent starts agents: a child under a sage_ name, in any mode, gets no spawn_agent.
+//   - Only a lead starts agents: a child under a sage_ name, in any mode, gets no spawn_agent. The one exception is a
+//     lead (sage_lead_t<n>, with only leads above it), which starts core's TEAM roles with its own t<n>.
 //   - No sage child, in any mode, sends a message to another thread (multi-agent v1's send_input, v2's send_message
 //     and followup_task): its message to the root thread would start a root turn as if the user typed it. No thread,
 //     in any mode, also the root, sends to the root thread: Codex records it as the user's typed message (R1940-1).
@@ -54,7 +56,7 @@ import { closeSync, existsSync, mkdirSync, openSync, readdirSync, readSync, real
 import { homedir } from "node:os";
 import { basename, dirname, isAbsolute, join, relative, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
-import { chiefEditDenied, commandWrites, createCommandPolicy, createPushPolicy, gitInternalPath, PR, programName, programsRun, pullRequestHead, readModeFile, roleEditDenied, shellCommands, switchModes } from "../core/index.mjs";
+import { chiefEditDenied, commandWrites, createCommandPolicy, createPushPolicy, gitInternalPath, PR, programName, programsRun, pullRequestHead, readModeFile, roleEditDenied, shellCommands, switchModes, TEAM } from "../core/index.mjs";
 import { tool } from "../skills/sage/sage.mjs";
 import { verificationOptions } from "../skills/sage/verify-install.mjs";
 import { patchPaths, readState, stateKey } from "./principles-hook.mjs";
@@ -89,11 +91,15 @@ const AUTOPILOT_OFF = 'sage: autopilot is off, so the user merges. Report the pu
 const SAGE_FOLDER = "sage: no agent runs a shell command that names the Codex sage folder or the Codex sessions folder, because the logbook, the mode files and the user's typed messages are there. Use the sage MCP tools for the logbook.";
 const CODEX_RUN = "sage: no agent runs codex from the shell, except codex --version and codex --help, because a new session runs outside these hooks, and Codex records the prompt of a resumed, forked or queued turn as the user's typed message, also a mode phrase. Ask the user.";
 const READ_ONLY = (role) => `sage: in sage mode, the ${role} agent changes no files. Report the finding instead.`;
+const LEAD_EDIT = "sage: a lead changes no files. Start an implementer of your task to make this change.";
 const BAD_NAME = (name) => `sage: "${name}" starts with sage_ but is not a sage task name (sage_<role>_t<n>_r<k>), so this agent counts as a read-only role: it changes no files. Report instead.`;
+const BAD_CHAIN = (name) => `sage: "${name}" is above this agent in its agent path, and only a lead (sage_lead_t<n>) has sage agents under it, so this agent changes no files. Report instead.`;
 const UNREAD_ROLE = "sage: the hook could not read this agent's task name from Codex's record of its thread, so it refuses this call. Tell the user.";
 const UNREAD_CODEX = "sage: the hook could not read this shell command, and it names codex, so it refuses it. Write the command in a plainer form.";
 const CHILD_LOGBOOK = "sage: role agents report; only the chief records the logbook. Put this in your report.";
-const CHILD_SPAWN = "sage: role agents start no agents; only the chief does. Put what you need in your report.";
+const CHILD_SPAWN = "sage: role agents start no agents; only the chief and a lead do. Put what you need in your report.";
+const TEAM_NAMES = [...TEAM].map((role) => role.replaceAll("-", "_")).join(", ").replace(/, (?=[^,]*$)/, " or ");
+const LEAD_SPAWN = (task, name) => `sage: a lead starts only the team of its own task: sage_<role>_t${task}_r<k>, where the role is ${TEAM_NAMES}. ${JSON.stringify(name ?? "no task_name")} is not one of these. Put what else you need in your report.`;
 const CHILD_SEND = "sage: agents send no input to another thread, because a message to the chief's thread would count as the user's. Put it in your report.";
 const ROOT_SEND = "sage: no thread sends input to the session's main thread, because Codex counts that message as the user's own typed message, also a mode phrase. Put it in your reply or your report.";
 const V1_REFUSED = "sage: in sage mode, no thread uses multi-agent v1's send_input, because Codex can deliver it to the main thread as the user's typed message. sage sends with multi-agent v2.";
@@ -263,20 +269,39 @@ const CODEX_THREADS = { guardian: "approval check" };
 /** Whether a child thread is under a sage_ name (a thread that Codex starts itself counts), or undefined when its record cannot be read. */
 const underSage = (t) => (t.codex ? true : t.parts?.some(sageName));
 
-/** Why the gate refuses a child's change of files in sage mode, or undefined: a read-only role at any part of its agent path. */
+const isLead = (name) => taskRole(name) === "lead";
+/** The first sage name above the leaf of an agent path that is not a lead's, or undefined. */
+const notLeadAbove = (parts) => parts.filter(sageName).slice(0, -1).find((name) => !isLead(name));
+
+/** Why the gate refuses a child's change of files in sage mode, or undefined: the leaf sage name decides. */
 function childChange(t, sage) {
   if (!sage || !t.child) return undefined;
   if (t.codex) return READ_ONLY(`Codex ${CODEX_THREADS[t.codex] ?? t.codex}`);
   if (!t.parts) return UNREAD_ROLE;
-  for (const name of t.parts.filter(sageName)) {
-    const role = taskRole(name);
-    if (role === "investigate" || role === "evidence-review") return READ_ONLY(role);
-    let denied;
-    try { denied = role !== null && roleEditDenied({ sage, role }); } catch { denied = undefined; } // core throws for a role that it does not know
-    if (denied === undefined || role === null) return BAD_NAME(name);
-    if (denied) return READ_ONLY(role);
-  }
-  return undefined;
+  const leaf = t.parts.findLast(sageName);
+  if (leaf === undefined) return undefined;
+  const above = notLeadAbove(t.parts);
+  if (above) return BAD_CHAIN(above);
+  const role = taskRole(leaf);
+  if (role === "lead") return LEAD_EDIT;
+  if (role === "investigate" || role === "evidence-review") return READ_ONLY(role);
+  let denied;
+  try { denied = role !== null && roleEditDenied({ sage, role }); } catch { denied = undefined; } // core throws for a role that it does not know
+  if (denied === undefined || role === null) return BAD_NAME(leaf);
+  return denied ? READ_ONLY(role) : undefined;
+}
+
+/** The task number of a sage task name. */
+const taskNumber = (name) => /_t(\d+)(?:_r\d+)?$/.exec(name)[1];
+/**
+ * Why the gate refuses a spawn by a child under a sage name: only a lead, with only leads above it, starts agents, and
+ * only core's TEAM roles with its own task number. The name of the new agent is the spawn's task_name.
+ */
+function childSpawn(t, name) {
+  const self = t.parts?.at(-1);
+  if (!isLead(self) || notLeadAbove(t.parts)) return CHILD_SPAWN;
+  const fits = typeof name === "string" && TEAM.has(taskRole(name)) && taskNumber(name) === taskNumber(self);
+  return fits ? undefined : LEAD_SPAWN(taskNumber(self), name);
 }
 
 const escape = (text) => text.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
@@ -574,7 +599,9 @@ export async function gate(input, { mode = readMode, check = checkMerge, env = p
   }
   if (SPAWN.test(f.tool)) {
     const under = thread.child && underSage(thread);
-    return under === false ? undefined : refuse(thread, under ? CHILD_SPAWN : UNREAD_ROLE);
+    if (under === false) return undefined;
+    const why = under ? childSpawn(thread, f.input.task_name) : UNREAD_ROLE;
+    return why ? refuse(thread, why) : undefined;
   }
   if (f.tool === "apply_patch") {
     const paths = patchPaths(f.command);
