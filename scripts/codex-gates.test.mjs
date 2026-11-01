@@ -75,11 +75,11 @@ test("T91: comparison admission cannot be reused for changed input or another ca
   const g = fixed();
   for (const changed of [{ project: SCRATCH_HOME }, { task: "T2" }, { run: "R2" }, { sha256: "2".repeat(64) }]) {
     assert.equal(await g.run(mcp("report_compare", args, { cwd: project, tool_use_id: "compare" })), undefined);
-    assert.equal(takeProof(meta, "report_compare", process.env, { ...args, ...changed }), false);
+    assert.equal(takeProof(meta, "report_compare", process.env, { ...args, ...changed }), null);
   }
   assert.equal(await g.run(mcp("report_compare", args, { cwd: project, tool_use_id: "compare" })), undefined);
-  assert.equal(takeProof(meta, "report_compare", process.env, args), true);
-  assert.equal(takeProof(meta, "report_compare", process.env, args), false);
+  assert.deepEqual(takeProof(meta, "report_compare", process.env, args), { role: "chief" });
+  assert.equal(takeProof(meta, "report_compare", process.env, args), null);
 });
 
 test("an input shape that the gate does not know is denied with one line, and a request gets no decision", async () => {
@@ -576,6 +576,7 @@ test("T551: a sage name that is not a lead above the leaf is refused; the team u
   const g = fixed({ sage: true });
   const p = patch("*** Update File: src/a.js", "@@", "-a", "+b");
   for (const [path, above] of [["/root/sage_qa_t1/sage_implementer_t1_r2", "sage_qa_t1"], ["/root/sage_implementer_t1/sage_implementer_t1_r2", "sage_implementer_t1"], ["/root/sage_pe_t1/sage_lead_t1", "sage_pe_t1"],
+    ["/root/sage_pe_t1/sage_lead_t1/sage_implementer_t1", "sage_pe_t1"], ["/root/sage_qa_t1/sage_lead_t1/sage_lead_t1/sage_implementer_t1_r2", "sage_qa_t1"], ["/root/sage_lead_t1/sage_pe_t1/sage_implementer_t1", "sage_pe_t1"],
     ["/root/sage_designer_t1/worker_1/sage_implementer_t1", "sage_designer_t1"], ["/root/Sage_Lead_T1/sage_implementer_t1", "Sage_Lead_T1"], [`${LEAD}/sage_qa_t12_r2/sage_implementer_t12_r3`, "sage_qa_t12_r2"]]) {
     const child = sageChild(t, path);
     assert.equal(denied(await g.run(pre("apply_patch", p, child))), BAD_CHAIN(above), path);
@@ -1191,17 +1192,37 @@ test("the gate saves a proof of each sage tool call that it lets through, and no
   const meta = (callId) => ({ callId, sessionId: base.session_id });
   const g = fixed({ sage: true });
   assert.equal(await g.run(mcp("verdict", { task: "T1" }, { tool_use_id: "call_chief" })), undefined);
-  assert.equal(takeProof(meta("call_chief"), "status"), false, "a proof names its tool");
+  assert.equal(takeProof(meta("call_chief"), "status"), null, "a proof names its tool");
   assert.equal(await g.run(mcp("verdict", { task: "T1" }, { tool_use_id: "call_chief" })), undefined);
-  assert.equal(takeProof({ callId: "call_chief", sessionId: "019a0000-0000-7000-8000-0000000000ff" }, "verdict"), false, "and its session");
+  assert.equal(takeProof({ callId: "call_chief", sessionId: "019a0000-0000-7000-8000-0000000000ff" }, "verdict"), null, "and its session");
   assert.equal(await g.run(mcp("verdict", { task: "T1" }, { tool_use_id: "call_chief" })), undefined);
-  assert.equal(takeProof(meta("call_chief"), "verdict"), true, "the chief's call");
-  assert.equal(takeProof(meta("call_chief"), "verdict"), false, "once");
+  assert.deepEqual(takeProof(meta("call_chief"), "verdict"), { role: "chief" }, "the chief's call");
+  assert.equal(takeProof(meta("call_chief"), "verdict"), null, "once");
   assert.equal(denied(await g.run(mcp("verdict", { task: "T1" }, { ...sageChild(t, "/root/sage_qa_t1_r1"), tool_use_id: "call_child" }))), LOGBOOK);
-  assert.equal(takeProof(meta("call_child"), "verdict"), false, "no proof of a refused call");
+  assert.equal(takeProof(meta("call_child"), "verdict"), null, "no proof of a refused call");
   assert.equal(await g.run(mcp("status", {}, { ...sageChild(t, "/root/sage_qa_t1_r1"), tool_use_id: "call_read" })), undefined);
-  assert.equal(takeProof(meta("call_read"), "status"), true, "a child's read");
-  assert.equal(takeProof(undefined, "status"), false, "a call with no _meta");
+  assert.deepEqual(takeProof(meta("call_read"), "status"), { role: "qa", task: "T1", run: "R1" }, "a child's read, with its role and task");
+  assert.equal(await g.run(mcp("status", {}, { ...sageChild(t, "/root/worker_1"), tool_use_id: "call_plain" })), undefined);
+  assert.deepEqual(takeProof(meta("call_plain"), "status"), { role: "child" }, "a child with no sage task name");
+  assert.equal(await g.run(mcp("status", {}, { ...sageChild(t, "/root/sage_pe_t1/sage_lead_t1"), tool_use_id: "call_nested" })), undefined);
+  assert.deepEqual(takeProof(meta("call_nested"), "status"), { role: "child" }, "a lead's name below another sage name is no lead");
+  assert.equal(takeProof(undefined, "status"), null, "a call with no _meta");
+});
+
+test("T552: the proof of a lead's call carries its role, task, run and project, and a call that the gate refuses leaves none", (t) => {
+  const w = world(t);
+  w.sage("init");
+  w.sage("task", "add", "--title", "a", "--size", "small", "--priority", "P2");
+  w.sage("task", "add", "--title", "b", "--size", "small", "--priority", "P2");
+  w.sage("task", "T1", "set", "state=briefed");
+  w.sage("run", "add", "T1", "--role", "lead");
+  const proofs = () => { try { return readdirSync(join(w.env.SAGE_HOME, ".hooks", "codex", "proofs")); } catch { return []; } };
+  const call = (args, tool_use_id) => w.send(mcp("run_add", { project: w.project, ...args }, { ...w.child("/root/sage_lead_t1_r1"), tool_use_id }));
+  assert.match(denied(call({ task: "T2", role: "qa" }, "call_other")), /^sage: T2 is not of T1, and a lead records only its own task/);
+  assert.deepEqual(proofs(), [], "no proof of a refused call");
+  assert.equal(call({ task: "T1", role: "qa" }, "call_own"), undefined);
+  const [file] = proofs();
+  assert.deepEqual(JSON.parse(readFileSync(join(w.env.SAGE_HOME, ".hooks", "codex", "proofs", file), "utf8")), { session: base.session_id, tool: "mcp__sage__run_add", caller: { role: "lead", task: "T1", run: "R1", project: w.project } });
 });
 
 test("no thread writes Codex's config file or the sage plugin's folder from the shell, in any mode; reads run (R1916-3)", async () => {
