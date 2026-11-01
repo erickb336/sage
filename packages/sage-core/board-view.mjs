@@ -24,6 +24,13 @@ const fold = value => String(value).normalize("NFC").toLowerCase();
 export function boardView({ sources, scope = "all", project = null, logbookKey = null, taskId = null, format = "chat", now = new Date().toISOString() }) {
   if (!["chat", "task", "status", "html"].includes(format)) throw new TypeError("unknown board format");
   if (taskId !== null && !/^T[1-9]\d*$/.test(taskId)) throw new TypeError("task id must be T followed by a positive number");
+  let identity;
+  if (scope !== "all" && logbookKey === null) {
+    if (!project) throw new RangeError("a project board needs the current project");
+    const tool = createStateTool({ defaultRoot: () => "/" });
+    const root = tool.projectRoot(resolve(project));
+    if (scope === "this") identity = { root, name: basename(tool.storeDir(root, { SAGE_HOME: "/" })) };
+  }
   const snapshots = readBoardSources(sources, { now: Date.parse(now), logbookKey });
   const projects = snapshots.flatMap(source => source.projects);
   let keys = new Set(projects.map(book => book.key));
@@ -38,9 +45,7 @@ export function boardView({ sources, scope = "all", project = null, logbookKey =
     const groups = buildBoardModel(snapshots, { now }).projects, bare = name => name.replace(/-[0-9a-f]{6}$/, "");
     let selected;
     if (scope === "this") {
-      if (!project) throw new RangeError("this board needs the current project");
-      let here = projects.filter(book => book.checkout && resolve(book.checkout) === resolve(project));
-      if (!here.length) here = projects.filter(book => fold(bare(book.name)) === fold(basename(project)));
+      const here = projects.filter(book => book.name === identity.name && (!book.checkout || resolve(book.checkout) === identity.root));
       selected = groups.filter(group => group.books.some(key => here.some(book => book.key === key)));
     // A scope is any name that the board shows or that the logbook has: its key, its folder with or without the hash, its
     // checkout's folder, or its shown name (the display name, else the upstream or origin repository's name).

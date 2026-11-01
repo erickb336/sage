@@ -13,6 +13,7 @@ import { basename, join, resolve } from "node:path";
 import { projectName as shownName } from "./board-model.mjs";
 import { logbookSettings } from "./logbook-fields.mjs";
 import { checkPrograms, gateLines } from "./program-rules.mjs";
+import { GitDiscoveryError } from "./local-git.mjs";
 export function createBoard({ BLOCKS, BRANCH, RISKS, STATES, mergeCheck, optionsOf, projectName, projectRoot, read, sageRoot, slug, storeDir, withLock }) {
 
 const FOLDER = /^([a-z0-9-]+)-[0-9a-f]{6}$/;
@@ -190,10 +191,12 @@ function sessionBooks(books, project, env) {
  * one with a control character in its path, as it cannot go into a command. A folder that is its own main checkout, as
  * checkout.txt names it, costs one git call: storeDir would only ask git for the same root again.
  */
-function home(p, env) {
+function home(p, env, allowMissingGit = false) {
   if (!p || /\p{Cc}/u.test(p)) return null;
-  const root = projectRoot(resolve(p));
-  const dir = root === resolve(p) ? join(sageRoot(env), `${slug(basename(root))}-${createHash("sha1").update(root).digest("hex").slice(0, 6)}`) : storeDir(p, env);
+  let root;
+  try { root = projectRoot(resolve(p)); }
+  catch (error) { if (allowMissingGit && error instanceof GitDiscoveryError) return null; throw error; }
+  const dir = join(sageRoot(env), `${slug(basename(root))}-${createHash("sha1").update(root).digest("hex").slice(0, 6)}`);
   return { root, dir };
 }
 /**
@@ -201,8 +204,8 @@ function home(p, env) {
  * else the checkout that checkout.txt names, when storeDir gives this logbook from it. Else null. here: home(project),
  * found once per board.
  */
-function answerPath(b, here, env) {
-  const h = here?.dir === b.dir ? here : home(b.checkout, env);
+function answerPath(b, here, env, allowMissingGit = false) {
+  const h = here?.dir === b.dir ? here : home(b.checkout, env, allowMissingGit);
   return h?.dir === b.dir ? h.root : null;
 }
 /** Each logbook with an open gate, by its key, and the folder where its answers go (null when none is known). */
@@ -272,9 +275,10 @@ function board({ scope = "this", project, env = process.env, now = new Date(), s
   // A logbook's real name and PR links come from its home: the folder where its gate answers go (answerPath), so only
   // a folder whose storeDir is this logbook. A folder that only shares the logbook's name, or a checkout.txt that names
   // a folder of another logbook, gives neither: the board shows the key and no links.
-  const here = home(project, env);
+  const global = slug(scope) === "all";
+  const here = home(project, env, global);
   for (const b of books) {
-    b.home = answerPath(b, here, env);
+    b.home = answerPath(b, here, env, global);
     b.real = b.home ? basename(b.home).normalize("NFC") : null;
     b.repo = b.home ? repoOf(b.home) : null;
     // The name that the rich board shows: the display name, else the upstream's or origin's repository, else the real

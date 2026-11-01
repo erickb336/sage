@@ -40,12 +40,13 @@ function fixture(t) {
   const dir = mkdtempSync(join(realpathSync(tmpdir()), "sage-board-acceptance-")), project = join(dir, "project"), sources = [];
   mkdirSync(project);
   t.after(() => rmSync(dir, { recursive: true, force: true }));
+  const bookName = `project-${createHash("sha1").update(project).digest("hex").slice(0, 6)}`;
   const add = (id = "sample", tasks = [task("T1", "framed")]) => {
-    const root = join(dir, `source-${id}`), book = join(root, "project-abcdef"); mkdirSync(book, { recursive: true });
+    const root = join(dir, `source-${id}`), book = join(root, bookName); mkdirSync(book, { recursive: true });
     for (const name of Object.keys(HEADERS)) table(book, name, name === "tasks" ? tasks : []);
     writeFileSync(join(book, "checkout.txt"), `${project}\n`);
     sources.push({ id, path: root, label: `Source ${id}` });
-    return { root, book, key: `${id}/project-abcdef` };
+    return { root, book, key: `${id}/${bookName}` };
   };
   const first = add();
   const tool = createStateTool({ defaultRoot: () => first.root });
@@ -63,7 +64,7 @@ function fixture(t) {
 const cards = html => /<main class="board"[^>]*>([\s\S]*?)<\/main>/.exec(html)?.[1] ?? "";
 /** The verdicts of one clean cycle of a small task on a head, and the known project list that lets the merge check read the logbook. */
 const clean = (id, number, sha, kinds = ["checks-pass", "review-clean", "qa-pass"]) => kinds.map(kind => ({ task: id, pr: number, sha, kind, cycle: "1", run: "", at: AT }));
-const known = f => writeFileSync(join(f.root, "projects.tsv"), `logbook\tat\thow\nproject-abcdef\t${AT}\tinit\n`);
+const known = f => writeFileSync(join(f.root, "projects.tsv"), `logbook\tat\thow\n${f.key.split("/")[1]}\t${AT}\tinit\n`);
 /** The column of each task card on the HTML board: the h2 of the section that holds it. */
 const columnsOf = html => Object.fromEntries([...cards(html).matchAll(/<h2>([^<]+?) <span class="n">\d+<\/span><\/h2>([\s\S]*?)(?=<h2>|$)/g)].flatMap(([, name, body]) => [...body.matchAll(/Sample (T\d+)/g)].map(([, id]) => [id, name])));
 
@@ -142,7 +143,7 @@ test("T205 acceptance: owner questions and hostile text remain escaped, complete
   table(f.book, "tasks", [task("T1", "held", { title: "<script>sample</script> [sample](https://example.test)" })]);
   table(f.book, "gates", [{ id: "G1", task: "T1", question: "Pick <sample>?", options: "keep|change", recommendation: "keep", default: "keep", answer: "", at: AT }]);
   const text = f.view("chat"), html = f.view("html");
-  assert.ok(text.includes("**1 · T1")); assert.ok(text.includes("sample/project-abcdef/G1"));
+  assert.ok(text.includes("**1 · T1")); assert.ok(text.includes(`${f.key}/G1`));
   assert.ok(text.includes("> Options: 1: keep · 2: change")); assert.ok(text.includes("> Recommended: keep"));
   assert.ok(text.includes("\\<script\\>sample\\</script\\>")); assert.ok(!text.includes("[sample](https://example.test)"));
   assert.ok(html.includes("&lt;script&gt;sample&lt;/script&gt;")); assert.ok(!html.includes("<script>sample</script>"));
