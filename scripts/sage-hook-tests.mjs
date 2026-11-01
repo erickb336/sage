@@ -3589,6 +3589,19 @@ test("T594: the shared root is the sage root's equal: no agent and no chief chan
   assert.match(denied(s.send(write)) ?? "", /the chief never writes under the sage root/);
 });
 
+test("T594: a project's own .sage folder behaves as before: only the home's .sage folder counts by name", () => {
+  const root = join(realpathSync(mkdtempSync(join(tmpdir(), "sage-shared-"))), "shared");
+  const s = session({ SAGE_SHARED_HOME: root });
+  for (const command of ["echo x > .sage/x", "rm -rf .sage/cache", "cp a sub/.sage/b"]) {
+    assert.equal(denied(s.send(bash(command, FEATURE, AGENT))), undefined, `agent: ${command}`);
+    assert.equal(denied(s.send(bash(command))), undefined, `chief: ${command}`);
+  }
+  for (const command of ["rm -rf ~/.sage", "echo x > ~/.SAGE/y", "cp a $HOME/./.sage/b"]) {
+    assert.match(denied(s.send(bash(command, FEATURE, AGENT))) ?? "", LOGBOOK_SHELL, `agent: ${command}`);
+    assert.match(denied(s.send(bash(command))) ?? "", /the chief never writes, moves or removes a logbook file/, `chief: ${command}`);
+  }
+});
+
 test("T529: a reviewer writes a fake with \"$*\", a heredoc with braces, and runs node -e with spawnSync, all in its own scratch subfolder", () => {
   const { s, own, reviewer } = scratchSession();
   const allowed = [

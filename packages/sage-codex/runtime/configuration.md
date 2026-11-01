@@ -16,11 +16,15 @@ Each version requires `directory`, `project`, `projectDirectory`, and `sessionsD
 - `observationsRoot` names an existing canonical directory for native event records.
   It must be separate from the admission journal: neither directory can contain
   the other. Event subdirectories would otherwise invalidate the journal.
-- `sharedRoot` names the shared root. It may not exist yet, and neither it nor
-  `logbookRoot` can contain the other. The runtime sets `SAGE_HOME` to `logbookRoot`,
-  also in production, so this option keeps the shared root from falling under the
-  Codex root. Without it, `logbook-env.mjs` picks the root from the server's own
-  environment: `SAGE_SHARED_HOME`, `<SAGE_HOME>/shared`, then `~/.sage`.
+- `sharedRoot` names the shared root. It may not exist yet. Neither it nor any
+  other location of this file can contain the other, also through a link. It must
+  be the root that the server's environment gives, because the hooks read the
+  environment and not this file: set `SAGE_SHARED_HOME` to a root that is not the
+  default. The runtime sets `SAGE_HOME` to `logbookRoot`, also in production, so
+  this option keeps the shared root from falling under the Codex root. Without it,
+  `logbook-env.mjs` picks the root from the server's own environment:
+  `SAGE_SHARED_HOME` (the same checks, and an absolute path), `<SAGE_HOME>/shared`,
+  then `~/.sage`.
 
 All paths must be absolute and canonical. The journal and project directories
 must already exist. The session directory may be absent under an existing

@@ -38,6 +38,19 @@ function canonical(path) {
 }
 const contains = (root, path) => path === root || path.startsWith(root.endsWith(sep) ? root : root + sep);
 
+/** Does a path part name name, also as a shell pattern (sag?, .cl*, [.]claude, {a,b})? */
+export function partNames(part, name) {
+  if (part === name) return true;
+  if (!/[*?[{]/.test(part)) return false;
+  if (part.replace(/[^*?[{]/g, "").length > 8) return true; // many wildcards could name anything, and would make a slow match
+  const re = part.replace(/[.+^$()|\\]/g, "\\$&").replace(/\*/g, ".*").replace(/\?/g, ".").replace(/\[!/g, "[^").replace(/\{([^{}]*)\}/g, (_, alts) => `(?:${alts.split(",").join("|")})`);
+  try {
+    return new RegExp(`^${re}$`).test(name);
+  } catch {
+    return true; // a pattern that the hook cannot read could name anything
+  }
+}
+
 /** A path check only. The caller supplies trusted roots and execution cwd, then enforces the decision. */
 export function fileWriteOutsideRoots({ paths, cwd, roots }) {
   paths = pathList(paths);

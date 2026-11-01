@@ -288,12 +288,16 @@ A Codex chief calls the `link` tool of the same name. A retry changes nothing.
 
 | Situation | Result |
 | --- | --- |
-| The project has a logbook in the Claude or Codex root | The link refuses, because the link would hide its tasks. A later command moves existing projects. |
+| The project has a logbook in the Claude or Codex root | The link refuses, because the link would hide its tasks. Keep using that logbook. A later command moves existing projects. |
 | The checkout is already linked to another logbook | The link refuses. A checkout has one logbook. |
-| `--to` names a logbook whose checkouts have no first commit in common with this one | The link refuses. |
-| The Git call for the first commit takes more than 5 s | The link refuses and makes no row. Run it again. |
-| A row names a missing logbook, or a logbook of another project | Each read and write of that project refuses and offers the link. The link replaces that row. |
+| `--to` names a logbook whose oldest row with commits has no first commit in common with this checkout | The link refuses. A shallow clone needs its full history first: `git fetch --unshallow`. |
+| The Git call for the first commit takes more than 5 s, or Git cannot read the history of a repository with a HEAD commit | The link refuses and makes no row. |
+| The shared root cannot be written, or a provider root cannot be read | The link refuses, names the path and makes no row. |
+| A row names a missing logbook | Each read and write of that project refuses and offers the link. The link replaces that row. |
+| A logbook has rows with no first commit in common | The oldest row with commits owns the logbook, and it keeps working. Each read and write of a later row refuses in that checkout. The link replaces that row there. |
 | `bindings.tsv` has two rows for one path, or cannot be read | Every command of every project refuses. Sage never falls back to another logbook. Fix the file. |
+| `bindings.tsv` is gone, and `bindings.made` shows that sage made it | Every command of every project refuses. Restore the table from a copy. If no project uses the shared root, remove `bindings.made`. |
+| `SAGE_SHARED_HOME` is a relative path | Every command refuses. Each folder must find the same root. |
 | A project has a marker that its move did not finish | Each command refuses and says to run the move again. |
 
 A moved folder with no Git commits, or that is no Git repository, has no first commit, so sage cannot compare it. This is a limit.
@@ -301,7 +305,7 @@ A moved folder with no Git commits, or that is no Git repository, has no first c
 **Cycle counts.**
 
 - A shared project reads `cycles.*` and `max_rounds` from the `config.json` of the shared root, and `sage config` writes them there.
-- Each link raises each count to the largest value of the shared root and both provider roots, so a project never needs fewer cycles than you wrote.
+- The first shared write takes the largest value of both provider roots for each count, so a project never needs fewer cycles than you wrote. A later link leaves the shared counts.
 - Model keys, `arena`, the agent caps and the hook state stay in each provider root.
 
 **Limit.** The board does not show a shared logbook yet.

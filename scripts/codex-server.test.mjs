@@ -2903,7 +2903,11 @@ test("native logbook configuration fixes an external location and refuses redire
   writeFileSync(file, JSON.stringify(config));
   assert.deepEqual(readHookConfiguration(file), f.options);
   const alias = join(f.dir, "logbook-link"); symlinkSync(f.options.logbookRoot, alias);
-  for (const bad of [{ ...config, version: 4 }, { ...config, version: 2 },
+  // Version 4 adds the launcher's root: the one that the environment gives, so that the hooks protect it too.
+  const fixed = { version: 4, mode: { ...f.options, sharedRoot: process.env.SAGE_SHARED_HOME } };
+  writeFileSync(file, JSON.stringify(fixed));
+  assert.deepEqual(readHookConfiguration(file), fixed.mode);
+  for (const bad of [{ ...config, version: 5 }, { ...config, version: 4 }, { ...fixed, mode: { ...fixed.mode, sharedRoot: join(f.dir, "another-root") } }, { ...config, version: 2 },
     { ...config, mode: { ...f.options, logbookRoot: undefined } },
     ...[alias, f.options.projectDirectory, f.options.directory, f.options.observationsRoot, f.options.sessionsDir, join(f.options.projectDirectory, "..")].map(logbookRoot =>
       ({ ...config, mode: { ...f.options, logbookRoot } }))]) {

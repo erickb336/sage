@@ -146,9 +146,9 @@ function sageRoot(env = process.env) {
  * ssh transports, and never a prompt. Every git call of the state tool goes through it, because the tool also runs
  * outside the sandbox, on a folder that an agent may have written.
  */
-function git(args, env = process.env, options = {}) {
+function git(args, env = process.env) {
   const neutral = { ...env, GIT_CONFIG_NOSYSTEM: "1", GIT_ALLOW_PROTOCOL: "file:https:ssh", GIT_TERMINAL_PROMPT: "0" };
-  return execFileSync("git", ["-c", "core.fsmonitor=false", "-c", "core.hooksPath=/dev/null", ...args], { ...options, encoding: "utf8", env: neutral, stdio: ["ignore", "pipe", "ignore"] });
+  return execFileSync("git", ["-c", "core.fsmonitor=false", "-c", "core.hooksPath=/dev/null", ...args], { encoding: "utf8", env: neutral, stdio: ["ignore", "pipe", "ignore"] });
 }
 
 /**
@@ -2057,10 +2057,11 @@ function enlist(root, rows) {
  * migration). After that, a missing list refuses, and only the owner's rebuild lists the folders again. The list must be
  * a regular file, not a link, with its header line; anything else refuses. It never removes a line. With add (init),
  * make runs under the root's lock after the list passed and before add joins it, so a refusal here changes nothing.
- * With readOnly, it takes no lock and writes nothing: a missing list gives undefined. With held, the caller already
- * holds the root's lock.
+ * With readOnly, it takes no lock and writes nothing: a missing list gives undefined. With fresh (the first link of a
+ * shared root), the caller already holds the root's lock, and a new list starts empty: that root has no logbook of an
+ * older version to list, so a folder planted there before the link stays out.
  */
-function known(root, add, make, readOnly, held) {
+function known(root, add, make, readOnly, fresh) {
   const file = join(root, "projects.tsv");
   const names = () => {
     let text;
@@ -2084,14 +2085,14 @@ function known(root, add, make, readOnly, held) {
     const was = names();
     if (!was && lstatSync(join(root, "projects.made"), { throwIfNoEntry: false }))
       refuse(`${file}, the known project list, is missing, but sage made it before (${join(root, "projects.made")}). Every merge and every init refuses until it is back, because a list made again without the user could take in a forged logbook. Ask the user to restore it from a copy, or to run ${REBUILD} and check each folder that it prints.`);
-    const rows = was ?? logbooks(root).filter((name) => name !== add).map((logbook) => ({ at: now(), logbook, how: "migration" }));
+    const rows = was ?? (fresh ? [] : logbooks(root).filter((name) => name !== add).map((logbook) => ({ at: now(), logbook, how: "migration" })));
     make?.();
     const more = add && !rows.some((r) => r.logbook === add);
     if (more) rows.push({ at: now(), logbook: add, how: "init" });
     if (!was || more) enlist(root, rows);
     return new Set(rows.map((r) => r.logbook));
   };
-  return held ? change() : withLock(root, change);
+  return fresh ? change() : withLock(root, change);
 }
 
 /** The owner's rebuild of the known project list: each logbook folder of the root now, printed so that the owner checks each one. */
@@ -2609,21 +2610,22 @@ function writeConfig(root, values) {
 }
 
 /**
- * At the write that makes a binding row: the shared root takes the largest value of each SHARED_KEYS count, of its own
- * and of each provider root, so a project never needs fewer cycles than the owner wrote. The caller holds the root's
- * lock. A count that has no number refuses, and no row is made, because no largest value exists.
+ * At the first shared write: the shared root takes the largest value of each SHARED_KEYS count of the provider roots, so
+ * a project never needs fewer cycles than the owner wrote. After that the shared root's counts are the owner's, and a
+ * later link leaves them. The caller holds the root's lock. A count that has no number refuses, and no row is made,
+ * because no largest value exists.
  */
 function raiseCounts(shared, env) {
   const file = join(shared, "config.json"), held = savedIn(shared), roots = [...new Set([sageRoot(env), ...legacyRoots(env)])];
+  if (SHARED_KEYS.some((key) => Object.hasOwn(held, key))) return;
   const next = Object.fromEntries(SHARED_KEYS.map((key) => {
     const values = roots.map((root) => [root, config({ ...env, SAGE_HOME: root })[key]]);
-    if (Object.hasOwn(held, key)) values.push([shared, valid(key, held[key]) ?? "invalid"]);
     const bad = values.find(([, value]) => value === "invalid");
     if (bad) refuse(`${key} in ${join(bad[0], "config.json")} is not a number, so sage cannot take the largest count for the shared root. Nothing changed. Set it to a whole number first.`);
     return [key, Math.max(...values.map(([, value]) => value))];
   }));
   fileOrNone(file);
-  if (SHARED_KEYS.some((key) => held[key] !== next[key])) swap(file, JSON.stringify({ ...held, ...next }, null, 2) + "\n");
+  swap(file, JSON.stringify({ ...held, ...next }, null, 2) + "\n");
 }
 
 function act(cmd, pos, opt, dir, env, skip, project) {
@@ -3391,7 +3393,7 @@ function runCli(argv = process.argv.slice(2)) {
 }
 
 const { board, answerPaths } = createBoard({ BLOCKS, BRANCH, RISKS, STATES, mergeCheck, optionsOf, projectName, projectRoot, read, sageRoot, slug, storeDir, withLock });
-const { fillCommits, link, locate, notePlugin } = createSharedRoot({ Refusal, refuse, git, legacyRoots, makeLogbook, now, projectRoot, provider, raiseCounts, readRegular, rowsOf, sageRoot, sheetText, slug, swap, visible, withLock,
+const { fillCommits, link, locate, notePlugin } = createSharedRoot({ Refusal, refuse, legacyRoots, makeLogbook, now, projectRoot, provider, raiseCounts, readRegular, rowsOf, sageRoot, sheetText, slug, swap, visible, withLock,
   listed: (root) => known(root, undefined, undefined, true),
   enroll: (root, folder, make) => known(root, folder, make, false, true) });
 return { SIZES, BLOCKS, RISKS, KINDS, STATES, DEFAULTS, PR, sageRoot, locate, git, projectRoot, roleReadProject, optionsOf, slug, worktreeRoot, BRANCH, ofTask, branchOfTask, projectName, storeDir, config, cyclesFor, modelFor, read, mergeCheck, landingBar, boardLandingCheck, logbookView, sage, readTaskSnapshot, updateRequestedTask, assertTaskUpdateOpen, settleWrites, createRequestedTask, createRequestedRun, finishReportedRun, finishInterruptedRun, acceptReportedReview, keepReport, compareRetainedReport, verdictBacking, captureRunAssignment, captureReviewTarget, validateTerminalAssignment, withLock, board, answerPaths, command, runCli };

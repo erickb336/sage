@@ -148,13 +148,22 @@ test("T594: the link tool starts a shared logbook or joins one, with the CLI's r
   const shared = realpathSync(mkdtempSync(join(tmpdir(), "sage-state-mcp-shared-")));
   t.after(() => rmSync(shared, { recursive: true, force: true }));
   const s = await connect(t, { SAGE_SHARED_HOME: shared });
-  assert.match((await s.call("link", {})).error, /link takes one of --to <folder> or --separate/);
+  // The same refusal as the CLI's, with no tool-side rule in front of it.
+  const form = /^(?:.*: )?link takes exactly one of --to <folder> or --separate \(the fields to and separate of the link tool\)/;
+  assert.match((await s.call("link", {})).error, form);
+  assert.match((await s.call("link", { to: "a-123456", separate: true })).error, form);
+  assert.match((await s.call("link", { to: "Not A Folder" })).error, /"Not A Folder" is not a logbook folder: its name is <project>-<6 hex>, as sage link prints it/);
   assert.match((await s.call("link", { to: "absent-123456" })).error, /is not a logbook of the shared root/);
   assert.match(await s.call("link", { separate: true }), new RegExp(`now uses the shared logbook ${shared}/project-[0-9a-f]{6}$`));
   assert.match(await s.call("link", { separate: true }), /^already linked: /);
   assert.match(await s.call("task_add", { title: "Shared", size: "tiny", priority: "P2" }), /T1/);
   assert.deepEqual(readdirSync(join(s.env.CODEX_HOME, "sage")).filter((name) => name.startsWith("project-")), [], "no Codex logbook");
   assert.equal(readFileSync(join(shared, "plugins.tsv"), "utf8").split("\n")[1].split("\t").slice(0, 2).join(" "), "codex 1");
+});
+
+test("the Codex chief's list of tools names the link tool, with the owner's answer first", () => {
+  const { PROJECT_SETUP } = JSON.parse(readFileSync(join(ROOT, "plugins/sage-codex/chief-bindings.json"), "utf8"));
+  assert.match(PROJECT_SETUP, /`link`\. Call `link` only after the owner's answer in the chat\./);
 });
 
 test("the Codex settings pass both roots to the state server", () => {

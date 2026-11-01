@@ -8,7 +8,7 @@ export { createCommandPolicy, mentionsMerge, gitSubcommand, programName } from "
 export { createPushPolicy, gitHubRepository, gitInternalPath } from "./push-policy.mjs";
 export { PR, pullRequestHead } from "./pull-request.mjs";
 export { branchProtection, protectionNote } from "./branch-protection.mjs";
-export { fileWriteOutsideRoots } from "./protected-paths.mjs";
+export { fileWriteOutsideRoots, partNames } from "./protected-paths.mjs";
 export { commandWrites } from "./shell-write-policy.mjs";
 export { shellWriteOutsideRoots } from "./shell-path-policy.mjs";
 export { chiefEditDenied } from "./file-policy.mjs";

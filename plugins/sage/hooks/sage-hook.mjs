@@ -625,18 +625,7 @@ const wordsOf = (text) =>
 /** The words of the text, each once (a long line repeats words), with the folded form (low) and its path parts. The word keeps its own capitals, for the refusal. */
 const partsOf = (text) => [...new Set(wordsOf(text))].map((word) => ({ word, low: fold(word), parts: fold(word).split("/") }));
 const GLOB = /[*?[{]/;
-/** Does a path part name name, also as a shell pattern (sag?, .cl*, [.]claude, {a,b})? */
-function names(part, name) {
-  if (part === name) return true;
-  if (!GLOB.test(part)) return false;
-  if (part.replace(/[^*?[{]/g, "").length > 8) return true; // many wildcards could name anything, and would make a slow match
-  const re = part.replace(/[.+^$()|\\]/g, "\\$&").replace(/\*/g, ".*").replace(/\?/g, ".").replace(/\[!/g, "[^").replace(/\{([^{}]*)\}/g, (_, alts) => `(?:${alts.split(",").join("|")})`);
-  try {
-    return new RegExp(`^${re}$`).test(name);
-  } catch {
-    return true; // a pattern that the hook cannot read could name anything
-  }
-}
+const names = (part, name) => core.partNames(part, name);
 const HOME = /^(?:~|\$home)(?:\/|$)/;
 /** The text and canonical path of the sage root, then of the shared root, in lower case. strict: throw when a root cannot be resolved (for agents). */
 function rootsOf(strict) {
@@ -652,11 +641,13 @@ function rootsOf(strict) {
 }
 /** The canonical paths in the list that rootsOf gives. */
 const canonicalRoots = (roots) => roots.filter((_, k) => k % 2 === 1);
-/** The word that names a root: its path or a variable that sets it, .claude then sage in one path, or .sage, in any case or as a pattern. */
+/** Does a word name the .sage folder of the home folder? A project's own .sage folder, from the cwd, stays free. */
+const homeSage = ({ low, parts }) => HOME.test(low) && names(parts.filter((p) => p !== ".")[1] ?? "", ".sage");
+/** The word that names a root: its path or a variable that sets it, .claude then sage in one path, or the home's .sage, in any case or as a pattern. */
 function namesRoot(text, words, roots, cwd) {
   const low = fold(unquote(text));
   const root = roots.find((r) => low.includes(r));
-  return usesRootVar(text, canonicalRoots(roots), cwd) ?? (root && (words.find((w) => w.low.includes(root))?.word ?? root)) ?? words.find(({ parts }) => parts.some((p, k) => (p.startsWith(".s") && names(p, ".sage")) || (names(p, ".claude") && names(parts[k + 1] ?? "", "sage"))))?.word;
+  return usesRootVar(text, canonicalRoots(roots), cwd) ?? (root && (words.find((w) => w.low.includes(root))?.word ?? root)) ?? words.find((w) => homeSage(w) || w.parts.some((p, k) => names(p, ".claude") && names(w.parts[k + 1] ?? "", "sage")))?.word;
 }
 /**
  * The first use in the text of a variable that sets a root (sageRoot: SAGE_HOME, CLAUDE_CONFIG_DIR; sharedRoot: SAGE_SHARED_HOME), or undefined.
