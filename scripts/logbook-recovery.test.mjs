@@ -10,7 +10,7 @@ import { sage as claude, mergeCheck } from '../plugins/sage/skills/sage/sage.mjs
 import { tool } from '../plugins/sage-codex/skills/sage/sage.mjs';
 
 const codex = tool.sage, SHA = 'a'.repeat(40), MARKER = 'review-pending.json';
-const STUCK = 'This command changed nothing. This project cannot save changes; other projects work. Tell the owner. There are two ways out. With a backup: the owner restores the folder that `sage logbook` prints; rows newer than the backup are lost. With no backup: after the owner accepts the loss of this saved change, the chief runs `sage logbook repair --accept-change-loss yes --project <the project>`; it keeps the file, and a half-published update keeps mixed tables. Do not remove review-pending.json by hand.';
+const STUCK = 'This command changed nothing. This project cannot save changes; other projects work. Tell the owner. There are two ways out. With a backup: the owner restores the folder that `sage logbook` prints; rows newer than the backup are lost. With no backup: after the owner accepts the loss of this saved change, the chief, or the owner in a terminal, runs `sage logbook repair --accept-change-loss yes --project <the project>`; it keeps the file, and a half-published update keeps mixed tables. Do not remove review-pending.json by hand.';
 
 function fixture(t, names = ['one']) {
   const base = realpathSync(mkdtempSync(join(tmpdir(), 'sage-recovery-')));
@@ -247,6 +247,100 @@ test('T593 a stuck change with a damaged decisions table: the repair refuses wit
   assert.deepEqual(tool.read(one.dir, 'decisions').map(line => line.why), ['the user accepts the loss of its rows', 'the owner accepts the loss of this saved change']);
   assert.equal(existsSync(file), false);
   assert.match(one.run(claude, 'task', 'add', '--priority', 'P2', '--title', 'Saves again', '--size', 'tiny'), /T2/);
+});
+
+const LINKED = real => `This logbook is reached through a link, so its saved change may finish from the real folder ${real}. Nothing changed. Run sage on a path with no link: put the folder back in place of the link, or set SAGE_HOME to the real folder's parent. Then any write finishes the change or says what to do.`;
+test('T593 a SAGE_HOME path through a link: the repair refuses, and the change that reads as stuck finishes from the real path', t => {
+  const { env, one } = fixture(t);
+  savedUsage(t, one);
+  const link = `${env.SAGE_HOME}-link`, linked = { ...env, SAGE_HOME: link }, saved = snapshot(one.dir);
+  symlinkSync(env.SAGE_HOME, link);
+  const write = ['init', '--project', one.project];
+  assert.throws(() => claude(write, linked), { message: STUCK });
+  assert.throws(() => claude([...REPAIR, '--project', one.project], linked), { message: LINKED(one.dir) });
+  assert.deepEqual(snapshot(one.dir), saved);
+  assert.deepEqual(lostFiles(one.dir), []);
+  claude(write, env);
+  assert.equal(row(one.dir, 'runs', 'R1').tokens, '50', 'the real path finishes the change');
+  assert.equal(existsSync(join(one.dir, MARKER)), false);
+});
+
+test('T593 a logbook moved behind a link: the repair refuses also with the table form, and from the real folder a stuck change still has its repair', t => {
+  const { env, one } = fixture(t), file = stuck(t, one), bytes = readFileSync(file, 'utf8'), moved = `${one.dir}-moved`;
+  fs.renameSync(one.dir, moved); symlinkSync(moved, one.dir);
+  writeFileSync(join(moved, 'decisions.tsv'), '');
+  const saved = snapshot(moved);
+  for (const args of [REPAIR, [...REPAIR, '--accept-loss', 'decisions']]) assert.throws(() => codex([...args, '--project', one.project], env), { message: LINKED(moved) });
+  assert.deepEqual(snapshot(moved), saved);
+  rmSync(one.dir); fs.renameSync(moved, one.dir);
+  assert.match(one.run(codex, ...REPAIR, '--accept-loss', 'decisions'), /The saved change \(request R1\) is lost: .*The logbook check passes/);
+  assert.equal(readFileSync(`${file}.lost-1`, 'utf8'), bytes);
+});
+
+/** Write the saved change again with these changes, with a hash that matches. */
+function rewrite(file, change) {
+  const { value } = JSON.parse(readFileSync(file, 'utf8'));
+  change(value);
+  writeFileSync(file, JSON.stringify({ value, hash: createHash('sha256').update(JSON.stringify(value)).digest('hex') }) + '\n');
+}
+
+for (const [name, provider] of [['Claude', claude], ['Codex', codex]]) test(`T593 ${name}: a saved change of a newer schema refuses with the plugin update, and it changes no file`, t => {
+  const { one } = fixture(t);
+  savedUsage(t, one);
+  const file = join(one.dir, MARKER);
+  rewrite(file, value => { value.schema = 9; });
+  const saved = snapshot(one.dir);
+  assert.throws(() => one.run(provider, 'init'), { message: STUCK });
+  assert.throws(() => one.run(provider, ...REPAIR), { message: 'This saved change has schema 9, and this version of sage knows schemas up to 8: a newer sage wrote it and may finish it. Nothing changed. Update the sage plugin and restart this session. Then any write finishes the change or says what to do.' });
+  assert.deepEqual(snapshot(one.dir), saved);
+});
+
+for (const [name, schema] of [['an older unknown schema', 1], ['a schema that is text', '9'], ['no schema', undefined]]) test(`T593 a whole marker with ${name} is damaged, not newer: the repair moves it aside`, t => {
+  const { one } = fixture(t);
+  savedUsage(t, one);
+  rewrite(join(one.dir, MARKER), value => { value.schema = schema; });
+  assert.match(one.run(claude, ...REPAIR), /The logbook check passes/);
+  assert.deepEqual(lostFiles(one.dir), [`${MARKER}.lost-1`]);
+});
+
+test('T593 a table with columns of a newer sage: the repair refuses with the plugin update, also when decisions.tsv is the one that is fine', t => {
+  const { one } = fixture(t);
+  stuck(t, one);
+  const runs = join(one.dir, 'runs.tsv');
+  writeFileSync(runs, readFileSync(runs, 'utf8').replace('\n', '\tnewer\n'));
+  const saved = snapshot(one.dir);
+  assert.throws(() => one.run(claude, ...REPAIR), { message: `${runs} has columns that this version of sage does not know (newer): a newer sage wrote this logbook, and a write of this version would lose them. Update the sage plugin and restart this session. Nothing changed; status, logbook, standing and merge-check still work.` });
+  assert.deepEqual(snapshot(one.dir), saved);
+});
+
+/** A stuck saved change, and one receipt of a whole earlier update, under task-updates. */
+function stuckWithReceipt(t) {
+  const { env, one } = fixture(t);
+  update(env, one, { title: 'First' }, answer(true));
+  stuck(t, one);
+  const [name] = readdirSync(join(one.dir, UPDATES));
+  return { one, receipt: join(one.dir, UPDATES, name) };
+}
+const BACKUP = 'A receipt in task-updates fails its check, so writes would still stop after this repair. Nothing changed. Only a backup helps here: the owner restores the folder that `sage logbook` prints; rows newer than the backup are lost.';
+test('T593 a damaged receipt: the repair refuses before the move, because the next write could not work', t => {
+  const { one, receipt } = stuckWithReceipt(t);
+  writeFileSync(receipt, 'damaged');
+  const saved = snapshot(one.dir);
+  assert.throws(() => one.run(claude, ...REPAIR), { message: BACKUP });
+  assert.deepEqual(snapshot(one.dir), saved);
+});
+
+test('T593 a receipt with a good hash that fails its check: the repair refuses before the move, with no error of another kind', t => {
+  const { one, receipt } = stuckWithReceipt(t);
+  rewrite(receipt, value => { value.intent.proposal = {}; });
+  const saved = snapshot(one.dir);
+  assert.throws(() => one.run(claude, ...REPAIR), { message: BACKUP });
+  assert.deepEqual(snapshot(one.dir), saved);
+});
+
+test('T593 a whole receipt does not stop the repair', t => {
+  const { one } = stuckWithReceipt(t);
+  assert.match(one.run(claude, ...REPAIR), /The logbook check passes/);
 });
 
 test('T593 the flag takes only yes, and the repair still needs a named form', t => {

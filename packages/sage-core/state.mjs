@@ -1214,22 +1214,32 @@ function settleFailure(dir, error) {
 }
 /**
  * The one way past a stuck saved change: the owner accepts its loss. It refuses, with no change, unless the marker truly
- * cannot finish and decisions.tsv can take the decision row. It writes nothing itself.
+ * cannot finish, here or from the real folder or on a newer sage, the next write can work, and decisions.tsv can take the
+ * decision row. It writes nothing itself.
  */
 function stuckChange(dir, skip) {
   if (!hasPendingWrite(dir)) refuse("This logbook has no saved change, so there is nothing to repair. Nothing changed.");
+  const real = realpathSync(dir);
+  if (real !== resolve(dir)) refuse(`This logbook is reached through a link, so its saved change may finish from the real folder ${visible(real)}. Nothing changed. Run sage on a path with no link: put the folder back in place of the link, or set SAGE_HOME to the real folder's parent. Then any write finishes the change or says what to do.`);
   try { verifyPendingWrite(dir, SAVED); }
   catch (error) {
     const failure = settleFailure(dir, error);
     if (failure.code !== "stuck-write") throw failure;
-    if (!skip.includes("decisions")) {
-      let table;
-      try { table = sheet(dir, "decisions"); }
+    const newest = Math.max(...Object.keys(SAVED));
+    if (Number.isSafeInteger(error.schema) && error.schema > newest) refuse(`This saved change has schema ${error.schema}, and this version of sage knows schemas up to ${newest}: a newer sage wrote it and may finish it. Nothing changed. Update the sage plugin and restart this session. Then any write finishes the change or says what to do.`);
+    try { taskUpdates.history(dir); }
+    catch (damaged) {
+      if (!(damaged instanceof RecordedWriteError || damaged instanceof TaskUpdateError)) throw settleFailure(dir, damaged);
+      refuse("A receipt in task-updates fails its check, so writes would still stop after this repair. Nothing changed. Only a backup helps here: the owner restores the folder that `sage logbook` prints; rows newer than the backup are lost.");
+    }
+    for (const table of Object.keys(TABLES)) {
+      let cols = [];
+      try { ({ cols } = sheet(dir, table)); }
       catch (damaged) {
         if (!(damaged instanceof Refusal)) throw damaged;
-        refuse(`The repair records its decision first, and decisions.tsv fails the logbook check: ${damaged.message} Nothing changed. If the owner accepts the loss of those rows too, run: sage logbook repair --accept-change-loss yes --accept-loss decisions --project <the project>.`);
+        if (table === "decisions" && !skip.includes(table)) refuse(`The repair records its decision first, and decisions.tsv fails the logbook check: ${damaged.message} Nothing changed. If the owner accepts the loss of those rows too, run: sage logbook repair --accept-change-loss yes --accept-loss decisions --project <the project>.`);
       }
-      knownColumns(dir, "decisions", table.cols);
+      knownColumns(dir, table, cols);
     }
     const marker = join(dir, PENDING);
     return { request: savedRequest(dir), marker, aside: lostName(marker) };

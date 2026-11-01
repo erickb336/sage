@@ -6,7 +6,8 @@ import { join, resolve } from "node:path";
 export const PENDING = "review-pending.json";
 const MAX = 64 * 1024 * 1024;
 export class RecordedWriteError extends Error {}
-const fail = () => { throw new RecordedWriteError("The saved change or its receipt is damaged, or a table has neither its before nor its after text."); };
+const DAMAGED = "The saved change or its receipt is damaged, or a table has neither its before nor its after text.";
+const fail = () => { throw new RecordedWriteError(DAMAGED); };
 const json = value => JSON.stringify(value);
 const hash = text => createHash("sha256").update(text).digest("hex");
 const keys = (value, names) => value && typeof value === "object" && !Array.isArray(value)
@@ -105,7 +106,7 @@ export function verifyPendingWrite(dir, writers) {
 function savedWrite(dir, writers) {
   canonical(dir);
   const saved = decode(join(dir, PENDING));
-  if (!Object.hasOwn(writers, String(saved?.schema))) fail();
+  if (!Object.hasOwn(writers, String(saved?.schema))) throw Object.assign(new RecordedWriteError(DAMAGED), { schema: saved?.schema });
   return { writer: writers[saved.schema], saved };
 }
 /** Guarded core consumers share one pending marker. Each saved change holds its whole receipt, so any writer publishes it. */

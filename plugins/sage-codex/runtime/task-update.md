@@ -22,7 +22,8 @@ needs a fresh read and a new request UUID. `uncertain-outcome` requires the
 original UUID and identical contents. `invalid-state` requires preserved-state
 inspection or repair. `stuck-write` gives the same line as Claude: a saved change
 cannot finish, so the owner restores the logbook from a backup or accepts the
-loss of that change. Readiness errors name the missing prerequisite and bounded
+loss of that change. In Codex, the owner runs that repair in a terminal, because
+the chief cannot (see the Codex guide). Readiness errors name the missing prerequisite and bounded
 task, gate, run or finding IDs. They do not include private exception text or
 finding summaries.
 
