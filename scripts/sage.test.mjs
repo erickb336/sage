@@ -5067,6 +5067,26 @@ test("F-T284-14: an approved move out of held gives the task exactly one more re
   assert.match(s.ok("round", "T1"), /^T1 held: 2 repair rounds did not make it clean/, "and then it holds again");
 });
 
+test("T600: round starts from repairing for a fix key that stays open; only low fix findings still refuse, and a task before reviewing still refuses", () => {
+  const s = store();
+  s.ok("task", "add", "--priority", "P2", "--title", "a", "--size", "small");
+  for (const state of ["briefed", "building"]) s.ok("task", "T1", "set", `state=${state}`);
+  assert.match(s.no("round", "T1"), /T1 is building\. A repair starts from reviewing, verifying or repairing\./);
+  s.ok("task", "T1", "set", "state=reviewing");
+  const fix = (severity, summary) => {
+    const key = finding(s, "T1", "--source", "qa", "--severity", severity, "--summary", summary).split(" ")[0];
+    s.ok("finding", "triage", "T1", key, "fix");
+    return key;
+  };
+  const medium = fix("medium", "one"), other = (fix("low", "two"), fix("medium", "three"));
+  assert.match(s.ok("round", "T1"), /^T1 repairing · round 1 of 3 · fix F-T1-1,F-T1-2,F-T1-3 /);
+  s.ok("finding", "close", "T1", medium);
+  assert.match(s.ok("round", "T1"), /^T1 repairing · round 2 of 3 · fix F-T1-2,F-T1-3 /, "the open keys go on, and the round counts");
+  s.ok("finding", "close", "T1", other);
+  assert.match(s.no("round", "T1"), /T1: only low findings are marked fix \(F-T1-2\)/, "a low key alone gets no round");
+  assert.equal(rows(s.dir, "tasks")[0].state, "repairing");
+});
+
 // Repair round 2 of T284 (R925). Each test fails on d563ef4 and passes after.
 /** A small task in reviewing with max_rounds=1, and a way to add a medium finding triaged fix. */
 function roundStore() {

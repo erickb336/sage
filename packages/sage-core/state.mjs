@@ -2988,7 +2988,8 @@ function act(cmd, pos, opt, dir, env, skip, project) {
     }
     case "round": {
       const { tasks, task } = taskOf(dir, need(sub, "the task id"));
-      if (!["reviewing", "verifying"].includes(task.state)) refuse(`${task.id} is ${task.state}. A repair starts from reviewing or verifying.`);
+      // From repairing too: the next round of a fix key that a re-check did not confirm, by the same count, hold and replan (T600).
+      if (!["reviewing", "verifying", "repairing"].includes(task.state)) refuse(`${task.id} is ${task.state}. A repair starts from reviewing, verifying or repairing.`);
       const fix = read(dir, "findings").filter((f) => f.task === task.id && f.status === "open" && f.triage === "fix");
       const keys = fix.map((f) => f.key).sort().join(",");
       if (!keys) refuse(`${task.id} has no open findings marked fix`);
