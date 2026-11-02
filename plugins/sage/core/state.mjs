@@ -626,7 +626,7 @@ function planNativeTaskUpdate(before, reference, at, facts, columns = TABLES, le
     if (gate) throw new TaskUpdateError("readiness-gates", [gate.id]);
     const live = planned.runs.filter(row => row.task === task.id && row.status === "running" && CHECKERS.includes(row.role));
     if (live.length) throw new TaskUpdateError("readiness-runs", live.map(row => row.id));
-    const verdict = judge("", task, facts.findings, task.id, facts.ledger.filter(row => row.task === task.id
+    const verdict = judge("", task, facts.findings, planned.decisions, task.id, facts.ledger.filter(row => row.task === task.id
       && row.sha === facts.readiness.head), facts.readiness.cycles, false, {});
     if (!verdict.ok) throw new TaskUpdateError("readiness");
     if (facts.readiness.branch !== branchOf(task.branch)
@@ -1104,6 +1104,22 @@ function compareRetainedReport(input, env = process.env) {
   }
 }
 
+/** Is a finding one of this run's, by its run cell or by the run in an older key? */
+const ofRun = (f, run) => f.run === run || f.key.startsWith(`${run}-`);
+/** The decisions that moved a task's findings of one run to a follow-up task, of one severity when given: a move clears the finding's run, so only these keep the link. */
+const movedOf = (decisions, task, run, severity = "") => decisions.filter((d) => d.task === task.id && / moved to T[1-9]\d* as /.test(d.decision) && d.why.startsWith(`the follow-up task (from ${run}, ${severity}`));
+
+/**
+ * Does triage clear this findings or qa-fail verdict (T294)? Its run links it to its findings: at least one, and each is
+ * dismissed or moved. A closed finding does not clear it: a new head confirms a fix, not this one. With no link, the
+ * verdict stays a block. A cleared verdict only stops refusing: it never counts toward a clean cycle.
+ */
+function cleared(verdict, task, findings, decisions) {
+  if (!FOUND.includes(verdict.kind) || !verdict.run) return false;
+  const stayed = findings.filter((f) => f.task === task.id && ofRun(f, verdict.run));
+  return stayed.every((f) => f.status === "dismissed") && stayed.length + movedOf(decisions, task, verdict.run).length > 0;
+}
+
 /**
  * Does a kept report back this review or QA verdict on a task with a build block (T483)? The run that --run names is a
  * run of the task, of a role that gives the kind, that ended done, with a kept report that reads, on the commit of --sha
@@ -1146,12 +1162,11 @@ function backingProblem(dir, task, kind, opt) {
   if (FOUND.includes(kind)) return clean ? `${run.id}'s report is clean (${said}), so it backs only ${cleanKind}.` : undefined;
   if (clean) return undefined;
   // A report with findings backs a clean verdict after the chief's triage: the cycles rule (T483 decision).
-  const ofRun = (f) => f.run === run.id || f.key.startsWith(`${run.id}-`);
-  const rows = read(dir, "findings").filter((f) => f.task === task.id && ofRun(f) && f.severity !== "low");
+  const rows = read(dir, "findings").filter((f) => f.task === task.id && ofRun(f, run.id) && f.severity !== "low");
   const open = rows.filter((f) => f.status === "open");
   if (open.length) return `${run.id}'s report has findings (${said}), and ${open.map((f) => `${f.key} (${f.severity})`).join(", ")} ${open.length === 1 ? "is" : "are"} still open: so it backs ${problemKind}, or ${cleanKind} after each one is dismissed with a reason, moved or closed.`;
   // A finding that moved to a follow-up task left its run behind: its move's decision names the run and the severity.
-  const moved = read(dir, "decisions").filter((d) => d.task === task.id && / moved to T[1-9]\d* as /.test(d.decision) && d.why.startsWith(`the follow-up task (from ${run.id}, medium): `));
+  const moved = movedOf(read(dir, "decisions"), task, run.id, "medium");
   const level = { medium: 2, high: 3 }, down = (a, b) => b - a;
   const held = [...rows.map((f) => level[f.severity]), ...moved.map(() => level.medium)].sort(down);
   const needed = report.severities.filter((s) => s !== "low").map((s) => level[s]).sort(down);
@@ -1949,7 +1964,7 @@ function planTaskChanges(before, id, changes, at, facts, legacyRounds = false) {
       if (v === "verified") {
         const rows = facts.ledger.filter((r) => r.task === task.id);
         const head = rows.at(-1)?.sha ?? refuse(`${task.id} has no verdicts yet`);
-        const r = judge("", task, facts.findings, task.id, rows.filter((r) => r.sha === head), 1);
+        const r = judge("", task, facts.findings, decisions, task.id, rows.filter((r) => r.sha === head), 1);
         if (!r.ok) refuse(`${task.id} is not verified on ${head.slice(0, 7)}: ${r.reason}`);
       }
       if (["merged", "concluded", "abandoned"].includes(v)) decided.push({ at: at, task: task.id, decision: `state ${v}`, why: "task set" });
@@ -2076,18 +2091,18 @@ const prHistory = (pr, tasks, decisions, ledger) =>
 const notFull = (sha) => (/^[0-9a-f]{40}$/i.test(sha) ? "" : `${JSON.stringify(sha)} is not a full commit SHA: a short one can match another commit. Give all 40 characters: git rev-parse <branch>.`);
 
 /**
- * Does one task have the clean cycles its route needs on one SHA? tasks and findings are its logbook's tables, read once
- * by the caller; rows are only that task's ledger rows for the SHA. A task without rows is in the merge check only through
+ * Does one task have the clean cycles its route needs on one SHA? findings and decisions are from its logbook's tables, read
+ * once by the caller; rows are only that task's ledger rows for the SHA. A task without rows is in the merge check only through
  * its PR history (prHistory).
  */
-function judge(dir, task, findings, id, rows, cycles, repaired, cfg, pr) {
+function judge(dir, task, findings, decisions, id, rows, cycles, repaired, cfg, pr) {
   if (!task) return { ok: false, reason: `${id} is in ${join(dir, "ledger.tsv")} but not in its tasks.tsv: ${repaired ? `tasks.tsv was started again without rows (see decisions.tsv), so the verdicts of ${id} are on a lost task. Push a new commit, and record its verdicts under a task that the logbook has.` : `a stray or damaged logbook. If no project uses it, ask the user to remove ${dir}.`}` };
   const who = task.state === "abandoned" ? `${task.id} (abandoned)` : task.id; // it still counts: the merge check fails closed
   if (!rows.length && !builds(task)) return { ok: false, reason: `${who} is an investigation, so it has no pull request, but it has PR ${task.pr}: clear its PR (sage task ${task.id} set pr=).` };
   if (!rows.length) return { ok: false, reason: `${who} ${prNumber(task.pr) === pr ? "is" : "was"} a task of PR ${pr} but has no verdicts on this SHA. Every task that was ever on PR ${pr} counts for its merge, also after its pr= changed (see decisions.tsv): record its verdicts on this SHA, or the user merges.` };
   const open = findings.filter((f) => f.task === task.id && f.status === "open");
   if (open.length) return { ok: false, reason: `${who} has open findings: ${open.map((f) => f.key).join(", ")}. Triage and close them first.` };
-  const bad = rows.find((r) => NOT_CLEAN.includes(r.kind));
+  const bad = rows.find((r) => NOT_CLEAN.includes(r.kind) && !cleared(r, task, findings, decisions));
   if (bad) return { ok: false, reason: `${who}: cycle ${bad.cycle} found problems on this SHA (${bad.kind}). Repair, then review the new SHA.` };
   if (!rows.some((r) => r.kind === "checks-pass")) return { ok: false, reason: `${who}: no checks-pass on this SHA. Run the checks on it and record checks-pass.` };
   const perCycle = cleanKinds(task);
@@ -2262,7 +2277,7 @@ function judgeMerge(sha, env, { cycles, pr, readOnly, head, project, locked }, l
       const repaired = decisions.some((d) => d.decision.startsWith("tasks.tsv started again without rows"));
       const ofPr = pr && (mine === undefined || basename(dir) === mine) ? prHistory(pr, tasks, decisions, ledger) : new Set();
       // Each table is grouped by task once, so thousands of tasks on one SHA take linear time, not the square of it.
-      const [byId, ownOf, findingsOf, runsOf] = [new Map(tasks.map((t) => [t.id, t])), group(rows), group(findings), group(runs)];
+      const [byId, ownOf, findingsOf, runsOf, decisionsOf] = [new Map(tasks.map((t) => [t.id, t])), group(rows), group(findings), group(runs), group(decisions)];
       const candidates = runs.filter(isCandidate);
       // A task owns the head branch by its branch=, by its name, or by a run of it on that branch: a task that ran work
       // there and then moved to another branch still owns it (R1709-1).
@@ -2287,7 +2302,7 @@ function judgeMerge(sha, env, { cycles, pr, readOnly, head, project, locked }, l
         const [own, task] = [ownOf.get(id) ?? [], byId.get(id)];
         // A held task never merges until the sage moves it (F-T273-12).
         const held = task?.state === "held" && { ok: false, reason: `${id} is held: only the sage moves a held task, and it does not merge until then.` };
-        const verdict = judge(dir, task, findingsOf.get(id) ?? [], id, own, task ? Math.max(cycles ?? 0, cyclesFor(task, cfg)) : cycles, repaired, cfg, pr);
+        const verdict = judge(dir, task, findingsOf.get(id) ?? [], decisionsOf.get(id) ?? [], id, own, task ? Math.max(cycles ?? 0, cyclesFor(task, cfg)) : cycles, repaired, cfg, pr);
         // A review or QA run that still runs may hold a finding that no verdict shows yet (F-T289-18). It refuses a task that
         // would pass, so a refusal still names an open finding first.
         const live = (runsOf.get(id) ?? []).filter((r) => r.status === "running" && CHECKERS.includes(r.role)).map((r) => `${r.id} (${r.role})`);

@@ -352,7 +352,8 @@ function card(source, project, group, task, now, graph, landing) {
     if (!["checks-fail", "qa-fail"].includes(row.kind)) continue;
     // The ledger is append-only; order resolves equal second-precision timestamps.
     const newer = current.slice(index + 1).find(other => other.kind === (row.kind === "checks-fail" ? "checks-pass" : "qa-pass") && other.cycle === row.cycle);
-    if (!newer) reasons.push({ kind: row.kind, text: `${row.kind === "checks-fail" ? "Checks" : "QA"} failed on the recorded PR head.`, evidence: row });
+    // A merge check that passes says that triage cleared this verdict (T294).
+    if (!newer && !merge?.ok) reasons.push({ kind: row.kind, text: `${row.kind === "checks-fail" ? "Checks" : "QA"} failed on the recorded PR head.`, evidence: row });
   }
   const inferred = pr?.data.state === "open" && task.branch.startsWith("codex/") && !agents.length;
   if (inferred && !["merged", "concluded", "abandoned"].includes(task.state)) reasons.push({ kind: "review-wait", text: "The PR has inferred provider work and waits for review." });
