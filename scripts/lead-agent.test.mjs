@@ -320,13 +320,13 @@ test("T301 D3: after a CI failure the sage adds the finding for QA and triages i
 
 // The start of a repair: R3 reports a medium finding (F-T1-1, and with low, a low one F-T1-2 too), R4 passes, round 1
 // fixes them, R5 repairs, and R6 re-checks the repair's head.
-const REPAIR = (low) => [...BUILT, `< R3 FINDINGS: - K1 medium a.mjs:1 the token is logged${low ? "\n- K2 low a.mjs:2 the log line has no label" : ""}`, "< R4 PASS: none",
+const REPAIR = (low, limit = 3) => [...BUILT, `< R3 FINDINGS: - K1 medium a.mjs:1 the token is logged${low ? "\n- K2 low a.mjs:2 the log line has no label" : ""}`, "< R4 PASS: none",
   "$ sage finding add T1 --source code-reviewer --severity medium --summary=token-logged --run R3 --class security", "→ F-T1-1 open · medium · T1",
   ...(low ? ["$ sage finding add T1 --source code-reviewer --severity low --summary=log-line-has-no-label --run R3 --class copy", "→ F-T1-2 open · low · T1"] : []),
   "$ sage run done R3 --status done --tokens 1", "$ sage verdict T1 --sha <sha> --kind findings --cycle 1 --pr 12 --run R3",
   "$ sage run done R4 --status done --tokens 1", "$ sage verdict T1 --sha <sha> --kind qa-pass --cycle 1 --pr 12 --run R4",
   "$ sage finding triage T1 F-T1-1 fix", ...(low ? ["$ sage finding triage T1 F-T1-2 fix"] : []), "$ sage round T1",
-  `→ T1 repairing · round 1 of 3 · fix ${low ? "F-T1-1,F-T1-2" : "F-T1-1"} · re-run code-reviewer on the repair's diff`,
+  `→ T1 repairing · round 1 of ${limit} · fix ${low ? "F-T1-1,F-T1-2" : "F-T1-1"} · re-run code-reviewer on the repair's diff`,
   "$ sage run add T1 --role implementer --branch sage/t1-example", "→ R5 running · implementer on T1", "> R5 sage:implementer", "< R5 done: none", "$ sage run done R5 --status done --tokens 1",
   "$ sage run add T1 --role code-reviewer", "→ R6 running · code-reviewer on T1", "> R6 sage:code-reviewer"];
 // The sage's triage of a finding that the lead calls a repeat: fix, never a dismissal (F-T301-55).
@@ -334,18 +334,63 @@ const repeatFix = (key) => sageSays("sage finding triage <T> <K> fix", { "<K>": 
 /** The finding's row: its key, severity, triage and status. */
 const findingOf = (p, key) => readFileSync(join(p.chief("logbook"), "findings.tsv"), "utf8").split("\n").map((row) => row.split("\t")).find((cells) => cells[1] === key)?.slice(0, 9); // task to status: the columns before run and class (T346)
 
-test("T301 D1, F-T301-55: a fix that the re-check did not confirm is never moved; the sage triages its repeat fix, never a dismissal, the task goes back to reviewing, and round re-plans it", () => {
+// The lead's own way on from an unconfirmed fix, as step 5 teaches it (T600).
+const leadRepeatFix = (key) => leadSays("sage finding triage <T> <K> fix", "does not confirm", { "<K>": key });
+const leadRound = () => leadSays("sage round <T>", "does not confirm");
+
+test("T301 D1, F-T301-55, T600: a fix that the re-check did not confirm is never moved; the lead triages its repeat fix, never a dismissal, and its round from repairing re-plans the task", () => {
   const p = project();
-  const { printed, moves } = play([...REPAIR(false), "< R6 FINDINGS: - K2 medium a.mjs:1 the token is still logged",
+  const { printed, sage } = play([...REPAIR(false), "< R6 FINDINGS: - K2 medium a.mjs:1 the token is still logged",
     "$ sage finding add T1 --source code-reviewer --severity medium --summary=token-still-logged --run R6 --class security", "→ F-T1-2 open · medium · T1", "$ sage run done R6 --status done --tokens 1",
-    "< lead-T1 blocked: - F-T1-2 medium a.mjs:1 the token is still logged, repeat of F-T1-1",
-    "! sage run done R1 --status blocked --tokens 1", repeatFix("F-T1-2"),
-    sageSays("sage task <T> set state=reviewing"), "! sage run add T1 --role lead", "→ R7 running · lead on T1", "! start lead-T1",
-    ...FRESH, "$ sage round T1"], p);
+    leadRepeatFix("F-T1-2"), leadRound()], p);
   assert.match(printed, /^T1 replan: round 1 did not fix F-T1-1\./, "the unconfirmed fix re-plans the task instead of a move");
   assert.match(p.chief("task", "T1"), /^T1 replan /);
-  assert.deepEqual(moves, ["repairing>reviewing"], "the sage's one state move");
+  assert.deepEqual(sage, [], "no step of the sage");
   assert.deepEqual(findingOf(p, "F-T1-2").slice(-3), ["fix", "", "open"], "the repeat stays open, triaged fix: it is not dismissed");
+});
+
+test("T600: a lead whose re-check leaves a fix key unconfirmed reaches the next round from repairing, with no step of the sage, and takes the task to verifying", () => {
+  const p = project();
+  const { sage } = play([...REPAIR(true), "< R6 FINDINGS: - K3 medium a.mjs:2 the log line still has no label",
+    "$ sage finding add T1 --source code-reviewer --severity medium --summary=log-line-still-has-no-label --run R6 --class copy", "→ F-T1-3 open · medium · T1", "$ sage run done R6 --status done --tokens 1",
+    leadRepeatFix("F-T1-3"), "$ sage finding close T1 F-T1-1", leadRound(), "→ T1 repairing · round 2 of 3 · fix F-T1-2,F-T1-3 · re-run code-reviewer on the repair's diff",
+    "$ sage run add T1 --role implementer --branch sage/t1-example", "→ R7 running · implementer on T1", "> R7 sage:implementer", "< R7 done: none", "$ sage run done R7 --status done --tokens 1",
+    "$ sage run add T1 --role code-reviewer", "→ R8 running · code-reviewer on T1", "> R8 sage:code-reviewer", "< R8 CLEAN: none", "$ sage run done R8 --status done --tokens 1",
+    "$ sage finding close T1 F-T1-2", "$ sage finding close T1 F-T1-3", "$ sage task T1 set state=reviewing",
+    "$ sage run add T1 --role code-reviewer", "→ R9 running · code-reviewer on T1", "$ sage run add T1 --role qa", "→ R10 running · qa on T1", "> R9 sage:code-reviewer", "> R10 sage:qa",
+    "< R9 CLEAN: none", "< R10 PASS: none", "$ sage run done R9 --status done --tokens 1", "$ sage verdict T1 --sha <sha> --kind review-clean --cycle 1 --pr 12 --run R9",
+    "$ sage run done R10 --status done --tokens 1", "$ sage verdict T1 --sha <sha> --kind qa-pass --cycle 1 --pr 12 --run R10",
+    "$ gh pr checks 12", "→ build pass", "$ sage task T1 set state=verifying"], p);
+  assert.deepEqual(sage, [], "no step of the sage");
+  assert.equal(p.leads, 1, "and no fresh lead");
+  assert.match(p.chief("task", "T1"), /^T1 verifying /);
+});
+
+test("T600: a lead's round from repairing acts only on its own task: another task's repairing row is refused", () => {
+  const p = project();
+  play([...REPAIR(true), "< R6 FINDINGS: - K3 medium a.mjs:2 the log line still has no label",
+    "$ sage finding add T1 --source code-reviewer --severity medium --summary=log-line-still-has-no-label --run R6 --class copy", "→ F-T1-3 open · medium · T1", "$ sage run done R6 --status done --tokens 1"], p);
+  p.chief("task", "add", "--priority", "P2", "--title", "other", "--size", "small");
+  for (const state of ["briefed", "building", "reviewing"]) p.chief("task", "T2", "set", `state=${state}`);
+  const run = p.chief("run", "add", "T2", "--role", "qa").split(" ")[0];
+  p.chief("finding", "add", "T2", "--source", "qa", "--severity", "medium", "--summary", "other", "--run", run, "--class", "other");
+  p.chief("finding", "triage", "T2", "F-T2-1", "fix");
+  assert.match(p.chief("round", "T2"), /^T2 repairing · round 1 of 3 · fix F-T2-1 /, "T2 sits at repairing with an open fix key, as T1 does");
+  assert.match(p.ask(`node ${TOOL} round T2`) ?? "", /^sage: .*not on its own task T1/, "lead-T1's round of T2");
+  assert.match(p.ask(`node ${TOOL} task T2 set state=reviewing`) ?? "", /^sage: .*not on its own task T1/, "lead-T1's move of T2");
+  assert.equal(p.ask(`node ${TOOL} round T1`), undefined, "its own round passes");
+  assert.match(p.chief("task", "T2"), /^T2 repairing /, "T2 stays");
+});
+
+test("T600: a lead's round from repairing past the limit holds the task for the owner: the lead writes nothing more, and the move out needs the owner's gate", () => {
+  const p = project({ config: ["max_rounds=1"] });
+  const { printed } = play([...REPAIR(true, 1), "< R6 FINDINGS: - K3 medium a.mjs:2 the log line still has no label",
+    "$ sage finding add T1 --source code-reviewer --severity medium --summary=log-line-still-has-no-label --run R6 --class copy", "→ F-T1-3 open · medium · T1", "$ sage run done R6 --status done --tokens 1",
+    leadRepeatFix("F-T1-3"), "$ sage finding close T1 F-T1-1", leadRound()], p);
+  assert.match(printed, /^T1 held: 1 repair rounds did not make it clean\. Stop and ask the user\.$/);
+  assert.match(p.chief("task", "T1"), /^T1 held /);
+  assert.match(p.ask(`node ${TOOL} round T1`) ?? "", /^sage: T1 is held, and only the sage moves a held task/, "the lead writes nothing more");
+  assert.match(p.run("sage", ["task", "T1", "set", "state=building"]).stderr, /T1 needs one approval=<G> with a move from a round hold/, "no move out without the owner's gate");
 });
 
 test("T301 F-T301-55: a high finding of a re-check that the lead calls a repeat of a closed fix key stays open: it blocks the merge and gets the next round", () => {
@@ -366,27 +411,21 @@ test("T301 F-T301-55: a high finding of a re-check that the lead calls a repeat 
   assert.match(next, /^T1 repairing · round 2 of 3 · fix F-T1-2 · re-run code-reviewer/, "the next round fixes it");
 });
 
-test("T301 F-T301-56, F-T301-59: a medium finding that the lead calls a repeat of a low fix key joins the next round, and the low key joins it too: no low path", () => {
+test("T301 F-T301-56, F-T301-59: a medium finding that repeats a low fix key joins the next round, and the low key joins it too: no low path", () => {
   const p = project();
-  const { printed, moves } = play([...REPAIR(true), "< R6 FINDINGS: - K3 medium a.mjs:2 the log line now writes the session token",
+  const { printed } = play([...REPAIR(true), "< R6 FINDINGS: - K3 medium a.mjs:2 the log line now writes the session token",
     "$ sage finding add T1 --source code-reviewer --severity medium --summary=log-line-writes-session-token --run R6 --class security", "→ F-T1-3 open · medium · T1", "$ sage run done R6 --status done --tokens 1",
-    "$ sage finding close T1 F-T1-1",
-    "< lead-T1 blocked: - F-T1-3 medium a.mjs:2 the log line now writes the session token, repeat of F-T1-2",
-    "! sage run done R1 --status blocked --tokens 1", repeatFix("F-T1-3"),
-    sageSays("sage task <T> set state=reviewing"), "! sage run add T1 --role lead", "→ R7 running · lead on T1", "! start lead-T1", ...FRESH, "$ sage round T1"], p);
+    leadRepeatFix("F-T1-3"), "$ sage finding close T1 F-T1-1", leadRound()], p);
   assert.match(printed, /^T1 repairing · round 2 of 3 · fix F-T1-2,F-T1-3 · re-run code-reviewer/, "the low key joins the next round with the medium repeat");
-  assert.deepEqual(moves, ["repairing>reviewing"]);
   assert.deepEqual(findingOf(p, "F-T1-2").slice(-3), ["fix", "", "open"], "the low key is not dismissed");
 });
 
-test("T301 F-T301-59: while a medium fix key of the round is still open, the sage keeps the unconfirmed low key, and round still re-plans when the round fixed nothing", () => {
+test("T301 F-T301-59: while a medium fix key of the round is still open, the unconfirmed low key stays, and round still re-plans when the round fixed nothing", () => {
   const p = project();
   const { printed } = play([...REPAIR(true), "< R6 FINDINGS: - K3 medium a.mjs:1 the token is still logged\n- K4 low a.mjs:2 the log line still has no label",
     "$ sage finding add T1 --source code-reviewer --severity medium --summary=token-still-logged --run R6 --class security", "→ F-T1-3 open · medium · T1",
     "$ sage finding add T1 --source code-reviewer --severity low --summary=log-line-still-has-no-label --run R6 --class copy", "→ F-T1-4 open · low · T1", "$ sage run done R6 --status done --tokens 1",
-    "< lead-T1 blocked: - F-T1-3 medium a.mjs:1 the token is still logged, repeat of F-T1-1\n- F-T1-4 low a.mjs:2 the log line still has no label, repeat of F-T1-2",
-    "! sage run done R1 --status blocked --tokens 1", repeatFix("F-T1-3"), repeatFix("F-T1-4"),
-    sageSays("sage task <T> set state=reviewing"), "! sage run add T1 --role lead", "→ R7 running · lead on T1", "! start lead-T1", ...FRESH, "$ sage round T1"], p);
+    leadRepeatFix("F-T1-3"), leadRepeatFix("F-T1-4"), leadRound()], p);
   assert.match(printed, /^T1 replan: round 1 did not fix F-T1-1,F-T1-2\./, "the round fixed none of its keys: a replan, as without the low key");
   assert.equal(findingOf(p, "F-T1-2").at(-1), "open", "the low key waits with the medium one");
   assert.match(BLOCKED_STEP, /While a medium or high finding of the task is open and triaged fix[^\n]*it joins the next round with that finding: keep it open\./, "step 6 keeps the low key while a medium or high finding is open");
