@@ -22,7 +22,7 @@ const gitFile = (path) => gitInternalPath(path) || /^\.git$/i.test(path ?? "");
  * This module never executes a command or offers a first-upload exception. An unread branch keeps the push; unread
  * settings, or a default branch that GitHub does not give, refuse it.
  */
-export function createPushPolicy({ stateToolPath, readGit, readGh, mainReason = "work reaches main only through a pull request. Push the task's branch and open a pull request." } = {}) {
+export function createPushPolicy({ stateToolPath, readGit, readGh, mainReason = "work reaches main only through a pull request. Push the task's branch and open a pull request.", moveNote = "" } = {}) {
   if (typeof readGit !== "function") throw new TypeError("readGit must be a function");
   if (typeof readGh !== "function") throw new TypeError("readGh must be a function");
   if (typeof mainReason !== "string" || !mainReason.trim() || mainReason.length > 2048 || /[\x00-\x1f\x7f]/.test(mainReason)) throw new TypeError("mainReason must be a bounded message without control characters");
@@ -205,7 +205,7 @@ export function createPushPolicy({ stateToolPath, readGit, readGh, mainReason = 
     if (name !== "gh") return undefined;
     const words = args.filter((a) => !a.startsWith("-"));
     if (words[0] === "repo" && words[1] === "sync") return { alone: true, why: "gh repo sync writes a branch on GitHub outside a pull request, so sage mode refuses it. Ask the user." };
-    if (words[0] === "repo" && words[1] === "edit" && args.some((a) => /^--default-branch/.test(a))) return { alone: true, why: "gh repo edit --default-branch moves the default branch, and only the user does that." };
+    if (words[0] === "repo" && words[1] === "edit" && args.some((a) => /^--default-branch/.test(a))) return { alone: true, why: `gh repo edit --default-branch moves the default branch, and only the user does that.${moveNote}` };
     return undefined;
   }
   /** git's output, or undefined when git fails. Any other value is a broken reader. */

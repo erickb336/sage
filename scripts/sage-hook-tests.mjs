@@ -7806,3 +7806,311 @@ test("T482 R1836-2: a review whose branch moved during its run backs no verdict,
   s.sage("run", "done", run, "--status", "done", "--tokens", "1");
   assert.match(leadVerdict(s, "qa-pass", run, head) ?? "", new RegExp(`^sage: ${run}'s helper reviewed no one commit .* So ${run} backs no verdict: start a new qa run on the current head of the branch \\(git rev-parse <branch>\\), and record its verdict on that head \\(R1836-2\\)\\.`));
 });
+
+/**
+ * T621: three refusals that stopped agents on another project. The hook only reads these commands; no test passes them to
+ * a shell (order 25). Each loop runs as an agent and as the chief, because both use the rule for a logbook write.
+ */
+const AS_BOTH = [["agent", AGENT], ["chief", {}]];
+const READ_NEAR_LOGBOOK = "ls ~/.claude/sage";
+
+test("T621: a read part beside a write part gives no evidence against it: each part is judged on its own", () => {
+  const s = session();
+  s.send(prompt("sage mode"));
+  const pass = [
+    `touch a && ${READ_NEAR_LOGBOOK}`,
+    `git fetch origin && git worktree add /tmp/wt/install -b claude/install origin/main && git log -1 && ${READ_NEAR_LOGBOOK}`,
+    `npm install && ${READ_NEAR_LOGBOOK}`,
+    `${READ_NEAR_LOGBOOK}; rm dist/old.js`,
+    "cp a b; jq '.items[]' /tmp/a.json",
+    "cp a b; grep -E '5[0-9]' /tmp/log",
+    "cp a b; cat /other/config.json",
+  ];
+  for (const command of pass) for (const [who, extra] of AS_BOTH) assert.equal(denied(s.send(bash(command, FEATURE, extra))), undefined, `${who}: ${command}`);
+  // In sage mode the chief's rule counts a pattern that can match a logbook file; an agent's counts it when the line can leave the folder.
+  assert.equal(denied(s.send(bash("ls /tmp && rm dist/*", FEATURE, AGENT))), undefined, "the absolute path of a read part does not make the line leave the folder");
+});
+
+test("T621: a pattern or a name among the words of a command that only redirects is data; its target is what the rule judges", () => {
+  const s = session();
+  s.send(prompt("sage mode"));
+  const pass = [
+    "jq '.items[]' /tmp/a.json > /tmp/out.json",
+    "grep -E '5[0-9]' /tmp/log > /tmp/out",
+    "cat /other/config.json > /tmp/out",
+    "cat config.json > /tmp/out",
+    "curl -s https://x/y | jq '.items[]' > /tmp/out",
+    "cat <<'EOF' > /tmp/out\nitems[0] in config.json\nEOF",
+  ];
+  for (const command of pass) for (const [who, extra] of AS_BOTH) assert.equal(denied(s.send(bash(command, FEATURE, extra))), undefined, `${who}: ${command}`);
+});
+
+test("T621: a real write near the logbook stays refused inside a compound command, and a line that the hook cannot split is judged whole", () => {
+  const s = session();
+  s.send(prompt("sage mode"));
+  const root = s.vars.SAGE_HOME;
+  const refused = [
+    // The write part itself.
+    `ls /tmp && rm -rf ${root}/p`,
+    `git fetch origin && touch ${root}/p/tasks.tsv && git log -1`,
+    `${READ_NEAR_LOGBOOK} && echo x >> ~/.claude/sage/p/ledger.tsv`,
+    "cat /tmp/a > ~/.claude/sage/p/tasks.tsv",
+    // A read part that feeds the write: a pipe, a variable, or the last word of the part before it.
+    "ls ~/.claude/sage | xargs rm",
+    "echo ~/.claude/sage/p | tee /tmp/x | xargs rm -rf",
+    `${READ_NEAR_LOGBOOK} && rm -rf "$_"`,
+    "D=~/.claude/sage; rm -rf $D/p",
+    `D=${root}/p && ls && rm $D/tasks.tsv`,
+    "for f in ~/.claude/sage/p/*; do rm $f; done",
+    "(cd ~/.claude/sage/p; rm tasks.tsv)",
+    "rm $(ls ~/.claude/sage/p)",
+    // A write behind a wrapper is a write part too.
+    "touch a; env curl -o ~/.claude/sage/p/tasks.tsv https://example.com",
+    "touch a; sudo tee ~/.claude/sage/p/tasks.tsv",
+    // An interpreter part: its stdin or heredoc can write, and its words do not show it.
+    "touch a; bash <<'EOF'\nrm ~/.claude/sage/p/tasks.tsv\nEOF",
+    "touch a; echo 'rm ~/.claude/sage/p/tasks.tsv' | sh",
+    // A part that sets the folder of the write.
+    "cd ~/.claude/sage/p && rm tasks.tsv",
+    "builtin cd ~/.claude/sage/p; rm tasks.tsv",
+    // Words of a redirecting command that name a root stay judged.
+    "cat ~/.claude/sage/p/tasks.tsv > /tmp/out",
+    // A line that the hook cannot read fails closed.
+    `touch a && ${READ_NEAR_LOGBOOK} "`,
+  ];
+  for (const command of refused) for (const [who, extra] of AS_BOTH) assert.match(denied(s.send(bash(command, FEATURE, extra))) ?? "not refused", /never writes, moves or removes|cannot read/, `${who}: ${command}`);
+  // An input with two command fields is never split: a field cannot be told from a part of the other.
+  assert.match(denied(s.send(tool("Bash", { command: READ_NEAR_LOGBOOK, script: "touch a" }, { cwd: FEATURE, ...AGENT }))) ?? "not refused", LOGBOOK_SHELL);
+});
+
+test("T621: the run mark comes from a first line that ends with punctuation too, and a refusal with no run names each cause", () => {
+  const s = session();
+  s.sage("config", "max_agents=20");
+  s.send(prompt("sage mode"));
+  const runs = (id) => readdirSync(join(s.vars.SAGE_HOOKS_STATE, "slots")).flatMap((slot) => {
+    const marks = readdirSync(join(s.vars.SAGE_HOOKS_STATE, "slots", slot));
+    return marks.includes(`tool-${id}`) ? marks.filter((m) => m.startsWith("run-")) : [];
+  });
+  for (const [k, line] of ["Run R7 · task T3: build the form", "Run R8 · task T3, repair", "Run R9 · task T3."].entries()) {
+    assert.equal(s.send(spawnAgent("sage:implementer", `${line}\n${BRIEF}`, `tuP${k}`)), undefined);
+    assert.deepEqual(runs(`tuP${k}`), [`run-${/R\d+/.exec(line)[0]}`], line);
+  }
+  assert.equal(s.send(spawnAgent("sage:implementer", `Run R10 · task T3/x\n${BRIEF}`, "tuX")), undefined);
+  assert.deepEqual(runs("tuX"), [], "a slash extends the task's id");
+  const { s: scratch, agent } = scratchSession();
+  const plain = agent("rev2", "sage:qa");
+  const answer = denied(scratch.send(bash(`rm -rf ${scratch.vars.SAGE_HOME}/p`, FEATURE, plain))) ?? "";
+  assert.match(answer, /the first line of the brief that started it must be "Run R<n> · task T<n>", and the run must not be on another task/);
+  assert.match(answer, /A slot that ended or expired gives no run too/);
+});
+
+test("T621: an implementer opens and reads its pull request from its worktree: cd and git push before gh, and a heredoc body, pass", () => {
+  const f = ghAgentSession();
+  const pass = [
+    `cd ${FEATURE} && gh pr create --title t --body b`,
+    `cd ${FEATURE} && gh pr view 41`,
+    `cd ${FEATURE} && gh pr view --json url --jq .url`,
+    "gh pr create --title t --body \"$(cat <<'EOF'\nA body with two lines.\nSecond line.\nEOF\n)\"",
+    `cd ${FEATURE} && gh pr create --title t --body "$(cat <<'EOF'\nbody\nEOF\n)"`,
+    "gh pr view 41 2>&1",
+    "gh pr view 41 2>/dev/null",
+  ];
+  for (const command of pass) assert.equal(denied(f.send(command)), undefined, command);
+  const refused = [
+    "gh pr view 41; echo done", "gh pr view 41 | head -5", "gh pr view 41 > /tmp/out", `cd ${FEATURE} && gh auth status`, `cd ${FEATURE} && gh pr merge 41`,
+    "cd ~ && gh pr view 41", "cd $HOME && gh pr view 41", "cd - && gh pr view 41", "rm a && gh pr view 41", "(cd /tmp && gh pr view 41)", "gh pr view 41 && gh pr checks 41",
+    "gh pr create --title t --body \"$(cat <<'EOF'\nbody\nEOF\n)$(rm a)\"", "gh pr create --title t --body \"$(gh auth token)\"", "gh pr create --title t --body \"$(cat /tmp/x)\"",
+    "PATH=/tmp/fake gh pr view 41", "X=$(gh pr view 41)",
+  ];
+  for (const command of refused) assert.ok(denied(f.send(command)), command);
+  assert.match(denied(f.send(`cd ${FEATURE} && gh auth status`)) ?? "", /Before it, a command line may only run cd <dir> and git push/, "the refusal names the form");
+});
+
+test("T621: a git push before gh pr create keeps the push rule: the task's branch passes, the default branch does not", () => {
+  const s = firstSession();
+  const send = (command) => denied(s.send(bash(command, FEATURE, AGENT)));
+  assert.equal(send("git push -u origin claude/t1 && gh pr create --title t --body b"), undefined);
+  assert.equal(send(`cd ${FEATURE} && git push -u origin claude/t1 && gh pr create --title t --body b`), undefined);
+  assert.match(send("git push origin main && gh pr create --title t --body b") ?? "", /work reaches main only through a pull request/);
+  assert.match(send("git push --force origin claude/t1 && gh pr create --title t --body b") ?? "", /never force-pushes/);
+});
+
+const MOVE = "gh repo edit github.com/o/r --default-branch main";
+const COMMITS = (branch) => `repos/o/r/commits?sha=${branch}&per_page=21`;
+const BRANCHES = "repos/o/r/branches?per_page=6";
+const PULLS = "repos/o/r/pulls?state=open&per_page=4";
+const rows = (n) => Array.from({ length: n }, (_, k) => ({ id: k }));
+const MOVED = (more = {}) => ({
+  "repos/o/r": { status: 200, body: { full_name: "o/r", default_branch: "claude/t1" } },
+  "repos/o/r/git/ref/heads/main": { status: 200, body: { object: { sha: ROOT_SHA, type: "commit" } } },
+  [COMMITS("claude%2Ft1")]: { status: 200, body: rows(3) },
+  [BRANCHES]: { status: 200, body: rows(2) },
+  [PULLS]: { status: 200, body: [] },
+  ...more,
+});
+const NOT_MOVE = (why) => new RegExp(`^sage: this command moves the default branch of github\\.com/o/r to main, and the hook asks the user only when GitHub shows that main is one root commit, that another branch is the default branch, and that the repository is nearly empty: ${why}`);
+
+test("T621: the first push to a blank repository made the task's branch the default branch: the chief moves it to main after a prompt, and the branch can then be pushed", () => {
+  const stuck = firstSession({ FAKE_DEFAULT_BRANCH: "claude/t1" });
+  stuck.github(MOVED());
+  const blank = checkout("claude/t1"); // no clone of a blank repository has refs/remotes/origin/HEAD
+  spawnSync("git", ["-C", blank, "symbolic-ref", "--delete", "refs/remotes/origin/HEAD"]);
+  const push = denied(stuck.send(bash("git push origin claude/t1", blank, AGENT))) ?? "not refused";
+  assert.match(push, /^sage: claude\/t1 is the default branch of origin: work reaches main only through a pull request/, "the task's branch is the default branch now");
+  assert.ok(push.includes("gh repo edit github.com/<owner>/<repo> --default-branch main"), "the refusal names the way out");
+  assert.equal(asked(stuck.send(bash(MOVE))), `sage: this moves the default branch of github.com/o/r from "claude/t1" to main: main is one root commit, ${ROOT_SHA}, and GitHub shows 3 commits on "claude/t1", 2 branches, 0 open pull requests. The user must approve it. After it, the task's branch can be pushed and can open a pull request into main.`);
+  assert.equal(asked(stuck.send(bash(MOVE.replace("--default-branch main", "--default-branch master")))), undefined, "master is not on GitHub here");
+  assert.match(denied(stuck.send(bash(MOVE, FEATURE, AGENT))) ?? "not refused", /only the user does that\. When the first push to a blank GitHub repository/, "an agent never gets the prompt");
+  // GitHub after the move: the default branch is main, and the same branch is an ordinary task branch again.
+  const moved = firstSession({ FAKE_DEFAULT_BRANCH: "main" });
+  assert.equal(denied(moved.send(bash("git push origin claude/t1", FEATURE, AGENT))), undefined, "the push passes after the move");
+  assert.match(denied(moved.send(bash("git push origin main", FEATURE, AGENT))) ?? "not refused", /work reaches main only through a pull request/, "no agent pushes to main");
+});
+
+test("T621: the move is refused when GitHub does not show a nearly empty repository, and only the literal form asks", () => {
+  const s = firstSession();
+  const refusal = (more) => (s.github(MOVED(more)), denied(s.send(bash(MOVE))) ?? "not refused");
+  assert.match(refusal({ "repos/o/r": { status: 200, body: { full_name: "o/r", default_branch: "main" } } }), NOT_MOVE('the default branch is already "main"'));
+  assert.match(refusal({ "repos/o/r": { status: 200, body: { full_name: "o/other", default_branch: "claude/t1" } } }), NOT_MOVE("GitHub answered for another repository than o/r"));
+  assert.match(refusal({ "repos/o/r": { status: 404, body: { message: "Not Found" } } }), NOT_MOVE("GitHub gave no default branch"));
+  assert.match(refusal({ "repos/o/r/git/ref/heads/main": { status: 404, body: { message: "Not Found" } } }), NOT_MOVE("GitHub has no main\\. Create it first"));
+  assert.match(refusal({ "repos/o/r/git/ref/heads/main": { status: 200, body: { object: { sha: CHILD_SHA, type: "commit" } } } }), NOT_MOVE(`commit ${CHILD_SHA} has a parent, so main has history`));
+  assert.match(refusal({ "repos/o/r": { fail: true } }), NOT_MOVE("the check on GitHub failed"));
+  // A repository with history and an orphan main, or a main made from its first commit: the root commit alone proves nothing.
+  const develop = { "repos/o/r": { status: 200, body: { full_name: "o/r", default_branch: "develop" } }, [COMMITS("develop")]: { status: 200, body: rows(21) } };
+  assert.match(refusal(develop), NOT_MOVE('the repository has more than 20 commits on "develop", so it has history'));
+  assert.match(refusal({ [BRANCHES]: { status: 200, body: rows(6) } }), NOT_MOVE("the repository has more than 5 branches, so it has history"));
+  assert.match(refusal({ [PULLS]: { status: 200, body: rows(4) } }), NOT_MOVE("the repository has more than 3 open pull requests, so it has history"));
+  // A check that cannot read GitHub refuses.
+  assert.match(refusal({ [COMMITS("claude%2Ft1")]: { status: 404, body: { message: "Not Found" } } }), NOT_MOVE('GitHub gave no list of commits on "claude/t1"'));
+  assert.match(refusal({ [BRANCHES]: { status: 500, body: { message: "x" } } }), NOT_MOVE("GitHub gave no list of branches"));
+  assert.match(refusal({ [PULLS]: { status: 200, body: { message: "not a list" } } }), NOT_MOVE("GitHub gave no list of open pull requests"));
+  assert.match(refusal({ [PULLS]: { fail: true } }), NOT_MOVE("the check on GitHub failed"));
+  s.github(MOVED({ "repos/o/r": { status: 200, body: { full_name: "o/r", default_branch: "develop" } }, [COMMITS("develop")]: { status: 200, body: rows(20) }, [BRANCHES]: { status: 200, body: rows(5) }, [PULLS]: { status: 200, body: rows(3) } }));
+  assert.match(asked(s.send(bash(MOVE))) ?? "not asked", /from "develop" to main: main is one root commit, 1{40}, and GitHub shows 20 commits on "develop", 5 branches, 3 open pull requests\./, "at each limit the user sees the counts and decides");
+  assert.doesNotMatch(asked(s.send(bash(MOVE))) ?? "", /first upload/);
+  s.github(MOVED());
+  for (const command of ["gh repo edit o/r --default-branch main", "gh repo edit github.com/o/r --default-branch trunk", `${MOVE}; echo done`, `${MOVE} --visibility public`, "gh repo edit --default-branch main"]) {
+    assert.match(denied(s.send(bash(command))) ?? "not refused", /only the user does that/, command);
+  }
+  assert.match(denied(s.send(tool("Bash", { command: MOVE, script: CREATE }, { cwd: FEATURE }))) ?? "not refused", /more than one first-upload command/);
+});
+
+/**
+ * T621, repair round 1: forms that the first round let pass and that the whole-line rule refused. Every form goes to the
+ * hook as text only (order 25). The rule keeps every part that is not a plain reader.
+ */
+const P = "~/.claude/sage/p", TABLE = `${P}/tasks.tsv`;
+const NEAR = /never writes, moves or removes|cannot read/;
+/** A project folder with lnk, a link to the session's sage root. */
+const linkedProject = (s) => {
+  const cwd = mkdtempSync(join(tmpdir(), "sage-t621-link-"));
+  mkdirSync(join(s.vars.SAGE_HOME, "p"), { recursive: true });
+  symlinkSync(s.vars.SAGE_HOME, join(cwd, "lnk"));
+  return cwd;
+};
+/** The forms of a list that the hook lets pass, so that a failure names every one of them. */
+const notRefused = (s, commands, cwd, roles = AS_BOTH) => commands.flatMap((command) => roles.flatMap(([who, extra]) => (NEAR.test(denied(s.send(bash(command, cwd, extra))) ?? "") ? [] : [`${who}: ${command}`])));
+
+test("T621 F-T621-7: a part that the hook does not know is judged, beside a known write and in a line that only redirects", () => {
+  const s = session();
+  s.send(prompt("sage mode"));
+  const cwd = linkedProject(s);
+  const beside = (parts) => parts.map((part) => `touch a; ${part}`);
+  const both = [
+    ...beside([
+      `awk 'BEGIN{print 1 > "/Users/x/.claude/sage/p/tasks.tsv"}'`,
+      `sed -n 'w ${TABLE}' b`,
+      `gcp b ${TABLE}`, `gmv b ${TABLE}`, `gtee ${TABLE}`, `ed ${TABLE}`, `vim -c wq ${TABLE}`, `split ${TABLE}`, `gzip ${TABLE}`, `mkfifo ${TABLE}`, `tcsh -c 'echo x > ${TABLE}'`,
+      `git -C ${P} checkout -- tasks.tsv`, `git -C ${P} clean -fdx`, `git clone ${P}/x y`, `make -C ${P}`, `npm --prefix ${P} install`,
+      `ed ${TABLE} <<'EOF'\nw\nEOF`,
+      `echo 'rm ${TABLE}' | csh`,
+      // A reader's name is plain only as a bare word, and only with no write form of its own.
+      `/tmp/x/cat ${TABLE}`, `CAT ${TABLE}`, `git log --output=${TABLE}`, `git diff --output=${TABLE}`, `rg --pre ${P}/x foo`,
+      // A reader that feeds a program that the hook does not know stays with it.
+      `cat ${TABLE} | csh`,
+      // F-T621-12: a last pipeline with no end.
+      `echo x > ${TABLE} |`,
+    ]),
+    `chmod 000 ${TABLE} && touch a`, `mkdir ${P}/x && touch a`,
+    "chmod 000 lnk/p/tasks.tsv > /tmp/o",
+    "tcsh <<'EOF' > /tmp/o\nrm lnk/p/tasks.tsv\nEOF",
+    `iex 'rm ${TABLE}'; touch a`,
+    // A part that names a file that a reader wrote can run that reader's words.
+    "echo 'rm tasks.tsv' > /tmp/y; sh /tmp/y",
+    "printf 'rm lnk/p/tasks.tsv' > y.sh; sh ./y.sh",
+    "cat <<'EOF' > /tmp/y\nrm lnk/p/tasks.tsv\nEOF\nsh /tmp/y",
+    // A definition, and its call on a later line: the name that it redefines keeps the line whole.
+    `alias x='rm ${TABLE}'\ntouch a\nx`,
+    `alias ls=rm\nls ${TABLE}\ntouch a`,
+    `PATH=/tmp/fake\nls ${TABLE}; touch a`,
+    `source /tmp/x.sh; ls ${TABLE}; touch a`,
+    `eval 'alias ls=rm'; ls ${TABLE}; touch a`,
+  ];
+  assert.deepEqual([...notRefused(s, both, cwd), ...notRefused(s, ["git -C lnk/p clean -fdx > /tmp/o", "ls lnk/p > /tmp/l; xargs rm < /tmp/l"], cwd, AS_BOTH.slice(0, 1))], []);
+});
+
+test("T621 F-T621-9: zsh's clobber forms keep the line whole, so the real target is judged", () => {
+  const s = session();
+  s.send(prompt("sage mode"));
+  const cwd = linkedProject(s);
+  const inside = join(s.vars.SAGE_HOME, "projects", "x");
+  mkdirSync(inside, { recursive: true });
+  assert.deepEqual([
+    ...notRefused(s, ["echo x >! lnk/p/tasks.tsv", "echo x >>! lnk/p/tasks.tsv", "echo x &>! lnk/p/tasks.tsv", "echo x >! lnk/p/tasks.tsv; touch a"], cwd),
+    ...notRefused(s, ["echo x >! tasks.tsv"], cwd, AS_BOTH.slice(1)),
+    ...notRefused(s, ["echo x >! ../../p/tasks.tsv"], inside, AS_BOTH.slice(0, 1)),
+  ], []);
+});
+
+test("T621 F-T621-1: a PowerShell line is judged whole, because the reader knows only the POSIX grammar", () => {
+  const s = session();
+  s.send(prompt("sage mode"));
+  const shell = (command, extra) => denied(s.send(tool("PowerShell", { command }, { cwd: FEATURE, ...extra }))) ?? "not refused";
+  const agent = [
+    `Set-Location ${P}; rm tasks.tsv`, `sl ${P}; rm tasks.tsv`, `Push-Location ${P}; rm tasks.tsv`, `CD ${P}; rm tasks.tsv`,
+    `Set-Location ${P}; Set-Content tasks.tsv x`, `Set-Location ${s.vars.SAGE_HOME}/p; Remove-Item tasks.tsv`,
+    `Set-Alias ls Remove-Item; ls ${TABLE}; touch a`,
+    `echo "a\\"; rm ${TABLE}; echo "b"`,
+  ];
+  assert.deepEqual([...agent.filter((command) => !NEAR.test(shell(command, AGENT))), ...AS_BOTH.filter(([, extra]) => !NEAR.test(shell(`iex 'rm ${TABLE}'; touch a`, extra))).map(([who]) => `${who}: iex`)], []);
+});
+
+test("T621: a command that only reads stays data beside a part that the hook keeps", () => {
+  const s = session();
+  s.send(prompt("sage mode"));
+  const pass = [
+    "git show HEAD:config.json > /tmp/old.json",
+    "git log -3 --format='%h [x]' > /tmp/log",
+    "git status; git diff; git rev-parse HEAD; touch a; cat /other/config.json",
+    `cd ${FEATURE} && jq '.items[]' /tmp/a.json > /tmp/out`,
+    `cd ${FEATURE} && cat config.json > /tmp/out`,
+    "curl -s https://x/y | jq '.items[]' | head -5 > /tmp/out",
+    "curl -s https://x/y | grep -E '5[0-9]'; touch a",
+    `npm test > /tmp/out; ${READ_NEAR_LOGBOOK}`,
+    `FOO=1 npm test > /tmp/out && ${READ_NEAR_LOGBOOK}`,
+    `grep read /tmp/log; touch a && ${READ_NEAR_LOGBOOK}`,
+    `grep a=b /tmp/log; touch a && ${READ_NEAR_LOGBOOK}`,
+  ];
+  for (const command of pass) for (const [who, extra] of AS_BOTH) assert.equal(denied(s.send(bash(command, FEATURE, extra))), undefined, `${who}: ${command}`);
+});
+
+test("T621 F-T621-11: a heredoc in gh is only a double-quoted value of a text flag of gh pr", () => {
+  const f = ghAgentSession();
+  const body = "$(cat <<'EOF'\n--web\nEOF\n)";
+  const refused = [
+    "gh api $(cat <<'EOF'\n-XDELETE repos/acme/project\nEOF\n)",
+    "gh api $(cat <<'EOF'\nrepos/acme/project/git/refs -f ref=refs/heads/main -f sha=1\nEOF\n)",
+    "gh api \"$(cat <<'EOF'\nrepos/acme/project\nEOF\n)\"",
+    `gh pr view 41 ${body}`,
+    `gh pr view 41 "${body}"`,
+    `gh pr create --title t --body ${body}`,
+    `gh pr create --title t --body ${body}""`,
+    `gh pr create --title t --body=${body}`,
+    `gh pr create "${body}"`,
+    `gh issue view 41 --body "${body}"`,
+  ];
+  assert.deepEqual(refused.filter((command) => !denied(f.send(command))), []);
+  const pass = [`gh pr create --title t --body "${body}"`, `gh pr create --title t --body="${body}"`, `gh pr create -t "${body}" -b b`, `gh pr comment 41 --body "${body}"`, `gh pr edit 41 --title "${body}"`];
+  for (const command of pass) assert.equal(denied(f.send(command)), undefined, command);
+});

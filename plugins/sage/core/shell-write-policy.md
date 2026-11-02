@@ -26,6 +26,19 @@ Option references: [curl](https://curl.se/docs/manpage.html),
 [Git diff](https://git-scm.com/docs/git-diff), and
 [OpenSSL dgst](https://docs.openssl.org/master/man1/openssl-dgst/).
 
+`writeParts(text, cwd)` gives the parts of a POSIX shell command list that a
+caller judges, so that a read beside a write gives no evidence against it. It
+drops the last commands of a pipeline when they are plain readers: a name of
+the reader list or `git log`, `show`, `status`, `diff` or `rev-parse`, as a bare
+word, with no write form of its own. `awk` and `sed` are not plain readers,
+because their text can write a file. Every other command stays, and so does a
+reader that feeds one. The redirection targets of a dropped reader stay too.
+Undefined means that the caller judges the whole text: the line has a
+substitution, a subshell, a group or control flow, a part uses `$` or a
+backtick, a part can change what a reader's name runs (an alias, a variable, a
+script of the same shell), a redirection is a zsh clobber form (`>!`), a part
+names a file that a dropped reader wrote, or no part is left.
+
 A false result is not permission to execute a command. This classifier does not
 prove that an arbitrary program cannot write. Callers must also enforce role,
 command, path, and workflow rules using verified execution context.

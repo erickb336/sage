@@ -796,8 +796,8 @@ function program(word, dir, path, uncertain = false) {
  * The simple commands of a shell command line: { words, bodies, host, piped, pipeTo, grouped, writes }. The words lose their
  * quotes and redirections (2>/dev/null, >out, <in, with their targets); syntax retains quote and assignment eligibility; the bodies are the command's heredocs and
  * here-strings, which stay text. The patterns of a case arm ("top)") are not commands. A command substitution, $( ) or a backtick, gives
- * commands of its own, whose host is the command and word they land in (index -1: a heredoc), and so does a process
- * substitution, <( ) or >( ). Throws when it cannot read the line: an open quote, substitution, heredoc, "(" or case,
+ * commands of its own, whose host is the command and word they land in (index -1: a heredoc; quoted: true inside double
+ * quotes, where the shell does not split the result), and so does a process substitution, <( ) or >( ). Throws when it cannot read the line: an open quote, substitution, heredoc, "(" or case,
  * or a ")" with no "(". The hook's rules then refuse a line that names what they guard (fail closed).
  */
 const FLOWS = new WeakMap();
@@ -914,7 +914,7 @@ function readCommands(src, i, close, out, host, flow) {
       i = j + 1;
     } else if (c === '"') {
       quoted = true;
-      const r = readExpanding(src, i + 1, '"', out, here());
+      const r = readExpanding(src, i + 1, '"', out, { ...here(), quoted: true });
       add(r.text);
       i = r.i;
     } else if (c === "`" || (c === "$" && src[i + 1] === "(")) {
