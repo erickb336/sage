@@ -443,6 +443,21 @@ test('T593 a whole receipt does not stop the repair', t => {
   assert.match(one.run(claude, ...REPAIR), /The logbook check passes/);
 });
 
+const NEWER_RECEIPT = 'A receipt in task-updates has schema 9, and this version of sage knows schemas up to 8: a newer sage wrote it. Nothing changed. Update the sage plugin and restart this session. Then any write finishes the change or says what to do.';
+for (const [name, change] of [['with the known shape', () => {}], ['with an outcome of another shape', value => { value.outcome = { decided: true }; }]]) test(`T607 a newer receipt ${name} and no new column: the repair gives the plugin update, not the backup`, t => {
+  const { one, receipt } = stuckWithReceipt(t);
+  rewrite(receipt, value => { value.intent.schema = 9; change(value); });
+  const saved = snapshot(one.dir);
+  assert.throws(() => one.run(claude, ...REPAIR), { message: NEWER_RECEIPT });
+  assert.deepEqual(snapshot(one.dir), saved);
+});
+
+for (const [name, schema] of [['the schema of another writer', 7], ['a schema that is text', '9'], ['no schema', undefined]]) test(`T607 a receipt with ${name} is damaged, not newer: the backup line`, t => {
+  const { one, receipt } = stuckWithReceipt(t);
+  rewrite(receipt, value => { value.intent.schema = schema; });
+  assert.throws(() => one.run(claude, ...REPAIR), { message: BACKUP });
+});
+
 test('T593 the flag takes only yes, and the repair still needs a named form', t => {
   const { one } = fixture(t), file = stuck(t, one), saved = snapshot(one.dir);
   assert.throws(() => one.run(claude, 'logbook', 'repair', '--accept-change-loss', 'no'), { message: '--accept-change-loss takes only yes. Run it only after the owner accepts the loss of the saved change.' });

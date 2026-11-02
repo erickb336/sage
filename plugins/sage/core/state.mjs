@@ -189,7 +189,7 @@ const checkout = (dir, project, env) => {
 const slug = (name) => String(name).toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/^-+|-+$/g, "") || "project";
 
 /** The folder of the task copies (default ~/sage-worktrees; $SAGE_WORKTREES overrides it). It is outside the sage root, so agents may write in it. */
-const worktreeRoot = (env = process.env) => env.SAGE_WORKTREES ?? join(homedir(), "sage-worktrees");
+const worktreeRoot = (env = process.env) => env.SAGE_WORKTREES ?? join(env.HOME ?? homedir(), "sage-worktrees");
 /**
  * The folder where agents save a task's pages (research, designs, findings): <worktree root>/<logbook key>/pages/<task>.
  * The logbook key (name and hash) keeps two projects with the same folder name apart.
@@ -1253,10 +1253,14 @@ function stuckChange(dir, skip, env) {
       }
       knownColumns(dir, table, cols);
     }
-    try { taskUpdates.history(dir); }
-    catch (damaged) {
-      if (!(damaged instanceof RecordedWriteError || damaged instanceof TaskUpdateError)) throw settleFailure(dir, damaged);
-      refuse("A receipt in task-updates fails its check, so writes would still stop after this repair. Nothing changed. Only a backup helps here: the owner restores the folder that `sage logbook` prints; rows newer than the backup are lost.");
+    for (const [folder, writes] of [["task-updates", taskUpdates], ["interrupted-runs", interruptedWrites]]) {
+      try { writes.history(dir); }
+      catch (damaged) {
+        const failure = settleFailure(dir, damaged);
+        if (failure.code !== "stuck-write") throw failure;
+        if (Number.isSafeInteger(damaged.schema) && damaged.schema > newest) refuse(`A receipt in ${folder} has schema ${damaged.schema}, and this version of sage knows schemas up to ${newest}: a newer sage wrote it. Nothing changed. Update the sage plugin and restart this session. Then any write finishes the change or says what to do.`);
+        refuse(`A receipt in ${folder} fails its check, so writes would still stop after this repair. Nothing changed. Only a backup helps here: the owner restores the folder that \`sage logbook\` prints; rows newer than the backup are lost.`);
+      }
     }
     const marker = join(dir, PENDING);
     return { request: savedRequest(dir), marker, aside: lostName(marker) };

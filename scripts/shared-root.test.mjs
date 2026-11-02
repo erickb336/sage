@@ -893,6 +893,11 @@ test("the PR script takes a shared logbook, which has no checkout.txt", async (t
   assert.deepEqual([saved.dir, saved.branch], [join(w.shared, w.name()), "sage/t1"]);
 });
 
+test("the worktree root follows the HOME of its env, and SAGE_WORKTREES comes first; a path only, so no folder is made", () => {
+  assert.equal(tool.worktreeRoot({ HOME: "/scratch/home" }), "/scratch/home/sage-worktrees");
+  assert.equal(tool.worktreeRoot({ HOME: "/scratch/home", SAGE_WORKTREES: "/scratch/trees" }), "/scratch/trees");
+});
+
 test("a chief with another logbook root finds a receipt of a shared project, so the Codex settle step cannot void a live row", (t) => {
   const w = world(t);
   const envA = { ...w.env, SAGE_HOME: join(w.base, "root-a") }, envB = { ...w.env, SAGE_HOME: join(w.base, "root-b") };
