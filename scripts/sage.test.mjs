@@ -268,6 +268,62 @@ test("T584: candidate branches stay apart: a new candidate never takes the branc
   assert.equal(s.no("run", "add", "T1", "--role", "designer", "--branch", "sage/t1-a", "--candidate", "1"), "sage: R2 (designer) still writes sage/t1-a, and a branch has one writer. Finish that run first (sage run done R2 --status done, blocked, question or failed), or give this run another branch.", "it still has one writer at a time");
 });
 
+/** A candidate run's refusal on a branch of another task. */
+const notYours = (branch, owner) => `sage: ${branch} belongs to ${owner}, and a candidate run there would bar ${owner} from its own branch. Give this run another branch. Nothing changed.`;
+
+test("T601: a candidate run never takes a branch that another task's branch= names, in any letter case, and that task keeps its branch", () => {
+  const s = store();
+  for (const title of ["first", "second"]) s.ok("task", "add", "--priority", "P2", "--title", title, "--size", "small");
+  s.ok("task", "T1", "set", "branch=sage/t1-own");
+  assert.equal(s.no("run", "add", "T2", "--role", "implementer", "--branch", "sage/t1-own", "--candidate", "1"), notYours("sage/t1-own", "T1"));
+  assert.equal(s.no("run", "add", "T2", "--role", "designer", "--branch", "SAGE/T1-Own", "--candidate", "1"), notYours("SAGE/T1-Own", "T1"), "git on a Mac reads these two names as one branch");
+  assert.deepEqual(rows(s.dir, "runs"), [], "a refused run is not written");
+  assert.match(s.ok("run", "add", "T1", "--role", "implementer", "--branch", "sage/t1-own"), /^R1 running · implementer on T1/, "T1 still works on its own branch");
+});
+
+test("T601: a candidate run never takes a branch where a writer run of another task worked, also after it ended; a review run claims no branch", () => {
+  const s = store();
+  for (const title of ["first", "second"]) s.ok("task", "add", "--priority", "P2", "--title", title, "--size", "small");
+  s.ok("run", "add", "T1", "--role", "implementer", "--branch", "sage/t1-work");
+  s.ok("run", "done", "R1", "--status", "done");
+  assert.equal(s.no("run", "add", "T2", "--role", "implementer", "--branch", "sage/t1-work", "--candidate", "1"), notYours("sage/t1-work", "T1"), "T1 names no branch=, and its writer run does");
+  assert.equal(s.no("run", "add", "T2", "--role", "implementer", "--branch", "Sage/T1-WORK", "--candidate", "1"), notYours("Sage/T1-WORK", "T1"));
+  s.ok("run", "add", "T1", "--role", "code-reviewer", "--branch", "sage/t1-read");
+  assert.match(s.ok("run", "add", "T2", "--role", "implementer", "--branch", "sage/t1-read", "--candidate", "1"), /^R3 running · implementer on T2 · sage\/t1-read · candidate 1/);
+});
+
+test("T601: a candidate run stays off a branch that two tasks share: the other task of the pair keeps it", () => {
+  const s = store();
+  for (const title of ["first", "second"]) s.ok("task", "add", "--priority", "P2", "--title", title, "--size", "small");
+  s.ok("task", "T1", "set", "branch=sage/t1-shared");
+  s.ok("task", "T2", "set", "branch=sage/t1-shared");
+  assert.equal(s.no("run", "add", "T2", "--role", "implementer", "--branch", "sage/t1-shared", "--candidate", "1"), notYours("sage/t1-shared", "T1"));
+  assert.equal(s.no("run", "add", "T1", "--role", "implementer", "--branch", "sage/t1-shared", "--candidate", "1"), notYours("sage/t1-shared", "T2"));
+});
+
+test("T601: two tasks on one branch keep their shared pull request: each one's build runs there, one writer at a time", () => {
+  const s = store();
+  for (const title of ["first", "second"]) s.ok("task", "add", "--priority", "P2", "--title", title, "--size", "small");
+  s.ok("task", "T1", "set", "branch=sage/t1-shared", "pr=41");
+  assert.match(s.ok("task", "T2", "set", "branch=sage/t1-shared", "pr=41"), /^T2 framed .* · sage\/t1-shared · PR 41 · P2$/);
+  assert.match(s.ok("run", "add", "T1", "--role", "implementer", "--branch", "sage/t1-shared"), /^R1 running · implementer on T1/);
+  assert.match(s.no("run", "add", "T2", "--role", "implementer", "--branch", "sage/t1-shared"), /^sage: R1 \(implementer\) still writes sage\/t1-shared, and a branch has one writer\./);
+  s.ok("run", "done", "R1", "--status", "done");
+  assert.match(s.ok("run", "add", "T2", "--role", "implementer", "--branch", "sage/t1-shared"), /^R2 running · implementer on T2/);
+});
+
+test("T601: an arena candidate starts on its own branch: a new one, its task's own branch=, and its task's earlier writer run", () => {
+  const s = store();
+  for (const title of ["first", "second"]) s.ok("task", "add", "--priority", "P2", "--title", title, "--size", "small");
+  s.ok("task", "T2", "set", "branch=sage/t2-own");
+  assert.match(s.ok("run", "add", "T1", "--role", "implementer", "--branch", "sage/t1-c1", "--candidate", "1"), /^R1 running · implementer on T1 · sage\/t1-c1 · candidate 1/, "a new branch");
+  assert.match(s.ok("run", "add", "T2", "--role", "implementer", "--branch", "sage/t2-own", "--candidate", "1"), /^R2 running · implementer on T2 · sage\/t2-own · candidate 1/, "the task's own branch=");
+  s.ok("task", "add", "--priority", "P2", "--title", "third", "--size", "small");
+  s.ok("run", "add", "T3", "--role", "implementer", "--branch", "sage/t3-work");
+  s.ok("run", "done", "R3", "--status", "done");
+  assert.match(s.ok("run", "add", "T3", "--role", "implementer", "--branch", "sage/t3-work", "--candidate", "1"), /^R4 running · implementer on T3 · sage\/t3-work · candidate 1/, "the task's own writer run");
+});
+
 /** The ways out of an open arena step, which each refusal names. */
 const arenaExits = (task = "T1") => `Finish a judge: sage run add ${task} --role arena-judge --branch sage/${task.toLowerCase()}-judge, then sage run done <R> --status done. A task that needs no arena: sage task ${task} set state=abandoned, then frame it again with sage task add, on a new branch.`;
 const openStep = `sage: T1's arena step is open: its route has the arena block or it has a candidate run, and no arena-judge run of it ended done, so T1 has no final version yet. ${arenaExits()}`;

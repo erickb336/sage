@@ -882,6 +882,9 @@ function runFrame(dir, task, role, branch, candidate, env) {
     const judge = role === "arena-judge", seat = !judge && candidate;
     const clash = there.find(row => (seat && row.role === "arena-judge") || (isCandidate(row) && !(row.task === task.id && row.role === role && row.candidate === candidate)));
     if (clash) refuse(`${clash.id} (${clash.role}${isCandidate(clash) ? `, candidate ${clash.candidate}` : ""}) is on ${branch}, and ${judge || !isCandidate(clash) ? "an arena's judge never shares a branch with a candidate" : seat ? "each candidate of an arena has its own branch" : "a candidate's branch stays as it is"}. Give this run a new branch. Nothing changed.`);
+    // A candidate's row bars every task from its branch for good (candidateBar), so a candidate takes no branch of another task (T601).
+    const owner = seat && (read(dir, "tasks").find(row => row.id !== task.id && sameBranch(row.branch, branch))?.id ?? there.find(row => row.task !== task.id && WRITERS.includes(row.role))?.task);
+    if (owner) refuse(`${branch} belongs to ${owner}, and a candidate run there would bar ${owner} from its own branch. Give this run another branch. Nothing changed.`);
     if (CANDIDATES.includes(role) && !candidate && arenaOpen(task, runs)) refuse(`${task.id}'s arena step is open: ${ARENA_STEP}. So this ${role} run needs --candidate <k>, on its own branch. ${arenaExits(task.id)} Nothing changed.`);
     // An arena on a large task is a design arena: arena, PE, the owner's approval, build. So its build waits for briefed.
     if (role === "implementer" && candidate && task.size === "large" && ["framed", "designing", "awaiting-you"].includes(task.state)) refuse(`${task.id} is large and ${task.state}, so its arena is a design arena, and an implementer is no candidate of it: use --role designer. A build arena runs on a tiny or small task, or on a briefed task after an approved design. Nothing changed.`);

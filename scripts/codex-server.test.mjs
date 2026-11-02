@@ -2565,28 +2565,27 @@ test("T586: a candidate or a judge passes on a branch of its own task, and is re
   // T2 has no branch=. A name of T1, a task's own named branch, and a task that does not exist are all another task's.
   f.assignmentCli('run', 'add', 'T2', '--role', 'implementer', '--branch', 'codex/t1-c9', '--candidate', '1'); // R4
   refused('T2', 'R4', 'implementer');
-  f.assignmentCli('run', 'add', 'T2', '--role', 'designer', '--branch', 'codex/t1-fixture', '--candidate', '2'); // R5
-  refused('T2', 'R5', 'designer');
-  f.assignmentCli('run', 'add', 'T2', '--role', 'arena-judge', '--branch', 'codex/t5-judge'); // R6
-  refused('T2', 'R6', 'arena-judge');
+  assert.throws(() => f.assignmentCli('run', 'add', 'T2', '--role', 'designer', '--branch', 'codex/t1-fixture', '--candidate', '2'), { message: 'codex/t1-fixture belongs to T1, and a candidate run there would bar T1 from its own branch. Give this run another branch. Nothing changed.' }); // T601: no run, so no id
+  f.assignmentCli('run', 'add', 'T2', '--role', 'arena-judge', '--branch', 'codex/t5-judge'); // R5
+  refused('T2', 'R5', 'arena-judge');
   // The shared case: T3 joins T1's branch. It may use that branch as its task branch, and a name of its own, but no other name of T1.
   f.assignmentCli('task', 'add', '--priority', 'P2', '--title', 'Shared', '--size', 'small', '--add', 'arena', '--why', 'open design');
   f.assignmentCli('task', 'T3', 'set', 'branch=codex/t1-fixture');
-  f.assignmentCli('run', 'add', 'T3', '--role', 'implementer', '--branch', 'codex/t3-c1', '--candidate', '1'); // R7
-  assert.equal(capture('T3', 'R7', 'implementer').runBranch, 'codex/t3-c1');
-  f.assignmentCli('run', 'add', 'T3', '--role', 'implementer', '--branch', 'codex/t1-c8', '--candidate', '2'); // R8
-  refused('T3', 'R8', 'implementer');
-  f.assignmentCli('run', 'done', 'R7', '--status', 'done');
-  f.assignmentCli('run', 'done', 'R8', '--status', 'failed');
-  f.assignmentCli('run', 'add', 'T3', '--role', 'arena-judge', '--branch', 'codex/t3-judge'); // R9
-  assert.equal(capture('T3', 'R9', 'arena-judge').runBranch, 'codex/t3-judge');
-  f.assignmentCli('run', 'done', 'R9', '--status', 'done');
+  f.assignmentCli('run', 'add', 'T3', '--role', 'implementer', '--branch', 'codex/t3-c1', '--candidate', '1'); // R6
+  assert.equal(capture('T3', 'R6', 'implementer').runBranch, 'codex/t3-c1');
+  f.assignmentCli('run', 'add', 'T3', '--role', 'implementer', '--branch', 'codex/t1-c8', '--candidate', '2'); // R7
+  refused('T3', 'R7', 'implementer');
+  f.assignmentCli('run', 'done', 'R6', '--status', 'done');
+  f.assignmentCli('run', 'done', 'R7', '--status', 'failed');
+  f.assignmentCli('run', 'add', 'T3', '--role', 'arena-judge', '--branch', 'codex/t3-judge'); // R8
+  assert.equal(capture('T3', 'R8', 'arena-judge').runBranch, 'codex/t3-judge');
+  f.assignmentCli('run', 'done', 'R8', '--status', 'done');
   // A second arena after a done judge has no open step, and its runs on their own branches still pass.
-  f.assignmentCli('run', 'add', 'T3', '--role', 'implementer', '--branch', 'codex/t3-c1-2', '--candidate', '1'); // R10
-  assert.equal(capture('T3', 'R10', 'implementer').runBranch, 'codex/t3-c1-2');
-  f.assignmentCli('run', 'done', 'R10', '--status', 'done');
-  f.assignmentCli('run', 'add', 'T3', '--role', 'arena-judge', '--branch', 'codex/t3-judge-2'); // R11
-  assert.equal(capture('T3', 'R11', 'arena-judge').runBranch, 'codex/t3-judge-2');
+  f.assignmentCli('run', 'add', 'T3', '--role', 'implementer', '--branch', 'codex/t3-c1-2', '--candidate', '1'); // R9
+  assert.equal(capture('T3', 'R9', 'implementer').runBranch, 'codex/t3-c1-2');
+  f.assignmentCli('run', 'done', 'R9', '--status', 'done');
+  f.assignmentCli('run', 'add', 'T3', '--role', 'arena-judge', '--branch', 'codex/t3-judge-2'); // R10
+  assert.equal(capture('T3', 'R10', 'arena-judge').runBranch, 'codex/t3-judge-2');
 });
 
 test("T586: a review reads its task's branch: it passes on the judge's branch, and a run on a candidate's branch is refused", async t => {
@@ -4127,6 +4126,17 @@ test('T57: core historical run receipts preserve the selected model after provid
   assert.equal(tool.createRequestedRun({ ...input, request: turns[2] }, f.env).run.model, 'second-model');
 });
 
+
+test('T601: core native run creation refuses a candidate run on another task\'s branch, as the CLI does', async t => {
+  const f = await runCreationFixture(t);
+  const tool = f.core.createStateTool({ defaultRoot: () => { throw Error('No ambient logbook'); }, models: ['inherit'] });
+  const cli = backedSage(tool, f.options.projectDirectory, f.env);
+  cli('task', 'add', '--priority', 'P2', '--title', 'second', '--size', 'small');
+  cli('task', 'T2', 'set', 'branch=sage/t2-own');
+  const input = { ...f.input, role: 'implementer', branch: 'Sage/T2-Own', candidate: '1', project: f.options.projectDirectory, owner: 'test-owner' };
+  assert.throws(() => tool.createRequestedRun(input, f.env), { message: 'Sage/T2-Own belongs to T2, and a candidate run there would bar T2 from its own branch. Give this run another branch. Nothing changed.' });
+  assert.equal(tool.createRequestedRun({ ...input, request: turns[2], branch: 'sage/t1-c1' }, f.env).run.branch, 'sage/t1-c1');
+});
 
 test('T336: core native run creation refuses a lead run while a wait is unmet, as the CLI does, and creates a PE run', async t => {
   const f = await runCreationFixture(t);
