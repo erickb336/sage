@@ -140,11 +140,13 @@ The lead ends blocked when it cannot clear a finding itself:
 
 - a low finding with no round;
 - a new finding from a round's re-check;
-- a fix that the re-check does not confirm.
+- a low fix that the re-check does not confirm, with no medium or high finding open.
 
-It also ends blocked in any state that its file does not name. The chief then reads the logbook and decides. It makes only these two state moves there:
+Another fix that the re-check does not confirm needs no chief: the lead runs `round` from repairing. That gives the next round, a replan when the round fixed none of its keys, or the hold after the last round.
 
-- repairing to reviewing: a fix that the re-check did not confirm gets the next round, or a replan;
+The lead also ends blocked in any state that its file does not name. The chief then reads the logbook and decides. It makes only these two state moves there:
+
+- repairing to reviewing: a fix key that stays open after a blocked report gets the next round, or a replan;
 - reviewing to verifying: the checks passed.
 
 The chief may also move a low or new finding to a follow-up task. Then it starts a fresh lead, which goes on from the logbook.

@@ -1013,7 +1013,7 @@ const LEAD_PAIRS = {
       if (!head) return `the head of ${task.id}'s branch cannot be read, so ${task.id} stays at ${task.state}.`;
       if (view.cleanCycles(task.id, head) === 0) return `${task.id}'s head ${head.slice(0, 7)} has no full clean cycle yet (a clean verdict of each review and QA of its route on it), so ${task.id} stays at ${task.state}: record them first (R1836-3, R1846-1).`;
     }
-    return !(task.state === "repairing" && roundFixOpen(task, view)) || `${task.id} has an open fix finding of its round: close each one after the repair's commit (finding close), then move it to reviewing.`;
+    return !(task.state === "repairing" && roundFixOpen(task, view)) || `${task.id} has an open fix finding of its round: close each one after the repair's commit (finding close), then move it to reviewing. When the re-check did not confirm one, run round ${task.id}: it starts the next round.`;
   },
 };
 /** The keys of the task's current round: round sets them to its fix findings. */
