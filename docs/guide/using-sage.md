@@ -125,6 +125,8 @@ The lead does these things:
 
 The lead and each helper take a slot of the project's agent cap (`max_agents`, 10 by default), and all agents together take slots of the total cap (`cap_total`, 20 by default). One lead with its 9 helpers fills the default cap of a project.
 
+At most 5 leads run for a project by default. To change this, ask the chief in the chat, and it runs `sage config max_leads=<n>` with a whole number from 1. A value below the running count ends no lead: it only refuses the next lead.
+
 A lead runs up to 9 helpers, but never more than the project's cap allows: with a lower cap, or a second lead in the project, it runs fewer. The chief starts a second lead only when the cap has room for it and its helpers.
 
 A tiny task has no review and no QA in its route, so its lead runs only the implementer. A task with no review or QA in its route has no cycle: it needs only checks-pass. A risk flag, an arena or an added review puts a review in the route, and then the task needs its clean cycles like any other task.

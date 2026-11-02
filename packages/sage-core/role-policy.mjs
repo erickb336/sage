@@ -1,3 +1,5 @@
+import { AGENT_CAPS } from "./logbook-fields.mjs";
+
 /** The roles that a lead may start. */
 export const TEAM = new Set(["implementer", "code-reviewer", "security-reviewer", "ux-reviewer", "qa"]);
 const ROLES = new Set(["chief-of-staff", "lead", "pe", "designer", "arena-judge", ...TEAM]);
@@ -19,8 +21,8 @@ export function checkRoleReservation(reservations, assignment, input) {
   }
   if (plan.issuerRole === "lead" && !TEAM.has(plan.role)) throw Error("A lead can start only its permitted team");
   const project = reservations.filter(row => row.assignment.project === assignment.project);
-  if (plan.role === "lead" && project.filter(row => !row.rolePlan || row.rolePlan.role === "lead").length >= 3) {
-    throw Error("The project already holds three lead slots");
+  if (plan.role === "lead" && project.filter(row => !row.rolePlan || row.rolePlan.role === "lead").length >= AGENT_CAPS.max_leads) {
+    throw Error(`The project already holds ${AGENT_CAPS.max_leads} lead slots`);
   }
   if (plan.issuerRole === "lead" && project.filter(row => row.assignment.session === assignment.session
     && row.assignment.epoch === assignment.epoch && row.assignment.issuer === assignment.issuer).length >= 3) {

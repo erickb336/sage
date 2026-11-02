@@ -46,14 +46,14 @@ The chief may still start the existing specialist roles directly for framing
 and other current workflows. The chief itself is the owner session, never a
 child role.
 
-The project holds at most three leads across its participating sessions. Each
+The project holds at most `AGENT_CAPS.max_leads` (5) leads across its participating sessions. Each
 lead holds at most nine children in its session and epoch. All reservations
 also count toward project and total limits, so the lowest applicable limit wins.
 No stop, report, or mode change releases these slots. Completion and recovery
 still need their separate protocol.
 
 Legacy reservations retain their original shape and consume normal capacity.
-Their role is unknown, so each also counts as a possible lead for the three-lead
+Their role is unknown, so each also counts as a possible lead for the lead
 limit. They confer no role authority. The legacy reservation API remains for
 existing callers; an adapter that enforces roles must use a role-aware reservation API.
 A retry cannot change or remove a recorded role plan, and it never permits a
