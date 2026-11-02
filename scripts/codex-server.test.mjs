@@ -4950,6 +4950,99 @@ test('T63: a durable receipt recovers a failed fence acknowledgement without reo
   rmSync(receiptFile); assert.throws(() => f.finish()); assert.deepEqual(interruptedTables(f), before);
 });
 
+/** A durable interrupted receipt with an open journal row, and a stuck marker beside it. */
+async function stuckWithOpenFinish(t) {
+  const f = await interruptedRunFixture(t), state = f.core.readAdmission(f.options.directory);
+  const binding = state.bindings[0], preparation = state.preparations[0];
+  assert.throws(() => f.tool.finishInterruptedRun({ project: f.options.projectDirectory, binding, task: 'T1', run: 'R1', role: 'lead', status: 'blocked',
+    evidenceHash: state.completions[0].evidenceHash, runTarget: preparation.runTarget }, f.env, {
+    begin: value => f.core.beginInterruptedRunFinish(f.options.directory, value),
+    end: () => { throw Error('Injected acknowledgement failure'); },
+  }), /Injected acknowledgement/);
+  assert.equal(f.core.readAdmission(f.options.directory).interruptedFinishes[0].receiptHash, undefined);
+  writeFileSync(join(f.logbook, 'review-pending.json'), 'stuck');
+  const repair = () => f.tool.sage(['logbook', 'repair', '--accept-change-loss', 'yes', '--project', f.options.projectDirectory], f.env);
+  return { f, repair, receipt: join(f.logbook, 'interrupted-runs', `${binding.assignment}.json`) };
+}
+const sealed = value => JSON.stringify({ value, hash: createHash('sha256').update(JSON.stringify(value)).digest('hex') }) + '\n';
+
+test('T607: a whole interrupted receipt with an open journal row does not stop the repair, and its finish then goes on', async t => {
+  const { f, repair } = await stuckWithOpenFinish(t);
+  assert.match(repair(), /The logbook check passes, and writes work again/);
+  assert.equal(f.finish().decision, 'already-finished');
+});
+
+const DAMAGED_RECORD = 'The saved change or its receipt is damaged, or a table has neither its before nor its after text.';
+const DAMAGED_UPDATE = 'The saved interrupted run update is damaged. No run table changed.';
+const RECEIPT_WARNING = 'A receipt in interrupted-runs fails its check, so a later Codex settle may stop on it. Then only a backup helps: the owner restores the folder that `sage logbook` prints; rows newer than the backup are lost.';
+const OTHER_ASSIGNMENT = `${'0'.repeat(8)}-0000-4000-8000-${'0'.repeat(12)}`;
+const settleOf = async f => {
+  const { settleNativeWrites } = await import(pathToFileURL(join(f.plugin, 'runtime/task-settle.mjs')));
+  return () => settleNativeWrites(f.options);
+};
+/** The repair went on: the marker moved, the line warns, and no line says that writes work. */
+function warnedRepair(f, repair) {
+  const out = repair(), marker = join(f.logbook, 'review-pending.json');
+  assert.equal(out.endsWith(`The logbook check passes. ${RECEIPT_WARNING} The check reads each table alone, so it cannot show that the tables agree.`), true, out);
+  assert.doesNotMatch(out, /writes work/);
+  assert.equal(existsSync(marker), false);
+  assert.equal(readFileSync(`${marker}.lost-1`, 'utf8'), 'stuck');
+}
+const finishRow = f => f.core.readAdmission(f.options.directory).interruptedFinishes[0];
+
+const DAMAGED_RECEIPTS = {
+  'bytes that are not a receipt': [receipt => writeFileSync(receipt, 'damaged'), DAMAGED_RECORD],
+  'a good hash and a bad result': [receipt => {
+    const { value } = JSON.parse(readFileSync(receipt, 'utf8'));
+    writeFileSync(receipt, sealed({ ...value, result: { ...value.result, report: 'invented.md' } }));
+  }, DAMAGED_UPDATE],
+  'a good hash and no fields': [receipt => writeFileSync(receipt, sealed({})), DAMAGED_RECORD],
+  'a good hash and a run target that does not parse': [receipt => {
+    const { value } = JSON.parse(readFileSync(receipt, 'utf8'));
+    writeFileSync(receipt, sealed({ ...value, reference: { ...value.reference, runTarget: {} } }));
+  }, DAMAGED_RECORD],
+  'the whole receipt of another assignment under this name': [receipt => {
+    const { value } = JSON.parse(readFileSync(receipt, 'utf8'));
+    writeFileSync(receipt, sealed({ reference: { ...value.reference, binding: { ...value.reference.binding, assignment: OTHER_ASSIGNMENT } }, result: { ...value.result, assignment: OTHER_ASSIGNMENT } }));
+  }, DAMAGED_RECORD],
+};
+for (const [name, [damage, stop]] of Object.entries(DAMAGED_RECEIPTS)) test(`T607: an interrupted receipt with ${name} and an open journal row: the repair goes on and warns, and the settle really stops`, async t => {
+  const { f, repair, receipt } = await stuckWithOpenFinish(t), settle = await settleOf(f);
+  damage(receipt);
+  warnedRepair(f, repair);
+  assert.throws(settle, { message: stop });
+  assert.deepEqual([finishRow(f).receiptHash, finishRow(f).void], [undefined, undefined], 'the row stays open, so each settle stops again');
+});
+
+test('T607: a damaged interrupted receipt with no open journal row: the repair warns, and the settle does not stop', async t => {
+  const { f, repair, receipt } = await stuckWithOpenFinish(t), settle = await settleOf(f), marker = join(f.logbook, 'review-pending.json');
+  rmSync(marker);
+  assert.equal(f.finish().decision, 'already-finished');
+  assert.match(finishRow(f).receiptHash, /^[a-f0-9]{64}$/);
+  writeFileSync(marker, 'stuck');
+  writeFileSync(receipt, 'damaged');
+  warnedRepair(f, repair);
+  settle();
+});
+
+test('T607: a whole receipt moved to the name of another assignment: the repair warns, the settle voids the open row, and the finish gets its own denial', async t => {
+  const { f, repair, receipt } = await stuckWithOpenFinish(t), settle = await settleOf(f);
+  renameSync(receipt, join(dirname(receipt), `${OTHER_ASSIGNMENT}.json`));
+  warnedRepair(f, repair);
+  settle();
+  assert.equal(finishRow(f).void, true);
+  assert.throws(() => f.finish(), { message: 'The interrupted run does not match its immutable finish evidence.' });
+});
+
+test('T607: a repair whose logbook check fails keeps the receipt warning', async t => {
+  const { f, repair, receipt } = await stuckWithOpenFinish(t);
+  writeFileSync(receipt, 'damaged');
+  writeFileSync(join(f.logbook, 'runs.tsv'), '');
+  const out = repair();
+  assert.match(out, /The logbook check fails, so writes still stop: \S+runs\.tsv is empty/);
+  assert.equal(out.endsWith(RECEIPT_WARNING), true, out);
+});
+
 test('T63: historical interrupted receipt refuses missing task and conflicting terminal row without changing later runs', async t => {
   const f = await interruptedRunFixture(t); f.finish(); f.cli('run', 'add', 'T1', '--role', 'lead');
   const runsFile = join(f.logbook, 'runs.tsv'), original = readFileSync(runsFile, 'utf8');

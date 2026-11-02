@@ -3,7 +3,7 @@ import assert from "node:assert/strict";
 import { execFileSync } from "node:child_process";
 import { chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, realpathSync, rmSync, statSync, symlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
-import { basename, dirname, join } from "node:path";
+import { basename, dirname, join, resolve } from "node:path";
 import { test } from "node:test";
 import { fileURLToPath } from "node:url";
 import { locate as claudeLocate, sage as claudeSage, sageRoot as claudeRootOf } from "../plugins/sage/skills/sage/sage.mjs";
@@ -891,6 +891,17 @@ test("the PR script takes a shared logbook, which has no checkout.txt", async (t
   const { record } = await import("../plugins/sage/skills/sage/sage-pr.mjs");
   const saved = record("T1", "view", { ...w.env, SAGE_PROJECT: w.project });
   assert.deepEqual([saved.dir, saved.branch], [join(w.shared, w.name()), "sage/t1"]);
+});
+
+test("the worktree root follows the HOME of its env, SAGE_WORKTREES comes first, and it is never relative; a path only, so no folder is made", (t) => {
+  processHome(t, "/process-home");
+  assert.equal(tool.worktreeRoot({ HOME: "/scratch/home" }), "/scratch/home/sage-worktrees");
+  assert.equal(tool.worktreeRoot({ HOME: "/scratch/home", SAGE_WORKTREES: "/scratch/trees" }), "/scratch/trees");
+  assert.equal(tool.worktreeRoot({ HOME: "/scratch/home", SAGE_WORKTREES: "" }), "/scratch/home/sage-worktrees");
+  assert.equal(tool.worktreeRoot({ HOME: "" }), "/process-home/sage-worktrees");
+  assert.equal(tool.worktreeRoot({}), "/process-home/sage-worktrees");
+  assert.equal(tool.worktreeRoot({ HOME: "relative-home" }), resolve("relative-home/sage-worktrees"));
+  assert.equal(tool.worktreeRoot({ SAGE_WORKTREES: "relative-trees" }), resolve("relative-trees"));
 });
 
 test("a chief with another logbook root finds a receipt of a shared project, so the Codex settle step cannot void a live row", (t) => {

@@ -189,7 +189,7 @@ const checkout = (dir, project, env) => {
 const slug = (name) => String(name).toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/^-+|-+$/g, "") || "project";
 
 /** The folder of the task copies (default ~/sage-worktrees; $SAGE_WORKTREES overrides it). It is outside the sage root, so agents may write in it. */
-const worktreeRoot = (env = process.env) => env.SAGE_WORKTREES ?? join(homedir(), "sage-worktrees");
+const worktreeRoot = (env = process.env) => resolve(env.SAGE_WORKTREES || join(env.HOME || homedir(), "sage-worktrees"));
 /**
  * The folder where agents save a task's pages (research, designs, findings): <worktree root>/<logbook key>/pages/<task>.
  * The logbook key (name and hash) keeps two projects with the same folder name apart.
@@ -1255,11 +1255,22 @@ function stuckChange(dir, skip, env) {
     }
     try { taskUpdates.history(dir); }
     catch (damaged) {
-      if (!(damaged instanceof RecordedWriteError || damaged instanceof TaskUpdateError)) throw settleFailure(dir, damaged);
+      const failure = settleFailure(dir, damaged);
+      if (failure.code !== "stuck-write") throw failure;
+      if (Number.isSafeInteger(damaged.schema) && damaged.schema > newest) refuse(`A receipt in task-updates has schema ${damaged.schema}, and this version of sage knows schemas up to ${newest}: a newer sage wrote it. Nothing changed. Update the sage plugin and restart this session. Then any write finishes the change or says what to do.`);
       refuse("A receipt in task-updates fails its check, so writes would still stop after this repair. Nothing changed. Only a backup helps here: the owner restores the folder that `sage logbook` prints; rows newer than the backup are lost.");
     }
+    // A provider's settle reads this folder only for an open row of its journal, which core cannot see. A refusal here would
+    // leave a logbook with no backup and no way out, so the repair goes on, and its line warns and does not say that writes work.
+    let damagedReceipt = false;
+    try { interruptedWrites.history(dir); }
+    catch (damaged) {
+      const failure = settleFailure(dir, damaged);
+      if (failure.code !== "stuck-write") throw failure;
+      damagedReceipt = true;
+    }
     const marker = join(dir, PENDING);
-    return { request: savedRequest(dir), marker, aside: lostName(marker) };
+    return { request: savedRequest(dir), marker, aside: lostName(marker), damagedReceipt };
   }
   refuse("This saved change can finish, so it needs no repair: any write in this project finishes it. Nothing changed.");
 }
@@ -2666,15 +2677,16 @@ function sage(argv, env = process.env) {
 }
 
 /** What a repair of a stuck saved change says: the loss in plain words, then the logbook check of what stays. */
-function lostChangeLine(dir, { request, aside }) {
+function lostChangeLine(dir, { request, aside, damagedReceipt }) {
   const loss = `The saved change${request} is lost: ${PENDING} moved to ${aside}, and the decision is in decisions.tsv. A half-published update can leave mixed tables, where some tables hold the change and others do not. Sage does not repair them, so read the rows of the last work.`;
+  const warning = damagedReceipt ? " A receipt in interrupted-runs fails its check, so a later Codex settle may stop on it. Then only a backup helps: the owner restores the folder that `sage logbook` prints; rows newer than the backup are lost." : "";
   try {
     ready(dir);
     status(dir, true);
-    return `${loss} The logbook check passes, and writes work again. The check reads each table alone, so it cannot show that the tables agree.`;
+    return `${loss} The logbook check passes${warning ? `.${warning}` : ", and writes work again."} The check reads each table alone, so it cannot show that the tables agree.`;
   } catch (error) {
     if (!(error instanceof Refusal || error instanceof RecordedWriteError)) throw error;
-    return `${loss} The logbook check fails, so writes still stop: ${error.message}`;
+    return `${loss} The logbook check fails, so writes still stop: ${error.message}${warning}`;
   }
 }
 

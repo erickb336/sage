@@ -122,14 +122,16 @@ function receiptFolder(dir) {
   if (lstatSync(folder, { throwIfNoEntry: false })) canonical(folder);
   return folder;
 }
+function receiptNames(folder) {
+  try { return readdirSync(folder).filter(name => NAME.test(name)).sort(); }
+  catch (error) { if (error.code !== "ENOENT") throw error; return []; }
+}
 /** Immutable receipt names detect a task committed while a reader read the separate tables. */
 function readVersion(dir) {
   // Read-only merge checks already support logbook aliases. Refuse a redirected receipts folder only.
   const folder = join(dir, FOLDER);
   if (lstatSync(folder, { throwIfNoEntry: false }) && realpathSync(folder) !== join(realpathSync(dir), FOLDER)) fail();
-  let names;
-  try { names = readdirSync(folder).filter(name => NAME.test(name)).sort(); }
-  catch (error) { if (error.code !== "ENOENT") throw error; names = []; }
+  const names = receiptNames(folder);
   assertNoPendingWrite(dir);
   return json(names);
 }
@@ -138,6 +140,17 @@ function readReceipt(dir, reference) {
   if (value !== undefined && (!keys(value, ["reference", "result"]) || json(value.reference) !== json(reference))) fail();
   if (value !== undefined) validate(value);
   return value;
+}
+/** Each receipt of the folder, read and checked as readReceipt does. */
+function history(dir) {
+  const folder = receiptFolder(dir);
+  return receiptNames(folder).map(file => {
+    const value = decode(join(folder, file));
+    if (!keys(value, ["reference", "result"])) fail();
+    validate(value);
+    if (recordName(value.reference) !== file) fail();
+    return value;
+  });
 }
 /** Pending intent preserves all before/after bytes. Settling refuses any unrelated table edit. */
 function verify(dir, pending) {
@@ -187,7 +200,7 @@ function commit(dir, receipt, after, beforePublish = () => {}) {
   return settle(dir, { schema, receipt, tables });
 }
 
-return { readVersion, readReceipt, verify, settle, commit };
+return { readVersion, readReceipt, history, verify, settle, commit };
 }
 
 /**
@@ -323,7 +336,10 @@ export function coordinatedWrites({ schema, previousSchemas = [], tables: TABLES
     try { names = readdirSync(path).filter(value => /^[0-9a-f]{64}\.json$/.test(value)).sort(); }
     catch (error) { if (error.code === 'ENOENT') return []; throw error; }
     return names.map(file => {
-      const receipt = checkReceipt(decode(join(path, file)));
+      const receipt = decode(join(path, file));
+      // A receipt that fails names its schema, so that a reader can tell a newer sage from damage.
+      try { checkReceipt(receipt); }
+      catch (error) { throw Object.assign(error, { schema: receipt?.intent?.schema }); }
       if (name(receipt.intent.reference) !== file) fail();
       return receipt;
     });
