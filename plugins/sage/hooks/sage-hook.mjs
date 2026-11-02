@@ -609,13 +609,16 @@ function firstMove(command) {
   const [, owner, repo, branch] = /^gh repo edit github\.com\/((?!\.+\/)[\w.-]+)\/((?!\.+\/)[\w.-]+) --default-branch (main|master)$/.exec(command.trim()) ?? [];
   return repo && { owner, repo, branch };
 }
+/** The most that a repository holds and still gets the move: the first task's commits, and a few task branches and their pull requests. */
+const MOVE_MOST = { commits: 20, branches: 5, pulls: 3 };
 /**
- * The checks of that move, all on GitHub: the default branch is not main or master, and the branch is one root commit, as
- * the first creation made it. So a repository with history never gets this exception. { decision, reason }, as firstCreation.
+ * The checks of that move, all on GitHub: the default branch is not main or master, the branch is one root commit, as the
+ * first creation made it, and the repository is within MOVE_MOST. A root commit proves nothing alone: any repository can
+ * have one on main. So a repository with history never gets this exception, and the prompt shows the counts. { decision, reason }, as firstCreation.
  */
 function moveCheck({ owner, repo, branch }) {
   const where = `github.com/${owner}/${repo}`;
-  const no = (why) => ({ decision: "deny", reason: `this command moves the default branch of ${where} to ${branch}, and the hook asks the user only when GitHub shows that ${branch} is one root commit and that another branch is the default branch: ${why}.` });
+  const no = (why) => ({ decision: "deny", reason: `this command moves the default branch of ${where} to ${branch}, and the hook asks the user only when GitHub shows that ${branch} is one root commit, that another branch is the default branch, and that the repository is nearly empty: ${why}.` });
   try {
     const deadline = Date.now() + 7000;
     const about = json(githubGet(`repos/${owner}/${repo}`, deadline));
@@ -627,7 +630,19 @@ function moveCheck({ owner, repo, branch }) {
     const { parents } = json(githubGet(`repos/${owner}/${repo}/git/commits/${sha}`, deadline));
     if (!Array.isArray(parents)) return no(`GitHub's answer for commit ${sha} has no list of parents`);
     if (parents.length) return no(`commit ${sha} has a parent, so ${branch} has history`);
-    return { decision: "ask", reason: `this moves the default branch of ${where} from ${quoted(about.default_branch)} to ${branch}: ${branch} is one root commit, ${sha}, so this is a first upload. The user must approve it. After it, the task's branch can be pushed and can open a pull request into ${branch}.` };
+    const count = {};
+    for (const [name, path, most] of [
+      [`commits on ${quoted(about.default_branch)}`, `commits?sha=${encodeURIComponent(about.default_branch)}&`, MOVE_MOST.commits],
+      ["branches", "branches?", MOVE_MOST.branches],
+      ["open pull requests", "pulls?state=open&", MOVE_MOST.pulls],
+    ]) {
+      const list = json(githubGet(`repos/${owner}/${repo}/${path}per_page=${most + 1}`, deadline));
+      if (!Array.isArray(list)) return no(`GitHub gave no list of ${name}`);
+      if (list.length > most) return no(`the repository has more than ${most} ${name}, so it has history`);
+      count[name] = list.length;
+    }
+    const counts = Object.entries(count).map(([name, n]) => `${n} ${name}`).join(", ");
+    return { decision: "ask", reason: `this moves the default branch of ${where} from ${quoted(about.default_branch)} to ${branch}: ${branch} is one root commit, ${sha}, and GitHub shows ${counts}. The user must approve it. After it, the task's branch can be pushed and can open a pull request into ${branch}.` };
   } catch (e) {
     return no(`the check on GitHub failed (${e.message})`);
   }
@@ -945,19 +960,20 @@ function chiefMemoryWrite(input) {
   }
 }
 /**
- * The text that the rule for a logbook write judges (T621): only the parts of one command line that write, each with only
- * its redirection targets when nothing else in it writes, unless its words name a root. Any other input is judged whole.
+ * The text that the rule for a logbook write judges (T621): the parts of one Bash command line that core.writeParts keeps,
+ * with the dropped readers' words back in when they name a root. Any other input is judged whole. Only Bash has the
+ * grammar that core reads: PowerShell quotes, escapes and defines names in its own way.
  */
-function writeText(texts, roots, cwd) {
-  const parts = texts.length === 1 ? core.writeParts(texts[0], cwd) : undefined;
+function writeText(texts, roots, cwd, tool) {
+  const parts = tool === "Bash" && texts.length === 1 ? core.writeParts(texts[0], cwd) : undefined;
   if (!parts) return texts.join("\n");
   return parts.map(({ text, targets }) => (targets === undefined || namesRoot(text, partsOf(text), roots, cwd) ? text : targets)).join("\n");
 }
 /** The word with which a command tool's input writes a logbook file, or undefined. sage: in sage mode a logbook file's name counts too. */
-function shellWrite(ti, sage, cwd) {
+function shellWrite(ti, sage, cwd, tool) {
   const text = runFields(ti);
   if (!text.some(t => writes(t, cwd)) || stateToolOnly(typeof ti.command === "string" ? ti.command : "")) return undefined;
-  const roots = rootsOf(false), judged = writeText(text, roots, cwd), words = partsOf(judged);
+  const roots = rootsOf(false), judged = writeText(text, roots, cwd, tool), words = partsOf(judged);
   return namesRoot(judged, words, roots, cwd) ?? (sage ? namesTable(words) : undefined);
 }
 /**
@@ -976,7 +992,7 @@ function chiefProblem(input, sage) {
     }
   }
   if (!SHELL_TOOLS.test(input.tool_name ?? "")) return undefined;
-  const word = shellWrite(input.tool_input ?? {}, sage, input.cwd ?? process.cwd());
+  const word = shellWrite(input.tool_input ?? {}, sage, input.cwd ?? process.cwd(), input.tool_name);
   return word && `the chief never writes, moves or removes a logbook file from the shell (${quoted(word)} names the logbook).`;
 }
 /**
@@ -1591,7 +1607,7 @@ function agentCheck(input, file, slots) {
     return `"${[cmd, ...pos.slice(0, 1)].join(" ")}" writes the logbook, or is not a read command of the state tool.`;
   }
   if (!texts.some(t => writes(t, cwd))) return undefined;
-  const word = nearLogbook(writeText(texts, roots, cwd), roots, cwd) ?? canonicalRoots(roots).flatMap((root) => texts.map((t) => linksNear(t, root, cwd))).find(Boolean);
+  const word = nearLogbook(writeText(texts, roots, cwd, input.tool_name), roots, cwd) ?? canonicalRoots(roots).flatMap((root) => texts.map((t) => linksNear(t, root, cwd))).find(Boolean);
   const hint = word && /\$\?/.test(word) ? " The hook does not expand $?, so its ? is a pattern character: to show an exit code, write || echo FAIL or ; echo done after the command instead." : "";
   return word && `an agent never writes, moves or removes a logbook file from the shell, and never writes near one with a pattern, a variable or a link to it. ${quoted(word)} makes this command near the logbook: change or remove it.${hint}${note}`;
 }
@@ -2112,7 +2128,7 @@ const TEMP = [...new Set([tmpdir(), "/tmp", process.env.TMPDIR].filter(Boolean).
 const inTemp = (file) => !!file && TEMP.some((t) => file.startsWith(`${t}/`));
 const PROCESS_TEXT = new RegExp(`(?:^|[\\s;&|(\`'"/<>])(?:${UNIX_PROCESS}|${POWERSHELL_PROCESS})(?:\\.exe)?(?=$|[\\s;&|)\`'"<>])`, "im");
 
-const NO_GH = "an agent may run only plain gh pr create, gh pr view, gh pr comment, gh pr edit, gh pr checks, gh issue view, or gh api with GET. Before it, a command line may only run cd <dir> and git push; after it, nothing. It may send its errors to 2>&1 or /dev/null, and a text field may be $(cat <<'EOF' ... EOF). Other gh commands, copies, links and aliases are refused. Ask the chief to run them.";
+const NO_GH = "an agent may run only plain gh pr create, gh pr view, gh pr comment, gh pr edit, gh pr checks, gh issue view, or gh api with GET. Before it, a command line may only run cd <dir> and git push; after it, nothing. It may send its errors to 2>&1 or /dev/null, and the value of --body or --title of gh pr may be \"$(cat <<'EOF' ... EOF)\", in double quotes. Other gh commands, copies, links and aliases are refused. Ask the chief to run them.";
 const GH_NAME = /^(?:gh|gh\.exe)$/i;
 const namesGh = text => /\bgh(?:\.exe)?\b/i.test(unquote(text).replace(/`/g, ""));
 const ghAliasWrite = text => /(?:^|[\s/\\])aliases\.ya?ml\b/i.test(text) || (/\[alias\]|!\s*gh\b/i.test(unquote(text).replace(/`/g, "")) && namesGh(text));
@@ -2204,8 +2220,13 @@ const fileIdentity = file => {
 /** A command that an implementer runs right before its gh pr create (T621): cd to its worktree, or the push that the push rule reads. */
 const beforeGh = ({ words, syntax, piped, grouped, host, bodies, redirects }) => !piped && !grouped && !host && !bodies.length && !redirects.length && !syntax.some(s => s.assignment)
   && ((words[0] === "cd" && words.length === 2 && !/^-|[$`~*?[{]/.test(words[1])) || (words[0] === "git" && /^push$/i.test(subcommand(words, 1))));
-/** A text field of gh's own, from a heredoc: --body "$(cat <<'EOF' ... EOF)". Its commands, if any, are commands of the line. */
-const ghText = (one) => ({ words, host, piped, heredoc, redirects }) => host?.cmd === one && words.length === 1 && words[0] === "cat" && heredoc && !piped && !redirects.length;
+/**
+ * A text field of gh pr, from a heredoc: --body "$(cat <<'EOF' ... EOF)". It stays one word only in double quotes, so
+ * nothing in it becomes an option; its host word must be the value of a text flag. Its commands, if any, are commands of the line.
+ */
+const ghText = (one) => ({ words, host, piped, heredoc, redirects }) => host?.cmd === one && host.quoted && one.words[1] === "pr"
+  && (/^(?:--body|--title|-b|-t)$/.test(one.words[host.index - 1] ?? "") || /^--(?:body|title)=/.test(one.words[host.index] ?? ""))
+  && words.length === 1 && words[0] === "cat" && heredoc && !piped && !redirects.length;
 /** Only one literal gh invocation gets the agent exceptions; wrappers and aliases do not. Beside it: beforeGh and ghText. */
 function plainGh(command) {
   const commands = shellCommands(command), at = commands.findIndex(c => !c.host && !beforeGh(c)), one = commands[at];
@@ -2935,7 +2956,7 @@ if (process.argv[1] && realpathSync(process.argv[1]) === fileURLToPath(import.me
     const chiefFile = !agentEvent(input) && CHIEF.test(input?.agent_type ?? "") && tools(FILE_TOOLS); // nor does the chief change a file (F-R1517-1)
     let chiefWrite;
     try {
-      chiefWrite = tools(SHELL_TOOLS) && shellWrite(input.tool_input ?? {}, true, input.cwd ?? process.cwd());
+      chiefWrite = tools(SHELL_TOOLS) && shellWrite(input.tool_input ?? {}, true, input.cwd ?? process.cwd(), input.tool_name);
     } catch {
       chiefWrite = tools(SHELL_TOOLS);
     }
