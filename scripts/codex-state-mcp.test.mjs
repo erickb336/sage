@@ -389,6 +389,7 @@ test("F-T552-2: a lead's verdict on a commit of the ledger passes while a repair
   await lead("verdict", { task: "T1", kind: "findings", sha: SHA, pr: 5, run: w.found });
   await triage(w, "F-T1-1");
   const other = await reviewed(w, "code-reviewer", FOUND);
+  await add({ ...w, found: other }, "medium");
   assert.match(await lead("verdict", { task: "T1", kind: "findings", sha: SHA, pr: 5, run: other }), /^T1 findings · 1111111/);
 });
 

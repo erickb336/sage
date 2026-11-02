@@ -60,6 +60,14 @@ test("same-second later clean verdict clears the owner failure; later failure re
   assert.equal(make([clean, failed]).reasons.some(reason => reason.kind === "qa-fail"), true);
 });
 
+test("T294: a qa-fail that the merge check no longer refuses is not an owner failure; one that it refuses still is", () => {
+  const records = [observation("pr", { number: 12, head, state: "open" })];
+  const ledger = ["checks-pass", "review-clean", "qa-pass", "qa-fail"].map(kind => ({ task: "T1", pr: "12", sha: head, kind, cycle: "1", at: now }));
+  const make = ok => buildBoardModel([source("one", [task("T1", "verified", { pr: "12" })], { ledger }, records)], { now, landing: () => ({ ok, reason: "T1 refused." }) }).tasks[0];
+  assert.deepEqual(make(true).reasons.filter(reason => reason.kind !== "merge").map(reason => reason.kind), [], "the merge check passed: triage cleared the verdict");
+  assert.deepEqual(make(false).reasons.map(reason => reason.kind), ["merge-check", "qa-fail"]);
+});
+
 
 test("task detail derives brief fields, and the step line shows only the route's steps (T305: no struck-through step)", () => {
   const input = source("one", [task("T1", "building")], {}, [observation("artifact", { type: "brief", label: "Brief" })]);
