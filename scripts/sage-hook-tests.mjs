@@ -7164,9 +7164,9 @@ const waitOut = (s, ms = 300) => spawnSync("node", [WAIT_CMD, "T1"], { cwd: s.di
 /** The lead's stop with its full report; stop_hook_active true: the stop gate already stopped it once. */
 const leadStop = (s, message = report("ready")) => s.send({ hook_event_name: "SubagentStop", ...LEAD, stop_hook_active: true, last_assistant_message: message });
 /** A helper that the lead started for its run and that still runs: its spawn and its bound result, with no stop. */
-function liveHelper(s, role) {
-  const run = leadAdd(s, role);
-  assert.equal(denied(s.send(tool("Agent", { subagent_type: `sage:${role}`, prompt: BRIEF, name: run }, { tool_use_id: `help-${run}`, ...LEAD }))), undefined, `the helper of ${run}`);
+function liveHelper(s, role, where = {}, ...more) {
+  const run = leadAdd(s, role, LEAD, ...more);
+  assert.equal(denied(s.send(tool("Agent", { subagent_type: `sage:${role}`, prompt: BRIEF, name: run }, { tool_use_id: `help-${run}`, ...LEAD, ...where }))), undefined, `the helper of ${run}`);
   s.send(resultOf(`help-${run}`, `child-${run}`, LEAD));
   return run;
 }
@@ -7244,16 +7244,75 @@ test("T482 K3: a lead's slot holds through a 2-hour wait while its lead run runs
   assert.match(denied(stateRun(s, "round T1")) ?? "", /this lead holds no bound lead slot/, "an ended lead run's slot expires");
 });
 
-test("T482 K3 T371: the sage's run done of a helper run frees the helper's slot at once, so the lead may go on and end", () => {
+test("T482 K3 T371: the sage's run done of a helper run notes its stop, so the lead may go on and end", () => {
   const s = leadSession();
   s.sage("run", "done", "R2", "--status", "done", "--tokens", "1");
   const run = liveHelper(s, "qa"); // its stop never reaches the hook
   assert.equal(helperSlots(s).length, 1);
-  s.sage("run", "done", run, "--status", "failed");
-  s.send({ hook_event_name: "PostToolUse", tool_name: "Bash", tool_input: { command: `node ${TOOL} run done ${run} --status failed --project ${realpathSync(s.dir)}` }, tool_response: { stdout: "", stderr: "", interrupted: false }, cwd: s.dir });
-  assert.deepEqual(helperSlots(s), [], "the sage's run done freed the helper's slot");
+  chiefRunDone(s, run);
   assert.equal(waitOut(s), "No helper of R1 runs.");
   assert.equal(leadStop(s), undefined, "the lead ends");
+});
+
+// T504: the slot's truth is the helper's stop. The sage's run done records the run's end, and frees no slot.
+/** A lead and a live helper of the role that fill the project's cap, after the sage's run done of the helper's run. */
+function endedHelper(role, ...more) {
+  const s = leadSession();
+  s.sage("run", "done", "R2", "--status", "done", "--tokens", "1");
+  const run = liveHelper(s, role, { cwd: s.dir }, ...more);
+  s.sage("config", "max_agents=2");
+  chiefRunDone(s, run);
+  return { s, run };
+}
+const overCap = (s, id) => denied(s.send(spawnAgent("sage:pe", BRIEF, id, { cwd: s.dir })));
+const CAP_FULL = /its cap is 2/;
+const endedFailed = (s, run) =>readFileSync(join(s.sage("logbook"), "runs.tsv"), "utf8").split("\n").find((line) => line.startsWith(`${run}\t`)).split("\t").includes("failed");
+
+test("T504: a slot stays held after the sage's run done while the helper still runs, so the agent cap counts it", () => {
+  const { s } = endedHelper("qa");
+  assert.equal(helperSlots(s).length, 1, "the helper still holds its slot");
+  assert.match(overCap(s, "over-cap") ?? "", CAP_FULL, "the cap counts the lead and the helper");
+});
+
+test("T504: the helper's later stop frees the slot, its real report counts in the lead's gap, and the ended run stays as it ended", () => {
+  const { s, run } = endedHelper("code-reviewer");
+  assert.equal(helperSlots(s).length, 1, "the slot holds until the stop");
+  s.send(ended(`child-${run}`, "sage:code-reviewer", { last_assistant_message: report("FINDINGS", "- K1 medium src/a.js:1 an empty name saves a row") }));
+  assert.deepEqual(helperSlots(s), [], "the stop freed the slot");
+  assert.equal(overCap(s, "after-stop"), undefined, "the cap has room again");
+  assert.ok(endedFailed(s, run), "the run still ended as failed");
+  assert.match(denied(stateRun(s, "run add T1 --role code-reviewer")) ?? "", new RegExp(`this lead's code-reviewer helpers reported medium or high findings on T1 \\(${run} medium\\)`), "the late finding counts");
+});
+
+test("T504: an implementer's later stop frees its slot too", () => {
+  const { s, run } = endedHelper("implementer", "--branch", "claude/t1");
+  assert.equal(helperSlots(s).length, 1, "the slot holds until the stop");
+  s.send(ended(`child-${run}`, "sage:implementer", { last_assistant_message: report("DONE") }));
+  assert.deepEqual(helperSlots(s), [], "the stop freed the slot");
+  assert.ok(endedFailed(s, run), "the run still ended as failed");
+});
+
+test("T504: a helper with no run done of the sage works as before: the slot holds until its stop, and its lead ends the run", () => {
+  const s = leadSession();
+  s.sage("run", "done", "R2", "--status", "done", "--tokens", "1");
+  const run = liveHelper(s, "qa", { cwd: s.dir });
+  s.sage("config", "max_agents=2");
+  assert.match(overCap(s, "while-it-runs") ?? "", CAP_FULL, "the running helper counts");
+  assert.equal(leadStop(s)?.decision, "block", "the lead does not end while its helper runs");
+  s.send(ended(`child-${run}`, "sage:qa", { last_assistant_message: report("PASS") }));
+  assert.deepEqual(helperSlots(s), [], "the stop freed the slot");
+  assert.equal(overCap(s, "after-its-stop"), undefined, "the cap has room again");
+  assert.equal(waitOut(s, 60_000), `${run} stopped · qa · PASS · sha ${s.head().slice(0, 7)}\nEnd each of these runs (run done), with its findings and its verdict, then go on.`, "the lead gets the report");
+  assert.equal(denied(stateRun(s, `run done ${run} --status done --tokens 1`)), undefined, "the lead ends the run");
+});
+
+test("T504: a slot whose stop never comes is still freed by the stale slot rule, and only then", () => {
+  const { s } = endedHelper("qa");
+  ageSlots(s, 59, helperSlots(s));
+  assert.match(overCap(s, "in-the-lease") ?? "", CAP_FULL, "the lease still holds the slot");
+  ageSlots(s, 61, helperSlots(s));
+  assert.equal(overCap(s, "after-the-lease"), undefined, "the next spawn's admission freed the stale slot");
+  assert.deepEqual(helperSlots(s), [], "the helper holds no slot");
 });
 
 test("T482 K3 F3: the sage's message to a lead that ended is refused, so no message wakes a lead with no slot", () => {
@@ -7438,7 +7497,7 @@ function chiefRunDone(s, run, extra = {}) {
   s.send({ hook_event_name: "PostToolUse", tool_name: "Bash", tool_input: { command: `node ${TOOL} run done ${run} --status failed --project ${realpathSync(s.dir)}` }, tool_response: { stdout: "", stderr: "", interrupted: false }, cwd: s.dir, ...extra });
 }
 
-test("T482 R1836-1: after a restart, the sage's run done of an old helper run frees its slot, also after the fresh lead's start", () => {
+test("T482 R1836-1 T504: after a restart, an old helper's slot frees by the stale slot rule after the sage's run done, also after the fresh lead's start", () => {
   for (const helpersFirst of [false, true]) { // variant A: the fresh lead first, as lead.md and the chief text say; variant B: the helper runs first
     const s = leadSession();
     s.sage("run", "done", "R2", "--status", "done", "--tokens", "1");
@@ -7458,9 +7517,10 @@ test("T482 R1836-1: after a restart, the sage's run done of an old helper run fr
     assert.equal(denied(s.send(leadSpawn("fresh-lead", 1, { cwd: s.dir, ...s2 }))), undefined, "the fresh lead starts");
     s.send(resultOf("fresh-lead", "lead-b", s2));
     if (!helpersFirst) for (const run of old) chiefRunDone(s, run, s2);
-    assert.deepEqual(helperSlots(s), [], `variant ${helpersFirst ? "B" : "A"}: the old helpers' slots are free`);
+    assert.equal(helperSlots(s).length, 2, `variant ${helpersFirst ? "B" : "A"}: the sage's run done frees no slot`);
+    ageSlots(s, 61, helperSlots(s)); // no stop came for an hour
     const run = leadAdd(s, "qa", fresh);
-    assert.equal(denied(s.send(tool("Agent", { subagent_type: "sage:qa", prompt: BRIEF, name: run }, { tool_use_id: "fresh-helper", cwd: s.dir, ...fresh }))), undefined, `variant ${helpersFirst ? "B" : "A"}: the fresh lead starts a helper at once`);
+    assert.equal(denied(s.send(tool("Agent", { subagent_type: "sage:qa", prompt: BRIEF, name: run }, { tool_use_id: "fresh-helper", cwd: s.dir, ...fresh }))), undefined, `variant ${helpersFirst ? "B" : "A"}: the fresh lead starts a helper after the lease`);
   }
 });
 
