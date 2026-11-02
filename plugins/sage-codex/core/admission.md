@@ -46,7 +46,10 @@ The chief may still start the existing specialist roles directly for framing
 and other current workflows. The chief itself is the owner session, never a
 child role.
 
-The project holds at most `AGENT_CAPS.max_leads` (5) leads across its participating sessions. Each
+The project holds at most `AGENT_CAPS.max_leads` (5) leads across its participating sessions.
+This check uses that default, not the config key `max_leads`. The key does not reach it,
+because the check also runs when a reader replays the journal, and nothing in `packages/`
+calls `configureAdmission` yet. Each
 lead holds at most nine children in its session and epoch. All reservations
 also count toward project and total limits, so the lowest applicable limit wins.
 No stop, report, or mode change releases these slots. Completion and recovery
