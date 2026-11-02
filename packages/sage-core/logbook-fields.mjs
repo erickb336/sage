@@ -27,8 +27,9 @@ export function countOf(value, { floor = 1, limit = 50, up = false } = {}) {
 /**
  * The agent caps without a config: max_agents for each project (unless cap.<project> is set), cap_total for all. One
  * lead and its 9 helpers fit in a project, and two full lead teams in all (the owner's decision of 2026-10-25, T482).
+ * max_leads is the most running leads of one project (T609): each lead also takes a slot of these caps.
  */
-export const AGENT_CAPS = { max_agents: 10, cap_total: 20 };
+export const AGENT_CAPS = { max_agents: 10, max_leads: 5, cap_total: 20 };
 /** The agent caps of a sage root's parsed config.json, as the hook applies them: cap(<project name>) and the total. */
 export function agentCaps(config) {
   const c = config && typeof config === "object" && !Array.isArray(config) ? config : {};

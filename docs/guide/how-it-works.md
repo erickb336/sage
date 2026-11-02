@@ -42,7 +42,7 @@ Three agents change files, each in its own git worktree: the designer, the imple
 
 Only one agent writes on a branch at a time. Reviewers start fresh, so they don't share the builder's blind spots.
 
-A lead runs up to 9 helpers at once. In Claude Code, a project runs at most 10 agents at once by default (`max_agents`), so one lead and its 9 helpers fit, and all projects 20 (`cap_total`). How the lead, its wait and the models work: see [Using sage](using-sage.md#the-lead-and-the-models).
+A lead runs up to 9 helpers at once. In Claude Code, a project runs at most 10 agents at once by default (`max_agents`), so one lead and its 9 helpers fit, all projects 20 (`cap_total`), and a project at most 5 leads (`max_leads`). How the lead, its wait and the models work: see [Using sage](using-sage.md#the-lead-and-the-models).
 
 ## Routes
 

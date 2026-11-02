@@ -3999,15 +3999,14 @@ test('native run creation retains merged lead uniqueness and project capacity', 
   const f = await runCreationFixture(t);
   assert.equal(f.createRun().run.id, 'R1');
   assert.throws(() => f.createRun({...f.input, request: turns[2]}), /one running lead/);
-  for (const task of ['T2', 'T3', 'T4']) f.cli('task', 'add', '--priority', 'P2', '--title', task, '--size', 'small');
-  f.cli('run', 'add', 'T2', '--role', 'lead');
-  f.cli('run', 'add', 'T3', '--role', 'lead');
-  const next = {...f.input, request: turns[2], task: 'T4'};
-  assert.throws(() => f.createRun(next), /3 running lead runs/);
-  assert.equal(f.tool.read(f.logbook, 'runs').length, 3);
+  for (const task of ['T2', 'T3', 'T4', 'T5', 'T6']) f.cli('task', 'add', '--priority', 'P2', '--title', task, '--size', 'small');
+  for (const task of ['T2', 'T3', 'T4', 'T5']) f.cli('run', 'add', task, '--role', 'lead');
+  const next = {...f.input, request: turns[2], task: 'T6'};
+  assert.throws(() => f.createRun(next), /5 running lead runs/);
+  assert.equal(f.tool.read(f.logbook, 'runs').length, 5);
   f.cli('run', 'done', 'R1', '--status', 'done', '--tokens', '1');
-  assert.equal(f.createRun(next).run.task, 'T4');
-  assert.equal(f.tool.read(f.logbook, 'runs').filter(run => run.status === 'running' && run.role === 'lead').length, 3);
+  assert.equal(f.createRun(next).run.task, 'T6');
+  assert.equal(f.tool.read(f.logbook, 'runs').filter(run => run.status === 'running' && run.role === 'lead').length, 5);
 });
 
 test('native run creation retains merged role and lead task eligibility rules', async t => {

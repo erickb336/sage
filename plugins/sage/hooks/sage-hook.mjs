@@ -16,7 +16,7 @@
 //     Monitor, PowerShell, mcp__terminal__*), not only Bash. One case asks the user instead of a refusal: the chief's
 //     first creation of main or master on GitHub, in one literal gh api form (FIRST_FORM), checked on GitHub only
 //     (firstUpload, firstCreation).
-//   - Only main starts leads (3 per project), each named lead-T<n> of a task with a running lead run in the logbook of
+//   - Only main starts leads (max_leads per project, default 5), each named lead-T<n> of a task with a running lead run in the logbook of
 //     the session's folder (logbookView), and in the background, one per task; only leads start their permitted children (LEAD_HELPERS each),
 //     inside the project cap. A spawn of a sage: type by an agent meets these rules in any mode. In the same scope
 //     (sage mode, or a sage agent in any mode), an agent sends SendMessage only to main (it can wake a stopped agent), and
@@ -419,7 +419,7 @@ export function handle(input, state, slots) {
       return deny(event, `the state tool cannot load (${e?.message ?? e}), so sage starts no new agent: reinstall or update the sage plugin, and tell the user.`);
     }
     const cap = caps[`cap.${project}`] ?? caps.max_agents;
-    const r = slots.take(project, cap, caps.cap_total, input.tool_use_id ?? (main && spawned !== "sage:lead" ? String(Date.now()) : undefined), { role: spawned, caller: main ? undefined : input.agent_id, input: ti, lead: leadMark, helper: helperKey, brief: main && spawned !== "sage:lead" ? briefMark(ti.prompt, spawned, input.cwd) : undefined });
+    const r = slots.take(project, cap, caps.cap_total, input.tool_use_id ?? (main && spawned !== "sage:lead" ? String(Date.now()) : undefined), { role: spawned, caller: main ? undefined : input.agent_id, input: ti, lead: leadMark, helper: helperKey, maxLeads: caps.max_leads, brief: main && spawned !== "sage:lead" ? briefMark(ti.prompt, spawned, input.cwd) : undefined });
     if (r.refused) {
       slots.log(`${project} ${r.project}/${cap} total ${r.total}/${caps.cap_total}`);
       // Only a lead starts an agent outside the main session, and a lead may not change the config: it waits for a helper,
@@ -428,7 +428,7 @@ export function handle(input, state, slots) {
       const raise = (key, n) => main ? `${SPACE_NOTE}Wait for one to finish, or raise the cap: ${stateCommand(`config ${key}=${n + 1}`)}` : `${helperWait} If no helper of yours runs, report the cap to the sage.`;
       if (r.refused === "identity") return deny(event, "the spawn has no valid, distinct caller and tool-use identity, so its slot cannot be checked. Report to the sage.");
       if (r.refused === "ended") return deny(event, "this lead or spawn already ended, so it cannot start another agent. Report to the sage.");
-      if (r.refused === "leads") return deny(event, `3 leads are running for ${project}. Wait for one to finish. Report to the sage.`);
+      if (r.refused === "leads") return deny(event, `${project} is at its limit of ${caps.max_leads} running leads (max_leads). Wait for one to finish. Report to the sage.`);
       if (r.refused === "children") return deny(event, `this lead already has ${LEAD_HELPERS} children. ${helperWait}`);
       if (r.refused === "helper") return deny(event, `${helperKey.run} already has its helper: one run is backed by one child (F-T284-9). Report to the sage.`);
       // A lead that started with no name field stops only by its agent id: a stop by name is refused (T434).
@@ -2532,7 +2532,7 @@ export function slotsFor(dir, session, now = Date.now(), rawSession = session, l
     renew(candidates);
   };
   return {
-    take: transaction((project, cap, capTotal, toolUseId, { role: raw, caller, input, lead, helper, brief } = {}) => {
+    take: transaction((project, cap, capTotal, toolUseId, { role: raw, caller, input, lead, helper, maxLeads, brief } = {}) => {
       const role = raw === undefined ? undefined : String(raw).toLowerCase();
       mkdirSync(dir, { recursive: true });
       expire();
@@ -2586,7 +2586,7 @@ export function slotsFor(dir, session, now = Date.now(), rawSession = session, l
         const projectSlots = others.filter(slot => (mark(slot, "project-") ?? project) === project);
         let refused;
         if (projectSlots.length >= cap) refused = "project";
-        else if (role === "sage:lead" && projectSlots.filter(slot => !mark(slot, "role-") || mark(slot, "role-") === "sage_lead").length >= 3) refused = "leads";
+        else if (role === "sage:lead" && projectSlots.filter(slot => !mark(slot, "role-") || mark(slot, "role-") === "sage_lead").length >= maxLeads) refused = "leads";
         else if (caller !== undefined && others.filter(slot => (mark(slot, "scope-") ?? scope) === scope && (mark(slot, "caller-") ?? owner) === owner).length >= LEAD_HELPERS) refused = "children";
         if (refused) { free(mine); return { refused, ...counts(project) }; }
         add(mine, "ok");
