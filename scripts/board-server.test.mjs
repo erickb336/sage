@@ -39,16 +39,21 @@ async function freePort() {
   return port;
 }
 
+// Guards against a hang, not time checks. An event wait passes the server's last read after a new watch (15 s), because a
+// write that the file watcher loses reaches the board only through those reads (T348). A request has a longer guard: a
+// password check is scrypt work, and on a starved machine one check took over 30 s and still ended.
+const EVENT_GUARD = 30_000, REQUEST_GUARD = 120_000;
+
 // A sample password only, hashed once for the file: no test uses a real password.
 const PASSWORD = "sample board pass 01", RECORD = await hashPassword(PASSWORD);
 
 /** A board server on a free port. password: null is a board with no password set yet (T229). */
-async function fixture(t, { missing = false, allowedHosts = [], password = RECORD, id, clock, before } = {}) {
+async function fixture(t, { missing = false, allowedHosts = [], password = RECORD, id, clock, before, settleReads } = {}) {
   const dir = mkdtempSync(join(tmpdir(), "sage-board-server-")), root = join(dir, "source"), port = await freePort();
   if (!missing) populate(root);
   before?.(join(root, "project-abcdef")); // a change of the logbook before the first start
   const sources = [{ id: "sample", path: root, label: "Sample source" }];
-  const server = createBoardServer({ sources, ...(password ? { password } : {}), port, allowedHosts, id, ...(clock ? { clock } : {}) });
+  const server = createBoardServer({ sources, ...(password ? { password } : {}), port, allowedHosts, id, ...(clock ? { clock } : {}), ...(settleReads ? { settleReads } : {}) });
   t.after(async () => { await server.close(); rmSync(dir, { recursive: true, force: true }); });
   await server.start();
   return { dir, root, project: join(root, "project-abcdef"), port, sources, server, authorization: `Basic ${Buffer.from(`sage:${PASSWORD}`).toString("base64")}` };
@@ -61,8 +66,16 @@ function read(f, path = "/", { method = "GET", headers = {}, rawHeaders } = {}) 
       response.on("end", () => accept({ status: response.statusCode, headers: response.headers, body }));
       response.on("error", reject);
     });
-    req.on("error", reject); req.setTimeout(10_000, () => req.destroy(new Error("board request did not finish"))); req.end();
+    req.on("error", reject); req.setTimeout(REQUEST_GUARD, () => req.destroy(new Error("board request did not finish"))); req.end();
   });
+}
+
+// With no reads after a new watch, only a watcher event updates the board. On macOS each new watch restarts the file
+// event stream, and a write in that time gives no event (T348), so the write repeats until the board shows it.
+async function keepWriting(write, seen) {
+  write();
+  const again = setInterval(write, 200);
+  try { return await seen; } finally { clearInterval(again); }
 }
 
 function events(f, path = "/?events=1") {
@@ -96,8 +109,7 @@ function events(f, path = "/?events=1") {
       if (ended) return Promise.reject(new Error("event stream is closed"));
       return new Promise((accept, reject) => {
         const waiter = { accept, reject, predicate, timer: null };
-        // A generous deadlock guard, not a latency or performance assertion.
-        waiter.timer = setTimeout(() => { waiters.delete(waiter); reject(new Error("no matching board event")); }, 10_000);
+        waiter.timer = setTimeout(() => { waiters.delete(waiter); reject(new Error("no matching board event")); }, EVENT_GUARD);
         waiters.add(waiter);
       });
     },
@@ -178,7 +190,7 @@ test("R1069-2: the checkout's full path is a search term only on the Mac's own p
   const loopback = `127.0.0.1:${f.port}`;
   // The board reads the logbooks again on a file event; wait until the Mac's page names the checkout's folder.
   let mac;
-  for (let i = 0; i < 100 && !(mac = await read(f, "/", { rawHeaders: ["Host", loopback] })).body.includes("folder sample-checkout-folder"); i++) await new Promise(wake => setTimeout(wake, 50));
+  for (let i = 0; i < 600 && !(mac = await read(f, "/", { rawHeaders: ["Host", loopback] })).body.includes("folder sample-checkout-folder"); i++) await new Promise(wake => setTimeout(wake, 50));
   assert.ok(mac.body.includes(checkout), "the Mac's own page can search by the path");
   for (const raw of [["Host", loopback, "X-Forwarded-For", "100.64.0.7", "Authorization", f.authorization], ["Host", "sample.tailnet.ts.net", "Authorization", f.authorization]]) {
     const remote = await read(f, "/", { rawHeaders: raw });
@@ -252,7 +264,7 @@ test("T308: the Agents page is a route with the same sign-in, CSP and browser ch
   writeFileSync(join(f.project, "runs.tsv"), `${HEADERS.runs.replaceAll(" ", "\t")}\nR1\tT1\tqa\t0\t\t\trunning\t\t\t${new Date(Date.now() - 60_000).toISOString()}\t\n`);
   slot(f.root, "slot-1", ["project-project", "role-sage_qa", "run-R1"]);
   let mac;
-  for (let i = 0; i < 100 && !(mac = await read(f, "/agents", { rawHeaders: ["Host", loopback] })).body.includes("Sample first task"); i++) await new Promise(wake => setTimeout(wake, 50));
+  for (let i = 0; i < 600 && !(mac = await read(f, "/agents", { rawHeaders: ["Host", loopback] })).body.includes("Sample first task"); i++) await new Promise(wake => setTimeout(wake, 50));
   assert.equal(mac.status, 200); assert.equal(mac.headers["www-authenticate"], undefined, "no sign-in on the Mac");
   assert.match(mac.body, /<a href="\/agents" aria-current="page">Agents \(1\)<\/a>/); assert.match(mac.body, /<span class="role">qa<\/span><span class="id">R1<\/span>/);
   assert.match(mac.body, /new EventSource\("\/agents\?events=1"\)/);
@@ -309,7 +321,8 @@ test("board event streams deliver initial and atomic file updates for the select
   const updatedTask = await task.next(p => p.html.includes("Sample replaced title") && !p.stale);
   assert.ok(Number(updated.revision) > Number(first.revision)); assert.match(updatedTask.html, /class="detail"/);
   const reconnect = events(f); t.after(() => reconnect.close());
-  const snapshot = await reconnect.next(); assert.equal(snapshot.revision, updated.revision); assert.match(snapshot.html, /Sample replaced title/);
+  // A read after a new watch can add a revision here, so the snapshot has this revision or a later one.
+  const snapshot = await reconnect.next(); assert.ok(Number(snapshot.revision) >= Number(updated.revision)); assert.match(snapshot.html, /Sample replaced title/);
 });
 
 test("T305 R1023-3: a file event that does not change the page sends nothing; the next change sends the new page", async t => {
@@ -340,16 +353,28 @@ test("board event streams keep the last valid content while an incomplete write 
 test("R1506-F1: a table written in place after an earlier rename onto it still updates the board, on Linux too", async t => {
   // Node's recursive fs.watch on Linux (24.21) watched each file's inode. After the rename, the path's watch stayed on the
   // old inode and its folder's event named a known file, so the in-place writes below sent nothing (CI run 40140060375).
-  const f = await fixture(t), stream = events(f); t.after(() => stream.close());
+  // No reads after a new watch: this test proves that a watcher event alone reaches the board (T348).
+  const f = await fixture(t, { settleReads: [] }), stream = events(f); t.after(() => stream.close());
   assert.equal((await stream.next()).stale, false);
   const target = join(f.project, "tasks.tsv"), temporary = join(f.project, "tasks.pending");
-  writeFileSync(temporary, tasks(row("Sample renamed title"))); renameSync(temporary, target);
-  await stream.next(p => !p.stale && p.html.includes("Sample renamed title"));
-  writeFileSync(target, "Sample invalid table header\nSample incomplete write\n");
-  const stale = await stream.next(p => p.stale);
+  const renamed = () => { writeFileSync(temporary, tasks(row("Sample renamed title"))); renameSync(temporary, target); };
+  await keepWriting(renamed, stream.next(p => !p.stale && p.html.includes("Sample renamed title")));
+  const stale = await keepWriting(() => writeFileSync(target, "Sample invalid table header\nSample incomplete write\n"), stream.next(p => p.stale));
   assert.match(stale.html, /Sample renamed title/); assert.doesNotMatch(stale.html, /Sample incomplete write/);
-  writeFileSync(target, tasks(row("Sample written in place")));
-  await stream.next(p => !p.stale && p.html.includes("Sample written in place"));
+  await keepWriting(() => writeFileSync(target, tasks(row("Sample written in place"))), stream.next(p => !p.stale && p.html.includes("Sample written in place")));
+});
+
+test("T348: a write that no watcher reports still reaches the board through the reads after a new watch", async t => {
+  // On macOS a write while a new watch restarts the file event stream gives no event at all. These watchers give none.
+  const original = fs.watch;
+  fs.watch = () => Object.assign(new EventEmitter(), { close() {} });
+  syncBuiltinESMExports();
+  let f;
+  try { f = await fixture(t); } finally { fs.watch = original; syncBuiltinESMExports(); }
+  const stream = events(f); t.after(() => stream.close());
+  await stream.next(p => !p.stale);
+  writeFileSync(join(f.project, "tasks.tsv"), tasks(row("Sample write with no event")));
+  await stream.next(p => p.html.includes("Sample write with no event"));
 });
 
 test("T314 R1042-2: a bad name or archived value in a logbook's config.json is a warning: the board stays live and shows the warning", async t => {
@@ -421,7 +446,8 @@ test("a parent rename that names only the destination refreshes the missing boar
   };
   syncBuiltinESMExports();
   let f;
-  try { f = await fixture(t); } finally { fs.watch = original; syncBuiltinESMExports(); }
+  // No reads after a new watch: only the callback below can update the board.
+  try { f = await fixture(t, { settleReads: [] }); } finally { fs.watch = original; syncBuiltinESMExports(); }
   const stream = events(f); t.after(() => stream.close());
   await stream.next(p => !p.stale);
   renameSync(f.root, join(f.dir, "renamed-source"));
@@ -445,7 +471,7 @@ function programs(project, goal = "Sample goal of PG1.", pilot = "Sample pilot")
 const programKey = id => Buffer.from(`sample/project-abcdef/${id}`).toString("base64url");
 async function until(f, path, text) {
   let page;
-  for (let i = 0; i < 100 && !(page = await read(f, path)).body.includes(text); i++) await new Promise(wake => setTimeout(wake, 50));
+  for (let i = 0; i < 600 && !(page = await read(f, path)).body.includes(text); i++) await new Promise(wake => setTimeout(wake, 50));
   return page;
 }
 

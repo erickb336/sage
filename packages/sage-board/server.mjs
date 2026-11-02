@@ -13,6 +13,11 @@ const unavailable = [{ source: "board", message: "The board snapshot is unavaila
 const TOO_LARGE = "The page that you opened is too large to show (over 8 MB), so the board shows this page instead.";
 const NO_STREAM = " This page does not update: reload the address to try again.";
 const own = (object, name) => Object.hasOwn(object, name);
+// The times of the reads after a new watch, in ms. On macOS libuv keeps one file event stream for all watches of a process,
+// and each new watch restarts it on another thread, so a write in that time gives no event for any watch (T348). The restart
+// took under 50 ms on a loaded machine and over 1 s on a starved one, so one read is not enough. This is not polling: the
+// reads end, and only a new watch starts them.
+const SETTLE_READS = [250, 1000, 3000, 7000, 15000];
 
 function authority(value) {
   if (typeof value !== "string" || value.length > 255 || !/^[a-zA-Z0-9.-]+(?::[1-9]\d{0,4})?$/.test(value)) throw new TypeError("invalid allowed board host");
@@ -95,7 +100,7 @@ const OFF = "Access from outside this Mac is off until the owner sets a board pa
  * a response on the Mac carries the X-Sage-Board header: the id, this process's pid and the time the listener started,
  * so the board command can tell which board answers on the port.
  */
-export function createBoardServer({ sources, password, port = 43123, allowedHosts = [], id, clock = () => new Date().toISOString() } = {}) {
+export function createBoardServer({ sources, password, port = 43123, allowedHosts = [], id, clock = () => new Date().toISOString(), settleReads = SETTLE_READS } = {}) {
   if (!Number.isSafeInteger(port) || port < 1024 || port > 65535) throw new TypeError("board port must be an integer from 1024 through 65535");
   if (typeof clock !== "function") throw new TypeError("the board clock must be a function that gives an ISO time");
   if (password !== undefined && !validPasswordRecord(password)) throw new TypeError("the board password must be a record from hashPassword");
@@ -242,8 +247,15 @@ export function createBoardServer({ sources, password, port = 43123, allowedHost
     return plans;
   }
 
+  function settle(step = 0) {
+    clearTimeout(settleTimer);
+    if (step === settleReads.length) return;
+    settleTimer = setTimeout(() => { schedule(); settle(step + 1); }, settleReads[step] - (settleReads[step - 1] ?? 0));
+    settleTimer.unref();
+  }
+
   function reconcileWatchers() {
-    const plans = watchPlans(), first = revision === 0;
+    const plans = watchPlans();
     let added = false;
     for (const [key, item] of watchers) if (!plans.has(key) || plans.get(key).identity !== item.plan.identity) { item.watcher.close(); watchers.delete(key); }
     for (const [key] of watchErrors) if (!plans.has(key)) watchErrors.delete(key);
@@ -265,9 +277,9 @@ export function createBoardServer({ sources, password, port = 43123, allowedHost
         watchers.set(key, item); added = true;
       } catch { watchErrors.set(key, { source: "board", message: "File watching is unavailable; the displayed board may be stale." }); }
     }
-    // A new watcher misses the changes made while it starts, for example the files of a logbook just created. One more
-    // read, once it has settled, sees them. This is one read per new watcher, not polling.
-    if (added && !first) { clearTimeout(settleTimer); settleTimer = setTimeout(schedule, 250); settleTimer.unref(); }
+    // A new watcher misses the changes made while it starts, for example the files of a logbook just created, and on
+    // macOS the other watchers miss them too. The reads after it see them.
+    if (added) settle();
   }
 
   function refresh() {
@@ -374,7 +386,7 @@ export function createBoardServer({ sources, password, port = 43123, allowedHost
       if (closePromise) return closePromise;
       closed = true;
       for (const { watcher } of watchers.values()) watcher.close(); watchers.clear();
-      clearTimeout(refreshTimer); clearTimeout(boundaryTimer); // a pending start's own timer ends that start
+      clearTimeout(refreshTimer); clearTimeout(boundaryTimer); clearTimeout(settleTimer); // a pending start's own timer ends that start
       for (const client of clients) { client.response.destroy(); removeClient(client); }
       closePromise = (async () => {
         if (startPromise) await startPromise.catch(() => {});
