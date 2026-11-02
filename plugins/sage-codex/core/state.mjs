@@ -1111,21 +1111,24 @@ const movedOf = (decisions, task, run, severity = "") => decisions.filter((d) =>
 
 /**
  * Does triage clear this findings or qa-fail verdict (T294)? Its run links it to its findings: at least one, and each is
- * dismissed or moved. A closed finding does not clear it: a new head confirms a fix, not this one. With no link, the
- * verdict stays a block. A cleared verdict only stops refusing: it never counts toward a clean cycle.
+ * moved, or dismissed by a triage that still says so, below high. A row back on the task under a moved key counts as that
+ * finding. A closed finding does not clear it: a new head confirms a fix, not this one. A high finding needs a new head
+ * too. With no link, the verdict stays a block. A cleared verdict only stops refusing: it never counts toward a clean cycle.
  */
 function cleared(verdict, task, findings, decisions) {
   if (!FOUND.includes(verdict.kind) || !verdict.run) return false;
-  const stayed = findings.filter((f) => f.task === task.id && ofRun(f, verdict.run));
-  return stayed.every((f) => f.status === "dismissed") && stayed.length + movedOf(decisions, task, verdict.run).length > 0;
+  const moved = movedOf(decisions, task, verdict.run), keys = moved.map((d) => d.decision.split(" ")[0]);
+  const stayed = findings.filter((f) => f.task === task.id && (ofRun(f, verdict.run) || keys.includes(f.key)));
+  return stayed.every((f) => f.status === "dismissed" && f.triage === "dismiss" && f.severity !== "high") && stayed.length + moved.length > 0;
 }
 
 /**
  * Does a kept report back this review or QA verdict on a task with a build block (T483)? The run that --run names is a
  * run of the task, of a role that gives the kind, that ended done, with a kept report that reads, on the commit of --sha
  * when the report names one. A clean report backs only a clean kind. A report with a medium or high finding backs findings
- * or qa-fail, and a clean kind after triage: each of its medium and high findings is recorded on the task for the run,
- * and none of them is open. A check verdict and an investigation's evidence-clean need no run here. The reason, or undefined.
+ * or qa-fail, and a clean kind after triage, when each of its medium and high findings is recorded on the task for the run
+ * at its severity or above (T294: triage can clear a problem verdict, so a part of its report must not); for a clean kind,
+ * none of them is open. A check verdict and an investigation's evidence-clean need no run here. The reason, or undefined.
  */
 function backingProblem(dir, task, kind, opt) {
   const roles = Object.keys(BACKS).filter((role) => BACKS[role].includes(kind));
@@ -1158,20 +1161,20 @@ function backingProblem(dir, task, kind, opt) {
   const other = [kept.sha, head].find((s) => s && s !== sha);
   if (other) return `${run.id}'s report is on ${other.slice(0, 7)}, not on ${sha.slice(0, 7)}: a verdict names the commit that its helper reviewed. Record it on ${other}, or review ${sha.slice(0, 7)} under a new run.`;
   const said = `RESULT ${report.result}${report.severities.length ? ` with ${report.severities.join(", ")} findings` : ""}`;
-  const clean = cleanReport(report), [cleanKind, problemKind] = BACKS[run.role];
-  if (FOUND.includes(kind)) return clean ? `${run.id}'s report is clean (${said}), so it backs only ${cleanKind}.` : undefined;
-  if (clean) return undefined;
+  const clean = cleanReport(report), [cleanKind, problemKind] = BACKS[run.role], found = FOUND.includes(kind);
+  if (clean) return found ? `${run.id}'s report is clean (${said}), so it backs only ${cleanKind}.` : undefined;
   // A report with findings backs a clean verdict after the chief's triage: the cycles rule (T483 decision).
   const rows = read(dir, "findings").filter((f) => f.task === task.id && ofRun(f, run.id) && f.severity !== "low");
   const open = rows.filter((f) => f.status === "open");
-  if (open.length) return `${run.id}'s report has findings (${said}), and ${open.map((f) => `${f.key} (${f.severity})`).join(", ")} ${open.length === 1 ? "is" : "are"} still open: so it backs ${problemKind}, or ${cleanKind} after each one is dismissed with a reason, moved or closed.`;
+  if (open.length && !found) return `${run.id}'s report has findings (${said}), and ${open.map((f) => `${f.key} (${f.severity})`).join(", ")} ${open.length === 1 ? "is" : "are"} still open: so it backs ${problemKind}, or ${cleanKind} after each one is dismissed with a reason, moved or closed.`;
   // A finding that moved to a follow-up task left its run behind: its move's decision names the run and the severity.
   const moved = movedOf(read(dir, "decisions"), task, run.id, "medium");
   const level = { medium: 2, high: 3 }, down = (a, b) => b - a;
   const held = [...rows.map((f) => level[f.severity]), ...moved.map(() => level.medium)].sort(down);
   const needed = report.severities.filter((s) => s !== "low").map((s) => level[s]).sort(down);
-  if (needed.some((n, k) => !(held[k] >= n))) return `${run.id}'s report has ${needed.length} medium or high finding${needed.length === 1 ? "" : "s"} (${said}), and ${task.id} holds ${held.length} of ${run.id} at that severity or above: so it backs ${problemKind}. For ${cleanKind}, record each one first (sage finding add ${task.id} --source ${run.role} --run ${run.id} --class <class> --severity <its severity> --summary "<the problem>"), then dismiss it with a reason, move it or close it.`;
-  return undefined;
+  if (!needed.some((n, k) => !(held[k] >= n))) return undefined;
+  const record = `record each one first (sage finding add ${task.id} --source ${run.role} --run ${run.id} --class <class> --severity <its severity> --summary "<the problem>")`;
+  return `${run.id}'s report has ${needed.length} medium or high finding${needed.length === 1 ? "" : "s"} (${said}), and ${task.id} holds ${held.length} of ${run.id} at that severity or above: ${found ? `${record}, then record ${kind}.` : `so it backs ${problemKind}. For ${cleanKind}, ${record}, then dismiss it with a reason, move it or close it.`}`;
 }
 
 /** The verdict command's backing rule, read only, for a hook's early refusal: the reason, or undefined (also with no such task). */
@@ -3140,6 +3143,8 @@ function act(cmd, pos, opt, dir, env, skip, project) {
       if (sub === "triage") {
         const t = need(more[1], "fix, dismiss or ask");
         if (!["fix", "dismiss", "ask"].includes(t)) refuse("triage is fix, dismiss or ask");
+        // A close is a fix, and a dismissal would hide it from the verdict that it must keep blocking (T294).
+        if (t === "dismiss" && f.status === "closed") refuse(`${f.key} is closed: a closed finding is a fix, so it is not dismissed. A new head confirms it.`);
         // A low fix key of the round joins the next round while a medium or high finding of the task is open, in any
         // triage and any state, so it is not dismissed then (F-T301-59, F-T301-66).
         const big = t === "dismiss" && f.status === "open" && f.severity === "low" && roundKeys(taskOf(dir, id).task).includes(f.key)

@@ -10,7 +10,7 @@ import { basename, dirname, join } from "node:path";
 import { test } from "node:test";
 import { fileURLToPath } from "node:url";
 import { keepReport } from "../plugins/sage/skills/sage/sage.mjs";
-import { BACKER, backed, reportFor } from "./verdict-backing.mjs";
+import { BACKER, backed, linkFinding, reportFor } from "./verdict-backing.mjs";
 import { TABLES } from "../packages/sage-core/logbook-fields.mjs";
 
 const LIB = new URL("../plugins/sage/skills/sage/sage.mjs", import.meta.url).href;
@@ -74,7 +74,7 @@ function store(home = mkdtempSync(join(tmpdir(), "sage-home-")), name = "sage-pr
     );
   // A review or QA verdict of a story that ok() records gets its backing run first (T483); a test of the backing rule passes --run itself.
   const cli = (...args) => { const r = run(...args); if (r.status) throw Error(r.stderr); return r.stdout.trim(); };
-  const back = (args) => backed(args, { cli, keep: (fields) => keepReport(project, fields, env()) });
+  const back = (args) => backed(args, { cli, keep: (fields) => keepReport(project, fields, env()), link: (task, id) => linkFinding(cli("init").replace(/^\S+ /, ""), task, id) });
   const ok = (...args) => {
     const r = run(...back(args));
     assert.equal(r.status, 0, `sage ${args.join(" ")} failed: ${r.stderr}`);
@@ -1071,10 +1071,16 @@ test("T294: a verdict with no link to its findings keeps blocking, and a checks-
     return s;
   };
 
-  // The finding names another run than the verdict: this helper's finding names the first code-reviewer run, and the verdict a new one.
+  // The verdict tool asks for the link, so only a row older than that rule lacks it: this sets a finding's run cell as such a row has it.
+  const relink = (s, key, run) => {
+    const column = readFileSync(join(s.dir, "findings.tsv"), "utf8").split("\n")[0].split("\t").indexOf("run");
+    byHand(s.dir, "findings", 1, key, (cells) => cells.with(column, run));
+  };
+
+  // The finding names another run than the verdict.
   const otherRun = cycled();
-  finding(otherRun, "T1", "--source", "code-reviewer", "--severity", "medium", "--summary", "of another run");
-  otherRun.ok("verdict", "T1", "--sha", SHA, "--kind", "findings");
+  failedReview(otherRun, "T1", "findings");
+  relink(otherRun, "F-T1-1", "R1");
   otherRun.ok("finding", "triage", "T1", "F-T1-1", "dismiss", "--reason", "not a real problem");
   blocked(otherRun, "findings");
 
@@ -1090,11 +1096,8 @@ test("T294: a verdict with no link to its findings keeps blocking, and a checks-
 
   // The moved finding named no run, so its move's decision names none.
   const unnamed = cycled();
-  const run = unnamed.ok("run", "add", "T1", "--role", "code-reviewer").split(" ")[0];
-  unnamed.keep({ task: "T1", run, role: "code-reviewer", sha: SHA, text: reportFor("findings") });
-  unnamed.ok("run", "done", run, "--status", "done", "--tokens", "1");
-  unnamed.ok("finding", "add", "T1", "--source", "sage", "--severity", "medium", "--summary", "no run");
-  unnamed.ok("verdict", "T1", "--sha", SHA, "--kind", "findings", "--run", run);
+  failedReview(unnamed, "T1", "findings");
+  relink(unnamed, "F-T1-1", "");
   unnamed.ok("finding", "move", "T1", "F-T1-1", "--to", "Later");
   blocked(unnamed, "findings");
 
@@ -1102,9 +1105,10 @@ test("T294: a verdict with no link to its findings keeps blocking, and a checks-
   const two = cycled();
   failedReview(two, "T1", "findings");
   two.ok("finding", "move", "T1", "F-T1-1", "--to", "Later");
-  finding(two, "T1", "--source", "qa", "--severity", "medium", "--summary", "of another run");
-  two.ok("verdict", "T1", "--sha", SHA, "--kind", "qa-fail");
-  two.ok("finding", "triage", "T1", rows(two.dir, "findings").find((f) => f.task === "T1").key, "dismiss", "--reason", "not a real problem");
+  failedReview(two, "T1", "qa-fail");
+  const left = rows(two.dir, "findings").find((f) => f.task === "T1").key;
+  relink(two, left, "R1");
+  two.ok("finding", "triage", "T1", left, "dismiss", "--reason", "not a real problem");
   blocked(two, "qa-fail");
 
   const checks = cycled();
@@ -1131,6 +1135,86 @@ test("T294: a cleared verdict alone never gives a clean cycle", () => {
   for (const clean of ["security-clean", "qa-pass"]) s.ok("verdict", "T3", "--sha", other, "--kind", clean, "--cycle", "2");
   s.ok("finding", "triage", "T3", "F-T3-1", "dismiss", "--reason", "not a real problem");
   assert.match(s.no("merge-check", "--sha", other), /^sage: T3: 1 of 2 clean cycles on this SHA\. /);
+});
+
+/** A head with its full clean cycle, as in R1035-3: the review of it that found problems comes after, so nothing reviews the head later. */
+function cleanHead() {
+  const s = store();
+  s.ok("task", "add", "--priority", "P2", "--title", "t", "--size", "small");
+  toReviewing(s, "T1");
+  for (const clean of ["checks-pass", "review-clean", "qa-pass"]) s.ok("verdict", "T1", "--sha", SHA, "--kind", clean);
+  return s;
+}
+const FAILED = "sage: T1: cycle 1 found problems on this SHA (qa-fail). Repair, then review the new SHA.";
+const MERGES = "T1 may merge: 1 clean cycle on this SHA";
+
+for (const [shape, report] of [["left out", "\n- K1 high data loss\n- K2 medium a wrong label"], ["recorded one level lower", "\n- K1 high data loss"]]) {
+  test(`T294 F-T294-2: a qa-fail verdict is refused when the report's top finding is ${shape}, so moving the part on record clears nothing`, () => {
+    const s = cleanHead();
+    const run = s.ok("run", "add", "T1", "--role", "qa").split(" ")[0];
+    s.keep({ task: "T1", run, role: "qa", sha: SHA, text: reportFor("qa-fail", { findings: report }) });
+    s.ok("run", "done", run, "--status", "done", "--tokens", "1");
+    const add = (severity) => s.ok("finding", "add", "T1", "--source", "qa", "--severity", severity, "--summary", "a problem", "--run", run, "--class", "other").split(" ")[0];
+    const verdict = ["verdict", "T1", "--sha", SHA, "--kind", "qa-fail", "--run", run];
+    const part = add("medium");
+    const needed = report.includes("K2") ? "2 medium or high findings" : "1 medium or high finding";
+    const said = report.includes("K2") ? "high, medium" : "high";
+    assert.equal(s.no(...verdict), `sage: ${run}'s report has ${needed} (RESULT FAIL with ${said} findings), and T1 holds 1 of ${run} at that severity or above: record each one first (sage finding add T1 --source qa --run ${run} --class <class> --severity <its severity> --summary "<the problem>"), then record qa-fail. Nothing changed.`);
+    assert.deepEqual(rows(s.dir, "ledger").filter((r) => r.kind === "qa-fail"), [], "the refused verdict wrote nothing");
+
+    // With the top finding on record, the verdict stands, and the high finding that triage cannot clear keeps the head from a merge.
+    const top = add("high");
+    assert.match(s.ok(...verdict), /^T1 qa-fail/);
+    s.ok("finding", "move", "T1", part, "--to", "Later");
+    s.ok("finding", "triage", "T1", top, "fix");
+    s.ok("finding", "close", "T1", top);
+    assert.equal(s.no("merge-check", "--sha", SHA), FAILED);
+  });
+}
+
+test("T294 F-T294-3: a dismissed high finding does not clear its verdict, and a dismissed medium beside it does not either", () => {
+  const s = cleanHead();
+  const run = s.ok("run", "add", "T1", "--role", "qa").split(" ")[0];
+  s.keep({ task: "T1", run, role: "qa", sha: SHA, text: reportFor("qa-fail", { findings: "\n- K1 high data loss\n- K2 medium a wrong label" }) });
+  s.ok("run", "done", run, "--status", "done", "--tokens", "1");
+  for (const severity of ["high", "medium"]) s.ok("finding", "add", "T1", "--source", "qa", "--severity", severity, "--summary", "a problem", "--run", run, "--class", "other");
+  s.ok("verdict", "T1", "--sha", SHA, "--kind", "qa-fail", "--run", run);
+  for (const key of ["F-T1-1", "F-T1-2"]) s.ok("finding", "triage", "T1", key, "dismiss", "--reason", "not a real problem");
+  assert.equal(s.no("merge-check", "--sha", SHA), FAILED);
+});
+
+test("T294 F-T294-4: a finding dismissed and then triaged fix keeps the block", () => {
+  const retriaged = cleanHead();
+  failedReview(retriaged, "T1", "qa-fail");
+  retriaged.ok("finding", "triage", "T1", "F-T1-1", "dismiss", "--reason", "not a real problem");
+  assert.equal(retriaged.ok("merge-check", "--sha", SHA), MERGES, "dismissed, it clears");
+  retriaged.ok("finding", "triage", "T1", "F-T1-1", "fix");
+  assert.equal(retriaged.no("merge-check", "--sha", SHA), FAILED);
+});
+
+test("T294 F-T294-4: a closed finding is not dismissed, so its fix keeps the block", () => {
+  const closed = cleanHead();
+  failedReview(closed, "T1", "qa-fail");
+  closed.ok("finding", "triage", "T1", "F-T1-1", "fix");
+  closed.ok("finding", "close", "T1", "F-T1-1");
+  assert.equal(closed.no("finding", "triage", "T1", "F-T1-1", "dismiss", "--reason", "not a real problem"), "sage: F-T1-1 is closed: a closed finding is a fix, so it is not dismissed. A new head confirms it.");
+  assert.equal(rows(closed.dir, "findings")[0].status, "closed");
+  assert.equal(closed.no("merge-check", "--sha", SHA), FAILED);
+});
+
+test("T294 F-T294-5: a moved finding that comes back on its task under its old key keeps the block, unless triage dismisses it", () => {
+  const s = cleanHead();
+  failedReview(s, "T1", "qa-fail");
+  s.ok("finding", "move", "T1", "F-T1-1", "--to", "Later");
+  assert.equal(s.ok("merge-check", "--sha", SHA), MERGES);
+  const back = () => s.ok("finding", "add", "T1", "--key", "F-T1-1", "--source", "sage", "--severity", "medium", "--summary", "it came back");
+  back();
+  s.ok("finding", "triage", "T1", "F-T1-1", "fix");
+  s.ok("finding", "close", "T1", "F-T1-1");
+  assert.equal(s.no("merge-check", "--sha", SHA), FAILED, "closed as a fix, it waits for a new head");
+  back();
+  s.ok("finding", "triage", "T1", "F-T1-1", "dismiss", "--reason", "not a real problem");
+  assert.equal(s.ok("merge-check", "--sha", SHA), MERGES);
 });
 
 /** The refusal of finding move for a fix key of the round (F-T301-65). */
@@ -2017,7 +2101,8 @@ test("F-R44-2: a refusal lists every failing task, marks an abandoned one, which
   s.ok("verdict", "T2", "--sha", SHA, "--kind", "checks-pass", "--pr", "4");
   finding(s, "T3", "--source", "qa", "--severity", "medium", "--summary", "slow");
   s.ok("verdict", "T3", "--sha", SHA, "--kind", "findings");
-  s.ok("finding", "triage", "T3", "F-T3-1", "dismiss", "--reason", "abandoned");
+  s.ok("finding", "triage", "T3", "F-T3-1", "fix");
+  s.ok("finding", "close", "T3", "F-T3-1");
   assert.equal(s.no("merge-check", "--sha", SHA, "--cycles", "1"), `sage: 3 tasks have verdicts on a1b2c3d, and each must pass; 2 fail. ${s.dir} T2: 0 of 1 clean cycles on this SHA; never recorded: review-clean, qa-pass. Run the next cycle of its reviews on this SHA and record each verdict. ${s.dir} T3 (abandoned): cycle 1 found problems on this SHA (findings). Repair, then review the new SHA. To merge, make each one pass, or push a new commit and record its verdicts under the live tasks only.`);
   const next = "0123456789abcdef0123456789abcdef01234567"; // the new commit
   clean("T1", next);
@@ -2347,7 +2432,8 @@ test("clean-rule: a cycle is clean when no medium or high finding is open, and e
   finding(s, "T2", "--source", "code-reviewer", "--severity", "low", "--summary", "a typo");
   assert.equal(s.ok("verdict", "T2", "--sha", other, "--kind", "findings"), "T2 findings · 0123456 · cycle 1");
   assert.match(s.no("merge-check", "--sha", other, "--cycles", "1"), /^sage: T2 has open findings: F-T2-1, F-T2-2\./);
-  s.ok("finding", "triage", "T2", "F-T2-1", "dismiss", "--reason", "by design");
+  s.ok("finding", "triage", "T2", "F-T2-1", "fix");
+  s.ok("finding", "close", "T2", "F-T2-1");
   s.ok("finding", "triage", "T2", "F-T2-2", "dismiss", "--reason", "moved to T9");
   assert.equal(s.no("merge-check", "--sha", other, "--cycles", "1"), "sage: T2: cycle 1 found problems on this SHA (findings). Repair, then review the new SHA.", "a cycle with a medium finding stays not clean");
 });

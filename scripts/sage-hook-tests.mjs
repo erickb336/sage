@@ -7289,12 +7289,13 @@ test("T482 F2, T483: the sage's review or QA verdict needs a helper's kept repor
   const silent = leadAdd(s, "qa");
   s.sage("run", "done", silent, "--status", "done", "--tokens", "1");
   assert.match(chief("qa-pass", silent) ?? "", new RegExp(`^sage: ${silent} has no kept report: .*${early.source}`), "a run with no kept report");
+  s.sage("finding", "add", "T1", "--source", "code-reviewer", "--severity", "medium", "--summary", "a sage note", "--run", findings, "--class", "other");
   assert.match(chief("findings", findings) ?? "", /this lead's code-reviewer helpers reported medium or high findings on T1/, "the kept report backs findings, and the lead records its findings first (R1816-2)");
   assert.equal(chief("qa-pass", "R4"), undefined, "R4's kept PASS backs qa-pass");
   assert.equal(chief("checks-pass"), undefined, "the checks verdict stays the sage's");
   s.sage("run", "done", "R1", "--status", "blocked");
   assert.equal(chief("findings", findings), undefined, "with no running lead run, the kept report backs findings");
-  assert.match(chief("review-clean", findings) ?? "", /so it backs findings\. For review-clean, record each one first/, "with no running lead run too, the report decides (R1795-3)");
+  assert.match(chief("review-clean", findings) ?? "", /so it backs findings, or review-clean after each one is dismissed with a reason, moved or closed/, "with no running lead run too, the report decides (R1795-3)");
 });
 
 // T482 repair round 1 (R1774): the findings of R1762, R1763 and R1764.
@@ -7494,6 +7495,7 @@ test("T483 R1956-1: a wrapped form of the sage's verdict command is refused, so 
   const rest = `T1 --kind findings --sha ${s.head()} --cycle 1 --pr 5 --run ${findings} --project ${realpathSync(s.dir)}`;
   const line = /^sage: the sage records a verdict as one plain command of the state tool, .*This command names a sage\.mjs/;
   // The plain form is read, and the gap rule refuses it: the lead records its helper's finding first (R1816-2).
+  s.sage("finding", "add", "T1", "--source", "code-reviewer", "--severity", "medium", "--summary", "a sage note", "--run", findings, "--class", "other");
   assert.match(denied(s.send(bash(`node ${TOOL} verdict ${rest}`, s.dir))) ?? "", /this lead's code-reviewer helpers reported medium or high findings on T1/, "the plain form");
   // Each wrapped form would skip that rule, so the hook refuses it (the strings are test input; no shell runs them).
   for (const command of [`env node ${TOOL} verdict ${rest}`, `bash -c 'node ${TOOL} verdict ${rest}'`, `sh -c "node '${TOOL}' verdict ${rest}"`, `nice node ${TOOL} verdict ${rest}`,
