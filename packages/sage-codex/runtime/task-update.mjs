@@ -15,13 +15,14 @@ export function updateNativeTask(input, context, options) {
     if (error.code) throw error;
     throw new TaskUpdateError("owner-required");
   }
-  const { tool, project, owner, env } = fixed;
+  const { tool, project, owner, env, native } = fixed;
   const [journalProject, session, epoch] = JSON.parse(owner);
   const update = (digest, disruptive) => ({ project: journalProject, session, epoch, request: input.request,
     task: input.task, digest, disruptive });
   let current;
   settleBeforeDecide(options);
   return tool.updateRequestedTask({ ...input, project, owner }, env, {
+    native,
     history(digest, proposal, reference) {
       if (reference.owner !== owner || reference.request !== input.request || reference.task !== input.task)
         throw new TaskUpdateError("invalid-state");

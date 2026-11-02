@@ -428,10 +428,11 @@ function create(rec, temp, env) {
 }
 
 /** Records the open pull request's number in the logbook, when it has none or another, through the state tool (which takes the lock itself). */
-function remember({ project, t }, { out, number }, env) {
+export function remember({ project, t }, { out, number }, env) {
   if (t.pr === number) return out;
   try {
-    sage(["task", t.id, "set", `pr=${number}`, "--project", project], env);
+    // Only a chief runs this script, for its task: in a shared logbook the write names the task's own chief.
+    sage(["task", t.id, "set", `pr=${number}`, "--project", project, ...(t.chief ? ["--chief", t.chief] : [])], env);
   } catch (e) {
     throw new Error(`${out}, but the logbook did not take PR ${number} (${e.message}). Run sage-pr create ${t.id} again`);
   }

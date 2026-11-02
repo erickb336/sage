@@ -6,9 +6,13 @@ import { tmpdir } from "node:os";
 import { basename, dirname, join, resolve } from "node:path";
 import { test } from "node:test";
 import { fileURLToPath } from "node:url";
-import { locate as claudeLocate, sage as claudeSage, sageRoot as claudeRootOf } from "../plugins/sage/skills/sage/sage.mjs";
+import { actorOptions, locate as claudeLocate, sage as claudeRun, sageRoot as claudeRootOf } from "../plugins/sage/skills/sage/sage.mjs";
 import { tool } from "../plugins/sage-codex/skills/sage/sage.mjs";
 import { sharedRoot } from "../packages/sage-core/index.mjs";
+
+/** A write of a shared logbook names its chief (T604): each call here acts as one chief of its provider, as the hooks and the MCP server do. */
+const acting = (run, options) => (argv, env) => run([...argv, ...options(argv[argv.indexOf("--project") + 1], argv, { native: "test-chief" }, env)], env);
+const claudeSage = acting(claudeRun, actorOptions), codexSage = acting(tool.sage, tool.actorOptions);
 
 const REPO = dirname(dirname(fileURLToPath(import.meta.url)));
 const FIRST = "1".repeat(40), OTHER = "2".repeat(40);
@@ -31,7 +35,7 @@ function world(t, { commit = true } = {}) {
   };
   const project = repo("project");
   const claude = (...args) => claudeSage([...args, "--project", project], env);
-  const codex = (...args) => tool.sage([...args, "--project", project], env);
+  const codex = (...args) => codexSage([...args, "--project", project], env);
   const name = () => basename(tool.storeDir(project, env));
   const table = (file) => readFileSync(join(shared, file), "utf8");
   const rows = () => table("bindings.tsv").trim().split("\n").slice(1).map((line) => line.split("\t"));
@@ -151,7 +155,7 @@ test("a relative SAGE_SHARED_HOME refuses: another folder would find another roo
   w.claude("link", "--separate");
   const env = { ...w.env, SAGE_SHARED_HOME: "shared" };
   assert.throws(() => claudeSage(["status", "--project", w.project], env), /SAGE_SHARED_HOME is "shared", but it must be an absolute path/);
-  assert.throws(() => tool.sage(["link", "--separate", "--project", w.project], env), /must be an absolute path/);
+  assert.throws(() => codexSage(["link", "--separate", "--project", w.project], env), /must be an absolute path/);
   assert.equal(tool.mergeCheck("a".repeat(40), env, { project: w.project }).ok, false);
   assert.equal(existsSync(join(process.cwd(), "shared")), false, "no root appears under the folder of the command");
 });
@@ -237,7 +241,7 @@ for (const [name, leave] of [
   assert.deepEqual([w.claudeRoot, w.codexRoot].filter(existsSync).flatMap((root) => readdirSync(root).filter((entry) => /-[0-9a-f]{6}$/.test(entry))), [], "no legacy logbook");
   assert.equal(claudeSage(["link", "--to", folder, "--project", there], w.env), `${there} now uses the shared logbook ${join(w.shared, folder)}`);
   assert.match(claudeSage(["status", "--project", there], w.env), /T1/);
-  assert.match(tool.sage([...ADD, "--project", there], w.env), /T2/);
+  assert.match(codexSage([...ADD, "--project", there], w.env), /T2/);
 });
 
 test("a fork that the same refusal stops starts its own logbook with --separate", (t) => {
@@ -285,7 +289,7 @@ test("the current folder that is gone gets a next step, not a raw error", (t) =>
   t.after(() => { process.cwd = cwd; });
   process.cwd = () => { throw Object.assign(new Error("ENOENT: process.cwd failed"), { code: "ENOENT" }); };
   const { SAGE_PROJECT: _unused, ...env } = w.env;
-  for (const run of [claudeSage, tool.sage]) {
+  for (const run of [claudeRun, tool.sage]) {
     for (const command of [["config"], ["projects", "rebuild", "--accept-listing", "yes"], ["board", "--view", "html"], ["status"]]) {
       assert.throws(() => run(command, env), (e) => {
         assert.equal(e.constructor.name, "Refusal");
@@ -371,7 +375,7 @@ test("a clone joins with an explicit link; without one it is a project of its ow
   git(w.base, "clone", "-q", w.project, clone);
   git(w.base, "clone", "-q", w.project, fork);
   assert.throws(() => claudeSage(["status", "--project", clone], w.env), /no logbook for the project/, "a matching first commit never joins a logbook");
-  assert.match(tool.sage(["link", "--to", w.name(), "--project", clone], w.env), /now uses the shared logbook/);
+  assert.match(codexSage(["link", "--to", w.name(), "--project", clone], w.env), /now uses the shared logbook/);
   assert.equal(claudeSage(["logbook", "--project", clone], w.env), join(w.shared, w.name()));
   assert.match(claudeSage(["link", "--separate", "--project", fork], w.env), new RegExp(`apart from ${w.name()}, which has the same first commit`));
 });
@@ -431,7 +435,7 @@ test("a later row with other commits and a gone path does no harm: the owner wor
   w.claude(...ADD);
   const clone = join(w.base, "clone");
   git(w.base, "clone", "-q", w.project, clone);
-  assert.match(tool.sage(["link", "--to", folder, "--project", clone], w.env), /now uses the shared logbook/);
+  assert.match(codexSage(["link", "--to", folder, "--project", clone], w.env), /now uses the shared logbook/);
 });
 
 test("a gone older row never refuses the only live checkout, and a checkout with other commits still cannot join through it", (t) => {
@@ -645,7 +649,7 @@ for (const [name, damage] of Object.entries(UNREADABLE)) {
     for (const how of [["--to", folder], ["--separate"]]) {
       const refusal = /git cannot read the repository at .*made no row\. Ask the user to repair the repository, then run the link again\. Only a \.git file that points to a removed worktree is safe to delete\. Never delete a \.git folder: it holds the history and any unpushed work\.$/;
       assert.throws(() => claudeSage(["link", ...how, "--project", project], w.env), refusal);
-      assert.throws(() => tool.sage(["link", ...how, "--project", project], w.env), refusal);
+      assert.throws(() => codexSage(["link", ...how, "--project", project], w.env), refusal);
     }
     assert.equal(w.table("bindings.tsv"), before);
     assert.deepEqual(readdirSync(w.shared).filter((entry) => /-[0-9a-f]{6}$/.test(entry)), [folder]);
@@ -814,7 +818,7 @@ test("a legacy project reads and writes cycle counts in the provider root, and n
 test("the first shared write takes the larger of the provider values, and a shared project reads and writes them in one home", (t) => {
   const w = world(t);
   claudeSage(["config", "cycles.large=3", "max_rounds=2", "--project", w.base], w.env);
-  tool.sage(["config", "cycles.large=5", "max_rounds=4", "cycles.risk=3", "--project", w.base], w.env);
+  codexSage(["config", "cycles.large=5", "max_rounds=4", "cycles.risk=3", "--project", w.base], w.env);
   w.claude("link", "--separate");
   assert.deepEqual(counts(w.shared), { "cycles.small": 1, "cycles.large": 5, "cycles.risk": 3, max_rounds: 4 });
   assert.match(w.claude("config"), /cycles\.large=5/);
@@ -888,9 +892,12 @@ test("the PR script takes a shared logbook, which has no checkout.txt", async (t
   w.claude("task", "add", "--title", "x", "--size", "tiny", "--priority", "P2");
   w.claude("task", "T1", "set", "branch=sage/t1");
   git(w.project, "remote", "add", "origin", "https://github.com/example/project.git");
-  const { record } = await import("../plugins/sage/skills/sage/sage-pr.mjs");
+  const { record, remember } = await import("../plugins/sage/skills/sage/sage-pr.mjs");
   const saved = record("T1", "view", { ...w.env, SAGE_PROJECT: w.project });
   assert.deepEqual([saved.dir, saved.branch], [join(w.shared, w.name()), "sage/t1"]);
+  // create records the PR number as the task's own chief (T604): the script has no session, and only a chief runs it.
+  remember({ project: w.project, t: tool.read(saved.dir, "tasks")[0] }, { out: "opened", number: "5" }, w.env);
+  assert.match(w.claude("task", "T1"), /· PR 5 /);
 });
 
 test("the worktree root follows the HOME of its env, SAGE_WORKTREES comes first, and it is never relative; a path only, so no folder is made", (t) => {
@@ -908,12 +915,13 @@ test("a chief with another logbook root finds a receipt of a shared project, so 
   const w = world(t);
   const envA = { ...w.env, SAGE_HOME: join(w.base, "root-a") }, envB = { ...w.env, SAGE_HOME: join(w.base, "root-b") };
   mkdirSync(envA.SAGE_HOME); mkdirSync(envB.SAGE_HOME);
-  tool.sage(["link", "--separate", "--project", w.project], envA);
-  tool.sage(["task", "add", "--title", "x", "--size", "tiny", "--priority", "P2", "--project", w.project], envA);
+  codexSage(["link", "--separate", "--project", w.project], envA);
+  codexSage(["task", "add", "--title", "x", "--size", "tiny", "--priority", "P2", "--project", w.project], envA);
   const owner = "chief", request = "00000000-0000-4000-8000-000000000594";
   let digest;
   const { version } = tool.readTaskSnapshot({ project: w.project, task: "T1" }, envA);
   tool.updateRequestedTask({ project: w.project, owner, request, task: "T1", version, changes: { title: "y" } }, envA, {
+    native: "test-chief",
     decide: (value) => { digest = value; return { digest: value, accepted: true, reason: "" }; },
     acknowledge: (value, receiptHash) => ({ digest: value, receiptHash }), release: (value, receiptHash) => ({ digest: value, receiptHash }),
     void() {}, history() { throw Error("No history here"); } });

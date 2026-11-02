@@ -96,7 +96,7 @@ Send `show board` to see what needs you, the agents at work, and each task in it
 | `sage mode` | The session becomes your chief of staff. Send your request next. |
 | `show status` | Where each task is: running, waiting for you, verified. It names each open task with no priority. |
 | Ask the chief to adopt another provider's task and PR | The chief uses [task adoption](docs/guide/codex.md#task-adoption). The branch, PR and spent repairs stay; reviews and QA start fresh. |
-| Tell the chief that a checkout joins a shared logbook, or starts its own | The chief runs [`sage link`](docs/guide/using-sage.md#shared-logbooks). It runs only after your answer. An existing project keeps its logbook and shows no change. |
+| Tell the chief that a checkout joins a shared logbook, or starts its own | The chief runs [`sage link`](docs/guide/using-sage.md#shared-logbooks), only after your answer. Each task there has one owning chief, and another chief's write refuses. An existing project shows no change. |
 | `show board` | The board in the chat, and the address of the board page. |
 | `autopilot on` / `autopilot off` | Verified pull requests merge by themselves, or wait for you again. Off by default. |
 | `sage mode off` | A normal session again, for the rest of the session. Autopilot goes off too. |

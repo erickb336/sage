@@ -5,6 +5,6 @@ export function createNativeRun(input, context, options) {
   const fields = ["request", "task", "role", "branch", "candidate"];
   if (!input || typeof input !== "object" || Array.isArray(input) || Object.keys(input).length !== fields.length
     || fields.some(key => !Object.hasOwn(input, key))) throw Error("Invalid run request");
-  const { tool, project, owner, env } = chiefLogbook(context, options);
-  return tool.createRequestedRun({ ...input, project, owner }, env);
+  const { tool, project, owner, env, native } = chiefLogbook(context, options);
+  return tool.createRequestedRun({ ...input, project, owner }, env, native);
 }

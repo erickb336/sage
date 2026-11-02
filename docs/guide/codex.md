@@ -199,6 +199,7 @@ The plugin starts a local MCP server, `sage`, in the desktop app and in the CLI.
 | --- | --- |
 | `init`, `status` | `init`, `status` |
 | `link` | `link --to <folder>`, `link --separate`: [shared logbooks](using-sage.md#shared-logbooks), only after your answer |
+| `claim` | `claim <T>`: take a task with no owning chief in a [shared logbook](using-sage.md#shared-logbooks) |
 | `task_add`, `task_set` | `task add`, `task <T> set` |
 | `task_adopt` | `task-adopt <T>`: adopt another provider's task and PR, with fresh destination reviews |
 | `run_add`, `run_done` | `run add`, `run done` |
@@ -212,12 +213,15 @@ The plugin starts a local MCP server, `sage`, in the desktop app and in the CLI.
 - The tools run the same checks as the commands. A refusal comes back as a tool error with the reason of the command.
 - The chief records the logbook, and a lead records its own task. Codex blocks another role agent's call of a tool that writes (for example `verdict`, `gate_answer` or `brief`), and the agent gets one line that says to put it in its report. Codex's own review thread (`/review`, the app's review button) and its approval check count as role agents here.
 - A role agent may call `status`, `standing`, `merge_check`, and `pages` without `record`.
+- In a [shared logbook](using-sage.md#shared-logbooks), the server finds the chief from the session, and a tool takes no chief field. A lead acts for the chief of its lead run.
+- A write on a task of another chief refuses and names the owning chief, as in Claude. The native tools `sage_update_task` and `sage_create_run` give the same words. A task with no owning chief refuses and prints its version: call `claim` with the task and that version.
 - A review or QA `verdict` on a task with a build needs `run`: a done run of the task whose child had the run in its task name (`sage_qa_t12_r40`) and ended with its full report. At that stop, the report check keeps the report in the logbook, and `verdict` refuses a verdict that no kept report backs. A report that `pages` saved backs no verdict, because the chief gives its text.
 - Codex starts the server outside the shell sandbox. Under `workspace-write`, the logbook is not a writable folder of an agent's shell, so only the server writes it.
 - Under full access (`danger-full-access`), an agent's shell can write any file, also the logbook, the mode files and Codex's record of your messages. So sage mode gives no guarantee there.
 - The plugin approves its own tools, so the logbook writes do not ask you each time. To be asked, set `default_tools_approval_mode = "prompt"` under `[plugins."sage@sage".mcp_servers.sage]` in your Codex config.
 - Limit: `logbook repair` has no tool, and the sandbox keeps the logbook closed to the chief's shell. So the Codex chief cannot run either repair.
 - When a saved change cannot finish and you have no backup, accept the loss, then run this yourself in a terminal, outside Codex: `node ~/.codex/plugins/cache/sage/sage/<version>/skills/sage/sage.mjs logbook repair --accept-change-loss yes --project <project>`.
+- When a table fails the logbook check and you have no copy, accept the loss, then run the line that the refusal prints in the same way: `logbook repair --accept-loss <table> --project <project>`. A repair names no chief, also on a shared logbook.
 - To find `<version>`, run `ls ~/.codex/plugins/cache/sage/sage/` and use the current one. When you set `CODEX_HOME`, use that folder in place of `~/.codex`.
 - Limit: the repair cannot compare a receipt with Codex's journal. A receipt that differs from its journal row still stops Codex writes after the repair, and that case needs a backup.
 
