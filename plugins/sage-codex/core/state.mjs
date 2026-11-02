@@ -2569,12 +2569,22 @@ function logbookConfig(dir, pairs) {
 }
 
 /** Runs one command and returns its output line(s). A refused command throws, with the reason. */
+/** The folder of this command. A checkout that moved or was cloned again can leave a session in a folder that is gone. */
+function folderHere() {
+  try {
+    return process.cwd();
+  } catch (e) {
+    if (e.code === "ENOENT") refuse("the current folder is gone: it was moved or removed. Nothing changed. Go to the project's folder, or give --project with its path.");
+    throw e;
+  }
+}
+
 function sage(argv, env = process.env) {
   const [cmd, ...rest] = argv;
   if (!COMMANDS.includes(cmd)) refuse(`unknown command "${cmd ?? ""}". Commands: ${COMMANDS.join(", ")}`);
   const { pos, opt } = parse(cmd, rest);
   const readOnly = scopedRead(cmd, pos, opt);
-  const root = sageRoot(env), project = resolve(opt.project ?? env.SAGE_PROJECT ?? process.cwd());
+  const root = sageRoot(env), project = resolve(opt.project ?? env.SAGE_PROJECT ?? folderHere());
   if (cmd === "board" && opt.view !== undefined) {
     if (pos.length > 1 || opt.remember !== undefined) refuse("rich board takes one scope or task id and never remembers state");
     const scope = opt["name-hex"] !== undefined ? unhex(opt["name-hex"]) : /^T[1-9]\d*$/.test(pos[0] ?? "") ? "this" : pos[0] ?? "this";
@@ -2596,7 +2606,7 @@ function sage(argv, env = process.env) {
   if (cmd === "merge-check") {
     const cycles = opt.cycles === undefined ? undefined : (typed("cycles.small", opt.cycles) ?? refuse("--cycles is a whole number from 1 to 10")); // the chief's explicit count: it only raises a task's own count
     if (opt.pr !== undefined && !PR.test(opt.pr)) refuse("--pr is the pull request's number, with no leading zero, for example --pr 5");
-    const r = mergeCheck(opt.sha ?? refuse("merge-check needs --sha with the full 40-character SHA of the head commit: git rev-parse <branch>"), env, { cycles, pr: opt.pr, head: opt.head, project: resolve(opt.project ?? env.SAGE_PROJECT ?? process.cwd()) });
+    const r = mergeCheck(opt.sha ?? refuse("merge-check needs --sha with the full 40-character SHA of the head commit: git rev-parse <branch>"), env, { cycles, pr: opt.pr, head: opt.head, project });
     return r.ok ? r.reason : refuse(r.reason);
   }
   if (cmd === "config" && !pos.some(ownKey)) {
@@ -2636,6 +2646,7 @@ function sage(argv, env = process.env) {
   const changeLoss = repair && opt["accept-change-loss"] !== undefined;
   if (changeLoss && opt["accept-change-loss"] !== "yes") refuse("--accept-change-loss takes only yes. Run it only after the owner accepts the loss of the saved change.");
   if (repair && (odd.length || (!skip.length && !changeLoss))) refuse(`logbook repair needs --accept-loss with the tables whose rows the user accepts to lose, joined by a comma: ${Object.keys(TABLES).join(", ")}.${odd.length ? ` Not ${odd.join(", ")}.` : ""}`);
+  if (!place.shared && !place.legacy && !existsSync(dir)) refuseNewLogbook(place.checkout, env);
   if (cmd !== "init" && !(repair && existsSync(dir)) && !existsSync(join(dir, "tasks.tsv"))) {
     const printed = visible(project); // a path with control characters prints otherwise than it is, so it gets no line to paste
     refuse(`no logbook for the project ${printed}. ${printed === project ? `Run: sage init --project ${shell(project)}` : "Its path has control characters, so no command is printed to paste. Rename the folder, or run sage init from inside it."}`);
@@ -3487,7 +3498,7 @@ function runCli(argv = process.argv.slice(2)) {
 }
 
 const { board, answerPaths } = createBoard({ BLOCKS, BRANCH, RISKS, STATES, mergeCheck, optionsOf, projectName, projectRoot, read, sageRoot, slug, storeDir, withLock });
-const { fillCommits, link, locate, notePlugin } = createSharedRoot({ Refusal, refuse, legacyRoots, makeLogbook, now, projectRoot, provider, raiseCounts, readRegular, rowsOf, sageRoot, sheetText, slug, swap, visible, withLock,
+const { fillCommits, link, locate, notePlugin, refuseNewLogbook } = createSharedRoot({ Refusal, refuse, legacyRoots, makeLogbook, now, projectRoot, provider, raiseCounts, readRegular, rowsOf, sageRoot, sheetText, slug, swap, visible, withLock,
   listed: (root) => known(root, undefined, undefined, true),
   enroll: (root, folder, make) => known(root, folder, make, false, true) });
 return { SIZES, BLOCKS, RISKS, KINDS, STATES, DEFAULTS, PR, sageRoot, locate, git, projectRoot, roleReadProject, optionsOf, slug, worktreeRoot, BRANCH, ofTask, branchOfTask, projectName, storeDir, config, cyclesFor, modelFor, read, mergeCheck, landingBar, boardLandingCheck, logbookView, sage, readTaskSnapshot, updateRequestedTask, assertTaskUpdateOpen, settleWrites, createRequestedTask, createRequestedRun, finishReportedRun, finishInterruptedRun, acceptReportedReview, keepReport, compareRetainedReport, verdictBacking, captureRunAssignment, captureReviewTarget, validateTerminalAssignment, withLock, board, answerPaths, command, runCli };
