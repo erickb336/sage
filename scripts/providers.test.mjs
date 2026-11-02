@@ -1845,14 +1845,14 @@ test("role admission refuses a third layer, a lead outside its team, and a child
   assert.deepEqual(f.api.readAdmission(f.journal).reservations, []);
 });
 
-test("role admission enforces three leads across project sessions and retains other project capacity", async t => {
+test("role admission enforces five leads across project sessions and retains other project capacity", async t => {
   const f = await roleAdmissionFixture(t);
-  for (let i = 1; i <= 3; i++) f.reserve(i);
+  for (let i = 1; i <= 5; i++) f.reserve(i);
   const other = f.api.activateAdmission(f.journal, { project: "project-a", session: "other-root", activation: f.activation });
-  assert.throws(() => f.reserve(4, "lead", "chief-of-staff", "other-root", { project: other.project, session: other.session, epoch: other.epoch }), /three lead slots/);
+  assert.throws(() => f.reserve(6, "lead", "chief-of-staff", "other-root", { project: other.project, session: other.session, epoch: other.epoch }), /5 lead slots/);
   const b = f.api.activateAdmission(f.journal, { project: "project-b", session: "root-b", activation: f.activation });
-  assert.equal(f.reserve(5, "lead", "chief-of-staff", "root-b", { project: b.project, session: b.session, epoch: b.epoch }).decision, "permit-once");
-  assert.equal(f.api.readAdmission(f.journal).reservations.length, 4);
+  assert.equal(f.reserve(7, "lead", "chief-of-staff", "root-b", { project: b.project, session: b.session, epoch: b.epoch }).decision, "permit-once");
+  assert.equal(f.api.readAdmission(f.journal).reservations.length, 6);
 });
 
 test("role admission counts each lead's children separately and keeps the lower capacity limit", async t => {
@@ -1871,8 +1871,8 @@ test("role admission counts each lead's children separately and keeps the lower 
 
 test("role admission conservatively counts legacy roles and never changes a retry's role plan", async t => {
   const f = await roleAdmissionFixture(t);
-  for (let i = 1; i <= 3; i++) f.api.reserveAdmission(...f.args(i));
-  assert.throws(() => f.reserve(4), /three lead slots/);
+  for (let i = 1; i <= 5; i++) f.api.reserveAdmission(...f.args(i));
+  assert.throws(() => f.reserve(6), /5 lead slots/);
   assert.throws(() => f.reserve(1), /different work/);
   const known = await roleAdmissionFixture(t);
   for (let i = 1; i <= 3; i++) known.reserve(i, "qa");
@@ -1889,7 +1889,7 @@ test("role admission conservatively counts legacy roles and never changes a retr
 
 test("role admission grants only one remaining lead slot to concurrent callers", async t => {
   const f = await roleAdmissionFixture(t);
-  f.reserve(1); f.reserve(2);
+  for (let i = 1; i <= 4; i++) f.reserve(i);
   const script = `
     const input = JSON.parse(process.argv[1]);
     const api = await import(input.url);
@@ -1908,10 +1908,10 @@ test("role admission grants only one remaining lead slot to concurrent callers",
     });
     child.stdin.end();
   });
-  const results = await Promise.all([run(3), run(4)]);
+  const results = await Promise.all([run(5), run(6)]);
   assert.equal(results.filter(row => row.decision === "permit-once").length, 1);
-  assert.equal(results.filter(row => /three lead slots/.test(row.refused)).length, 1);
-  assert.equal(f.api.readAdmission(f.journal).reservations.length, 3);
+  assert.equal(results.filter(row => /5 lead slots/.test(row.refused)).length, 1);
+  assert.equal(f.api.readAdmission(f.journal).reservations.length, 5);
 });
 
 const bindingFor = (assignment, child = "child-1", turn = "child-turn") => ({ project: assignment.project,
@@ -2174,9 +2174,9 @@ test("prepared admission enforces mode capacity and role limits again at dispatc
   f.api.reserveRoleAdmission(...f.args(2), f.role);
   assert.throws(() => f.reserve(first.preparation.id), /capacity/);
   const leads = await preparationFixture(t); const prepared = leads.prepare();
-  for (let n = 2; n <= 4; n++) leads.api.reserveRoleAdmission(...leads.args(n), leads.role);
-  assert.throws(() => leads.reserve(prepared.preparation.id), /three lead slots/);
-  assert.equal(leads.api.readAdmission(leads.journal).reservations.length, 3);
+  for (let n = 2; n <= 6; n++) leads.api.reserveRoleAdmission(...leads.args(n), leads.role);
+  assert.throws(() => leads.reserve(prepared.preparation.id), /5 lead slots/);
+  assert.equal(leads.api.readAdmission(leads.journal).reservations.length, 5);
 });
 
 test("prepared admission refuses an already dispatched name and preserves legacy reservations", async t => {
@@ -3819,19 +3819,19 @@ test('terminal lead cannot prepare work and off-mode interruption preserves mode
 });
 
 test('terminal evidence frees its project and lead limits without changing another project', async t => {
-  const f = await roleAdmissionFixture(t, { total: 4, projects: [{ project: 'project-a', limit: 3 }, { project: 'project-b', limit: 1 }] });
+  const f = await roleAdmissionFixture(t, { total: 6, projects: [{ project: 'project-a', limit: 5 }, { project: 'project-b', limit: 1 }] });
   assert.equal(typeof f.api.completeAdmission, 'function');
-  const first = f.reserve(1); f.reserve(2); f.reserve(3);
+  const first = f.reserve(1); f.reserve(2); f.reserve(3); f.reserve(4); f.reserve(5);
   const owner = f.api.activateAdmission(f.journal, { project: 'project-b', session: 'other', activation: f.activation });
   const scope = { project: owner.project, session: owner.session, epoch: owner.epoch };
-  f.reserve(4, 'qa', 'chief-of-staff', 'other', scope);
-  assert.throws(() => f.reserve(5), /three lead slots/);
+  f.reserve(6, 'qa', 'chief-of-staff', 'other', scope);
+  assert.throws(() => f.reserve(7), /5 lead slots/);
   const binding = bindingFor(first.assignment); f.api.bindAdmission(f.journal, binding);
   f.api.completeAdmission(f.journal, binding);
-  assert.throws(() => f.reserve(5, 'qa', 'chief-of-staff', 'other', scope), /project capacity/);
-  assert.equal(f.reserve(6).decision, 'permit-once');
-  assert.throws(() => f.reserve(7, 'qa'), /total capacity/);
-  assert.equal(f.api.readAdmission(f.journal).reservations.length, 5);
+  assert.throws(() => f.reserve(7, 'qa', 'chief-of-staff', 'other', scope), /project capacity/);
+  assert.equal(f.reserve(8).decision, 'permit-once');
+  assert.throws(() => f.reserve(9, 'qa'), /total capacity/);
+  assert.equal(f.api.readAdmission(f.journal).reservations.length, 7);
 });
 
 

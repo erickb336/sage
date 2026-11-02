@@ -125,6 +125,8 @@ The lead does these things:
 
 The lead and each helper take a slot of the project's agent cap (`max_agents`, 10 by default), and all agents together take slots of the total cap (`cap_total`, 20 by default). One lead with its 9 helpers fills the default cap of a project.
 
+At most 5 leads run for a project by default. To change this, ask the chief in the chat, and it runs `sage config max_leads=<n>` with a whole number from 1. A value below the running count ends no lead: it only refuses the next lead.
+
 A lead runs up to 9 helpers, but never more than the project's cap allows: with a lower cap, or a second lead in the project, it runs fewer. The chief starts a second lead only when the cap has room for it and its helpers.
 
 A tiny task has no review and no QA in its route, so its lead runs only the implementer. A task with no review or QA in its route has no cycle: it needs only checks-pass. A risk flag, an arena or an added review puts a review in the route, and then the task needs its clean cycles like any other task.
@@ -290,13 +292,14 @@ A Codex chief calls the `link` tool of the same name. A retry changes nothing.
 | --- | --- |
 | The project has a logbook in the Claude or Codex root | The link refuses, because the link would hide its tasks. Keep using that logbook. A later command moves existing projects. |
 | The checkout is already linked to another logbook | The link refuses. A checkout has one logbook, so keep using that one. Only the move can take a checkout to another logbook, and no command does the move today: a later sage adds it. |
-| `--to` names a logbook whose oldest row with commits has no first commit in common with this checkout | The link refuses. A shallow clone needs its full history first: `git fetch --unshallow`. |
+| You moved a checkout or cloned it again, so its new path has no row | Each command and `init` refuse and name the logbook with the same first commit. Run `sage link --to <folder>`, or `sage link --separate` for another project. The old row stays and does no harm. |
+| `--to` names a logbook whose owner has no first commit in common with this checkout | The link refuses. A shallow clone needs its full history first: `git fetch --unshallow`. |
 | The Git call for the first commit takes more than 5 s | The link refuses and makes no row. Run the link again. A later write of a row with no commits tries again. |
 | Git cannot read the repository: for example a broken config, an unknown repository extension, or a garbage HEAD or branch ref | The link refuses and makes no row, and a later write of a row with no commits tries again. Repair the repository, then run the link again. Never delete a `.git` folder: it holds the history and any unpushed work. |
 | The checkout is a linked worktree whose target is gone: its `.git` is a file that points to a removed worktree | The link refuses and makes no row. Repair the worktree, or delete that `.git` file, then run the link again. |
 | The shared root cannot be written, or a provider root cannot be read | The link refuses, names the path and makes no row. |
 | A row names a missing logbook | Each read and write of that project refuses and offers the link. The link replaces that row. |
-| A logbook has rows with no first commit in common | The oldest row with commits owns the logbook, and it keeps working. Each read and write of a later row refuses in that checkout. The link replaces that row there. |
+| A logbook has rows with no first commit in common | The owner is the oldest row with commits whose checkout is still on the disk, or the oldest row when all are gone. Each read and write of another row refuses in that checkout. The link replaces that row there. |
 | `bindings.tsv` has two rows for one path, or cannot be read | Every command of every project refuses. Sage never falls back to another logbook. Fix the file. |
 | `bindings.tsv` is gone, and `bindings.made` shows that sage made it | Every command of every project refuses. Restore the table from a copy. If no project uses the shared root, remove `bindings.made`. |
 | `SAGE_SHARED_HOME` is a relative path | Every command refuses. Each folder must find the same root. |

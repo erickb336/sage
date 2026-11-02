@@ -4977,7 +4977,7 @@ const LEAD_DIR = realpathSync(mkdtempSync(join(tmpdir(), "sage-leads-")));
 const leadSpawn = (id, n = 1, extra = {}) => tool("Agent", { subagent_type: "sage:lead", prompt: BRIEF, name: `lead-T${n}`, description: `lead-T${n}`, run_in_background: true }, { tool_use_id: id, cwd: LEAD_DIR, ...extra });
 /** The same spawn in the desktop app's form (T434): its Agent tool has no name and no run_in_background field, and starts every agent in the background. */
 const desktopLead = (id, description, extra = {}) => tool("Agent", { subagent_type: "sage:lead", prompt: BRIEF, description }, { tool_use_id: id, cwd: LEAD_DIR, ...extra });
-/** A logbook for LEAD_DIR in the session's sage home, with a running lead run for T1 to T9 and T181. The rows go in directly: the state tool holds 3 running leads per project, and these tests check the hook's own limits. */
+/** A logbook for LEAD_DIR in the session's sage home, with a running lead run for T1 to T9 and T181. The rows go in directly: the state tool holds max_leads running leads per project, and these tests check the hook's own limits. */
 function leadRuns(s) {
   spawnSync("node", [TOOL, "init", "--project", LEAD_DIR], { encoding: "utf8", env: s.vars });
   const dir = spawnSync("node", [TOOL, "logbook", "--project", LEAD_DIR], { encoding: "utf8", env: s.vars }).stdout.trim();
@@ -5020,11 +5020,30 @@ test("T181: nested briefs and shared caps keep the chief's existing refusals", (
   assert.match(denied(s.send(spawnAgent("sage:qa", BRIEF, "main"))) ?? "", /1 sage agent is running for other, and its cap is 1/);
 });
 
-test("T181: parallel admission holds three leads per project and nine children per caller across folders", async () => {
+test("T609: with no key the hook starts 5 leads and refuses the 6th; with max_leads=2 it refuses the 3rd", async () => {
   const s = nestedSession();
+  const leads = await Promise.all([1, 2, 3, 4, 5, 6].map(n => s.sendAsync(leadSpawn(`lead-${n}`, n))));
+  assert.equal(leads.filter(x => !denied(x)).length, 5);
+  assert.match(leads.map(denied).find(Boolean), /is at its limit of 5 running leads \(max_leads\)/);
+  const two = nestedSession();
+  two.sage("config", "max_leads=2");
+  assert.equal(two.send(leadSpawn("lead-1", 1)), undefined);
+  assert.equal(two.send(leadSpawn("lead-2", 2)), undefined);
+  assert.match(denied(two.send(leadSpawn("lead-3", 3))) ?? "", /is at its limit of 2 running leads \(max_leads\)/);
+  const lower = nestedSession();
+  assert.equal(lower.send(leadSpawn("lead-1", 1)), undefined);
+  assert.equal(lower.send(leadSpawn("lead-2", 2)), undefined);
+  lower.sage("config", "max_leads=1");
+  assert.equal(lower.send(nested("sage:qa", "child")), undefined, "a value below the running count ends no lead");
+  assert.match(denied(lower.send(leadSpawn("lead-3", 3))) ?? "", /limit of 1 running leads/, "it only refuses the next one");
+});
+
+test("T181: parallel admission holds the lead limit per project and nine children per caller across folders", async () => {
+  const s = nestedSession();
+  s.sage("config", "max_leads=3");
   const leads = await Promise.all([1, 2, 3, 4].map(n => s.sendAsync(leadSpawn(`lead-${n}`, n))));
   assert.equal(leads.filter(x => !denied(x)).length, 3);
-  assert.match(leads.map(denied).find(Boolean), /3 leads/);
+  assert.match(leads.map(denied).find(Boolean), /limit of 3 running leads/);
   const a = join(s.dir, "a"), b = join(s.dir, "b");
   mkdirSync(a); mkdirSync(b);
   const children = await Promise.all(Array.from({ length: 10 }, (_, k) => k + 1).map(n => s.sendAsync(nested("sage:qa", `c-${n}`, { cwd: n % 2 ? a : b }))));
@@ -5108,6 +5127,7 @@ test("T181: report gates and attempted TaskStop keep nested capacity; late async
 
 test("T181: exact identity includes the raw session and refuses malformed nonmain lifecycle callers", () => {
   const s = nestedSession();
+  s.sage("config", "max_leads=3");
   assert.equal(s.send(leadSpawn("main-call")), undefined);
   const noCaller = { agent_type: "sage:lead" };
   s.send(resultOf("main-call", "wrong", noCaller, "completed"));
@@ -5302,6 +5322,7 @@ const fillSix = (s, prefix, extra = {}) => { for (let n = 1; n <= 6; n++) assert
 /** The sage ends these lead runs of LEAD_DIR's logbook. */
 const endLeadRuns = (s, ...ids) => { for (const id of ids) spawnSync("node", [TOOL, "run", "done", id, "--status", "failed", "--project", LEAD_DIR], { encoding: "utf8", env: s.vars }); };
 const threeLeads = (s) => {
+  s.sage("config", "max_leads=3");
   for (const [n, a] of ["a", "b", "c"].entries()) {
     assert.equal(s.send(leadSpawn(`lead-${a}-call`, n + 1)), undefined);
     s.send(resultOf(`lead-${a}-call`, `lead-${a}`));
@@ -5321,7 +5342,7 @@ test("T255 H1: a child's events renew its lead's slot, and a lead with a running
   renewed.send(ended("impl", "sage:implementer"));
   assert.equal(renewed.send(leadSpawn("lead-4", 4)), undefined, "an idle lead's lease ends");
   assert.equal(renewed.send(leadSpawn("lead-5", 5)), undefined);
-  assert.match(denied(renewed.send(leadSpawn("lead-6", 6))) ?? "", /3 leads are running for sage-leads-/, "the child's event renewed lead a");
+  assert.match(denied(renewed.send(leadSpawn("lead-6", 6))) ?? "", /is at its limit of 3 running leads/, "the child's event renewed lead a");
 
   const waiting = nestedSession();
   threeLeads(waiting);
@@ -5331,7 +5352,7 @@ test("T255 H1: a child's events renew its lead's slot, and a lead with a running
   ageSlots(waiting, 61, ["slot-1", "slot-2", "slot-3"]);
   assert.equal(waiting.send(leadSpawn("lead-4", 4)), undefined);
   assert.equal(waiting.send(leadSpawn("lead-5", 5)), undefined);
-  assert.match(denied(waiting.send(leadSpawn("lead-6", 6))) ?? "", /3 leads are running for sage-leads-/, "lead a has a running child");
+  assert.match(denied(waiting.send(leadSpawn("lead-6", 6))) ?? "", /is at its limit of 3 running leads/, "lead a has a running child");
 });
 
 test("T255 H2: outside sage mode, an agent that is not a lead starts no sage agent; a lead keeps the brief check", () => {
@@ -5400,7 +5421,7 @@ test("T255 L1: the main session starts a lead only with the name lead-T<n>", () 
   }
   assert.equal(s.send(lead("ok-1", { description: "lead-T181" })), undefined);
   assert.equal(s.send(lead("ok-2", { name: "lead-T7", description: "a lead" })), undefined, "the name wins over the description");
-  const t = nestedSession(); // a project runs at most 3 leads
+  const t = nestedSession(); // a new session, so that these two start under the lead limit
   assert.equal(t.send(lead("ok-3", { description: "  lead-T2 fix the form" })), undefined, "the first word of the description names the lead");
   assert.equal(t.send(lead("ok-4", { name: " ", description: "lead-T3 fix" })), undefined, "an empty name falls back to the description (T262)");
 });
@@ -5473,7 +5494,7 @@ test("F-T255-4: a sage agent, or any agent in sage mode, never names a spawn mai
 
 test("F-T255-5: a sage type in another letter case meets the same spawn and message rules", () => {
   const s = leadRuns(session());
-  s.sage("config", "max_agents=20", "cap_total=30");
+  s.sage("config", "max_agents=20", "cap_total=30", "max_leads=3");
   const gp = { agent_id: "gp", agent_type: "general-purpose" };
   assert.match(denied(s.send(spawnAgent("Sage:lead", BRIEF, "case-1", gp))) ?? "", /only a lead may start an agent/, "a plain agent starts no Sage:lead outside sage mode");
   assert.match(denied(s.send(spawnAgent("SAGE:QA", "GOAL short", "case-2", LEAD))) ?? "", /the brief has no SCOPE/, "the brief check reads the type in any case");
@@ -5482,7 +5503,7 @@ test("F-T255-5: a sage type in another letter case meets the same spawn and mess
   s.send(prompt("sage mode"));
   assert.match(denied(s.send(tool("Agent", { subagent_type: "Sage:Lead", prompt: BRIEF, description: "d", run_in_background: true }, { tool_use_id: "case-4" }))) ?? "", /only with the name lead-T<n>/, "the main session's lead rules read the type in any case");
   for (const n of [1, 2, 3]) assert.equal(s.send(tool("Agent", { subagent_type: "SAGE:lead", prompt: BRIEF, description: `lead-T${n}`, run_in_background: true }, { tool_use_id: `lead-${n}`, cwd: LEAD_DIR })), undefined);
-  assert.match(denied(s.send(leadSpawn("lead-4", 4))) ?? "", /3 leads are running/, "a lead in another case counts as a lead");
+  assert.match(denied(s.send(leadSpawn("lead-4", 4))) ?? "", /is at its limit of 3 running leads/, "a lead in another case counts as a lead");
 });
 
 test("F-T255-10: a sage agent, or any agent in sage mode, never names a spawn lead-T<n>; plain use outside sage mode is unchanged", () => {
@@ -5503,15 +5524,16 @@ test("F-T255-10: a sage agent, or any agent in sage mode, never names a spawn le
 
 test("F-T255-12: the main session's TaskStop frees a lead's slot; an agent's TaskStop frees none", () => {
   const s = nestedSession();
+  s.sage("config", "max_leads=3");
   for (const n of [1, 2, 3]) {
     assert.equal(s.send(leadSpawn(`lead-${n}-call`, n)), undefined);
     s.send(resultOf(`lead-${n}-call`, `lead-${n}`));
   }
   s.send(tool("TaskStop", { task_id: "lead-2" }, LEAD));
-  assert.match(denied(s.send(leadSpawn("lead-4-early", 4))) ?? "", /3 leads are running/, "an agent's TaskStop frees no slot");
+  assert.match(denied(s.send(leadSpawn("lead-4-early", 4))) ?? "", /is at its limit of 3 running leads/, "an agent's TaskStop frees no slot");
   s.send(tool("TaskStop", { task_id: "lead-1" }));
   assert.equal(s.send(leadSpawn("lead-4-call", 4)), undefined, "the main session's TaskStop of lead-1 frees its slot");
-  assert.match(denied(s.send(leadSpawn("lead-5-call", 5))) ?? "", /3 leads are running/);
+  assert.match(denied(s.send(leadSpawn("lead-5-call", 5))) ?? "", /is at its limit of 3 running leads/);
 });
 
 test("F-T255-13: a child whose type comes in another letter case keeps its slot through its events", () => {

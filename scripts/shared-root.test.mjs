@@ -224,6 +224,83 @@ test("the folder name stays the one saved in the row after the checkout moves on
   assert.deepEqual(w.rows().map(([root, saved]) => [root, saved]), [[w.project, folder], [moved, folder]], "a row whose path is gone stays");
 });
 
+for (const [name, leave] of [
+  ["moved", (w, there) => execFileSync("mv", [w.project, there])],
+  ["cloned again", (w, there) => { git(w.base, "clone", "-q", w.project, there); rmSync(w.project, { recursive: true }); }],
+]) test(`a checkout that was ${name} is told to link, and following each refusal reaches its tasks with no legacy logbook`, (t) => {
+  const w = world(t);
+  w.claude("link", "--separate");
+  w.claude(...ADD);
+  const folder = w.name(), there = join(w.base, "there");
+  leave(w, there);
+  for (const run of [claudeSage, tool.sage]) {
+    const next = new RegExp(`no logbook for the project ${there}, but it has the first commit of the shared logbook ${folder}, which ${w.project} used\\..*For a moved checkout or a clone, run sage link --to ${folder}\\. For another project, run sage link --separate\\. Run it in ${there}\\.$`);
+    assert.throws(() => run(["status", "--project", there], w.env), next, "a command names the link");
+    assert.throws(() => run(["init", "--project", there], w.env), next, "init never makes the logbook that traps the link");
+  }
+  assert.deepEqual([w.claudeRoot, w.codexRoot].filter(existsSync).flatMap((root) => readdirSync(root).filter((entry) => /-[0-9a-f]{6}$/.test(entry))), [], "no legacy logbook");
+  assert.equal(claudeSage(["link", "--to", folder, "--project", there], w.env), `${there} now uses the shared logbook ${join(w.shared, folder)}`);
+  assert.match(claudeSage(["status", "--project", there], w.env), /T1/);
+  assert.match(codexSage([...ADD, "--project", there], w.env), /T2/);
+});
+
+test("a fork that the same refusal stops starts its own logbook with --separate", (t) => {
+  const w = world(t);
+  w.claude("link", "--separate");
+  const fork = join(w.base, "fork");
+  git(w.base, "clone", "-q", w.project, fork);
+  assert.throws(() => claudeSage(["init", "--project", fork], w.env), /For another project, run sage link --separate/);
+  assert.match(claudeSage(["link", "--separate", "--project", fork], w.env), /now uses the shared logbook/);
+  assert.notEqual(claudeSage(["logbook", "--project", fork], w.env), join(w.shared, w.name()));
+});
+
+test("a checkout with other first commits still starts a legacy logbook while shared rows exist", (t) => {
+  const w = world(t);
+  w.claude("link", "--separate");
+  const other = w.repo("other"), plain = join(w.base, "plain");
+  mkdirSync(plain);
+  assert.equal(claudeSage(["init", "--project", other], w.env), `logbook ${tool.storeDir(other, { ...w.env, SAGE_HOME: w.claudeRoot })}`);
+  assert.match(claudeSage(["init", "--project", plain], w.env), /^logbook /);
+});
+
+test("two shared logbooks with one first commit: the refusal names both, and the owner picks", (t) => {
+  const w = world(t);
+  w.claude("link", "--separate");
+  const fork = join(w.base, "fork"), third = join(w.base, "third");
+  git(w.base, "clone", "-q", w.project, fork);
+  git(w.base, "clone", "-q", w.project, third);
+  claudeSage(["link", "--separate", "--project", fork], w.env);
+  const forkFolder = basename(claudeSage(["logbook", "--project", fork], w.env));
+  assert.throws(() => claudeSage(["status", "--project", third], w.env), new RegExp(`shared logbook (?:${w.name()} and ${forkFolder}|${forkFolder} and ${w.name()}), which .*run sage link --to <folder>\\.`));
+});
+
+test("a matching row whose logbook is missing offers nothing: no link can reach it, so init starts as before", (t) => {
+  const w = world(t);
+  w.claude("link", "--separate");
+  const clone = join(w.base, "clone");
+  git(w.base, "clone", "-q", w.project, clone);
+  rmSync(join(w.shared, w.name()), { recursive: true });
+  assert.match(claudeSage(["init", "--project", clone], w.env), /^logbook /);
+});
+
+test("the current folder that is gone gets a next step, not a raw error", (t) => {
+  const w = world(t);
+  const cwd = process.cwd;
+  t.after(() => { process.cwd = cwd; });
+  process.cwd = () => { throw Object.assign(new Error("ENOENT: process.cwd failed"), { code: "ENOENT" }); };
+  const { SAGE_PROJECT: _unused, ...env } = w.env;
+  for (const run of [claudeRun, tool.sage]) {
+    for (const command of [["config"], ["projects", "rebuild", "--accept-listing", "yes"], ["board", "--view", "html"], ["status"]]) {
+      assert.throws(() => run(command, env), (e) => {
+        assert.equal(e.constructor.name, "Refusal");
+        assert.equal(e.message, "the current folder is gone: it was moved or removed. Nothing changed. Go to the project's folder, or give --project with its path.");
+        return true;
+      }, command.join(" "));
+    }
+  }
+  assert.match(claudeSage(["init", "--project", w.project], env), /^logbook /, "a command that names its project needs no current folder");
+});
+
 test("a linked worktree uses its main checkout's row and needs no row of its own", (t) => {
   const w = world(t);
   w.claude("link", "--separate");
@@ -257,7 +334,7 @@ test("link refuses a project with a legacy logbook in either root, and names the
 test("link takes exactly one form, and --to names a real logbook of the shared root", (t) => {
   const w = world(t);
   const form = /link takes exactly one of --to <folder> or --separate; --separate takes no value\. Nothing changed\.$/;
-  const notALogbook = /is not a logbook of the shared root\. Nothing changed\. List the logbook folders in .*\/shared\/projects\.tsv, then run sage link --to <folder> with one of them, or run sage link --separate to start a new logbook\.$/;
+  const notALogbook = /is not a logbook of the shared root\. Nothing changed\. Run sage link --separate to start a new logbook\.$/;
   assert.throws(() => w.claude("link"), form);
   assert.throws(() => w.claude("link", "--separate", "--to", "a-123456"), form);
   assert.throws(() => w.claude("link", "--separate=no"), form);
@@ -268,6 +345,16 @@ test("link takes exactly one form, and --to names a real logbook of the shared r
   writeFileSync(join(w.shared, "planted-123456", "tasks.tsv"), "");
   assert.throws(() => w.claude("link", "--to", "planted-123456"), notALogbook, "a folder that link did not make is not listed");
   assert.equal(existsSync(join(w.shared, "bindings.tsv")), false);
+});
+
+test("a --to that names no logbook lists the logbooks in the refusal, so that no agent reads projects.tsv, and the named folder works", (t) => {
+  const w = world(t);
+  const other = w.repo("other"), clone = join(w.base, "clone");
+  claudeSage(["link", "--separate", "--project", other], w.env);
+  const folder = basename(tool.storeDir(other, w.env));
+  git(w.base, "clone", "-q", other, clone);
+  for (const run of [claudeSage, tool.sage]) assert.throws(() => run(["link", "--to", "typo-123456", "--project", clone], w.env), new RegExp(`is not a logbook of the shared root\\. Nothing changed\\. Its logbooks are ${folder}\\. Run sage link --to <folder> with one of them, or run sage link --separate to start a new logbook\\.$`));
+  assert.match(claudeSage(["link", "--to", folder, "--project", clone], w.env), /now uses the shared logbook/);
 });
 
 test("link --to refuses a logbook of another project, and --separate refuses a folder name in use", (t) => {
@@ -295,7 +382,7 @@ test("a clone joins with an explicit link; without one it is a project of its ow
 
 for (const [name, lines, expected] of [
   ["a folder that is missing", (w) => [`${w.project}\tgone-123456\t${FIRST}\t2026-11-01T00:00:00Z`], /names the logbook gone-123456, which is missing.*sage link --to <folder> or sage link --separate/],
-  ["a folder of another project", (w) => [`${w.project}\tshared-123456\t${FIRST}\t2026-11-01T00:00:01Z`, `/elsewhere\tshared-123456\t${OTHER}\t2026-11-01T00:00:00Z`], /belongs to another project \(\/elsewhere\).*shallow clone.*sage link --to <folder> or sage link --separate/],
+  ["a folder of another project", (w) => [`${w.project}\tshared-123456\t${FIRST}\t2026-11-01T00:00:01Z`, `${w.base}\tshared-123456\t${OTHER}\t2026-11-01T00:00:00Z`], /belongs to another project \(.*sage-shared-.*\).*shallow clone.*sage link --to <folder> or sage link --separate/],
   ["two rows for one path", (w) => [`${w.project}\tshared-123456\t\t2026-11-01T00:00:00Z`, `${w.project}\tshared-123456\t\t2026-11-01T00:00:01Z`], /has two rows for/],
   ["a row with a bad folder", (w) => [`${w.project}\t../shared-123456\t\t2026-11-01T00:00:00Z`], /has a damaged row/],
   ["a row of three cells", (w) => [`${w.project}\tshared-123456\t2026-11-01T00:00:00Z`], /has a damaged row/],
@@ -349,6 +436,30 @@ test("a later row with other commits and a gone path does no harm: the owner wor
   const clone = join(w.base, "clone");
   git(w.base, "clone", "-q", w.project, clone);
   assert.match(codexSage(["link", "--to", folder, "--project", clone], w.env), /now uses the shared logbook/);
+});
+
+test("a gone older row never refuses the only live checkout, and a checkout with other commits still cannot join through it", (t) => {
+  const w = world(t);
+  w.claude("link", "--separate");
+  w.claude(...ADD);
+  const folder = w.name(), [[root, , commits, at]] = w.rows(), gone = join(w.base, "gone");
+  const older = `${gone}\t${folder}\t${OTHER}\t2020-01-01T00:00:00Z`, mine = `${root}\t${folder}\t${commits}\t${at}`;
+  w.bind(older, mine);
+  assert.equal(w.claude("logbook"), join(w.shared, folder));
+  assert.match(w.claude("status"), /T1/);
+  assert.match(w.claude(...ADD), /T2/);
+  assert.match(w.codex(...ADD), /T3/);
+  // While a gone row is back on the disk, it owns the logbook again: gone means gone now, and no row is rewritten.
+  mkdirSync(gone);
+  assert.throws(() => w.claude("status"), /belongs to another project/);
+  rmSync(gone, { recursive: true });
+  // A newcomer meets the live owner, also while an older gone row shares its first commit.
+  w.bind(`${gone}\t${folder}\t${commits}\t2020-01-01T00:00:00Z`, `${root}\t${folder}\t${OTHER}\t${at}`);
+  const stranger = w.repo("stranger");
+  assert.throws(() => claudeSage(["link", "--to", folder, "--project", stranger], w.env), new RegExp(`belongs to another project \\(${root}\\)`));
+  // With no live row, the oldest gone row still keeps a stranger out.
+  w.bind(`${gone}\t${folder}\t${OTHER}\t2020-01-01T00:00:00Z`);
+  assert.throws(() => claudeSage(["link", "--to", folder, "--project", stranger], w.env), new RegExp(`belongs to another project \\(${gone}\\)`));
 });
 
 test("the older row owns a logbook whichever row filled its commits first", (t) => {

@@ -55,8 +55,6 @@ const CLEAN = Object.values(VERDICT).filter((k) => k !== "checks-pass");
 const KINDS = [...Object.values(VERDICT), ...NOT_CLEAN];
 const CANDIDATES = ["implementer", "designer"];
 const WRITERS = [...CANDIDATES, "arena-judge"];
-/** The most running lead runs in one logbook: the owner's limit of 3 leads per project (#62, section 6). The hook holds the same limit for the agents. */
-const LEADS = 3;
 /** The roles of a run: sage's child roles (roles.mjs), and the steps of an investigation, whose runs the board reads by the step's name. */
 const RUN_ROLES = [...ROLES, "investigate", "evidence-review"];
 /** The roles of the runs whose reports give a review or QA verdict: none may still run when a task merges (F-T289-18). */
@@ -80,7 +78,7 @@ const NEXT = {
   abandoned: [],
 };
 const STATES = Object.keys(NEXT);
-const DEFAULTS = { max_agents: AGENT_CAPS.max_agents, "cycles.small": 1, "cycles.large": 2, "cycles.risk": 2, max_rounds: 3, arena: 3, arena_models: "inherit,inherit,inherit", cap_total: AGENT_CAPS.cap_total, ...modelDefaults };
+const DEFAULTS = { max_agents: AGENT_CAPS.max_agents, max_leads: AGENT_CAPS.max_leads, "cycles.small": 1, "cycles.large": 2, "cycles.risk": 2, max_rounds: 3, arena: 3, arena_models: "inherit,inherit,inherit", cap_total: AGENT_CAPS.cap_total, ...modelDefaults };
 /** The counts in the config, and what a 0 would do. Each count is a whole number of 1 or more. */
 /** The owner's floors (gate G18): a large or risk-flagged task needs at least 2 clean cycles. Only a code change lowers them; every other count is 1 or more. */
 const FLOOR = { "cycles.large": 2, "cycles.risk": 2 };
@@ -88,12 +86,12 @@ const floor = (key) => FLOOR[key] ?? 1;
 /** The limits that keep a typo from blocking every merge or starting too many agents: 10 for cycles and rounds, 50 for agent counts. */
 const LIMIT = { "cycles.small": 10, "cycles.large": 10, "cycles.risk": 10, max_rounds: 10 };
 const limit = (key) => LIMIT[key] ?? 50;
-const COUNTS = { max_agents: "no sage agent could start", "cycles.small": "a tiny or small task would merge with no review", "cycles.large": "a large task would merge with no review", "cycles.risk": "a task with a risk flag would merge with no review", max_rounds: "no repair round could start", arena: "an arena would have no candidates", cap_total: "no sage agent could start" };
+const COUNTS = { max_agents: "no sage agent could start", max_leads: "no lead could start", "cycles.small": "a tiny or small task would merge with no review", "cycles.large": "a large task would merge with no review", "cycles.risk": "a task with a risk flag would merge with no review", max_rounds: "no repair round could start", arena: "an arena would have no candidates", cap_total: "no sage agent could start" };
 /** One project's own agent cap, cap.<project>, with the project's name as projectName gives it. Without one, max_agents is the project's cap. */
 const CAP = /^cap\.[a-z0-9][a-z0-9-]*$/;
 /** Model choice by role, task size or risk flag; provider defaults supply the model names. */
 const MODEL = /^model\.(pe|designer|implementer|code-reviewer|security-reviewer|ux-reviewer|qa|arena-judge)(\.(tiny|small|large|investigate|risk))?$/;
-const KEYS = "max_agents, cycles.small, cycles.large, cycles.risk, max_rounds, arena and cap_total as key=number, cap.<project>=number for one project's cap, model.<role>.<size>=<model>, model.<role>.risk=<model> or model.<role>=<model> for an agent role's model";
+const KEYS = "max_agents, max_leads, cycles.small, cycles.large, cycles.risk, max_rounds, arena and cap_total as key=number, cap.<project>=number for one project's cap, model.<role>.<size>=<model>, model.<role>.risk=<model> or model.<role>=<model> for an agent role's model";
 /** The columns that a later version added: an older table without them reads with them empty, and its next write adds them. */
 const FILLED = { runs: ["model", ...USAGE_FIELDS], tasks: ["hold", "extra", "priority", "kind", "waits", "program", "adoption", "approvals"], findings: ["run", "class"] };
 /**
@@ -885,13 +883,13 @@ function runFrame(dir, task, role, branch, candidate, env) {
   if (!RUN_ROLES.includes(role)) refuse(`${JSON.stringify(role)} is not a role of a run. Roles: ${RUN_ROLES.join(", ")}.`);
   if (WAIT_ROLES.includes(role)) waitsMet(task, graphOf(dir), `${role} run`);
   if (role === "lead") {
-    // A lead carries one task's pull request: one running lead per task, and at most LEADS per project.
+    // A lead carries one task's pull request: one running lead per task, and at most max_leads per project (the hook holds the same key for the agents).
     if (["merged", "abandoned", "concluded"].includes(task.state)) refuse(`${task.id} is ${task.state}, so it takes no lead run: the task has ended.`);
     if (!builds(task)) refuse(`${task.id} is an investigation: it has no build and no pull request, so it takes no lead run. The chief runs its steps.`);
     const leads = read(dir, "runs").filter((r) => r.role === "lead" && r.status === "running");
     const same = leads.find((r) => r.task === task.id);
     if (same) refuse(`${same.id} is the running lead run of ${task.id}, and a task has one running lead. Finish ${same.id} first (sage run done ${same.id} --status done, blocked, question or failed).`);
-    if (leads.length >= LEADS) refuse(`the project has ${leads.length} running lead runs, the most it holds: ${leads.map((r) => `${r.id} on ${r.task}`).join(", ")}. Finish one of them first (sage run done <R> --status done, blocked, question or failed).`);
+    if (leads.length >= config(env, dir).max_leads) refuse(`the project has ${leads.length} running lead runs, the most it holds: ${leads.map((r) => `${r.id} on ${r.task}`).join(", ")}. Finish one of them first (sage run done <R> --status done, blocked, question or failed).`);
   }
   if (WRITERS.includes(role)) {
     if (!branch) refuse(`the ${role} run needs --branch`);
@@ -2592,12 +2590,22 @@ function logbookConfig(dir, pairs) {
 }
 
 /** Runs one command and returns its output line(s). A refused command throws, with the reason. */
+/** The folder of this command. A checkout that moved or was cloned again can leave a session in a folder that is gone. */
+function folderHere() {
+  try {
+    return process.cwd();
+  } catch (e) {
+    if (e.code === "ENOENT") refuse("the current folder is gone: it was moved or removed. Nothing changed. Go to the project's folder, or give --project with its path.");
+    throw e;
+  }
+}
+
 function sage(argv, env = process.env) {
   const [cmd, ...rest] = argv;
   if (!COMMANDS.includes(cmd)) refuse(`unknown command "${cmd ?? ""}". Commands: ${COMMANDS.join(", ")}`);
   const { pos, opt } = parse(cmd, rest);
   const readOnly = scopedRead(cmd, pos, opt);
-  const root = sageRoot(env), project = resolve(opt.project ?? env.SAGE_PROJECT ?? process.cwd());
+  const root = sageRoot(env), project = resolve(opt.project ?? env.SAGE_PROJECT ?? folderHere());
   // First, because board, link, config, projects and merge-check return before they open a logbook. Only a command that names an actor locates here, so link can still replace a row that locate refuses.
   if ((opt.chief !== undefined || opt.lead !== undefined || cmd === "claim") && !locate(project, env).shared) refuse(`${visible(project)} has no shared logbook, and only a shared logbook has chiefs: leave out --chief and --lead, and a task here needs no claim. Nothing changed.`);
   if (cmd === "board" && opt.view !== undefined) {
@@ -2622,7 +2630,7 @@ function sage(argv, env = process.env) {
   if (cmd === "merge-check") {
     const cycles = opt.cycles === undefined ? undefined : (typed("cycles.small", opt.cycles) ?? refuse("--cycles is a whole number from 1 to 10")); // the chief's explicit count: it only raises a task's own count
     if (opt.pr !== undefined && !PR.test(opt.pr)) refuse("--pr is the pull request's number, with no leading zero, for example --pr 5");
-    const r = mergeCheck(opt.sha ?? refuse("merge-check needs --sha with the full 40-character SHA of the head commit: git rev-parse <branch>"), env, { cycles, pr: opt.pr, head: opt.head, project: resolve(opt.project ?? env.SAGE_PROJECT ?? process.cwd()) });
+    const r = mergeCheck(opt.sha ?? refuse("merge-check needs --sha with the full 40-character SHA of the head commit: git rev-parse <branch>"), env, { cycles, pr: opt.pr, head: opt.head, project });
     return r.ok ? r.reason : refuse(r.reason);
   }
   if (cmd === "config" && !pos.some(ownKey)) {
@@ -2663,6 +2671,7 @@ function sage(argv, env = process.env) {
   const changeLoss = repair && opt["accept-change-loss"] !== undefined;
   if (changeLoss && opt["accept-change-loss"] !== "yes") refuse("--accept-change-loss takes only yes. Run it only after the owner accepts the loss of the saved change.");
   if (repair && (odd.length || (!skip.length && !changeLoss))) refuse(`logbook repair needs --accept-loss with the tables whose rows the user accepts to lose, joined by a comma: ${Object.keys(TABLES).join(", ")}.${odd.length ? ` Not ${odd.join(", ")}.` : ""}`);
+  if (!place.shared && !place.legacy && !existsSync(dir)) refuseNewLogbook(place.checkout, env);
   if (cmd !== "init" && !(repair && existsSync(dir)) && !existsSync(join(dir, "tasks.tsv"))) {
     const printed = visible(project); // a path with control characters prints otherwise than it is, so it gets no line to paste
     refuse(`no logbook for the project ${printed}. ${printed === project ? `Run: sage init --project ${shell(project)}` : "Its path has control characters, so no command is printed to paste. Rename the folder, or run sage init from inside it."}`);
@@ -3586,7 +3595,7 @@ function runCli(argv = process.argv.slice(2)) {
 }
 
 const { board, answerPaths } = createBoard({ BLOCKS, BRANCH, RISKS, STATES, mergeCheck, optionsOf, projectName, projectRoot, read, sageRoot, slug, storeDir, withLock });
-const { fillCommits, link, locate, notePlugin } = createSharedRoot({ Refusal, refuse, legacyRoots, makeLogbook, now, projectRoot, provider, raiseCounts, readRegular, rowsOf, sageRoot, sheetText, slug, swap, visible, withLock,
+const { fillCommits, link, locate, notePlugin, refuseNewLogbook } = createSharedRoot({ Refusal, refuse, legacyRoots, makeLogbook, now, projectRoot, provider, raiseCounts, readRegular, rowsOf, sageRoot, sheetText, slug, swap, visible, withLock,
   listed: (root) => known(root, undefined, undefined, true),
   enroll: (root, folder, make) => known(root, folder, make, false, true) });
 const { chiefs, chiefRow, rowOf } = createChiefs({ now, provider, readRegular, refuse, rowsOf, sheetText, swap });
