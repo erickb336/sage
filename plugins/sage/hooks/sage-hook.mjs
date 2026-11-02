@@ -48,6 +48,7 @@ const filePolicy = await import("./file-policy.mjs").catch((error) => ({ error }
 const ROOT = join(dirname(fileURLToPath(import.meta.url)), "..");
 const commandReader = await import("./command-reader.mjs").catch((error) => ({ error }));
 const TOOL = join(ROOT, "skills/sage/sage.mjs");
+const PR_TOOL = join(ROOT, "skills/sage/sage-pr.mjs");
 /** The board server's command, which the build copies into the plugin from packages/sage-board. */
 const BOARD = join(ROOT, "board/cli.mjs");
 /** The one command that can create main or master (firstUpload). */
@@ -279,6 +280,10 @@ export function handle(input, state, slots) {
       } else if (!helper) keepDirect(input, slots);
       return void slots.release(input.agent_id, helper && { ...core.readReport(input.last_assistant_message), sha });
     }
+    // A late report of a run that ended stays readable, whatever its role: the state tool says which runs keep one.
+    try {
+      if (typeof input.last_assistant_message === "string" && logbookOf(helper.folder).row(helper.run)?.status !== "running") stateTool.keepReport(helper.folder, { task: helper.task, run: helper.run, role: helper.role, sha: head || "", text: input.last_assistant_message });
+    } catch {}
     // An implementer's report backs no verdict, and its RESULT is its own word: a normal stop, with that word and the
     // head that it left on the branch, so that its lead ends its run and starts the reviews there (R1817-1).
     return void slots.release(input.agent_id, { result: core.readReport(input.last_assistant_message).result, severities: [], sha: head || "" });
@@ -325,7 +330,7 @@ export function handle(input, state, slots) {
   const why = event === "PreToolUse" ? (main ? chiefProblem(input, state.sage) : agentWriteProblem(input, slots)) : undefined;
   const verdict = event === "PreToolUse" && main && state.sage && !why ? chiefVerdictProblem(input, slots) : undefined;
   if (verdict) return deny(event, verdict);
-  const notChief = event === "PreToolUse" && main && !why ? chiefIdProblem(input) : undefined;
+  const notChief = event === "PreToolUse" && main && !why ? chiefIdProblem(input) ?? chiefPrProblem(input) : undefined;
   if (notChief) return deny(event, notChief);
   if (why && main) return deny(event, `${why} Only sage.mjs changes the logbook: run the state tool's command for this change (node <path to skills/sage/sage.mjs> ...), as a command of its own. If no command does it, ask the user.`);
   if (why && input.agent_type === "sage:lead") return deny(event, `${why} A lead writes the logbook only with ${LEAD_FORM}. Report to the sage what else the logbook needs.`);
@@ -452,7 +457,7 @@ export function handle(input, state, slots) {
     }
     let answer;
     for (const command of commands) {
-      const result = gitGate(event, command, state, cwd, main, tool, describedOnly(ti, command));
+      const result = gitGate(event, command, state, cwd, main, tool, describedOnly(ti, command), input.session_id);
       if (result?.hookSpecificOutput?.permissionDecision === "deny") return result;
       answer ??= result;
     }
@@ -1041,9 +1046,10 @@ const LEAD_STOPS = ["held", "replan", "merged", "concluded", "abandoned"];
 function keepDirect(input, slots) {
   try {
     const role = String(input.agent_type ?? "").replace(/^sage:/, ""), mark = slots.runOf(input.agent_id);
-    if (!OURS.test(input.agent_type ?? "") || !REVIEWERS.includes(role) || !mark || mark.shared || typeof input.last_assistant_message !== "string") return;
+    if (!OURS.test(input.agent_type ?? "") || !mark || mark.shared || typeof input.last_assistant_message !== "string") return;
     const folder = realpathSync.native(input.cwd), view = logbookOf(folder), run = view.row(mark.run);
-    if (run?.role !== role || run.status !== "running") return;
+    // A running run keeps the report of a review or QA. A run that ended asks the state tool, which keeps its late report or refuses.
+    if (run?.role !== role || (run.status === "running" && !REVIEWERS.includes(role))) return;
     const lead = view.leadRun(run.task);
     if (lead && slots.helper(helperOf({ logbook: digest(view.dir), run: lead.id }, mark.run)).owned) return;
     const sha = mark.tip && mark.tip === headOf(folder, run.task) ? mark.tip : "";
@@ -1332,10 +1338,10 @@ function chiefStateWords(input) {
   return words.length && PLAIN.test(words.join(" ")) ? words : undefined;
 }
 /**
- * The words after the state tool's path, as the shell reads them, so a quoted value is one word: the line is this hook's
- * state tool as one command, and a substitution in its words does not change that. Any other line gives undefined.
+ * The words after a sage script's path, as the shell reads them, so a quoted value is one word: the line is this hook's
+ * script as one command, and a substitution in its words does not change that. Any other line gives undefined.
  */
-function chiefWriteWords(input) {
+function chiefWriteWords(input, tool = TOOL) {
   let commands;
   try {
     commands = core.shellCommands(String(input.tool_input?.command ?? ""));
@@ -1344,7 +1350,7 @@ function chiefWriteWords(input) {
   }
   const [one, ...more] = commands.filter((c) => !c.host);
   const [node, path, ...rest] = one?.words ?? [];
-  return !more.length && node === "node" && /(?:^|\/)skills\/sage\/sage\.mjs$/.test(path) && canonical(resolve(input.cwd ?? process.cwd(), path)) === canonical(TOOL) ? rest : undefined;
+  return !more.length && node === "node" && /(?:^|\/)skills\/sage\/sage(?:-pr)?\.mjs$/.test(path) && canonical(resolve(input.cwd ?? process.cwd(), path)) === canonical(tool) ? rest : undefined;
 }
 /**
  * The sage's review or QA verdict, early (T483). The state tool is the boundary: its verdict command refuses a review or
@@ -1373,6 +1379,20 @@ function chiefIdProblem(input) {
   }
   if (!id || opt.chief === id) return undefined;
   return opt.chief === undefined ? `this project's logbook is shared, so each write names its chief: add --chief ${id} to this command.` : `this session is chief ${id}, not ${quoted(opt.chief)}: give --chief ${id}.`;
+}
+/**
+ * The PR script reads no session, and writes the task's PR number in the name of the task's chief. So this hook, which
+ * knows the session, refuses its create and merge for a chief that does not own the task, in the state tool's own words.
+ */
+function chiefPrProblem(input) {
+  if (input.tool_name !== "Bash") return undefined;
+  const [verb, task] = chiefWriteWords(input, PR_TOOL) ?? [];
+  if (!["create", "merge"].includes(verb)) return undefined;
+  try {
+    return stateTool.sessionBar(realpathSync.native(resolve(input.cwd ?? process.cwd(), process.env.SAGE_PROJECT ?? ".")), task, input.session_id) || undefined;
+  } catch {
+    return undefined; // a logbook that cannot be read: the script gives its own refusal
+  }
 }
 function chiefVerdictProblem(input, slots) {
   if (input.tool_name !== "Bash") return undefined;
@@ -1981,7 +2001,7 @@ function powerShellProblem(command) {
     : undefined;
 }
 
-function gitGate(event, command, state, cwd, main, tool, described = false) {
+function gitGate(event, command, state, cwd, main, tool, described = false, session) {
   const powerShell = tool === "PowerShell" && powerShellProblem(command);
   if (powerShell) return deny(event, powerShell);
   const options = { powerShell: tool === "PowerShell" };
@@ -2013,7 +2033,7 @@ function gitGate(event, command, state, cwd, main, tool, described = false) {
   try {
     if (stateTool.error) throw stateTool.error;
     // Only a task of the merged project's logbook approves: its folder, resolved as for a lead (F-T273-9).
-    verdict = stateTool.mergeCheck(merge.sha, process.env, { pr: merge.pr, head, project: realpathSync.native(cwd) });
+    verdict = stateTool.mergeCheck(merge.sha, process.env, { pr: merge.pr, head, project: realpathSync.native(cwd), session });
   } catch (e) {
     verdict = { reason: `it could not run (${e?.message ?? e}), so it refuses every merge. Tell the user.` };
   }

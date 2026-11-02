@@ -200,13 +200,14 @@ The plugin starts a local MCP server, `sage`, in the desktop app and in the CLI.
 | `init`, `status` | `init`, `status` |
 | `link` | `link --to <folder>`, `link --separate`: [shared logbooks](using-sage.md#shared-logbooks), only after your answer |
 | `claim` | `claim <T>`: take a task with no owning chief in a [shared logbook](using-sage.md#shared-logbooks) |
+| `offer`, `cancel`, `accept`, `release` | `offer <T>`, `cancel <T>`, `accept <T>`, `release <T>`: [hand a task to another chief](using-sage.md#shared-logbooks) |
 | `task_add`, `task_set` | `task add`, `task <T> set` |
 | `task_adopt` | `task-adopt <T>`: adopt another provider's task and PR, with fresh destination reviews |
 | `run_add`, `run_done` | `run add`, `run done` |
 | `finding_add`, `finding_triage`, `finding_close`, `finding_move` | `finding add`, `triage`, `close`, `move` |
 | `verdict`, `round`, `merge_check`, `log` | `verdict`, `round`, `merge-check`, `log` |
 | `standing`, `standing_add`, `pages` | `standing`, `standing add`, `pages` |
-| `gate_add`, `gate_answer` | `gate add`, `gate answer` |
+| `gate_add`, `gate_replace`, `gate_answer` | `gate add`, `gate replace`, `gate answer` |
 | `brief` | None: the brief check ([next section](#the-brief-check)) |
 
 - Each tool takes `project`, the absolute path of the project's checkout, and the command's options by their names.

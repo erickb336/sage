@@ -317,6 +317,32 @@ test("the hook process reads the mode file and the ledger: a verified merge pass
   assert.equal(denied(w.send("{not json")), UNREADABLE);
 });
 
+test("F-T618-17: in the Codex hook a replaced chief's gh pr merge refuses and names the owning chief; a legacy project and the owning chief merge as before", (t) => {
+  const w = world(t);
+  w.typed("sage mode", "autopilot on");
+  w.mode({ sage: true, autopilot: true });
+  const run = (...args) => codexTool.sage([...args, "--project", w.project], w.env);
+  const verified = (...chief) => {
+    const cli = (...args) => run(...args, ...chief), keep = (fields) => codexTool.keepReport(w.project, fields, w.env);
+    cli("task", "add", "--priority", "P2", "--title", "t", "--size", "small");
+    for (const kind of ["checks-pass", "review-clean", "qa-pass"]) cli(...backed(["verdict", "T1", "--sha", SHA, "--kind", kind, "--cycle", "1", "--pr", "41"], { cli, keep }));
+  };
+  run("init");
+  verified();
+  assert.equal(w.send(pre("Bash", MERGE)), undefined, "a legacy project has no chief");
+  assert.deepEqual(w.send(ask(MERGE)), ALLOW);
+  rmSync(codexTool.storeDir(w.project, w.env), { recursive: true });
+  codexTool.sage(["link", "--separate", "--project", w.project], w.env);
+  const first = codexTool.chiefFor(w.project, base.session_id, w.env), second = codexTool.chiefFor(w.project, "another-session", w.env);
+  verified("--chief", first);
+  assert.equal(w.send(pre("Bash", MERGE)), undefined, "the owning chief merges");
+  assert.deepEqual(w.send(ask(MERGE)), ALLOW, "and Codex shows no prompt for it");
+  run("gate", "replace", "T1", "--to", second, "--chief", second);
+  run("gate", "answer", "G1", "--option", "1");
+  assert.equal(denied(w.send(pre("Bash", MERGE))), `sage: the merge check refuses: T1 belongs to chief ${second} (codex), not to ${first}. Nothing changed. Change only your own tasks. If ${second} stopped, open a replace gate for the owner to answer: call the gate_replace tool with this task and to ${first}`);
+  assert.equal(w.send(ask(MERGE)), undefined, "the request of the replaced chief gets no allow");
+});
+
 test("the core reader of the mode file: no file is no mode, and a damaged file or a link is off (one rule with the mode hook)", (t) => {
   const w = world(t);
   const at = { session: base.session_id, transcript: w.transcript };

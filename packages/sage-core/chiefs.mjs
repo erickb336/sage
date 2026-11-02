@@ -24,12 +24,13 @@ const onTask = (task) => ({ kind: "task", task });
 export function writerClass(cmd, [sub, id] = []) {
   switch (cmd) {
     case "task": return sub === "add" ? NEW : id === "set" ? onTask(sub) : READ;
-    case "claim": return NEW;
+    case "claim": case "accept": return NEW;
+    case "offer": case "cancel": case "release": return onTask(sub);
     case "task-adopt": case "round": case "verdict": return onTask(sub);
     case "finding": return onTask(id);
     case "program": return { kind: "program" };
     case "run": return sub === "add" ? onTask(id) : sub === "done" ? { kind: "task", run: id } : sub === "usage" ? ANY : READ;
-    case "gate": return sub === "answer" ? OWNER : sub === "add" ? (id === undefined ? ANY : onTask(id)) : READ;
+    case "gate": return sub === "answer" ? OWNER : sub === "replace" ? ANY : sub === "add" ? (id === undefined ? ANY : onTask(id)) : READ;
     case "log": return TASK.test(sub ?? "") ? onTask(sub) : ANY;
     case "observe": return { ...ANY, task: sub };
     case "pages": return id === "record" ? { ...ANY, task: sub } : READ;
@@ -39,6 +40,29 @@ export function writerClass(cmd, [sub, id] = []) {
     case "init": case "projects": return ANY;
     default: return READ;
   }
+}
+
+/** A command that only a shared logbook has: it moves a task between chiefs. */
+export const chiefOnly = (cmd, [sub] = []) => ["claim", "offer", "cancel", "accept", "release"].includes(cmd) || (cmd === "gate" && sub === "replace");
+
+/** The open offer of a task's row: { id, from, to }. An empty cell has none, and so has a cell that does not read as one. */
+export function offerOf(task) {
+  try {
+    const offer = JSON.parse(task.offer || "null");
+    return typeof offer?.id === "string" && CHIEF.test(offer.from) && CHIEF.test(offer.to) ? offer : undefined;
+  } catch {
+    return undefined;
+  }
+}
+
+/**
+ * A replace gate's question, which only gate replace writes, on one line. The owner decides from it with no other page,
+ * and the answer reads it back (replaceOf). The title comes last, and replaceOf reads only the fixed start, so a title cannot pass for a rule.
+ */
+export const replaceQuestion = ({ from, to, task, title, runs, label }) => `Replace chief ${label(from)} of ${task} with ${label(to)}? Runs that end as failed: ${runs.map((r) => `${r.id} (${r.role})`).join(", ") || "none"}. Replace: ${to} owns ${task}, each of those runs ends as failed and work that it did not report may be lost, ${from} can no longer write ${task}, and an open offer is cleared. Then ${to} goes on with ${task}. Keep: nothing changes, and ${from} stays the owning chief. Title of ${task}: ${title}`;
+export function replaceOf(gate) {
+  const [, from, to, runs] = /^Replace chief (C[1-9]\d*)(?: \(\S+\))? of T[1-9]\d* with (C[1-9]\d*)(?: \(\S+\))?\? Runs that end as failed: (none|R[1-9]\d* \([^)]*\)(?:, R[1-9]\d* \([^)]*\))*)\. Replace: /.exec(gate.question) ?? [];
+  return from && { from, to, runs: runs === "none" ? [] : runs.split(", ").map((r) => r.split(" ")[0]) };
 }
 
 export function createChiefs({ now, provider, readRegular, refuse, rowsOf, sheetText, swap }) {

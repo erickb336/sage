@@ -29,9 +29,9 @@ import { AGENT_CAPS, BREAKS, FINDING_CLASSES, HIDDEN, LINE, NAME_MAX, PRIORITIES
 import { BREAKDOWN, ENDED, MET, PROGRAM_ID, TASK_ID, breakdownGate, byIds, dead, droppedBy, gateLines, lostClause, programState, progressOf, progressText, shownGraph, shownWaits, unmetWaits, waitGraph, waitWords, waitsOf, waitsWithState } from "./program-rules.mjs";
 import { OBSERVATIONS_MAX_BYTES, OBSERVATION_DATA_MAX_BYTES, validateObservation, validateObservations } from "./observations.mjs";
 import { createSharedRoot, sharedRoot } from "./shared-root.mjs";
-import { CHIEF, createChiefs, writerClass } from "./chiefs.mjs";
+import { CHIEF, chiefOnly, createChiefs, offerOf, replaceOf, replaceQuestion, writerClass } from "./chiefs.mjs";
 
-export function createStateTool({ defaultRoot, legacyRoots = () => [], provider, models = ["inherit"], modelDefaults = {}, usageInterfaces = [], claimStep = (task, version, chief) => `run sage claim ${task} --version ${version} --chief ${chief}` }) {
+export function createStateTool({ defaultRoot, legacyRoots = () => [], provider, models = ["inherit"], modelDefaults = {}, usageInterfaces = [], claimStep = (task, version, chief) => `run sage claim ${task} --version ${version} --chief ${chief}`, replaceStep = (task, chief) => `run sage gate replace ${task} --to ${chief} --chief ${chief}` }) {
 if (typeof defaultRoot !== "function") throw new TypeError("defaultRoot must be a function");
 if (typeof legacyRoots !== "function") throw new TypeError("legacyRoots must be a function");
 const MODELS = [...models];
@@ -101,14 +101,24 @@ const FILLED = { runs: ["model", ...USAGE_FIELDS], tasks: ["hold", "extra", "pri
  */
 const CHIEF_COLUMN = "chief";
 const TABLES = { ...PLAIN_TABLES, tasks: [...PLAIN_TABLES.tasks, CHIEF_COLUMN], runs: [...PLAIN_TABLES.runs, CHIEF_COLUMN] };
+/** All the columns of that rule: also a task's open offer, and the kind of a gate, which only the state tool writes. */
+const SPARSE = { tasks: [CHIEF_COLUMN, "offer"], runs: [CHIEF_COLUMN], gates: ["kind"] };
+TABLES.tasks = [...TABLES.tasks, "offer"];
+TABLES.gates = [...TABLES.gates, "kind"];
 /** The columns that a table may lack. */
-const ADDED = { ...FILLED, runs: [...FILLED.runs, CHIEF_COLUMN], tasks: [...FILLED.tasks, CHIEF_COLUMN] };
-const COMMANDS = ["init", "logbook", "standing", "pages", "task", "task-adopt", "program", "round", "run", "finding", "verdict", "gate", "log", "status", "stats", "merge-check", "config", "projects", "board", "observe", "link", "claim"];
+const ADDED = { ...FILLED, runs: [...FILLED.runs, ...SPARSE.runs], tasks: [...FILLED.tasks, ...SPARSE.tasks], gates: SPARSE.gates };
+/** The status of a run that ended. Any other status is an active or an unknown run. */
+const RUN_ENDS = ["done", "blocked", "question", "failed"];
+const COMMANDS = ["init", "logbook", "standing", "pages", "task", "task-adopt", "program", "round", "run", "finding", "verdict", "gate", "log", "status", "stats", "merge-check", "config", "projects", "board", "observe", "link", "claim", "offer", "cancel", "accept", "release"];
 /** The options of each command, by its name or by its name and first word. Every command also takes --project. */
 const OPTIONS = {
   "logbook repair": ["accept-loss", "accept-change-loss"],
   link: ["to", "separate"],
   claim: ["version"],
+  offer: ["to"],
+  cancel: ["offer"],
+  accept: ["offer", "version"],
+  "gate replace": ["to"],
   "projects rebuild": ["accept-listing"],
   "task add": ["title", "size", "risk", "add", "why", "priority", "kind", "waits", "program"],
   "task-adopt": ["source-logbook", "source-provider", "source-task", "pr", "branch"],
@@ -521,13 +531,14 @@ const read = (dir, table) => rowsIn(table, sheet(dir, table));
  * merge check runs it on every logbook, and every write on its own, so no command hides a lost table or makes a new one.
  */
 const check = (dir, skip = [], max = Infinity) => {
-  const version = JSON.stringify([taskWrites.readVersion(dir), runWrites.readVersion(dir), reviewWrites.readVersion(dir), interruptedWrites.readVersion(dir), taskUpdates.readVersion(dir)]);
+  const receipts = () => JSON.stringify([taskWrites, runWrites, reviewWrites, interruptedWrites, taskUpdates, replaceWrites].map((writes) => writes.readVersion(dir)));
+  const version = receipts();
   const tables = Object.fromEntries(Object.keys(TABLES).filter((t) => !skip.includes(t)).map((t) => [t, sheet(dir, t, skip, max)]));
   // A program's id is on one row: with two, a line could read the wrong one (R1208-3).
   const seen = new Set();
   const twice = (tables.programs ? rowsOf(tables.programs) : []).find(({ id }) => seen.has(id) || !seen.add(id))?.id;
   if (twice !== undefined) refuse(`${join(dir, "programs.tsv")} has two rows for ${visible(twice)}, but a program's id is on one row. Ask the user to fix the file: keep one row of ${visible(twice)}.`);
-  if (JSON.stringify([taskWrites.readVersion(dir), runWrites.readVersion(dir), reviewWrites.readVersion(dir), interruptedWrites.readVersion(dir), taskUpdates.readVersion(dir)]) !== version) refuse("A task, run, or review receipt was created while this logbook was read. Retry the read.");
+  if (receipts() !== version) refuse("A task, run, review, or Replace receipt was created while this logbook was read. Retry the read.");
   return tables;
 };
 
@@ -554,7 +565,8 @@ function knownColumns(dir, table, cols) {
   if (extra.length) refuse(`${join(dir, `${table}.tsv`)} has columns that this version of sage does not know (${extra.join(", ")}): a newer sage wrote this logbook, and a write of this version would lose them. Update the sage plugin and restart this session. Nothing changed; status, logbook, standing and merge-check still work.`);
 }
 
-const taskVersion = task => createHash("sha256").update(JSON.stringify(task)).digest("hex");
+/** The hash of a task's row. An empty offer cell counts as no cell, so the first offer of a logbook changes no other task's version. */
+const taskVersion = ({ offer, ...task }) => createHash("sha256").update(JSON.stringify(offer ? { ...task, offer } : task)).digest("hex");
 
 function taskSnapshot(dir, id) {
   const matches = read(dir, "tasks").filter(row => row.id === id);
@@ -607,7 +619,7 @@ function checkUpdateFacts(facts) {
   if (!updateKeys(facts, [...tables, "readiness", ...counts])
     || (counts.length && (!Number.isSafeInteger(facts.maxRounds) || valid("max_rounds", facts.maxRounds) !== facts.maxRounds))) updateDeny();
   for (const table of tables) {
-    if (!Array.isArray(facts[table]) || facts[table].some(row => !updateKeys(row, TABLES[table])
+    if (!Array.isArray(facts[table]) || facts[table].some(row => !updateKeys(row, TABLES[table].filter(c => !SPARSE[table]?.includes(c) || Object.hasOwn(row, c)))
       || Object.values(row).some(value => typeof value !== "string" || cell(value) !== value))) updateDeny();
   }
   const r = facts.readiness;
@@ -1045,7 +1057,8 @@ const keptFile = (dir, run) => join(dir, "kept", `${run}.json`);
  * Keep a helper's report at its stop, for the verdict that it backs (T483). A provider's stop hook calls it with the
  * report as the helper gave it, and the commit that the hook saw the helper review ("" when it saw none). No command of the
  * state tool keeps a report, so a chief cannot make one. The first report of a run stays: a later one never replaces it.
- * The path of the kept report, or a refusal.
+ * In a shared logbook, a run that ended as blocked or failed keeps a report that arrives late, with its arrival time, so a
+ * transfer or Replace loses no report. Such a run backs no verdict (backingProblem). The path of the kept report, or a refusal.
  */
 function keepReport(project, { task, run, role, sha = "", text } = {}, env = process.env) {
   const dir = storeDir(project, env);
@@ -1055,7 +1068,7 @@ function keepReport(project, { task, run, role, sha = "", text } = {}, env = pro
   }
   const row = read(dir, "runs").find((r) => r.id === run);
   if (row?.task !== task || row.role !== role) refuse(`${run} is not a ${role} run of ${task}, so no report is kept.`);
-  if (row.status !== "running") refuse(`${run} ended as ${row.status} before this stop, so no report is kept.`);
+  if (row.status !== "running" && !(["blocked", "failed"].includes(row.status) && isShared(dir, env))) refuse(`${run} ended as ${row.status} before this stop, so no report is kept.`);
   const folder = join(dir, "kept"), file = keptFile(dir, run), temporary = join(folder, `.kept-${randomUUID()}`);
   mkdirSync(folder, { recursive: true, mode: 0o700 });
   // The whole file appears at once, by a link of a full temporary file, and never over a kept one.
@@ -1077,6 +1090,10 @@ function keptOf(dir, run) {
   } catch {}
   return { damaged: true };
 }
+
+/** One line for each kept report of a task's blocked or failed runs: its path and its arrival time, for the owning chief to read. */
+const keptLines = (dir, task) => read(dir, "runs").filter((r) => r.task === task && ["blocked", "failed"].includes(r.status) && keptOf(dir, r.id)?.at)
+  .map((r) => `\n${r.id} ${r.status} · report kept ${keptOf(dir, r.id).at} · backs no verdict · ${keptFile(dir, r.id)}`).join("");
 
 /** Compare one existing report. Admission belongs to the caller; this read creates no state or review authority. */
 function compareRetainedReport(input, env = process.env) {
@@ -1204,7 +1221,7 @@ function verdictBacking(project, id, kind, opt = {}, env = process.env) {
   return task && backingProblem(dir, task, kind, opt);
 }
 
-function acceptReportedReview(input, env = process.env) {
+function acceptReportedReview(input, env = process.env, native) {
   const fields = ["project", "task", "run", "role", "assignment", "reportHash", "text", "review"];
   const deny = () => refuse("The review does not match its completed run, report, or current commit.");
   if (!input || typeof input !== "object" || Array.isArray(input) || Object.keys(input).length !== fields.length
@@ -1225,6 +1242,7 @@ function acceptReportedReview(input, env = process.env) {
     const prior = reviewWrites.readReceipt(dir, reference);
     if (prior) return { decision: "already-accepted", ...prior.result };
     ready(dir);
+    if (isShared(dir, env)) guard(dir, "verdict", [input.task], { chief: chiefRow(dir, native).id });
     const tasks = read(dir, "tasks"), runs = read(dir, "runs");
     const matches = tasks.filter(row => row.id === input.task), assigned = runs.filter(row => row.id === input.run);
     if (matches.length !== 1 || assigned.length !== 1) deny();
@@ -1248,7 +1266,31 @@ function acceptReportedReview(input, env = process.env) {
 const interruptedWrites = recordedWrites({ schema: 5, tables: ["runs"], folder: "interrupted-runs",
   name: /^[0-9a-f-]{36}\.json$/, receiptName: reference => `${reference.binding.assignment}.json`, validate: validateInterruptedWrite });
 /** The consumer of each schema of a saved change. Schema 6 is the old marker of a task update. */
-const SAVED = { 2: taskWrites, 3: runWrites, 4: reviewWrites, 5: interruptedWrites, 6: taskUpdates, 7: usageWrites, 8: taskUpdates };
+/** The tables after a Replace, from the tables before it: the one write of the design's table, with the gate's answer. */
+function replaceDelta({ reference: { gate, task, to, runs }, result: { at, answer } }, rows) {
+  const row = rows.tasks.find((t) => t.id === task), asked = rows.gates.find((g) => g.id === gate);
+  if (!row || !asked || runs.some((id) => !rows.runs.some((r) => r.id === id))) return false;
+  Object.assign(row, { chief: to, ...(row.offer ? { offer: "" } : {}) });
+  for (const run of rows.runs) if (runs.includes(run.id)) Object.assign(run, { status: "failed", ended: at });
+  asked.answer = answer;
+  rows.decisions.push({ at, task, decision: `${asked.question} → ${answer}`, why: "the user's answer" });
+  return true;
+}
+function validateReplaceWrite(receipt, tables) {
+  const deny = () => refuse("The saved Replace is damaged. No table changed.");
+  const { reference, result } = receipt;
+  if (typeof reference?.gate !== "string" || typeof reference.task !== "string" || !CHIEF.test(reference.to) || !Array.isArray(reference.runs)
+    || typeof result?.at !== "string" || typeof result.answer !== "string") deny();
+  if (!tables) return;
+  const columns = savedWriteColumns(tables, deny);
+  const rows = Object.fromEntries(Object.entries(tables).map(([table, { before }]) => [table, rowsOf(sheetText(before))]));
+  if (!replaceDelta(receipt, rows) || Object.keys(tables).some((table) => tables[table].after !== tableText(table, rows[table], columns[table]))) deny();
+}
+const REPLACE_TABLES = ["tasks", "runs", "gates", "decisions"];
+const replaceWrites = recordedWrites({ schema: 9, tables: REPLACE_TABLES, folder: "replace-requests",
+  name: /^[0-9a-f]{64}\.json$/, receiptName: reference => createHash("sha256").update(JSON.stringify(reference)).digest("hex") + ".json", validate: validateReplaceWrite });
+
+const SAVED = { 2: taskWrites, 3: runWrites, 4: reviewWrites, 5: interruptedWrites, 6: taskUpdates, 7: usageWrites, 8: taskUpdates, 9: replaceWrites };
 /**
  * Step 3 of every writer, and of a read that takes the lock. Call under the lock. A file fault leaves the marker for the
  * next writer, and its error keeps the code, so that a caller reads the outcome as uncertain.
@@ -1619,8 +1661,8 @@ function captureReviewTarget(input, env = process.env) {
   });
 }
 
-/** The columns that a write gives a table: all, but the chief column only when a row has it. */
-const columnsOf = (table, rows) => TABLES[table].filter((c) => c !== CHIEF_COLUMN || rows.some((r) => Object.hasOwn(r, c)));
+/** The columns that a write gives a table: all, but a sparse column only when a row has it. */
+const columnsOf = (table, rows) => TABLES[table].filter((c) => !SPARSE[table]?.includes(c) || rows.some((r) => Object.hasOwn(r, c)));
 function tableText(table, rows, cols = columnsOf(table, rows)) {
   return [cols.join("\t"), ...rows.map((r) => cols.map((c) => cell(r[c])).join("\t"))].join("\n") + "\n";
 }
@@ -2054,7 +2096,7 @@ function frame(dir, title, size, risk, add, tags = {}) {
   return task;
 }
 /** A task's priority, kind and program for a printed line: nothing when it has none. */
-const tagsOf = (task) => `${task.priority ? ` · ${task.priority}` : ""}${task.kind ? ` · kind ${task.kind}` : ""}${task.program ? ` · program ${task.program}` : ""}${task.chief ? ` · chief ${task.chief}` : ""}`;
+const tagsOf = (task) => `${task.priority ? ` · ${task.priority}` : ""}${task.kind ? ` · kind ${task.kind}` : ""}${task.program ? ` · program ${task.program}` : ""}${task.chief ? ` · chief ${task.chief}` : ""}${offerOf(task) ? ` · offer ${offerOf(task).id} to ${offerOf(task).to} · version ${taskVersion(task)}` : ""}`;
 const framed = (task) => `${task.id} framed · ${task.size}${task.risk ? ` · risk ${task.risk}` : ""} · route ${task.route}${tagsOf(task)}${task.waits ? ` · waits ${task.waits.replaceAll(",", ", ")}` : ""}`;
 
 function move(task, to) {
@@ -2250,6 +2292,8 @@ function rebuild(root) {
  * With project, the folder of the project being merged: only a task of its logbook counts as a task of the pull request
  * that may approve the merge. A task of another logbook with verdicts on the SHA must still pass (F-T273-9).
  * With locked, the caller already holds that project's lock, so the check finishes its saved change without taking it.
+ * With session, a hook's session id in that project: a task of a shared logbook lands only by its owning chief, as its
+ * later state=merged would refuse (F-T618-17). A legacy project has no chief, and a read with no session judges no chief.
  */
 function mergeCheck(sha, env = process.env, options = {}) {
   return assessMerge(sha, env, options);
@@ -2266,7 +2310,7 @@ function assessMerge(sha, env, options, logbook = null) {
   return skipped.length ? { ...verdict, reason: `${verdict.reason} Skipped ${skipped.map(visible).join(", ")}: a saved change is incomplete there, and it has no row for this commit. Any write there finishes it or says what to do.` } : verdict;
 }
 
-function judgeMerge(sha, env, { cycles, pr, readOnly, head, project, locked }, logbook, skipped) {
+function judgeMerge(sha, env, { cycles, pr, readOnly, head, project, locked, session }, logbook, skipped) {
   let root = sageRoot(env);
   try {
     if (notFull(sha)) return { ok: false, reason: notFull(sha) };
@@ -2324,7 +2368,8 @@ function judgeMerge(sha, env, { cycles, pr, readOnly, head, project, locked }, l
       // task's branch cannot merge that task's work on its own verdicts (F-T273-8).
       if (head !== undefined && ofPr.size) absent.push(...tasks.filter((t) => !ofPr.has(t.id) && owns(t.id)).map((t) => ({ name: `${visible(dir)} ${t.id}`, how: how(t.id) })));
       const graph = waitGraph(tasks, book ? rowsOf(book.programs) : [], book ? rowsOf(book.gates) : [], decisions);
-      const checked = [...new Set([...rows.map((r) => r.task), ...ofPr])].map((id) => {
+      const chief = session !== undefined && basename(dir) === mine ? chiefFor(project, session, env) : undefined;
+      const checked =[...new Set([...rows.map((r) => r.task), ...ofPr])].map((id) => {
         const [own, task] = [ownOf.get(id) ?? [], byId.get(id)];
         // A held task never merges until the sage moves it (F-T273-12).
         const held = task?.state === "held" && { ok: false, reason: `${id} is held: only the sage moves a held task, and it does not merge until then.` };
@@ -2335,7 +2380,9 @@ function judgeMerge(sha, env, { cycles, pr, readOnly, head, project, locked }, l
         const busy = verdict.ok && live.length > 0 && { ok: false, reason: `${id} has a review or QA run that still runs: ${live.join(", ")}. End it with its report's findings recorded, then check again.` };
         // With no --head, the task's branch= says what would land.
         const bar = candidateBar(task ?? { id }, head ?? task?.branch, candidates, runsOf.get(id) ?? []), arena = bar && { ok: false, reason: bar };
-        return { dir, id, ofPr: ofPr.has(id), owns: owns(id), back: !owns(id) && back(id), own: own.length, ...verdict, ...busy, ...arena, ...held };
+        // Nothing else helps a chief that does not own the task, so this refusal comes last and replaces the others.
+        const notOwn = chief && !dead(task?.state) && ownerBar(dir, task, chief), owner = notOwn && { ok: false, reason: notOwn };
+        return { dir, id, ofPr: ofPr.has(id), owns: owns(id), back: !owns(id) && back(id), own: own.length, ...verdict, ...busy, ...arena, ...held, ...owner };
       });
       // A task with an unmet wait does not merge. A wait on a task of the same PR is met when that task passes in this merge
       // too, its own waits included: else two tasks of one PR could never merge. The same PR is the PR of --pr for both
@@ -2639,7 +2686,7 @@ function sage(argv, env = process.env) {
   const readOnly = scopedRead(cmd, pos, opt);
   const root = sageRoot(env), project = resolve(opt.project ?? env.SAGE_PROJECT ?? folderHere());
   // First, because board, link, config, projects and merge-check return before they open a logbook. Only a command that names an actor locates here, so link can still replace a row that locate refuses.
-  if ((opt.chief !== undefined || opt.lead !== undefined || cmd === "claim") && !locate(project, env).shared) refuse(`${visible(project)} has no shared logbook, and only a shared logbook has chiefs: leave out --chief and --lead, and a task here needs no claim. Nothing changed.`);
+  if ((opt.chief !== undefined || opt.lead !== undefined || chiefOnly(cmd, pos)) && !locate(project, env).shared) refuse(chiefOnly(cmd, pos) && cmd !== "claim" ? `${visible(project)} has no shared logbook, so it has no chiefs to hand a task to. Nothing changed.` : `${visible(project)} has no shared logbook, and only a shared logbook has chiefs: leave out --chief and --lead, and a task here needs no claim. Nothing changed.`);
   if (cmd === "board" && opt.view !== undefined) {
     if (pos.length > 1 || opt.remember !== undefined) refuse("rich board takes one scope or task id and never remembers state");
     const scope = opt["name-hex"] !== undefined ? unhex(opt["name-hex"]) : /^T[1-9]\d*$/.test(pos[0] ?? "") ? "this" : pos[0] ?? "this";
@@ -2750,12 +2797,58 @@ function change(cmd, pos, opt, dir, env, skip, project, guarded) {
   });
 }
 
+/** A chief's id with its provider, when chiefs.tsv has its row. */
+function chiefLabel(dir, id) {
+  const row = chiefs(dir).find((r) => r.id === id);
+  return row ? `${id} (${row.provider})` : id;
+}
 /** Why this chief does not write this task, or "". An empty cell is a task with no owning chief. */
 function ownerBar(dir, task, chief) {
   if (!task.chief) return `${task.id} has no owning chief, so ${chief} cannot change it. Claim it first: ${claimStep(task.id, taskVersion(task), chief)}. Nothing changed.`;
   if (task.chief === chief) return "";
-  const owner = chiefs(dir).find((r) => r.id === task.chief);
-  return `${task.id} belongs to chief ${task.chief}${owner ? ` (${owner.provider})` : ""}, not to ${chief}. Nothing changed. Change only your own tasks. If ${task.chief} stopped, ask the owner.`;
+  return `${task.id} belongs to chief ${chiefLabel(dir, task.chief)}, not to ${chief}. Nothing changed. Change only your own tasks. If ${task.chief} stopped, open a replace gate for the owner to answer: ${replaceStep(task.id, chief)}.`;
+}
+/** Why the chief of this session does not run a command on a task that the state tool does not write: "" for its own task, a task that the logbook lacks, or a legacy project. */
+function sessionBar(project, id, native, env = process.env) {
+  const { dir, shared } = locate(project, env), task = shared && read(dir, "tasks").find((t) => t.id === id);
+  return task ? ownerBar(dir, task, chiefFor(project, native, env)) : "";
+}
+
+/** The runs of a task that a transfer waits for, and that a Replace ends: each one that has not ended, also one of an unknown status. */
+const activeRuns = (dir, id) => read(dir, "runs").filter((r) => r.task === id && !RUN_ENDS.includes(r.status));
+/** Refuses a change of owning chief while a run of the task is active. The run's end changes no task, so the chief runs the command again then. */
+function runsBar(dir, task, what) {
+  const active = activeRuns(dir, task.id).map((r) => r.id);
+  if (active.length) refuse(`${task.id} has ${active.join(", ")} active, so it takes no ${what} yet: a transfer waits for each active run to end. Nothing changed. Run this again after they end.`);
+}
+/** Appends the decision of a change of owning chief. */
+const ownership = (dir, task, decision, why) => write(dir, "decisions", [...read(dir, "decisions"), { at: now(), task, decision: `${task} ${decision}`, why }]);
+/** The open offer that this command names, or a refusal. */
+function exactOffer(task, id) {
+  const open = offerOf(task);
+  if (open?.id !== need(id, "--offer with the offer's id")) refuse(`${task.id} has ${open ? `the open offer ${open.id}, not ${visible(id)}` : `no open offer ${visible(id)}`}, and an offer that was cancelled never comes back. Nothing changed. Read ${task.id} for its open offer. If it has none, ask its owning chief for a new offer.`);
+  return open;
+}
+/** The chief that --to names. */
+function chiefNamed(dir, to) {
+  need(to, "--to with a chief id, for example --to C2");
+  if (!chiefs(dir).some((r) => r.id === to)) refuse(`${visible(to)} is not a chief of this logbook (${join(dir, "chiefs.tsv")}). A session gets its id at its first write. Nothing changed. Use an id from that file: each row is one chief, with its provider.`);
+  return to;
+}
+
+/** The owner's answer to a replace gate: the one way to take a task with no consent from its chief. Tables and receipt publish as one saved change. */
+function replaceChief(dir, g, answer) {
+  const plan = replaceOf(g), task = read(dir, "tasks").find((t) => t.id === g.task);
+  if (!plan || !task) refuse(`${g.id} does not name a task and two chiefs, so it replaces nobody. Answer keep. Nothing changed.`);
+  const active = activeRuns(dir, task.id).map((r) => r.id), added = active.filter((id) => !plan.runs.includes(id));
+  const again = `Answer keep, then open a new replace gate. Nothing changed.`;
+  if (task.chief !== plan.from) refuse(`${task.id} now belongs to ${task.chief ? `chief ${task.chief}` : "no chief"}, not to ${plan.from}, so ${g.id} is out of date. ${again}`);
+  if (added.length) refuse(`${added.join(", ")} started after ${g.id} opened, so ${g.id} does not name each run that ends as failed. ${again}`);
+  const receipt = { reference: { gate: g.id, task: task.id, to: plan.to, runs: active }, result: { at: now(), answer } };
+  const rows = Object.fromEntries(REPLACE_TABLES.map((table) => [table, read(dir, table)]));
+  replaceDelta(receipt, rows);
+  replaceWrites.commit(dir, receipt, Object.fromEntries(REPLACE_TABLES.map((table) => [table, tableText(table, rows[table])])));
+  return `${g.id} answered · ${answer} · ${task.id} chief ${plan.to}${active.length ? ` · ${active.join(", ")} failed` : ""}`;
 }
 
 /**
@@ -2911,8 +3004,44 @@ function act(cmd, pos, opt, dir, env, skip, project) {
       if (opt.version !== taskVersion(task)) refuse(`${task.id} changed, so this claim is out of date: read it again, then claim it with --version ${taskVersion(task)}. Nothing changed.`);
       task.chief = opt.chief;
       write(dir, "tasks", tasks);
-      write(dir, "decisions", [...read(dir, "decisions"), { at: now(), task: task.id, decision: `${task.id} claimed by ${opt.chief}`, why: "claim" }]);
+      ownership(dir, task.id, `claimed by ${opt.chief}`, "claim");
       return `${task.id} claimed · chief ${opt.chief}`;
+    }
+    case "offer": {
+      const { tasks, task } = taskOf(dir, need(sub, "the task id")), to = chiefNamed(dir, opt.to), open = offerOf(task);
+      if (open) refuse(`${task.id} has the open offer ${open.id} to ${open.to}: cancel it first. Nothing changed.`);
+      if (to === opt.chief) refuse(`${task.id} is yours, so an offer names another chief. Nothing changed.`);
+      task.offer = JSON.stringify({ id: randomUUID().slice(0, 8), from: opt.chief, to });
+      write(dir, "tasks", tasks);
+      ownership(dir, task.id, `offered to ${to}`, "offer");
+      return `${task.id} offered to ${to} · offer ${offerOf(task).id} · version ${taskVersion(task)}. You stay its owning chief until ${to} accepts.`;
+    }
+    case "cancel": {
+      const { tasks, task } = taskOf(dir, need(sub, "the task id"));
+      exactOffer(task, opt.offer);
+      task.offer = "";
+      write(dir, "tasks", tasks);
+      ownership(dir, task.id, `offer ${opt.offer} cancelled`, "cancel");
+      return `${task.id} offer ${opt.offer} cancelled`;
+    }
+    case "accept": {
+      const { tasks, task } = taskOf(dir, need(sub, "the task id")), open = exactOffer(task, opt.offer);
+      if (open.to !== opt.chief) refuse(`offer ${open.id} of ${task.id} names ${open.to}, not ${opt.chief}. Nothing changed. Only ${open.to} accepts it. ${task.chief === opt.chief ? `You own ${task.id}: to end this offer, cancel it.` : `To get ${task.id}, ask its owning chief ${task.chief} to cancel this offer and offer it to you.`}`);
+      if (opt.version !== taskVersion(task)) refuse(`${task.id} changed, so this acceptance is out of date: read it again, then accept it with --version ${taskVersion(task)}. Nothing changed.`);
+      runsBar(dir, task, "accept");
+      Object.assign(task, { chief: opt.chief, offer: "" });
+      write(dir, "tasks", tasks);
+      ownership(dir, task.id, `accepted by ${opt.chief} from ${open.from}`, "accept");
+      return `${task.id} accepted · chief ${opt.chief}`;
+    }
+    case "release": {
+      const { tasks, task } = taskOf(dir, need(sub, "the task id")), open = offerOf(task);
+      if (open) refuse(`${task.id} has the open offer ${open.id} to ${open.to}: cancel it first. Nothing changed.`);
+      runsBar(dir, task, "release");
+      task.chief = "";
+      write(dir, "tasks", tasks);
+      ownership(dir, task.id, `released by ${opt.chief}`, "release");
+      return `${task.id} released · no owning chief. Any chief can claim it.`;
     }
     case "init":
       // A new logbook's tables, tasks.tsv last: the merge check takes a folder with it for a whole logbook. An existing
@@ -3025,7 +3154,7 @@ function act(cmd, pos, opt, dir, env, skip, project) {
         Object.assign(task, planned.task);
         note = planned.note;
       }
-      return `${task.id} ${task.state} · ${task.size} · round ${task.round} · route ${task.route}${task.branch ? ` · ${task.branch}` : ""}${task.pr ? ` · PR ${task.pr}` : ""}${tagsOf(task)}${waitsText(task, shownOf(dir, tasks))}${note}`;
+      return `${task.id} ${task.state} · ${task.size} · round ${task.round} · route ${task.route}${task.branch ? ` · ${task.branch}` : ""}${task.pr ? ` · PR ${task.pr}` : ""}${tagsOf(task)}${waitsText(task, shownOf(dir, tasks))}${note}${isShared(dir, env) ? keptLines(dir, task.id) : ""}`;
     }
     case "program": {
       // program propose writes a program, puts its pilot and its other tasks in it, and opens its breakdown gate on the
@@ -3169,7 +3298,7 @@ function act(cmd, pos, opt, dir, env, skip, project) {
       if (sub === "done") {
         const run = runs.find((r) => r.id === id) ?? missing(`run ${id}`, runs.map((r) => r.id));
         const st = need(opt.status, "--status");
-        if (!["done", "blocked", "question", "failed"].includes(st)) refuse("status is done, blocked, question or failed");
+        if (!RUN_ENDS.includes(st)) refuse("status is done, blocked, question or failed");
         // Any --tokens is a whole number of at most 12 digits, so that a typo cannot make a total that a number cannot hold.
         if (opt.tokens !== undefined && !/^[1-9]\d{0,11}$/.test(opt.tokens)) refuse(`--tokens is a whole number from 1 to 12 digits, for example --tokens 52000; not ${JSON.stringify(opt.tokens)}. Nothing changed.`);
         const unavailable = opt.usage === "unavailable";
@@ -3346,8 +3475,17 @@ function act(cmd, pos, opt, dir, env, skip, project) {
         write(dir, "gates", [...gates, g]);
         return `${g.id} open · ${g.question}`;
       }
+      if (sub === "replace") {
+        const { task } = taskOf(dir, need(id, "the task id")), to = chiefNamed(dir, opt.to);
+        if (!task.chief) refuse(`${task.id} has no owning chief, so it needs no Replace: claim it. Nothing changed.`);
+        if (task.chief === to) refuse(`${task.id} already belongs to ${to}. Nothing changed.`);
+        const g = { id: nextId(dir, "G"), task: task.id, question: replaceQuestion({ from: task.chief, to, task: task.id, title: oneLine(task.title), runs: activeRuns(dir, task.id), label: (chief) => chiefLabel(dir, chief) }), options: "replace|keep", recommendation: "replace", default: "", at: now(), kind: "replace" };
+        write(dir, "gates", [...gates, g]);
+        return `${g.id} open · ${g.question}`;
+      }
       if (sub === "answer") {
         const g = gates.find((x) => x.id === id) ?? missing(`gate ${id}`, gates.map((x) => x.id));
+        if (g.answer && g.kind === "replace") refuse(`${g.id} is a replace gate, and the owner answered it already (${visible(g.answer)}): a replace gate answers once. Open a new one. Nothing changed.`);
         // A breakdown gate answers once, current or replaced by a newer round, so no second answer undoes a drop or an
         // approval (R1208-1, R1224-1): a change of mind goes through a new proposal and its own gate. Its own question
         // marks it, so this holds after a stop between writes and after a lost table (R1240-2); a plain gate with the
@@ -3362,11 +3500,12 @@ function act(cmd, pos, opt, dir, env, skip, project) {
         if (more.length || (opt.option === undefined) === (own === undefined) || (own !== undefined && unhex(own) === undefined)) refuse(how);
         if (own !== undefined) g.answer = `other: ${need(cell(unhex(own)), "the owner's own words: --other-hex gives only spaces")}`;
         else g.answer = (/^[1-9]\d*$/.test(opt.option) && options[Number(opt.option) - 1]) || refuse(how);
+        if (g.kind === "replace" && g.answer === options[0]) return replaceChief(dir, g, g.answer);
         write(dir, "gates", gates);
         write(dir, "decisions", [...read(dir, "decisions"), { at: now(), task: g.task, decision: `${g.question} → ${g.answer}`, why: own === undefined ? "the user's answer" : "the user's own words" }]);
         return `${g.id} answered · ${g.answer}`;
       }
-      refuse("gate add or gate answer");
+      refuse("gate add, gate replace or gate answer");
     }
     case "log": {
       write(dir, "decisions", [...read(dir, "decisions"), { at: now(), task: sub === "-" ? "" : sub, decision: need(id, "the decision"), why: need(opt.why, "--why") }]);
@@ -3635,5 +3774,5 @@ const { fillCommits, link, locate, notePlugin, refuseNewLogbook } = createShared
   listed: (root) => known(root, undefined, undefined, true),
   enroll: (root, folder, make) => known(root, folder, make, false, true) });
 const { chiefs, chiefRow, rowOf } = createChiefs({ now, provider, readRegular, refuse, rowsOf, sheetText, swap });
-return { SIZES, BLOCKS, RISKS, KINDS, STATES, DEFAULTS, PR, sageRoot, locate, chiefFor, actorOptions, git, projectRoot, roleReadProject, optionsOf, slug, worktreeRoot, BRANCH, ofTask, branchOfTask, projectName, storeDir, config, cyclesFor, modelFor, read, mergeCheck, landingBar, boardLandingCheck, logbookView, sage, readTaskSnapshot, updateRequestedTask, assertTaskUpdateOpen, settleWrites, createRequestedTask, createRequestedRun, finishReportedRun, finishInterruptedRun, acceptReportedReview, keepReport, compareRetainedReport, verdictBacking, captureRunAssignment, captureReviewTarget, validateTerminalAssignment, withLock, board, answerPaths, command, runCli };
+return { SIZES, BLOCKS, RISKS, KINDS, STATES, DEFAULTS, PR, sageRoot, locate, chiefFor, sessionBar, actorOptions, git, projectRoot, roleReadProject, optionsOf, slug, worktreeRoot, BRANCH, ofTask, branchOfTask, projectName, storeDir, config, cyclesFor, modelFor, read, mergeCheck, landingBar, boardLandingCheck, logbookView, sage, readTaskSnapshot, updateRequestedTask, assertTaskUpdateOpen, settleWrites, createRequestedTask, createRequestedRun, finishReportedRun, finishInterruptedRun, acceptReportedReview, keepReport, compareRetainedReport, verdictBacking, captureRunAssignment, captureReviewTarget, validateTerminalAssignment, withLock, board, answerPaths, command, runCli };
 }

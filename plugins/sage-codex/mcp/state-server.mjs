@@ -18,6 +18,9 @@ const word = z.string().regex(/^(?!--)/, "a value that does not start with --");
 const optional = (what) => z.string().optional().describe(what);
 const count = (what) => z.union([z.number().int().nonnegative(), z.string()]).optional().describe(what);
 const sha = z.string().describe("the full 40-character SHA of the head commit");
+const version = z.string().regex(/^[0-9a-f]{64}$/).describe("the task's current version");
+const chief = id("C", "the id of a chief of this logbook");
+const offerId = z.string().describe("the id of the open offer");
 
 /**
  * Each tool: its description, its input fields, and the command words with the positional fields (pos). Every other
@@ -98,7 +101,23 @@ export const TOOLS = {
   },
   claim: {
     describe: "Take a task with no owning chief in a shared logbook. The version is the one that the refusal of your last write printed.",
-    input: { task, version: z.string().regex(/^[0-9a-f]{64}$/).describe("the task's current version") }, pos: ["task"], argv: (i) => ["claim", i.task],
+    input: { task, version }, pos: ["task"], argv: (i) => ["claim", i.task],
+  },
+  offer: {
+    describe: "Offer your task to another chief of a shared logbook. You stay its owning chief until that chief accepts, and active runs go on.",
+    input: { task, to: chief }, pos: ["task"], argv: (i) => ["offer", i.task],
+  },
+  cancel: {
+    describe: "Cancel your open offer of a task. A cancelled offer never becomes valid again.",
+    input: { task, offer: offerId }, pos: ["task"], argv: (i) => ["cancel", i.task],
+  },
+  accept: {
+    describe: "Take a task that another chief offered to you. No run of the task may be active. The task line gives the offer's id and the version.",
+    input: { task, offer: offerId, version }, pos: ["task"], argv: (i) => ["accept", i.task],
+  },
+  release: {
+    describe: "Give up your task, so that any chief can claim it. The task needs no open offer and no active run. Its work and reports stay.",
+    input: { task }, pos: ["task"], argv: (i) => ["release", i.task],
   },
   round: { describe: "Start a repair round on the open findings marked fix. It names the roles to run again.", input: { task }, pos: ["task"], argv: (i) => ["round", i.task] },
   merge_check: {
@@ -125,6 +144,10 @@ export const TOOLS = {
     input: { task, question: z.string(), options: z.string().describe("the options joined by |, for example yes|no"), recommend: z.string().describe("the recommended option"),
       default: optional("the default option") },
     pos: ["task"], argv: (i) => ["gate", "add", i.task],
+  },
+  gate_replace: {
+    describe: "For an owning chief that stopped: ask the owner to give its task to another chief. The gate names each run that ends as failed. The owner's answer does the Replace, through gate_answer.",
+    input: { task, to: chief }, pos: ["task"], argv: (i) => ["gate", "replace", i.task],
   },
   gate_answer: {
     describe: "Record the owner's answer to a gate: the option's number, or the owner's own words as the hex of their UTF-8 bytes.",

@@ -65,7 +65,7 @@ function recordedRun(input, context, options) {
   const assigned = state.reservations.find(row => row.assignment.id === input.assignment);
   if (!assigned?.rolePlan?.role || !hasReportRecovery(saved, options)) refuse();
   const tool = logbookTool(() => { refuse(); });
-  return { tool, state, assigned, work: { project: options.projectDirectory, task: saved.task, run: saved.run,
+  return { tool, state, assigned, native: native.actor, work: { project: options.projectDirectory, task: saved.task, run: saved.run,
     role: assigned.rolePlan.role, assignment: input.assignment, reportHash: saved.reportHash, text: saved.text },
     env: logbookEnv(options) };
 }
@@ -79,8 +79,8 @@ export function finishRecordedRun(input, context, options) {
 
 /** Accept only the review target saved before this completed child was dispatched. */
 export function acceptRecordedReview(input, context, options) {
-  const { tool, state, assigned, work, env } = recordedRun(input, context, options);
+  const { tool, state, assigned, native, work, env } = recordedRun(input, context, options);
   const review = state.preparations.find(row => row.id === assigned.preparation)?.review;
   if (!review) refuse();
-  return tool.acceptReportedReview({ ...work, review }, env);
+  return tool.acceptReportedReview({ ...work, review }, env, native);
 }
