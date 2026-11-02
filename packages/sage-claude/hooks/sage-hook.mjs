@@ -53,11 +53,14 @@ const PR_TOOL = join(ROOT, "skills/sage/sage-pr.mjs");
 const BOARD = join(ROOT, "board/cli.mjs");
 /** The one command that can create main or master (firstUpload). */
 const FIRST_FORM = "gh api --hostname github.com -X POST repos/<owner>/<repo>/git/refs -f ref=refs/heads/main -f sha=<full commit id>";
-const TO_MAIN = `work reaches main only through a pull request. Push the task's branch and open a pull request. (Only the first creation of main in a blank GitHub repository asks the user, from the main session, as a command of its own: ${FIRST_FORM}, for a commit with no parent that is already on GitHub. After it, the chief tries to turn on branch protection for that branch.)`;
+/** The one command that moves the default branch of a blank repository to main or master (firstMove). */
+const MOVE_FORM = "gh repo edit github.com/<owner>/<repo> --default-branch main";
+const MOVE_NOTE = ` When the first push to a blank GitHub repository made a task's branch the default branch, the main session creates main with that form, then moves the default branch with ${MOVE_FORM}, as a command of its own that asks the user. An agent reports this to the chief.`;
+const TO_MAIN = `work reaches main only through a pull request. Push the task's branch and open a pull request. (Only the first creation of main in a blank GitHub repository asks the user, from the main session, as a command of its own: ${FIRST_FORM}, for a commit with no parent that is already on GitHub. After it, the chief tries to turn on branch protection for that branch.)${MOVE_NOTE}`;
 const commandPolicy = await import("./command-policy.mjs")
   .then((module) => ({ ...module,
     commands: module.createCommandPolicy({ stateToolPath: TOOL, prPattern: stateTool.PR ?? null }),
-    pushes: module.createPushPolicy({ stateToolPath: TOOL, readGit, readGh, mainReason: TO_MAIN }),
+    pushes: module.createPushPolicy({ stateToolPath: TOOL, readGit, readGh, mainReason: TO_MAIN, moveNote: MOVE_NOTE }),
   }))
   .catch((error) => ({ error }));
 const SP = String.raw`[^\S\r\n  ]`; // a space, a tab or an NBSP, never a line break
@@ -452,7 +455,7 @@ export function handle(input, state, slots) {
     const cwd = /^mcp__terminal__/.test(tool) && ti.cwd !== undefined ? ti.cwd : input.cwd ?? process.cwd();
     if (typeof cwd !== "string" || !cwd) return deny(event, "the command folder is not a path, so the hook cannot check this command.");
     const commands = [...new Set(commandFields(ti))];
-    if (main && commands.filter(command => firstUpload(command)).length > 1) {
+    if (main && commands.filter(command => firstUpload(command) || firstMove(command)).length > 1) {
       return deny(event, "the input names more than one first-upload command. Send one command so the user approves one destination.");
     }
     let answer;
@@ -592,6 +595,39 @@ function firstCreation({ owner, repo, branch, sha }) {
     const names = top.length ? `; top level: ${top.slice(0, 10).map(quoted).join(", ")}${more}` : "";
     const count = files || t.truncated ? `${t.truncated ? "more than " : ""}${files} file${files === 1 && !t.truncated ? "" : "s"}` : "no files";
     return { decision: "ask", reason: `this is the first creation of ${branch} on ${where}: GitHub has no ${branch}, and commit ${sha} is one root commit with ${count}${names}. The user must approve it. After this, sage tries to turn on branch protection for ${branch} (GitHub offers it for public repos, and for private repos on paid plans).` };
+  } catch (e) {
+    return no(`the check on GitHub failed (${e.message})`);
+  }
+}
+
+/**
+ * The move of the default branch to main or master after the first upload (T621). The first push to a blank repository
+ * makes the task's branch the default branch, and GitHub never moves it by itself, so the push rule then refuses that
+ * branch. The whole command is MOVE_FORM, with every word literal. Returns { owner, repo, branch }, or undefined.
+ */
+function firstMove(command) {
+  const [, owner, repo, branch] = /^gh repo edit github\.com\/((?!\.+\/)[\w.-]+)\/((?!\.+\/)[\w.-]+) --default-branch (main|master)$/.exec(command.trim()) ?? [];
+  return repo && { owner, repo, branch };
+}
+/**
+ * The checks of that move, all on GitHub: the default branch is not main or master, and the branch is one root commit, as
+ * the first creation made it. So a repository with history never gets this exception. { decision, reason }, as firstCreation.
+ */
+function moveCheck({ owner, repo, branch }) {
+  const where = `github.com/${owner}/${repo}`;
+  const no = (why) => ({ decision: "deny", reason: `this command moves the default branch of ${where} to ${branch}, and the hook asks the user only when GitHub shows that ${branch} is one root commit and that another branch is the default branch: ${why}.` });
+  try {
+    const deadline = Date.now() + 7000;
+    const about = json(githubGet(`repos/${owner}/${repo}`, deadline));
+    if (typeof about.default_branch !== "string" || !about.default_branch) return no("GitHub gave no default branch");
+    if (String(about.full_name).toLowerCase() !== `${owner}/${repo}`.toLowerCase()) return no(`GitHub answered for another repository than ${owner}/${repo}, as for a renamed or moved repository. Use its current name`);
+    if (/^(?:main|master)$/i.test(about.default_branch)) return no(`the default branch is already ${quoted(about.default_branch)}`);
+    const sha = json(githubGet(`repos/${owner}/${repo}/git/ref/heads/${branch}`, deadline)).object?.sha;
+    if (!/^[0-9a-f]{40}$/.test(sha ?? "")) return no(`GitHub has no ${branch}. Create it first: ${FIRST_FORM}`);
+    const { parents } = json(githubGet(`repos/${owner}/${repo}/git/commits/${sha}`, deadline));
+    if (!Array.isArray(parents)) return no(`GitHub's answer for commit ${sha} has no list of parents`);
+    if (parents.length) return no(`commit ${sha} has a parent, so ${branch} has history`);
+    return { decision: "ask", reason: `this moves the default branch of ${where} from ${quoted(about.default_branch)} to ${branch}: ${branch} is one root commit, ${sha}, so this is a first upload. The user must approve it. After it, the task's branch can be pushed and can open a pull request into ${branch}.` };
   } catch (e) {
     return no(`the check on GitHub failed (${e.message})`);
   }
@@ -908,13 +944,21 @@ function chiefMemoryWrite(input) {
     return false;
   }
 }
+/**
+ * The text that the rule for a logbook write judges (T621): only the parts of one command line that write, each with only
+ * its redirection targets when nothing else in it writes, unless its words name a root. Any other input is judged whole.
+ */
+function writeText(texts, roots, cwd) {
+  const parts = texts.length === 1 ? core.writeParts(texts[0], cwd) : undefined;
+  if (!parts) return texts.join("\n");
+  return parts.map(({ text, targets }) => (targets === undefined || namesRoot(text, partsOf(text), roots, cwd) ? text : targets)).join("\n");
+}
 /** The word with which a command tool's input writes a logbook file, or undefined. sage: in sage mode a logbook file's name counts too. */
 function shellWrite(ti, sage, cwd) {
   const text = runFields(ti);
-  const all = text.join("\n");
-  const words = partsOf(all);
   if (!text.some(t => writes(t, cwd)) || stateToolOnly(typeof ti.command === "string" ? ti.command : "")) return undefined;
-  return namesRoot(all, words, rootsOf(false), cwd) ?? (sage ? namesTable(words) : undefined);
+  const roots = rootsOf(false), judged = writeText(text, roots, cwd), words = partsOf(judged);
+  return namesRoot(judged, words, roots, cwd) ?? (sage ? namesTable(words) : undefined);
 }
 /**
  * The chief's own tools change no logbook file either (S2): only sage.mjs does, so each change leaves its record. A file
@@ -1547,7 +1591,7 @@ function agentCheck(input, file, slots) {
     return `"${[cmd, ...pos.slice(0, 1)].join(" ")}" writes the logbook, or is not a read command of the state tool.`;
   }
   if (!texts.some(t => writes(t, cwd))) return undefined;
-  const word = nearLogbook(texts.join("\n"), roots, cwd) ?? canonicalRoots(roots).flatMap((root) => texts.map((t) => linksNear(t, root, cwd))).find(Boolean);
+  const word = nearLogbook(writeText(texts, roots, cwd), roots, cwd) ?? canonicalRoots(roots).flatMap((root) => texts.map((t) => linksNear(t, root, cwd))).find(Boolean);
   const hint = word && /\$\?/.test(word) ? " The hook does not expand $?, so its ? is a pattern character: to show an exit code, write || echo FAIL or ; echo done after the command instead." : "";
   return word && `an agent never writes, moves or removes a logbook file from the shell, and never writes near one with a pattern, a variable or a link to it. ${quoted(word)} makes this command near the logbook: change or remove it.${hint}${note}`;
 }
@@ -1560,7 +1604,8 @@ function agentCheck(input, file, slots) {
  */
 export function ownScratch(input, slots, root) {
   const mark = slots?.runOf?.(input?.agent_id), session = input?.session_id, uid = process.getuid?.();
-  if (!mark) return { why: 'The hook knows no run of this agent, so it has no scratch folder: the first line of the brief that started it must be "Run R<n> · task T<n>".' };
+  // T621: the same text covers each cause, so it names them: a first line alone does not give a mark.
+  if (!mark) return { why: 'The hook knows no run of this agent, so it has no scratch folder: the first line of the brief that started it must be "Run R<n> · task T<n>", and the run must not be on another task in the logbook of the folder that started the agent. A slot that ended or expired gives no run too.' };
   if (mark.shared) return { why: `Two agents of this session hold the run ${mark.run}, so the hook cannot tell whose scratch folder it is.` };
   // The transcript is <config>/projects/<project>/<session>.jsonl, or a subagent's under <project>/<session>/.
   const parts = String(input.transcript_path ?? "").split("/"), k = typeof session === "string" ? parts.findIndex((p) => p === session || p === `${session}.jsonl`) : -1;
@@ -2012,6 +2057,11 @@ function gitGate(event, command, state, cwd, main, tool, described = false, sess
     const { decision, reason } = firstCreation(first);
     return decide(event, decision, reason);
   }
+  const move = main ? firstMove(command) : undefined; // an agent never gets this exception either
+  if (move) {
+    const { decision, reason } = moveCheck(move);
+    return decide(event, decision, reason);
+  }
   const push = pushProblem(command, cwd, options, { described });
   if (push) return deny(event, push);
   const merge = mergeIn(command);
@@ -2062,7 +2112,7 @@ const TEMP = [...new Set([tmpdir(), "/tmp", process.env.TMPDIR].filter(Boolean).
 const inTemp = (file) => !!file && TEMP.some((t) => file.startsWith(`${t}/`));
 const PROCESS_TEXT = new RegExp(`(?:^|[\\s;&|(\`'"/<>])(?:${UNIX_PROCESS}|${POWERSHELL_PROCESS})(?:\\.exe)?(?=$|[\\s;&|)\`'"<>])`, "im");
 
-const NO_GH = "an agent may run only plain gh pr create, gh pr view, gh pr comment, gh pr edit, gh pr checks, gh issue view, or gh api with GET. Other gh commands, copies, links and aliases are refused. Ask the chief to run them.";
+const NO_GH = "an agent may run only plain gh pr create, gh pr view, gh pr comment, gh pr edit, gh pr checks, gh issue view, or gh api with GET. Before it, a command line may only run cd <dir> and git push; after it, nothing. It may send its errors to 2>&1 or /dev/null, and a text field may be $(cat <<'EOF' ... EOF). Other gh commands, copies, links and aliases are refused. Ask the chief to run them.";
 const GH_NAME = /^(?:gh|gh\.exe)$/i;
 const namesGh = text => /\bgh(?:\.exe)?\b/i.test(unquote(text).replace(/`/g, ""));
 const ghAliasWrite = text => /(?:^|[\s/\\])aliases\.ya?ml\b/i.test(text) || (/\[alias\]|!\s*gh\b/i.test(unquote(text).replace(/`/g, "")) && namesGh(text));
@@ -2151,10 +2201,16 @@ const fileIdentity = file => {
   try { const stat = statSync(file); return stat.isFile() ? `${stat.dev}:${stat.ino}` : undefined; } catch { return undefined; }
 };
 
-/** Only one literal gh invocation gets the agent exceptions; wrappers, substitutions and aliases do not. */
+/** A command that an implementer runs right before its gh pr create (T621): cd to its worktree, or the push that the push rule reads. */
+const beforeGh = ({ words, syntax, piped, grouped, host, bodies, redirects }) => !piped && !grouped && !host && !bodies.length && !redirects.length && !syntax.some(s => s.assignment)
+  && ((words[0] === "cd" && words.length === 2 && !/^-|[$`~*?[{]/.test(words[1])) || (words[0] === "git" && /^push$/i.test(subcommand(words, 1))));
+/** A text field of gh's own, from a heredoc: --body "$(cat <<'EOF' ... EOF)". Its commands, if any, are commands of the line. */
+const ghText = (one) => ({ words, host, piped, heredoc, redirects }) => host?.cmd === one && words.length === 1 && words[0] === "cat" && heredoc && !piped && !redirects.length;
+/** Only one literal gh invocation gets the agent exceptions; wrappers and aliases do not. Beside it: beforeGh and ghText. */
 function plainGh(command) {
-  const [one, ...more] = shellCommands(command);
-  if (!one || more.length || one.writes || one.piped || one.grouped || one.bodies.length || one.words[0] !== "gh") return false;
+  const commands = shellCommands(command), at = commands.findIndex(c => !c.host && !beforeGh(c)), one = commands[at];
+  if (!one || commands.some((c, k) => k !== at && !(c.host ? ghText(one)(c) : k < at && beforeGh(c)))) return false;
+  if (one.redirects.some(toFile) || one.piped || one.grouped || one.bodies.length || one.words[0] !== "gh") return false;
   const [, group, verb, ...args] = one.words;
   if (group === "pr") return /^(?:create|view|comment|edit|checks)$/.test(verb ?? "");
   if (group === "issue") return verb === "view";
@@ -2405,8 +2461,8 @@ const agentName = (raw) => String(raw ?? "").normalize("NFKC").replace(/\p{Cf}/g
 const decide = (event, decision, reason) => ({ hookSpecificOutput: { hookEventName: event, permissionDecision: decision, permissionDecisionReason: `sage: ${String(reason).replace(/\p{Cc}/gu, (c) => `\\u${c.charCodeAt(0).toString(16).padStart(4, "0")}`)}` } });
 const deny = (event, reason) => decide(event, "deny", reason);
 
-/** A brief's first line, "Run R<n> · task T<n>" (T308), with any text after a space (R1898-2): only R and digits pass. */
-const BRIEF_LINE = /^Run (R[1-9]\d{0,8}) · task (T[1-9]\d*)(?:\s|$)/;
+/** A brief's first line, "Run R<n> · task T<n>" (T308), with any text after it that does not extend the task's id (T621): only R and digits pass. */
+const BRIEF_LINE = /^Run (R[1-9]\d{0,8}) · task (T[1-9]\d*)(?![\w/])/;
 /**
  * The run mark of the main session's spawn (R1933-1): the brief's run, unless the logbook of the spawn's folder has that
  * run on another task than the brief's "task T<n>" (then no mark). For a review or QA run of that role that runs, also the

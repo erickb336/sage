@@ -26,6 +26,12 @@ Option references: [curl](https://curl.se/docs/manpage.html),
 [Git diff](https://git-scm.com/docs/git-diff), and
 [OpenSSL dgst](https://docs.openssl.org/master/man1/openssl-dgst/).
 
+`writeParts(text, cwd)` gives the parts of a plain command list that write, so
+that a caller judges each part on its own. A part that sets state for a later
+part or runs an interpreter stays in the list. Undefined means that the caller
+judges the whole text: the line has a substitution, a subshell, a group or
+control flow, a part uses `$` or a backtick, or the parts do not show the write.
+
 A false result is not permission to execute a command. This classifier does not
 prove that an arbitrary program cannot write. Callers must also enforce role,
 command, path, and workflow rules using verified execution context.

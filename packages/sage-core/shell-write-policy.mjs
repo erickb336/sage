@@ -95,3 +95,49 @@ export function commandWrites(text, cwd) {
     return true;
   }
 }
+
+/** A word that opens or closes shell control flow: such a line is not a plain list of parts. */
+const FLOW_WORD = /^(?:if|then|elif|else|fi|for|while|until|do|done|select|case|esac|function|time|coproc|\{|\}|\[\[|!)$/;
+/** A command that changes what a later part means: the folder, a variable, an alias or a trap. */
+const STATE_WORD = /^(?:cd|pushd|popd|chdir|export|unset|readonly|declare|typeset|local|set|shopt|setopt|alias|unalias|read|mapfile|readarray|trap|hash|umask|builtin|command)$/;
+/** A program that can run the text of its stdin or a heredoc, which its words do not show. */
+const RUNS_TEXT = /^(?:node|deno|bun|python[\d.]*|perl|ruby|php|osascript|sh|bash|zsh|dash|ksh|fish|pwsh|powershell)$/;
+const shellQuoted = (word) => (/^[\w./=:@%+,-]+$/.test(word) ? word : `'${word.replace(/'/g, "'\\''")}'`);
+const redirectParts = (redirect) => {
+  const [, operator, target] = /^(&>>?|>>|>\||>&|<>|<&|>|<)([^]*)$/.exec(redirect);
+  return { operator, target };
+};
+/**
+ * The parts of a command line that write (T621), so that the rule for a logbook write judges each part on its own: a
+ * read part beside a write gives no evidence against it. The result is a list, one item for each pipeline with a write:
+ * { text } is what the rule judges. { targets } is set when only redirections write, and it holds only their targets: the
+ * words of such a pipeline are read, so a pattern among them is data (.items[], 5[0-9]).
+ *
+ * A part stays in the list when it sets state for a later part (cd, a variable) or runs an interpreter, which can run
+ * text that its words do not show. Undefined means "judge the whole text":
+ * an unreadable line, a substitution, a subshell, a group or control flow, a part that uses $ or a backtick (a part can
+ * read what an earlier part made, such as $_), or a line whose write the parts do not show.
+ */
+export function writeParts(text, cwd) {
+  try {
+    const commands = shellCommands(text);
+    if (commands.some(c => c.host || c.grouped || FLOW_WORD.test(c.words[0] ?? "") || [...c.words, ...c.redirects, ...c.bodies].some(word => /[$`]/.test(word)))) return undefined;
+    const lines = [];
+    for (let k = 0, line = []; k < commands.length; k++) {
+      line.push(commands[k]);
+      if (!commands[k].piped) { lines.push(line); line = []; }
+    }
+    const parts = [];
+    for (const line of lines) {
+      const wordWrites = line.some(c => commandWrites(c.words.map(shellQuoted).join(" "), cwd));
+      const fileWrites = line.flatMap(c => c.redirects.map(redirectParts)).filter(toFile);
+      const state = line.some(c => c.syntax.some(s => s.assignment) || c.words.some(w => STATE_WORD.test(w) || RUNS_TEXT.test(programName(w))));
+      if (!wordWrites && !fileWrites.length && !state) continue;
+      const body = line.map(c => [...c.words, ...c.redirects, ...c.bodies].join(" ")).join(" | ");
+      parts.push(wordWrites || state ? { text: body } : { text: body, targets: fileWrites.map(({ target }) => target).join(" ") });
+    }
+    return parts.some(({ text: body, targets }) => targets !== undefined || commandWrites(body, cwd)) ? parts : undefined;
+  } catch {
+    return undefined;
+  }
+}
