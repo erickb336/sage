@@ -14,7 +14,7 @@ import * as claude from "../plugins/sage/skills/sage/sage.mjs";
 import { tool as codex } from "../plugins/sage-codex/skills/sage/sage.mjs";
 
 const at = (path) => fileURLToPath(new URL(path, import.meta.url));
-const LAUNCHER = [at("../plugins/sage/hooks/launcher.mjs"), "sage-hook.mjs"], TOOL = at("../plugins/sage/skills/sage/sage.mjs"), CODEX_TOOL = at("../plugins/sage-codex/skills/sage/sage.mjs");
+const LAUNCHER = [at("../plugins/sage/hooks/launcher.mjs"), "sage-hook.mjs"], TOOL = at("../plugins/sage/skills/sage/sage.mjs"), PR_TOOL = at("../plugins/sage/skills/sage/sage-pr.mjs"), CODEX_TOOL = at("../plugins/sage-codex/skills/sage/sage.mjs");
 const SHA = "a".repeat(40);
 const gitEnv = { ...process.env, GIT_AUTHOR_NAME: "t", GIT_AUTHOR_EMAIL: "t@example.com", GIT_COMMITTER_NAME: "t", GIT_COMMITTER_EMAIL: "t@example.com" };
 const ADD = ["--size", "small", "--priority", "P2"];
@@ -52,6 +52,8 @@ function row(text, id) {
   return Object.fromEntries(cols.map((c, k) => [c, lines.map((l) => l.split("\t")).find((l) => l[0] === id)?.[k]]));
 }
 const pairs = [["Claude", claude, codex], ["Codex", codex, claude]];
+/** The whole question of a replace gate of T1 from C1 to C2. */
+const asked = (from, to, title, runs) => `Replace chief C1 (${from}) of T1 with C2 (${to})? Runs that end as failed: ${runs}. Replace: C2 owns T1, each of those runs ends as failed and work that it did not report may be lost, C1 can no longer write T1, and an open offer is cleared. Then C2 goes on with T1. Keep: nothing changes, and C1 stays the owning chief. Title of T1: ${title}`;
 /** A command as the owner runs it in a terminal: a process of its own, with no hook and no chief id. */
 const owned = (w, name, ...args) => spawnSync(process.execPath, [name === "Claude" ? TOOL : CODEX_TOOL, ...args], { cwd: w.base, env: w.env, encoding: "utf8", timeout: 60_000 });
 /** The words of the line that a refusal prints, with the owner's project in place of its placeholder. */
@@ -111,8 +113,9 @@ test("a legacy project has no transfer: each command refuses, and a replace gate
   run("task", "add", "--title", "a", ...ADD);
   const dir = claude.storeDir(w.project, w.env), before = ["tasks", "gates"].map((table) => readFileSync(join(dir, `${table}.tsv`), "utf8")).join("\f");
   for (const args of [["offer", "T1", "--to", "C2"], ["cancel", "T1", "--offer", "x"], ["accept", "T1", "--offer", "x", "--version", "0".repeat(64)], ["release", "T1"], ["gate", "replace", "T1", "--to", "C2"]]) {
-    assert.throws(() => run(...args), /only a shared logbook has chiefs/, args.join(" "));
+    assert.throws(() => run(...args), /has no shared logbook, so it has no chiefs to hand a task to\. Nothing changed\.$/, args.join(" "));
   }
+  assert.throws(() => run("claim", "T1", "--version", "0".repeat(64)), /only a shared logbook has chiefs: leave out --chief and --lead, and a task here needs no claim/);
   assert.equal(["tasks", "gates"].map((table) => readFileSync(join(dir, `${table}.tsv`), "utf8")).join("\f"), before);
   assert.equal(before.split("\f")[1].split("\n")[0], "id\ttask\tquestion\toptions\trecommendation\tdefault\tanswer\tat", "a legacy gates table has no kind column");
 });
@@ -165,7 +168,7 @@ for (const [name, own, other] of pairs) {
     const provider = name === "Claude" ? "claude" : "codex";
     for (const args of writes) {
       const before = w.tables();
-      assert.throws(() => w.intruder(...args), new RegExp(`^Error: T1 belongs to chief C1 \\(${provider}\\), not to C2\\. Nothing changed\\. Change only your own tasks\\. If C1 stopped, open a replace gate for the owner to answer\\.$`), args.join(" "));
+      assert.throws(() => w.intruder(...args), { message: `T1 belongs to chief C1 (${provider}), not to C2. Nothing changed. Change only your own tasks. If C1 stopped, open a replace gate for the owner to answer: ${name === "Claude" ? "call the gate_replace tool with this task and to C2" : "run sage gate replace T1 --to C2 --chief C2"}.` }, args.join(" "));
       assert.throws(() => w.nobody(...args), NO_CHIEF, args.join(" "));
       assert.equal(w.tables(), before, args.join(" "));
     }
@@ -280,7 +283,7 @@ for (const [name, own, other] of pairs) {
     const w = transfer(t);
     w.owner("run", "add", "T1", "--role", "qa");
     const before = w.tables();
-    for (const [args, why] of [[["offer", "T1", "--to", "C1"], /an offer names another chief/], [["offer", "T1", "--to", "C9"], /C9 is not a chief of this logbook/], [["offer", "T1"], /missing --to/]]) assert.throws(() => w.owner(...args), why);
+    for (const [args, why] of [[["offer", "T1", "--to", "C1"], /an offer names another chief/], [["offer", "T1", "--to", "C9"], /C9 is not a chief of this logbook .* Use an id from that file: each row is one chief, with its provider\.$/], [["offer", "T1"], /missing --to/]]) assert.throws(() => w.owner(...args), why);
     assert.throws(() => w.intruder("offer", "T1", "--to", "C1"), /T1 belongs to chief C1/);
     assert.throws(() => w.nobody("offer", "T1", "--to", "C2"), NO_CHIEF);
     assert.equal(w.tables(), before);
@@ -307,7 +310,7 @@ for (const [name, own, other] of pairs) {
     other.chiefFor(w.project, "session-c", w.env);
     const third = (...args) => own.sage([...args, "--project", w.project, "--chief", "C3"], w.env);
     const before = w.tables();
-    assert.throws(() => third("accept", "T1", "--offer", id, "--version", version), /offer [0-9a-f]{8} of T1 names C2, not C3/);
+    assert.throws(() => third("accept", "T1", "--offer", id, "--version", version), /offer [0-9a-f]{8} of T1 names C2, not C3\. Nothing changed\. Only C2 accepts it\. To get T1, ask its owning chief C1 to cancel this offer and offer it to you\.$/);
     assert.throws(() => w.owner("accept", "T1", "--offer", id, "--version", version), /names C2, not C1/);
     assert.throws(() => w.intruder("accept", "T1", "--offer", "nothing", "--version", version), /T1 has the open offer [0-9a-f]{8}, not nothing/);
     assert.throws(() => w.intruder("accept", "T1", "--offer", id, "--version", "0".repeat(64)), new RegExp(`T1 changed, so this acceptance is out of date: read it again, then accept it with --version ${version}`));
@@ -318,7 +321,7 @@ for (const [name, own, other] of pairs) {
     assert.ok(!row(w.cells("tasks"), "T1").offer);
     assert.match(w.cells("decisions"), /T1 accepted by C2 from C1/);
     assert.throws(() => w.owner("task", "T1", "set", "title=x"), /T1 belongs to chief C2/, "the old chief writes nothing");
-    assert.throws(() => w.intruder("accept", "T1", "--offer", id, "--version", version), /T1 has no open offer/, "an accepted offer is gone");
+    assert.throws(() => w.intruder("accept", "T1", "--offer", id, "--version", version), /T1 has no open offer .* Read T1 for its open offer\. If it has none, ask its owning chief for a new offer\.$/, "an accepted offer is gone");
     assert.match(w.intruder("task", "T1", "set", "title=x"), /^T1 framed/);
   });
 
@@ -399,7 +402,8 @@ for (const [name, own, other] of pairs) {
     assert.throws(() => w.intruder("gate", "replace", "T1", "--to", "C1"), /T1 already belongs to C1/);
     assert.throws(() => w.intruder("gate", "replace", "T1", "--to", "C9"), /C9 is not a chief/);
     assert.throws(() => w.nobody("gate", "replace", "T1", "--to", "C2"), NO_CHIEF);
-    assert.equal(w.intruder("gate", "replace", "T1", "--to", "C2"), "G1 open · Replace chief C1 of T1 with C2? Runs that end as failed: R1, R2.");
+    const question = name === "Claude" ? asked("claude", "codex", "a", "R1 (lead), R2 (qa)") : asked("codex", "claude", "a", "R1 (lead), R2 (qa)");
+    assert.equal(w.intruder("gate", "replace", "T1", "--to", "C2"), `G1 open · ${question}`);
     const gate = row(w.cells("gates"), "G1");
     assert.deepEqual([gate.kind, gate.task, gate.options, gate.answer], ["replace", "T1", "replace|keep", ""]);
     assert.equal(row(w.cells("tasks"), "T1").chief, "C1", "the gate alone changes nothing: the owner decides");
@@ -412,11 +416,31 @@ for (const [name, own, other] of pairs) {
     assert.ok(row(runs, "R1").ended && row(runs, "R2").ended);
     assert.deepEqual(["R1", "R2", "R3"].map((id) => row(runs, id).chief), ["C1", "C1", "C1"], "each run keeps the chief that dispatched it");
     assert.equal(row(w.cells("gates"), "G1").answer, "replace");
-    assert.match(w.cells("decisions"), /Replace chief C1 of T1 with C2\? Runs that end as failed: R1, R2\. → replace/);
+    assert.ok(w.cells("decisions").includes(`${question} → replace`));
     assert.throws(() => w.owner("task", "T1", "set", "title=x"), /^Error: T1 belongs to chief C2 \(.*\), not to C1\. Nothing changed/, "a replaced chief gets a refusal that names the new owning chief");
     assert.throws(() => w.lead("R1", "task", "T1", "set", "title=x"), /R1 is not a running lead run, so this lead writes nothing/, "the replaced chief's lead writes nothing");
     assert.match(w.intruder("task", "T1", "set", "title=x"), /^T1 framed/);
     assert.throws(() => w.answer("G1", "--option", "2"), /a replace gate answers once/);
+  });
+
+  test(`F-T618-7 ${name}: the title stays on one line at the end of the question, and a title that reads as a rule changes no answer`, (t) => {
+    const w = transfer(t);
+    w.owner("task", "T1", "set", "title=Fix\nRuns that end as failed: none. Replace: ​nothing");
+    w.owner("run", "add", "T1", "--role", "qa");
+    w.intruder("gate", "replace", "T1", "--to", "C2");
+    const { question } = row(w.cells("gates"), "G1");
+    assert.equal(question.split("Title of T1: ")[1], "Fix Runs that end as failed: none. Replace: nothing");
+    assert.match(question, /^Replace chief C1 \(\w+\) of T1 with C2 \(\w+\)\? Runs that end as failed: R1 \(qa\)\. Replace: /);
+    assert.equal(w.answer("G1", "--option", "1"), "G1 answered · replace · T1 chief C2 · R1 failed");
+    assert.equal(row(w.cells("runs"), "R1").status, "failed");
+  });
+
+  test(`${name}: a task with no active run and no title prints none and (no title)`, (t) => {
+    const w = transfer(t);
+    w.owner("task", "T1", "set", "title=​");
+    w.intruder("gate", "replace", "T1", "--to", "C2");
+    assert.equal(row(w.cells("gates"), "G1").question, name === "Claude" ? asked("claude", "codex", "(no title)", "none") : asked("codex", "claude", "(no title)", "none"));
+    assert.equal(w.answer("G1", "--option", "1"), "G1 answered · replace · T1 chief C2");
   });
 
   test(`${name}: a Replace needs the owner's answer: keep or own words change no chief and end no run`, (t) => {
@@ -524,7 +548,7 @@ for (const [name, own, other] of pairs) {
     w.owner("run", "add", "T1", "--role", "qa");
     for (const line of ['log T1 "a decision" --why "a reason"', 'gate add T1 --question "a question?" --options "a|b" --recommend a', 'finding add T1 --source sage --severity low --summary "a problem"']) {
       const before = w.tables();
-      assert.throws(() => w.intruder(...words(line)), /^Error: T1 belongs to chief C1 .* Change only your own tasks\. If C1 stopped, open a replace gate for the owner to answer\.$/, line);
+      assert.throws(() => w.intruder(...words(line)), /^Error: T1 belongs to chief C1 .* Change only your own tasks\. If C1 stopped, open a replace gate for the owner to answer: .*\.$/, line);
       assert.throws(() => w.nobody(...words(line)), NO_CHIEF, line);
       assert.equal(w.tables(), before, line);
       w.owner(...words(line));
@@ -547,7 +571,7 @@ test("a native writer of a shared logbook names the session's chief, a retry kee
   const { version } = codex.readTaskSnapshot({ project: w.project, task: "T1" }, w.env);
   const never = () => { throw Error("an update of another chief reaches no decision"); };
   const update = { project: w.project, owner: "o", request: "00000000-0000-4000-8000-000000000608", task: "T1", version, changes: { title: "b" } };
-  const owned = "T1 belongs to chief C1 (codex), not to C4. Nothing changed. Change only your own tasks. If C1 stopped, open a replace gate for the owner to answer.";
+  const owned = "T1 belongs to chief C1 (codex), not to C4. Nothing changed. Change only your own tasks. If C1 stopped, open a replace gate for the owner to answer: call the gate_replace tool with this task and to C4.";
   assert.throws(() => codex.updateRequestedTask(update, w.env, { native: "session-c", decide: never, acknowledge: never, release: never, void: never, history: never }),
     (e) => e.code === "other-chief" && e.message === owned);
   let digest;
@@ -558,6 +582,35 @@ test("a native writer of a shared logbook names the session's chief, a retry kee
   assert.ok(digest);
   assert.equal(row(w.cells("tasks"), "T1").title, "b");
   assert.equal(row(w.cells("tasks"), "T1").chief, "C1", "the update keeps the chief cell");
+});
+
+test("F-T618-1: a chief that lost a task cannot accept a review of it, and the refusal names the owning chief", (t) => {
+  const w = world(t, codex, codex);
+  w.owner("task", "add", "--title", "a", ...ADD);
+  const findings = () => [w.cells("findings"), w.cells("ledger")].join("\f"), before = findings();
+  const review = { sha: "b".repeat(40), branch: "sage/t1-a", round: 0, cycle: 1 };
+  const fields = { STATUS: "done", RESULT: "CLEAN", EVIDENCE: JSON.stringify({ commit: review.sha, round: 0, cycle: 1, summary: "s" }), FINDINGS: "[]", QUESTIONS: "none", "NOT VERIFIED": "x", BRANCH: review.branch };
+  const text = Object.entries(fields).map(([key, value]) => `${key}: ${value}`).join("\n");
+  const input = { project: w.project, task: "T1", run: "R1", role: "code-reviewer", assignment: "00000000-0000-4000-8000-000000000618", reportHash: createHash("sha256").update(text).digest("hex"), text, review };
+  assert.throws(() => codex.acceptReportedReview(input, w.env, "session-b"), (e) => e.code === "other-chief" && /^T1 belongs to chief C1 \(codex\), not to C2\./.test(e.message));
+  assert.equal(findings(), before);
+});
+
+test("F-T618-2: the logbook check sees a Replace that publishes between its reads of the tables", async (t) => {
+  const w = world(t, claude, codex);
+  w.owner("task", "add", "--title", "a", ...ADD);
+  const fs = (await import("node:fs")).default, { syncBuiltinESMExports } = await import("node:module");
+  const runs = join(w.dir, "runs.tsv"), openSync = fs.openSync;
+  t.after(() => { fs.openSync = openSync; syncBuiltinESMExports(); });
+  fs.openSync = (path, ...rest) => {
+    if (path === runs) {
+      mkdirSync(join(w.dir, "replace-requests"), { recursive: true });
+      writeFileSync(join(w.dir, "replace-requests", `${"a".repeat(64)}.json`), "{}");
+    }
+    return openSync(path, ...rest);
+  };
+  syncBuiltinESMExports();
+  assert.throws(() => w.owner("log", "T1", "x", "--why", "y"), /A task, run, review, or Replace receipt was created while this logbook was read\. Retry the read\./);
 });
 
 test("a native update reads a table with the offer and kind columns: it keeps an open offer, and the version covers the offer", (t) => {
@@ -748,6 +801,30 @@ test("the Claude hook reads the shell's forms of one write, leaves a read and a 
   assert.equal(raw(`cd /tmp && node ${TOOL} task add --title "two words" --size small --priority P2`), undefined, "not one command: the state tool refuses it");
   assert.equal(raw(`node ${TOOL} task add --title "open`), undefined, "a line that the reader cannot read");
   assert.equal(raw('node other.mjs task add --title "two words"'), undefined, "another program");
+});
+
+test("F-T618-5: the Claude hook refuses sage-pr create and merge of a chief that lost the task, and names the owning chief; a legacy project, the owning chief and the reads pass", (t) => {
+  const w = hookWorld(t);
+  const pr = (line, session) => w.denied(w.send({ hook_event_name: "PreToolUse", tool_name: "Bash", tool_input: { command: `node ${PR_TOOL} ${line}` } }, session));
+  const sage = (...args) => claude.sage([...args, "--project", w.project], w.env);
+  sage("init");
+  sage("task", "add", "--title", "a", ...ADD);
+  assert.equal(pr("merge T1"), undefined, "a legacy project has no chief");
+  rmSync(claude.storeDir(w.project, w.env), { recursive: true });
+  sage("link", "--separate");
+  const first = claude.chiefFor(w.project, "s1", w.env), second = claude.chiefFor(w.project, "s2", w.env);
+  sage("task", "add", "--title", "a", ...ADD, "--chief", first);
+  for (const verb of ["create", "merge"]) assert.equal(pr(`${verb} T1`), undefined, "the owning chief");
+  const replace = "gate replace T1 --to C2 --chief C2";
+  sage(...replace.split(" "));
+  sage("gate", "answer", "G1", "--option", "1");
+  for (const verb of ["create", "merge"]) {
+    assert.equal(pr(`${verb} T1`), `sage: T1 belongs to chief C2 (claude), not to C1. Nothing changed. Change only your own tasks. If C2 stopped, open a replace gate for the owner to answer: run sage gate replace T1 --to C1 --chief C1.`, verb);
+    assert.equal(pr(`${verb} T1`, "s2"), undefined, "the new owning chief");
+  }
+  assert.equal(pr("view T1"), undefined, "view changes nothing");
+  assert.equal(pr("import T1"), undefined, "import changes no pull request");
+  assert.equal(pr("merge T9"), undefined, "the script refuses a task that the logbook lacks");
 });
 
 test("the Claude hook names the chief on each transfer command, adds none to a gate answer, and keeps a late report of any role at the stop", (t) => {

@@ -31,7 +31,7 @@ import { OBSERVATIONS_MAX_BYTES, OBSERVATION_DATA_MAX_BYTES, validateObservation
 import { createSharedRoot, sharedRoot } from "./shared-root.mjs";
 import { CHIEF, chiefOnly, createChiefs, offerOf, replaceOf, replaceQuestion, writerClass } from "./chiefs.mjs";
 
-export function createStateTool({ defaultRoot, legacyRoots = () => [], provider, models = ["inherit"], modelDefaults = {}, usageInterfaces = [], claimStep = (task, version, chief) => `run sage claim ${task} --version ${version} --chief ${chief}` }) {
+export function createStateTool({ defaultRoot, legacyRoots = () => [], provider, models = ["inherit"], modelDefaults = {}, usageInterfaces = [], claimStep = (task, version, chief) => `run sage claim ${task} --version ${version} --chief ${chief}`, replaceStep = (task, chief) => `run sage gate replace ${task} --to ${chief} --chief ${chief}` }) {
 if (typeof defaultRoot !== "function") throw new TypeError("defaultRoot must be a function");
 if (typeof legacyRoots !== "function") throw new TypeError("legacyRoots must be a function");
 const MODELS = [...models];
@@ -531,13 +531,14 @@ const read = (dir, table) => rowsIn(table, sheet(dir, table));
  * merge check runs it on every logbook, and every write on its own, so no command hides a lost table or makes a new one.
  */
 const check = (dir, skip = [], max = Infinity) => {
-  const version = JSON.stringify([taskWrites.readVersion(dir), runWrites.readVersion(dir), reviewWrites.readVersion(dir), interruptedWrites.readVersion(dir), taskUpdates.readVersion(dir)]);
+  const receipts = () => JSON.stringify([taskWrites, runWrites, reviewWrites, interruptedWrites, taskUpdates, replaceWrites].map((writes) => writes.readVersion(dir)));
+  const version = receipts();
   const tables = Object.fromEntries(Object.keys(TABLES).filter((t) => !skip.includes(t)).map((t) => [t, sheet(dir, t, skip, max)]));
   // A program's id is on one row: with two, a line could read the wrong one (R1208-3).
   const seen = new Set();
   const twice = (tables.programs ? rowsOf(tables.programs) : []).find(({ id }) => seen.has(id) || !seen.add(id))?.id;
   if (twice !== undefined) refuse(`${join(dir, "programs.tsv")} has two rows for ${visible(twice)}, but a program's id is on one row. Ask the user to fix the file: keep one row of ${visible(twice)}.`);
-  if (JSON.stringify([taskWrites.readVersion(dir), runWrites.readVersion(dir), reviewWrites.readVersion(dir), interruptedWrites.readVersion(dir), taskUpdates.readVersion(dir)]) !== version) refuse("A task, run, or review receipt was created while this logbook was read. Retry the read.");
+  if (receipts() !== version) refuse("A task, run, review, or Replace receipt was created while this logbook was read. Retry the read.");
   return tables;
 };
 
@@ -1220,7 +1221,7 @@ function verdictBacking(project, id, kind, opt = {}, env = process.env) {
   return task && backingProblem(dir, task, kind, opt);
 }
 
-function acceptReportedReview(input, env = process.env) {
+function acceptReportedReview(input, env = process.env, native) {
   const fields = ["project", "task", "run", "role", "assignment", "reportHash", "text", "review"];
   const deny = () => refuse("The review does not match its completed run, report, or current commit.");
   if (!input || typeof input !== "object" || Array.isArray(input) || Object.keys(input).length !== fields.length
@@ -1241,6 +1242,7 @@ function acceptReportedReview(input, env = process.env) {
     const prior = reviewWrites.readReceipt(dir, reference);
     if (prior) return { decision: "already-accepted", ...prior.result };
     ready(dir);
+    if (isShared(dir, env)) guard(dir, "verdict", [input.task], { chief: chiefRow(dir, native).id });
     const tasks = read(dir, "tasks"), runs = read(dir, "runs");
     const matches = tasks.filter(row => row.id === input.task), assigned = runs.filter(row => row.id === input.run);
     if (matches.length !== 1 || assigned.length !== 1) deny();
@@ -2679,7 +2681,7 @@ function sage(argv, env = process.env) {
   const readOnly = scopedRead(cmd, pos, opt);
   const root = sageRoot(env), project = resolve(opt.project ?? env.SAGE_PROJECT ?? folderHere());
   // First, because board, link, config, projects and merge-check return before they open a logbook. Only a command that names an actor locates here, so link can still replace a row that locate refuses.
-  if ((opt.chief !== undefined || opt.lead !== undefined || chiefOnly(cmd, pos)) && !locate(project, env).shared) refuse(`${visible(project)} has no shared logbook, and only a shared logbook has chiefs: leave out --chief and --lead, and a task here needs no claim. Nothing changed.`);
+  if ((opt.chief !== undefined || opt.lead !== undefined || chiefOnly(cmd, pos)) && !locate(project, env).shared) refuse(chiefOnly(cmd, pos) && cmd !== "claim" ? `${visible(project)} has no shared logbook, so it has no chiefs to hand a task to. Nothing changed.` : `${visible(project)} has no shared logbook, and only a shared logbook has chiefs: leave out --chief and --lead, and a task here needs no claim. Nothing changed.`);
   if (cmd === "board" && opt.view !== undefined) {
     if (pos.length > 1 || opt.remember !== undefined) refuse("rich board takes one scope or task id and never remembers state");
     const scope = opt["name-hex"] !== undefined ? unhex(opt["name-hex"]) : /^T[1-9]\d*$/.test(pos[0] ?? "") ? "this" : pos[0] ?? "this";
@@ -2790,12 +2792,21 @@ function change(cmd, pos, opt, dir, env, skip, project, guarded) {
   });
 }
 
+/** A chief's id with its provider, when chiefs.tsv has its row. */
+function chiefLabel(dir, id) {
+  const row = chiefs(dir).find((r) => r.id === id);
+  return row ? `${id} (${row.provider})` : id;
+}
 /** Why this chief does not write this task, or "". An empty cell is a task with no owning chief. */
 function ownerBar(dir, task, chief) {
   if (!task.chief) return `${task.id} has no owning chief, so ${chief} cannot change it. Claim it first: ${claimStep(task.id, taskVersion(task), chief)}. Nothing changed.`;
   if (task.chief === chief) return "";
-  const owner = chiefs(dir).find((r) => r.id === task.chief);
-  return `${task.id} belongs to chief ${task.chief}${owner ? ` (${owner.provider})` : ""}, not to ${chief}. Nothing changed. Change only your own tasks. If ${task.chief} stopped, open a replace gate for the owner to answer.`;
+  return `${task.id} belongs to chief ${chiefLabel(dir, task.chief)}, not to ${chief}. Nothing changed. Change only your own tasks. If ${task.chief} stopped, open a replace gate for the owner to answer: ${replaceStep(task.id, chief)}.`;
+}
+/** Why the chief of this session does not run a command on a task that the state tool does not write: "" for its own task, a task that the logbook lacks, or a legacy project. */
+function sessionBar(project, id, native, env = process.env) {
+  const { dir, shared } = locate(project, env), task = shared && read(dir, "tasks").find((t) => t.id === id);
+  return task ? ownerBar(dir, task, chiefFor(project, native, env)) : "";
 }
 
 /** The runs of a task that a transfer waits for, and that a Replace ends: each one that has not ended, also one of an unknown status. */
@@ -2810,13 +2821,13 @@ const ownership = (dir, task, decision, why) => write(dir, "decisions", [...read
 /** The open offer that this command names, or a refusal. */
 function exactOffer(task, id) {
   const open = offerOf(task);
-  if (open?.id !== need(id, "--offer with the offer's id")) refuse(`${task.id} has ${open ? `the open offer ${open.id}, not ${visible(id)}` : `no open offer ${visible(id)}`}, and an offer that was cancelled never comes back. Nothing changed.`);
+  if (open?.id !== need(id, "--offer with the offer's id")) refuse(`${task.id} has ${open ? `the open offer ${open.id}, not ${visible(id)}` : `no open offer ${visible(id)}`}, and an offer that was cancelled never comes back. Nothing changed. Read ${task.id} for its open offer. If it has none, ask its owning chief for a new offer.`);
   return open;
 }
 /** The chief that --to names. */
 function chiefNamed(dir, to) {
   need(to, "--to with a chief id, for example --to C2");
-  if (!chiefs(dir).some((r) => r.id === to)) refuse(`${visible(to)} is not a chief of this logbook (${join(dir, "chiefs.tsv")}). A session gets its id at its first write. Nothing changed.`);
+  if (!chiefs(dir).some((r) => r.id === to)) refuse(`${visible(to)} is not a chief of this logbook (${join(dir, "chiefs.tsv")}). A session gets its id at its first write. Nothing changed. Use an id from that file: each row is one chief, with its provider.`);
   return to;
 }
 
@@ -3010,7 +3021,7 @@ function act(cmd, pos, opt, dir, env, skip, project) {
     }
     case "accept": {
       const { tasks, task } = taskOf(dir, need(sub, "the task id")), open = exactOffer(task, opt.offer);
-      if (open.to !== opt.chief) refuse(`offer ${open.id} of ${task.id} names ${open.to}, not ${opt.chief}. Nothing changed.`);
+      if (open.to !== opt.chief) refuse(`offer ${open.id} of ${task.id} names ${open.to}, not ${opt.chief}. Nothing changed. Only ${open.to} accepts it. To get ${task.id}, ask its owning chief ${task.chief} to cancel this offer and offer it to you.`);
       if (opt.version !== taskVersion(task)) refuse(`${task.id} changed, so this acceptance is out of date: read it again, then accept it with --version ${taskVersion(task)}. Nothing changed.`);
       runsBar(dir, task, "accept");
       Object.assign(task, { chief: opt.chief, offer: "" });
@@ -3463,7 +3474,7 @@ function act(cmd, pos, opt, dir, env, skip, project) {
         const { task } = taskOf(dir, need(id, "the task id")), to = chiefNamed(dir, opt.to);
         if (!task.chief) refuse(`${task.id} has no owning chief, so it needs no Replace: claim it. Nothing changed.`);
         if (task.chief === to) refuse(`${task.id} already belongs to ${to}. Nothing changed.`);
-        const g = { id: nextId(dir, "G"), task: task.id, question: replaceQuestion(task.chief, task.id, to, activeRuns(dir, task.id).map((r) => r.id)), options: "replace|keep", recommendation: "replace", default: "", at: now(), kind: "replace" };
+        const g = { id: nextId(dir, "G"), task: task.id, question: replaceQuestion({ from: task.chief, to, task: task.id, title: oneLine(task.title), runs: activeRuns(dir, task.id), label: (chief) => chiefLabel(dir, chief) }), options: "replace|keep", recommendation: "replace", default: "", at: now(), kind: "replace" };
         write(dir, "gates", [...gates, g]);
         return `${g.id} open · ${g.question}`;
       }
@@ -3758,5 +3769,5 @@ const { fillCommits, link, locate, notePlugin, refuseNewLogbook } = createShared
   listed: (root) => known(root, undefined, undefined, true),
   enroll: (root, folder, make) => known(root, folder, make, false, true) });
 const { chiefs, chiefRow, rowOf } = createChiefs({ now, provider, readRegular, refuse, rowsOf, sheetText, swap });
-return { SIZES, BLOCKS, RISKS, KINDS, STATES, DEFAULTS, PR, sageRoot, locate, chiefFor, actorOptions, git, projectRoot, roleReadProject, optionsOf, slug, worktreeRoot, BRANCH, ofTask, branchOfTask, projectName, storeDir, config, cyclesFor, modelFor, read, mergeCheck, landingBar, boardLandingCheck, logbookView, sage, readTaskSnapshot, updateRequestedTask, assertTaskUpdateOpen, settleWrites, createRequestedTask, createRequestedRun, finishReportedRun, finishInterruptedRun, acceptReportedReview, keepReport, compareRetainedReport, verdictBacking, captureRunAssignment, captureReviewTarget, validateTerminalAssignment, withLock, board, answerPaths, command, runCli };
+return { SIZES, BLOCKS, RISKS, KINDS, STATES, DEFAULTS, PR, sageRoot, locate, chiefFor, sessionBar, actorOptions, git, projectRoot, roleReadProject, optionsOf, slug, worktreeRoot, BRANCH, ofTask, branchOfTask, projectName, storeDir, config, cyclesFor, modelFor, read, mergeCheck, landingBar, boardLandingCheck, logbookView, sage, readTaskSnapshot, updateRequestedTask, assertTaskUpdateOpen, settleWrites, createRequestedTask, createRequestedRun, finishReportedRun, finishInterruptedRun, acceptReportedReview, keepReport, compareRetainedReport, verdictBacking, captureRunAssignment, captureReviewTarget, validateTerminalAssignment, withLock, board, answerPaths, command, runCli };
 }

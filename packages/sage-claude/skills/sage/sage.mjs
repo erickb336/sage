@@ -25,5 +25,5 @@ const tool = createStateTool({
     "model.qa.tiny": "sonnet", "model.qa.small": "sonnet",
   },
 });
-export const { SIZES, BLOCKS, RISKS, KINDS, STATES, DEFAULTS, PR, sageRoot, locate, chiefFor, actorOptions, git, projectRoot, optionsOf, slug, worktreeRoot, BRANCH, ofTask, branchOfTask, projectName, storeDir, config, cyclesFor, modelFor, read, mergeCheck, landingBar, logbookView, sage, withLock, board, answerPaths, keepReport, verdictBacking } = tool;
+export const { SIZES, BLOCKS, RISKS, KINDS, STATES, DEFAULTS, PR, sageRoot, locate, chiefFor, sessionBar, actorOptions, git, projectRoot, optionsOf, slug, worktreeRoot, BRANCH, ofTask, branchOfTask, projectName, storeDir, config, cyclesFor, modelFor, read, mergeCheck, landingBar, logbookView, sage, withLock, board, answerPaths, keepReport, verdictBacking } = tool;
 if (process.argv[1] === fileURLToPath(import.meta.url)) tool.runCli();

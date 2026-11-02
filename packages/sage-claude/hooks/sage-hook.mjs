@@ -48,6 +48,7 @@ const filePolicy = await import("./file-policy.mjs").catch((error) => ({ error }
 const ROOT = join(dirname(fileURLToPath(import.meta.url)), "..");
 const commandReader = await import("./command-reader.mjs").catch((error) => ({ error }));
 const TOOL = join(ROOT, "skills/sage/sage.mjs");
+const PR_TOOL = join(ROOT, "skills/sage/sage-pr.mjs");
 /** The board server's command, which the build copies into the plugin from packages/sage-board. */
 const BOARD = join(ROOT, "board/cli.mjs");
 /** The one command that can create main or master (firstUpload). */
@@ -329,7 +330,7 @@ export function handle(input, state, slots) {
   const why = event === "PreToolUse" ? (main ? chiefProblem(input, state.sage) : agentWriteProblem(input, slots)) : undefined;
   const verdict = event === "PreToolUse" && main && state.sage && !why ? chiefVerdictProblem(input, slots) : undefined;
   if (verdict) return deny(event, verdict);
-  const notChief = event === "PreToolUse" && main && !why ? chiefIdProblem(input) : undefined;
+  const notChief = event === "PreToolUse" && main && !why ? chiefIdProblem(input) ?? chiefPrProblem(input) : undefined;
   if (notChief) return deny(event, notChief);
   if (why && main) return deny(event, `${why} Only sage.mjs changes the logbook: run the state tool's command for this change (node <path to skills/sage/sage.mjs> ...), as a command of its own. If no command does it, ask the user.`);
   if (why && input.agent_type === "sage:lead") return deny(event, `${why} A lead writes the logbook only with ${LEAD_FORM}. Report to the sage what else the logbook needs.`);
@@ -1337,10 +1338,10 @@ function chiefStateWords(input) {
   return words.length && PLAIN.test(words.join(" ")) ? words : undefined;
 }
 /**
- * The words after the state tool's path, as the shell reads them, so a quoted value is one word: the line is this hook's
- * state tool as one command, and a substitution in its words does not change that. Any other line gives undefined.
+ * The words after a sage script's path, as the shell reads them, so a quoted value is one word: the line is this hook's
+ * script as one command, and a substitution in its words does not change that. Any other line gives undefined.
  */
-function chiefWriteWords(input) {
+function chiefWriteWords(input, tool = TOOL) {
   let commands;
   try {
     commands = core.shellCommands(String(input.tool_input?.command ?? ""));
@@ -1349,7 +1350,7 @@ function chiefWriteWords(input) {
   }
   const [one, ...more] = commands.filter((c) => !c.host);
   const [node, path, ...rest] = one?.words ?? [];
-  return !more.length && node === "node" && /(?:^|\/)skills\/sage\/sage\.mjs$/.test(path) && canonical(resolve(input.cwd ?? process.cwd(), path)) === canonical(TOOL) ? rest : undefined;
+  return !more.length && node === "node" && /(?:^|\/)skills\/sage\/sage(?:-pr)?\.mjs$/.test(path) && canonical(resolve(input.cwd ?? process.cwd(), path)) === canonical(tool) ? rest : undefined;
 }
 /**
  * The sage's review or QA verdict, early (T483). The state tool is the boundary: its verdict command refuses a review or
@@ -1378,6 +1379,20 @@ function chiefIdProblem(input) {
   }
   if (!id || opt.chief === id) return undefined;
   return opt.chief === undefined ? `this project's logbook is shared, so each write names its chief: add --chief ${id} to this command.` : `this session is chief ${id}, not ${quoted(opt.chief)}: give --chief ${id}.`;
+}
+/**
+ * The PR script reads no session, and writes the task's PR number in the name of the task's chief. So this hook, which
+ * knows the session, refuses its create and merge for a chief that does not own the task, in the state tool's own words.
+ */
+function chiefPrProblem(input) {
+  if (input.tool_name !== "Bash") return undefined;
+  const [verb, task] = chiefWriteWords(input, PR_TOOL) ?? [];
+  if (!["create", "merge"].includes(verb)) return undefined;
+  try {
+    return stateTool.sessionBar(realpathSync.native(resolve(input.cwd ?? process.cwd(), process.env.SAGE_PROJECT ?? ".")), task, input.session_id) || undefined;
+  } catch {
+    return undefined; // a logbook that cannot be read: the script gives its own refusal
+  }
 }
 function chiefVerdictProblem(input, slots) {
   if (input.tool_name !== "Bash") return undefined;

@@ -129,7 +129,7 @@ test("the transfer commands through the server: offer, accept, cancel, release a
   assert.equal(await s.call("release", { task: "T2" }, as), "T2 released · no owning chief. Any chief can claim it.");
   // C1 opens the gate on C2's T1; the owner's answer comes through gate_answer, with no chief.
   assert.match(await s.call("run_add", { task: "T1", role: "qa" }, as), /^R1 running/);
-  assert.equal(await s.call("gate_replace", { task: "T1", to: "C1" }), "G1 open · Replace chief C2 of T1 with C1? Runs that end as failed: R1.");
+  assert.match(await s.call("gate_replace", { task: "T1", to: "C1" }), /^G1 open · Replace chief C2 \(codex\) of T1 with C1 \(codex\)\? Runs that end as failed: R1 \(qa\)\. Replace: C1 owns T1, .* Keep: nothing changes, and C2 stays the owning chief\. Title of T1: first$/);
   assert.equal(await s.call("gate_answer", { gate: "G1", option: 1 }), "G1 answered · replace · T1 chief C1 · R1 failed");
   assert.match((await s.call("task_set", { task: "T1", fields: { title: "x" } }, as)).error, /^sage: T1 belongs to chief C1 \(codex\), not to C2\./);
 });
@@ -512,6 +512,12 @@ test("the Codex chief's list of tools names the link tool, with the owner's answ
   assert.match(PROJECT_SETUP, /`link`\. Call `link` only after the owner's answer in the chat\./);
 });
 
+test("F-T618-3: the Codex chief's list of tools names each tool that moves a task between chiefs", () => {
+  const { PROJECT_SETUP } = JSON.parse(readFileSync(join(ROOT, "plugins/sage-codex/chief-bindings.json"), "utf8"));
+  const [list] = /The tools are .*?\./.exec(PROJECT_SETUP);
+  for (const name of ["claim", "offer", "cancel", "accept", "release", "gate_replace"]) assert.ok(list.includes(`\`${name}\``), name);
+});
+
 test("the Codex settings pass both roots to the state server", () => {
   const { env_vars: vars } = JSON.parse(readFileSync(join(ROOT, "plugins/sage-codex/.mcp.json"), "utf8")).mcpServers.sage;
   assert.deepEqual(vars, ["CODEX_HOME", "SAGE_HOME", "SAGE_SHARED_HOME", "CLAUDE_CONFIG_DIR"]);
@@ -658,7 +664,7 @@ test("the chief's setup text sends only read commands to the state CLI, and says
   assert.ok(cli.length > 0, setup);
   assert.deepEqual(cli.filter((command) => !["board", "config", "status", "standing", "merge-check", "logbook"].includes(command)), [], "each command it runs through the CLI only reads");
   assert.equal(Object.hasOwn(TOOLS, "program"), false);
-  assert.match(setup, /`program` has no tool yet, so programs do not run in Codex/);
+  assert.match(setup, /`program` has no tool yet, so no program runs in Codex/);
 });
 
 // R1765 F2: a chief that ended a Codex run with only status done and usage unavailable was refused, and learned the

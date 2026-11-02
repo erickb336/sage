@@ -343,14 +343,15 @@ A moved folder with no Git commits, or that is no Git repository, has no first c
 | `sage cancel <T> --offer <id>` | The owning chief, with the exact open offer. Active runs do not stop it. | The offer clears, and it never becomes valid again. |
 | `sage accept <T> --offer <id> --version <version>` | The chief that the offer names, with the exact open offer and the current version. The task has no active or unknown run. | That chief owns the task, and the offer clears. |
 | `sage release <T>` | The owning chief. The task has no open offer and no active or unknown run. | The task has no owning chief, so any chief can claim it. Its work and reports stay. |
-| `sage gate replace <T> --to C<n>` | Any chief, for an owning chief that stopped. | A gate for you, with the options replace and keep. It names both chiefs and each run that will end as failed. |
+| `sage gate replace <T> --to C<n>` | Any chief, for an owning chief that stopped. | A gate for you, with the options replace and keep. It names the task's title, both chiefs with their providers and each run that will end as failed, with its role. It says what each answer does. |
 
 - `offer` and `task <T>` print the offer's id and the version that `accept` needs.
 - A run that ends does not advance a transfer: the recipient still accepts. A transfer changes no run: each run keeps the chief that dispatched it.
 - Sage cannot see that a chief ended, so a stopped chief stays the owning chief until you answer. A Replace is the only way to take a task with no consent from its chief.
 - You answer a Replace gate as you answer any gate, and only once. The answer replace does one write: it sets the chief, clears an open offer and ends each named run as failed. Keep, or your own words, change nothing.
+- A chief never answers a replace gate by itself: only your answer counts. This rule is an instruction, not a check. No code ties the answer to your message, as for other gates.
 - A replace gate refuses your answer replace when the owning chief changed, or when a new run started after it opened. Answer keep, and the chief opens a new gate.
-- The replaced chief gets a refusal that names the new owning chief. Its lead writes nothing, because the lead run ended.
+- The replaced chief gets a refusal that names the new owning chief, also for `sage-pr create` and `sage-pr merge`. Its lead writes nothing, because the lead run ended.
 - A run that ended as blocked or failed keeps a late report once, with its arrival time, so no report is lost. `task <T>` prints its path. That report backs no verdict.
 - Claude's stop hook keeps the late report of any role with a known run. Codex keeps it for a child that has the run in its task name.
 

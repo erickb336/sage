@@ -108,8 +108,8 @@ export function createPreparationServer(options = {}) {
     try {
       const { acceptRecordedReview } = await import("./run-report.mjs");
       return { content: [{ type: "text", text: JSON.stringify(acceptRecordedReview(input, native, fixed)) }] };
-    } catch {
-      return { isError: true, content: [{ type: "text", text: "Sage could not accept this review. Check the chief identity, saved report, assigned run, and configured logbook." }] };
+    } catch (error) {
+      return { isError: true, content: [{ type: "text", text: `Sage could not accept this review. ${error.code === "other-chief" ? error.message : "Check the chief identity, saved report, assigned run, and configured logbook."}` }] };
     }
   });
   server.registerTool("sage_read_report", {

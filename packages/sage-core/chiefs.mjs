@@ -55,11 +55,14 @@ export function offerOf(task) {
   }
 }
 
-/** A replace gate's question, which only gate replace writes: the owner reads in it what the answer does, and the answer reads it back (replaceOf). */
-export const replaceQuestion = (from, task, to, runs) => `Replace chief ${from} of ${task} with ${to}? Runs that end as failed: ${runs.join(", ") || "none"}.`;
+/**
+ * A replace gate's question, which only gate replace writes, on one line. The owner decides from it with no other page,
+ * and the answer reads it back (replaceOf). The title comes last, and replaceOf reads only the fixed start, so a title cannot pass for a rule.
+ */
+export const replaceQuestion = ({ from, to, task, title, runs, label }) => `Replace chief ${label(from)} of ${task} with ${label(to)}? Runs that end as failed: ${runs.map((r) => `${r.id} (${r.role})`).join(", ") || "none"}. Replace: ${to} owns ${task}, each of those runs ends as failed and work that it did not report may be lost, ${from} can no longer write ${task}, and an open offer is cleared. Then ${to} goes on with ${task}. Keep: nothing changes, and ${from} stays the owning chief. Title of ${task}: ${title}`;
 export function replaceOf(gate) {
-  const [, from, to, runs] = /^Replace chief (C[1-9]\d*) of T[1-9]\d* with (C[1-9]\d*)\? Runs that end as failed: (.+)\.$/.exec(gate.question) ?? [];
-  return from && { from, to, runs: runs === "none" ? [] : runs.split(", ") };
+  const [, from, to, runs] = /^Replace chief (C[1-9]\d*)(?: \(\S+\))? of T[1-9]\d* with (C[1-9]\d*)(?: \(\S+\))?\? Runs that end as failed: (none|R[1-9]\d* \([^)]*\)(?:, R[1-9]\d* \([^)]*\))*)\. Replace: /.exec(gate.question) ?? [];
+  return from && { from, to, runs: runs === "none" ? [] : runs.split(", ").map((r) => r.split(" ")[0]) };
 }
 
 export function createChiefs({ now, provider, readRegular, refuse, rowsOf, sheetText, swap }) {

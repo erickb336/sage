@@ -13,7 +13,7 @@ import { appendFileSync, cpSync, existsSync, mkdirSync, mkdtempSync, readFileSyn
 import { tmpdir } from "node:os";
 import { basename, dirname, join } from "node:path";
 import { createInterface } from "node:readline";
-import { test } from "node:test";
+import { after, test } from "node:test";
 import { pathToFileURL } from "node:url";
 import { ROOT } from "./build.mjs";
 import { backedSage, reportFor } from "./verdict-backing.mjs";
@@ -22,11 +22,22 @@ const session = "d72422c7-509c-43aa-8c42-827c556f8a57";
 const childActor = "f22422c7-509c-43aa-8c42-827c556f8a58";
 const turns = ["e22422c7-509c-43aa-8c42-827c556f8a57", "e22422c7-509c-43aa-8c42-827c556f8a58", "e22422c7-509c-43aa-8c42-827c556f8a59"];
 
+/**
+ * One copy of the package for the whole file. A fixture's plugin folder is a link to it, and an import reads the real
+ * path, so this process loads the package once. A copy per fixture is a new module graph per test, which node never
+ * unloads: with each graph's compiled regular expressions, the process ran out of memory before the last test (F-T618-12).
+ */
+const PACKAGE = mkdtempSync(join(realpathSync(tmpdir()), "sage-native-package-"));
+cpSync(join(ROOT, "plugins/sage-codex"), PACKAGE, { recursive: true });
+after(() => rmSync(PACKAGE, { recursive: true, force: true }));
+/** A plugin folder of the fixture's own, for a test that changes a file of the package. Call it before the fixture's server starts. */
+const ownPlugin = f => { rmSync(f.plugin); cpSync(PACKAGE, f.plugin, { recursive: true }); };
+
 function fixture(t, policy = "normal") {
   const dir = mkdtempSync(join(realpathSync(tmpdir()), "sage-native-server-"));
   t.after(() => rmSync(dir, { recursive: true, force: true }));
   const plugin = join(dir, "plugin");
-  cpSync(join(ROOT, "plugins/sage-codex"), plugin, { recursive: true });
+  symlinkSync(PACKAGE, plugin);
   assert.ok(existsSync(join(plugin, "runtime/mcp-server.mjs")), "the native server ships in the plugin");
   const sessions = join(dir, "sessions"); mkdirSync(sessions);
   const transcript = join(sessions, "root.jsonl");
@@ -136,7 +147,7 @@ test("packaged native server denies failed and invalid tool policies without lea
 });
 
 test("packaged native server turns missing policy modules into explicit denials", async t => {
-  const f = fixture(t);
+  const f = fixture(t); ownPlugin(f);
   // Load the server first, then remove modules before their lazy import.
   const client = await connect(t, f);
   rmSync(join(f.plugin, "runtime/mcp-policy.mjs"));
@@ -367,7 +378,7 @@ test("packaged native server contains post-tool validation, loading, and publica
     assert.deepEqual(await client.call(input, actor), { decision: "block", reason: "Sage could not verify this hook request." });
   }
   await client.close();
-  const missing = fixture(t); rmSync(join(missing.plugin, "runtime/post-tool.mjs"));
+  const missing = fixture(t); ownPlugin(missing); rmSync(join(missing.plugin, "runtime/post-tool.mjs"));
   const next = await connect(t, missing);
   assert.equal((await next.call(postSpawn())).decision, "block");
   await next.close();
@@ -531,7 +542,7 @@ test("native prepared spawn refuses mode-off and changed scope and keeps the pre
 
 test("visible preparation server contains missing modules and unavailable storage", async t => {
   for (const failure of ["module", "journal"]) {
-    const f = await preparationServerFixture(t); const client = await f.connectVisible();
+    const f = await preparationServerFixture(t); ownPlugin(f); const client = await f.connectVisible();
     if (failure === "module") rmSync(join(f.plugin, "runtime/preparation.mjs"));
     else writeFileSync(join(f.options.directory, "00000000.json"), "private storage error");
     const output = await client.call(f.input);
@@ -781,7 +792,8 @@ test('chief context restarts after off-to-on and refuses delivery to a native ch
 });
 
 test('chief context retries rendering failure without losing the saved activation', async t => {
-  const f = fixture(t), client = await connect(t, f);
+  const f = fixture(t); ownPlugin(f);
+  const client = await connect(t, f);
   const bindings = join(f.plugin, 'chief-bindings.json'), saved = readFileSync(bindings, 'utf8');
   writeFileSync(bindings, 'invalid fixture JSON');
   assert.equal((await client.call(f.prompt('sage mode'))).decision, 'block');
@@ -797,7 +809,8 @@ test('chief context retries rendering failure without losing the saved activatio
 
 
 test('chief context refuses oversized rules and recovers all parts after repair', async t => {
-  const f = fixture(t), client = await connect(t, f);
+  const f = fixture(t); ownPlugin(f);
+  const client = await connect(t, f);
   const bindings = join(f.plugin, 'chief-bindings.json'), saved = readFileSync(bindings, 'utf8');
   for (const oversized of ['x'.repeat(8_000), 'Extra instruction.\n'.repeat(1_000)]) {
     writeFileSync(bindings, JSON.stringify({ ...JSON.parse(saved), TEAM: oversized }));
@@ -942,7 +955,8 @@ test('chief compaction refuses foreign callers unsupported sources and malformed
 });
 
 test('chief compaction retries failed rendering and never activates an inactive owner', async t => {
-  const f = fixture(t), client = await connect(t, f);
+  const f = fixture(t); ownPlugin(f);
+  const client = await connect(t, f);
   assert.deepEqual(await client.call(compactStart(f)), {});
   const first = await client.call(f.prompt('sage mode'));
   const bindings = join(f.plugin, 'chief-bindings.json'), saved = readFileSync(bindings, 'utf8');
@@ -4173,7 +4187,7 @@ test('T604: on a shared logbook, sage_update_task and sage_create_run give the g
     return { version, updated: (await update.call({ request: turns[0], task: 'T1', version, changes: { title: 'b' } })).error,
       created: (await create.call({ request: turns[1], task: 'T1', role: 'qa', branch: '', candidate: '' })).error };
   };
-  const owned = 'T1 belongs to chief C1 (codex), not to C2. Nothing changed. Change only your own tasks. If C1 stopped, open a replace gate for the owner to answer.';
+  const owned = 'T1 belongs to chief C1 (codex), not to C2. Nothing changed. Change only your own tasks. If C1 stopped, open a replace gate for the owner to answer: call the gate_replace tool with this task and to C2.';
   const held = await attempt();
   assert.equal(held.updated, `Sage could not update this task. [other-chief] ${owned}`);
   assert.equal(held.created, `Sage could not create this run. ${owned}`);
@@ -4764,10 +4778,12 @@ test('T17: assignment recovery accepts the exact message byte limit and refuses 
     const f = await preparationServerFixture(t);
     const prepared = f.api.prepareNativeTask(f.input, f.native(session), f.options);
     const saved = f.core.readAdmission(f.options.directory).preparations[0];
-    const { preparedTaskMessage } = await import(pathToFileURL(join(f.plugin, 'runtime/instructions.mjs')));
+    // A new path: node keeps its first answer for f.plugin, which this test already imported through the link.
+    const own = join(f.dir, 'own-package'); cpSync(PACKAGE, own, { recursive: true });
+    const { preparedTaskMessage } = await import(pathToFileURL(join(own, 'runtime/instructions.mjs')));
     // Grow only this isolated package's instructions. Core admission remains valid; this
     // tests the reader independently of the native dispatch adapter's own size refusal.
-    const file = join(f.plugin, 'core/roles/lead.md'), original = readFileSync(file, 'utf8').trim();
+    const file = join(own, 'core/roles/lead.md'), original = readFileSync(file, 'utf8').trim();
     writeFileSync(file, original + 'x'.repeat(bytes - Buffer.byteLength(prepared.message)));
     const message = preparedTaskMessage(saved), taskHash = createHash('sha256').update(message).digest('hex');
     assert.equal(Buffer.byteLength(message), bytes);
@@ -4782,7 +4798,7 @@ test('T17: assignment recovery accepts the exact message byte limit and refuses 
       parent: session, path: '/root/fixture_lead', turn: turns[1] });
     f.events.publish(join(f.options.observationsRoot, session), { ...base, kind: 'child-transcript', child: childActor,
       turn: turns[1], transcript });
-    const before = f.core.readAdmission(f.options.directory), read = await assignmentReader(f);
+    const before = f.core.readAdmission(f.options.directory), read = await assignmentReader({ ...f, plugin: own });
     if (bytes === 1024 * 1024) {
       const result = read(); assert.equal(result.message, message); assert.equal(result.taskHash, taskHash);
       assert.equal(result.preparation, saved.id); assert.equal(result.assignment, reserved.assignment.id);
