@@ -16,7 +16,7 @@ import { createInterface } from "node:readline";
 import { test } from "node:test";
 import { pathToFileURL } from "node:url";
 import { ROOT } from "./build.mjs";
-import { backedSage } from "./verdict-backing.mjs";
+import { backedSage, reportFor } from "./verdict-backing.mjs";
 
 const session = "d72422c7-509c-43aa-8c42-827c556f8a57";
 const childActor = "f22422c7-509c-43aa-8c42-827c556f8a58";
@@ -6118,6 +6118,18 @@ for (const obstacle of ['none', 'old-head', 'configured-cycles', 'gate', 'runnin
     writeFileSync(join(f.env.SAGE_HOME, 'config.json'), JSON.stringify({ 'cycles.small': 3 }));
     assert.equal(f.update().decision, 'task-update-history');
   }
+});
+
+test('T294: a native move to verified refuses a qa-fail verdict, and goes on after its finding moved', async t => {
+  const f = await taskUpdateReadinessFixture(t);
+  const run = /^R\d+/.exec(f.cli('run', 'add', 'T1', '--role', 'qa'))[0];
+  f.tool.keepReport(f.options.projectDirectory, { task: 'T1', run, role: 'qa', sha: f.head, text: reportFor('qa-fail') }, f.env);
+  f.cli('run', 'done', run, '--status', 'done', '--tokens', '1');
+  const key = /^\S+/.exec(f.cli('finding', 'add', 'T1', '--source', 'qa', '--severity', 'medium', '--summary', 'A real problem', '--run', run, '--class', 'other'))[0];
+  f.cli('verdict', 'T1', '--sha', f.head, '--kind', 'qa-fail', '--run', run);
+  assert.throws(() => f.update(), error => error.code === 'readiness-findings');
+  f.cli('finding', 'move', 'T1', key, '--to', 'Later');
+  assert.equal(f.update().task.state, 'verified');
 });
 
 test('T584: a native move to verified refuses an open arena step, and goes on after a judge ended done', async t => {
