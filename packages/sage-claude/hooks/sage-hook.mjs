@@ -1431,9 +1431,9 @@ function unreadVerdict(command) {
   });
 }
 /**
- * After the sage's run done of a lead's helper run: the helper's slot frees at once, and the hook notes its stop, so that
- * the lead can start the next helper and does not wait for it (T482, T371). The helper of a run that ended does no work
- * that counts. Any doubt frees nothing.
+ * After the sage's run done of a lead's helper run: the hook notes its stop, so that the lead can start the next helper
+ * and does not wait for it (T482, T371). The slot stays until the helper really stops, or until its lease ends (T504).
+ * The helper of a run that ended does no work that counts. Any doubt notes nothing.
  */
 function chiefEnded(input, slots) {
   try {
@@ -2706,15 +2706,13 @@ export function slotsFor(dir, session, now = Date.now(), rawSession = session, l
       return keys.filter((key) => !names.includes(`stopped-${key}`) && lease(key) > 0).map((key) => key.slice(prefix.length + 1)).sort((a, b) => a.slice(1) - b.slice(1));
     },
     /**
-     * The sage ended these helpers' runs: each one's slot frees, in any session, and its stop is noted with no report
-     * (T482, T371). The slot is found by its own mark, so it frees also when a fresh lead's start pruned the run's notes
-     * (R1836-1).
+     * The sage ended these helpers' runs: each one's stop is noted with no report, so that its lead goes on (T482, T371).
+     * The slot stays: the helper's own stop frees it and puts its report in this note, else its lease ends (T504).
      */
     endHelpers: transaction((keys) => {
       for (const key of keys) {
         const started = helperNote(`started-${key}`);
         if (started !== undefined && helperNote(`stopped-${key}`) === undefined) note(`stopped-${key}`, JSON.stringify(parsed(started)), helpers);
-        for (const slot of list().filter((slot) => mark(slot, "helper-") === key)) free(slot);
       }
     }),
     /**
