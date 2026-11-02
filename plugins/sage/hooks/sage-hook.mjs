@@ -457,7 +457,7 @@ export function handle(input, state, slots) {
     }
     let answer;
     for (const command of commands) {
-      const result = gitGate(event, command, state, cwd, main, tool, describedOnly(ti, command));
+      const result = gitGate(event, command, state, cwd, main, tool, describedOnly(ti, command), input.session_id);
       if (result?.hookSpecificOutput?.permissionDecision === "deny") return result;
       answer ??= result;
     }
@@ -2001,7 +2001,7 @@ function powerShellProblem(command) {
     : undefined;
 }
 
-function gitGate(event, command, state, cwd, main, tool, described = false) {
+function gitGate(event, command, state, cwd, main, tool, described = false, session) {
   const powerShell = tool === "PowerShell" && powerShellProblem(command);
   if (powerShell) return deny(event, powerShell);
   const options = { powerShell: tool === "PowerShell" };
@@ -2033,7 +2033,7 @@ function gitGate(event, command, state, cwd, main, tool, described = false) {
   try {
     if (stateTool.error) throw stateTool.error;
     // Only a task of the merged project's logbook approves: its folder, resolved as for a lead (F-T273-9).
-    verdict = stateTool.mergeCheck(merge.sha, process.env, { pr: merge.pr, head, project: realpathSync.native(cwd) });
+    verdict = stateTool.mergeCheck(merge.sha, process.env, { pr: merge.pr, head, project: realpathSync.native(cwd), session });
   } catch (e) {
     verdict = { reason: `it could not run (${e?.message ?? e}), so it refuses every merge. Tell the user.` };
   }

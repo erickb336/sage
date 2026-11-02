@@ -351,7 +351,7 @@ A moved folder with no Git commits, or that is no Git repository, has no first c
 - You answer a Replace gate as you answer any gate, and only once. The answer replace does one write: it sets the chief, clears an open offer and ends each named run as failed. Keep, or your own words, change nothing.
 - A chief never answers a replace gate by itself: only your answer counts. This rule is an instruction, not a check. No code ties the answer to your message, as for other gates.
 - A replace gate refuses your answer replace when the owning chief changed, or when a new run started after it opened. Answer keep, and the chief opens a new gate.
-- The replaced chief gets a refusal that names the new owning chief, also for `sage-pr create` and `sage-pr merge`. Its lead writes nothing, because the lead run ended.
+- The replaced chief gets a refusal that names the new owning chief, also for `sage-pr create`, `sage-pr merge` and `gh pr merge`. Its lead writes nothing, because the lead run ended.
 - A run that ended as blocked or failed keeps a late report once, with its arrival time, so no report is lost. `task <T>` prints its path. That report backs no verdict.
 - Claude's stop hook keeps the late report of any role with a known run. Codex keeps it for a child that has the run in its task name.
 

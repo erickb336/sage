@@ -2292,6 +2292,8 @@ function rebuild(root) {
  * With project, the folder of the project being merged: only a task of its logbook counts as a task of the pull request
  * that may approve the merge. A task of another logbook with verdicts on the SHA must still pass (F-T273-9).
  * With locked, the caller already holds that project's lock, so the check finishes its saved change without taking it.
+ * With session, a hook's session id in that project: a task of a shared logbook lands only by its owning chief, as its
+ * later state=merged would refuse (F-T618-17). A legacy project has no chief, and a read with no session judges no chief.
  */
 function mergeCheck(sha, env = process.env, options = {}) {
   return assessMerge(sha, env, options);
@@ -2308,7 +2310,7 @@ function assessMerge(sha, env, options, logbook = null) {
   return skipped.length ? { ...verdict, reason: `${verdict.reason} Skipped ${skipped.map(visible).join(", ")}: a saved change is incomplete there, and it has no row for this commit. Any write there finishes it or says what to do.` } : verdict;
 }
 
-function judgeMerge(sha, env, { cycles, pr, readOnly, head, project, locked }, logbook, skipped) {
+function judgeMerge(sha, env, { cycles, pr, readOnly, head, project, locked, session }, logbook, skipped) {
   let root = sageRoot(env);
   try {
     if (notFull(sha)) return { ok: false, reason: notFull(sha) };
@@ -2366,7 +2368,8 @@ function judgeMerge(sha, env, { cycles, pr, readOnly, head, project, locked }, l
       // task's branch cannot merge that task's work on its own verdicts (F-T273-8).
       if (head !== undefined && ofPr.size) absent.push(...tasks.filter((t) => !ofPr.has(t.id) && owns(t.id)).map((t) => ({ name: `${visible(dir)} ${t.id}`, how: how(t.id) })));
       const graph = waitGraph(tasks, book ? rowsOf(book.programs) : [], book ? rowsOf(book.gates) : [], decisions);
-      const checked = [...new Set([...rows.map((r) => r.task), ...ofPr])].map((id) => {
+      const chief = session !== undefined && basename(dir) === mine ? chiefFor(project, session, env) : undefined;
+      const checked =[...new Set([...rows.map((r) => r.task), ...ofPr])].map((id) => {
         const [own, task] = [ownOf.get(id) ?? [], byId.get(id)];
         // A held task never merges until the sage moves it (F-T273-12).
         const held = task?.state === "held" && { ok: false, reason: `${id} is held: only the sage moves a held task, and it does not merge until then.` };
@@ -2377,7 +2380,9 @@ function judgeMerge(sha, env, { cycles, pr, readOnly, head, project, locked }, l
         const busy = verdict.ok && live.length > 0 && { ok: false, reason: `${id} has a review or QA run that still runs: ${live.join(", ")}. End it with its report's findings recorded, then check again.` };
         // With no --head, the task's branch= says what would land.
         const bar = candidateBar(task ?? { id }, head ?? task?.branch, candidates, runsOf.get(id) ?? []), arena = bar && { ok: false, reason: bar };
-        return { dir, id, ofPr: ofPr.has(id), owns: owns(id), back: !owns(id) && back(id), own: own.length, ...verdict, ...busy, ...arena, ...held };
+        // Nothing else helps a chief that does not own the task, so this refusal comes last and replaces the others.
+        const notOwn = chief && !dead(task?.state) && ownerBar(dir, task, chief), owner = notOwn && { ok: false, reason: notOwn };
+        return { dir, id, ofPr: ofPr.has(id), owns: owns(id), back: !owns(id) && back(id), own: own.length, ...verdict, ...busy, ...arena, ...held, ...owner };
       });
       // A task with an unmet wait does not merge. A wait on a task of the same PR is met when that task passes in this merge
       // too, its own waits included: else two tasks of one PR could never merge. The same PR is the PR of --pr for both
@@ -3021,7 +3026,7 @@ function act(cmd, pos, opt, dir, env, skip, project) {
     }
     case "accept": {
       const { tasks, task } = taskOf(dir, need(sub, "the task id")), open = exactOffer(task, opt.offer);
-      if (open.to !== opt.chief) refuse(`offer ${open.id} of ${task.id} names ${open.to}, not ${opt.chief}. Nothing changed. Only ${open.to} accepts it. To get ${task.id}, ask its owning chief ${task.chief} to cancel this offer and offer it to you.`);
+      if (open.to !== opt.chief) refuse(`offer ${open.id} of ${task.id} names ${open.to}, not ${opt.chief}. Nothing changed. Only ${open.to} accepts it. ${task.chief === opt.chief ? `You own ${task.id}: to end this offer, cancel it.` : `To get ${task.id}, ask its owning chief ${task.chief} to cancel this offer and offer it to you.`}`);
       if (opt.version !== taskVersion(task)) refuse(`${task.id} changed, so this acceptance is out of date: read it again, then accept it with --version ${taskVersion(task)}. Nothing changed.`);
       runsBar(dir, task, "accept");
       Object.assign(task, { chief: opt.chief, offer: "" });

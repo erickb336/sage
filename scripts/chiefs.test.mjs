@@ -12,6 +12,7 @@ import { fileURLToPath, pathToFileURL } from "node:url";
 import { shellCommands } from "../plugins/sage/core/command-reader.mjs";
 import * as claude from "../plugins/sage/skills/sage/sage.mjs";
 import { tool as codex } from "../plugins/sage-codex/skills/sage/sage.mjs";
+import { backed } from "./verdict-backing.mjs";
 
 const at = (path) => fileURLToPath(new URL(path, import.meta.url));
 const LAUNCHER = [at("../plugins/sage/hooks/launcher.mjs"), "sage-hook.mjs"], TOOL = at("../plugins/sage/skills/sage/sage.mjs"), PR_TOOL = at("../plugins/sage/skills/sage/sage-pr.mjs"), CODEX_TOOL = at("../plugins/sage-codex/skills/sage/sage.mjs");
@@ -311,7 +312,7 @@ for (const [name, own, other] of pairs) {
     const third = (...args) => own.sage([...args, "--project", w.project, "--chief", "C3"], w.env);
     const before = w.tables();
     assert.throws(() => third("accept", "T1", "--offer", id, "--version", version), /offer [0-9a-f]{8} of T1 names C2, not C3\. Nothing changed\. Only C2 accepts it\. To get T1, ask its owning chief C1 to cancel this offer and offer it to you\.$/);
-    assert.throws(() => w.owner("accept", "T1", "--offer", id, "--version", version), /names C2, not C1/);
+    assert.throws(() => w.owner("accept", "T1", "--offer", id, "--version", version), /names C2, not C1\. Nothing changed\. Only C2 accepts it\. You own T1: to end this offer, cancel it\.$/, "F-T618-23: the owning chief is not told to ask itself");
     assert.throws(() => w.intruder("accept", "T1", "--offer", "nothing", "--version", version), /T1 has the open offer [0-9a-f]{8}, not nothing/);
     assert.throws(() => w.intruder("accept", "T1", "--offer", id, "--version", "0".repeat(64)), new RegExp(`T1 changed, so this acceptance is out of date: read it again, then accept it with --version ${version}`));
     assert.throws(() => w.nobody("accept", "T1", "--offer", id, "--version", version), NO_CHIEF);
@@ -596,6 +597,27 @@ test("F-T618-1: a chief that lost a task cannot accept a review of it, and the r
   assert.equal(findings(), before);
 });
 
+test("F-T618-16: the owning chief's review acceptance on a shared logbook records its verdict; the same input refuses another chief", (t) => {
+  const w = world(t, codex, codex);
+  w.owner("task", "add", "--title", "a", ...ADD);
+  w.owner("task", "T1", "set", "state=briefed");
+  w.owner("task", "T1", "set", "state=building", "branch=sage/t1-a");
+  execFileSync("git", ["-C", w.project, "branch", "sage/t1-a"]);
+  const sha = execFileSync("git", ["-C", w.project, "rev-parse", "sage/t1-a"], { encoding: "utf8" }).trim();
+  w.owner("run", "add", "T1", "--role", "code-reviewer", "--branch", "sage/t1-a");
+  const fields = { STATUS: "done", RESULT: "CLEAN", EVIDENCE: JSON.stringify({ commit: sha, round: 0, cycle: 1, summary: "s" }), FINDINGS: "[]", QUESTIONS: "none", "NOT VERIFIED": "x", BRANCH: "sage/t1-a" };
+  const text = Object.entries(fields).map(([key, value]) => `${key}: ${value}`).join("\n");
+  const work = { project: w.project, task: "T1", run: "R1", role: "code-reviewer", assignment: "00000000-0000-4000-8000-000000000616", reportHash: createHash("sha256").update(text).digest("hex"), text };
+  codex.finishReportedRun(work, w.env);
+  const input = { ...work, review: { sha, branch: "sage/t1-a", round: 0, cycle: 1 } };
+  assert.throws(() => codex.acceptReportedReview(input, w.env, "session-b"), (e) => e.code === "other-chief");
+  assert.doesNotMatch(w.cells("ledger"), /review-clean/, "the refusal recorded nothing");
+  const { decision, kind, run } = codex.acceptReportedReview(input, w.env, "session-a");
+  assert.deepEqual({ decision, kind, run }, { decision: "review-accepted", kind: "review-clean", run: "R1" });
+  assert.equal(row(w.cells("ledger"), "T1").sha, sha);
+  assert.equal(row(w.cells("ledger"), "T1").kind, "review-clean");
+});
+
 test("F-T618-2: the logbook check sees a Replace that publishes between its reads of the tables", async (t) => {
   const w = world(t, claude, codex);
   w.owner("task", "add", "--title", "a", ...ADD);
@@ -731,7 +753,11 @@ test("F-T604-19: an older sage, whose tables have no chief column, refuses to wr
 /** The Claude hook as Claude Code runs it, over one linked project, with scratch roots. */
 function hookWorld(t) {
   const w = scratch(t);
-  const env = { ...w.env, SAGE_HOOKS_STATE: join(w.base, "hooks") };
+  // gh is a fake: the hook reads a pull request's head branch for each merge, and a test never reaches GitHub.
+  const bin = join(w.base, "bin");
+  mkdirSync(bin);
+  writeFileSync(join(bin, "gh"), `#!/bin/sh\nprintf '{"headRefName":"sage/t1-a","isCrossRepository":false}'\n`, { mode: 0o755 });
+  const env = { ...w.env, PATH: `${bin}:${w.env.PATH}`, SAGE_HOOKS_STATE: join(w.base, "hooks") };
   const send = (event, session = "s1") => {
     const r = spawnSync("node", LAUNCHER, { input: JSON.stringify({ session_id: session, cwd: w.project, ...event }), env, encoding: "utf8", timeout: 60_000 });
     assert.equal(r.status, 0, r.stderr);
@@ -825,6 +851,32 @@ test("F-T618-5: the Claude hook refuses sage-pr create and merge of a chief that
   assert.equal(pr("view T1"), undefined, "view changes nothing");
   assert.equal(pr("import T1"), undefined, "import changes no pull request");
   assert.equal(pr("merge T9"), undefined, "the script refuses a task that the logbook lacks");
+});
+
+test("F-T618-17: in the Claude hook a replaced chief's gh pr merge refuses and names the owning chief; a legacy project and the owning chief merge as before", (t) => {
+  const w = hookWorld(t);
+  const sage = (...args) => claude.sage([...args, "--project", w.project], w.env);
+  for (const session of ["s1", "s2"]) for (const prompt of ["sage mode", "autopilot on"]) w.send({ hook_event_name: "UserPromptSubmit", prompt }, session);
+  const verified = (...chief) => {
+    const cli = (...args) => sage(...args, ...chief), keep = (fields) => claude.keepReport(w.project, fields, w.env);
+    cli("task", "add", "--title", "a", ...ADD);
+    for (const cycle of ["1", "2"]) for (const kind of ["checks-pass", "review-clean", "qa-pass"]) cli(...backed(["verdict", "T1", "--sha", SHA, "--kind", kind, "--cycle", cycle, "--pr", "41"], { cli, keep }));
+  };
+  const merge = (session) => w.denied(w.send({ hook_event_name: "PreToolUse", tool_name: "Bash", tool_input: { command: `gh pr merge 41 --squash --delete-branch --match-head-commit ${SHA}` } }, session));
+  sage("init");
+  verified();
+  assert.equal(merge("s1"), undefined, "a legacy project has no chief");
+  assert.equal(merge("s2"), undefined, "so any session merges there");
+  rmSync(claude.storeDir(w.project, w.env), { recursive: true });
+  sage("link", "--separate");
+  const first = claude.chiefFor(w.project, "s1", w.env), second = claude.chiefFor(w.project, "s2", w.env);
+  verified("--chief", first);
+  assert.equal(merge("s1"), undefined, "the owning chief merges");
+  assert.match(merge("s2"), /^sage: the merge check refuses: T1 belongs to chief C1 \(claude\), not to C2\. Nothing changed\./, "a chief that never owned it");
+  sage("gate", "replace", "T1", "--to", second, "--chief", second);
+  sage("gate", "answer", "G1", "--option", "1");
+  assert.equal(merge("s1"), "sage: the merge check refuses: T1 belongs to chief C2 (claude), not to C1. Nothing changed. Change only your own tasks. If C2 stopped, open a replace gate for the owner to answer: run sage gate replace T1 --to C1 --chief C1.", "the replaced chief");
+  assert.equal(merge("s2"), undefined, "the new owning chief merges");
 });
 
 test("the Claude hook names the chief on each transfer command, adds none to a gate answer, and keeps a late report of any role at the stop", (t) => {

@@ -676,7 +676,7 @@ export function takeProof(meta, name, env = process.env, input) {
 export const NO_GATE = "sage's gate is not running: trust sage's hooks with /hooks in the Codex CLI (or the app's hook review), then try again.";
 
 /** The merge check for one merge form: the pull request's head branch from gh, then the state tool's ledger check. */
-export async function checkMerge({ pr, sha }, cwd, env = process.env) {
+export async function checkMerge({ pr, sha }, cwd, env = process.env, session) {
   let head;
   try {
     head = pullRequestHead(pr, cwd, env);
@@ -685,7 +685,7 @@ export async function checkMerge({ pr, sha }, cwd, env = process.env) {
   }
   try {
     const { tool } = await import("../skills/sage/sage.mjs");
-    const verdict = tool.mergeCheck(sha, env, { pr, head, project: realpathSync.native(cwd) });
+    const verdict = tool.mergeCheck(sha, env, { pr, head, project: realpathSync.native(cwd), session });
     return verdict?.ok === true ? { ok: true } : { ok: false, reason: `sage: the merge check refuses: ${verdict?.reason}` };
   } catch (error) {
     return { ok: false, reason: `sage: the merge check could not run (${error?.message ?? error}), so it refuses every merge. Tell the user.` };
@@ -747,7 +747,7 @@ export async function gate(input, { mode = readMode, check = checkMerge, env = p
     if (f.tool !== "Bash" || thread.child || !mode(f, env).autopilot) return undefined;
     const merge = policy.mergeIn(f.command);
     if (!merge || merge.problem) return undefined;
-    return (await check(merge, f.cwd, env)).ok === true ? ALLOW : undefined;
+    return (await check(merge, f.cwd, env, f.session)).ok === true ? ALLOW : undefined;
   }
   const sageTool = SAGE_TOOL.exec(f.tool);
   if (sageTool) {
@@ -825,7 +825,7 @@ export async function gate(input, { mode = readMode, check = checkMerge, env = p
   if (merge.problem) return deny(`sage: ${merge.problem}`);
   if (thread.child) return refuse(thread, AGENT_MERGE);
   if (!now.autopilot) return deny(AUTOPILOT_OFF);
-  const verdict = await check(merge, f.cwd, env);
+  const verdict = await check(merge, f.cwd, env, f.session);
   return verdict.ok === true ? undefined : deny(verdict.reason ?? "sage: the merge check refuses.");
 }
 
