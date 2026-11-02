@@ -11,16 +11,17 @@ const TASK = /^T[1-9]\d*$/;
 /** A table of short rows: a bigger file is not a table of this tool. */
 const TABLE_MAX = 1024 * 1024;
 
-const READ = { kind: "read" }, ANY = { kind: "any" }, NEW = { kind: "new" };
+const READ = { kind: "read" }, ANY = { kind: "any" }, NEW = { kind: "new" }, OWNER = { kind: "owner" };
 const onTask = (task) => ({ kind: "task", task });
 /**
  * What a command writes, from its words: the design's table of writer classes, in one place.
- *   read: no guard. owner: the owner's own words, which a hook checks. any: any chief. new: a chief that gets the task.
+ *   read: no guard. owner: the owner's own act, so no chief: a gate answer, which a hook checks, and a repair with
+ *   --accept-change-loss, which the owner may run in a terminal with no hook. any: any chief. new: a chief that gets the task.
  *   task: the owning chief of task, or of the task of run. program: the owning chief of each task that it names.
  * A task on an any class is only the place of a lead: such a command changes no task. link is a read here, because a
  * checkout has no chief until it has a row.
  */
-export function writerClass(cmd, [sub, id] = []) {
+export function writerClass(cmd, [sub, id] = [], opt = {}) {
   switch (cmd) {
     case "task": return sub === "add" ? NEW : id === "set" ? onTask(sub) : READ;
     case "claim": return NEW;
@@ -28,12 +29,12 @@ export function writerClass(cmd, [sub, id] = []) {
     case "finding": return onTask(id);
     case "program": return { kind: "program" };
     case "run": return sub === "add" ? onTask(id) : sub === "done" ? { kind: "task", run: id } : sub === "usage" ? ANY : READ;
-    case "gate": return sub === "answer" ? { kind: "owner" } : sub === "add" ? (id === undefined ? ANY : onTask(id)) : READ;
+    case "gate": return sub === "answer" ? OWNER : sub === "add" ? (id === undefined ? ANY : onTask(id)) : READ;
     case "log": return TASK.test(sub ?? "") ? onTask(sub) : ANY;
     case "observe": return { ...ANY, task: sub };
     case "pages": return id === "record" ? { ...ANY, task: sub } : READ;
     case "standing": return sub === "add" ? ANY : READ;
-    case "logbook": return sub === "repair" ? ANY : READ;
+    case "logbook": return sub !== "repair" ? READ : opt["accept-change-loss"] === undefined ? ANY : OWNER;
     case "config": return sub === undefined ? READ : ANY;
     case "init": case "projects": return ANY;
     default: return READ;

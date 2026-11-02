@@ -197,9 +197,9 @@ for (const [name, own, other] of pairs) {
     const w = world(t, own, other);
     w.owner("task", "add", "--title", "a", ...ADD);
     writeFileSync(join(w.dir, "tasks.tsv"), w.cells("tasks").replace(/\tC1\n/, "\t\n")); // as a moved task starts
-    const [, version] = (() => { try { w.intruder("task", "T1", "set", "title=x"); } catch (e) { return /--version ([0-9a-f]{64}) --chief C2/.exec(e.message); } return []; })();
-    assert.match(version, /^[0-9a-f]{64}$/, "the refusal names the claim that works");
-    assert.throws(() => w.intruder("task", "T1", "set", "title=x"), new RegExp(`Claim it first: call the claim tool with this task and version ${version}, or run sage claim T1 --version ${version} --chief C2\\.`), "F-T604-11: each provider has a form that works");
+    const { version } = codex.readTaskSnapshot({ project: w.project, task: "T1" }, w.env);
+    const step = name === "Claude" ? `call the claim tool with this task and version ${version}` : `run sage claim T1 --version ${version} --chief C2`; // the intruder is the other provider
+    assert.throws(() => w.intruder("task", "T1", "set", "title=x"), { message: `T1 has no owning chief, so C2 cannot change it. Claim it first: ${step}. Nothing changed.` }, "F-T604-21: the reader of each provider gets only the form that it can use");
     assert.throws(() => w.intruder("claim", "T1", "--version", "0".repeat(64)), /T1 changed, so this claim is out of date/);
     assert.throws(() => w.nobody("claim", "T1", "--version", version), NO_CHIEF);
     assert.equal(w.intruder("claim", "T1", "--version", version), "T1 claimed · chief C2");
@@ -271,7 +271,7 @@ test("F-T604-4, F-T604-12: a native update of a task with no owning chief gives 
   const never = () => { throw Error("an update of a task with no owning chief reaches no decision"); };
   const update = { project: w.project, owner: "o", request: "00000000-0000-4000-8000-000000000609", task: "T1", version, changes: { title: "b" } };
   assert.throws(() => codex.updateRequestedTask(update, w.env, { native: "session-a", decide: never, acknowledge: never, release: never, void: never, history: never }),
-    (e) => e.code === "other-chief" && e.message.startsWith(`T1 has no owning chief, so C1 cannot change it. Claim it first: call the claim tool with this task and version ${version}`));
+    (e) => e.code === "other-chief" && e.message === `T1 has no owning chief, so C1 cannot change it. Claim it first: call the claim tool with this task and version ${version}. Nothing changed.`);
 });
 
 test("F-T604-18: a provider's command gives the real cause of a refusal: a damaged chiefs.tsv, a busy lock, or a lead with no lead run", (t) => {
@@ -387,6 +387,8 @@ test("the Claude hook adds the session's row at its first write, names its id, a
   assert.match(w.bash("task add --title a --size small --priority P2", "s1"), /add --chief C1/, "a resume keeps the id, so it is the same chief");
   assert.equal(w.bash("status"), undefined);
   assert.equal(w.bash("gate answer G1 --option 1"), undefined);
+  assert.equal(w.bash("logbook repair --accept-change-loss yes"), undefined, "F-T604-20: this repair is the owner's, so it names no chief");
+  assert.match(w.bash("logbook repair --accept-loss programs"), /add --chief C1/, "the other repair stays a write of any chief");
 });
 
 // Each write that the skill teaches with a quoted value. The plain form has one-word values: the hook must give both one result.

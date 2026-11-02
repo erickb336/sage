@@ -7,8 +7,10 @@ import { syncBuiltinESMExports } from 'node:module';
 import { tmpdir } from 'node:os';
 import { basename, dirname, join } from 'node:path';
 import { test } from 'node:test';
+import { fileURLToPath } from 'node:url';
 import { sage as claude, mergeCheck } from '../plugins/sage/skills/sage/sage.mjs';
 import { tool } from '../plugins/sage-codex/skills/sage/sage.mjs';
+import { STUCK_WRITE } from '../plugins/sage/core/task-update-error.mjs';
 
 const codex = tool.sage, SHA = 'a'.repeat(40), MARKER = 'review-pending.json';
 const STUCK = 'This command changed nothing. This project cannot save changes; other projects work. Tell the owner. There are two ways out. With a backup: the owner restores the folder that `sage logbook` prints; rows newer than the backup are lost. With no backup: after the owner accepts the loss of this saved change, the chief runs `sage logbook repair --accept-change-loss yes --project <the project>`, or the owner runs it in a terminal when the chief cannot; it keeps the file, and a half-published update keeps mixed tables. Do not remove review-pending.json by hand.';
@@ -339,13 +341,25 @@ for (const [name, provider] of [['Claude', claude], ['Codex', codex]]) {
 }
 
 test('T593 a path to a linked checkout through a link is no link to the logbook: the repair works', t => {
-  const { actor, base, dir, env, one } = linkedProjects(t), file = stuck(t, one), link = join(base, 'first-link');
+  const { base, dir, env, one } = linkedProjects(t), file = stuck(t, one), link = join(base, 'first-link');
   symlinkSync(one.project, link);
-  assert.throws(() => claude([...REPAIR, '--project', link], env), /a command with no chief only reads: add --chief/, 'a repair is a write of any chief');
-  assert.match(claude([...REPAIR, '--project', link, ...actor], env), /The saved change \(request R1\) is lost: .*The logbook check passes/);
+  assert.match(claude([...REPAIR, '--project', link], env), /The saved change \(request R1\) is lost: .*The logbook check passes/);
   assert.deepEqual(lostFiles(dir), [`${MARKER}.lost-1`]);
   assert.equal(existsSync(file), false);
 });
+
+for (const [name, cli] of [['Claude', '../plugins/sage/skills/sage/sage.mjs'], ['Codex', '../plugins/sage-codex/skills/sage/sage.mjs']]) {
+  test(`F-T604-20 ${name}: the line that a stuck write prints works in the owner's terminal on a shared logbook, with no chief and no hook`, t => {
+    const { env, dir, one, shared } = linkedProjects(t), file = stuck(t, one);
+    const before = readFileSync(join(dir, 'chiefs.tsv'), 'utf8');
+    const line = /`sage (logbook repair [^`]+)`/.exec(STUCK_WRITE)[1].replace('<the project>', one.project).split(' ');
+    const out = execFileSync(process.execPath, [fileURLToPath(new URL(cli, import.meta.url)), ...line], { cwd: shared, env, encoding: 'utf8' });
+    assert.match(out, /^The saved change \(request R1\) is lost: .*The logbook check passes, and writes work again\./);
+    assert.equal(existsSync(file), false);
+    assert.deepEqual(lostFiles(dir), [`${MARKER}.lost-1`]);
+    assert.equal(readFileSync(join(dir, 'chiefs.tsv'), 'utf8'), before, 'the repair adds no chief');
+  });
+}
 
 test('T593 a linked project: the repair refuses a change that can finish, and a write from the other checkout finishes it', t => {
   const { dir, one, two, shared } = linkedProjects(t);

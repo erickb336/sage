@@ -31,7 +31,7 @@ import { OBSERVATIONS_MAX_BYTES, OBSERVATION_DATA_MAX_BYTES, validateObservation
 import { createSharedRoot, sharedRoot } from "./shared-root.mjs";
 import { CHIEF, createChiefs, writerClass } from "./chiefs.mjs";
 
-export function createStateTool({ defaultRoot, legacyRoots = () => [], provider, models = ["inherit"], modelDefaults = {}, usageInterfaces = [] }) {
+export function createStateTool({ defaultRoot, legacyRoots = () => [], provider, models = ["inherit"], modelDefaults = {}, usageInterfaces = [], claimStep = (task, version, chief) => `run sage claim ${task} --version ${version} --chief ${chief}` }) {
 if (typeof defaultRoot !== "function") throw new TypeError("defaultRoot must be a function");
 if (typeof legacyRoots !== "function") throw new TypeError("legacyRoots must be a function");
 const MODELS = [...models];
@@ -2719,7 +2719,7 @@ function change(cmd, pos, opt, dir, env, skip, project, guarded) {
 
 /** Why this chief does not write this task, or "". An empty cell is a task with no owning chief. */
 function ownerBar(dir, task, chief) {
-  if (!task.chief) return `${task.id} has no owning chief, so ${chief} cannot change it. Claim it first: call the claim tool with this task and version ${taskVersion(task)}, or run sage claim ${task.id} --version ${taskVersion(task)} --chief ${chief}. Nothing changed.`;
+  if (!task.chief) return `${task.id} has no owning chief, so ${chief} cannot change it. Claim it first: ${claimStep(task.id, taskVersion(task), chief)}. Nothing changed.`;
   if (task.chief === chief) return "";
   const owner = chiefs(dir).find((r) => r.id === task.chief);
   return `${task.id} belongs to chief ${task.chief}${owner ? ` (${owner.provider})` : ""}, not to ${chief}. Nothing changed. Change only your own tasks. If ${task.chief} stopped, ask the owner.`;
@@ -2731,7 +2731,7 @@ function ownerBar(dir, task, chief) {
  * for the chief of its lead run, while that run runs, on the task of that run only (P4). A command with no chief only reads.
  */
 function guard(dir, cmd, pos, opt) {
-  const need = writerClass(cmd, pos);
+  const need = writerClass(cmd, pos, opt);
   if (["read", "owner"].includes(need.kind)) return undefined;
   const name = [cmd, ...pos.slice(0, 1)].join(" ");
   if (opt.chief !== undefined && opt.lead !== undefined) refuse(`${name} takes --chief or --lead, not both. Nothing changed.`);
@@ -2765,8 +2765,8 @@ function chiefFor(project, native, env = process.env) {
  * read, a gate answer or a legacy project. A refusal here is the real cause, such as a damaged chiefs.tsv or a busy lock.
  */
 function actorOptions(project, [cmd, ...rest], { native, leadTask }, env = process.env) {
-  const { pos } = parse(cmd, rest);
-  if (["read", "owner"].includes(writerClass(cmd, pos).kind) || !locate(project, env).shared) return [];
+  const { pos, opt } = parse(cmd, rest);
+  if (["read", "owner"].includes(writerClass(cmd, pos, opt).kind) || !locate(project, env).shared) return [];
   if (!leadTask) return [`--chief=${chiefFor(project, native, env)}`];
   const run = logbookView(project, env).leadRun(leadTask) ?? refuse(`${leadTask} has no running lead run, so this lead writes nothing. Report to your chief. Nothing changed.`);
   return [`--lead=${run.id}`];

@@ -1364,7 +1364,7 @@ function chiefIdProblem(input) {
   const words = chiefWriteWords(input);
   if (!words?.length) return undefined;
   const [cmd, ...args] = words, { pos, opt } = optionsOf(args);
-  if (["read", "owner"].includes(core.writerClass(cmd, pos).kind)) return undefined;
+  if (["read", "owner"].includes(core.writerClass(cmd, pos, opt).kind)) return undefined;
   let id;
   try {
     id = stateTool.chiefFor(realpathSync.native(resolve(input.cwd ?? process.cwd(), opt.project ?? process.env.SAGE_PROJECT ?? ".")), input.session_id);

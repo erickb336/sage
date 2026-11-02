@@ -317,8 +317,8 @@ A moved folder with no Git commits, or that is no Git repository, has no first c
 | --- | --- |
 | The owning chief | Its own task: `task <T> set`, `round`, `run add`, `run done`, `finding add`, `triage`, `close`, `move`, `verdict`, `task-adopt`, `gate add <T>`, `program propose` for its pilot and each of its tasks, and `log <T>`. |
 | A lead | What the chief of its lead run may write, on the task of that run only, while that run runs. |
-| Any chief | `task add`, `claim`, `gate add` with no task, `init`, `standing add`, `config`, `log -`, `pages <T> record`, `observe`, `run usage`, `logbook repair` and `projects rebuild`. |
-| You | `gate answer`, in your own words, from either provider. |
+| Any chief | `task add`, `claim`, `gate add` with no task, `init`, `standing add`, `config`, `log -`, `pages <T> record`, `observe`, `run usage`, `logbook repair --accept-loss` and `projects rebuild`. |
+| You | `gate answer`, in your own words, from either provider, and `logbook repair --accept-change-loss`: you accept the loss, and it names no chief, so the line that sage prints works in your terminal. |
 | A stop hook | The report and the end of the run of its own slot, so no report is lost. |
 | A helper, or a command with no chief | Nothing. It only reads. |
 
@@ -330,7 +330,7 @@ A moved folder with no Git commits, or that is no Git repository, has no first c
 | Situation | Result |
 | --- | --- |
 | The task belongs to another chief | The write refuses, names the owning chief and changes nothing, on every path. If that chief stopped, the chief asks you. A later sage adds the transfer. |
-| The task has no owning chief | The write refuses and prints the claim that works: `sage claim <T> --version <version> --chief C<n>`. A Codex chief calls the `claim` tool with the task and that version. |
+| The task has no owning chief | The write refuses and prints the claim that works for that chief. A Claude chief runs `sage claim <T> --version <version> --chief C<n>`. A Codex chief calls the `claim` tool with the task and that version. |
 | The task changed before the claim, or another chief claimed it first | The claim refuses and changes nothing. |
 
 This check prevents mistakes. It does not stop an agent that gives another chief's id on purpose. An older sage does not write a shared logbook that has the `chief` column: it refuses and asks you to update the plugin, and its reads go on.

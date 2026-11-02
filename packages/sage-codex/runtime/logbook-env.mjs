@@ -19,5 +19,8 @@ export const legacyRoots = (env) => (env.SAGE_HOME ? [env.SAGE_HOME] : [
  */
 export const logbookEnv = (options) => ({ ...process.env, SAGE_HOME: options.logbookRoot, SAGE_SHARED_HOME: sharedRoot(process.env, options.sharedRoot) });
 
+/** The claim that a Codex chief can make: the server's tool, because the sandbox keeps the logbook closed to its shell. */
+export const claimStep = (task, version) => `call the claim tool with this task and version ${version}`;
+
 /** A state tool with no ambient logbook. The call's env selects the logbook; the legacy roots come from the server's own environment. */
-export const logbookTool = (defaultRoot) => createStateTool({ provider: "codex", defaultRoot, legacyRoots: () => legacyRoots(process.env) });
+export const logbookTool = (defaultRoot) => createStateTool({ provider: "codex", claimStep, defaultRoot, legacyRoots: () => legacyRoots(process.env) });

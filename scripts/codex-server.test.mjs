@@ -4170,7 +4170,7 @@ test('T604: on a shared logbook, sage_update_task and sage_create_run give the g
   const tasks = join(tool.storeDir(project, env), 'tasks.tsv');
   writeFileSync(tasks, readFileSync(tasks, 'utf8').replace(/\tC1\n/, '\t\n'));
   const free = await attempt();
-  const claim = `T1 has no owning chief, so C2 cannot change it. Claim it first: call the claim tool with this task and version ${free.version}, or run sage claim T1 --version ${free.version} --chief C2. Nothing changed.`;
+  const claim = `T1 has no owning chief, so C2 cannot change it. Claim it first: call the claim tool with this task and version ${free.version}. Nothing changed.`;
   assert.equal(free.updated, `Sage could not update this task. [other-chief] ${claim}`);
   assert.equal(free.created, `Sage could not create this run. ${claim}`);
   await Promise.all([read, update, create].map(client => client.close()));
