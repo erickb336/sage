@@ -39,10 +39,10 @@ async function freePort() {
   return port;
 }
 
-// A guard against a hang, not a time check. It passes the server's last read after a new watch (15 s), because a write
-// that the file watcher loses reaches the board only through those reads (T348). A password check also takes over 10 s
-// on a starved machine, so a request has the same guard.
-const HANG_GUARD = 30_000;
+// Guards against a hang, not time checks. An event wait passes the server's last read after a new watch (15 s), because a
+// write that the file watcher loses reaches the board only through those reads (T348). A request has a longer guard: a
+// password check is scrypt work, and on a starved machine one check took over 30 s and still ended.
+const EVENT_GUARD = 30_000, REQUEST_GUARD = 120_000;
 
 // A sample password only, hashed once for the file: no test uses a real password.
 const PASSWORD = "sample board pass 01", RECORD = await hashPassword(PASSWORD);
@@ -66,7 +66,7 @@ function read(f, path = "/", { method = "GET", headers = {}, rawHeaders } = {}) 
       response.on("end", () => accept({ status: response.statusCode, headers: response.headers, body }));
       response.on("error", reject);
     });
-    req.on("error", reject); req.setTimeout(HANG_GUARD, () => req.destroy(new Error("board request did not finish"))); req.end();
+    req.on("error", reject); req.setTimeout(REQUEST_GUARD, () => req.destroy(new Error("board request did not finish"))); req.end();
   });
 }
 
@@ -109,7 +109,7 @@ function events(f, path = "/?events=1") {
       if (ended) return Promise.reject(new Error("event stream is closed"));
       return new Promise((accept, reject) => {
         const waiter = { accept, reject, predicate, timer: null };
-        waiter.timer = setTimeout(() => { waiters.delete(waiter); reject(new Error("no matching board event")); }, HANG_GUARD);
+        waiter.timer = setTimeout(() => { waiters.delete(waiter); reject(new Error("no matching board event")); }, EVENT_GUARD);
         waiters.add(waiter);
       });
     },
