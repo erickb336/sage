@@ -279,6 +279,10 @@ export function handle(input, state, slots) {
       } else if (!helper) keepDirect(input, slots);
       return void slots.release(input.agent_id, helper && { ...core.readReport(input.last_assistant_message), sha });
     }
+    // A late report of a run that ended stays readable, whatever its role: the state tool says which runs keep one.
+    try {
+      if (typeof input.last_assistant_message === "string" && logbookOf(helper.folder).row(helper.run)?.status !== "running") stateTool.keepReport(helper.folder, { task: helper.task, run: helper.run, role: helper.role, sha: head || "", text: input.last_assistant_message });
+    } catch {}
     // An implementer's report backs no verdict, and its RESULT is its own word: a normal stop, with that word and the
     // head that it left on the branch, so that its lead ends its run and starts the reviews there (R1817-1).
     return void slots.release(input.agent_id, { result: core.readReport(input.last_assistant_message).result, severities: [], sha: head || "" });
@@ -1041,9 +1045,10 @@ const LEAD_STOPS = ["held", "replan", "merged", "concluded", "abandoned"];
 function keepDirect(input, slots) {
   try {
     const role = String(input.agent_type ?? "").replace(/^sage:/, ""), mark = slots.runOf(input.agent_id);
-    if (!OURS.test(input.agent_type ?? "") || !REVIEWERS.includes(role) || !mark || mark.shared || typeof input.last_assistant_message !== "string") return;
+    if (!OURS.test(input.agent_type ?? "") || !mark || mark.shared || typeof input.last_assistant_message !== "string") return;
     const folder = realpathSync.native(input.cwd), view = logbookOf(folder), run = view.row(mark.run);
-    if (run?.role !== role || run.status !== "running") return;
+    // A running run keeps the report of a review or QA. A run that ended asks the state tool, which keeps its late report or refuses.
+    if (run?.role !== role || (run.status === "running" && !REVIEWERS.includes(role))) return;
     const lead = view.leadRun(run.task);
     if (lead && slots.helper(helperOf({ logbook: digest(view.dir), run: lead.id }, mark.run)).owned) return;
     const sha = mark.tip && mark.tip === headOf(folder, run.task) ? mark.tip : "";

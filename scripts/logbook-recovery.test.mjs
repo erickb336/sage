@@ -425,10 +425,10 @@ for (const [name, provider] of [['Claude', claude], ['Codex', codex]]) test(`T59
   const { one } = fixture(t);
   savedUsage(t, one);
   const file = join(one.dir, MARKER);
-  rewrite(file, value => { value.schema = 9; });
+  rewrite(file, value => { value.schema = 10; });
   const saved = snapshot(one.dir);
   assert.throws(() => one.run(provider, 'init'), { message: STUCK });
-  assert.throws(() => one.run(provider, ...REPAIR), { message: 'This saved change has schema 9, and this version of sage knows schemas up to 8: a newer sage wrote it and may finish it. Nothing changed. Update the sage plugin and restart this session. Then any write finishes the change or says what to do.' });
+  assert.throws(() => one.run(provider, ...REPAIR), { message: 'This saved change has schema 10, and this version of sage knows schemas up to 9: a newer sage wrote it and may finish it. Nothing changed. Update the sage plugin and restart this session. Then any write finishes the change or says what to do.' });
   assert.deepEqual(snapshot(one.dir), saved);
 });
 
@@ -489,10 +489,10 @@ test('T593 a whole receipt does not stop the repair', t => {
   assert.match(one.run(claude, ...REPAIR), /The logbook check passes/);
 });
 
-const NEWER_RECEIPT = 'A receipt in task-updates has schema 9, and this version of sage knows schemas up to 8: a newer sage wrote it. Nothing changed. Update the sage plugin and restart this session. Then any write finishes the change or says what to do.';
+const NEWER_RECEIPT = 'A receipt in task-updates has schema 10, and this version of sage knows schemas up to 9: a newer sage wrote it. Nothing changed. Update the sage plugin and restart this session. Then any write finishes the change or says what to do.';
 for (const [name, change] of [['with the known shape', () => {}], ['with an outcome of another shape', value => { value.outcome = { decided: true }; }]]) test(`T607 a newer receipt ${name} and no new column: the repair gives the plugin update, not the backup`, t => {
   const { one, receipt } = stuckWithReceipt(t);
-  rewrite(receipt, value => { value.intent.schema = 9; change(value); });
+  rewrite(receipt, value => { value.intent.schema = 10; change(value); });
   const saved = snapshot(one.dir);
   assert.throws(() => one.run(claude, ...REPAIR), { message: NEWER_RECEIPT });
   assert.deepEqual(snapshot(one.dir), saved);

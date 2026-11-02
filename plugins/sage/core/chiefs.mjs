@@ -24,12 +24,13 @@ const onTask = (task) => ({ kind: "task", task });
 export function writerClass(cmd, [sub, id] = []) {
   switch (cmd) {
     case "task": return sub === "add" ? NEW : id === "set" ? onTask(sub) : READ;
-    case "claim": return NEW;
+    case "claim": case "accept": return NEW;
+    case "offer": case "cancel": case "release": return onTask(sub);
     case "task-adopt": case "round": case "verdict": return onTask(sub);
     case "finding": return onTask(id);
     case "program": return { kind: "program" };
     case "run": return sub === "add" ? onTask(id) : sub === "done" ? { kind: "task", run: id } : sub === "usage" ? ANY : READ;
-    case "gate": return sub === "answer" ? OWNER : sub === "add" ? (id === undefined ? ANY : onTask(id)) : READ;
+    case "gate": return sub === "answer" ? OWNER : sub === "replace" ? ANY : sub === "add" ? (id === undefined ? ANY : onTask(id)) : READ;
     case "log": return TASK.test(sub ?? "") ? onTask(sub) : ANY;
     case "observe": return { ...ANY, task: sub };
     case "pages": return id === "record" ? { ...ANY, task: sub } : READ;
@@ -39,6 +40,26 @@ export function writerClass(cmd, [sub, id] = []) {
     case "init": case "projects": return ANY;
     default: return READ;
   }
+}
+
+/** A command that only a shared logbook has: it moves a task between chiefs. */
+export const chiefOnly = (cmd, [sub] = []) => ["claim", "offer", "cancel", "accept", "release"].includes(cmd) || (cmd === "gate" && sub === "replace");
+
+/** The open offer of a task's row: { id, from, to }. An empty cell has none, and so has a cell that does not read as one. */
+export function offerOf(task) {
+  try {
+    const offer = JSON.parse(task.offer || "null");
+    return typeof offer?.id === "string" && CHIEF.test(offer.from) && CHIEF.test(offer.to) ? offer : undefined;
+  } catch {
+    return undefined;
+  }
+}
+
+/** A replace gate's question, which only gate replace writes: the owner reads in it what the answer does, and the answer reads it back (replaceOf). */
+export const replaceQuestion = (from, task, to, runs) => `Replace chief ${from} of ${task} with ${to}? Runs that end as failed: ${runs.join(", ") || "none"}.`;
+export function replaceOf(gate) {
+  const [, from, to, runs] = /^Replace chief (C[1-9]\d*) of T[1-9]\d* with (C[1-9]\d*)\? Runs that end as failed: (.+)\.$/.exec(gate.question) ?? [];
+  return from && { from, to, runs: runs === "none" ? [] : runs.split(", ") };
 }
 
 export function createChiefs({ now, provider, readRegular, refuse, rowsOf, sheetText, swap }) {
