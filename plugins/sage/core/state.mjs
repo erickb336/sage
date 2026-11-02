@@ -2731,7 +2731,7 @@ function ownerBar(dir, task, chief) {
  * for the chief of its lead run, while that run runs, on the task of that run only (P4). A command with no chief only reads.
  */
 function guard(dir, cmd, pos, opt) {
-  const need = writerClass(cmd, pos, opt);
+  const need = writerClass(cmd, pos);
   if (["read", "owner"].includes(need.kind)) return undefined;
   const name = [cmd, ...pos.slice(0, 1)].join(" ");
   if (opt.chief !== undefined && opt.lead !== undefined) refuse(`${name} takes --chief or --lead, not both. Nothing changed.`);
@@ -2739,7 +2739,7 @@ function guard(dir, cmd, pos, opt) {
     ?? refuse(`${visible(opt.lead)} is not a running lead run, so this lead writes nothing. Report to your chief. Nothing changed.`);
   const chief = lead?.chief ?? opt.chief ?? refuse(`this logbook is shared, and a command with no chief only reads: add --chief <your C id> to ${name}. To get your id, run this write again as one command of its own: the session's hook names the id. Nothing changed.`);
   if (!lead && !chiefs(dir).some((r) => r.id === chief)) refuse(`${visible(chief)} is not a chief of this logbook (${join(dir, "chiefs.tsv")}). Nothing changed.`);
-  const tasks = need.kind === "any" ? [] : read(dir, "tasks"); // a repair of a lost tasks table is an any class
+  const tasks = need.kind === "any" ? [] : read(dir, "tasks");
   const old = need.kind === "program" ? read(dir, "programs").find((p) => p.id === pos[1]) : undefined;
   const ids = need.kind === "program"
     ? [opt.pilot ?? old?.pilot, ...(opt.tasks === undefined ? tasks.filter((t) => old && t.program === old.id).map((t) => t.id) : opt.tasks === "none" ? [] : waitWords(opt.tasks))]
@@ -2765,8 +2765,8 @@ function chiefFor(project, native, env = process.env) {
  * read, a gate answer or a legacy project. A refusal here is the real cause, such as a damaged chiefs.tsv or a busy lock.
  */
 function actorOptions(project, [cmd, ...rest], { native, leadTask }, env = process.env) {
-  const { pos, opt } = parse(cmd, rest);
-  if (["read", "owner"].includes(writerClass(cmd, pos, opt).kind) || !locate(project, env).shared) return [];
+  const { pos } = parse(cmd, rest);
+  if (["read", "owner"].includes(writerClass(cmd, pos).kind) || !locate(project, env).shared) return [];
   if (!leadTask) return [`--chief=${chiefFor(project, native, env)}`];
   const run = logbookView(project, env).leadRun(leadTask) ?? refuse(`${leadTask} has no running lead run, so this lead writes nothing. Report to your chief. Nothing changed.`);
   return [`--lead=${run.id}`];

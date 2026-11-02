@@ -221,6 +221,7 @@ The plugin starts a local MCP server, `sage`, in the desktop app and in the CLI.
 - The plugin approves its own tools, so the logbook writes do not ask you each time. To be asked, set `default_tools_approval_mode = "prompt"` under `[plugins."sage@sage".mcp_servers.sage]` in your Codex config.
 - Limit: `logbook repair` has no tool, and the sandbox keeps the logbook closed to the chief's shell. So the Codex chief cannot run either repair.
 - When a saved change cannot finish and you have no backup, accept the loss, then run this yourself in a terminal, outside Codex: `node ~/.codex/plugins/cache/sage/sage/<version>/skills/sage/sage.mjs logbook repair --accept-change-loss yes --project <project>`.
+- When a table fails the logbook check and you have no copy, accept the loss, then run the line that the refusal prints in the same way: `logbook repair --accept-loss <table> --project <project>`. A repair names no chief, also on a shared logbook.
 - To find `<version>`, run `ls ~/.codex/plugins/cache/sage/sage/` and use the current one. When you set `CODEX_HOME`, use that folder in place of `~/.codex`.
 - Limit: the repair cannot compare a receipt with Codex's journal. A receipt that differs from its journal row still stops Codex writes after the repair, and that case needs a backup.
 

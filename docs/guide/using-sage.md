@@ -317,8 +317,8 @@ A moved folder with no Git commits, or that is no Git repository, has no first c
 | --- | --- |
 | The owning chief | Its own task: `task <T> set`, `round`, `run add`, `run done`, `finding add`, `triage`, `close`, `move`, `verdict`, `task-adopt`, `gate add <T>`, `program propose` for its pilot and each of its tasks, and `log <T>`. |
 | A lead | What the chief of its lead run may write, on the task of that run only, while that run runs. |
-| Any chief | `task add`, `claim`, `gate add` with no task, `init`, `standing add`, `config`, `log -`, `pages <T> record`, `observe`, `run usage`, `logbook repair --accept-loss` and `projects rebuild`. |
-| You | `gate answer`, in your own words, from either provider, and `logbook repair --accept-change-loss`: you accept the loss, and it names no chief, so the line that sage prints works in your terminal. |
+| Any chief | `task add`, `claim`, `gate add` with no task, `init`, `standing add`, `config`, `log -`, `pages <T> record`, `observe`, `run usage` and `projects rebuild`. |
+| You | `gate answer`, in your own words, from either provider, and each form of `logbook repair` (`--accept-loss`, `--accept-change-loss`, or both): you accept the loss, and it names no chief, so the line that sage prints works in your terminal. |
 | A stop hook | The report and the end of the run of its own slot, so no report is lost. |
 | A helper, or a command with no chief | Nothing. It only reads. |
 

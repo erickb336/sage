@@ -1,6 +1,6 @@
 import './test-env.mjs';
 import assert from 'node:assert/strict';
-import { execFileSync } from 'node:child_process';
+import { execFileSync, spawnSync } from 'node:child_process';
 import { createHash } from 'node:crypto';
 import fs, { existsSync, mkdtempSync, mkdirSync, readFileSync, readdirSync, realpathSync, rmSync, symlinkSync, truncateSync, writeFileSync } from 'node:fs';
 import { syncBuiltinESMExports } from 'node:module';
@@ -251,6 +251,35 @@ test('T593 a stuck change with a damaged decisions table: the repair refuses wit
   assert.equal(existsSync(file), false);
   assert.match(one.run(claude, 'task', 'add', '--priority', 'P2', '--title', 'Saves again', '--size', 'tiny'), /T2/);
 });
+
+for (const [name, provider, file] of [['Claude', claude, '../plugins/sage/skills/sage/sage.mjs'], ['Codex', codex, '../plugins/sage-codex/skills/sage/sage.mjs']]) {
+  test(`F-T604-23 ${name}: on a shared logbook, the combined repair line works in the owner's terminal, with no chief`, t => {
+    const base = realpathSync(mkdtempSync(join(tmpdir(), 'sage-recovery-')));
+    t.after(() => rmSync(base, { recursive: true, force: true }));
+    const env = { ...process.env, HOME: join(base, 'home'), SAGE_HOME: join(base, 'sage'), CLAUDE_CONFIG_DIR: join(base, 'claude'), CODEX_HOME: join(base, 'codex'), SAGE_SHARED_HOME: join(base, 'shared'), SAGE_TEST_PIDS: '{}' };
+    const project = join(base, 'project'), gitEnv = { ...env, GIT_AUTHOR_NAME: 't', GIT_AUTHOR_EMAIL: 't@example.com', GIT_COMMITTER_NAME: 't', GIT_COMMITTER_EMAIL: 't@example.com' };
+    mkdirSync(project);
+    execFileSync('git', ['init', '-q', '-b', 'main', project]);
+    execFileSync('git', ['-C', project, 'commit', '-q', '--allow-empty', '-m', 'first'], { env: gitEnv });
+    provider(['link', '--separate', '--project', project], env);
+    const dir = tool.storeDir(project, env), chief = tool.chiefFor(project, 'session-a', env);
+    const run = (who, ...args) => who([...args, '--project', project, '--chief', chief], env);
+    run(codex, 'task', 'add', '--priority', 'P2', '--title', 'First', '--size', 'tiny');
+    const marker = stuck(t, { dir, run }), people = readFileSync(join(dir, 'chiefs.tsv'), 'utf8');
+    writeFileSync(join(dir, 'decisions.tsv'), '');
+    const terminal = (...args) => spawnSync(process.execPath, [fileURLToPath(new URL(file, import.meta.url)), ...args], { cwd: base, env, encoding: 'utf8', timeout: 60_000 });
+    const refused = terminal(...REPAIR, '--project', project);
+    assert.notEqual(refused.status, 0);
+    const line = refused.stderr.match(/run: sage (logbook repair --accept-change-loss .*? --project) <the project>\./)[1].split(' ').concat(project);
+    assert.deepEqual(line, [...REPAIR, '--accept-loss', 'decisions', '--project', project]);
+    const repair = terminal(...line);
+    assert.equal(repair.status, 0, repair.stderr);
+    assert.match(repair.stdout, /^decisions\.tsv started again without rows; .* The saved change \(request R1\) is lost: /);
+    assert.equal(existsSync(marker), false);
+    assert.equal(readFileSync(join(dir, 'chiefs.tsv'), 'utf8'), people, 'the repair names no chief, so it adds none');
+    assert.match(run(provider, 'task', 'add', '--priority', 'P2', '--title', 'Saves again', '--size', 'tiny'), /T2 framed .* · chief C1/);
+  });
+}
 
 const LINKED = (real, path, parent, setting = 'SAGE_HOME') => `This logbook is reached through a link, so its saved change may finish from the real folder ${real}. Nothing changed. Run sage on a path with no link. When ${path} is the link itself, move the real folder there, in place of the link. When a folder above it is the link, set ${setting} to ${parent}. Then any write finishes the change or says what to do.`;
 test('T593 a SAGE_HOME path through a link: the repair refuses, and the change that reads as stuck finishes from the real path', t => {

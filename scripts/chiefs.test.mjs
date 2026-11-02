@@ -14,7 +14,7 @@ import * as claude from "../plugins/sage/skills/sage/sage.mjs";
 import { tool as codex } from "../plugins/sage-codex/skills/sage/sage.mjs";
 
 const at = (path) => fileURLToPath(new URL(path, import.meta.url));
-const LAUNCHER = [at("../plugins/sage/hooks/launcher.mjs"), "sage-hook.mjs"], TOOL = at("../plugins/sage/skills/sage/sage.mjs");
+const LAUNCHER = [at("../plugins/sage/hooks/launcher.mjs"), "sage-hook.mjs"], TOOL = at("../plugins/sage/skills/sage/sage.mjs"), CODEX_TOOL = at("../plugins/sage-codex/skills/sage/sage.mjs");
 const SHA = "a".repeat(40);
 const gitEnv = { ...process.env, GIT_AUTHOR_NAME: "t", GIT_AUTHOR_EMAIL: "t@example.com", GIT_COMMITTER_NAME: "t", GIT_COMMITTER_EMAIL: "t@example.com" };
 const ADD = ["--size", "small", "--priority", "P2"];
@@ -52,6 +52,25 @@ function row(text, id) {
   return Object.fromEntries(cols.map((c, k) => [c, lines.map((l) => l.split("\t")).find((l) => l[0] === id)?.[k]]));
 }
 const pairs = [["Claude", claude, codex], ["Codex", codex, claude]];
+/** A command as the owner runs it in a terminal: a process of its own, with no hook and no chief id. */
+const owned = (w, name, ...args) => spawnSync(process.execPath, [name === "Claude" ? TOOL : CODEX_TOOL, ...args], { cwd: w.base, env: w.env, encoding: "utf8", timeout: 60_000 });
+/** The words of the line that a refusal prints, with the owner's project in place of its placeholder. */
+const printed = (text, project) => text.match(/run: sage (logbook repair .*? --project) <the project>\./)[1].split(" ").concat(project);
+
+test("F-T604-23: the printed repair line on a legacy project adds no chiefs.tsv and no chief column", (t) => {
+  const w = scratch(t);
+  const run = (...args) => claude.sage([...args, "--project", w.project], w.env);
+  run("init");
+  run("task", "add", "--title", "a", ...ADD);
+  const dir = claude.storeDir(w.project, w.env), head = readFileSync(join(dir, "tasks.tsv"), "utf8").split("\n")[0];
+  writeFileSync(join(dir, "tasks.tsv"), "");
+  assert.throws(() => run("status"), /--accept-loss tasks/);
+  const line = printed(owned(w, "Claude", "task", "add", "--title", "b", ...ADD, "--project", w.project).stderr, w.project);
+  assert.equal(owned(w, "Claude", ...line).status, 0);
+  run("task", "add", "--title", "c", ...ADD);
+  assert.equal(readFileSync(join(dir, "tasks.tsv"), "utf8").split("\n")[0], head);
+  assert.equal(existsSync(join(dir, "chiefs.tsv")), false);
+});
 
 test("a legacy project has no chief: no chiefs.tsv, no chief column, the same task version, and no option or claim", (t) => {
   const w = scratch(t);
@@ -149,7 +168,7 @@ for (const [name, own, other] of pairs) {
     writeFileSync(page, "a page");
     w.owner("run", "done", "R1", "--status", "failed");
     const some = [["standing", "add", "an order"], ["log", "-", "a decision", "--why", "w"], ["gate", "add", "--question", "q?", "--options", "a|b", "--recommend", "a"], ["config", "max_rounds=4"], ["config", "name=Shown"],
-      ["projects", "rebuild", "--accept-listing", "yes"], ["init"], ["pages", "T1", "record", page], ["observe", "T1", "--kind", "completion"], ["run", "usage", "R1", "--tokens", "5", "--usage-source", "s", "--usage-evidence", "e"], ["logbook", "repair", "--accept-loss", "programs"]];
+      ["projects", "rebuild", "--accept-listing", "yes"], ["init"], ["pages", "T1", "record", page], ["observe", "T1", "--kind", "completion"], ["run", "usage", "R1", "--tokens", "5", "--usage-source", "s", "--usage-evidence", "e"]];
     for (const args of some) {
       assert.throws(() => w.nobody(...args), NO_CHIEF, args.join(" "));
       try { w.intruder(...args); } catch (e) { assert.doesNotMatch(e.message, /belongs to|no chief/, args.join(" ")); }
@@ -168,6 +187,22 @@ for (const [name, own, other] of pairs) {
     assert.deepEqual(own.actorOptions(w.project, ["gate", "answer", "G1"], { native: "session-a" }, w.env), [], "no chief goes on a gate answer");
     assert.deepEqual(own.actorOptions(w.project, ["status"], { native: "session-new" }, w.env), [], "a read makes no chief");
     assert.equal(readFileSync(join(w.dir, "chiefs.tsv"), "utf8").includes("session-new"), false);
+  });
+
+  test(`F-T604-23 ${name}: the line that the integrity refusal prints works in the owner's terminal on a shared logbook`, (t) => {
+    const w = world(t, own, other), people = readFileSync(join(w.dir, "chiefs.tsv"), "utf8");
+    w.owner("task", "add", "--title", "a", ...ADD);
+    writeFileSync(join(w.dir, "tasks.tsv"), "");
+    const out = owned(w, name, "task", "add", "--title", "b", ...ADD, "--project", w.project, "--chief", w.chief);
+    assert.notEqual(out.status, 0);
+    const line = printed(out.stderr, w.project);
+    assert.deepEqual(line, ["logbook", "repair", "--accept-loss", "tasks", "--project", w.project]);
+    const repair = owned(w, name, ...line);
+    assert.equal(repair.status, 0, repair.stderr);
+    assert.match(repair.stdout, /^tasks\.tsv started again without rows; its old file is \S+tasks\.tsv\.lost-1\./);
+    assert.match(w.cells("decisions"), /the user accepts the loss of its rows/);
+    assert.equal(readFileSync(join(w.dir, "chiefs.tsv"), "utf8"), people, "the repair names no chief, so it adds none");
+    assert.match(w.owner("task", "add", "--title", "c", ...ADD), /^T1 framed .* · chief C1$/);
   });
 
   test(`${name}: a lead acts for the chief of its lead run, on the task of that run only, while that run runs`, (t) => {
@@ -388,7 +423,7 @@ test("the Claude hook adds the session's row at its first write, names its id, a
   assert.equal(w.bash("status"), undefined);
   assert.equal(w.bash("gate answer G1 --option 1"), undefined);
   assert.equal(w.bash("logbook repair --accept-change-loss yes"), undefined, "F-T604-20: this repair is the owner's, so it names no chief");
-  assert.match(w.bash("logbook repair --accept-loss programs"), /add --chief C1/, "the other repair stays a write of any chief");
+  assert.equal(w.bash("logbook repair --accept-loss programs"), undefined, "F-T604-23: so is this one");
 });
 
 // Each write that the skill teaches with a quoted value. The plain form has one-word values: the hook must give both one result.
