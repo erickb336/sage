@@ -270,7 +270,7 @@ test("F-T552-1: the refusal of finding_close gives a step that the lead can take
   const qa = (await lead("run_add", { task: "T1", role: "qa" })).split(" ")[0];
   await lead("finding_add", { task: "T1", source: "qa", severity: "medium", summary: "a", run: qa, class: "other" });
   await triage(w, "F-T1-1");
-  assert.match((await lead("round", { task: "T1" })).error, /^sage: T1 is building\. A repair starts from reviewing or verifying/, "so round is no step from here");
+  assert.match((await lead("round", { task: "T1" })).error, /^sage: T1 is building\. A repair starts from reviewing, verifying or repairing/, "so round is no step from here");
   const close = async () => (await lead("finding_close", { task: "T1", key: "F-T1-1" })).denied;
   assert.equal(await close(), "sage: T1 has a medium or high finding triaged fix and is not repairing: move it to reviewing, run round, then repair");
   await lead("task_set", { task: "T1", fields: { state: "reviewing" } });
