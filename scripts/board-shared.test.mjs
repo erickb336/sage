@@ -16,6 +16,7 @@ import { cardFits, renderBoardHtml, renderBoardText, renderTaskText, renderAgent
 import { replaceQuestion } from "../packages/sage-core/chiefs.mjs";
 import { sharedRoot } from "../packages/sage-core/shared-root.mjs";
 import { readSources, standardSources } from "../packages/sage-board/cli.mjs";
+import * as view from "../packages/sage-core/board-view.mjs";
 import { createBoardServer } from "../packages/sage-board/server.mjs";
 import * as claude from "../plugins/sage/skills/sage/sage.mjs";
 
@@ -139,7 +140,7 @@ test("each shared card names its owning chief, an open offer, or Unclaimed; the 
   assert.equal(card(model, "T321").offer, "Offered to Codex · C2. It waits for R407 and R420 to end, then Codex · C2 accepts.");
   assert.equal(card(model, "T323").offer, "Offered to Claude · C1. Ready: Claude · C1 can accept.");
   assert.equal(card(model, "T322").offer, null);
-  assert.deepEqual(model.warnings.map(item => item.message), ["chiefs: T324 names the chief C9, which chiefs.tsv does not list"]);
+  assert.equal(card(model, "T324").owner.unlisted, true, "an unknown chief id shows on its task's page");
   assert.ok(!model.needsOwner.some(item => item.id === "T324"), "an unknown chief id is a warning, not a need");
   const html = renderBoardHtml(model);
   assert.match(html, /data-key="shared\/lantern-4be1a2\/T321"[^>]*data-provider="claude"/);
@@ -188,7 +189,7 @@ test("old logbooks: finished tasks show in Done with their old label, a moved ro
   writeFileSync(join(w.shared, FOLDER, "sources.tsv"), `provider\tpath\tat\nclaude\t${outside}\tx\nclaude\t${link}\tx\nclaude\t${join(w.claudeRoot, ".hooks")}\tx\n`);
   const read = readBoardSources(w.sources, { now: NOW }), shared = read.find(source => source.id === "shared");
   assert.deepEqual(shared.projects.map(project => project.key), [`shared/${FOLDER}`]);
-  assert.deepEqual(shared.projects[0].diagnostics, [2, 3, 4].map(line => `sources: line ${line} does not name an old logbook folder under a provider root`));
+  assert.deepEqual(shared.projects[0].diagnostics, [2, 3, 4].map(line => `sources: line ${line} does not name a moved logbook of its provider under a provider root`));
   // The in-session board knows the other provider's root from the state tool (providerRoots), not as a source.
   writeFileSync(join(w.shared, FOLDER, "sources.tsv"), `provider\tpath\tat\ncodex\t${join(w.codexRoot, FOLDER)}\tx\n`);
   const session = sources => readBoardSources([{ id: "current", path: w.claudeRoot }, { id: "shared", path: w.shared }], { now: NOW, ...sources }).find(source => source.id === "shared");
@@ -336,4 +337,79 @@ test("a legacy project's board is the same with the shared root missing, empty o
   assert.equal(t41.holder, undefined);
   assert.match(renderBoardHtml(both), /<span class="who" title="The logbook that holds this task">Claude<\/span>/);
   assert.doesNotMatch(renderBoardHtml(harbor(legacy)), /Owning chief: |class="offerline"|class="who oldtag"|The logbook is changing|<th>Provider<\/th>/);
+});
+
+// Repair round 1 of PR 419 (R2402): one test for each fix key.
+test("F-T624-1: a slot joins the run of its own source when a legacy project runs the same run id in Claude and Codex", t => {
+  const base = realpathSync(mkdtempSync(join(tmpdir(), "sage-board-shared-twin-")));
+  t.after(() => rmSync(base, { recursive: true, force: true }));
+  const claudeRoot = join(base, "claude"), codexRoot = join(base, "codex");
+  for (const root of [claudeRoot, codexRoot]) logbook(join(root, "app-aaaaaa"), { tasks: [task("T1", "Twin", "building")], runs: [run("R3", "T1", "code-reviewer", "running", iso(-5 * MIN))] }, LEGACY);
+  const dir = join(claudeRoot, ".hooks", "slots", "slot-1");
+  mkdirSync(dir, { recursive: true });
+  for (const mark of ["ok", "project-app", "role-sage_code-reviewer", "run-R3"]) writeFileSync(join(dir, mark), "");
+  mkdirSync(join(claudeRoot, ".hooks", "helpers"));
+  const agents = modelOf([{ id: "claude", label: "Claude", provider: "claude", path: claudeRoot }, { id: "codex", label: "Codex", provider: "codex", path: codexRoot }]).agents;
+  const rows = agents.projects.flatMap(project => project.agents).map(agent => [agent.key, agent.slot ? "slot" : agent.how, agent.state]).sort();
+  assert.deepEqual(rows, [["claude/app-aaaaaa/R3", "slot", "work"], ["codex/app-aaaaaa/R3", "logbook", "unk"]]);
+  assert.deepEqual(agents.unmatched, []);
+});
+
+/** A writer that replaces the whole logbook folder with a new one, as a move or a restore would. */
+const replaceFolder = dir => { renameSync(dir, `${dir}.gone`); mkdirSync(dir); for (const name of readdirSync(`${dir}.gone`)) writeFileSync(join(dir, name), readFileSync(join(`${dir}.gone`, name))); rmSync(`${dir}.gone`, { recursive: true }); };
+
+test("F-T624-2: when the third read lost its data, the changing note says what does not show", t => {
+  const w = world(t), dir = join(w.claudeRoot, HARBOR), sources = [w.sources[0]];
+  const read = readBoardSources(sources, { now: NOW, duringRead: key => key.endsWith(HARBOR) && replaceFolder(dir) });
+  const harbor = read[0].projects.find(project => project.name === HARBOR);
+  assert.deepEqual([harbor.tables, harbor.diagnostics, harbor.changing], [{}, [], { at: iso(), dropped: ["project changed during the read"] }]);
+  const model = buildBoardModel(read, { now: iso() });
+  assert.deepEqual(model.changing, [{ project: "harbor", at: iso(), dropped: ["project changed during the read"] }]);
+  assert.match(renderBoardHtml(model), /<li>harbor · last read \d\d:\d\d UTC · not shown, as it changed during that read: project changed during the read<\/li>/);
+  assert.match(renderBoardText(model), /⧗ The logbook is changing: harbor · read at \d\d\\:\d\d UTC, without what changed during it \(project changed during the read\)\. The board shows that read;/);
+  // A third read that lost nothing has no such line.
+  const calm = buildBoardModel(readBoardSources(sources, { now: NOW, duringRead: key => key.endsWith(HARBOR) && rewrite(dir, "Busy") }), { now: iso() });
+  assert.deepEqual(calm.changing, [{ project: "harbor", at: iso() }]);
+  assert.doesNotMatch(renderBoardText(calm), /without what changed/);
+});
+
+test("F-T624-3: the in-session board reads its provider's hook notes for a shared run, as the server does", t => {
+  const w = world(t);
+  const session = view.sessionSources(w.claudeRoot, w.shared, "claude");
+  assert.equal(session[0].label, "Current provider", "the legacy label stays");
+  const state = sources => { const agents = modelOf(sources).agents.projects.flatMap(project => project.agents.flatMap(agent => [agent, ...agent.children])); return ["R410", "R411", "R412"].map(id => agents.find(agent => agent.runId === id)?.state); };
+  assert.deepEqual(state(session), ["stuck", "stuck", "unk"]);
+  assert.deepEqual(state(session), state(w.sources), "the same as the server");
+});
+
+test("F-T624-4 and F-T624-7: a chief id that chiefs.tsv does not list shows on its task's pages only, not as a setting that the board ignores", t => {
+  const model = modelOf(world(t).sources), t324 = card(model, "T324");
+  assert.deepEqual(model.warnings, []);
+  assert.equal(t324.holder, "C9");
+  const page = key => renderBoardHtml(model, { taskKey: key, snapshot: false });
+  assert.match(page(`shared/${FOLDER}/T324`), /<div class="banner warn">.*<div><b>The owning chief is not in chiefs\.tsv\.<\/b> T324 names the chief C9, which chiefs\.tsv does not list, so the board does not know its provider\.<\/div><\/div>/);
+  assert.match(renderTaskText(t324), /\nOwning chief: C9\nC9 is not in chiefs\\\.tsv, so the board does not know its provider\\\.\n/);
+  for (const html of [page(`claude/${HARBOR}/T41`), page(`shared/${FOLDER}/T321`), renderBoardHtml(model, { snapshot: false })]) assert.doesNotMatch(html, /Settings ignored|not in chiefs\.tsv/);
+  assert.doesNotMatch(renderTaskText(card(model, "T321")), /not in chiefs/);
+  assert.doesNotMatch(renderBoardText(model), /Setting ignored|chiefs\\?\.tsv/);
+});
+
+test("F-T624-6: a sources.tsv row reads an old logbook only when it has moved.json and its provider is its root's", t => {
+  const w = world(t);
+  // A Codex row that names the live Claude project Harbor, a Claude row for it (no moved.json), and a Codex row for a Claude old logbook.
+  writeFileSync(join(w.shared, FOLDER, "sources.tsv"), `provider\tpath\tat\ncodex\t${join(w.codexRoot, "..", "..", "claude", "sage", HARBOR)}\tx\nclaude\t${join(w.claudeRoot, HARBOR)}\tx\ncodex\t${join(w.claudeRoot, FOLDER)}\tx\n`);
+  const read = readBoardSources(w.sources, { now: NOW });
+  assert.deepEqual(read.find(source => source.id === "shared").projects.map(project => [project.key, project.diagnostics]), [[`shared/${FOLDER}`, [2, 3, 4].map(line => `sources: line ${line} does not name a moved logbook of its provider under a provider root`)]]);
+  assert.deepEqual(read.find(source => source.id === "claude").projects.map(project => project.key), [`claude/${HARBOR}`, `claude/${FOLDER}`]);
+  const t41 = card(buildBoardModel(read, { now: iso() }), "T41");
+  assert.deepEqual([t41.key, t41.holder, t41.old], [`claude/${HARBOR}/T41`, undefined, undefined]);
+});
+
+test("F-T624-8: a damaged chiefs.tsv gives its one table diagnostic, and no warning for each task", t => {
+  const w = world(t);
+  writeFileSync(join(w.shared, FOLDER, "chiefs.tsv"), "id\tprovider\nC1\tclaude\n");
+  const model = modelOf(w.sources);
+  assert.deepEqual(model.warnings, []);
+  assert.deepEqual(model.diagnostics.filter(item => item.project === `shared/${FOLDER}`).map(item => item.message), ["chiefs: damaged table"]);
+  assert.doesNotMatch(renderBoardHtml(model, { taskKey: `shared/${FOLDER}/T321`, snapshot: false }), /not in chiefs\.tsv/);
 });

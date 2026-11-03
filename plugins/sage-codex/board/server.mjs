@@ -308,7 +308,8 @@ export function createBoardServer({ sources, password, port = 43123, allowedHost
     const changing = next.changing ?? [];
     if (changing.length && !model?.changing?.length) settle();
     if (!next.diagnostics.length && !changing.length) { lastGood = next; model = { ...next, stale: false }; }
-    else if (!next.diagnostics.length) model = lastGood ? { ...lastGood, stale: false, changing: changing.map(item => ({ ...item, at: lastGood.at })) } : { ...next, stale: false };
+    // The last good read lost nothing, so its note names no data that changed during the third read.
+    else if (!next.diagnostics.length) model = lastGood ? { ...lastGood, stale: false, changing: changing.map(item => ({ project: item.project, at: lastGood.at })) } : { ...next, stale: false };
     else model = { ...(lastGood ?? next), stale: true, diagnostics: next.diagnostics, notSetUp: next.notSetUp, changing };
     revision++;
     for (const client of clients) publish(client);

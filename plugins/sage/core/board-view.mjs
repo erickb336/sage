@@ -20,6 +20,12 @@ export function landingRule(sources, logbookKey = null) {
   };
 }
 
+/**
+ * The sources of the in-session board: the provider's root, with today's label and the provider whose hook writes its
+ * notes (F-T624-3), and the shared root (T306), where a shared project's logbook is, its key shared/<folder>.
+ */
+export const sessionSources = (root, shared, provider) => [{ id: "current", label: "Current provider", path: root, hookProvider: provider }, { id: "shared", label: "Shared", path: shared }];
+
 const fold = value => String(value).normalize("NFC").toLowerCase();
 /**
  * here: the key of the current project's shared logbook (T306), which names "this" project from any folder of it.

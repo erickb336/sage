@@ -168,6 +168,11 @@ export function readHookNotes(root) {
 
 /** The id of the board source that is the shared root (T306): its logbooks have no checkout.txt and may name old logbooks. */
 export const SHARED = "shared";
+/**
+ * The provider whose hook writes a root's notes and logbooks: a source's hookProvider (the in-session board's root: it
+ * keeps today's label as its provider stand-in), else its provider, else null when the board does not know it.
+ */
+export const hookProvider = source => source.hookProvider ?? source.provider ?? null;
 /** The folders of a logbook's receipts: a write adds one before it changes the tables. */
 const RECEIPTS = ["task-requests", "run-requests", "usage-requests", "reviews", "interrupted-runs", "replace-requests", "task-updates"];
 const WATCHED = [...Object.keys(TABLES), "chiefs", "sources"].map(name => `${name}.tsv`).concat("review-pending.json");
@@ -183,8 +188,11 @@ function fingerprint(directory) {
 }
 const CHANGED = /changed during the read$/;
 
-/** One read of one logbook into project. bound is a shared logbook's checkout (null when none is known), else undefined. */
-function readLogbook(directory, project, budget, { now, bound, chiefs = true }) {
+/**
+ * One read of one logbook into project. bound is a shared logbook's checkout (null when none is known), else undefined.
+ * duringRead (for tests) runs at the end of the read, before the folder's second check.
+ */
+function readLogbook(directory, project, budget, { now, bound, chiefs = true, duringRead, attempt }) {
   const before = lstatSync(directory);
   for (const name of Object.keys(TABLES)) {
     try { project.tables[name] = table(join(directory, `${name}.tsv`), name, budget); }
@@ -196,12 +204,13 @@ function readLogbook(directory, project, budget, { now, bound, chiefs = true }) 
     }
   }
   // The chiefs of a shared logbook (T306, PR 3), by the state tool's rule. A legacy logbook has none: no file, no rows.
+  // A table that the board cannot read gives null: its one diagnostic says so, and no task's chief counts as not listed.
   project.chiefs = [];
   if (chiefs) try {
     const found = sheet(join(directory, "chiefs.tsv"), budget);
     if (!chiefsWhole(found.cols, found.lines, found.rows)) throw damaged();
     project.chiefs = found.rows;
-  } catch (error) { if (error.code !== "ENOENT") project.diagnostics.push(`chiefs: ${error.code ?? error.message}`); }
+  } catch (error) { if (error.code !== "ENOENT") { project.chiefs = null; project.diagnostics.push(`chiefs: ${error.code ?? error.message}`); } }
   try { project.observations = validateObservations(parseJson(regular(join(directory, "observations.json"), budget)), { now }); }
   catch (error) {
     project.observations = { version: 1, records: [] };
@@ -225,6 +234,7 @@ function readLogbook(directory, project, budget, { now, bound, chiefs = true }) 
       }
     } catch (error) { project.diagnostics.push(`artifact ${record.id}: ${error.code ?? error.message}`); }
   }
+  duringRead?.(project.key, attempt);
   const after = lstatSync(directory);
   if (after.dev !== before.dev || after.ino !== before.ino || !after.isDirectory() || after.isSymbolicLink()) {
     project.tables = {}; project.contents = {}; project.observations = { version: 1, records: [] }; project.diagnostics.push("project changed during the read");
@@ -235,18 +245,18 @@ function readLogbook(directory, project, budget, { now, bound, chiefs = true }) 
 /**
  * A consistent read of one logbook (T306, F9): a read counts only when the logbook's fingerprint is the same before and
  * after it, and no file changed while it was read. At most 3 reads, each with the same share of the read budget. After the
- * third difference the third read stays, with changing: { at }, and a file that changed during it is no diagnostic.
- * duringRead (for tests) runs after each read, before its second fingerprint.
+ * third difference the third read stays, with changing: { at }. A file that changed during it is no diagnostic: the
+ * note names it in dropped, as its data does not show (F-T624-2).
  */
 function consistentRead(directory, base, budget, options) {
   const share = budget.remaining;
   for (let attempt = 1; ; attempt++) {
     budget.remaining = share;
     const before = fingerprint(directory);
-    const project = readLogbook(directory, { ...base, tables: {}, diagnostics: [], warnings: [] }, budget, options);
-    options.duringRead?.(project.key, attempt);
-    if (!project.diagnostics.some(message => CHANGED.test(message)) && fingerprint(directory) === before) return project;
-    if (attempt === MAX_ATTEMPTS) return Object.assign(project, { diagnostics: project.diagnostics.filter(message => !CHANGED.test(message)), changing: { at: new Date(options.now).toISOString() } });
+    const project = readLogbook(directory, { ...base, tables: {}, diagnostics: [], warnings: [] }, budget, { ...options, attempt });
+    const dropped = project.diagnostics.filter(message => CHANGED.test(message));
+    if (!dropped.length && fingerprint(directory) === before) return project;
+    if (attempt === MAX_ATTEMPTS) return Object.assign(project, { diagnostics: project.diagnostics.filter(message => !CHANGED.test(message)), changing: { at: new Date(options.now).toISOString(), ...(dropped.length && { dropped }) } });
   }
 }
 
@@ -261,8 +271,9 @@ function bindingsOf(root, budget) {
 
 /**
  * The old logbooks that a shared logbook's sources.tsv names (T306, the move): each row is a provider, a path and a time.
- * The board reads a path only when it is a logbook folder directly under a known provider root and not a link; any
- * other row is a diagnostic, and the board reads nothing there. Only the move (PR 7) writes this file.
+ * The board reads a path only when it is a logbook folder directly under a known provider root, not a link, with the
+ * move's mark moved.json, and its row names the root's provider (when the board knows it); any other row is a
+ * diagnostic, and the board reads nothing there, so a live logbook stays on its own. Only the move (PR 7) writes this file.
  */
 function oldSources(directory, roots, budget, project) {
   let found;
@@ -271,8 +282,9 @@ function oldSources(directory, roots, budget, project) {
   if (!exact(found, ["provider", "path", "at"]) || found.rows.length > MAX_OLD) { project.diagnostics.push("sources: damaged table"); return []; }
   return found.rows.flatMap((row, i) => {
     const path = isAbsolute(row.path) ? resolve(row.path) : null, root = path && roots.find(item => item.path === dirname(path));
-    const stat = root && /^[a-z0-9-]+-[0-9a-f]{6}$/.test(basename(path)) && /^[a-z][a-z0-9-]{0,30}$/.test(row.provider) ? lstatSync(path, { throwIfNoEntry: false }) : null;
-    if (!stat?.isDirectory() || stat.isSymbolicLink()) { project.diagnostics.push(`sources: line ${i + 2} does not name an old logbook folder under a provider root`); return []; }
+    const named = root && (root.provider ?? row.provider) === row.provider && /^[a-z0-9-]+-[0-9a-f]{6}$/.test(basename(path)) && /^[a-z][a-z0-9-]{0,30}$/.test(row.provider);
+    const stat = named ? lstatSync(path, { throwIfNoEntry: false }) : null;
+    if (!stat?.isDirectory() || stat.isSymbolicLink() || !lstatSync(join(path, "moved.json"), { throwIfNoEntry: false })?.isFile()) { project.diagnostics.push(`sources: line ${i + 2} does not name a moved logbook of its provider under a provider root`); return []; }
     return [{ provider: row.provider, path, root }];
   });
 }
@@ -287,14 +299,15 @@ export function readBoardSources(sources, { now = Date.now(), logbookKey = null,
   if (logbookKey !== null && !/^[a-zA-Z0-9_-]{1,80}\/[a-z0-9-]+-[0-9a-f]{6}$/.test(logbookKey)) throw new TypeError("invalid logbook key");
   const budget = { remaining: MAX_READ };
   const ids = new Set(), identities = new Set(), moved = new Set();
-  // The roots where an old logbook may be: each provider source's root, with its id, then the caller's other roots.
-  const roots = [...sources.filter(source => source?.id !== SHARED && isAbsolute(source?.path ?? "")).map(source => ({ id: source.id, path: resolve(source.path) })),
-    ...providerRoots.filter(path => isAbsolute(path)).map(path => ({ id: null, path: resolve(path) }))];
+  // The roots where an old logbook may be: each provider source's root, with its id and provider, then the caller's other
+  // roots, whose provider the board does not know.
+  const roots = [...sources.filter(source => source?.id !== SHARED && isAbsolute(source?.path ?? "")).map(source => ({ id: source.id, path: resolve(source.path), provider: hookProvider(source) })),
+    ...providerRoots.filter(path => isAbsolute(path)).map(path => ({ id: null, path: resolve(path), provider: null }))];
   const results = sources.map(source => {
     if (!source || !/^[a-zA-Z0-9_-]{1,80}$/.test(source.id ?? "") || ids.has(source.id) || !isAbsolute(source.path ?? "")) throw new TypeError("each board source needs a unique id and an absolute path");
     ids.add(source.id);
     const shared = source.id === SHARED;
-    const result = { id: source.id, label: source.label ?? source.id, provider: source.provider ?? null, ...(shared && { shared: true }), config: {}, projects: [], diagnostics: [], hooks: { present: false, slots: [], helpers: [], problem: null } };
+    const result = { id: source.id, label: source.label ?? source.id, provider: source.provider ?? null, ...(source.hookProvider && { hookProvider: source.hookProvider }), ...(shared && { shared: true }), config: {}, projects: [], diagnostics: [], hooks: { present: false, slots: [], helpers: [], problem: null } };
     if (logbookKey !== null && !logbookKey.startsWith(`${source.id}/`)) return result;
     try {
       const root = lstatSync(source.path, { throwIfNoEntry: !shared });
@@ -319,10 +332,7 @@ export function readBoardSources(sources, { now = Date.now(), logbookKey = null,
         const project = consistentRead(directory, base, budget, { now, bound: shared ? ownerOf(bindings.rows, entry.name)?.root ?? null : undefined, duringRead });
         if (bindings?.problem) project.diagnostics.push(bindings.problem);
         result.projects.push(project);
-        if (!shared) continue;
-        // Each task's owning chief is a row of chiefs.tsv; an id with none shows as the id, with a warning.
-        for (const task of project.tables.tasks ?? []) if (task.chief && !project.chiefs.some(chief => chief.id === task.chief)) project.warnings.push(`chiefs: ${task.id} names the chief ${task.chief}, which chiefs.tsv does not list`);
-        if (logbookKey !== null) continue;
+        if (!shared || logbookKey !== null) continue;
         // The finished tasks of the old logbooks stay there, read-only. Each shows once, in this project, with its provider.
         for (const old of oldSources(directory, roots, budget, project)) {
           const folder = basename(old.path), key = `${old.root.id ?? `old-${old.provider}`}/${folder}`;

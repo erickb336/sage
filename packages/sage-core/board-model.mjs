@@ -1,6 +1,6 @@
 import { createHash } from "node:crypto";
 import { basename } from "node:path";
-import { githubRepository } from "./board-reader.mjs";
+import { githubRepository, hookProvider } from "./board-reader.mjs";
 import { LINE, PRIORITIES, TASK_KINDS, agentCaps, proposalOf } from "./logbook-fields.mjs";
 import { ENDED, MET, breakdownGate, dead, gateLines, lostWhy, namedText, progressOf, progressText, shownGraph, shownWaits, waitGraph, waitsOf } from "./program-rules.mjs";
 import { offerOf, replaceOf } from "./chiefs.mjs";
@@ -394,7 +394,8 @@ function holderOf(project, task, runs, label) {
   }
   if (!project.shared) return {};
   const chief = task.chief ? (project.chiefs ?? NONE).find(row => row.id === task.chief) ?? null : null;
-  const owner = task.chief ? { id: task.chief, provider: chief?.provider ?? null, label: label(task.chief) } : null;
+  // unlisted: chiefs.tsv reads, and it has no row of this id (F-T624-4). A table that does not read has its own diagnostic.
+  const owner = task.chief ? { id: task.chief, provider: chief?.provider ?? null, label: label(task.chief), ...(!chief && project.chiefs && { unlisted: true }) } : null;
   // The open offer (T618): it waits for each running run of the task to end, then its chief accepts.
   const offer = offerOf(task), active = runs.filter(run => run.status === "running").map(run => run.id);
   const offerText = offer ? `Offered to ${label(offer.to)}. ${active.length ? `It waits for ${and(active)} to end, then ${label(offer.to)} accepts.` : `Ready: ${label(offer.to)} can accept.`}` : null;
@@ -536,10 +537,11 @@ function agentsOf(sources, groups, groupOf, cards, at) {
   const bare = name => name.replace(/-[0-9a-f]{6}$/, "");
   const groupNamed = name => groups.find(group => group.books.some(book => bare(book.project.name) === name));
   // The hook's notes are in each provider's root, and the runs of a shared logbook in the shared root (T306), so a slot
-  // joins a running run of any source, and a run with no slot reads the notes of its provider's source.
+  // joins a running run of its own source or of the shared root, and a run with no slot reads the notes of its provider's
+  // source. writer: the provider whose hook writes the source's notes.
   const hooked = sources.map(source => {
     const hooks = source.hooks ?? { present: false, slots: [], helpers: [], problem: null };
-    return { source, hooks, provider: String(source.provider ?? standIn(source)).toLowerCase(), slots: hooks.slots.map(slotOf), known: hooks.present && !hooks.problem };
+    return { source, hooks, provider: String(source.provider ?? standIn(source)).toLowerCase(), writer: String(hookProvider(source) ?? standIn(source)).toLowerCase(), slots: hooks.slots.map(slotOf), known: hooks.present && !hooks.problem };
   });
   // An old logbook (T306, the move) holds only finished tasks: no agent of it runs.
   const runs = sources.flatMap(source => source.projects.filter(book => !book.old).flatMap(book => (book.tables.runs ?? []).filter(run => run.status === "running" && /^R[1-9]\d*$/.test(run.id)).map(run => ({ source, book, run }))));
@@ -547,7 +549,7 @@ function agentsOf(sources, groups, groupOf, cards, at) {
   // A run's provider: its evidence, else its chief's row in a shared logbook, else its source's.
   const providerOf = item => runRecords(item.book.observations?.records ?? NONE).get(item.run.id)?.data.provider ?? (item.book.shared ? (item.book.chiefs ?? NONE).find(chief => chief.id === item.run.chief)?.provider : null) ?? item.source.provider ?? standIn(item.source);
   // The hook notes that know a run: its own source's, or for a shared run its provider's source.
-  const notesOf = (item, prov) => item.source.shared ? hooked.find(entry => !entry.source.shared && entry.provider === prov) : hooked.find(entry => entry.source === item.source);
+  const notesOf = (item, prov) => item.source.shared ? hooked.find(entry => !entry.source.shared && entry.writer === prov) : hooked.find(entry => entry.source === item.source);
   const taken = new Set();
   const row = (source, item, extra) => {
     const group = item ? groupOf.get(item.book.key) : groupNamed(extra.slot?.project);
@@ -565,10 +567,13 @@ function agentsOf(sources, groups, groupOf, cards, at) {
       const used = name => slots.filter(slot => slot.project === name).length;
       caps.push({ source: source.id, label: title(provider), total: { used: slots.length, cap: config.total }, of: name => ({ used: used(name), cap: config.cap(name) }) });
     }
-    // 1. Each taken slot, joined to its running run by the run mark, in a logbook of the slot's project.
+    // 1. Each taken slot, joined to its running run by the run mark, in a logbook of the slot's project: of its own source
+    // first, as before the shared root, else of the shared root. Each provider numbers its runs from R1, so the same run
+    // id of another provider's logbook is not this slot's (F-T624-1).
     for (const slot of slots.filter(slot => slot.ok)) {
-      const match = slot.run ? runs.filter(item => item.run.id === slot.run && bare(item.book.name) === slot.project && (!slot.logbook || item.book.logbook === slot.logbook)) : [];
-      const item = match.length === 1 ? match[0] : null;
+      const match = slot.run ? runs.filter(item => (item.source === source || item.source.shared) && item.run.id === slot.run && bare(item.book.name) === slot.project && (!slot.logbook || item.book.logbook === slot.logbook)) : [];
+      const own = match.filter(item => item.source === source), found = own.length ? own : match;
+      const item = found.length === 1 ? found[0] : null;
       if (item) taken.add(item);
       row(source, item, { slot, activity: slot.at, leadKey: item && slot.role === "lead" ? leadKey(item) : null, helperOf: slot.lead });
     }
@@ -762,12 +767,16 @@ function logbookNeeds(source, project, group) {
 /** A logbook whose programs table cannot be read shows its tasks with no program (R1307-1): no tag, and no program wait. */
 const withoutPrograms = project => project.tables.programs || !project.tables.tasks ? project : { ...project, tables: { ...project.tables, tasks: project.tables.tasks.map(task => ({ ...task, program: "" })) } };
 
-/** The projects whose logbook kept changing through the reader's 3 reads (T306, F9): each once, with the time of its read. */
+/**
+ * The projects whose logbook kept changing through the reader's 3 reads (T306, F9): each once, with the time of its read,
+ * and dropped: what changed during that read, so it does not show (F-T624-2).
+ */
 function changingOf(sources, groupOf) {
   const seen = new Map();
   for (const source of sources) for (const project of source.projects) if (project.changing) {
-    const name = groupOf.get(project.key)?.name ?? project.name;
-    if (!seen.has(name)) seen.set(name, { project: name, at: project.changing.at });
+    const name = groupOf.get(project.key)?.name ?? project.name, item = seen.get(name) ?? { project: name, at: project.changing.at };
+    const dropped = [...(item.dropped ?? []), ...(project.changing.dropped ?? [])];
+    seen.set(name, { ...item, ...(dropped.length && { dropped }) });
   }
   return [...seen.values()];
 }

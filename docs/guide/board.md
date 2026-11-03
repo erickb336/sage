@@ -89,12 +89,13 @@ A project with a [shared logbook](using-sage.md#shared-logbooks) shows as one pr
 | `The owning chief, Codex · C2, may have stopped: R412 shows no change for over 24 h.` | Needs you | A running run of the owning chief has no change in the task's rows for over 24 h. Ask any chief to open a Replace gate. |
 | A Provider column | The runs of a shared task's page | The provider of each run, from the run's chief in `chiefs.tsv`. A run with no chief shows a dotted stand-in. |
 | `Old · Claude · read-only` or `Old · Codex · read-only` | A card in Done, and its task page | A finished task that stayed in its old logbook when the project moved. Its number belongs to the old logbook. |
-| `The logbook is changing.` | A note over the board | The board read the logbook 3 times, and it changed during each read. |
+| `The logbook is changing.` | A note over the board | The board read the logbook 3 times, and it changed during each read. When a part of the last read changed while the board read it, the note names that part, because it does not show. |
+| `The owning chief is not in chiefs.tsv.` | The task page | The task names a chief id that `chiefs.tsv` does not list, so the board does not know its provider. The card shows the id. |
 
 - **Who filter:** a shared task shows under its owning chief's provider. An unclaimed task shows only under All, and no button names the shared root.
 - **Names and links:** the board takes a shared project's checkout from its row in `bindings.tsv`, because a shared logbook has no `checkout.txt`. So the name and the PR links come from that checkout's GitHub remote.
 - **A damaged `bindings.tsv`:** it is a line under the board. The project then shows with its folder name and no PR links.
-- **Old logbooks:** the move (a later sage) lists them in `sources.tsv`. The board reads a folder of that list only when it is a logbook folder directly under a Claude or Codex root, and not a link.
+- **Old logbooks:** the move (a later sage) lists them in `sources.tsv`. The board reads a folder of that list only when it is a logbook folder directly under a Claude or Codex root, not a link, with the move's mark `moved.json`, and its row names that root's provider. Any other row is a line under the board, and a live logbook stays on its own.
 - **Each old logbook shows once,** in its shared project. A task row that moved shows only in the shared logbook, and Done still shows the last 7 days.
 - **The changing note:** the board reads a logbook again when it changed during the read, at most 3 times. After the third change, the board page keeps its last good read under the note, and the next read with no change removes it.
 - **The changing note in the chat:** the chat board has no earlier read, so it shows its third read with the note. Ask for the board again.

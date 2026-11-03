@@ -16,7 +16,7 @@ import { createHash, randomUUID } from "node:crypto";
 import { closeSync, constants, existsSync, fchmodSync, fstatSync, fsyncSync, linkSync, lstatSync, mkdirSync, openSync, readFileSync, readSync, readdirSync, realpathSync, renameSync, rmSync, rmdirSync, statSync, unlinkSync, writeFileSync } from "node:fs";
 import { homedir, hostname, platform, tmpdir, uptime } from "node:os";
 import { basename, dirname, isAbsolute, join, resolve, sep } from "node:path";
-import { boardView } from "./board-view.mjs";
+import { boardView, sessionSources } from "./board-view.mjs";
 import { projectName as shownName } from "./board-model.mjs";
 import { logbookIdentity } from "./board-reader.mjs";
 import { createBoard } from "./board.mjs";
@@ -2700,8 +2700,7 @@ function sage(argv, env = process.env) {
     let sources;
     try {
       if (env.SAGE_BOARD_ROOTS && Buffer.byteLength(env.SAGE_BOARD_ROOTS) > 65536) throw new Error("root configuration is too large");
-      // The provider's root and the shared root (T306): a shared project's logbook is in the shared root, its key shared/<folder>.
-      sources = env.SAGE_BOARD_ROOTS ? JSON.parse(env.SAGE_BOARD_ROOTS) : [{ id: "current", label: "Current provider", path: root }, { id: "shared", label: "Shared", path: sharedRoot(env) }];
+      sources = env.SAGE_BOARD_ROOTS ? JSON.parse(env.SAGE_BOARD_ROOTS) : sessionSources(root, sharedRoot(env), provider);
       const folder = opt.project ?? env.PWD;
       // A chat board shows today's board when the resolver refuses; only a task view needs the logbook.
       const located = () => { try { return storeDir(folder, env); } catch (e) { if (readOnly) throw e; return null; } };
