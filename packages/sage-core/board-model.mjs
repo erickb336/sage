@@ -294,7 +294,10 @@ function card(source, project, group, task, now, graph, landing) {
   const lastActivity = times.length ? new Date(Math.max(...times)).toISOString() : null;
   // A shared logbook (T306) names each run's chief, and chiefs.tsv names the chief's provider (C4): a run keeps its chief for good.
   const shared = !!project.shared, chiefs = project.chiefs ?? NONE, chiefOf = id => chiefs.find(chief => chief.id === id);
-  const runs = rows(project, "runs", task).map(run => { const evidence = latest(records, "run", data => data.run === run.id); const chief = shared ? chiefOf(run.chief) : null; return { ...run, evidence, provider: evidence?.data.provider ?? (chief ? title(chief.provider) : null), clock: runClock(run.started, now, lastActivity) }; });
+  // A run's checkout (T625) leaves the model as its folder name and a gone flag, never as a path, so no page can print the path (R1069-2).
+  const goneCheckouts = project.goneCheckouts ?? NONE;
+  const where = checkout => shared && checkout?.startsWith("/") ? { checkoutName: basename(checkout), checkoutGone: goneCheckouts.includes(checkout) } : {};
+  const runs = rows(project, "runs", task).map(({ checkout, ...run }) => { const evidence = latest(records, "run", data => data.run === run.id); const chief = shared ? chiefOf(run.chief) : null; return { ...run, ...where(checkout), evidence, provider: evidence?.data.provider ?? (chief ? title(chief.provider) : null), clock: runClock(run.started, now, lastActivity) }; });
   const agents = runs.filter(run => run.status === "running").map(run => ({ id: run.id, role: run.role, provider: run.provider, evidence: run.evidence, recordedStatus: run.status, stale: run.clock.stale }));
   const label = id => chiefOf(id) ? `${title(chiefOf(id).provider)} · ${id}` : id;
   // Needs you: an open gate, or a state that waits for the owner (R1077). Held and replan wait for the chief, not for you.

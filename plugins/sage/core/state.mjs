@@ -28,7 +28,7 @@ import { ROLES } from "./roles.mjs";
 import { AGENT_CAPS, BREAKS, FINDING_CLASSES, HIDDEN, LINE, NAME_MAX, PRIORITIES, PRIORITY_SCALE, TABLES as PLAIN_TABLES, TASK_KINDS, countOf, nameProblem, proposalOf } from "./logbook-fields.mjs";
 import { BREAKDOWN, ENDED, MET, PROGRAM_ID, TASK_ID, breakdownGate, byIds, dead, droppedBy, gateLines, lostClause, programState, progressOf, progressText, shownGraph, shownWaits, unmetWaits, waitGraph, waitWords, waitsOf, waitsWithState } from "./program-rules.mjs";
 import { OBSERVATIONS_MAX_BYTES, OBSERVATION_DATA_MAX_BYTES, validateObservation, validateObservations } from "./observations.mjs";
-import { createSharedRoot, sharedRoot } from "./shared-root.mjs";
+import { createSharedRoot, gone as rowGone, sharedRoot } from "./shared-root.mjs";
 import { CHIEF, chiefOnly, createChiefs, offerOf, replaceOf, replaceQuestion, writerClass } from "./chiefs.mjs";
 
 export function createStateTool({ defaultRoot, legacyRoots = () => [], provider, models = ["inherit"], modelDefaults = {}, usageInterfaces = [], claimStep = (task, version, chief) => `run sage claim ${task} --version ${version} --chief ${chief}`, replaceStep = (task, chief) => `run sage gate replace ${task} --to ${chief} --chief ${chief}` }) {
@@ -100,9 +100,11 @@ const FILLED = { runs: ["model", ...USAGE_FIELDS], tasks: ["hold", "extra", "pri
  * gets it (columnsOf). It comes last.
  */
 const CHIEF_COLUMN = "chief";
-const TABLES = { ...PLAIN_TABLES, tasks: [...PLAIN_TABLES.tasks, CHIEF_COLUMN], runs: [...PLAIN_TABLES.runs, CHIEF_COLUMN] };
+/** A shared logbook's run also names its checkout: the main checkout of the folder that the run started from (T625). */
+const CHECKOUT_COLUMN = "checkout";
+const TABLES = { ...PLAIN_TABLES, tasks: [...PLAIN_TABLES.tasks, CHIEF_COLUMN], runs: [...PLAIN_TABLES.runs, CHIEF_COLUMN, CHECKOUT_COLUMN] };
 /** All the columns of that rule: also a task's open offer, and the kind of a gate, which only the state tool writes. */
-const SPARSE = { tasks: [CHIEF_COLUMN, "offer"], runs: [CHIEF_COLUMN], gates: ["kind"] };
+const SPARSE = { tasks: [CHIEF_COLUMN, "offer"], runs: [CHIEF_COLUMN, CHECKOUT_COLUMN], gates: ["kind"] };
 TABLES.tasks = [...TABLES.tasks, "offer"];
 TABLES.gates = [...TABLES.gates, "kind"];
 /** The columns that a table may lack. */
@@ -735,7 +737,7 @@ function updateRequestedTask(input, env, coordination) {
       if (Object.values(cfg).includes("invalid")) throw new TaskUpdateError("readiness-config");
       const branch = branchOf(preliminary.task.branch);
       let head;
-      try { head = reviewHead(project, branch, env); } catch { throw new TaskUpdateError("readiness-branch"); }
+      try { head = reviewHead(dir, project, branch, env); } catch (e) { throw e.goneRun ? new TaskUpdateError("readiness-checkout", [e.goneRun]) : new TaskUpdateError("readiness-branch"); }
       facts.readiness = { head, branch, cycles: cyclesFor(preliminary.task, cfg),
         config: Object.fromEntries(["cycles.small", "cycles.large", "cycles.risk"].map(key => [key, cfg[key]])) };
     }
@@ -873,6 +875,8 @@ function createRequestedRun(input, env = process.env, native) {
     const run = receipt.result;
     const matches = read(dir, "runs").filter(row => row.id === run.id);
     if (matches.length !== 1 || matches[0].task !== input.task || matches[0].role !== input.role) deny();
+    // The receipt and its row name the same checkout (T625): a receipt that names another folder is damaged.
+    if ((matches[0].checkout ?? "") !== (run.checkout ?? "")) refuse(RUN_DAMAGED);
     return run;
   };
   return withLock(dir, () => {
@@ -887,6 +891,7 @@ function createRequestedRun(input, env = process.env, native) {
     if (input.candidate && candidateOf(input.candidate) !== input.candidate) deny();
     const run = runFrame(dir, matches[0], input.role, input.branch, input.candidate, env);
     if (chief) run.chief = chief;
+    Object.assign(run, checkoutTag(dir, project, env));
     runWrites.commit(dir, { reference, result: run }, { runs: tableText("runs", [...read(dir, "runs"), run]) });
     status(dir, true);
     return { decision: "run-created", run };
@@ -929,16 +934,19 @@ function runFrame(dir, task, role, branch, candidate, env) {
     status: "running", started: now(), model: modelFor(role, task.size, candidate, config(env), task.risk) };
 }
 
+const RUN_DAMAGED = "The saved run update is damaged. No run table changed.";
 /** Saved run facts survive later task/config changes; validate the record rather than recompute them. */
 function validateRunWrite({ reference, result: run }, tables) {
-  const deny = () => refuse("The saved run update is damaged. No run table changed.");
+  const deny = () => refuse(RUN_DAMAGED);
   if (!run || typeof run.id !== "string" || !/^R[1-9]\d*$/.test(run.id) || typeof run.round !== "string" || !/^(0|[1-9]\d*)$/.test(run.round)
     || !Number.isSafeInteger(Number(run.round)) || !RUN_ROLES.includes(run.role) || typeof run.model !== "string" || cell(run.model) !== run.model
     || typeof run.started !== "string" || !/^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}Z$/.test(run.started)
     || !Number.isFinite(Date.parse(run.started)) || new Date(run.started).toISOString().replace(".000Z", "Z") !== run.started
     || (run.chief !== undefined && !CHIEF.test(run.chief))
+    || (run.checkout !== undefined && (typeof run.checkout !== "string" || !isAbsolute(run.checkout) || cell(run.checkout) !== run.checkout || run.checkout.length > 4096))
     || JSON.stringify(run) !== JSON.stringify({ id: run.id, task: reference.task, role: reference.role, round: run.round,
-      candidate: reference.candidate, branch: reference.branch, status: "running", started: run.started, model: run.model, ...(run.chief === undefined ? {} : { chief: run.chief }) })) deny();
+      candidate: reference.candidate, branch: reference.branch, status: "running", started: run.started, model: run.model, ...(run.chief === undefined ? {} : { chief: run.chief }),
+      ...(run.checkout === undefined ? {} : { checkout: run.checkout }) })) deny();
   if (!tables) return;
   const { cols, lines } = sheetText(tables.runs.before);
   if (!TABLES.runs.every(c => cols.includes(c) || ADDED.runs?.includes(c))
@@ -1259,7 +1267,7 @@ function acceptReportedReview(input, env = process.env, native) {
       || run.status !== "done" || !run.ended || run.report !== path || task.branch !== review.branch
       || (run.branch && run.branch !== review.branch) || realpathSync(join(dir, "reports")) !== join(dir, "reports")
       || readRegular(join(dir, path), { link: false, max: 32 * 1024 }) !== input.text
-      || reviewHead(input.project, branchOf(task.branch), env) !== review.sha) deny();
+      || reviewHead(dir, input.project, branchOf(task.branch), env) !== review.sha) deny();
     const findings = read(dir, "findings"), ledger = read(dir, "ledger"), decisions = read(dir, "decisions");
     const receipt = { reference, result: reviewResult(reference, claims, now()) };
     const after = reviewDelta(receipt, claims, { tasks, findings, ledger, decisions });
@@ -1542,9 +1550,25 @@ function finishReportedRun(input, env = process.env) {
 }
 
 
-function reviewHead(project, branch, env) {
+/** The tip of a branch, read in the checkout of the branch's newest writer run (branchCheckout). */
+function reviewHead(dir, project, branch, env) {
   const clean = Object.fromEntries(Object.entries(env).filter(([key]) => !key.startsWith("GIT_")));
-  return git(["-C", project, "rev-parse", "--verify", `refs/heads/${branch}^{commit}`], clean).trim();
+  return git(["-C", branchCheckout(dir, project, branch, env), "rev-parse", "--verify", `refs/heads/${branch}^{commit}`], clean).trim();
+}
+
+/**
+ * Where a branch lives: the checkout of its newest writer run, or the project of the command when that run names none
+ * (a legacy logbook, or a run from before T625). The checkout must be the root of a bindings.tsv row of this logbook's
+ * folder, so that a table cell alone never chooses the folder for git. A gone folder refuses with the run's ID.
+ */
+function branchCheckout(dir, project, branch, env) {
+  const writer = read(dir, "runs").filter((r) => WRITERS.includes(r.role) && sameBranch(r.branch, branch))
+    .sort((a, b) => Number(a.id.slice(1)) - Number(b.id.slice(1))).at(-1);
+  if (!writer?.checkout) return project;
+  const row = bindings(dirname(dir)).find((r) => r.folder === basename(dir) && r.root === writer.checkout);
+  if (!row) refuse(`The checkout of ${writer.id} is not a checkout of this logbook in bindings.tsv, so sage cannot read ${branch}. Nothing changed.`);
+  if (rowGone(row)) throw Object.assign(new Refusal(`The checkout of ${writer.id} (${visible(basename(row.root))}) is gone, so sage cannot read ${branch}. Nothing changed.`), { goneRun: writer.id });
+  return row.root;
 }
 
 /**
@@ -1633,7 +1657,7 @@ function validateTerminalAssignment(input, env = process.env, historyProof) {
     if (input.review !== null) {
       const review = parseReviewTarget(input.review);
       if (!REVIEW_ROLES.includes(target.role) || review.round !== target.round || review.branch !== branchOf(target.taskBranch)
-        || (!retired && review.sha !== reviewHead(input.project, review.branch, env))) deny();
+        || (!retired && review.sha !== reviewHead(dir, input.project, review.branch, env))) deny();
     } else if (REVIEW_ROLES.includes(target.role)) deny();
     return structuredClone(target);
   });
@@ -1662,7 +1686,7 @@ function captureReviewTarget(input, env = process.env) {
       || !Number.isSafeInteger(Number(task.round)) || (run.branch && run.branch !== task.branch)) deny();
     const branch = branchOf(task.branch);
     // Repository-selection and injected-config environment variables cannot redirect this read.
-    const sha = reviewHead(input.project, branch, env);
+    const sha = reviewHead(dir, input.project, branch, env);
     return parseReviewTarget({ branch, sha, round: Number(task.round), cycle: input.cycle });
   });
 }
@@ -2952,6 +2976,8 @@ function raiseCounts(shared, env) {
 
 /** The chief cell of a new task or run: only a shared logbook's write has a chief. */
 const chiefTag = (opt) => (opt.chief === undefined ? {} : { chief: opt.chief });
+/** The checkout cell of a new run: only a shared logbook's run has one, the root of the project's bindings.tsv row. */
+const checkoutTag = (dir, project, env) => (isShared(dir, env) ? { checkout: locate(project, env).row.root } : {});
 
 function act(cmd, pos, opt, dir, env, skip, project) {
   const [sub, id, ...more] = pos;
@@ -3295,7 +3321,7 @@ function act(cmd, pos, opt, dir, env, skip, project) {
         const role = cell(need(opt.role, "--role")).toLowerCase();
         const branch = opt.branch === undefined ? "" : branchOf(opt.branch);
         const candidate = opt.candidate === undefined ? "" : candidateOf(opt.candidate);
-        const run = { ...runFrame(dir, task, role, branch, candidate, env), ...chiefTag(opt) };
+        const run = { ...runFrame(dir, task, role, branch, candidate, env), ...chiefTag(opt), ...checkoutTag(dir, project, env) };
         if (opt["usage-interface"] !== undefined) {
           const entry = USAGE_INTERFACES.get(opt["usage-interface"]);
           if (!entry) refuse("Unknown usage interface. Nothing changed.");
@@ -3789,7 +3815,7 @@ function runCli(argv = process.argv.slice(2)) {
 }
 
 const { board, answerPaths } = createBoard({ BLOCKS, BRANCH, RISKS, STATES, mergeCheck, optionsOf, projectName, projectRoot, read, sageRoot, slug, storeDir, withLock });
-const { fillCommits, link, locate, notePlugin, refuseNewLogbook } = createSharedRoot({ Refusal, refuse, legacyRoots, makeLogbook, now, projectRoot, provider, raiseCounts, readRegular, rowsOf, sageRoot, sheetText, slug, swap, visible, withLock,
+const { bindings, fillCommits, link, locate, notePlugin, refuseNewLogbook } = createSharedRoot({ Refusal, refuse, legacyRoots, makeLogbook, now, projectRoot, provider, raiseCounts, readRegular, rowsOf, sageRoot, sheetText, slug, swap, visible, withLock,
   listed: (root) => known(root, undefined, undefined, true),
   enroll: (root, folder, make) => known(root, folder, make, false, true) });
 const { chiefs, chiefRow, rowOf } = createChiefs({ now, provider, readRegular, refuse, rowsOf, sheetText, swap });

@@ -5,7 +5,7 @@ import { createHash } from "node:crypto";
 import { validateObservations } from "./observations.mjs";
 import { logbookSettings } from "./logbook-fields.mjs";
 import { PROGRAM_ID, TASK_ID, checkPrograms } from "./program-rules.mjs";
-import { BINDING_COLUMNS, bindingRow, ownerOf } from "./shared-root.mjs";
+import { BINDING_COLUMNS, bindingRow, gone as goneRoot, ownerOf } from "./shared-root.mjs";
 import { chiefsWhole } from "./chiefs.mjs";
 
 const parseJson = text => { try { return JSON.parse(text); } catch { throw new Error("invalid JSON"); } };
@@ -224,6 +224,12 @@ function readLogbook(directory, project, budget, { now, bound, chiefs = true, du
     if (error.code !== "ENOENT") project.diagnostics.push(`observations: ${error.code ?? error.message}`);
   }
   Object.assign(project, logbookIdentity(directory, budget, project, bound));
+  // The run checkouts of a shared logbook that are gone from this Mac (T625), by the state tool's rule (gone): one lstat
+  // for each distinct absolute path, at most 64, with no content read and no Git command.
+  if (bound !== undefined) {
+    const checkouts = [...new Set((project.tables.runs ?? []).map(run => run.checkout).filter(path => path && isAbsolute(path)))].slice(0, 64);
+    project.goneCheckouts = checkouts.filter(root => goneRoot({ root }));
+  }
   project.contents = {};
   for (const record of project.observations.records.filter(record => record.kind === "artifact" && record.data.path)) {
     try {
