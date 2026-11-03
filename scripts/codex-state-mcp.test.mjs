@@ -492,7 +492,7 @@ test("T594: the link tool starts a shared logbook or joins one, with the CLI's r
   assert.match(await s.call("link", { separate: true }), /^already linked: /);
   assert.match(await s.call("task_add", { title: "Shared", size: "tiny", priority: "P2" }), /T1/);
   assert.deepEqual(readdirSync(join(s.env.CODEX_HOME, "sage")).filter((name) => name.startsWith("project-")), [], "no Codex logbook");
-  assert.equal(readFileSync(join(shared, "plugins.tsv"), "utf8").split("\n")[1].split("\t").slice(0, 2).join(" "), "codex 1");
+  assert.equal(readFileSync(join(shared, "plugins.tsv"), "utf8").split("\n")[1].split("\t").slice(0, 2).join(" "), "codex 2");
 });
 
 test("T594 with T552: a lead's rules read the shared logbook, and only the chief links", async (t) => {
