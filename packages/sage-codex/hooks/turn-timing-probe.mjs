@@ -11,7 +11,8 @@ const uuid = value => typeof value === 'string' && /^[0-9a-f]{8}-[0-9a-f]{4}-[0-
 const pathValue = value => typeof value === 'string' && value.length <= 4096 && isAbsolute(value)
   && normalize(value) === value && !/[\p{Cc}\p{Cf}]/u.test(value);
 const token = value => typeof value === 'string' && /^[a-z][a-z0-9_]{0,31}$/.test(value);
-const version = value => typeof value === 'string' && /^\d{1,3}\.\d{1,3}\.\d{1,3}(?:-(?:alpha|beta|rc)\.\d{1,3})?$/.test(value);
+// Three release numbers; alpha, beta or rc can have one or two numbers. Each number has at most three digits.
+const version = value => typeof value === 'string' && /^\d{1,3}\.\d{1,3}\.\d{1,3}(?:-(?:alpha|beta|rc)(?:\.\d{1,3}){1,2})?(?![\s\S])/.test(value);
 const timestamp = value => typeof value === 'string' && /^\d{4}-\d\d-\d\dT\d\d:\d\d:\d\d(?:\.\d{1,9})?Z$/.test(value) && Number.isFinite(Date.parse(value));
 class Refusal extends Error { constructor(reason) { super(); this.reason = reason; } }
 const refuse = reason => { throw new Refusal(reason); };

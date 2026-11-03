@@ -15,12 +15,47 @@ const privacy = (text, f) => {
   for (const secret of ['PROMPT_SECRET_SENTINEL', 'MESSAGE_SECRET_SENTINEL', 'PATH_SENTINEL', f.session, f.turn, f.other, f.root, f.file]) assert.ok(!text.includes(secret));
 };
 
+for (const cli_version of ['0.165.0-alpha.1.2', '0.164.0-alpha.11.1']) test(`reported desktop version ${cli_version} retains fictional metadata`, t => {
+  const f = fixture(t);
+  Object.assign(f.rows[0].payload, { source: 'vscode', cli_version });
+  f.write();
+  const result = f.inspect();
+  assert.equal(result.status, 'present');
+  assert.deepEqual(result.session_meta, { source: 'vscode', cli_version });
+  assert.equal(result.task_started.turn_trigger, 'composer');
+  privacy(JSON.stringify(envelope(result)), f);
+});
+
+for (const cli_version of ['0.164.0', '0.165.0-alpha.1', '999.999.999-alpha.999.999', '0.165.0-beta.1.2', '0.165.0-rc.1.2']) test(`bounded version ${cli_version} retains fictional metadata`, t => {
+  const f = fixture(t); f.rows[0].payload.cli_version = cli_version; f.write();
+  const result = f.inspect();
+  assert.equal(result.status, 'present');
+  assert.deepEqual(result.session_meta, { source: 'vscode', cli_version });
+});
+
+for (const cli_version of [
+  '0.165.0-alpha.1.2.3', '0.165.0-alpha.1000.1', '0.165.0-alpha.1.1000',
+  '1000.165.0', '0.1000.0', '0.165.1000', '0.165.0.1',
+  '0.165.0-alpha', '0.165.0-alpha.', '0.165.0-alpha..1', '0.165.0-alpha.1.',
+  '0.165.0-alpha.1.two', '0.165.0-preview.1.2', '0.165.0-alpha.1.2+build',
+  '0.165.0-alpha.1.2\n', '0.165.0-alpha.' + '1'.repeat(100), null, 165,
+]) test(`malformed or overbound version ${JSON.stringify(cli_version)} is unavailable`, t => {
+  const f = fixture(t); f.rows[0].payload.cli_version = cli_version; f.write();
+  const result = f.inspect();
+  unavailable(result, 'unsupported_metadata');
+  assert.equal(result.session_meta, undefined);
+});
+
 for (const trigger of ['composer', 'remote_ios', 'queue', 'exec']) test(`fictional ${trigger} is reported without authorizing a mode`, t => {
-  const f = fixture(t); f.rows[0].payload.source = trigger; f.rows[1].payload.turn_attribution.turn_trigger = trigger; f.write();
+  const f = fixture(t);
+  const source = trigger === 'exec' ? 'exec' : 'vscode';
+  const cli_version = trigger === 'exec' ? '0.164.0' : '0.165.0-alpha.1.2';
+  Object.assign(f.rows[0].payload, { source, cli_version });
+  f.rows[1].payload.turn_attribution.turn_trigger = trigger; f.write();
   const result = f.inspect();
   assert.equal(result.status, 'present');
   assert.equal(result.observation, 'present at the first bounded callback read');
-  assert.deepEqual(result.session_meta, { source: trigger, cli_version: '0.164.0' });
+  assert.deepEqual(result.session_meta, { source, cli_version });
   assert.deepEqual(result.callback, { turn_id_present: true, transcript_path_present: true });
   assert.deepEqual(result.task_started, { timestamp: '2026-11-03T10:00:00.000Z', turn_trigger: trigger,
     parent_turn_id: 'null', root_turn_id: 'matches_callback_turn', initiating_agent_path: 'null' });

@@ -12,7 +12,7 @@ export function makeSample() {
   const other = '33333333-3333-4333-8333-333333333333';
   const file = join(root, 'PATH_SENTINEL.jsonl');
   const row = (type, payload) => ({ timestamp: '2026-11-03T10:00:00.000Z', type, payload });
-  const rows = [row('session_meta', { id: session, session_id: session, cwd: root, source: 'cli', cli_version: '0.164.0' }),
+  const rows = [row('session_meta', { id: session, session_id: session, cwd: root, source: 'vscode', cli_version: '0.165.0-alpha.1.2' }),
     row('event_msg', { type: 'task_started', turn_id: turn, root_turn_id: turn,
       turn_attribution: { turn_id: turn, root_turn_id: turn, turn_trigger: 'composer', parent_turn_id: null, initiating_agent_path: null } }),
     row('response_item', { type: 'message', content: 'MESSAGE_SECRET_SENTINEL' })];
@@ -30,10 +30,11 @@ export function makeSample() {
 if (process.argv[1] === fileURLToPath(import.meta.url)) {
   const sample = makeSample();
   try {
-    console.log('SAMPLE DATA ONLY: no native callback or session was read.');
+    console.log('SAMPLE DATA ONLY: no native callback or session was read. Interactive CLI metadata is unknown.');
     for (const trigger of ['composer', 'remote_ios', 'queue', 'exec']) {
       sample.rows[1].payload.turn_attribution.turn_trigger = trigger;
-      sample.rows[0].payload.source = trigger === 'exec' ? 'exec' : 'cli';
+      sample.rows[0].payload.source = trigger === 'exec' ? 'exec' : 'vscode';
+      sample.rows[0].payload.cli_version = trigger === 'exec' ? '0.164.0' : '0.165.0-alpha.1.2';
       sample.write();
       console.log(JSON.stringify({ sample: trigger, ...envelope(sample.inspect()) }));
     }
