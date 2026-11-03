@@ -75,6 +75,32 @@ A task page shows the step line, one row for each step with its detail and each 
 
 The offline HTML file contains the selected tasks and their full details. Text from agents is escaped in both views.
 
+## A shared project on the board
+
+A project with a [shared logbook](using-sage.md#shared-logbooks) shows as one project, in the chat and on the board page, from Claude and from Codex. The board reads the shared root (`~/.sage`, or the root that `SAGE_SHARED_HOME` names) beside the Claude and Codex roots, and it writes nothing there. A project that is not shared looks and works as before.
+
+| Line | Where | What it says |
+| --- | --- | --- |
+| `Claude · C1` on the card's top line | Each card of a shared task, in place of the logbook's name | The owning chief and its provider. |
+| `Unclaimed`, with a dashed outline | A shared task with no owning chief | Any chief can claim it. |
+| `Offered to Codex · C2. It waits for R407 to end, then Codex · C2 accepts.` | Under the step line, and on the task page | An open offer, while a run of the task runs. |
+| `Offered to Claude · C1. Ready: Claude · C1 can accept.` | The same | An open offer with no running run. |
+| `Replace the owning chief of T320, Claude · C1, with Codex · C2? R410 and R411 end as failed.` | Needs you | An open Replace gate, with its options and recommendation. |
+| `The owning chief, Codex · C2, may have stopped: R412 shows no change for over 24 h.` | Needs you | A running run of the owning chief has no change in the task's rows for over 24 h. Ask any chief to open a Replace gate. |
+| A Provider column | The runs of a shared task's page | The provider of each run, from the run's chief in `chiefs.tsv`. A run with no chief shows a dotted stand-in. |
+| `Old · Claude · read-only` or `Old · Codex · read-only` | A card in Done, and its task page | A finished task that stayed in its old logbook when the project moved. Its number belongs to the old logbook. |
+| `The logbook is changing.` | A note over the board | The board read the logbook 3 times, and it changed during each read. |
+
+- **Who filter:** a shared task shows under its owning chief's provider. An unclaimed task shows only under All, and no button names the shared root.
+- **Names and links:** the board takes a shared project's checkout from its row in `bindings.tsv`, because a shared logbook has no `checkout.txt`. So the name and the PR links come from that checkout's GitHub remote.
+- **A damaged `bindings.tsv`:** it is a line under the board. The project then shows with its folder name and no PR links.
+- **Old logbooks:** the move (a later sage) lists them in `sources.tsv`. The board reads a folder of that list only when it is a logbook folder directly under a Claude or Codex root, and not a link.
+- **Each old logbook shows once,** in its shared project. A task row that moved shows only in the shared logbook, and Done still shows the last 7 days.
+- **The changing note:** the board reads a logbook again when it changed during the read, at most 3 times. After the third change, the board page keeps its last good read under the note, and the next read with no change removes it.
+- **The changing note in the chat:** the chat board has no earlier read, so it shows its third read with the note. Ask for the board again.
+- **Agents:** a run of a shared logbook joins its agent slot in its provider's root. So a Claude run with a slot shows as at work, not as "may be stuck".
+- **"Show board" in a session:** the chat board finds a shared project from its checkout, a worktree or a subfolder. A task view (`board T<n> --view task`) shows the task of the shared logbook, also when an old logbook has a task of the same id.
+
 ## The Agents page
 
 The board server has a page **Agents** (`/agents`). The header of the pages has three tabs: "Task board | Programs | Agents (n)", where n is the count of agents that run now. The page has the same sign-in as the task board, and it updates live in the same way.
@@ -116,7 +142,7 @@ The offline HTML file holds the programs list and each program's page too, as pa
 
 The board server only reads your logbooks. It does not make or change a logbook, change the chat board's list of what merged since the last board, fetch from GitHub, or decide whether a pull request may merge. The state tool still records each change and applies the merge rules.
 
-In Claude, `show board` also starts the local board server on the Mac when it is not running (the first time, it sets it up from the standard Claude and Codex roots), and the chief shows its address, or why it is not running, next to the chat board. On the Mac the board needs no sign-in.
+In Claude, `show board` also starts the local board server on the Mac when it is not running (the first time, it sets it up from the standard Claude and Codex roots and the shared root), and the chief shows its address, or why it is not running, next to the chat board. On the Mac the board needs no sign-in.
 
 On the phone, through a private HTTPS tunnel, you sign in as `sage` with your own password. Set it once in Terminal on the Mac with the `board --set-password` command that the line gives; until then, access from outside the Mac is off.
 

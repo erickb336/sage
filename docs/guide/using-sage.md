@@ -365,7 +365,9 @@ This check prevents mistakes. It does not stop an agent that gives another chief
 - The first shared write takes the largest value of both provider roots for each count, so a project never needs fewer cycles than you wrote. A later link leaves the shared counts.
 - Model keys, `arena`, the agent caps and the hook state stay in each provider root.
 
-**Limit.** The board does not show a shared logbook yet.
+**The board.** The board shows a shared project as one project, in Claude and in Codex, in the chat and on the board page. It only reads, and an existing project looks as before ([board guide](board.md#a-shared-project-on-the-board)).
+
+After you update sage in Claude and in Codex, stop a running board server with the `board --stop` command that `board --ensure` prints, then ask for the board again. A board server that started before the update reads with its old code.
 
 ## Where sage keeps things
 
