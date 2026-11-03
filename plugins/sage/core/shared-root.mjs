@@ -20,6 +20,14 @@ const FOLDER = /^[a-z0-9-]+-[0-9a-f]{6}$/;
 const COMMITS = /^(?:[0-9a-f]{40,64}(?:,[0-9a-f]{40,64})*)?$/;
 /** What a refusal about first commits adds: a shallow clone's first commit is its newest one, so it matches no other checkout. */
 const SHALLOW = "A shallow clone needs its full history here: run git fetch --unshallow in it, then try again.";
+/** The warning of a link prompt (T633 design), before its choices: a link or a new logbook stays. */
+const LASTS = "Note: no sage command can change this answer later.";
+
+/** The <owner>/<repo> of a GitHub remote's URL, or null for any other remote. The board and the link prompt read remotes with it. */
+export const githubRemote = (url) => {
+  const match = /^(?:https:\/\/|ssh:\/\/git@|git@)github\.com[:/]([A-Za-z0-9][A-Za-z0-9-]*)\/([\w-][\w.-]*?)(?:\.git)?\/?$/.exec(url ?? "");
+  return match ? `${match[1]}/${match[2]}` : null;
+};
 /** The largest table that the tool reads: a checkout row is short, so a bigger file is not a table of this tool. */
 const TABLE_MAX = 1024 * 1024;
 
@@ -125,13 +133,35 @@ export function createSharedRoot({ Refusal, refuse, listed, legacyRoots, makeLog
 
   const disjoint = (a, b) => !!a && !!b && !a.split(",").some((commit) => b.split(",").includes(commit));
   const shares = (a, b) => !!a && !!b && !disjoint(a, b);
-  const offer = (checkout) => `Nothing changed. Ask the user, then run sage link --to <folder> or sage link --separate, in ${visible(checkout)}.`;
-  /** The logbook of a row. A row that names a missing folder, or a folder that another project owns, refuses and offers the link. */
+  /** A logbook's project name: its folder without the hash. */
+  const nameOf = (folder) => folder.slice(0, -7);
+  /**
+   * A link prompt of the T633 design, as the chief puts it to the owner word for word: the head line, the facts, the
+   * notes, the numbered choices with the recommended one marked, and then, for the chief, the command of each choice.
+   */
+  const prompt = (checkout, head, facts, notes, choices, reply) => [
+    `**${head}:** ${visible(checkout)}`, facts, ...notes, `Choose one:\n${choices.map(({ text }, i) => `${i + 1}. ${text}`).join("\n")}`,
+    reply ?? `Reply ${choices.slice(0, -1).map((_, i) => i + 1).join(", ")} or ${choices.length}.`,
+    `After the reply, run one command in ${visible(checkout)}: ${choices.map(({ run }, i) => `for ${i + 1}, ${run}`).join("; ")}.`,
+  ].join("\n\n");
+  const SEPARATE = "sage link --separate", ANOTHER = "sage link --to <the folder of the project that the user names>";
+  /** The logbook of a row. A row that names a missing folder, or a folder that another project owns, refuses with the link prompt. */
   function boundFolder(shared, rows, row) {
     const dir = join(shared, row.folder);
-    if (!lstatSync(dir, { throwIfNoEntry: false })?.isDirectory()) refuse(`the row of ${visible(row.root)} in ${join(shared, "bindings.tsv")} names the logbook ${row.folder}, which is missing. ${offer(row.root)}`);
+    if (!lstatSync(dir, { throwIfNoEntry: false })?.isDirectory()) refuse(prompt(row.root, "This folder's logbook is missing",
+      `Its row links it to the logbook ${row.folder}, but that folder is not in the shared root (${visible(shared)}) now. Nothing has changed.`,
+      ["Note: a new link or a new logbook does not bring back the old tasks."], [
+        { text: `**Restore the folder** (recommended if it was removed by mistake). Put ${row.folder} back from a copy, for example Time Machine. Then ask me again.`, run: `no command: the user puts ${row.folder} back in ${visible(shared)}` },
+        { text: "**Start separate.** This folder gets a new, empty logbook.", run: SEPARATE },
+        { text: "**Link to another project.** Tell me its name.", run: ANOTHER },
+      ]));
     const owner = ownerOf(rows, row.folder);
-    if (owner && disjoint(owner.commits, row.commits)) refuse(`the row of ${visible(row.root)} in ${join(shared, "bindings.tsv")} names the logbook ${row.folder}, which belongs to another project (${visible(owner.root)}): the two checkouts have no first commit in common. ${SHALLOW} ${offer(row.root)}`);
+    if (owner && disjoint(owner.commits, row.commits)) refuse(prompt(row.root, "This folder's link is wrong",
+      `Its row links it to the logbook ${row.folder}, but that logbook belongs to another project (${visible(owner.root)}): the two folders have no first commit in common. So sage does not use that logbook here, and nothing has changed. The ${nameOf(row.folder)} tasks are safe.`,
+      ["If this folder is a shallow clone, its first commit is its newest one. Then run `git fetch --unshallow` in it, and ask me again.", LASTS], [
+        { text: "**Start separate** (recommended). This folder gets a new, empty logbook in place of the wrong link.", run: SEPARATE },
+        { text: "**Link to another project.** Tell me its name. The link stops if that project does not have this folder's first commit.", run: ANOTHER },
+      ], "Reply 1, or 2 and the name."));
     return dir;
   }
   const healthy = (shared, rows, row) => {
@@ -213,8 +243,45 @@ export function createSharedRoot({ Refusal, refuse, listed, legacyRoots, makeLog
     }
     const twins = rows.filter((r) => shares(r.commits, commits) && healthy(shared, rows, r));
     if (!twins.length) return;
-    const folders = [...new Set(twins.map((r) => r.folder))];
-    refuse(`no logbook for the project ${visible(checkout)}, but it has the first commit of the shared logbook ${folders.join(" and ")}, which ${visible(twins[0].root)} used. A new logbook here would hide that one. Nothing changed. Ask the user. For a moved checkout or a clone, run sage link --to ${folders.length === 1 ? folders[0] : "<folder>"}. For another project, run sage link --separate. Run it in ${visible(checkout)}.`);
+    // The recommendation follows the GitHub origin: the same one links, another one (a fork) starts separate, and a
+    // folder with none that sage can read links. Git reads the remotes only here, on the way to this refusal.
+    const origin = (root) => {
+      try {
+        return githubRemote(readLocalGit(root, ["config", "--get", "remote.origin.url"]).toString().trim());
+      } catch {
+        return null;
+      }
+    };
+    const mine = origin(checkout), here = visible(basename(checkout));
+    const same = (remote) => !!mine && !!remote && mine.toLowerCase() === remote.toLowerCase(); // GitHub ignores the case
+    const logbooks = [...new Set(twins.map((r) => r.folder))].map((folder) => {
+      const root = ownerOf(rows, folder).root;
+      return { folder, name: nameOf(folder), used: visible(root), remote: origin(root) };
+    });
+    const head = "This folder has no logbook yet", done = "sage does not guess, and nothing has changed.";
+    const separate = { text: "**Start separate.** This folder gets a new, empty logbook, and the board shows it as another project.", run: SEPARATE };
+    if (logbooks.length === 1) {
+      const [{ folder, name, used, remote }] = logbooks, linkTo = `sage link --to ${folder}`;
+      const facts = `It has the same first commit as the project ${name} (logbook ${folder}, used by ${used}).`;
+      if (mine && remote && !same(remote)) refuse(prompt(checkout, head, `${facts} But its GitHub remote is ${mine}, not ${remote}. So it is most likely a fork. ${done}`, [LASTS], [
+        { ...separate, text: separate.text.replace(".**", "** (recommended).") },
+        { text: `**Link to ${name}.** This folder uses the ${name} logbook, and its tasks show in the ${name} project. Choose this only if the fork and ${name} are one project to you.`, run: linkTo },
+      ]));
+      const why = mine && remote ? `Its GitHub remote is also ${remote}. So it is most likely a second clone of ${name}.` : `sage cannot compare GitHub remotes: ${mine ? used : "this folder"} has none that sage can read. So it is most likely a second clone of ${name}, or this folder moved.`;
+      refuse(prompt(checkout, head, `${facts} ${why} ${done}`, [LASTS], [
+        { text: `**Link to ${name}** (recommended). This folder uses the ${name} logbook. Its tasks show in the one ${name} project on the board, and its runs show "checkout ${here}". No record is copied.`, run: linkTo },
+        { ...separate, text: `${separate.text} Choose this for a fork that is now its own project.` },
+      ]));
+    }
+    // Two or more shared logbooks: the one with this folder's GitHub remote is recommended. With a remote that none of
+    // them has, a new logbook is. When a remote is missing, sage cannot tell, so no choice is recommended.
+    const pick = logbooks.find((b) => same(b.remote));
+    const fork = !pick && mine && logbooks.every((b) => b.remote);
+    const ordered = pick ? [pick, ...logbooks.filter((b) => b !== pick)] : logbooks;
+    refuse(prompt(checkout, head, `${logbooks.length === 2 ? "Two" : logbooks.length} shared logbooks have its first commit. ${done}${pick || fork ? "" : " sage cannot recommend one: a folder has no GitHub remote that sage can read."}`, [LASTS], [
+      ...ordered.map((b) => ({ text: `${b === pick ? `**Link to ${b.name}** (recommended: the same GitHub remote, ${b.remote}).` : `**Link to ${b.name}.**`} Logbook ${b.folder}, used by ${b.used}.`, run: `sage link --to ${b.folder}` })),
+      { text: `${fork ? `**Start separate** (recommended: no logbook has its GitHub remote, ${mine}).` : "**Start separate.**"} A new, empty logbook.`, run: SEPARATE },
+    ]));
   }
 
   /** The provider's row in plugins.tsv, under the root's lock. */

@@ -5,7 +5,7 @@ import { createHash } from "node:crypto";
 import { validateObservations } from "./observations.mjs";
 import { logbookSettings } from "./logbook-fields.mjs";
 import { PROGRAM_ID, TASK_ID, checkPrograms } from "./program-rules.mjs";
-import { BINDING_COLUMNS, bindingRow, gone as goneRoot, ownerOf } from "./shared-root.mjs";
+import { BINDING_COLUMNS, bindingRow, githubRemote, gone as goneRoot, ownerOf } from "./shared-root.mjs";
 import { chiefsWhole } from "./chiefs.mjs";
 
 const parseJson = text => { try { return JSON.parse(text); } catch { throw new Error("invalid JSON"); } };
@@ -86,8 +86,8 @@ function githubRemotes(config) {
     const section = /^\s*\[([^\]]*)\]/.exec(line);
     if (section) { remote = /^remote\s+"(origin|upstream)"$/.exec(section[1].trim())?.[1] ?? null; continue; }
     const url = remote && !found[remote] && /^\s*url\s*=\s*(\S+)\s*$/.exec(line)?.[1];
-    const match = url && new RegExp(String.raw`^(?:https:\/\/|ssh:\/\/git@|git@)github\.com[:/]${REPOSITORY}(?:\.git)?\/?$`).exec(url);
-    if (match) found[remote] = `https://github.com/${match[1]}/${match[2]}`;
+    const repository = url && githubRemote(url);
+    if (repository) found[remote] = `https://github.com/${repository}`;
   }
   return found;
 }
