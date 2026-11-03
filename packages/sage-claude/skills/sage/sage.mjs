@@ -5,13 +5,13 @@ import { fileURLToPath } from "node:url";
 import { createStateTool } from "sage-core";
 
 /**
- * Each provider's legacy logbook root, for the core's resolver. This function is the one place where this adapter names
- * another provider's logbook setting (see AGENTS.md). An explicit SAGE_HOME stands for both, so a scratch run stays apart
- * from the real roots.
+ * Each provider's legacy logbook root, with its provider's name, for the core's resolver and the move. This function is
+ * the one place where this adapter names another provider's logbook setting (see AGENTS.md). An explicit SAGE_HOME stands
+ * for both, so a scratch run stays apart from the real roots: it is this tool's own root.
  */
 const legacyRoots = (env) => (env.SAGE_HOME ? [env.SAGE_HOME] : [
-  join(env.CLAUDE_CONFIG_DIR ?? join(env.HOME ?? homedir(), ".claude"), "sage"),
-  join(env.CODEX_HOME ?? join(env.HOME ?? homedir(), ".codex"), "sage"),
+  { provider: "claude", path: join(env.CLAUDE_CONFIG_DIR ?? join(env.HOME ?? homedir(), ".claude"), "sage") },
+  { provider: "codex", path: join(env.CODEX_HOME ?? join(env.HOME ?? homedir(), ".codex"), "sage") },
 ]);
 const tool = createStateTool({
   provider: "claude",
