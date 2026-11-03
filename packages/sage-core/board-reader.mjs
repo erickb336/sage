@@ -62,8 +62,7 @@ function table(file, name, budget) {
   });
   // Two rows of one id or of one gate make the programs table unreadable, as the state tool refuses it; so does a bad id,
   // pilot or gate cell. The error names the row's line. The older board (board.mjs) reads it with the same check.
-  // A task row that the move took to the shared logbook (its moved cell is set) shows there, not here (T306, PR 7).
-  return name === "programs" ? checkPrograms(rows, lines.map(([, number]) => number)) : name === "tasks" ? rows.filter(row => !row.moved) : rows;
+  return name === "programs" ? checkPrograms(rows, lines.map(([, number]) => number)) : rows;
 }
 
 /** The lines of a small table of exact columns, as rows: the shared root's bindings, a logbook's chiefs and its old sources. */
@@ -187,6 +186,9 @@ function fingerprint(directory) {
   return JSON.stringify([stat(directory), ...WATCHED.map(name => stat(join(directory, name))), ...RECEIPTS.map(name => names(join(directory, name)))]);
 }
 const CHANGED = /changed during the read$/;
+/** What a message of a change during the read names, in plain words: the whole logbook, a table, a file or an artifact (F-T624-11). */
+export const changedPart = message => message === "project changed during the read" ? "the whole logbook"
+  : message.startsWith("artifact ") ? message.split(":")[0] : { observations: "observations.json", checkout: "checkout.txt" }[message.split(":")[0]] ?? `${message.split(":")[0]}.tsv`;
 
 /**
  * One read of one logbook into project. bound is a shared logbook's checkout (null when none is known), else undefined.
@@ -203,6 +205,11 @@ function readLogbook(directory, project, budget, { now, bound, chiefs = true, du
       else project.diagnostics.push(`${name}: ${error.code ?? error.message}`);
     }
   }
+  // A task row that the move took to the shared logbook (its moved cell is set) shows there, not here (T306, PR 7). Its
+  // program moved with it, with a new number, so the program and its cells leave this old logbook too (F-T624-12).
+  const moved = (project.tables.tasks ?? []).filter(task => task.moved), gone = new Set(moved.map(task => task.program).filter(Boolean));
+  if (moved.length) project.tables.tasks = project.tables.tasks.filter(task => !task.moved).map(task => gone.has(task.program) ? { ...task, program: "" } : task);
+  if (gone.size && project.tables.programs) project.tables.programs = project.tables.programs.filter(program => !gone.has(program.id));
   // The chiefs of a shared logbook (T306, PR 3), by the state tool's rule. A legacy logbook has none: no file, no rows.
   // A table that the board cannot read gives null: its one diagnostic says so, and no task's chief counts as not listed.
   project.chiefs = [];
@@ -254,7 +261,8 @@ function consistentRead(directory, base, budget, options) {
     budget.remaining = share;
     const before = fingerprint(directory);
     const project = readLogbook(directory, { ...base, tables: {}, diagnostics: [], warnings: [] }, budget, { ...options, attempt });
-    const dropped = project.diagnostics.filter(message => CHANGED.test(message));
+    const changed = project.diagnostics.filter(message => CHANGED.test(message)).map(changedPart);
+    const dropped = changed.includes("the whole logbook") ? ["the whole logbook"] : [...new Set(changed)];
     if (!dropped.length && fingerprint(directory) === before) return project;
     if (attempt === MAX_ATTEMPTS) return Object.assign(project, { diagnostics: project.diagnostics.filter(message => !CHANGED.test(message)), changing: { at: new Date(options.now).toISOString(), ...(dropped.length && { dropped }) } });
   }
@@ -282,7 +290,9 @@ function oldSources(directory, roots, budget, project) {
   if (!exact(found, ["provider", "path", "at"]) || found.rows.length > MAX_OLD) { project.diagnostics.push("sources: damaged table"); return []; }
   return found.rows.flatMap((row, i) => {
     const path = isAbsolute(row.path) ? resolve(row.path) : null, root = path && roots.find(item => item.path === dirname(path));
-    const named = root && (root.provider ?? row.provider) === row.provider && /^[a-z0-9-]+-[0-9a-f]{6}$/.test(basename(path)) && /^[a-z][a-z0-9-]{0,30}$/.test(row.provider);
+    // A root of no known provider (SAGE_HOME stands for both) takes a row of any provider that no other root is known to hold.
+    const provider = root && (root.provider ?? (roots.some(other => other.provider === row.provider) ? null : row.provider));
+    const named = root && provider === row.provider && /^[a-z0-9-]+-[0-9a-f]{6}$/.test(basename(path)) && /^[a-z][a-z0-9-]{0,30}$/.test(row.provider);
     const stat = named ? lstatSync(path, { throwIfNoEntry: false }) : null;
     if (!stat?.isDirectory() || stat.isSymbolicLink() || !lstatSync(join(path, "moved.json"), { throwIfNoEntry: false })?.isFile()) { project.diagnostics.push(`sources: line ${i + 2} does not name a moved logbook of its provider under a provider root`); return []; }
     return [{ provider: row.provider, path, root }];
@@ -292,17 +302,24 @@ function oldSources(directory, roots, budget, project) {
 /**
  * Missing or damaged input is a diagnostic, never a silently empty board. The source with the id "shared" is the shared
  * root: when it is missing, that is no diagnostic (no project is shared yet). providerRoots are the provider roots that
- * the caller knows beyond the sources: an old logbook must be directly under one of them, or under a provider source.
+ * the caller knows beyond the sources, each { path, provider }, provider null when the root stands for both (SAGE_HOME):
+ * an old logbook must be directly under one of them, or under a provider source.
  */
 export function readBoardSources(sources, { now = Date.now(), logbookKey = null, providerRoots = [], duringRead = null } = {}) {
   if (!Array.isArray(sources) || sources.length > 32) throw new TypeError("board sources must be an array of at most 32 roots");
   if (logbookKey !== null && !/^[a-zA-Z0-9_-]{1,80}\/[a-z0-9-]+-[0-9a-f]{6}$/.test(logbookKey)) throw new TypeError("invalid logbook key");
   const budget = { remaining: MAX_READ };
   const ids = new Set(), identities = new Set(), moved = new Set();
-  // The roots where an old logbook may be: each provider source's root, with its id and provider, then the caller's other
-  // roots, whose provider the board does not know.
-  const roots = [...sources.filter(source => source?.id !== SHARED && isAbsolute(source?.path ?? "")).map(source => ({ id: source.id, path: resolve(source.path), provider: hookProvider(source) })),
-    ...providerRoots.filter(path => isAbsolute(path)).map(path => ({ id: null, path: resolve(path), provider: null }))];
+  // The roots where an old logbook may be: each source's root, with its id, then the caller's other roots. A root's provider
+  // is the logbook provider that a source or the caller knows for it, never a hook provider (F-T624-9), so the chat board
+  // and the server judge a sources.tsv row alike.
+  const roots = [];
+  for (const item of [...sources.filter(source => source?.id !== SHARED).map(source => ({ id: source.id, path: source.path, provider: source.provider })), ...providerRoots.map(root => ({ id: null, ...root }))]) {
+    if (!isAbsolute(item?.path ?? "")) continue;
+    const path = resolve(item.path), known = roots.find(root => root.path === path), provider = item.provider ?? null;
+    if (!known) roots.push({ id: item.id, path, provider });
+    else known.provider ??= provider;
+  }
   const results = sources.map(source => {
     if (!source || !/^[a-zA-Z0-9_-]{1,80}$/.test(source.id ?? "") || ids.has(source.id) || !isAbsolute(source.path ?? "")) throw new TypeError("each board source needs a unique id and an absolute path");
     ids.add(source.id);

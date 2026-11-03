@@ -85,6 +85,8 @@ export const standardSources = (env = process.env) => [...(env.SAGE_HOME ? [{ id
   { id: "claude", label: "Claude", provider: "claude", path: resolve(env.CLAUDE_CONFIG_DIR ?? join(env.HOME ?? homedir(), ".claude"), "sage") },
   { id: "codex", label: "Codex", provider: "codex", path: resolve(env.CODEX_HOME ?? join(env.HOME ?? homedir(), ".codex"), "sage") },
 ]), SHARED_SOURCE(env)];
+/** The provider roots where an old logbook of a shared project may be (T306), each with its provider, for the CLI and the server alike. */
+export const providerRoots = (env = process.env) => standardSources(env).filter(source => source.id !== "shared").map(source => ({ path: source.path, provider: source.provider ?? null }));
 /** The shared root (T306) as a board source, by core's one rule (sharedRoot). */
 const SHARED_SOURCE = env => ({ id: "shared", label: "Shared", path: sharedRoot(env) });
 /**
@@ -294,7 +296,7 @@ export async function runBoardCli(argv, { output = line => process.stdout.write(
   if (options.serve) {
     if (value !== "all" || options.out || options.project) throw new TypeError("server uses all configured sources; no output or project option");
     // The server writes board.pid only once it listens, and removes it when it stops, so a pid there is a running board.
-    const configPath = boundedPath(options.config), server = createBoardServer({ ...config, sources: readSources(config.sources, env), id: configId(configPath) });
+    const configPath = boundedPath(options.config), server = createBoardServer({ ...config, sources: readSources(config.sources, env), providerRoots: providerRoots(env), id: configId(configPath) });
     await server.start();
     // No listener stays without board.pid: then no command could tell its process (F-T216-12).
     try { writePid(configPath, process.pid); } catch (error) { await server.close(); throw error; }
@@ -305,7 +307,7 @@ export async function runBoardCli(argv, { output = line => process.stdout.write(
   if (options.scope && !taskId) throw new TypeError("--scope selects the exact project of a task lookup");
   const format = options.html ? "html" : options.status ? "status" : taskId ? "task" : "chat";
   const sources = readSources(config.sources, env);
-  const body = boardView({ sources, scope: taskId ? options.scope ?? "this" : value, project: options.project ?? process.cwd(), providerRoots: standardSources(env).filter(source => source.id !== "shared").map(source => source.path), taskId, format });
+  const body = boardView({ sources, scope: taskId ? options.scope ?? "this" : value, project: options.project ?? process.cwd(), providerRoots: providerRoots(env), taskId, format });
   if (options.html) {
     const file = boundedPath(options.out ?? (config.pagesDir ? resolve(config.pagesDir, `board-${Date.now()}-${randomBytes(6).toString("hex")}.html`) : ""));
     if (!file.endsWith(".html") || !outsideRoots(file, sources)) throw new TypeError("HTML output must be an .html artifact outside logbook roots");

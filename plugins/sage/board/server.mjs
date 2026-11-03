@@ -100,7 +100,7 @@ const OFF = "Access from outside this Mac is off until the owner sets a board pa
  * a response on the Mac carries the X-Sage-Board header: the id, this process's pid and the time the listener started,
  * so the board command can tell which board answers on the port.
  */
-export function createBoardServer({ sources, password, port = 43123, allowedHosts = [], id, clock = () => new Date().toISOString(), settleReads = SETTLE_READS, duringRead = null } = {}) {
+export function createBoardServer({ sources, password, port = 43123, allowedHosts = [], id, clock = () => new Date().toISOString(), settleReads = SETTLE_READS, duringRead = null, providerRoots = [] } = {}) {
   if (!Number.isSafeInteger(port) || port < 1024 || port > 65535) throw new TypeError("board port must be an integer from 1024 through 65535");
   if (typeof clock !== "function") throw new TypeError("the board clock must be a function that gives an ISO time");
   if (password !== undefined && !validPasswordRecord(password)) throw new TypeError("the board password must be a record from hashPassword");
@@ -290,7 +290,8 @@ export function createBoardServer({ sources, password, port = 43123, allowedHost
       reconcileWatchers();
       // A root that does not exist is not set up yet (an owner may use only one provider): a quiet note, not a failure.
       // The shared root is optional (T306): until a project is shared, it is not there, and the board says nothing about it.
-      const read = readBoardSources(configured, { duringRead }), notSetUp = [];
+      // The provider roots beyond the sources, as the one-shot board has them, so both read a sources.tsv row alike (F-T624-13).
+      const read = readBoardSources(configured, { duringRead, providerRoots }), notSetUp = [];
       for (const [index, source] of read.entries()) {
         if (lstatSync(configured[index].path, { throwIfNoEntry: false })) continue;
         source.diagnostics = source.diagnostics.filter(message => message !== "ENOENT");

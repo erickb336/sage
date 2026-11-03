@@ -10,12 +10,12 @@ import { request } from "node:http";
 import { createServer } from "node:net";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { readBoardSources } from "../packages/sage-core/board-reader.mjs";
+import { changedPart, readBoardSources } from "../packages/sage-core/board-reader.mjs";
 import { buildBoardModel } from "../packages/sage-core/board-model.mjs";
 import { cardFits, renderBoardHtml, renderBoardText, renderTaskText, renderAgentsHtml } from "../packages/sage-core/board-render.mjs";
 import { replaceQuestion } from "../packages/sage-core/chiefs.mjs";
 import { sharedRoot } from "../packages/sage-core/shared-root.mjs";
-import { readSources, standardSources } from "../packages/sage-board/cli.mjs";
+import { providerRoots, readSources, standardSources } from "../packages/sage-board/cli.mjs";
 import * as view from "../packages/sage-core/board-view.mjs";
 import { createBoardServer } from "../packages/sage-board/server.mjs";
 import * as claude from "../plugins/sage/skills/sage/sage.mjs";
@@ -193,7 +193,7 @@ test("old logbooks: finished tasks show in Done with their old label, a moved ro
   // The in-session board knows the other provider's root from the state tool (providerRoots), not as a source.
   writeFileSync(join(w.shared, FOLDER, "sources.tsv"), `provider\tpath\tat\ncodex\t${join(w.codexRoot, FOLDER)}\tx\n`);
   const session = sources => readBoardSources([{ id: "current", path: w.claudeRoot }, { id: "shared", path: w.shared }], { now: NOW, ...sources }).find(source => source.id === "shared");
-  assert.deepEqual(session({ providerRoots: [w.claudeRoot, w.codexRoot] }).projects.map(project => project.key), [`shared/${FOLDER}`, `old-codex/${FOLDER}`]);
+  assert.deepEqual(session({ providerRoots: view.sessionRoots(w.claudeRoot, [w.claudeRoot, w.codexRoot], "claude") }).projects.map(project => project.key), [`shared/${FOLDER}`, `old-codex/${FOLDER}`]);
   assert.deepEqual(session({}).projects.map(project => project.key), [`shared/${FOLDER}`], "a root that the board does not know is not read");
 });
 
@@ -362,11 +362,11 @@ test("F-T624-2: when the third read lost its data, the changing note says what d
   const w = world(t), dir = join(w.claudeRoot, HARBOR), sources = [w.sources[0]];
   const read = readBoardSources(sources, { now: NOW, duringRead: key => key.endsWith(HARBOR) && replaceFolder(dir) });
   const harbor = read[0].projects.find(project => project.name === HARBOR);
-  assert.deepEqual([harbor.tables, harbor.diagnostics, harbor.changing], [{}, [], { at: iso(), dropped: ["project changed during the read"] }]);
+  assert.deepEqual([harbor.tables, harbor.diagnostics, harbor.changing], [{}, [], { at: iso(), dropped: ["the whole logbook"] }]);
   const model = buildBoardModel(read, { now: iso() });
-  assert.deepEqual(model.changing, [{ project: "harbor", at: iso(), dropped: ["project changed during the read"] }]);
-  assert.match(renderBoardHtml(model), /<li>harbor · last read \d\d:\d\d UTC · not shown, as it changed during that read: project changed during the read<\/li>/);
-  assert.match(renderBoardText(model), /⧗ The logbook is changing: harbor · read at \d\d\\:\d\d UTC, without what changed during it \(project changed during the read\)\. The board shows that read;/);
+  assert.deepEqual(model.changing, [{ project: "harbor", at: iso(), dropped: ["the whole logbook"] }]);
+  assert.match(renderBoardHtml(model), /<li>harbor · last read \d\d:\d\d UTC · not shown, as it changed during that read: the whole logbook<\/li>/);
+  assert.match(renderBoardText(model), /⧗ The logbook is changing: harbor · read at \d\d\\:\d\d UTC, without what changed during it \(the whole logbook\)\. The board shows that read;/);
   // A third read that lost nothing has no such line.
   const calm = buildBoardModel(readBoardSources(sources, { now: NOW, duringRead: key => key.endsWith(HARBOR) && rewrite(dir, "Busy") }), { now: iso() });
   assert.deepEqual(calm.changing, [{ project: "harbor", at: iso() }]);
@@ -412,4 +412,70 @@ test("F-T624-8: a damaged chiefs.tsv gives its one table diagnostic, and no warn
   assert.deepEqual(model.warnings, []);
   assert.deepEqual(model.diagnostics.filter(item => item.project === `shared/${FOLDER}`).map(item => item.message), ["chiefs: damaged table"]);
   assert.doesNotMatch(renderBoardHtml(model, { taskKey: `shared/${FOLDER}/T321`, snapshot: false }), /not in chiefs\.tsv/);
+});
+
+// Repair round 2 of PR 419 (R2413): one test for each fix key.
+test("F-T624-12: a program that moved with its open task leaves the old logbook, as no stuck or second program; a finished old program stays", t => {
+  const w = world(t), old = join(w.claudeRoot, FOLDER);
+  rmSync(old, { recursive: true });
+  const gate = (id, taskId) => ({ id, task: taskId, question: "Approve the breakdown?", options: "approve|change|drop", recommendation: "approve", answer: "approve", at: iso(-3 * DAY) });
+  logbook(old, {
+    tasks: [task("T4", "Sync part one", "merged", { program: "PG1" }), { ...task("T5", "Sync pilot", "building", { program: "PG1" }), moved: "T20" }, task("T6", "Old export", "merged", { program: "PG2" }), { ...task("T7", "Lone pilot", "building", { program: "PG3" }), moved: "T21" }],
+    programs: [{ id: "PG1", name: "Sync", goal: "Sync", pilot: "T5", gate: "G1", at: iso(-3 * DAY) }, { id: "PG2", name: "Export", goal: "Export", pilot: "T6", gate: "G2", at: iso(-3 * DAY) }, { id: "PG3", name: "Lone", goal: "Lone", pilot: "T7", gate: "G3", at: iso(-3 * DAY) }],
+    gates: [gate("G1", "T5"), gate("G2", "T6"), gate("G3", "T7")],
+    decisions: ["T4", "T6"].map(id => ({ at: iso(-DAY), task: id, decision: "state merged" })),
+  }, LEGACY, { cols: { tasks: `${LEGACY.tasks} program moved` }, files: { "checkout.txt": `${w.checkout}\n`, "moved.json": "{}\n" } });
+  const model = modelOf(w.sources), lantern = model.projects.find(project => project.name === "lantern");
+  assert.deepEqual(model.programNeeds.filter(need => need.group === lantern.key), []);
+  assert.equal(lantern.needsOwner, 2, "the two shared tasks only");
+  assert.deepEqual(model.programs.filter(program => program.group === lantern.key).map(program => [program.key, program.state]), [[`claude/${FOLDER}/PG2`, "done"]]);
+  assert.equal(card(model, "T4").program, null, "a finished task of the moved program shows with no program");
+  assert.doesNotMatch(renderBoardText(model) + renderBoardHtml(model, { snapshot: false }), /PG1|PG3|is stuck/);
+});
+
+test("F-T624-13: the board server reads an old logbook under a provider root that its config leaves out, as the one-shot board does", async t => {
+  const w = world(t);
+  const port = await freePort(), server = createBoardServer({ sources: [w.sources[0], w.sources[2]], port, settleReads: [], providerRoots: [{ path: w.codexRoot, provider: "codex" }] });
+  t.after(() => server.close());
+  await server.start();
+  const page = (await get(port, "/")).body;
+  assert.match(page, /Old · Codex · read-only/);
+  assert.doesNotMatch(page, /Incomplete sources|does not name a moved logbook/);
+  // The CLI gives the server the provider roots of the standard sources, with their providers.
+  assert.deepEqual(providerRoots({ HOME: "/h" }), [{ path: "/h/.claude/sage", provider: "claude" }, { path: "/h/.codex/sage", provider: "codex" }]);
+  assert.deepEqual(providerRoots({ HOME: "/h", SAGE_HOME: "/s" }), [{ path: "/s", provider: null }]);
+});
+
+test("F-T624-9 and F-T624-10: the chat board and the server judge a sources.tsv row by the same provider rule, with one root or two", t => {
+  const w = world(t);
+  const oldOf = (sources, roots) => { const model = modelOf(sources, { providerRoots: roots }); return [model.diagnostics.map(item => item.message), model.tasks.filter(item => item.old).map(item => [item.id, item.holder])]; };
+  const refused = [["sources: line 2 does not name a moved logbook of its provider under a provider root"], []];
+  // Two roots: a Claude row for the Codex root's folder, and a Codex row for the Claude root's folder, are refused in both.
+  const session = view.sessionSources(w.claudeRoot, w.shared, "claude"), roots = view.sessionRoots(w.claudeRoot, [w.claudeRoot, w.codexRoot], "claude");
+  for (const row of [`claude\t${join(w.codexRoot, FOLDER)}`, `codex\t${join(w.claudeRoot, FOLDER)}`]) {
+    writeFileSync(join(w.shared, FOLDER, "sources.tsv"), `provider\tpath\tat\n${row}\tx\n`);
+    assert.deepEqual(oldOf(session, roots), refused, `chat: ${row}`);
+    assert.deepEqual(oldOf(w.sources, providerRoots({ HOME: w.base })), refused, `server: ${row}`);
+  }
+  writeFileSync(join(w.shared, FOLDER, "sources.tsv"), `provider\tpath\tat\ncodex\t${join(w.codexRoot, FOLDER)}\tx\n`);
+  assert.deepEqual(oldOf(session, roots), [[], [["T96", "Old · Codex · read-only"]]], "the right provider reads");
+  assert.deepEqual(roots, [{ path: w.claudeRoot, provider: "claude" }, { path: w.codexRoot, provider: null }]);
+  // One root for both providers (SAGE_HOME): the chat board and the server both read a Codex row there.
+  const one = view.sessionRoots(w.codexRoot, [w.codexRoot], "claude");
+  assert.deepEqual(one, [{ path: w.codexRoot, provider: null }]);
+  const read = [[], [["T96", "Old · Codex · read-only"]]];
+  assert.deepEqual(oldOf(view.sessionSources(w.codexRoot, w.shared, "claude"), one), read, "chat");
+  assert.deepEqual(oldOf([{ id: "sage", label: "Sage", path: w.codexRoot }, w.sources[2]], []), read, "server");
+});
+
+test("F-T624-11: the changing note names the whole logbook, a table, a file or an artifact in plain words, not a code message", t => {
+  // The whole logbook: a folder that a writer replaced during the read (the F-T624-2 test shows it in the note too).
+  const w = world(t), dir = join(w.claudeRoot, HARBOR);
+  const read = readBoardSources([w.sources[0]], { now: NOW, duringRead: key => key.endsWith(HARBOR) && replaceFolder(dir) });
+  const text = renderBoardText(buildBoardModel(read, { now: iso() }));
+  assert.match(text, /without what changed during it \(the whole logbook\)/);
+  assert.doesNotMatch(text, /changed during the read/);
+  // Each message of a file that changed while the board read it, as the reader writes it.
+  assert.deepEqual(["tasks: file changed during the read", "chiefs: file changed during the read", "observations: file changed during the read", "checkout: file changed during the read", "artifact A3: artifact parent changed during the read", "artifact A4: file changed during the read", "project changed during the read"].map(changedPart),
+    ["tasks.tsv", "chiefs.tsv", "observations.json", "checkout.txt", "artifact A3", "artifact A4", "the whole logbook"]);
 });

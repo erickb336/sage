@@ -25,6 +25,12 @@ export function landingRule(sources, logbookKey = null) {
  * notes (F-T624-3), and the shared root (T306), where a shared project's logbook is, its key shared/<folder>.
  */
 export const sessionSources = (root, shared, provider) => [{ id: "current", label: "Current provider", path: root, hookProvider: provider }, { id: "shared", label: "Shared", path: shared }];
+/**
+ * The provider roots of the in-session board, where an old logbook may be: the tool's own root, then the adapter's legacy
+ * roots. The own root is its provider's when the adapter names another root; one root for both (SAGE_HOME) has no
+ * provider, and the board does not know another root's provider (F-T624-10).
+ */
+export const sessionRoots = (root, legacy, provider) => [...new Set([root, ...legacy].map(path => resolve(path)))].map((path, i, roots) => ({ path, provider: i === 0 && roots.length > 1 ? provider : null }));
 
 const fold = value => String(value).normalize("NFC").toLowerCase();
 /**

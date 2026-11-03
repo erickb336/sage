@@ -686,6 +686,7 @@ function programsOf(source, project, group, graph, cards) {
   // The questions of each program's breakdown gates, by program id, read once: the page cuts them off the answer rows (F-T384-1).
   const questions = new Map();
   for (const gate of gates.values()) { const id = proposalOf(gate); if (id) questions.set(id, [...questions.get(id) ?? [], gate.question]); }
+  // An old logbook (T306, the move) is read-only history: only its finished programs show, and none needs the owner (F-T624-12).
   return [...graph.programs.values()].map(program => {
     const own = graph.byProgram.get(program.id) ?? [], progress = progressOf(own), pilotState = graph.byId.get(program.pilot)?.state;
     const state = program.state === "active" ? progress.done ? "done" : dead(pilotState) ? "stuck" : "active"
@@ -704,7 +705,7 @@ function programsOf(source, project, group, graph, cards) {
       next: first ? { key: first.key, id: first.id, word: stateWord(first.state), pilot: first.id === program.pilot } : null,
       waiting: waiting.filter(item => !item.waitLine.never).length, cannotStart: waiting.filter(item => item.waitLine.never).map(item => item.id),
       need: need && { ...need, key: `${project.key}/${program.id}`, program: program.id, source: source.id, sourceLabel: source.label, projectName: group.name, group: group.key, archived: group.archived } };
-  });
+  }).filter(program => !project.old || ["done", "dropped"].includes(program.state) && !program.open);
 }
 
 /** A card in Needs you when it has a reason: one on a column (not ended, or done in the last 7 days), as needsOwner reads it. */
