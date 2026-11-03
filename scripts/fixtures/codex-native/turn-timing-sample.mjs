@@ -27,6 +27,34 @@ export function makeSample() {
   return { root, file, session, turn, other, row, rows, callback, options, write, bytes, inspect, remove };
 }
 
+// A complete fictional earlier turn followed by an ordinary or queued callback.
+export function makeOrdinaryHistory(historyMode = 'legacy', trigger = 'composer') {
+  const f = makeSample();
+  const current = structuredClone(f.rows[1]);
+  current.payload.turn_attribution.turn_trigger = trigger;
+  const earlier = f.rows[1].payload;
+  earlier.turn_id = f.other; earlier.root_turn_id = f.other;
+  earlier.turn_attribution.turn_id = f.other; earlier.turn_attribution.root_turn_id = f.other;
+  f.rows[0].payload.history_mode = historyMode;
+  f.rows.push(
+    f.row('world_state', { full: true, state: { sample: 'MESSAGE_SECRET_SENTINEL' } }),
+    f.row('turn_context', { turn_id: f.other, root_turn_id: f.other, cwd: f.root }),
+    f.row('event_msg', { type: 'thread_settings_applied', thread_id: f.session,
+      thread_settings: { model: 'sample', cwd: f.root, sample: 'MESSAGE_SECRET_SENTINEL' } }),
+    f.row('event_msg', { type: 'item_completed', thread_id: f.session, turn_id: f.other,
+      item: historyMode === 'legacy'
+        ? { type: 'Plan', id: 'fictional-item', text: 'MESSAGE_SECRET_SENTINEL' }
+        : { type: 'UserMessage', id: 'fictional-item', content: [] }, completed_at_ms: 0 }),
+    f.row('event_msg', { type: 'task_complete', turn_id: f.other }), current);
+  const write = f.write;
+  f.write = () => {
+    if (historyMode === 'paginated') f.rows.forEach((row, ordinal) => { row.ordinal = ordinal; });
+    write();
+  };
+  f.write();
+  return f;
+}
+
 if (process.argv[1] === fileURLToPath(import.meta.url)) {
   const sample = makeSample();
   try {
@@ -43,4 +71,15 @@ if (process.argv[1] === fileURLToPath(import.meta.url)) {
     fs.appendFileSync(sample.file, '{');
     console.log(JSON.stringify({ sample: 'incomplete final record', ...envelope(sample.inspect()) }));
   } finally { sample.remove(); }
+}
+
+if (process.argv[1] === fileURLToPath(import.meta.url)) {
+  for (const mode of ['legacy', 'paginated']) for (const trigger of ['composer', 'queue']) {
+    const sample = makeOrdinaryHistory(mode, trigger);
+    try {
+      console.log(JSON.stringify({ sample: `${mode} ordinary history / ${trigger}`, ...envelope(sample.inspect()) }));
+      sample.rows.pop(); sample.write();
+      console.log(JSON.stringify({ sample: `${mode} ordinary history / ${trigger} / no matching start`, ...envelope(sample.inspect()) }));
+    } finally { sample.remove(); }
+  }
 }

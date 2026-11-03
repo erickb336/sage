@@ -130,9 +130,23 @@ function classify(bytes, callback, options, checkTime, result) {
   if (paginated ? header.ordinal !== 0 : Object.hasOwn(header, 'ordinal')) refuse('partial_history');
   result.session_meta = { source: meta.source, cli_version: meta.cli_version };
   const starts = new Set();
-  const events = new Set(['task_started', 'task_complete', 'turn_aborted', 'user_message', 'agent_message',
-    'agent_reasoning', 'agent_reasoning_raw_content', 'token_count', 'hook_started', 'hook_completed']);
-  const responses = new Set(['message', 'reasoning', 'function_call', 'function_call_output', 'custom_tool_call', 'custom_tool_call_output']);
+  // Serialized durable tags: openai/codex 6aaac694803004a63c6f393d153c96d22521a6b9,
+  // rollout/src/policy.rs + history/src/rollout_payload.rs + protocol/src/{protocol,models}.rs.
+  // These classify record envelopes, not opaque nested payloads or installed compatibility.
+  // Session metadata belongs only at the header. Existing hook event support is retained.
+  const records = new Set(['event_msg', 'response_item', 'turn_context', 'compacted', 'token_usage_record',
+    'world_state', 'retained_context', 'security_risk_score', 'realtime_item',
+    'inter_agent_communication', 'inter_agent_communication_metadata']);
+  const events = new Set(['task_started', 'task_complete', 'turn_aborted', 'token_count',
+    'thread_goal_updated', 'thread_rolled_back', 'thread_settings_applied', 'item_completed',
+    'user_message', 'agent_message', 'agent_reasoning', 'agent_reasoning_raw_content',
+    'entered_review_mode', 'exited_review_mode', 'patch_apply_end', 'context_compacted',
+    'mcp_tool_call_end', 'web_search_end', 'image_generation_end', 'sub_agent_activity',
+    'hook_started', 'hook_completed']);
+  const responses = new Set(['additional_tools', 'message', 'agent_message', 'reasoning', 'local_shell_call',
+    'function_call', 'tool_search_call', 'function_call_output', 'tool_search_output', 'custom_tool_call',
+    'custom_tool_call_output', 'web_search_call', 'image_generation_call', 'configuration_update',
+    'compaction', 'context_compaction']);
   let count = 0, offset = first + 1, matched = false;
   while (offset < bytes.length) {
     checkTime();
@@ -142,7 +156,7 @@ function classify(bytes, callback, options, checkTime, result) {
     offset = end + 1;
     if (!object(row) || !object(row.payload) || !timestamp(row.timestamp)) refuse('unsupported_layout');
     if (paginated ? row.ordinal !== count : Object.hasOwn(row, 'ordinal')) refuse('partial_history');
-    if (!['event_msg', 'response_item', 'turn_context'].includes(row.type)) refuse('unsupported_layout');
+    if (!records.has(row.type)) refuse('unsupported_layout');
     const p = row.payload;
     if (p.parent_thread_id != null || p.agent_path != null && p.agent_path !== '/root'
       || p.parent_turn_id != null || p.initiating_agent_path != null) refuse('child_evidence');

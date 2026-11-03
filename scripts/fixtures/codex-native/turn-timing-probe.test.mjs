@@ -6,7 +6,7 @@ import { fileURLToPath } from 'node:url';
 import { PassThrough } from 'node:stream';
 import { spawnSync } from 'node:child_process';
 import { inspectCallback, envelope, LIMITS, readCallback } from '../../../packages/sage-codex/hooks/turn-timing-probe.mjs';
-import { makeSample } from './turn-timing-sample.mjs';
+import { makeSample, makeOrdinaryHistory } from './turn-timing-sample.mjs';
 
 const command = fileURLToPath(new URL('../../../packages/sage-codex/hooks/turn-timing-probe.mjs', import.meta.url));
 const fixture = t => { const f = makeSample(); t.after(f.remove); return f; };
@@ -85,7 +85,7 @@ test('earlier root starts do not stand in for the callback turn', t => {
 });
 
 test('unsupported history records cannot establish absence', t => {
-  const f = fixture(t); f.rows.splice(1, 1); f.rows.push(f.row('event_msg', { type: 'context_compacted' }));
+  const f = fixture(t); f.rows.splice(1, 1); f.rows.push(f.row('event_msg', { type: 'future_unknown_event' }));
   f.write(); unavailable(f.inspect(), 'unsupported_layout');
 });
 
@@ -260,4 +260,99 @@ test('actual helper stdout uses the hook envelope and stderr is empty, with fict
 test('helper stays absent from the shipped hook manifest', () => {
   const manifest = fs.readFileSync(new URL('../../../packages/sage-codex/hooks/hooks.json', import.meta.url), 'utf8');
   assert.ok(!manifest.includes('turn-timing-probe'));
+});
+
+for (const mode of ['legacy', 'paginated']) for (const trigger of ['composer', 'queue']) {
+  test(`ordinary persisted ${mode} ${trigger} history preserves presence and absence`, t => {
+    const f = makeOrdinaryHistory(mode, trigger); t.after(f.remove);
+    const present = f.inspect();
+    assert.equal(present.status, 'present');
+    assert.equal(present.task_started.turn_trigger, trigger);
+    assert.equal(present.observation, 'present at the first bounded callback read');
+    privacy(JSON.stringify(envelope(present)), f);
+    f.rows.pop(); f.write();
+    const absent = f.inspect();
+    assert.equal(absent.status, 'absent');
+    assert.equal(absent.observation, 'absent after a complete bounded callback read');
+    assert.equal(absent.task_started, undefined);
+    privacy(JSON.stringify(envelope(absent)), f);
+  });
+}
+
+// Literal wire examples from the pinned persistence policy, independent of the helper's sets.
+const persistedExamples = [
+  ['compacted', { message: 'MESSAGE_SECRET_SENTINEL' }],
+  ['token_usage_record', { response_id: 'MESSAGE_SECRET_SENTINEL', usage: {} }],
+  ['world_state', { full: false, state: { text: 'MESSAGE_SECRET_SENTINEL' } }],
+  ['retained_context', { type: 'user_message', text: 'MESSAGE_SECRET_SENTINEL' }],
+  ['security_risk_score', { score: 0, reason: 'MESSAGE_SECRET_SENTINEL' }],
+  ['realtime_item', { type: 'message', text: 'MESSAGE_SECRET_SENTINEL' }],
+  ['inter_agent_communication', { text: 'MESSAGE_SECRET_SENTINEL' }],
+  ['inter_agent_communication_metadata', { trigger_turn: false }],
+  ...['thread_goal_updated', 'thread_rolled_back', 'thread_settings_applied', 'item_completed',
+    'entered_review_mode', 'exited_review_mode', 'patch_apply_end', 'context_compacted',
+    'mcp_tool_call_end', 'web_search_end', 'image_generation_end', 'sub_agent_activity',
+    'user_message', 'agent_message', 'agent_reasoning', 'agent_reasoning_raw_content', 'token_count']
+    .map(type => ['event_msg', { type, text: 'MESSAGE_SECRET_SENTINEL' }]),
+  ...['additional_tools', 'message', 'agent_message', 'reasoning', 'local_shell_call', 'function_call',
+    'tool_search_call', 'function_call_output', 'tool_search_output', 'custom_tool_call',
+    'custom_tool_call_output', 'web_search_call', 'image_generation_call', 'configuration_update',
+    'compaction', 'context_compaction'].map(type => ['response_item', { type, content: 'MESSAGE_SECRET_SENTINEL' }]),
+];
+for (const [type, payload] of persistedExamples) test(`persisted envelope ${type}/${payload.type ?? '-'} cannot hide a start`, t => {
+  const f = fixture(t);
+  f.rows.push(f.row(type, payload)); f.write();
+  const present = f.inspect(); assert.equal(present.status, 'present');
+  privacy(JSON.stringify(envelope(present)), f);
+  f.rows.splice(1, 1); f.write();
+  const absent = f.inspect(); assert.equal(absent.status, 'absent');
+  privacy(JSON.stringify(envelope(absent)), f);
+});
+
+for (const mode of ['legacy', 'paginated']) test(`unknown nonprojected ${mode} fields stay private without broad refusal`, t => {
+  const f = makeOrdinaryHistory(mode); t.after(f.remove);
+  f.rows[0].payload.future_history_boundary = { incomplete: 'MESSAGE_SECRET_SENTINEL' };
+  f.rows.at(-1).payload.future_identity_field = 'MESSAGE_SECRET_SENTINEL';
+  f.rows.at(-1).future_row_field = 'MESSAGE_SECRET_SENTINEL'; f.write();
+  assert.equal(f.inspect().status, 'present'); privacy(JSON.stringify(envelope(f.inspect())), f);
+  f.rows.pop(); f.write();
+  assert.equal(f.inspect().status, 'absent'); privacy(JSON.stringify(envelope(f.inspect())), f);
+});
+
+for (const [type, payload] of [['future_record', {}], ['event_msg', { type: 'future_event' }],
+  ['response_item', { type: 'future_response' }], ['response_item', { type: 'compaction_trigger' }]]) {
+  test(`unknown or nonpersisted ${type}/${payload.type ?? '-'} prevents presence and absence`, t => {
+    const f = makeOrdinaryHistory('paginated', 'queue'); t.after(f.remove);
+    const current = f.rows.pop(); f.rows.push(f.row(type, payload), current); f.write();
+    unavailable(f.inspect(), 'unsupported_layout');
+    f.rows.pop(); f.write(); unavailable(f.inspect(), 'unsupported_layout');
+  });
+}
+
+for (const kind of ['gap', 'duplicate']) test(`ordinary paginated history with an ordinal ${kind} stays unavailable`, t => {
+  const f = makeOrdinaryHistory('paginated', 'queue'); t.after(f.remove);
+  f.rows[3].ordinal = kind === 'gap' ? 99 : 2;
+  fs.writeFileSync(f.file, f.rows.map(row => JSON.stringify(row)).join('\n') + '\n');
+  unavailable(f.inspect(), 'partial_history');
+});
+
+test('ordinary persisted rows preserve the child boundary', t => {
+  const f = makeOrdinaryHistory('paginated', 'queue'); t.after(f.remove);
+  f.rows[3].payload.parent_thread_id = f.other; f.write();
+  unavailable(f.inspect(), 'child_evidence');
+});
+
+test('actual helper command handles ordinary queued histories with private output', t => {
+  for (const mode of ['legacy', 'paginated']) {
+    const f = makeOrdinaryHistory(mode, 'queue'); t.after(f.remove);
+    for (const status of ['present', 'absent']) {
+      if (status === 'absent') { f.rows.pop(); f.write(); }
+      const run = spawnSync(process.execPath, [command, '--session-dir', f.root, '--project', f.root],
+        { input: f.bytes(), encoding: 'utf8' });
+      assert.equal(run.status, 0); assert.equal(run.stderr, '');
+      const context = JSON.parse(run.stdout).hookSpecificOutput.additionalContext;
+      assert.equal(JSON.parse(context.slice(context.indexOf('{'))).status, status);
+      privacy(run.stdout + run.stderr, f);
+    }
+  }
 });
