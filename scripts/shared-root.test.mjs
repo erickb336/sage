@@ -483,6 +483,34 @@ test("a shallow clone's refusal says to fetch its full history", (t) => {
   assert.throws(() => claudeSage(["link", "--to", w.name(), "--project", shallow], w.env), /belongs to another project .*A shallow clone needs its full history here: run git fetch --unshallow/);
 });
 
+// T610 (F-T599-3): the two conditions of the new-logbook guard that had no test.
+test("M6: a clone with a legacy logbook in the other provider's root gets no link offer: this provider keeps today's refusal", (t) => {
+  const w = world(t);
+  const clone = join(w.base, "clone");
+  git(w.base, "clone", "-q", w.project, clone);
+  codexSage(["init", "--project", clone], w.env); // before any row: a legacy Codex logbook
+  w.claude("link", "--separate");
+  assert.deepEqual([claudeLocate(clone, w.env).shared, claudeLocate(clone, w.env).legacy], [false, true]);
+  assert.throws(() => claudeSage(["status", "--project", clone], w.env), (e) => /no logbook for the project/.test(e.message) && !/sage link/.test(e.message));
+  assert.match(codexSage(["status", "--project", clone], w.env), /^tasks +0$/m, "the Codex logbook works as before");
+  assert.throws(() => claudeSage(["link", "--to", w.name(), "--project", clone], w.env), /this project has a logbook at .*codex/);
+});
+
+test("M7: a clone whose first commit cannot be read, or a shallow one, gets past the guard: init makes a legacy logbook, and link then refuses", (t) => {
+  const w = world(t);
+  git(w.project, "commit", "-q", "--allow-empty", "-m", "second");
+  w.claude("link", "--separate");
+  const broken = join(w.base, "broken"), shallow = join(w.base, "shallow");
+  git(w.base, "clone", "-q", w.project, broken);
+  const config = join(broken, ".git", "config"), good = readFileSync(config, "utf8");
+  writeFileSync(config, "[core\n"); // Git cannot read it, so the guard has no first commit to compare
+  git(w.base, "clone", "-q", "--depth", "1", `file://${w.project}`, shallow); // its first commit is its newest one
+  for (const clone of [broken, shallow]) assert.match(claudeSage(["init", "--project", clone], w.env), new RegExp(`^logbook ${w.claudeRoot}/`), basename(clone));
+  assert.throws(() => claudeSage(["link", "--to", w.name(), "--project", broken], w.env), /git cannot read the repository at .*broken/);
+  writeFileSync(config, good); // the repair: now the legacy logbook stops the link
+  for (const clone of [broken, shallow]) assert.throws(() => claudeSage(["link", "--to", w.name(), "--project", clone], w.env), /this project has a logbook at .*A link would hide its tasks/, basename(clone));
+});
+
 test("a shared logbook that lost tasks.tsv reaches the repair, as a legacy logbook does, and link leaves its row", (t) => {
   const w = world(t);
   w.claude("link", "--separate");
