@@ -1215,11 +1215,16 @@ for (const [shape, report] of [["left out", "\n- K1 high data loss\n- K2 medium 
     const part = add("medium");
     const needed = report.includes("K2") ? "2 medium or high findings" : "1 medium or high finding";
     const said = report.includes("K2") ? "high, medium" : "high";
-    assert.equal(s.no(...verdict), `sage: ${run}'s report has ${needed} (RESULT FAIL with ${said} findings), and T1 holds 1 of ${run} at that severity or above: record each one first (sage finding add T1 --source qa --run ${run} --class <class> --severity <its severity> --summary "<the problem>"), then record qa-fail. Nothing changed.`);
+    // F-T294-6: the line counts the rows by severity, so a high finding recorded as medium shows as 1 medium, not as 1 at that severity.
+    assert.equal(s.no(...verdict), `sage: ${run}'s report has ${needed} (RESULT FAIL with ${said} findings), and T1 holds 1 medium of ${run}, but each one needs a row at its severity or above: record each one first (sage finding add T1 --source qa --run ${run} --key ${run}-<its key> --class <class> --severity <its severity> --summary "<the problem>"), then record qa-fail. Nothing changed.`);
     assert.deepEqual(rows(s.dir, "ledger").filter((r) => r.kind === "qa-fail"), [], "the refused verdict wrote nothing");
 
     // With the top finding on record, the verdict stands, and the high finding that triage cannot clear keeps the head from a merge.
-    const top = add("high");
+    // The printed form, with its --key, as the chief retries it after a lost reply: one row, which backs the verdict.
+    const printed = ["finding", "add", "T1", "--source", "qa", "--run", run, "--key", `${run}-K1`, "--class", "other", "--severity", "high", "--summary", "data loss"];
+    const top = s.ok(...printed).split(" ")[0];
+    assert.equal(s.ok(...printed), `${run}-K1 open again · high · T1`);
+    assert.equal(rows(s.dir, "findings").filter((f) => f.key === top).length, 1);
     assert.match(s.ok(...verdict), /^T1 qa-fail/);
     s.ok("finding", "move", "T1", part, "--to", "Later");
     s.ok("finding", "triage", "T1", top, "fix");

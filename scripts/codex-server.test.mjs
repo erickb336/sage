@@ -29,7 +29,15 @@ const turns = ["e22422c7-509c-43aa-8c42-827c556f8a57", "e22422c7-509c-43aa-8c42-
  */
 const PACKAGE = mkdtempSync(join(realpathSync(tmpdir()), "sage-native-package-"));
 cpSync(join(ROOT, "plugins/sage-codex"), PACKAGE, { recursive: true });
-after(() => rmSync(PACKAGE, { recursive: true, force: true }));
+/** Each file of a folder and the hash of its bytes, by its path in the folder. */
+const tree = dir => Object.fromEntries(readdirSync(dir, { recursive: true, withFileTypes: true }).filter(e => e.isFile())
+  .map(e => join(e.parentPath, e.name)).sort().map(file => [file.slice(dir.length + 1), createHash("sha256").update(readFileSync(file)).digest("hex")]));
+const BUILT = tree(join(ROOT, "plugins/sage-codex"));
+// A test that changes a file of the package without ownPlugin changes it for every later test: the copy must end as it began (F-T618-15).
+after(() => {
+  try { assert.deepEqual(tree(PACKAGE), BUILT, "a test changed the shared package copy: give it ownPlugin(f)"); }
+  finally { rmSync(PACKAGE, { recursive: true, force: true }); }
+});
 /** A plugin folder of the fixture's own, for a test that changes a file of the package. Call it before the fixture's server starts. */
 const ownPlugin = f => { rmSync(f.plugin); cpSync(PACKAGE, f.plugin, { recursive: true }); };
 

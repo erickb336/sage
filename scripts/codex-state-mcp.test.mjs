@@ -122,7 +122,17 @@ test("the transfer commands through the server: offer, accept, cancel, release a
   const [, first] = /offer ([0-9a-f]{8})/.exec(await s.call("offer", { task: "T1", to: "C2" }));
   assert.match((await s.call("offer", { task: "T1", to: "C2" }, as)).error, /^sage: T1 belongs to chief C1/);
   assert.equal(await s.call("cancel", { task: "T1", offer: first }), `T1 offer ${first} cancelled`);
+  // The recipient declines an offer through the same tool (F-T618-31); the owning chief keeps the task and offers again.
+  const [, declined] = /offer ([0-9a-f]{8})/.exec(await s.call("offer", { task: "T1", to: "C2" }));
+  assert.equal(await s.call("cancel", { task: "T1", offer: declined }, as), `T1 offer ${declined} declined by C2 · chief C1 keeps T1`);
   const [, offer, version] = /offer ([0-9a-f]{8}) · version ([0-9a-f]{64})/.exec(await s.call("offer", { task: "T1", to: "C2" }));
+  // F-T618-32: the accept tool names a reader that a Codex chief has, and that reader gives the offer's id and the version that accept takes.
+  const tools = await s.tools(), describe = (name) => tools.find((one) => one.name === name).description;
+  assert.match(describe("accept"), /sage_read_task gives the offer's id \(in the task's offer cell\) and the version/);
+  assert.match(describe("cancel"), /decline an offer that another chief made to you/);
+  const { tool: codexTool } = await import(pathToFileURL(join(s.dir, "plugin/skills/sage/sage.mjs")).href);
+  const snapshot = codexTool.readTaskSnapshot({ project: s.project, task: "T1" }, s.env);
+  assert.deepEqual([JSON.parse(snapshot.task.offer).id, snapshot.version], [offer, version]);
   assert.match((await s.call("accept", { task: "T1", offer: first, version }, as)).error, /has the open offer/);
   assert.match((await s.call("accept", { task: "T1", offer, version })).error, /names C2, not C1/);
   assert.equal(await s.call("accept", { task: "T1", offer, version }, as), "T1 accepted · chief C2");

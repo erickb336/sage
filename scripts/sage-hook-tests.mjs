@@ -7342,7 +7342,7 @@ test("T482 F2, T483: the sage's review or QA verdict needs a helper's kept repor
   const chief = (kind, run) => denied(s.send(bash(`node ${TOOL} verdict T1 --kind ${kind} --sha ${s.head()} --cycle 1 --pr 5${run ? ` --run ${run}` : ""} --project ${realpathSync(s.dir)}`, s.dir)));
   const findings = helpedRun(s, "code-reviewer", report("FINDINGS", "- K1 medium src/a.js:1 an empty name saves a row"));
   const early = / The state tool refuses this verdict too \(T483\)\.$/;
-  assert.match(chief("review-clean", findings) ?? "", new RegExp(`^sage: ${findings}'s report has 1 medium or high finding \\(RESULT FINDINGS with medium findings\\), and T1 holds 0 of ${findings} at that severity or above: so it backs findings\\.`), "a relay of CLEAN is refused");
+  assert.match(chief("review-clean", findings) ?? "", new RegExp(`^sage: ${findings}'s report has 1 medium or high finding \\(RESULT FINDINGS with medium findings\\), and T1 holds none of ${findings}, but each one needs a row at its severity or above: so it backs findings\\.`), "a relay of CLEAN is refused");
   assert.match(chief("review-clean") ?? "", /^sage: review-clean is a review or QA verdict, so it names the run whose kept report backs it/, "a verdict with no run");
   assert.match(chief("qa-pass", "R9") ?? "", /^sage: R9 is not a run in this logbook/, "a run that is not in the logbook");
   const silent = leadAdd(s, "qa");
