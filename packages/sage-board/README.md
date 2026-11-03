@@ -1,14 +1,18 @@
 # Sage board service
 
-The Sage board shows recorded tasks from explicit Claude and Codex logbook roots. It reads them without changing them.
+The Sage board shows recorded tasks from explicit Claude and Codex logbook roots, and from the shared root that both providers use for a shared project. It reads them without changing them.
 
 The service runs independently of a chat session. On the Mac itself, browser pages need no sign-in. Through a private HTTPS tunnel, they need one password that you set once in a terminal. Until you set it, access from outside the Mac is off. The board has no random secret. Chat and offline views use the same task model.
 
 ## Start locally
 
-Use Node.js 20 or later. In Claude, the board phrase does this for you: the chief runs `board --ensure`, which sets the board up when `~/.config/sage-board/board.json` is missing, starts the server in the background when nothing answers on its port, and prints the address or why the server is not running. The server log goes to `board.log` next to the config. The server writes its pid to `board.pid` there once it listens, and removes the file when it stops. Without `--config`, every board command uses that file; without `--sources`, setup uses the standard roots: `$SAGE_HOME` when it is set, or else `$CLAUDE_CONFIG_DIR/sage` or `~/.claude/sage`, and `$CODEX_HOME/sage` or `~/.codex/sage`. A root that does not exist shows as "not set up yet" until it appears.
+Use Node.js 20 or later. In Claude, the board phrase does this for you: the chief runs `board --ensure`, which sets the board up when `~/.config/sage-board/board.json` is missing, starts the server in the background when nothing answers on its port, and prints the address or why the server is not running. The server log goes to `board.log` next to the config. The server writes its pid to `board.pid` there once it listens, and removes the file when it stops. Without `--config`, every board command uses that file; without `--sources`, setup uses the standard roots: `$SAGE_HOME` when it is set, or else `$CLAUDE_CONFIG_DIR/sage` or `~/.claude/sage`, and `$CODEX_HOME/sage` or `~/.codex/sage`, then the shared root: `$SAGE_SHARED_HOME`, `$SAGE_HOME/shared` or `~/.sage`. A root that does not exist shows as "not set up yet" until it appears. The shared root is the exception: until a project is shared, it is not there, and the board says nothing about it.
 
-Each server sends a non-secret id of its config on the Mac, so `board --ensure` tells this config's board from an older board server or a board of another config on the same port, and says which. A server reads its config once, when it starts. After you change the config or the password, or update sage, `board --ensure` says that a restart is needed. To restart, run:
+A config from before the shared root names only the Claude and Codex roots. The server and each board command add the shared root when they read, when no source of the config names its path, so a shared project shows without a new config. They do not change the config file.
+
+The board reads a logbook again when it changed during the read: at most 3 times, each with its own share of the read limit. After the third change, the server keeps its last good read under the note "The logbook is changing", which is not a diagnostic, so the page is not stale. It reads again soon, and the next read with no change removes the note.
+
+Each server sends a non-secret id of its config on the Mac, so `board --ensure` tells this config's board from an older board server or a board of another config on the same port, and says which. A server reads its config once, when it starts. After you change the config or the password, or update sage, `board --ensure` says that a restart is needed. A server keeps the code that it started with: after you update sage to the version that shows shared projects, stop the board with the command below, then ask for the board again. To restart, run:
 
 ```sh
 node <path to board/cli.mjs> board --stop

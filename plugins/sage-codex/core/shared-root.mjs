@@ -29,6 +29,35 @@ const TABLE_MAX = 1024 * 1024;
  */
 export const sharedRoot = (env = process.env, fixed) => resolve(fixed || env.SAGE_SHARED_HOME || (env.SAGE_HOME ? join(env.SAGE_HOME, "shared") : join(env.HOME || homedir(), ".sage")));
 
+/** The column names of bindings.tsv, and the check of one of its rows: the state tool and the board read the table with them. */
+export const BINDING_COLUMNS = BINDINGS;
+export const bindingRow = (r) => isAbsolute(r.root) && FOLDER.test(r.folder) && COMMITS.test(r.commits);
+
+/** Is something at the path? A folder on the way that is no folder holds nothing: the later read names it, as before this root. */
+const present = (path) => {
+  try {
+    return !!lstatSync(path, { throwIfNoEntry: false });
+  } catch (e) {
+    if (["ENOTDIR", "ELOOP"].includes(e.code)) return false;
+    throw e;
+  }
+};
+/** Is a row's checkout gone from the disk? A path that cannot be read may still be there, so it counts as live. */
+const gone = ({ root }) => {
+  try {
+    return !present(root);
+  } catch {
+    return false;
+  }
+};
+/**
+ * The row that a logbook belongs to: its oldest live row with first commits, or its oldest gone row when none is live.
+ * A later row with none of them is the foreign one, so the owner keeps working. A row of a checkout that left stays
+ * and does no harm: it can refuse a newcomer, but never the only live checkout. The board names a shared logbook's
+ * checkout by this row too.
+ */
+export const ownerOf = (rows, folder) => rows.filter((r) => r.folder === folder && r.commits).sort((a, b) => gone(a) - gone(b) || a.at.localeCompare(b.at))[0];
+
 export function createSharedRoot({ Refusal, refuse, listed, legacyRoots, makeLogbook, enroll, now, projectRoot, provider, raiseCounts, readRegular, rowsOf, sageRoot, sheetText, slug, swap, visible, withLock }) {
   const realOf = (path) => {
     try { return realpathSync.native(path); } catch { return path; }
@@ -42,15 +71,6 @@ export function createSharedRoot({ Refusal, refuse, listed, legacyRoots, makeLog
   const folderOf = (checkout) => `${slug(basename(checkout))}-${createHash("sha1").update(checkout).digest("hex").slice(0, 6)}`;
   /** Every root that may hold this project's legacy logbook: this tool's own, then what the adapter names. */
   const roots = (env) => [...new Set([sageRoot(env), ...legacyRoots(env)].map((root) => resolve(root)))];
-  /** Is something at the path? A folder on the way that is no folder holds nothing: the later read names it, as before this root. */
-  const present = (path) => {
-    try {
-      return !!lstatSync(path, { throwIfNoEntry: false });
-    } catch (e) {
-      if (["ENOTDIR", "ELOOP"].includes(e.code)) return false;
-      throw e;
-    }
-  };
   /**
    * What the resolver sees in a provider root that it may not read: nothing. A project with a row never looks there, and
    * a project with no row keeps today's result, because today's commands never read the other root. Only the link stays
@@ -86,7 +106,7 @@ export function createSharedRoot({ Refusal, refuse, listed, legacyRoots, makeLog
 
   /** bindings.tsv: root is the key, so a path on two rows is a damaged table. A table that sage made and that is gone refuses. */
   function bindings(shared) {
-    const rows = table(shared, "bindings", BINDINGS, (r) => isAbsolute(r.root) && FOLDER.test(r.folder) && COMMITS.test(r.commits));
+    const rows = table(shared, "bindings", BINDINGS, bindingRow);
     const file = join(shared, "bindings.tsv"), made = join(shared, "bindings.made");
     if (!rows.length && !present(file) && present(made)) refuse(`${file} is missing, but sage made it before (${made}), so sage cannot tell which logbook a project uses. Nothing changed. Ask the user to restore it from a copy. If no project uses the shared root, the user removes ${made}.`);
     const seenRoots = new Set();
@@ -105,20 +125,6 @@ export function createSharedRoot({ Refusal, refuse, listed, legacyRoots, makeLog
 
   const disjoint = (a, b) => !!a && !!b && !a.split(",").some((commit) => b.split(",").includes(commit));
   const shares = (a, b) => !!a && !!b && !disjoint(a, b);
-  /** Is a row's checkout gone from the disk? A path that cannot be read may still be there, so it counts as live. */
-  const gone = ({ root }) => {
-    try {
-      return !present(root);
-    } catch {
-      return false;
-    }
-  };
-  /**
-   * The row that a logbook belongs to: its oldest live row with first commits, or its oldest gone row when none is live.
-   * A later row with none of them is the foreign one, so the owner keeps working. A row of a checkout that left stays
-   * and does no harm: it can refuse a newcomer, but never the only live checkout.
-   */
-  const ownerOf = (rows, folder) => rows.filter((r) => r.folder === folder && r.commits).sort((a, b) => gone(a) - gone(b) || a.at.localeCompare(b.at))[0];
   const offer = (checkout) => `Nothing changed. Ask the user, then run sage link --to <folder> or sage link --separate, in ${visible(checkout)}.`;
   /** The logbook of a row. A row that names a missing folder, or a folder that another project owns, refuses and offers the link. */
   function boundFolder(shared, rows, row) {

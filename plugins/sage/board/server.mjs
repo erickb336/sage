@@ -100,7 +100,7 @@ const OFF = "Access from outside this Mac is off until the owner sets a board pa
  * a response on the Mac carries the X-Sage-Board header: the id, this process's pid and the time the listener started,
  * so the board command can tell which board answers on the port.
  */
-export function createBoardServer({ sources, password, port = 43123, allowedHosts = [], id, clock = () => new Date().toISOString(), settleReads = SETTLE_READS } = {}) {
+export function createBoardServer({ sources, password, port = 43123, allowedHosts = [], id, clock = () => new Date().toISOString(), settleReads = SETTLE_READS, duringRead = null } = {}) {
   if (!Number.isSafeInteger(port) || port < 1024 || port > 65535) throw new TypeError("board port must be an integer from 1024 through 65535");
   if (typeof clock !== "function") throw new TypeError("the board clock must be a function that gives an ISO time");
   if (password !== undefined && !validPasswordRecord(password)) throw new TypeError("the board password must be a record from hashPassword");
@@ -289,11 +289,12 @@ export function createBoardServer({ sources, password, port = 43123, allowedHost
     try {
       reconcileWatchers();
       // A root that does not exist is not set up yet (an owner may use only one provider): a quiet note, not a failure.
-      const read = readBoardSources(configured), notSetUp = [];
+      // The shared root is optional (T306): until a project is shared, it is not there, and the board says nothing about it.
+      const read = readBoardSources(configured, { duringRead }), notSetUp = [];
       for (const [index, source] of read.entries()) {
         if (lstatSync(configured[index].path, { throwIfNoEntry: false })) continue;
         source.diagnostics = source.diagnostics.filter(message => message !== "ENOENT");
-        notSetUp.push(source.label);
+        if (!source.shared) notSetUp.push(source.label);
       }
       next = { ...buildBoardModel(read, { now: clock(), landing }), notSetUp };
       next.diagnostics = [...next.diagnostics, ...watchErrors.values()];
@@ -302,8 +303,13 @@ export function createBoardServer({ sources, password, port = 43123, allowedHost
       const pages = [() => renderBoardHtml(next, { snapshot: false, live: true }), () => renderAgentsHtml(next, { live: true }), () => renderProgramsHtml(next, { live: true })];
       if (pages.some(render => Buffer.byteLength(render()) > MAX_HTML)) throw new RangeError("board rendering exceeds the size limit");
     } catch { next = { ...buildBoardModel([], { now: clock() }), diagnostics: unavailable }; }
-    if (!next.diagnostics.length) { lastGood = next; model = { ...next, stale: false }; }
-    else model = { ...(lastGood ?? next), stale: true, diagnostics: next.diagnostics, notSetUp: next.notSetUp };
+    // A logbook that kept changing through 3 reads (T306, C8) is no diagnostic: the board keeps its last good read under
+    // the note, not stale, and reads again soon; the next read with no change removes the note.
+    const changing = next.changing ?? [];
+    if (changing.length && !model?.changing?.length) settle();
+    if (!next.diagnostics.length && !changing.length) { lastGood = next; model = { ...next, stale: false }; }
+    else if (!next.diagnostics.length) model = lastGood ? { ...lastGood, stale: false, changing: changing.map(item => ({ ...item, at: lastGood.at })) } : { ...next, stale: false };
+    else model = { ...(lastGood ?? next), stale: true, diagnostics: next.diagnostics, notSetUp: next.notSetUp, changing };
     revision++;
     for (const client of clients) publish(client);
     // A clock boundary changes the seven-day column; this never polls files on an interval.

@@ -8,7 +8,7 @@ import { request } from "node:http";
 import { homedir } from "node:os";
 import { dirname, isAbsolute, join, relative, resolve, sep } from "node:path";
 import { fileURLToPath } from "node:url";
-import { boardView } from "../sage-core/index.mjs";
+import { boardView, sharedRoot } from "../sage-core/index.mjs";
 import { installBoard, stableNodePath, writeLoginFile } from "./install.mjs";
 import { createBoardServer, hashPassword, validPasswordRecord } from "./server.mjs";
 
@@ -81,10 +81,17 @@ const existingConfig = path => `the board config ${path} exists, and setup does 
  * set, is the one root of every provider. A missing root stays listed: the server attaches when it appears. The board
  * reads every provider's logbook, so it names their settings, as a cross-provider reader may (AGENTS.md).
  */
-export const standardSources = (env = process.env) => env.SAGE_HOME ? [{ id: "sage", label: "Sage", path: resolve(env.SAGE_HOME) }] : [
+export const standardSources = (env = process.env) => [...(env.SAGE_HOME ? [{ id: "sage", label: "Sage", path: resolve(env.SAGE_HOME) }] : [
   { id: "claude", label: "Claude", provider: "claude", path: resolve(env.CLAUDE_CONFIG_DIR ?? join(env.HOME ?? homedir(), ".claude"), "sage") },
   { id: "codex", label: "Codex", provider: "codex", path: resolve(env.CODEX_HOME ?? join(env.HOME ?? homedir(), ".codex"), "sage") },
-];
+]), SHARED_SOURCE(env)];
+/** The shared root (T306) as a board source, by core's one rule (sharedRoot). */
+const SHARED_SOURCE = env => ({ id: "shared", label: "Shared", path: sharedRoot(env) });
+/**
+ * The sources that the board reads (T306, C2): the configured ones, and the shared root when no source names it. So a
+ * config from before the shared root shows a shared project too. The config file stays as it is.
+ */
+export const readSources = (sources, env = process.env) => sources.some(source => source.id === "shared" || resolve(source.path) === sharedRoot(env)) ? sources : [...sources, SHARED_SOURCE(env)];
 export const defaultConfigPath = (env = process.env) => join(env.HOME ?? homedir(), ".config", "sage-board", "board.json");
 
 /**
@@ -287,7 +294,7 @@ export async function runBoardCli(argv, { output = line => process.stdout.write(
   if (options.serve) {
     if (value !== "all" || options.out || options.project) throw new TypeError("server uses all configured sources; no output or project option");
     // The server writes board.pid only once it listens, and removes it when it stops, so a pid there is a running board.
-    const configPath = boundedPath(options.config), server = createBoardServer({ ...config, id: configId(configPath) });
+    const configPath = boundedPath(options.config), server = createBoardServer({ ...config, sources: readSources(config.sources, env), id: configId(configPath) });
     await server.start();
     // No listener stays without board.pid: then no command could tell its process (F-T216-12).
     try { writePid(configPath, process.pid); } catch (error) { await server.close(); throw error; }
@@ -297,10 +304,11 @@ export async function runBoardCli(argv, { output = line => process.stdout.write(
   const taskId = /^T[1-9]\d*$/.test(value) ? value : null;
   if (options.scope && !taskId) throw new TypeError("--scope selects the exact project of a task lookup");
   const format = options.html ? "html" : options.status ? "status" : taskId ? "task" : "chat";
-  const body = boardView({ sources: config.sources, scope: taskId ? options.scope ?? "this" : value, project: options.project ?? process.cwd(), taskId, format });
+  const sources = readSources(config.sources, env);
+  const body = boardView({ sources, scope: taskId ? options.scope ?? "this" : value, project: options.project ?? process.cwd(), providerRoots: standardSources(env).filter(source => source.id !== "shared").map(source => source.path), taskId, format });
   if (options.html) {
     const file = boundedPath(options.out ?? (config.pagesDir ? resolve(config.pagesDir, `board-${Date.now()}-${randomBytes(6).toString("hex")}.html`) : ""));
-    if (!file.endsWith(".html") || !outsideRoots(file, config.sources)) throw new TypeError("HTML output must be an .html artifact outside logbook roots");
+    if (!file.endsWith(".html") || !outsideRoots(file, sources)) throw new TypeError("HTML output must be an .html artifact outside logbook roots");
     noLinkedParents(file);
     mkdirSync(dirname(file), { recursive: true, mode: 0o700 });
     writeFileSync(file, body, { flag: "wx", mode: 0o600 }); output(file);

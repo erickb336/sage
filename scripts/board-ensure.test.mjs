@@ -48,6 +48,7 @@ function scratch(t) {
   const env = { ...process.env, HOME: join(dir, "home") };
   delete env.CODEX_HOME;
   delete env.SAGE_HOME;
+  delete env.SAGE_SHARED_HOME; // the shared root is then <scratch home>/.sage
   return { dir, env, config: join(dir, "home", ".config", "sage-board", "board.json") };
 }
 
@@ -86,7 +87,7 @@ const get = (port) => new Promise((done) => {
 /** Close every owned server attempt and await actual exit before removing its files. */
 async function stop(dir, _port) { await closeHome(join(dir, "home")); }
 
-test("T216: setup without --sources lists the standard Claude and Codex roots of the current user, also when they are missing", async (t) => {
+test("T216: setup without --sources lists the standard Claude and Codex roots and the shared root of the current user, also when they are missing", async (t) => {
   const { dir, env, config } = scratch(t);
   const made = await board(CLI, ["--setup"], env);
   assert.equal(made.status, 0, made.stderr);
@@ -95,6 +96,7 @@ test("T216: setup without --sources lists the standard Claude and Codex roots of
   assert.deepEqual(written.sources, [
     { id: "claude", label: "Claude", provider: "claude", path: join(dir, "home", ".claude", "sage") },
     { id: "codex", label: "Codex", provider: "codex", path: join(dir, "home", ".codex", "sage") },
+    { id: "shared", label: "Shared", path: join(dir, "home", ".sage") },
   ]);
   assert.equal(written.port, 43123);
   assert.equal(written.secret, undefined, "T229: setup writes no random secret");
@@ -104,11 +106,11 @@ test("T216: setup without --sources lists the standard Claude and Codex roots of
   const moved = { ...env, CLAUDE_CONFIG_DIR: join(dir, "claude-config"), CODEX_HOME: join(dir, "codex-home") };
   const other = join(dir, "other", "board.json");
   assert.equal((await board(CLI, ["--setup", "--config", other], moved)).status, 0);
-  assert.deepEqual(JSON.parse(readFileSync(other, "utf8")).sources.map((source) => source.path), [join(dir, "claude-config", "sage"), join(dir, "codex-home", "sage")]);
+  assert.deepEqual(JSON.parse(readFileSync(other, "utf8")).sources.map((source) => source.path), [join(dir, "claude-config", "sage"), join(dir, "codex-home", "sage"), join(dir, "home", ".sage")]);
   // F-T216-4: SAGE_HOME is the one root of every provider's state tool, so it is the one standard root too.
   const shared = join(dir, "shared", "board.json");
   assert.equal((await board(CLI, ["--setup", "--config", shared], { ...moved, SAGE_HOME: join(dir, "sage-home") })).status, 0);
-  assert.deepEqual(JSON.parse(readFileSync(shared, "utf8")).sources, [{ id: "sage", label: "Sage", path: join(dir, "sage-home") }]);
+  assert.deepEqual(JSON.parse(readFileSync(shared, "utf8")).sources, [{ id: "sage", label: "Sage", path: join(dir, "sage-home") }, { id: "shared", label: "Shared", path: join(dir, "sage-home", "shared") }]);
   // --sources still works, and a second setup never replaces a config.
   const explicit = join(dir, "explicit", "board.json");
   assert.equal((await board(CLI, ["--setup", "--config", explicit, "--sources", JSON.stringify([{ id: "one", path: join(dir, "one") }])], env)).status, 0);
@@ -128,7 +130,7 @@ test("T216: ensure sets the board up, starts one detached server, and leaves a r
     assert.equal(first.stdout, `Sage board started: http://127.0.0.1:${port}/ · no sign-in needed on this Mac. Phone access is off: no allowedHosts in ${config}. To turn it on, add the host name of your private HTTPS tunnel to allowedHosts in that file.\n`);
     const { secret, password, sources } = JSON.parse(readFileSync(config, "utf8"));
     assert.deepEqual([secret, password], [undefined, undefined], "T229: ensure writes no random secret");
-    assert.deepEqual(sources.map((source) => source.id), ["claude", "codex"]);
+    assert.deepEqual(sources.map((source) => source.id), ["claude", "codex", "shared"]);
     const page = await get(port);
     assert.equal(page.status, 200);
     assert.match(page.body, /<html/);
