@@ -7,7 +7,8 @@
 // everything else refuses. The branch and the
 // reviewed head come only from the logbook, which only the chief writes: the branch from tasks.tsv, the head from the
 // task's latest ledger row. The project must be the logbook's own checkout (checkout.txt), outside the worktree root,
-// and its origin a GitHub repository. git runs only in the script's own mirror (<logbook>/mirror.git), with sage's
+// and its origin a GitHub repository. In a shared logbook the origin is the one of the checkout of the branch's writer
+// run (another clone, maybe), and it must be the logbook's repository (T634). git runs only in the script's own mirror (<logbook>/mirror.git), with sage's
 // neutral options, and gh only in an empty folder; both through execFile with argument arrays, never a shell. The whole
 // run holds the logbook's lock, so two calls on one project never share the mirror. The script writes, reads and
 // runs nothing in a folder that an agent can write (its worktree, the temp folder), except that it reads the bundle once
@@ -22,7 +23,7 @@ import { execFileSync } from "node:child_process";
 import { closeSync, constants, existsSync, fstatSync, lstatSync, mkdirSync, mkdtempSync, openSync, readFileSync, readSync, readdirSync, realpathSync, renameSync, rmSync, writeFileSync, writeSync } from "node:fs";
 import { basename, dirname, join, resolve, sep } from "node:path";
 import { fileURLToPath } from "node:url";
-import { PR, branchOfTask, landingBar, locate, mergeCheck, projectRoot, read, sage, withLock, worktreeRoot } from "./sage.mjs";
+import { PR, branchHome, branchOfTask, landingBar, locate, mergeCheck, projectRoot, read, sage, withLock, worktreeRoot } from "./sage.mjs";
 
 const BASE = "main";
 /**
@@ -122,13 +123,25 @@ export function parse(argv) {
   return { verb, task };
 }
 
+/** The origin of a checkout and its GitHub owner/name. No origin, or one that is not a GitHub repository, refuses. */
+function originOf(root, env) {
+  let url;
+  try {
+    url = run(["-C", root, "config", "--get", "remote.origin.url"], env);
+  } catch {
+    no(`the project ${root} has no origin remote: git -C ${root} remote add origin <address>`);
+  }
+  if (!url || url.startsWith("-")) no(`the origin of ${root} is not a repository address: git -C ${root} remote set-url origin <address>`);
+  return { url, repo: repoOf(url) ?? no(`the origin of ${root} is not a GitHub repository, and sage-pr pushes only to GitHub: git -C ${root} remote set-url origin https://github.com/<owner>/<name>.git`) };
+}
+
 /** The task's records, from the logbook only: its branch and, for create and merge, its reviewed head; and where to push. */
 export function record(task, verb, env = process.env) {
   const project = resolve(env.SAGE_PROJECT ?? process.cwd());
   const root = projectRoot(project);
   const trees = real(worktreeRoot(env));
   if (`${real(root)}${sep}`.startsWith(`${trees}${sep}`)) no(`the project ${project} is in the worktree root ${trees}, where agents write: run sage-pr from the project's main checkout, or set SAGE_PROJECT=<that folder>`);
-  const { dir, shared } = locate(project, env);
+  const { dir, shared, owner } = locate(project, env);
   if (!existsSync(join(dir, "tasks.tsv"))) no(`no logbook for the project ${project}: run sage-pr from the project's main checkout, or set SAGE_PROJECT=<that folder>`);
   // The logbook's key is short, so another folder can have the same one: a legacy logbook must name this folder as its
   // checkout. A shared logbook has a row for this checkout instead.
@@ -148,14 +161,23 @@ export function record(task, verb, env = process.env) {
     head = read(dir, "ledger").filter((r) => r.task === task && r.sha).at(-1)?.sha ?? no(`${task} has no verdict with a SHA, so it has no reviewed head: record the route's verdicts on the reviewed head (sage verdict ${task} --sha <sha> --kind <kind>)`);
     if (!/^[0-9a-f]{40}$/.test(head)) no(`the reviewed head of ${task} is not a full SHA: ${JSON.stringify(head)}. Record the verdict with the full SHA: sage verdict ${task} --sha <40-character sha> --kind <kind>`);
   }
-  let url;
-  try {
-    url = run(["-C", root, "config", "--get", "remote.origin.url"], env);
-  } catch {
-    no(`the project ${project} has no origin remote: git -C ${project} remote add origin <address>`);
+  // A shared logbook's branch lives in the checkout of its newest writer run, which can be another clone than this one (T634).
+  let home = root;
+  if (shared) {
+    try {
+      home = projectRoot(branchHome(project, branch, env));
+    } catch (e) {
+      if (e.goneRun) no(`${e.message} Nothing was pushed.`);
+      throw e;
+    }
+    if (`${real(home)}${sep}`.startsWith(`${trees}${sep}`)) no(`the checkout ${home} of ${branch} is in the worktree root ${trees}, where agents write. Nothing was pushed: ask the user`);
   }
-  if (!url || url.startsWith("-")) no(`the origin of ${project} is not a repository address: git -C ${project} remote set-url origin <address>`);
-  const repo = repoOf(url) ?? no(`the origin of ${project} is not a GitHub repository, and sage-pr pushes only to GitHub: git -C ${root} remote set-url origin https://github.com/<owner>/<name>.git`);
+  const { url, repo } = originOf(home, env);
+  // One repository for each logbook: the origin of the logbook's owner row (as the board reads it).
+  if (shared && owner && real(owner) !== real(home)) {
+    const theirs = originOf(owner, env).repo;
+    if (theirs.toLowerCase() !== repo.toLowerCase()) no(`${branch} is in ${home}, whose origin is ${repo}, but the logbook's repository is ${theirs} (the origin of ${owner}). One logbook has one repository, so nothing was pushed: ask the user`);
+  }
   if (env.SAGE_REPO !== undefined && env.SAGE_REPO.toLowerCase() !== repo.toLowerCase()) no(`SAGE_REPO is not the origin's repository ${repo}, so gh and git would act on two repositories. Unset SAGE_REPO, or set it to ${repo}`);
   return { project, dir, t, branch, head, url, repo };
 }

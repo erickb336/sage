@@ -151,7 +151,8 @@ export function createSharedRoot({ Refusal, refuse, listed, legacyRoots, makeLog
   function locate(project, env = process.env) {
     const checkout = projectRoot(resolve(project)), shared = rootOf(env), rows = bindings(shared);
     const row = rows.find((r) => r.root === realOf(checkout));
-    if (row) return { dir: boundFolder(shared, rows, row), row, checkout, shared: true };
+    // owner: the checkout of the logbook's owner row (ownerOf), whose origin is the logbook's repository (sage-pr, T634).
+    if (row) return { dir: boundFolder(shared, rows, row), row, get owner() { return ownerOf(rows, row.folder)?.root; }, checkout, shared: true };
     const folder = folderOf(checkout), all = roots(env);
     const moved = all.map((root) => join(root, folder, "moved.json")).find(seen);
     if (moved) refuse(`this project's logbook moved to the shared root, but the move did not finish (${moved}). Nothing changed. Run the move again.`);

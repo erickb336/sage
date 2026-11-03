@@ -1149,3 +1149,39 @@ test("T625: a writer run's checkout that is no bindings.tsv row of this logbook 
   assert.equal(codex.captureReviewTarget({ project: w.b, task: "T1", run: "R2", role: "code-reviewer", cycle: 1 }, env).sha, w.tip);
   assert.match(readFileSync(calls, "utf8"), new RegExp(`"-C","${w.a}","rev-parse"`));
 });
+
+test("T634: the Claude hook reads a review's branch tip in the checkout of the writer run from another clone, and none when that checkout is gone", (t) => {
+  const w = hookWorld(t), a = realpathSync(w.project), b = join(w.base, "clone-b"), branch = "sage/t1-a";
+  const sage = (...args) => claude.sage(args, w.env);
+  sage("link", "--separate", "--project", a);
+  git("clone", "-q", a, b);
+  sage("link", "--to", basename(claude.storeDir(a, w.env)), "--project", b);
+  w.send({ hook_event_name: "UserPromptSubmit", prompt: "sage mode", cwd: b });
+  const chief = claude.chiefFor(b, "s1", w.env), inB = (...args) => sage(...args, "--project", b, "--chief", chief);
+  inB("task", "add", "--title", "a", ...ADD);
+  inB("task", "T1", "set", "state=briefed");
+  inB("task", "T1", "set", "state=building", `branch=${branch}`);
+  const tip = git("-C", a, "commit-tree", "HEAD^{tree}", "-p", "HEAD", "-m", "the implementer's work");
+  git("-C", a, "update-ref", `refs/heads/${branch}`, tip);
+  git("-C", b, "branch", branch);
+  sage("run", "add", "T1", "--role", "implementer", "--branch", branch, "--project", a, "--chief", chief);
+  inB("run", "add", "T1", "--role", "code-reviewer", "--branch", branch);
+  inB("run", "add", "T1", "--role", "code-reviewer", "--branch", branch);
+  // The main session starts each review in B; its stop keeps the report with the tip that the hook read at the start, when the branch did not move.
+  const start = (run) => {
+    const brief = { subagent_type: "sage:code-reviewer", description: "review", prompt: `Run ${run} · task T1 (review)\nGOAL a\nSCOPE b\nCONTEXT c\nDECISIONS d\nACCEPTANCE e\nVERIFY f\nBUDGET 1 hour of agent time\nFORBIDDEN g\nREPORT h\nSTANDING i`, run_in_background: true };
+    assert.equal(w.denied(w.send({ hook_event_name: "PreToolUse", tool_name: "Agent", tool_input: brief, tool_use_id: `start-${run}`, cwd: b })), undefined);
+    w.send({ hook_event_name: "PostToolUse", tool_name: "Agent", tool_use_id: `start-${run}`, tool_response: { status: "async_launched", agentId: `agent-${run}` }, cwd: b });
+    w.send({ hook_event_name: "SubagentStart", agent_id: `agent-${run}`, agent_type: "sage:code-reviewer", cwd: b });
+  };
+  const text = `STATUS done\nRESULT CLEAN\nEVIDENCE e\nFINDINGS none\nQUESTIONS none\nNOT VERIFIED n\nBRANCH ${branch} head ${tip}`;
+  const stop = (run) => {
+    w.send({ hook_event_name: "SubagentStop", agent_id: `agent-${run}`, agent_type: "sage:code-reviewer", last_assistant_message: text, stop_hook_active: false, cwd: b });
+    return JSON.parse(readFileSync(join(claude.storeDir(b, w.env), "kept", `${run}.json`), "utf8")).sha;
+  };
+  start("R2");
+  start("R3");
+  assert.equal(stop("R2"), tip, "A's tip, not B's own branch");
+  rmSync(a, { recursive: true, force: true });
+  assert.equal(stop("R3"), "", "a gone checkout gives no tip");
+});
