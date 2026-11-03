@@ -242,6 +242,7 @@ test('T593 a stuck change with a damaged decisions table: the repair refuses wit
   writeFileSync(decisions, '');
   const saved = snapshot(one.dir);
   assert.throws(() => one.run(claude, ...REPAIR), /The repair records its decision first, and decisions\.tsv fails the logbook check: .* Nothing changed\. If the owner accepts the loss of those rows too, run: sage logbook repair --accept-change-loss yes --accept-loss decisions --project <the project>\.$/);
+  assert.throws(() => one.run(claude, ...REPAIR), (e) => e.message.split('sage logbook repair').length === 2, 'K1: the refusal prints one repair line, the one that takes both');
   assert.deepEqual(snapshot(one.dir), saved);
   assert.throws(() => one.run(claude, 'logbook', 'repair', '--accept-loss', 'decisions'), { message: STUCK });
   const out = one.run(claude, ...REPAIR, '--accept-loss', 'decisions');

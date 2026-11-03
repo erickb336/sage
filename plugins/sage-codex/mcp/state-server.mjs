@@ -108,11 +108,11 @@ export const TOOLS = {
     input: { task, to: chief }, pos: ["task"], argv: (i) => ["offer", i.task],
   },
   cancel: {
-    describe: "Cancel your open offer of a task. A cancelled offer never becomes valid again.",
+    describe: "Cancel your open offer of a task, or decline an offer that another chief made to you; the task keeps its owning chief. A cancelled offer never becomes valid again.",
     input: { task, offer: offerId }, pos: ["task"], argv: (i) => ["cancel", i.task],
   },
   accept: {
-    describe: "Take a task that another chief offered to you. No run of the task may be active. The task line gives the offer's id and the version.",
+    describe: "Take a task that another chief offered to you. No run of the task may be active. sage_read_task gives the offer's id (in the task's offer cell) and the version; so does the line that the offer printed.",
     input: { task, offer: offerId, version }, pos: ["task"], argv: (i) => ["accept", i.task],
   },
   release: {

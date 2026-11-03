@@ -460,7 +460,8 @@ export function handle(input, state, slots) {
     }
     let answer;
     for (const command of commands) {
-      const result = gitGate(event, command, state, cwd, main, tool, describedOnly(ti, command), input.session_id);
+      // null, not undefined: an event with no session id still gets the owner rule of a shared logbook, and fails closed there (F-T618-27).
+      const result = gitGate(event, command, state, cwd, main, tool, describedOnly(ti, command), input.session_id ?? null);
       if (result?.hookSpecificOutput?.permissionDecision === "deny") return result;
       answer ??= result;
     }

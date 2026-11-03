@@ -83,7 +83,7 @@ test("T483: a FINDINGS report never backs review-clean, in every form in which t
   for (const [form, [args, at]] of Object.entries(forms)) {
     const r = s.cli(args, at);
     assert.equal(r.status, 1, `${form}: the state tool must refuse, printed: ${r.stdout}`);
-    assert.match(r.stderr, new RegExp(`^sage: ${run}'s report has 1 medium or high finding \\(RESULT FINDINGS with medium findings\\), and T1 holds 0 of ${run} at that severity or above: so it backs findings\\. For review-clean, record each one first`), form);
+    assert.match(r.stderr, new RegExp(`^sage: ${run}'s report has 1 medium or high finding \\(RESULT FINDINGS with medium findings\\), and T1 holds none of ${run}, but each one needs a row at its severity or above: so it backs findings\\. For review-clean, record each one first \\(sage finding add T1 --source code-reviewer --run ${run} --key ${run}-<its key> `), form);
     assert.equal(s.ledger(), before, `${form}: nothing is recorded`);
   }
 });

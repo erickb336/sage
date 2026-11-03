@@ -15,9 +15,10 @@ const READ = { kind: "read" }, ANY = { kind: "any" }, NEW = { kind: "new" }, OWN
 const onTask = (task) => ({ kind: "task", task });
 /**
  * What a command writes, from its words: the design's table of writer classes, in one place.
- *   read: no guard. owner: the owner's own act, so no chief: a gate answer, which a hook checks, and a logbook repair,
- *   which the owner may run in a terminal with no hook. any: any chief. new: a chief that gets the task.
- *   task: the owning chief of task, or of the task of run. program: the owning chief of each task that it names.
+ *   read: no guard. owner: the owner's own act, so no chief: a gate answer, which a hook checks, and a logbook repair or
+ *   projects rebuild, which the owner may run in a terminal with no hook. any: any chief. new: a chief that gets the task.
+ *   task: the owning chief of task, or of the task of run; with recipient, also the chief that the task's open offer
+ *   names, so that it can decline the offer. program: the owning chief of each task that it names.
  * A task on an any class is only the place of a lead: such a command changes no task. link is a read here, because a
  * checkout has no chief until it has a row.
  */
@@ -25,7 +26,8 @@ export function writerClass(cmd, [sub, id] = []) {
   switch (cmd) {
     case "task": return sub === "add" ? NEW : id === "set" ? onTask(sub) : READ;
     case "claim": case "accept": return NEW;
-    case "offer": case "cancel": case "release": return onTask(sub);
+    case "offer": case "release": return onTask(sub);
+    case "cancel": return { ...onTask(sub), recipient: true };
     case "task-adopt": case "round": case "verdict": return onTask(sub);
     case "finding": return onTask(id);
     case "program": return { kind: "program" };
@@ -36,8 +38,9 @@ export function writerClass(cmd, [sub, id] = []) {
     case "pages": return id === "record" ? { ...ANY, task: sub } : READ;
     case "standing": return sub === "add" ? ANY : READ;
     case "logbook": return sub === "repair" ? OWNER : READ;
+    case "projects": return OWNER;
     case "config": return sub === undefined ? READ : ANY;
-    case "init": case "projects": return ANY;
+    case "init": return ANY;
     default: return READ;
   }
 }
