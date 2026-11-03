@@ -61,7 +61,18 @@ function runTime(run) {
 }
 const tokens = value => /^\d+$/.test(String(value)) ? Number(value) >= 1000 ? `${Math.round(Number(value) / 1000)}k` : String(value) : "—";
 // A provider's filter word: lowercase letters, digits and dashes only, so it is safe in an attribute and a selector.
-const who = task => String(task.providerStandIn ?? "").toLowerCase().replace(/[^a-z0-9-]/g, "-");
+// A task of a shared or an old logbook has its own word (T306): its owning chief's provider, the old logbook's, or none.
+const who = task => String(task.who ?? task.providerStandIn ?? "").toLowerCase().replace(/[^a-z0-9-]/g, "-");
+const PROVIDERS = ["claude", "codex"];
+/**
+ * The top line's holder (T306, F9): the logbook that holds a legacy task; the owning chief of a shared task, or Unclaimed
+ * with a dashed outline; the old logbook of a finished task that did not move.
+ */
+const holderTag = task => task.old ? `<span class="who oldtag" title="A finished task in the old ${esc(title(task.old.provider))} logbook. It did not move.">${esc(task.old.label)}</span>`
+  : !task.shared ? `<span class="who" title="The logbook that holds this task">${esc(title(task.providerStandIn))}</span>`
+  : task.owner ? `<span class="who own own-${known(PROVIDERS, task.owner.provider)}" title="The owning chief: the one chief that can change this task"><span class="vh">Owning chief: </span>${esc(task.owner.label)}</span>`
+  : `<span class="who own own-none" title="No chief owns this task: a chief claims it in the chat">Unclaimed</span>`;
+const offerLine = (task, tag = "div") => task.offer ? `<${tag} class="offerline"><span aria-hidden="true">⇄</span> ${esc(task.offer)}</${tag}>` : "";
 
 /** The page's view of the model: project colour slots (8, by sorted project key) and the source of each alternate agent colour. */
 function context(model, snapshot) {
@@ -69,7 +80,9 @@ function context(model, snapshot) {
   // The tasks and programs by key, and the tasks that wait for each task (the task page's "Waited for by"), built once.
   const waitedBy = new Map();
   for (const task of model.tasks) for (const wait of task.waits ?? []) if (wait.id) waitedBy.set(`${task.project}/${wait.id}`, [...(waitedBy.get(`${task.project}/${wait.id}`) ?? []), task]);
-  return { snapshot, slot: new Map(keys.map((key, i) => [key, `p${i % 8}`])), sources: model.sources.map(source => source.id), names: model.sources.map(source => title(source.standIn)), at: model.at,
+  // The shared root is no provider (T306): its agents take the colour of their provider's source, and the legend does not name it.
+  const providers = model.sources.filter(source => !source.shared);
+  return { snapshot, slot: new Map(keys.map((key, i) => [key, `p${i % 8}`])), sources: providers.map(source => source.id), names: providers.map(source => title(source.standIn)), at: model.at,
     tasks: new Map(model.tasks.map(task => [task.key, task])), programs: new Map((model.programs ?? []).map(program => [program.key, program])), waitedBy };
 }
 const dot = (ctx, key) => `<span class="dot ${ctx.slot.get(key) ?? "p0"}" aria-hidden="true"></span>`;
@@ -87,7 +100,7 @@ const tags = task => `${task.priority ? `<span class="tag prio" title="${task.pr
 const archivedCounts = book => `${book.tasks} task${book.tasks === 1 ? "" : "s"}${book.needsOwner ? ` · ${book.needsOwner} need${book.needsOwner === 1 ? "s" : ""} you` : ""}`;
 const archivedGroup = model => model.archived.length ? `<details class="archived" id="board-archived" data-key="archived"><summary id="sum-archived">Archived · ${model.archived.length} project${model.archived.length === 1 ? "" : "s"}</summary><ul>${model.archived.map(book => `<li>${esc(book.name)} · ${archivedCounts(book)}</li>`).join("")}</ul></details>` : "";
 const agentPill = (ctx, task, agent, focus) => agent.stale ? `<span class="agent stale"><span aria-hidden="true">${MARK.stale}</span><span class="prov">${provider(agent.provider, task, focus)} ·</span> ${esc(agent.role)} · may have stopped</span>`
-  : `<span class="agent${ctx.sources.indexOf(task.source) % 2 ? " alt" : ""}"><span class="live" aria-hidden="true"></span><span class="prov">${provider(agent.provider, task, focus)} ·</span> ${esc(agent.role)}</span>`;
+  : `<span class="agent${(task.shared ? ctx.names.indexOf(title(agent.provider)) : ctx.sources.indexOf(task.source)) % 2 === 1 ? " alt" : ""}"><span class="live" aria-hidden="true"></span><span class="prov">${provider(agent.provider, task, focus)} ·</span> ${esc(agent.role)}</span>`;
 const agents = (ctx, task, extra = "", focus = true) => task.agents.length ? `<div class="agents${extra}">${task.agents.map(agent => agentPill(ctx, task, agent, focus)).join("")}</div>` : "";
 
 /** The step line: only the route's steps, each with its mark and its word (the word is for screen readers on the line). */
@@ -119,11 +132,11 @@ function card(ctx, task, { archived = false, i = 0 } = {}) {
     : task.waitLine && !task.loop.now.needs ? waitHtml(task) : (task.column !== "backlog" ? nowNext(task) : task.loop.now.needs ? nowNext(task, false) : "") + waitHtml(task);
   return `<a class="card${task.reasons.length ? " needs" : ""}${approval ? " approval" : ""}" id="card-${b64(task.key)}" href="${esc(taskHref(ctx, task))}" data-key="${esc(task.key)}" data-project="${esc(task.group ?? task.project)}" data-provider="${esc(who(task))}" data-priority="${esc(task.priority)}" data-kind="${esc(task.kind)}" data-needs="${!!task.reasons.length}" data-agents="${task.agents.filter(agent => !agent.stale).length}" data-inferred="${task.inferredWork ? 1 : 0}" data-review="${task.column === "review" ? 1 : 0}" data-i="${i}" data-program="${task.program ? b64(task.program.key) : ""}"${archived ? " data-archived hidden" : ""}>`
     + (approval ? `<div class="band"><span aria-hidden="true">◫</span>Program approval<span class="bk">· ${esc(approval.breakdown.id)} ${esc(approval.breakdown.name)} · gate ${esc(approval.gateId)}</span></div>` : "")
-    + `<div class="top"><span class="id">${esc(task.id)}</span>·${project(ctx, task)}<span class="who" title="The logbook that holds this task">${esc(title(task.providerStandIn))}</span>${task.pr ? `<span class="pr">PR ${esc(task.pr)}</span>` : ""}</div>`
+    + `<div class="top"><span class="id">${esc(task.id)}</span>·${project(ctx, task)}${holderTag(task)}${task.pr ? `<span class="pr">PR ${esc(task.pr)}</span>` : ""}</div>`
     + `<div class="title" title="${esc(task.title)}">${esc(task.title)}</div>`
     // A backlog card shows only its steps: its Now and Next lines would say the same on every card (R1056-2). A task
     // that needs you keeps its Needs you line, with the question, on every card (F-T305-4).
-    + (done ? "" : stepLine(task) + now) + agents(ctx, task, "", false)
+    + (done ? "" : stepLine(task) + now + offerLine(task)) + agents(ctx, task, "", false)
     + (task.inferredWork ? `<div class="nextline">Inferred work on the open PR</div>` : "")
     + `<div class="tags">${tags(task)}<span class="more">Open</span></div></a>`;
 }
@@ -149,8 +162,10 @@ function runsTable(task) {
   const seconds = run => { const start = Date.parse(run.started), end = Date.parse(run.ended); return Number.isFinite(start) && Number.isFinite(end) && end >= start ? Math.round((end - start) / 1000) : null; };
   // A running run shows minutes or hours up to 24 h; after 24 h with no logbook change, it says the run may have stopped.
   const clock = run => { const value = task.runClocks?.[run.id]; return value ? `<span class="${value.stale ? "stale" : ""}">${esc(value.text)}${/^\d/.test(value.text) ? " so far" : ""}</span>` : duration(seconds(run)); };
-  const row = run => `<tr><td class="id">${esc(run.id)}</td><td>${provider(run.evidence?.data.provider, task)} · ${esc(run.role)}</td><td><span class="st-${known(RUN_STATUSES, run.status)}">${esc(run.status)}</span></td><td>${run.status === "running" ? clock(run) : duration(seconds(run))}</td><td>${tokens(run.tokens)}</td></tr>`;
-  const table = list => `<table class="runs"><thead><tr><th>Run</th><th>Agent</th><th>Status</th><th>Time</th><th>Tokens</th></tr></thead><tbody>${list.map(row).join("")}</tbody></table>`;
+  // A task of a shared logbook has a Provider column (T306, F9): each run's provider, from its chief. A legacy task keeps its columns.
+  const agent = run => task.shared ? `<td>${run.provider ? `<span class="ptag ptag-${known(PROVIDERS, String(run.provider).toLowerCase())}">${esc(title(run.provider))}</span>` : standIn(title(task.providerStandIn), "Stand-in: the run names no chief, so the board does not know its provider.")}</td><td>${esc(run.role)}</td>` : `<td>${provider(run.provider, task)} · ${esc(run.role)}</td>`;
+  const row = run => `<tr><td class="id">${esc(run.id)}</td>${agent(run)}<td><span class="st-${known(RUN_STATUSES, run.status)}">${esc(run.status)}</span></td><td>${run.status === "running" ? clock(run) : duration(seconds(run))}</td><td>${tokens(run.tokens)}</td></tr>`;
+  const table = list => `<table class="runs"><thead><tr><th>Run</th>${task.shared ? "<th>Provider</th>" : ""}<th>Agent</th><th>Status</th><th>Time</th><th>Tokens</th></tr></thead><tbody>${list.map(row).join("")}</tbody></table>`;
   const earlier = task.runs.slice(0, Math.max(0, task.runs.length - RUNS_SHOWN));
   return `${earlier.length ? `<details class="fold" data-key="runs"><summary id="sum-runs">Show ${earlier.length} earlier runs</summary>${table(earlier)}</details>` : ""}${table(task.runs.slice(-RUNS_SHOWN))}`;
 }
@@ -239,9 +254,15 @@ function page(ctx, task, { routed = false } = {}) {
   const pr = task.pr ? ` · ${url ? link(`PR ${task.pr}`, url) : standIn(`PR ${task.pr}`, "No link: the project's GitHub remote is not known.")}` : "";
   const brief = task.brief ? `<p><b>Goal:</b> ${esc(task.briefFields.goal ?? "not recorded")}</p><p><b>Acceptance:</b></p><pre>${esc(task.briefFields.acceptance ?? "not recorded")}</pre><details class="fold" data-key="brief"><summary id="sum-brief">Full brief</summary><pre>${esc(task.brief)}</pre></details>` : `<div class="empty">No brief recorded for this task.</div>`;
   const decisions = task.decisions.length ? `<ol class="log">${[...task.decisions].reverse().map(row => `<li><span class="faint">${esc(day(row.at))}</span> ${esc(row.decision)}${row.why ? ` · ${esc(row.why)}` : ""}</li>`).join("")}</ol>` : `<div class="empty">No decisions recorded.</div>`;
-  const content = `<div class="ptop"><span class="id">${esc(task.id)}</span> · ${project(ctx, task)}${pr} · ${tags(task)} · <span class="faint">${esc(title(task.sourceLabel))} logbook</span></div>`
-    + `<${routed ? "h1" : "h2"} class="ptitle">${esc(task.title)}</${routed ? "h1" : "h2"}>`
-    + `<div class="detail"><section class="wide"><h3>Where in the loop</h3>${stepLine(task)}${nowWaits(task)}${stepRows(task)}${agents(ctx, task, " nowagents")}${meta(task)}<p class="faint">To change the priority or the kind, ask the chief in the chat. The board is read-only.</p></section>`
+  // A shared task names its owning chief and its offer over the steps; an old task says why it did not move (T306, F9).
+  const holder = task.old ? `<span class="who oldtag">${esc(task.old.label)}</span>` : `<span class="faint">${esc(title(task.sourceLabel))} logbook</span>`;
+  const oldNote = task.old ? `<div class="banner info oldnote"><div><b>A finished task of the old ${esc(title(task.old.provider))} logbook.</b> It stays there, read-only: finished tasks did not move to the shared logbook. Its number belongs to that old logbook, so ${esc(task.id)} here is not a task of the shared logbook.</div></div>` : "";
+  // A chief id that chiefs.tsv does not list is about this one task, so its note is on this page only (F-T624-4).
+  const unlisted = task.owner?.unlisted ? `<div class="banner warn">${ICON}<div><b>The owning chief is not in chiefs.tsv.</b> ${esc(task.id)} names the chief ${esc(task.owner.id)}, which chiefs.tsv does not list, so the board does not know its provider.</div></div>` : "";
+  const ownRow = task.shared ?`<div class="ownrow"><span class="f">Owning chief</span> ${holderTag(task)}${offerLine(task, "span")}</div>` : "";
+  const content = `<div class="ptop"><span class="id">${esc(task.id)}</span> · ${project(ctx, task)}${pr} · ${tags(task)} · ${holder}</div>`
+    + `<${routed ? "h1" : "h2"} class="ptitle">${esc(task.title)}</${routed ? "h1" : "h2"}>${oldNote}${unlisted}`
+    + `<div class="detail"><section class="wide"><h3>Where in the loop</h3>${ownRow}${stepLine(task)}${nowWaits(task)}${stepRows(task)}${agents(ctx, task, " nowagents")}${meta(task)}<p class="faint">${task.shared ? "To claim, offer, accept or release this task, ask a chief in the chat. " : ""}To change the priority or the kind, ask the chief in the chat. The board is read-only.</p></section>`
     + `<div class="colL"><section><h3>Brief</h3>${brief}</section><section><h3>Agent runs <span class="n">${task.runs.length}</span></h3>${runsTable(task)}</section><section><h3>Findings <span class="n">${task.findings.filter(row => row.status === "open").length} open</span></h3>${findings(task)}</section></div>`
     + `<div class="colR">${programSections(ctx, task)}<section><h3>Evidence <span class="n">${task.ledger.length}</span></h3>${evidence(task)}</section><section><h3>Latest decisions</h3>${decisions}</section><section><h3>Artifacts</h3>${artifacts(task)}</section></div></div>${legend(null)}`;
   return routed ? content : `<section class="page" id="${esc(anchor(task))}" aria-label="${esc(task.id)}"><div class="pagebar"><a class="back" href="#">← Board</a>${programLink(ctx, task)}<span class="spacer"></span>${themeSwitch(`flip-${anchor(task)}`, true)}</div>${content}</section>`;
@@ -267,7 +288,9 @@ function banners(model) {
   const warned = model.warnings.length ? `<div class="banner warn">${ICON}<div><b>Settings ignored.</b> The board shows these projects without them.${list(model.warnings)}</div></div>` : "";
   // A note says how the board joined or kept apart the logbooks of one key (T305 notes, section 3).
   const noted = model.notes?.length ? `<div class="banner warn">${ICON}<div><b>Logbook notes.</b> How the board joined the logbooks of each repository.${list(model.notes)}</div></div>` : "";
-  return `${note}${notSetUp}${model.diagnostics.length ? `<div class="banner warn">${ICON}<div><b>Incomplete sources.</b> The numbers can be low.${list(model.diagnostics)}</div></div>` : ""}${warned}${noted}`;
+  // The logbook kept changing through 3 reads (T306, F9): the board shows its last read, and the note says so. It never hides the board.
+  const changing = model.changing?.length ? `<div class="banner warn changing" role="status">${ICON}<div><b>The logbook is changing.</b> The board shows the last read. It reads again at the next change.<ul class="diag">${model.changing.map(item => `<li>${esc(item.project)} · last read ${esc(hhmm(item.at))} UTC${item.dropped ? ` · not shown, as it changed during that read: ${esc(item.dropped.join("; "))}` : ""}</li>`).join("")}</ul></div></div>` : "";
+  return `${changing}${note}${notSetUp}${model.diagnostics.length ? `<div class="banner warn">${ICON}<div><b>Incomplete sources.</b> The numbers can be low.${list(model.diagnostics)}</div></div>` : ""}${warned}${noted}`;
 }
 
 // Theme (bug bash R1023-4, T349): the page is dark until you choose light; a choice is kept in the browser and the head
@@ -366,6 +389,9 @@ a.card:hover{transform:translateY(-1px);box-shadow:var(--ring),var(--lift)}.card
 .id{font-family:ui-monospace,SFMono-Regular,Menlo,monospace}
 .proj{display:inline-flex;align-items:center;gap:5px;color:var(--text);font-weight:550;min-width:0}.proj .pn{overflow:hidden;text-overflow:ellipsis;white-space:nowrap;min-width:0}
 .who{font-size:10.5px;color:var(--muted);border:1px solid transparent;background:var(--panel2);border-radius:999px;padding:0 5px;font-weight:550;white-space:nowrap;margin-left:auto;flex:none}
+.who.own{color:var(--text);background:var(--panel2);border-color:var(--line)}.who.own-claude{color:var(--p2)}.who.own-codex{color:var(--p6)}.who.own-none,.who.oldtag{color:var(--muted);border:1px dashed var(--edge);background:transparent}
+.offerline{display:block;font-size:12px;color:var(--accent);margin:2px 0 4px;overflow-wrap:anywhere}.ownrow{display:flex;flex-wrap:wrap;gap:6px 8px;align-items:center;font-size:12.5px;margin:2px 0 8px}.ownrow .who{margin-left:0;font-size:12px;padding:1px 8px}.ownrow .offerline{margin:0;flex-basis:100%}
+.top:has(.oldtag){flex-wrap:wrap}.top .oldtag{margin-left:0}.oldnote{margin:8px 0 10px}
 .pr{color:var(--muted);white-space:nowrap}
 .title{margin:6px 0 4px;font-weight:550;font-size:13.5px;letter-spacing:-.006em;display:-webkit-box;-webkit-line-clamp:3;-webkit-box-orient:vertical;overflow:hidden;overflow-wrap:anywhere}
 .sline{display:flex;flex-wrap:wrap;gap:2px 4px;list-style:none;margin:6px 0 4px;padding:0;align-items:center;font-size:12px}
@@ -752,7 +778,8 @@ function needStrip(ctx, model) {
 }
 
 function filterBar(ctx, model) {
-  const providers = [...new Map(model.sources.map(source => [String(source.standIn ?? "").toLowerCase().replace(/[^a-z0-9-]/g, "-"), title(source.standIn)])).entries()];
+  // Each provider source, then each provider that owns a shared task or holds an old one (T306). An unclaimed task is only under All; no button names the shared root.
+  const providers = [...new Map([...model.sources.filter(source => !source.shared).map(source => source.standIn), ...model.tasks.map(task => task.who).filter(Boolean)].map(name => [String(name ?? "").toLowerCase().replace(/[^a-z0-9-]/g, "-"), title(name)])).entries()];
   const select = (name, label, values) => `<label class="f">${label} <select id="f-${name}" data-f="${name}">${values.map(([value, text]) => `<option value="${esc(value)}">${esc(text)}</option>`).join("")}</select></label>`;
   return `<span class="f">Who</span><div class="seg" role="group" aria-label="Who"><button type="button" id="who-all" data-who="" aria-pressed="true">All</button>${providers.map(([key, name]) => `<button type="button" id="who-${esc(key)}" data-who="${esc(key)}" aria-pressed="false">${esc(name)}</button>`).join("")}</div>`
     + select("priority", "Priority", [["", "Any"], ...PRIORITIES.map(value => [value, value]), ["none", "No priority"]])
@@ -1063,7 +1090,9 @@ export function renderTaskText(task) {
   const head = task.currentHead ? `${md(task.currentHead)}${task.headBasis === "ledger" ? " (newest verdict)" : ""}` : "not recorded";
   const where = row => row.movedTo ? ` · moved to ${md(row.movedTo)}` : row.movedFrom ? ` · from ${md(row.movedFrom)}` : "";
   const rows = task.loop.steps.map(step => `${MARK[status(step.status)]} ${md(step.label)}: ${WORD[status(step.status)]}${step.detail ? ` · ${md(step.detail)}` : ""}${step.parts?.length ? `\n  ${step.parts.map(([name, value]) => `${MARK[status(value)]} ${md(name)}: ${WORD[status(value)]}`).join(" · ")}` : ""}`).join("\n");
-  return `**${md(task.id)} ${md(task.title)}**\n${md(task.sourceLabel)} · ${md(task.projectName)} · ${md(task.state)} · ${md(task.size)}${tagText(task)}${task.risk ? ` · risk: ${md(task.risk)}` : ""}${task.pr ? ` · PR ${prUrl(task) ? `[${md(task.pr)}](${mdUrl(prUrl(task))})` : md(task.pr)}` : ""}\n\n**Loop**\n${stepText(task)}\n${nowText(task)}\n${rows}\nRecorded state: ${md(task.state)} · repair round ${md(task.round)} · last commit ${head}\n\n**Brief**\nGoal: ${mdBlock(task.briefFields.goal ?? "not recorded")}\nAcceptance: ${mdBlock(task.briefFields.acceptance ?? "not recorded")}\n\nFull brief:\n${mdBlock(task.brief ?? "No verified brief content is available.")}\n\n**Agent runs**\n${task.runs.map(r => `${md(r.id)} ${providerText(r.evidence?.data.provider, task)} · ${md(r.role)} · ${md(r.status)} · ${md(task.runClocks?.[r.id]?.text ?? runTime(r))} · tokens ${md(r.tokens || "unknown")}`).join("\n") || "No runs recorded."}\n\n**Evidence**\n${task.ledger.map(r => `${md(r.kind)} · cycle ${md(r.cycle)} · ${md(r.sha)} · ${md(r.run)} · ${md(r.at)}`).join("\n") || "No verdicts recorded."}${evidenceArtifacts(task).map(r => `\n\n${md(r.data.label)} · ${md(r.source)} · ${md(r.observedAt)} · ${md(r.data.run ?? "run unknown")} · digest verified\n${mdBlock(r.content.text)}`).join("")}\n\n**Findings**\n${task.findings.map(r => `${md(r.severity)} · ${md(r.summary)} · ${md(r.status)}${where(r)}${r.reason ? ` · ${md(r.reason)}` : ""}`).join("\n") || "No findings recorded."}\n\n**Artifacts**\n${task.artifacts.map(r => `${md(r.data.label)} · ${md(r.data.url ?? (r.content?.verified ? "local artifact; digest verified" : "local artifact; content not verified"))}`).join("\n") || "No artifacts recorded."}\n\n**Latest decisions**\n${task.decisions.map(r => `${md(r.at)} · ${md(r.decision)} · ${md(r.why)}`).join("\n") || "No decisions recorded."}`;
+  // A shared task names its owning chief (or Unclaimed) and its offer; an old task its old logbook and why it did not move (T306).
+  const holder = `${task.shared ? `Owning chief: ${md(task.holder)}${task.owner?.unlisted ? `\n${md(`${task.owner.id} is not in chiefs.tsv, so the board does not know its provider.`)}` : ""}${task.offer ? `\n⇄ ${md(task.offer)}` : ""}\n` : ""}${task.old ? `${md(`A finished task of the old ${title(task.old.provider)} logbook. It stays there, read-only, and its number belongs to that old logbook.`)}\n` : ""}`;
+  return `**${md(task.id)} ${md(task.title)}**\n${md(task.holder ?? task.sourceLabel)} · ${md(task.projectName)} · ${md(task.state)} · ${md(task.size)}${tagText(task)}${task.risk ? ` · risk: ${md(task.risk)}` : ""}${task.pr ? ` · PR ${prUrl(task) ? `[${md(task.pr)}](${mdUrl(prUrl(task))})` : md(task.pr)}` : ""}\n${holder}\n**Loop**\n${stepText(task)}\n${nowText(task)}\n${rows}\nRecorded state: ${md(task.state)} · repair round ${md(task.round)} · last commit ${head}\n\n**Brief**\nGoal: ${mdBlock(task.briefFields.goal ?? "not recorded")}\nAcceptance: ${mdBlock(task.briefFields.acceptance ?? "not recorded")}\n\nFull brief:\n${mdBlock(task.brief ?? "No verified brief content is available.")}\n\n**Agent runs**\n${task.runs.map(r => `${md(r.id)} ${providerText(r.provider, task)} · ${md(r.role)} · ${md(r.status)} · ${md(task.runClocks?.[r.id]?.text ?? runTime(r))} · tokens ${md(r.tokens || "unknown")}`).join("\n") || "No runs recorded."}\n\n**Evidence**\n${task.ledger.map(r => `${md(r.kind)} · cycle ${md(r.cycle)} · ${md(r.sha)} · ${md(r.run)} · ${md(r.at)}`).join("\n") || "No verdicts recorded."}${evidenceArtifacts(task).map(r => `\n\n${md(r.data.label)} · ${md(r.source)} · ${md(r.observedAt)} · ${md(r.data.run ?? "run unknown")} · digest verified\n${mdBlock(r.content.text)}`).join("")}\n\n**Findings**\n${task.findings.map(r => `${md(r.severity)} · ${md(r.summary)} · ${md(r.status)}${where(r)}${r.reason ? ` · ${md(r.reason)}` : ""}`).join("\n") || "No findings recorded."}\n\n**Artifacts**\n${task.artifacts.map(r => `${md(r.data.label)} · ${md(r.data.url ?? (r.content?.verified ? "local artifact; digest verified" : "local artifact; content not verified"))}`).join("\n") || "No artifacts recorded."}\n\n**Latest decisions**\n${task.decisions.map(r => `${md(r.at)} · ${md(r.decision)} · ${md(r.why)}`).join("\n") || "No decisions recorded."}`;
 }
 
 /** A hard break (F1): a chat that joins soft line breaks still shows each line of a block on its own line. */
@@ -1101,12 +1130,13 @@ export function renderBoardText(model) {
   // A card's question is in the Needs you section above; the card shows its steps and, when nothing needs you, its Now line.
   // A card of a program has its tag. A card with a wait has the tasks that it waits for in one line (⊘ when one is never
   // met), instead of its Now line and in its place, after the step line (R1307-3, T374). Each line ends with a hard break.
-  const line = task => block([`**${md(task.id)} ${md(clamp(task.title))}** · ${md(task.sourceLabel)} · ${md(task.projectName)}${task.pr ? ` · PR ${md(task.pr)}` : ""}${tagText(task)}${programTag(task)}`,
+  const line = task => block([`**${md(task.id)} ${md(clamp(task.title))}** · ${md(task.holder ?? task.sourceLabel)} · ${md(task.projectName)}${task.pr ? ` · PR ${md(task.pr)}` : ""}${tagText(task)}${programTag(task)}`,
     ...task.agents.map(agent => `${agent.provider ? md(agent.provider) : md(`${title(task.providerStandIn)}*`)} · ${md(agent.role)} at work`),
     task.inferredWork ? "Inferred from the open PR." : "",
     task.column === "done" ? "" : stepText(task),
     task.waitLine ? `${WAIT_MARK[task.waitLine.never ? "never" : "wait"]} ${md(task.waitLine.text)}` : "",
-    task.column === "done" || task.loop.now.needs || task.waitLine ? "" : `Now: ${md(task.loop.now.text)}`]);
+    task.column === "done" || task.loop.now.needs || task.waitLine ? "" : `Now: ${md(task.loop.now.text)}`,
+    task.column === "done" || !task.offer ? "" : `⇄ ${md(task.offer)}`]);
   // Each column shows its first 5 cards in the page's order (needs you first, then the newest activity) and counts the rest.
   const section = column => {
     const name = COLUMN_NAME[column.key] ?? column.name, rest = column.tasks.length - CHAT_SHOWN;
@@ -1123,7 +1153,7 @@ export function renderBoardText(model) {
   // The breakdown gate shows its full key, as every other gate does: the owner answers by that key (F-T233-4).
   const approval = ([task, gate]) => block([`**${++n} · ${md(gate.breakdown.id)} ${md(clamp(gate.breakdown.name))}** · ${md(task.sourceLabel)} · ${md(task.projectName)} · pilot ${md(task.id)} · gate ${md(gate.gateId)}`], reasonLines(gate));
   const programNeed = need => block([`**${++n} · ${md(clamp(need.title))}** · ${md(need.sourceLabel)} · ${md(need.projectName)}`], [md(need.text)]);
-  const other = task => block([`**${++n} · ${md(task.id)} ${md(clamp(task.title))}** · ${md(task.sourceLabel)} · ${md(task.projectName)}`], task.reasons.flatMap(reason => reasonLines(reason)));
+  const other = task => block([`**${++n} · ${md(task.id)} ${md(clamp(task.title))}** · ${md(task.holder ?? task.sourceLabel)} · ${md(task.projectName)}`], task.reasons.flatMap(reason => reasonLines(reason)));
   const needs = approvals.length
     ? [`#### ◫ Program approval\n${approvals.map(approval).join("\n\n")}`, ...(others.length || programNeeds.length ? [`#### Other\n${[...programNeeds.map(programNeed), ...others.map(other)].join("\n\n")}`] : [])].join("\n\n")
     : [...programNeeds.map(programNeed), ...others.map(other)].join("\n\n") || "No recorded task needs you.";
@@ -1138,7 +1168,9 @@ export function renderBoardText(model) {
   const ended = ["done", "dropped"].map(state => [state, programs.filter(program => counted(program) && program.state === state).length]).filter(([, count]) => count);
   const programText = programs.length ? `### ◫ Programs\n${[...programs.filter(program => !counted(program)).map(program => `- ${programLine({ ...program, where: where(program) })}`), ...(ended.length ? [`- ${ended.map(([state, count]) => `${count} ${state}`).join(" · ")}: open the board's Programs tab`] : [])].join("\n")}` : "";
   // The count is the number of the numbered items above (n), so a pilot with a breakdown gate and another reason counts twice, as it shows.
-  const top = block([`**sage board** · built ${md(day(model.at))} UTC`, `🔴 ${n} needs you · ${counts.recordedAgents} agents at work${counts.inferredWork ? ` · ${counts.inferredWork} inferred PRs` : ""} · 🔁 ${counts.inReview} in review · ${counts.tasks} tasks`, standIns ? `${md("*")} A stand-in: the run does not record its provider, so the board names the logbook's source.` : ""]);
+  // The logbook kept changing through 3 reads (T306, F9): this board is its third read, which may mix two moments.
+  const changing = (model.changing ?? []).map(item => `⧗ The logbook is changing: ${md(item.project)} · read at ${md(hhmm(item.at))} UTC${item.dropped ? `, without what changed during it (${md(item.dropped.join("; "))})` : ""}. The board shows that read; ask for the board again for a read with no change.`);
+  const top = block([`**sage board** · built ${md(day(model.at))} UTC`, ...changing,`🔴 ${n} needs you · ${counts.recordedAgents} agents at work${counts.inferredWork ? ` · ${counts.inferredWork} inferred PRs` : ""} · 🔁 ${counts.inReview} in review · ${counts.tasks} tasks`, standIns ? `${md("*")} A stand-in: the run does not record its provider, so the board names the logbook's source.` : ""]);
   const end = block([model.archived.length ? `Archived: ${model.archived.map(book => `${md(book.name)} (${archivedCounts(book)})`).join(", ")}` : "",
     ...model.diagnostics.map(d => `Incomplete source: ${md(d.source)}${d.project ? ` · ${md(d.project)}` : ""} · ${md(d.message)}`), ...model.warnings.map(d => `Setting ignored: ${md(d.source)} · ${md(d.project)} · ${md(d.message)}`), ...(model.notes ?? []).map(d => `Logbook note: ${md(d.source)} · ${md(d.project)} · ${md(d.message)}`)]);
   return [top, `### 🔴 Needs you\n${needs}`, programText, ...model.columns.map(section), end].filter(Boolean).join("\n\n");

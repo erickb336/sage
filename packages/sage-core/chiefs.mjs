@@ -68,6 +68,14 @@ export function replaceOf(gate) {
   return from && { from, to, runs: runs === "none" ? [] : runs.split(", ").map((r) => r.split(" ")[0]) };
 }
 
+/**
+ * Does chiefs.tsv read as the table: its column names, a cell for each column, a chief id and a session identity on each
+ * row, and no id or identity twice? The state tool and the board read the table with this one rule.
+ */
+export const chiefsWhole = (cols, lines, rows) => cols.join("\t") === COLUMNS.join("\t") && lines.every((line) => line.split("\t").length === COLUMNS.length)
+  && rows.every((r) => CHIEF.test(r.id) && r.provider && NATIVE.test(r.native))
+  && new Set(rows.map((r) => r.id)).size === rows.length && new Set(rows.map((r) => `${r.provider}\t${r.native}`)).size === rows.length;
+
 export function createChiefs({ now, provider, readRegular, refuse, rowsOf, sheetText, swap }) {
   /** The rows of a logbook's chiefs.tsv. A missing file has no rows. Anything else that does not read as the table refuses. */
   function chiefs(dir) {
@@ -81,9 +89,7 @@ export function createChiefs({ now, provider, readRegular, refuse, rowsOf, sheet
     }
     if (text === undefined) return [];
     const { cols, lines } = sheetText(text), rows = rowsOf({ cols, lines });
-    if (cols.join("\t") !== COLUMNS.join("\t") || lines.some((line) => line.split("\t").length !== COLUMNS.length)
-      || !rows.every((r) => CHIEF.test(r.id) && r.provider && NATIVE.test(r.native))
-      || new Set(rows.map((r) => r.id)).size !== rows.length || new Set(rows.map((r) => `${r.provider}\t${r.native}`)).size !== rows.length) damaged();
+    if (!chiefsWhole(cols, lines, rows)) damaged();
     return rows;
   }
   const rowOf = (dir, native) => chiefs(dir).find((r) => r.provider === provider && r.native === native);

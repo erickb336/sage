@@ -1,8 +1,9 @@
 import { createHash } from "node:crypto";
 import { basename } from "node:path";
-import { githubRepository } from "./board-reader.mjs";
+import { githubRepository, hookProvider } from "./board-reader.mjs";
 import { LINE, PRIORITIES, TASK_KINDS, agentCaps, proposalOf } from "./logbook-fields.mjs";
 import { ENDED, MET, breakdownGate, dead, gateLines, lostWhy, namedText, progressOf, progressText, shownGraph, shownWaits, waitGraph, waitsOf } from "./program-rules.mjs";
+import { offerOf, replaceOf } from "./chiefs.mjs";
 // One semantic model for HTML, chat and the read-only server.
 const COLUMNS = [
   ["backlog", "Backlog", ["framed"]],
@@ -291,8 +292,11 @@ function card(source, project, group, task, now, graph, landing) {
   // N7: the newest run, verdict or decision time. A running run with no news for 24 h may have stopped (its clock is stale).
   const times = [...rows(project, "runs", task).flatMap(run => [run.started, run.ended]), ...ledger.map(row => row.at), ...rows(project, "decisions", task).map(row => row.at)].map(time).filter(at => at !== null);
   const lastActivity = times.length ? new Date(Math.max(...times)).toISOString() : null;
-  const runs = rows(project, "runs", task).map(run => ({ ...run, evidence: latest(records, "run", data => data.run === run.id), clock: runClock(run.started, now, lastActivity) }));
-  const agents = runs.filter(run => run.status === "running").map(run => ({ id: run.id, role: run.role, provider: run.evidence?.data.provider ?? null, evidence: run.evidence, recordedStatus: run.status, stale: run.clock.stale }));
+  // A shared logbook (T306) names each run's chief, and chiefs.tsv names the chief's provider (C4): a run keeps its chief for good.
+  const shared = !!project.shared, chiefs = project.chiefs ?? NONE, chiefOf = id => chiefs.find(chief => chief.id === id);
+  const runs = rows(project, "runs", task).map(run => { const evidence = latest(records, "run", data => data.run === run.id); const chief = shared ? chiefOf(run.chief) : null; return { ...run, evidence, provider: evidence?.data.provider ?? (chief ? title(chief.provider) : null), clock: runClock(run.started, now, lastActivity) }; });
+  const agents = runs.filter(run => run.status === "running").map(run => ({ id: run.id, role: run.role, provider: run.provider, evidence: run.evidence, recordedStatus: run.status, stale: run.clock.stale }));
+  const label = id => chiefOf(id) ? `${title(chiefOf(id).provider)} · ${id}` : id;
   // Needs you: an open gate, or a state that waits for the owner (R1077). Held and replan wait for the chief, not for you.
   const allGates = rows(project, "gates", task), gates = allGates.filter(gate => !gate.answer);
   // Only a breakdown gate keeps its lines (gateLines), and only by the data rule (breakdownGate: a programs row names it,
@@ -301,10 +305,15 @@ function card(source, project, group, task, now, graph, landing) {
   const reasons = gates.map(gate => {
     const breakdown = breakdownGate(gate, graph.programs);
     const lost = (graph.byGate.get(gate.id) ?? []).filter(program => program.state === "lost").map(program => `${lostWhy(program)}: ${LOST_FIX(program.id)}`);
-    return { kind: "gate", key: `${project.key}/${gate.id}`, text: [...gateLines(gate, graph.programs), ...lost].join(LINE), recommendation: gate.recommendation || null, gateId: gate.id, options: gate.options ? gate.options.split("|").map(option => option.trim()) : [],
+    // A Replace gate (T618) says its question in one line, from its fixed start: the chiefs, and the runs that end as failed.
+    const replace = gate.kind === "replace" && replaceOf(gate);
+    const text = replace ? `Replace the owning chief of ${task.id}, ${label(replace.from)}, with ${label(replace.to)}? ${replace.runs.length ? `${and(replace.runs)} ${replace.runs.length === 1 ? "ends" : "end"} as failed.` : "No run ends as failed."}` : [...gateLines(gate, graph.programs), ...lost].join(LINE);
+    return { kind: "gate", ...(replace && { replace: true }), key: `${project.key}/${gate.id}`, text, recommendation: gate.recommendation || null, gateId: gate.id, options: gate.options ? gate.options.split("|").map(option => option.trim()) : [],
       breakdown: breakdown ? { key: `${project.key}/${breakdown}`, id: breakdown, name: graph.programs.get(breakdown).name } : null };
   });
   if (task.state === "awaiting-you" && !gates.length && !allGates.at(-1)?.answer) reasons.push({ kind: "design", text: "The design waits for your answer." });
+  const unknown = shared && !reasons.some(reason => reason.replace) ? unknownChief(task, runs, label) : null;
+  if (unknown) reasons.push(unknown);
   // N2: an observed PR head wins. Else the ledger head: the newest commit of the task's PR by its first verdict (the ledger
   // is append-only), when that first verdict comes after every verdict by a run of an earlier round. At round 1 or later, a
   // verdict by a run of round 1 or earlier must show where the round starts. A repairing task pushes a new head, so it
@@ -370,7 +379,37 @@ function card(source, project, group, task, now, graph, landing) {
     ...rows(project, "findings", task).map(row => ({ ...row, movedFrom: (moves.to.get(task.id) ?? NONE).find(({ move }) => move[3] === row.key)?.row.task ?? null })),
     ...(moves.from.get(task.id) ?? NONE).map(({ row, move }) => ({ severity: "", summary: row.decision.slice(row.decision.indexOf(":") + 1).trim(), ...found(move[2], move[3]), task: task.id, key: move[1], status: "moved", reason: "", movedTo: move[2] })),
   ];
-  return { key: `${project.key}/${task.id}`, source: source.id, sourceLabel: source.label, providerStandIn: standIn(source), repository: githubRepository(pr?.data.repository) ?? githubRepository(project.repository), lastActivity, headBasis, project: project.key, group: group.key, projectName: group.name, archived: group.archived, program: task.program ? { key: `${project.key}/${task.program}`, id: task.program, name: program?.name ?? null, pilot: program?.pilot === task.id } : null, waits, waitLine: waitLine(task, waits, column), priority: PRIORITIES.includes(task.priority) ? task.priority : "", kind: TASK_KINDS.includes(task.kind) ? task.kind : "", ...Object.fromEntries(["id", "title", "size", "risk", "route", "state", "branch", "pr", "round", "keys", "hold"].map(field => [field, task[field] ?? ""])), column, prEvidence: pr, currentHead: head, modeEvidence: mode, completedAt, visible: column !== "done" || completedAt !== null && completedAt <= now && completedAt >= now - 7 * 86400000, agents, inferredWork: inferred, cycles, requiredCycles: required, reasons, runs, ledger, gates, findings, decisions: rows(project, "decisions", task).slice(-10), brief, briefFields: briefFields(brief), projectCheck, mergeCheck: merge, loop: stepLine({ task, route, cycles, required: count, head, judged, reasons, merge, gates: allGates, runs, ledger, rounds: positive(source.config?.max_rounds) ?? 3, autopilot: mode?.data.autopilot === true }), runClocks: Object.fromEntries(runs.filter(run => run.status === "running").map(run => [run.id, run.clock])), artifacts: records.filter(record => record.kind === "artifact").map(record => ({ ...record, content: project.contents?.[record.id] ?? null })), diagnostics: [...project.diagnostics] };
+  return { key: `${project.key}/${task.id}`, source: source.id, sourceLabel: source.label, providerStandIn: standIn(source), repository: githubRepository(pr?.data.repository) ?? githubRepository(project.repository), lastActivity, headBasis, project: project.key, group: group.key, projectName: group.name, archived: group.archived, program: task.program ? { key: `${project.key}/${task.program}`, id: task.program, name: program?.name ?? null, pilot: program?.pilot === task.id } : null, waits, waitLine: waitLine(task, waits, column), priority: PRIORITIES.includes(task.priority) ? task.priority : "", kind: TASK_KINDS.includes(task.kind) ? task.kind : "", ...Object.fromEntries(["id", "title", "size", "risk", "route", "state", "branch", "pr", "round", "keys", "hold"].map(field => [field, task[field] ?? ""])), column, prEvidence: pr, currentHead: head, modeEvidence: mode, completedAt, visible: column !== "done" || completedAt !== null && completedAt <= now && completedAt >= now - 7 * 86400000, agents, inferredWork: inferred, cycles, requiredCycles: required, reasons, runs, ledger, gates, findings, decisions: rows(project, "decisions", task).slice(-10), brief, briefFields: briefFields(brief), projectCheck, mergeCheck: merge, loop: stepLine({ task, route, cycles, required: count, head, judged, reasons, merge, gates: allGates, runs, ledger, rounds: positive(source.config?.max_rounds) ?? 3, autopilot: mode?.data.autopilot === true }), runClocks: Object.fromEntries(runs.filter(run => run.status === "running").map(run => [run.id, run.clock])), artifacts: records.filter(record => record.kind === "artifact").map(record => ({ ...record, content: project.contents?.[record.id] ?? null })), diagnostics: [...project.diagnostics], ...holderOf(project, task, runs, label) };
+}
+
+/**
+ * Who holds a task, for a task of a shared logbook or of an old one (T306, F9); a legacy task has none of these fields,
+ * so it shows as before. who is the Who filter's word: the owning chief's provider, or the old logbook's ("" for an
+ * unclaimed task, which shows only under All). holder names the task on its card's top line and in the chat.
+ */
+function holderOf(project, task, runs, label) {
+  if (project.old) {
+    const provider = project.old.provider;
+    return { old: { provider, label: `Old · ${title(provider)} · read-only` }, who: provider, holder: `Old · ${title(provider)} · read-only` };
+  }
+  if (!project.shared) return {};
+  const chief = task.chief ? (project.chiefs ?? NONE).find(row => row.id === task.chief) ?? null : null;
+  // unlisted: chiefs.tsv reads, and it has no row of this id (F-T624-4). A table that does not read has its own diagnostic.
+  const owner = task.chief ? { id: task.chief, provider: chief?.provider ?? null, label: label(task.chief), ...(!chief && project.chiefs && { unlisted: true }) } : null;
+  // The open offer (T618): it waits for each running run of the task to end, then its chief accepts.
+  const offer = offerOf(task), active = runs.filter(run => run.status === "running").map(run => run.id);
+  const offerText = offer ? `Offered to ${label(offer.to)}. ${active.length ? `It waits for ${and(active)} to end, then ${label(offer.to)} accepts.` : `Ready: ${label(offer.to)} can accept.`}` : null;
+  return { shared: true, owner, offer: offerText, who: String(owner?.provider ?? "").toLowerCase(), holder: owner ? owner.label : "Unclaimed" };
+}
+
+/**
+ * G103, the owner's default (in this one place, so that another answer changes only this rule): the owning chief of a
+ * shared task may have stopped when a running run of that chief shows no change for over 24 h (runClock's stale rule).
+ * Then the task needs you. A chief that stopped with no running run does not show here, as for today's stale rule.
+ */
+function unknownChief(task, runs, label) {
+  const run = task.chief ? runs.find(run => run.status === "running" && run.chief === task.chief && run.clock.stale) : null;
+  return run ? { kind: "chief-unknown", text: `The owning chief, ${label(task.chief)}, may have stopped: ${run.id} shows no change for over 24 h.`, recommendation: "if it stopped, ask any chief to open a Replace gate." } : null;
 }
 
 const title = value => String(value ?? "").charAt(0).toUpperCase() + String(value ?? "").slice(1);
@@ -388,7 +427,8 @@ const unique = list => list.filter((item, i) => item && list.indexOf(item) === i
  */
 function projectGroups(sources) {
   const byName = new Map(), groups = [], notes = [];
-  for (const source of sources) for (const project of source.projects) byName.set(project.name, [...(byName.get(project.name) ?? []), { source, project }]);
+  // An old logbook (T306, the move) is a part of its shared project: it joins that group, and gives no name, checkout or archive.
+  for (const source of sources) for (const project of source.projects) if (!project.old) byName.set(project.name, [...(byName.get(project.name) ?? []), { source, project }]);
   const keys = books => books.map(book => book.project.key).join(" and ");
   const note = (books, message) => notes.push({ source: books.map(book => book.source.id).join(" + "), project: books[0].project.name, message });
   for (const books of byName.values()) {
@@ -401,8 +441,12 @@ function projectGroups(sources) {
     if (books.length > 1 && unknown.length) note(books, `One project: the checkout of ${keys(unknown)} is not known, and the logbook key is the same.`);
     groups.push({ key: books[0].project.name, books });
   }
+  for (const source of sources) for (const project of source.projects.filter(project => project.old)) {
+    const group = groups.find(group => group.books.some(book => book.project.key === project.old.of));
+    if (group) group.books.push({ source, project }); else groups.push({ key: project.key, books: [{ source, project }] });
+  }
   for (const group of groups) {
-    const known = group.books.filter(book => book.project.checkout), trusted = known.length ? known : group.books;
+    const own = group.books.filter(book => !book.project.old), known = own.filter(book => book.project.checkout), trusted = known.length ? known : own.length ? own : group.books;
     const projects = trusted.map(book => book.project), first = field => projects.map(project => project[field]).find(Boolean) ?? null;
     const names = unique(projects.map(project => project.displayName));
     if (names.length > 1) note(trusted, `Two display names: the board shows "${names[0]}" (the first source), not ${names.slice(1).map(other => `"${other}"`).join(", ")}.`);
@@ -422,7 +466,8 @@ function projectGroups(sources) {
       name: all.every(project => unreadable(project).length) ? merged.name : projectName(merged),
       remote, path: merged.checkout ?? null,
       archived: archived.length > 0 && archived.length === trusted.length, problem: problem && plainProblem(problem),
-      providers: unique(group.books.map(book => title(standIn(book.source)))),
+      // A shared logbook's providers are its chiefs' (T306), and an old logbook's is its own.
+      providers: unique(group.books.flatMap(book => book.project.old ? [title(book.project.old.provider)] : book.project.shared ? (book.project.chiefs ?? []).map(chief => title(chief.provider)) : [title(standIn(book.source))])),
       sub: unique(sub).join(" · "),
       // Search matches every name a person may know: the display names, the repositories, the folder and the logbook keys.
       // The checkout paths are apart: only the Mac's own page carries them (R1069-2).
@@ -491,46 +536,55 @@ function agentsOf(sources, groups, groupOf, cards, at) {
   const rows = [], problems = [], caps = [];
   const bare = name => name.replace(/-[0-9a-f]{6}$/, "");
   const groupNamed = name => groups.find(group => group.books.some(book => bare(book.project.name) === name));
-  for (const source of sources) {
+  // The hook's notes are in each provider's root, and the runs of a shared logbook in the shared root (T306), so a slot
+  // joins a running run of its own source or of the shared root, and a run with no slot reads the notes of its provider's
+  // source. writer: the provider whose hook writes the source's notes.
+  const hooked = sources.map(source => {
     const hooks = source.hooks ?? { present: false, slots: [], helpers: [], problem: null };
-    const provider = String(source.provider ?? standIn(source)).toLowerCase();
+    return { source, hooks, provider: String(source.provider ?? standIn(source)).toLowerCase(), writer: String(hookProvider(source) ?? standIn(source)).toLowerCase(), slots: hooks.slots.map(slotOf), known: hooks.present && !hooks.problem };
+  });
+  // An old logbook (T306, the move) holds only finished tasks: no agent of it runs.
+  const runs = sources.flatMap(source => source.projects.filter(book => !book.old).flatMap(book => (book.tables.runs ?? []).filter(run => run.status === "running" && /^R[1-9]\d*$/.test(run.id)).map(run => ({ source, book, run }))));
+  const leadKey = item => sha256(`${item.book.logbook}:${item.run.id}`);
+  // A run's provider: its evidence, else its chief's row in a shared logbook, else its source's.
+  const providerOf = item => runRecords(item.book.observations?.records ?? NONE).get(item.run.id)?.data.provider ?? (item.book.shared ? (item.book.chiefs ?? NONE).find(chief => chief.id === item.run.chief)?.provider : null) ?? item.source.provider ?? standIn(item.source);
+  // The hook notes that know a run: its own source's, or for a shared run its provider's source.
+  const notesOf = (item, prov) => item.source.shared ? hooked.find(entry => !entry.source.shared && entry.writer === prov) : hooked.find(entry => entry.source === item.source);
+  const taken = new Set();
+  const row = (source, item, extra) => {
+    const group = item ? groupOf.get(item.book.key) : groupNamed(extra.slot?.project);
+    const card = item ? cards.get(`${item.book.key}/${item.run.task}`) : null;
+    rows.push({ key: `${source.id}/${item ? `${item.book.name}/${item.run.id}` : extra.slot.name}`, source: source.id, runId: item?.run.id ?? extra.slot?.run ?? null, run: item?.run ?? null,
+      group: group?.key ?? `slot:${extra.slot?.project ?? "other"}`, groupName: group?.name ?? extra.slot?.project ?? "other",
+      provider: String(item ? providerOf(item) : source.provider ?? standIn(source)), role: item?.run.role ?? extra.slot?.role ?? "agent", model: item?.run.model || null,
+      task: card ? { key: card.key, id: card.id, title: card.title, kind: card.kind, priority: card.priority } : item ? { key: null, id: item.run.task, title: "", kind: "", priority: "" } : null,
+      lead: null, children: [], ...extra });
+  };
+  for (const { source, hooks, provider, slots, known } of hooked) {
     if (hooks.problem) problems.push({ source: source.id, message: plainProblem(hooks.problem) });
-    const slots = hooks.slots.map(slotOf);
-    const known = hooks.present && !hooks.problem;
     if (known) {
       const config = agentCaps(source.config);
       const used = name => slots.filter(slot => slot.project === name).length;
       caps.push({ source: source.id, label: title(provider), total: { used: slots.length, cap: config.total }, of: name => ({ used: used(name), cap: config.cap(name) }) });
     }
-    const runs = source.projects.flatMap(book => (book.tables.runs ?? []).filter(run => run.status === "running" && /^R[1-9]\d*$/.test(run.id)).map(run => ({ book, run })));
-    const leadKey = item => sha256(`${item.book.logbook}:${item.run.id}`);
-    const taken = new Set();
-    const row = (item, extra) => {
-      const record = item && runRecords(item.book.observations?.records ?? NONE).get(item.run.id);
-      const group = item ? groupOf.get(item.book.key) : groupNamed(extra.slot?.project);
-      const card = item ? cards.get(`${item.book.key}/${item.run.task}`) : null;
-      rows.push({ key: `${source.id}/${item ? `${item.book.name}/${item.run.id}` : extra.slot.name}`, source: source.id, runId: item?.run.id ?? extra.slot?.run ?? null, run: item?.run ?? null,
-        group: group?.key ?? `slot:${extra.slot?.project ?? "other"}`, groupName: group?.name ?? extra.slot?.project ?? "other",
-        provider: String(record?.data.provider ?? source.provider ?? standIn(source)), role: item?.run.role ?? extra.slot?.role ?? "agent", model: item?.run.model || null,
-        task: card ? { key: card.key, id: card.id, title: card.title, kind: card.kind, priority: card.priority } : item ? { key: null, id: item.run.task, title: "", kind: "", priority: "" } : null,
-        lead: null, children: [], ...extra });
-    };
-    // 1. Each taken slot, joined to its running run by the run mark, in a logbook of the slot's project.
+    // 1. Each taken slot, joined to its running run by the run mark, in a logbook of the slot's project: of its own source
+    // first, as before the shared root, else of the shared root. Each provider numbers its runs from R1, so the same run
+    // id of another provider's logbook is not this slot's (F-T624-1).
     for (const slot of slots.filter(slot => slot.ok)) {
-      const match = slot.run ? runs.filter(item => item.run.id === slot.run && bare(item.book.name) === slot.project && (!slot.logbook || item.book.logbook === slot.logbook)) : [];
-      const item = match.length === 1 ? match[0] : null;
+      const match = slot.run ? runs.filter(item => (item.source === source || item.source.shared) && item.run.id === slot.run && bare(item.book.name) === slot.project && (!slot.logbook || item.book.logbook === slot.logbook)) : [];
+      const own = match.filter(item => item.source === source), found = own.length ? own : match;
+      const item = found.length === 1 ? found[0] : null;
       if (item) taken.add(item);
-      row(item, { slot, activity: slot.at, leadKey: item && slot.role === "lead" ? leadKey(item) : null, helperOf: slot.lead });
+      row(source, item, { slot, activity: slot.at, leadKey: item && slot.role === "lead" ? leadKey(item) : null, helperOf: slot.lead });
     }
-    // 2. Each running run that no slot holds.
-    const notes = hooks.helpers ?? [];
-    for (const item of runs.filter(item => !taken.has(item))) {
-      const note = notes.filter(note => note.run === item.run.id && runs.some(lead => lead.book === item.book && lead.run.role === "lead" && leadKey(lead) === note.lead));
-      const stopped = note.find(note => note.stopped);
-      const prov = String(runRecords(item.book.observations?.records ?? NONE).get(item.run.id)?.data.provider ?? source.provider ?? standIn(source)).toLowerCase();
-      const how = NO_SLOT_NOTES.includes(prov) ? "logbook" : !known ? "unknown" : stopped ? "stopped" : "noslot";
-      row(item, { slot: null, activity: null, how, stoppedAt: stopped?.at ?? null, leadKey: item.run.role === "lead" ? leadKey(item) : null, helperOf: note[0]?.lead ?? null });
-    }
+  }
+  // 2. Each running run that no slot holds.
+  for (const item of runs.filter(item => !taken.has(item))) {
+    const prov = String(providerOf(item)).toLowerCase(), entry = notesOf(item, prov);
+    const note = (entry?.hooks.helpers ?? NONE).filter(note => note.run === item.run.id && runs.some(lead => lead.book === item.book && lead.run.role === "lead" && leadKey(lead) === note.lead));
+    const stopped = note.find(note => note.stopped);
+    const how = NO_SLOT_NOTES.includes(prov) ? "logbook" : !entry?.known ? "unknown" : stopped ? "stopped" : "noslot";
+    row(entry?.source ?? item.source, item, { slot: null, activity: null, how, stoppedAt: stopped?.at ?? null, leadKey: item.run.role === "lead" ? leadKey(item) : null, helperOf: note[0]?.lead ?? null });
   }
   // The tree: a helper under its lead, by the slot's parent mark (the lead slot's bound mark) or by its lead key.
   for (const child of rows) {
@@ -632,6 +686,7 @@ function programsOf(source, project, group, graph, cards) {
   // The questions of each program's breakdown gates, by program id, read once: the page cuts them off the answer rows (F-T384-1).
   const questions = new Map();
   for (const gate of gates.values()) { const id = proposalOf(gate); if (id) questions.set(id, [...questions.get(id) ?? [], gate.question]); }
+  // An old logbook (T306, the move) is read-only history: only its finished programs show, and none needs the owner (F-T624-12).
   return [...graph.programs.values()].map(program => {
     const own = graph.byProgram.get(program.id) ?? [], progress = progressOf(own), pilotState = graph.byId.get(program.pilot)?.state;
     const state = program.state === "active" ? progress.done ? "done" : dead(pilotState) ? "stuck" : "active"
@@ -650,7 +705,7 @@ function programsOf(source, project, group, graph, cards) {
       next: first ? { key: first.key, id: first.id, word: stateWord(first.state), pilot: first.id === program.pilot } : null,
       waiting: waiting.filter(item => !item.waitLine.never).length, cannotStart: waiting.filter(item => item.waitLine.never).map(item => item.id),
       need: need && { ...need, key: `${project.key}/${program.id}`, program: program.id, source: source.id, sourceLabel: source.label, projectName: group.name, group: group.key, archived: group.archived } };
-  });
+  }).filter(program => !project.old || ["done", "dropped"].includes(program.state) && !program.open);
 }
 
 /** A card in Needs you when it has a reason: one on a column (not ended, or done in the last 7 days), as needsOwner reads it. */
@@ -687,7 +742,7 @@ function sourceNeeds(source) {
 // read is a line under the board only: every task shows. Each reason says the file and the line, as the reader gives them.
 const TABLE_NAMES = ["tasks", "runs", "findings", "ledger", "gates", "decisions", "programs"];
 const TABLE_FILE = new RegExp(`^(${TABLE_NAMES.join("|")}): (.*)$`);
-const unreadable = project => project.diagnostics.filter(message => !/^(programs|observations|checkout|artifact [^:]*): /.test(message));
+const unreadable = project => project.diagnostics.filter(message => !/^(programs|observations|checkout|bindings|chiefs|sources|artifact [^:]*): /.test(message));
 function reasonOf(message) {
   const [, name, rest] = TABLE_FILE.exec(message) ?? [];
   if (!name) return title(plainProblem(message));
@@ -713,7 +768,21 @@ function logbookNeeds(source, project, group) {
 /** A logbook whose programs table cannot be read shows its tasks with no program (R1307-1): no tag, and no program wait. */
 const withoutPrograms = project => project.tables.programs || !project.tables.tasks ? project : { ...project, tables: { ...project.tables, tasks: project.tables.tasks.map(task => ({ ...task, program: "" })) } };
 
-export function buildBoardModel(input, { now = new Date().toISOString(), landing = null } = {}) {
+/**
+ * The projects whose logbook kept changing through the reader's 3 reads (T306, F9): each once, with the time of its read,
+ * and dropped: what changed during that read, so it does not show (F-T624-2).
+ */
+function changingOf(sources, groupOf) {
+  const seen = new Map();
+  for (const source of sources) for (const project of source.projects) if (project.changing) {
+    const name = groupOf.get(project.key)?.name ?? project.name, item = seen.get(name) ?? { project: name, at: project.changing.at };
+    const dropped = [...(item.dropped ?? []), ...(project.changing.dropped ?? [])];
+    seen.set(name, { ...item, ...(dropped.length && { dropped }) });
+  }
+  return [...seen.values()];
+}
+
+export function buildBoardModel(input,{ now = new Date().toISOString(), landing = null } = {}) {
   const at = time(now);
   if (at === null) throw new TypeError("board time must be an ISO date");
   build++;
@@ -747,5 +816,5 @@ export function buildBoardModel(input, { now = new Date().toISOString(), landing
   }).sort((a, b) => LISTS.indexOf(a.list) - LISTS.indexOf(b.list) || (a.list === "needs" ? b.needsOwner - a.needsOwner : 0) || (Date.parse(b.lastActivity ?? 0) || 0) - (Date.parse(a.lastActivity ?? 0) || 0) || a.name.localeCompare(b.name));
   const archived = projects.filter(project => project.archived).map(project => ({ key: project.key, name: project.name, tasks: project.tasks, needsOwner: project.needsOwner }));
   const agents = agentsOf(sources, groups, groupOf, byKey, at);
-  return { at: new Date(at).toISOString(), tasks, programs, programNeeds: liveNeeds, projects, notes, agents, columns: COLUMNS.map(([key, name]) => ({ key, name, tasks: columnOf(key, visible), archivedTasks: columnOf(key, shown.filter(task => task.archived)), needsOwner: visible.some(task => task.column === key && task.reasons.length) })), needsOwner: visible.filter(task => task.reasons.length), archived, counts: { tasks: visible.length, needsOwner: visible.filter(task => task.reasons.length).length + liveNeeds.length, recordedAgents: visible.reduce((n, task) => n + task.agents.filter(agent => !agent.stale).length, 0), inferredWork: visible.filter(task => task.inferredWork).length, inReview: visible.filter(task => task.column === "review").length }, sources: sources.map(source => ({ id: source.id, label: source.label, standIn: standIn(source), diagnostics: source.diagnostics })), diagnostics: sources.flatMap(source => [...source.diagnostics.map(message => ({ source: source.id, message: plainProblem(message) })), ...source.projects.flatMap(project => project.diagnostics.map(message => ({ source: source.id, project: project.key, message: plainProblem(message) })))]), warnings: sources.flatMap(source => source.projects.flatMap(project => (project.warnings ?? []).map(message => ({ source: source.id, project: project.key, message: plainProblem(message) })))) };
+  return { at: new Date(at).toISOString(), tasks, programs, programNeeds: liveNeeds, projects, notes, agents, columns: COLUMNS.map(([key, name]) => ({ key, name, tasks: columnOf(key, visible), archivedTasks: columnOf(key, shown.filter(task => task.archived)), needsOwner: visible.some(task => task.column === key && task.reasons.length) })), needsOwner: visible.filter(task => task.reasons.length), archived, counts: { tasks: visible.length, needsOwner: visible.filter(task => task.reasons.length).length + liveNeeds.length, recordedAgents: visible.reduce((n, task) => n + task.agents.filter(agent => !agent.stale).length, 0), inferredWork: visible.filter(task => task.inferredWork).length, inReview: visible.filter(task => task.column === "review").length }, sources: sources.map(source => ({ id: source.id, label: source.label, standIn: standIn(source), diagnostics: source.diagnostics, ...(source.shared && { shared: true }) })), changing: changingOf(sources, groupOf), diagnostics: sources.flatMap(source => [...source.diagnostics.map(message => ({ source: source.id, message: plainProblem(message) })), ...source.projects.flatMap(project => project.diagnostics.map(message => ({ source: source.id, project: project.key, message: plainProblem(message) })))]), warnings: sources.flatMap(source => source.projects.flatMap(project => (project.warnings ?? []).map(message => ({ source: source.id, project: project.key, message: plainProblem(message) })))) };
 }

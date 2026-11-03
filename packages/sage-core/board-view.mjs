@@ -20,11 +20,27 @@ export function landingRule(sources, logbookKey = null) {
   };
 }
 
+/**
+ * The sources of the in-session board: the provider's root, with today's label and the provider whose hook writes its
+ * notes (F-T624-3), and the shared root (T306), where a shared project's logbook is, its key shared/<folder>.
+ */
+export const sessionSources = (root, shared, provider) => [{ id: "current", label: "Current provider", path: root, hookProvider: provider }, { id: "shared", label: "Shared", path: shared }];
+/**
+ * The provider roots of the in-session board, where an old logbook may be: the tool's own root, then the adapter's legacy
+ * roots. The own root is its provider's when the adapter names another root; one root for both (SAGE_HOME) has no
+ * provider, and the board does not know another root's provider (F-T624-10).
+ */
+export const sessionRoots = (root, legacy, provider) => [...new Set([root, ...legacy].map(path => resolve(path)))].map((path, i, roots) => ({ path, provider: i === 0 && roots.length > 1 ? provider : null }));
+
 const fold = value => String(value).normalize("NFC").toLowerCase();
-export function boardView({ sources, scope = "all", project = null, logbookKey = null, taskId = null, format = "chat", now = new Date().toISOString() }) {
+/**
+ * here: the key of the current project's shared logbook (T306), which names "this" project from any folder of it.
+ * providerRoots: the provider roots where an old logbook of a shared project may be, beyond the sources.
+ */
+export function boardView({ sources, scope = "all", project = null, logbookKey = null, here = null, providerRoots = [], taskId = null, format = "chat", now = new Date().toISOString() }) {
   if (!["chat", "task", "status", "html"].includes(format)) throw new TypeError("unknown board format");
   if (taskId !== null && !/^T[1-9]\d*$/.test(taskId)) throw new TypeError("task id must be T followed by a positive number");
-  const snapshots = readBoardSources(sources, { now: Date.parse(now), logbookKey });
+  const snapshots = readBoardSources(sources, { now: Date.parse(now), logbookKey, providerRoots });
   const projects = snapshots.flatMap(source => source.projects);
   let keys = new Set(projects.map(book => book.key));
   // An exact logbook key (source/folder) chooses that one logbook. Any other scope chooses projects as the board shows them:
@@ -39,9 +55,10 @@ export function boardView({ sources, scope = "all", project = null, logbookKey =
     let selected;
     if (scope === "this") {
       if (!project) throw new RangeError("this board needs the current project");
-      let here = projects.filter(book => book.checkout && resolve(book.checkout) === resolve(project));
-      if (!here.length) here = projects.filter(book => fold(bare(book.name)) === fold(basename(project)));
-      selected = groups.filter(group => group.books.some(key => here.some(book => book.key === key)));
+      let mine = projects.filter(book => book.key === here);
+      if (!mine.length) mine = projects.filter(book => book.checkout && resolve(book.checkout) === resolve(project));
+      if (!mine.length) mine = projects.filter(book => fold(bare(book.name)) === fold(basename(project)));
+      selected = groups.filter(group => group.books.some(key => mine.some(book => book.key === key)));
     // A scope is any name that the board shows or that the logbook has: its key, its folder with or without the hash, its
     // checkout's folder, or its shown name (the display name, else the upstream or origin repository's name).
     } else selected = groups.filter(group => [group.key, group.name, ...group.terms, ...group.terms.map(bare), ...projects.filter(book => group.books.includes(book.key)).map(projectName)].some(name => fold(name) === fold(scope)));
@@ -50,7 +67,9 @@ export function boardView({ sources, scope = "all", project = null, logbookKey =
   }
   const model = buildBoardModel(snapshots.map(source => ({ ...source, projects: source.projects.filter(book => keys.has(book.key)) })), { now, landing: landingRule(sources, logbookKey) });
   if (taskId) {
-    const tasks = model.tasks.filter(task => task.id === taskId);
+    // A task id names the shared logbook's task: an old logbook's number belongs to that old logbook (T306), and its key scope finds it.
+    const found = model.tasks.filter(task => task.id === taskId), own = found.filter(task => !task.old);
+    const tasks = found.length > 1 && own.length === 1 ? own : found;
     if (tasks.length !== 1) {
       if (tasks.length) throw new RangeError(`The task is ambiguous. Choose its project: ${tasks.map(task => task.project).join(", ")}`);
       const nearby = [...new Set(model.tasks.map(task => task.id))].sort((a,b) => Math.abs(Number(a.slice(1)) - Number(taskId.slice(1))) - Math.abs(Number(b.slice(1)) - Number(taskId.slice(1)))).slice(0, 3);
