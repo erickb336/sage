@@ -284,6 +284,17 @@ function bindingsOf(root, budget) {
 }
 
 /**
+ * A shared logbook's rows of bindings.tsv (T633), in link order, at most 64, with one lstat each and no Git command. A row
+ * that has no first commit in common with the owner row is a foreign one, which the state tool refuses (disjoint): only
+ * its folder name stays. The others are the logbook's checkouts.
+ */
+function linkedCheckouts(rows, folder, owner) {
+  const mine = rows.filter(row => row.folder === folder).sort((a, b) => a.at.localeCompare(b.at)).slice(0, 64);
+  const foreign = row => !!owner && !!row.commits && !row.commits.split(",").some(commit => owner.commits.split(",").includes(commit));
+  return { checkouts: mine.filter(row => !foreign(row)).map(row => ({ root: row.root, gone: goneRoot(row) })), foreignCheckouts: mine.filter(foreign).map(row => basename(row.root)) };
+}
+
+/**
  * The old logbooks that a shared logbook's sources.tsv names (T306, the move): each row is a provider, a path and a time.
  * The board reads a path only when it is a logbook folder directly under a known provider root, not a link, with the
  * move's mark moved.json, and its row names the root's provider (when the board knows it); any other row is a
@@ -352,8 +363,10 @@ export function readBoardSources(sources, { now = Date.now(), logbookKey = null,
         const base = { key: `${source.id}/${entry.name}`, source: source.id, name: entry.name, logbook: createHash("sha256").update(join(source.path, entry.name)).digest("hex"), ...(shared && { shared: true }) };
         if (!entry.isDirectory() || entry.isSymbolicLink()) { result.projects.push({ ...base, tables: {}, diagnostics: ["project is not a directory"], warnings: [] }); continue; }
         const directory = join(source.path, entry.name);
-        const project = consistentRead(directory, base, budget, { now, bound: shared ? ownerOf(bindings.rows, entry.name)?.root ?? null : undefined, duringRead });
+        const owner = shared ? ownerOf(bindings.rows, entry.name) : undefined;
+        const project = consistentRead(directory, base, budget, { now, bound: shared ? owner?.root ?? null : undefined, duringRead });
         if (bindings?.problem) project.diagnostics.push(bindings.problem);
+        if (shared) Object.assign(project, linkedCheckouts(bindings.rows, entry.name, owner));
         result.projects.push(project);
         if (!shared || logbookKey !== null) continue;
         // The finished tasks of the old logbooks stay there, read-only. Each shows once, in this project, with its provider.

@@ -9,7 +9,7 @@ import { mkdirSync, mkdtempSync, readFileSync, readdirSync, realpathSync, rename
 import { request } from "node:http";
 import { createServer } from "node:net";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { basename, join } from "node:path";
 import { changedPart, readBoardSources } from "../packages/sage-core/board-reader.mjs";
 import { buildBoardModel } from "../packages/sage-core/board-model.mjs";
 import { cardFits, renderBoardHtml, renderBoardText, renderTaskText, renderAgentsHtml } from "../packages/sage-core/board-render.mjs";
@@ -522,4 +522,127 @@ test("T625: a shared run shows its checkout folder under its role, never the pat
   assert.doesNotMatch(t41, /class="faint ck"|class="cknote"|lantern \(gone\)/);
   assert.match(renderTaskText(legacy.tasks.find(item => item.id === "T41")), /^R5 .* · implementer · running · /m);
   assert.ok(!t41.includes(moved));
+});
+
+// T633 (PR 6b of the T306 shared logbook): one shared project with two or more linked checkouts.
+/** Lantern with more rows in bindings.tsv, each [folder, at, commits], after the world's own row. A live folder has a Git config of sample-owner/lantern. */
+function linked(t, extra, { live = extra.map(([path]) => path) } = {}) {
+  const w = world(t), at = path => join(w.base, path);
+  const row = ([root, when, commits = "a".repeat(40)]) => `${root}\t${FOLDER}\t${commits}\t${when}`;
+  writeFileSync(join(w.shared, "bindings.tsv"), ["root\tfolder\tcommits\tat", row([w.checkout, "2026-10-01T00:00:00Z"]), ...extra.map(([path, ...rest]) => row([at(path), ...rest]))].join("\n") + "\n");
+  for (const path of live) { mkdirSync(join(at(path), ".git"), { recursive: true }); writeFileSync(join(at(path), ".git", "config"), `[remote "origin"]\n\turl = git@github.com:sample-owner/lantern.git\n`); }
+  return { ...w, at };
+}
+/** The views that a person reads: the board (shared page, own page, chat), T321's task page and chat text, and the Agents page. */
+const viewsOf = model => [renderBoardHtml(model), renderBoardHtml(model, { snapshot: false }), renderBoardText(model), renderBoardHtml(model, { taskKey: `shared/${FOLDER}/T321`, snapshot: false }), renderTaskText(card(model, "T321")), renderAgentsHtml(model)];
+/** T321's runs from these checkouts, then the model, the Lantern project and the views. */
+function withRuns(w, checkouts) {
+  writeFileSync(join(w.shared, FOLDER, "runs.tsv"), sheet(`${COLS.runs} checkout`, checkouts.map((checkout, i) => run(`R50${i}`, "T321", "implementer", "running", iso(-(10 + i) * MIN), { chief: "C1", checkout }))));
+  const model = modelOf(w.sources), views = viewsOf(model);
+  return { model, lantern: model.projects.find(project => project.books.includes(`shared/${FOLDER}`)), views, html: views[3], text: views[4] };
+}
+const noPath = (w, views) => { for (const out of views) assert.ok(!out.includes(w.base), "no page or chat text holds a checkout path"); };
+
+test("T633: one checkout reads as before: its row adds nothing to the board, the task page or the chat text", t => {
+  const w = linked(t, []);
+  writeFileSync(join(w.shared, FOLDER, "runs.tsv"), sheet(`${COLS.runs} checkout`, [run("R500", "T321", "implementer", "running", iso(-10 * MIN), { chief: "C1", checkout: w.checkout })]));
+  const read = readBoardSources(w.sources, { now: NOW });
+  assert.deepEqual(read.find(source => source.shared).projects[0].checkouts, [{ root: w.checkout, gone: false }], "the reader has the row");
+  // The input as it was before T633: a shared logbook with no rows of its own.
+  const before = read.map(source => ({ ...source, projects: source.projects.map(({ checkouts, foreignCheckouts, ...project }) => project) }));
+  const now = buildBoardModel(read, { now: iso() });
+  assert.deepEqual(viewsOf(now), viewsOf(buildBoardModel(before, { now: iso() })));
+  assert.equal(now.projects.find(project => project.name === "lantern").sub, "sample-owner/lantern · folder lantern");
+  assert.match(viewsOf(now)[4], /^R500 Claude · implementer · checkout lantern · running · /m);
+  assert.deepEqual(now.notes, []);
+});
+
+test("T633: two live checkouts show both names in the picker line and on their runs, and search finds either folder", t => {
+  const w = linked(t, [["lantern-b", "2026-10-02T00:00:00Z"]]);
+  const { model, lantern, views, html, text } = withRuns(w, [w.checkout, w.at("lantern-b")]);
+  assert.equal(model.projects.filter(project => project.name === "lantern").length, 1, "one project");
+  assert.equal(lantern.sub, "sample-owner/lantern · 2 checkouts: lantern, lantern-b");
+  assert.match(views[1], /2 checkouts: lantern, lantern-b/);
+  assert.match(html, /<td class="id">R500<\/td><td><span class="ptag ptag-claude">Claude<\/span><\/td><td>implementer<div class="faint ck">checkout lantern<\/div><\/td>/);
+  assert.match(html, /<td class="id">R501<\/td><td><span class="ptag ptag-claude">Claude<\/span><\/td><td>implementer<div class="faint ck">checkout lantern-b<\/div><\/td>/);
+  assert.match(text, /^R501 Claude · implementer · checkout lantern-b · running · /m);
+  assert.ok(lantern.terms.includes("lantern-b"));
+  noPath(w, views);
+  // Only the Mac's own page carries the paths, as search terms.
+  assert.ok(renderBoardHtml(model, { snapshot: false, paths: true }).includes(w.at("lantern-b")));
+});
+
+test("T633: two checkouts of one folder name get #1 and #2 by link order, and a gone #1 keeps #2 on the second", t => {
+  const w = linked(t, [["clones/lantern", "2026-10-02T00:00:00Z"]]);
+  const both = withRuns(w, [w.checkout, w.at("clones/lantern")]);
+  assert.equal(both.lantern.sub, "sample-owner/lantern · 2 checkouts: lantern #1, lantern #2");
+  assert.match(both.html, /<td class="id">R500<\/td><td><span class="ptag ptag-claude">Claude<\/span><\/td><td>implementer<div class="faint ck">checkout lantern #1<\/div><\/td>/);
+  assert.match(both.text, /^R501 Claude · implementer · checkout lantern \\#2 · running · /m);
+  noPath(w, both.views);
+  rmSync(w.checkout, { recursive: true });
+  const gone = withRuns(w, [w.checkout, w.at("clones/lantern")]);
+  assert.equal(gone.lantern.sub, "sample-owner/lantern · folder lantern", "only live checkouts count");
+  assert.match(gone.text, /^R500 Claude · implementer · checkout lantern \\#1 \(gone\) · running · /m);
+  assert.match(gone.text, /^R501 Claude · implementer · checkout lantern \\#2 · running · /m);
+  noPath(w, gone.views);
+});
+
+test("T633: a row with no first commit in common is one logbook note with its folder name, and it is not a checkout", t => {
+  const w = linked(t, [["work/harbor-new", "2026-10-02T00:00:00Z", "b".repeat(40)]]);
+  const { model, lantern, views } = withRuns(w, [w.checkout]);
+  assert.equal(lantern.sub, "sample-owner/lantern · folder lantern");
+  const message = "A checkout named harbor-new is linked to this logbook, but it has no first commit in common with it. sage does not use that link: commands in harbor-new stop and offer a new link. Ask the chief in harbor-new.";
+  assert.deepEqual(model.notes, [{ source: "shared", project: FOLDER, message }]);
+  assert.match(views[0], /<b>Logbook notes\.<\/b>[^]*?<li>shared · lantern-4be1a2 · A checkout named harbor-new is linked to this logbook/);
+  noPath(w, views);
+});
+
+test("T633 (Q3): the in-session board of an unlinked clone does not show a shared logbook of the same folder name", t => {
+  const w = world(t), clone = join(w.base, "elsewhere", "lantern");
+  mkdirSync(clone, { recursive: true });
+  const board = (project, here = null) => view.boardView({ sources: w.sources, scope: "this", project, here, format: "chat", now: iso() });
+  assert.throws(() => board(clone), /No recorded project matches this board scope/);
+  assert.match(board(clone, `shared/${FOLDER}`), /T321 Show the board in both providers/, "a linked clone finds it by its logbook");
+  assert.match(board(join(w.base, "harbor")), /T41 Legacy task at work/, "a legacy logbook still matches by folder name");
+});
+
+// B1 of the PE plan (R2439): the board of "this" project finds a shared logbook from each linked clone, by its logbook.
+test("T633: one project with two linked clones: the board of this project from either clone, the owner when one is gone, one Agents group", t => {
+  const base = realpathSync(mkdtempSync(join(tmpdir(), "sage-board-clones-")));
+  t.after(() => rmSync(base, { recursive: true, force: true }));
+  const env = { ...process.env, HOME: join(base, "home"), CLAUDE_CONFIG_DIR: join(base, "claude"), CODEX_HOME: join(base, "codex"), SAGE_SHARED_HOME: join(base, "shared"), SAGE_TEST_PIDS: "{}" };
+  delete env.SAGE_HOME;
+  const a = join(base, "lantern"), b = join(base, "lantern-b");
+  const git = (cwd, ...args) => execFileSync("git", args, { cwd, stdio: "ignore", env: { ...env, GIT_AUTHOR_NAME: "t", GIT_AUTHOR_EMAIL: "t@example.com", GIT_COMMITTER_NAME: "t", GIT_COMMITTER_EMAIL: "t@example.com" } });
+  mkdirSync(a);
+  git(a, "init", "-q", "-b", "main"); git(a, "commit", "-q", "--allow-empty", "-m", "first");
+  git(base, "clone", "-q", a, b);
+  claude.sage(["link", "--separate", "--project", a], env);
+  claude.sage(["link", "--to", basename(claude.logbookView(a, env).dir), "--project", b], env);
+  claude.sage(["task", "add", "--title", "Task from clone A", "--size", "small", "--priority", "P2", "--project", a, "--chief", claude.chiefFor(a, "session-a", env)], env);
+  claude.sage(["task", "add", "--title", "Task from clone B", "--size", "small", "--priority", "P2", "--project", b, "--chief", claude.chiefFor(b, "session-b", env)], env);
+  const chat = project => claude.sage(["board", "this", "--view", "chat", "--project", project], env);
+  for (const project of [a, b]) for (const title of ["T1 Task from clone A", "T2 Task from clone B"]) assert.ok(chat(project).includes(title), `${title} from ${basename(project)}`);
+  const sources = [{ id: "shared", label: "Shared", path: sharedRoot(env) }];
+  assert.deepEqual(modelOf(sources).projects.map(project => [project.name, project.sub]), [["lantern", "no GitHub remote · 2 checkouts: lantern, lantern-b"]]);
+  // The Agents page: a lead slot of each clone carries the hook's name of the one logbook (digest(view.dir)), so they are one group.
+  const mark = createHash("sha256").update(claude.logbookView(b, env).dir).digest("hex"), slots = join(env.CLAUDE_CONFIG_DIR, "sage", ".hooks", "slots");
+  assert.equal(mark, createHash("sha256").update(claude.logbookView(a, env).dir).digest("hex"));
+  // A running lead of each task, from its own clone (sample rows in the scratch logbook's runs table).
+  const runsFile = join(claude.logbookView(a, env).dir, "runs.tsv"), columns = readFileSync(runsFile, "utf8").split("\n")[0].split("\t").join(" ");
+  writeFileSync(runsFile, sheet(columns, [run("R1", "T1", "lead", "running", iso(-MIN), { chief: "C1", checkout: a }), run("R2", "T2", "lead", "running", iso(-MIN), { chief: "C2", checkout: b })]));
+  mkdirSync(join(env.CLAUDE_CONFIG_DIR, "sage", ".hooks", "helpers"), { recursive: true });
+  for (const [name, runId] of [["slot-1", "R1"], ["slot-2", "R2"]]) { mkdirSync(join(slots, name), { recursive: true }); for (const file of ["ok", "project-lantern", "role-sage_lead", `run-${runId}`, `logbook-${mark}`]) writeFileSync(join(slots, name, file), ""); }
+  const agents = modelOf([{ id: "claude", label: "Claude", provider: "claude", path: join(env.CLAUDE_CONFIG_DIR, "sage") }, ...sources]).agents.projects;
+  assert.deepEqual(agents.map(group => group.name), ["lantern"]);
+  assert.deepEqual(agents[0].agents.map(agent => [agent.runId, agent.state]).sort(), [["R1", "work"], ["R2", "work"]], "each slot holds its run");
+  // A gone owner: the board from B still shows the project, and B's row names it now.
+  renameSync(a, `${a}.away`);
+  assert.ok(chat(b).includes("T1 Task from clone A"));
+  assert.equal(readBoardSources(sources, { now: NOW })[0].projects[0].checkout, b);
+  assert.equal(modelOf(sources).projects[0].sub, "no GitHub remote · folder lantern-b");
+  // A gone B: the board from A shows the project, and A owns it again.
+  renameSync(`${a}.away`, a); renameSync(b, `${b}.away`);
+  assert.ok(chat(a).includes("T2 Task from clone B"));
+  assert.equal(modelOf(sources).projects[0].sub, "no GitHub remote · folder lantern");
 });
