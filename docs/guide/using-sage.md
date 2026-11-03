@@ -290,12 +290,23 @@ The chief runs a link only after your answer in the chat:
 
 A Codex chief calls the `link` tool of the same name. A retry changes nothing.
 
+When a command stops in a new clone, or in a folder with a wrong link, the chief asks you one choice in the chat, with its recommendation. The text of the choice comes from the state tool's refusal, so both providers ask it in the same words:
+
+| The command stops because | Your options |
+| --- | --- |
+| This folder has no row, but it has the first commit of a shared logbook | Link to that project (for a second clone), or start separate (for a fork that is now its own project). The recommendation follows the GitHub remote: the same remote recommends the link, another remote (a fork) recommends separate, and no remote recommends the link. When two shared logbooks have that first commit, the one with the same remote is recommended. |
+| This folder's row names another project's logbook | Start separate, or link to another project by its name |
+| This folder's row names a logbook that is missing | Restore the folder from a copy, start separate, or link to another project |
+
+No sage command can change the answer later. After a link, the board shows one project with each linked checkout, for example `2 checkouts: lantern, lantern-b` (see [the board guide](board.md)).
+
 | Situation | Result |
 | --- | --- |
 | The project has a logbook in the Claude or Codex root | The link refuses, because the link would hide its tasks. Keep using that logbook. A later command moves existing projects. |
 | The checkout is already linked to another logbook | The link refuses. A checkout has one logbook, so keep using that one. Only the move can take a checkout to another logbook, and no command does the move today: a later sage adds it. |
-| You moved a checkout or cloned it again, so its new path has no row | Each command and `init` refuse and name the logbook with the same first commit. Run `sage link --to <folder>`, or `sage link --separate` for another project. The old row stays and does no harm. |
+| You moved a checkout or cloned it again, so its new path has no row | Each command and `init` refuse with the link prompt: it names the logbook with the same first commit, and the command of each choice (`sage link --to <folder>`, or `sage link --separate` for another project). The old row stays and does no harm. |
 | `--to` names a logbook whose owner has no first commit in common with this checkout | The link refuses. A shallow clone needs its full history first: `git fetch --unshallow`. |
+| A new clone is shallow, or Git cannot read its first commit (a damaged repository, or more than 5 s) | No refusal names the shared logbook, so `init` makes a legacy logbook, and a later link refuses: it would hide that logbook's tasks. Before `init`, run `git fetch --unshallow` or repair the repository, then run the command again. |
 | The Git call for the first commit takes more than 5 s | The link refuses and makes no row. Run the link again. A later write of a row with no commits tries again. |
 | Git cannot read the repository: for example a broken config, an unknown repository extension, or a garbage HEAD or branch ref | The link refuses and makes no row, and a later write of a row with no commits tries again. Repair the repository, then run the link again. Never delete a `.git` folder: it holds the history and any unpushed work. |
 | The checkout is a linked worktree whose target is gone: its `.git` is a file that points to a removed worktree | The link refuses and makes no row. Repair the worktree, or delete that `.git` file, then run the link again. |

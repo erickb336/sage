@@ -57,7 +57,8 @@ export function boardView({ sources, scope = "all", project = null, logbookKey =
       if (!project) throw new RangeError("this board needs the current project");
       let mine = projects.filter(book => book.key === here);
       if (!mine.length) mine = projects.filter(book => book.checkout && resolve(book.checkout) === resolve(project));
-      if (!mine.length) mine = projects.filter(book => fold(bare(book.name)) === fold(basename(project)));
+      // A folder name never finds a shared logbook or its old ones: an unlinked clone of one name is not linked (T633).
+      if (!mine.length) mine = projects.filter(book => !book.shared && !book.old && fold(bare(book.name)) === fold(basename(project)));
       selected = groups.filter(group => group.books.some(key => mine.some(book => book.key === key)));
     // A scope is any name that the board shows or that the logbook has: its key, its folder with or without the hash, its
     // checkout's folder, or its shown name (the display name, else the upstream or origin repository's name).

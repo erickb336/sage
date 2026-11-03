@@ -90,6 +90,9 @@ A project with a [shared logbook](using-sage.md#shared-logbooks) shows as one pr
 | A Provider column | The runs of a shared task's page | The provider of each run, from the run's chief in `chiefs.tsv`. A run with no chief shows a dotted stand-in. |
 | `checkout lantern`, under the role | The runs of a shared task's page | The folder of the checkout that the run started from: its name only, never its path. A run from before this line has none. |
 | `checkout lantern · gone` | The same | That folder is not on this Mac now. While the task is active, one note under the runs says that its next review step stops until the folder is back. |
+| `checkout lantern #2` | The same | Two linked checkouts have the folder name lantern. The number is the link order, and it never moves to another folder, also when the other folder is gone. The chief's message after the link says which folder has which number. |
+| `sample-owner/lantern · 2 checkouts: lantern, lantern-b` | The second line of a shared project in the project picker | Two or more linked checkouts of the project are on this Mac, in link order. A gone checkout does not count, and one checkout shows `folder lantern`, as before. |
+| `A checkout named harbor-new is linked to this logbook, but it has no first commit in common with it.` | Logbook notes, over the board | A row of `bindings.tsv` links that folder to the logbook of another project. The board does not count it as a checkout. Commands in that folder stop: ask the chief there. |
 | `Old · Claude · read-only` or `Old · Codex · read-only` | A card in Done, and its task page | A finished task that stayed in its old logbook when the project moved. Its number belongs to the old logbook. |
 | `The logbook is changing.` | A note over the board | The board read the logbook 3 times, and it changed during each read. When a part of the last read changed while the board read it, the note names that part, because it does not show. |
 | `The owning chief is not in chiefs.tsv.` | The task page | The task names a chief id that `chiefs.tsv` does not list, so the board does not know its provider. The card shows the id. |
@@ -103,7 +106,7 @@ A project with a [shared logbook](using-sage.md#shared-logbooks) shows as one pr
 - **The changing note:** the board reads a logbook again when it changed during the read, at most 3 times. After the third change, the board page keeps its last good read under the note, and the next read with no change removes it.
 - **The changing note in the chat:** the chat board has no earlier read, so it shows its third read with the note. Ask for the board again.
 - **Agents:** a run of a shared logbook joins its agent slot in its provider's root. So a Claude run with a slot shows as at work, not as "may be stuck".
-- **"Show board" in a session:** the chat board finds a shared project from its checkout, a worktree or a subfolder. A task view (`board T<n> --view task`) shows the task of the shared logbook, also when an old logbook has a task of the same id.
+- **"Show board" in a session:** the chat board finds a shared project from its checkout, a worktree, a subfolder or another linked clone. A clone with no row does not find a shared project by its folder's name: link it first. A task view (`board T<n> --view task`) shows the task of the shared logbook, also when an old logbook has a task of the same id.
 
 ## The Agents page
 

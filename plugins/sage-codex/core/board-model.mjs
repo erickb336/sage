@@ -45,6 +45,12 @@ const standIn = source => source.provider ?? source.label ?? source.id;
 // then its main checkout's folder, then its logbook folder without the hash.
 export const projectName = project => project.displayName ?? [project.upstream, project.repository].map(url => githubRepository(url)?.split("/").at(-1)).find(Boolean)
   ?? (project.checkout ? basename(project.checkout) : project.name.replace(/-[0-9a-f]{6}$/, ""));
+// A linked checkout's label (T633): its folder name, and " #n" by link order when two checkouts of its logbook share
+// that name. A gone checkout keeps its place, so a number never moves to another folder. ("clone n" names two projects.)
+const checkoutLabel = (checkouts, root) => {
+  const name = basename(root), same = (checkouts ?? NONE).filter(item => basename(item.root) === name), n = same.findIndex(item => item.root === root);
+  return same.length > 1 && n >= 0 ? `${name} #${n + 1}` : name;
+};
 // A priority's rank: P0 first, no priority last.
 const rank = task => task.priority ? PRIORITIES.indexOf(task.priority) : PRIORITIES.length;
 const positive =value => /^([1-9]\d*)$/.test(String(value)) ? Number(value) : null;
@@ -296,7 +302,7 @@ function card(source, project, group, task, now, graph, landing) {
   const shared = !!project.shared, chiefs = project.chiefs ?? NONE, chiefOf = id => chiefs.find(chief => chief.id === id);
   // A run's checkout (T625) leaves the model as its folder name and a gone flag, never as a path, so no page can print the path (R1069-2).
   const goneCheckouts = project.goneCheckouts ?? NONE;
-  const where = checkout => shared && checkout?.startsWith("/") ? { checkoutName: basename(checkout), checkoutGone: goneCheckouts.includes(checkout) } : {};
+  const where = checkout => shared && checkout?.startsWith("/") ? { checkoutName: checkoutLabel(project.checkouts, checkout), checkoutGone: goneCheckouts.includes(checkout) } : {};
   const runs = rows(project, "runs", task).map(({ checkout, ...run }) => { const evidence = latest(records, "run", data => data.run === run.id); const chief = shared ? chiefOf(run.chief) : null; return { ...run, ...where(checkout), evidence, provider: evidence?.data.provider ?? (chief ? title(chief.provider) : null), clock: runClock(run.started, now, lastActivity) }; });
   const agents = runs.filter(run => run.status === "running").map(run => ({ id: run.id, role: run.role, provider: run.provider, evidence: run.evidence, recordedStatus: run.status, stale: run.clock.stale }));
   const label = id => chiefOf(id) ? `${title(chiefOf(id).provider)} · ${id}` : id;
@@ -461,7 +467,11 @@ function projectGroups(sources) {
     // The quiet second line names the next source of the name (notes, section 2): the repository as owner/repo, or first
     // that there is no GitHub remote, then the folder. Two projects that would show the same lines show the end of their paths.
     const remote = full ? `${full}${!merged.displayName && repoPath(merged.upstream) ? " (upstream)" : ""}` : null;
-    const sub = merged.checkout || remote ? [remote ?? "no GitHub remote", folder && `folder ${folder}`] : [`logbook ${merged.name}`];
+    // A shared project with two or more live checkouts names them all, in link order (T633). A foreign row is a note.
+    const linked = own.flatMap(book => book.project.checkouts ?? NONE), live = linked.filter(item => !item.gone);
+    const where = live.length > 1 ? `${live.length} checkouts: ${live.map(item => checkoutLabel(linked, item.root)).join(", ")}` : folder && `folder ${folder}`;
+    for (const book of own) for (const name of book.project.foreignCheckouts ?? NONE) note([book], `A checkout named ${name} is linked to this logbook, but it has no first commit in common with it. sage does not use that link: commands in ${name} stop and offer a new link. Ask the chief in ${name}.`);
+    const sub = merged.checkout || remote ? [remote ?? "no GitHub remote", where] : [`logbook ${merged.name}`];
     Object.assign(group, {
       // A project that no logbook can name, because every logbook of it is unreadable, is named by its folder, with the
       // reason (the prototype's failure state). One unreadable logbook does not rename what the others name (F-T305-3), and
@@ -474,8 +484,8 @@ function projectGroups(sources) {
       sub: unique(sub).join(" · "),
       // Search matches every name a person may know: the display names, the repositories, the folder and the logbook keys.
       // The checkout paths are apart: only the Mac's own page carries them (R1069-2).
-      terms: unique([...names, repoPath(merged.upstream), ...all.map(project => repoPath(project.repository)), folder, merged.name, ...all.map(project => project.key)]),
-      paths: unique(all.map(project => project.checkout)),
+      terms: unique([...names, repoPath(merged.upstream), ...all.map(project => repoPath(project.repository)), folder, ...linked.map(item => basename(item.root)), merged.name, ...all.map(project => project.key)]),
+      paths: unique([...all.map(project => project.checkout), ...linked.map(item => item.root)]),
     });
   }
   // Two projects with the same name and the same second line, such as two clones in two folders of one name: each shows
