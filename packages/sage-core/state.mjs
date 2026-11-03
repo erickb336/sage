@@ -28,7 +28,7 @@ import { ROLES } from "./roles.mjs";
 import { AGENT_CAPS, BREAKS, FINDING_CLASSES, HIDDEN, LINE, NAME_MAX, PRIORITIES, PRIORITY_SCALE, TABLES as PLAIN_TABLES, TASK_KINDS, countOf, nameProblem, proposalOf } from "./logbook-fields.mjs";
 import { BREAKDOWN, ENDED, MET, PROGRAM_ID, TASK_ID, breakdownGate, byIds, dead, droppedBy, gateLines, lostClause, programState, progressOf, progressText, shownGraph, shownWaits, unmetWaits, waitGraph, waitWords, waitsOf, waitsWithState } from "./program-rules.mjs";
 import { OBSERVATIONS_MAX_BYTES, OBSERVATION_DATA_MAX_BYTES, validateObservation, validateObservations } from "./observations.mjs";
-import { createSharedRoot, gone as rowGone, sharedRoot } from "./shared-root.mjs";
+import { checkoutGone, createSharedRoot, sharedRoot } from "./shared-root.mjs";
 import { CHIEF, chiefOnly, createChiefs, offerOf, replaceOf, replaceQuestion, writerClass } from "./chiefs.mjs";
 
 export function createStateTool({ defaultRoot, legacyRoots = () => [], provider, models = ["inherit"], modelDefaults = {}, usageInterfaces = [], claimStep = (task, version, chief) => `run sage claim ${task} --version ${version} --chief ${chief}`, replaceStep = (task, chief) => `run sage gate replace ${task} --to ${chief} --chief ${chief}` }) {
@@ -1567,7 +1567,7 @@ function branchCheckout(dir, project, branch, env) {
   if (!writer?.checkout) return project;
   const row = bindings(dirname(dir)).find((r) => r.folder === basename(dir) && r.root === writer.checkout);
   if (!row) refuse(`The checkout of ${writer.id} is not a checkout of this logbook in bindings.tsv, so sage cannot read ${branch}. Nothing changed.`);
-  if (rowGone(row)) throw Object.assign(new Refusal(`The checkout of ${writer.id} (${visible(basename(row.root))}) is gone, so sage cannot read ${branch}. Nothing changed.`), { goneRun: writer.id });
+  if (checkoutGone(row)) throw Object.assign(new Refusal(`The checkout of ${writer.id} (${visible(basename(row.root))}) is gone, so sage cannot read ${branch}. Nothing changed.`), { goneRun: writer.id });
   return row.root;
 }
 /** Where a branch of a project lives (branchCheckout): sage-pr reads the branch's origin there. A gone checkout refuses with goneRun. */

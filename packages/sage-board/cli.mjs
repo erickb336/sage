@@ -91,9 +91,14 @@ export const providerRoots = (env = process.env) => standardSources(env).filter(
 const SHARED_SOURCE = env => ({ id: "shared", label: "Shared", path: sharedRoot(env) });
 /**
  * The sources that the board reads (T306, C2): the configured ones, and the shared root when no source names it. So a
- * config from before the shared root shows a shared project too. The config file stays as it is.
+ * config from before the shared root shows a shared project too. The config file stays as it is. The reader knows the
+ * shared root by its id, so a source of another id at the shared root's path takes the id "shared" (F-T624-16).
  */
-export const readSources = (sources, env = process.env) => sources.some(source => source.id === "shared" || resolve(source.path) === sharedRoot(env)) ? sources : [...sources, SHARED_SOURCE(env)];
+export const readSources = (sources, env = process.env) => {
+  if (sources.some(source => source.id === "shared")) return sources;
+  const at = sources.findIndex(source => resolve(source.path) === sharedRoot(env));
+  return at < 0 ? [...sources, SHARED_SOURCE(env)] : sources.map((source, i) => i === at ? { ...source, id: "shared" } : source);
+};
 export const defaultConfigPath = (env = process.env) => join(env.HOME ?? homedir(), ".config", "sage-board", "board.json");
 
 /**

@@ -47,8 +47,10 @@ export const projectName = project => project.displayName ?? [project.upstream, 
   ?? (project.checkout ? basename(project.checkout) : project.name.replace(/-[0-9a-f]{6}$/, ""));
 // A linked checkout's label (T633): its folder name, and " #n" by link order when two checkouts of its logbook share
 // that name. A gone checkout keeps its place, so a number never moves to another folder. ("clone n" names two projects.)
+// The name leaves no control or format character (bidi), as md() drops them from the chat text (F-T625-2).
+const folderName = root => basename(root).replace(/[\p{Cc}\p{Cf}\u2028\u2029]/gu, "");
 const checkoutLabel = (checkouts, root) => {
-  const name = basename(root), same = (checkouts ?? NONE).filter(item => basename(item.root) === name), n = same.findIndex(item => item.root === root);
+  const name = folderName(root), same = (checkouts ?? NONE).filter(item => folderName(item.root) === name), n = same.findIndex(item => item.root === root);
   return same.length > 1 && n >= 0 ? `${name} #${n + 1}` : name;
 };
 // A priority's rank: P0 first, no priority last.
@@ -301,8 +303,9 @@ function card(source, project, group, task, now, graph, landing) {
   // A shared logbook (T306) names each run's chief, and chiefs.tsv names the chief's provider (C4): a run keeps its chief for good.
   const shared = !!project.shared, chiefs = project.chiefs ?? NONE, chiefOf = id => chiefs.find(chief => chief.id === id);
   // A run's checkout (T625) leaves the model as its folder name and a gone flag, never as a path, so no page can print the path (R1069-2).
-  const goneCheckouts = project.goneCheckouts ?? NONE;
-  const where = checkout => shared && checkout?.startsWith("/") ? { checkoutName: checkoutLabel(project.checkouts, checkout), checkoutGone: goneCheckouts.includes(checkout) } : {};
+  // checkoutGone is null for a folder past the reader's 64 checks: the board did not check it (F-T625-5).
+  const goneCheckouts = project.goneCheckouts ?? NONE, unchecked = project.uncheckedCheckouts ?? NONE;
+  const where = checkout => shared && checkout?.startsWith("/") ? { checkoutName: checkoutLabel(project.checkouts, checkout), checkoutGone: unchecked.includes(checkout) ? null : goneCheckouts.includes(checkout) } : {};
   const runs = rows(project, "runs", task).map(({ checkout, ...run }) => { const evidence = latest(records, "run", data => data.run === run.id); const chief = shared ? chiefOf(run.chief) : null; return { ...run, ...where(checkout), evidence, provider: evidence?.data.provider ?? (chief ? title(chief.provider) : null), clock: runClock(run.started, now, lastActivity) }; });
   const agents = runs.filter(run => run.status === "running").map(run => ({ id: run.id, role: run.role, provider: run.provider, evidence: run.evidence, recordedStatus: run.status, stale: run.clock.stale }));
   const label = id => chiefOf(id) ? `${title(chiefOf(id).provider)} · ${id}` : id;
@@ -311,7 +314,8 @@ function card(source, project, group, task, now, graph, landing) {
   // Only a breakdown gate keeps its lines (gateLines), and only by the data rule (breakdownGate: a programs row names it,
   // on its pilot, with the breakdown options): the renderers split no other question into lines (R1249-1, the owner's Q1).
   // An open gate that a lost program names (F-T233-2) says so on its own line of the question, so Needs you counts that problem once.
-  const reasons = gates.map(gate => {
+  // An old logbook is read-only, so nobody answers a gate of its finished task there: it does not need you (F-T624-15).
+  const reasons = (project.old && ENDED.includes(task.state) ? NONE : gates).map(gate => {
     const breakdown = breakdownGate(gate, graph.programs);
     const lost = (graph.byGate.get(gate.id) ?? []).filter(program => program.state === "lost").map(program => `${lostWhy(program)}: ${LOST_FIX(program.id)}`);
     // A Replace gate (T618) says its question in one line, from its fixed start: the chiefs, and the runs that end as failed.
@@ -399,7 +403,8 @@ function card(source, project, group, task, now, graph, landing) {
 function holderOf(project, task, runs, label) {
   if (project.old) {
     const provider = project.old.provider;
-    return { old: { provider, label: `Old · ${title(provider)} · read-only` }, who: provider, holder: `Old · ${title(provider)} · read-only` };
+    // An open row that did not move (an unfinished move) is open, not finished (F-T624-25).
+    return { old: { provider, label: `Old · ${title(provider)} · read-only`, finished: ENDED.includes(task.state) }, who: provider, holder: `Old · ${title(provider)} · read-only` };
   }
   if (!project.shared) return {};
   const chief = task.chief ? (project.chiefs ?? NONE).find(row => row.id === task.chief) ?? null : null;
@@ -800,8 +805,11 @@ export function buildBoardModel(input,{ now = new Date().toISOString(), landing 
   if (at === null) throw new TypeError("board time must be an ISO date");
   build++;
   const sources = input.map(source => ({ ...source, projects: source.projects.map(withoutPrograms) }));
-  const { groups, notes } = projectGroups(sources);
+  const { groups, notes: joined } = projectGroups(sources);
   const groupOf = new Map(groups.flatMap(group => group.books.map(book => [book.project.key, group])));
+  // The reader's notes: a shared root that holds no project, and the sources.tsv rows that it did not read (T630).
+  const notes = [...joined, ...sources.flatMap(source => [...(source.notes ?? NONE).map(message => ({ source: source.id, project: title(source.label), message })),
+    ...source.projects.flatMap(project => (project.notes ?? NONE).map(message => ({ source: source.id, project: groupOf.get(project.key)?.name ?? project.name, message })))])];
   const graphs = new Map(sources.flatMap(source => source.projects.map(project => [project.key, graphOf(project)])));
   const tasks = sources.flatMap(source => source.projects.flatMap(project => (project.tables.tasks ?? []).filter(task => /^T[1-9]\d*$/.test(task.id)).map(task => card(source, project, groupOf.get(project.key), task, at, graphs.get(project.key), landing))));
   const byKey = new Map(tasks.map(task => [task.key, task]));

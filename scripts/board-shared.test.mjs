@@ -5,7 +5,7 @@ import test from "node:test";
 import assert from "node:assert/strict";
 import { createHash } from "node:crypto";
 import { execFileSync } from "node:child_process";
-import { mkdirSync, mkdtempSync, readFileSync, readdirSync, realpathSync, renameSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
+import { chmodSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, realpathSync, renameSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import { request } from "node:http";
 import { createServer } from "node:net";
 import { tmpdir } from "node:os";
@@ -182,14 +182,14 @@ test("old logbooks: finished tasks show in Done with their old label, a moved ro
   // The 7-day Done rule stays: an old task that ended 8 days ago is not on a column.
   writeFileSync(join(w.codexRoot, FOLDER, "decisions.tsv"), sheet(COLS.decisions, [{ at: iso(-8 * DAY), task: "T96", decision: "state concluded" }]));
   assert.equal(card(modelOf(w.sources), "T96").visible, false);
-  // A row outside the provider roots, a link and a folder of another name: a diagnostic each, and no read.
+  // A row outside the provider roots, a link and a folder of another name: a note each, and no read.
   const outside = join(w.base, "elsewhere", FOLDER), link = join(w.claudeRoot, "other-111111");
   logbook(outside, { tasks: [task("T1", "Outside", "merged")] }, LEGACY);
   symlinkSync(join(w.codexRoot, FOLDER), link);
   writeFileSync(join(w.shared, FOLDER, "sources.tsv"), `provider\tpath\tat\nclaude\t${outside}\tx\nclaude\t${link}\tx\nclaude\t${join(w.claudeRoot, ".hooks")}\tx\n`);
   const read = readBoardSources(w.sources, { now: NOW }), shared = read.find(source => source.id === "shared");
   assert.deepEqual(shared.projects.map(project => project.key), [`shared/${FOLDER}`]);
-  assert.deepEqual(shared.projects[0].diagnostics, [2, 3, 4].map(line => `sources: line ${line} does not name a moved logbook of its provider under a provider root`));
+  assert.deepEqual([shared.projects[0].diagnostics, shared.projects[0].notes], [[], [2, 3, 4].map(line => `sources: line ${line} does not name a moved logbook of its provider under a provider root`)]);
   // The in-session board knows the other provider's root from the state tool (providerRoots), not as a source.
   writeFileSync(join(w.shared, FOLDER, "sources.tsv"), `provider\tpath\tat\ncodex\t${join(w.codexRoot, FOLDER)}\tx\n`);
   const session = sources => readBoardSources([{ id: "current", path: w.claudeRoot }, { id: "shared", path: w.shared }], { now: NOW, ...sources }).find(source => source.id === "shared");
@@ -399,7 +399,7 @@ test("F-T624-6: a sources.tsv row reads an old logbook only when it has moved.js
   // A Codex row that names the live Claude project Harbor, a Claude row for it (no moved.json), and a Codex row for a Claude old logbook.
   writeFileSync(join(w.shared, FOLDER, "sources.tsv"), `provider\tpath\tat\ncodex\t${join(w.codexRoot, "..", "..", "claude", "sage", HARBOR)}\tx\nclaude\t${join(w.claudeRoot, HARBOR)}\tx\ncodex\t${join(w.claudeRoot, FOLDER)}\tx\n`);
   const read = readBoardSources(w.sources, { now: NOW });
-  assert.deepEqual(read.find(source => source.id === "shared").projects.map(project => [project.key, project.diagnostics]), [[`shared/${FOLDER}`, [2, 3, 4].map(line => `sources: line ${line} does not name a moved logbook of its provider under a provider root`)]]);
+  assert.deepEqual(read.find(source => source.id === "shared").projects.map(project => [project.key, project.diagnostics, project.notes]), [[`shared/${FOLDER}`, [], [2, 3, 4].map(line => `sources: line ${line} does not name a moved logbook of its provider under a provider root`)]]);
   assert.deepEqual(read.find(source => source.id === "claude").projects.map(project => project.key), [`claude/${HARBOR}`, `claude/${FOLDER}`]);
   const t41 = card(buildBoardModel(read, { now: iso() }), "T41");
   assert.deepEqual([t41.key, t41.holder, t41.old], [`claude/${HARBOR}/T41`, undefined, undefined]);
@@ -448,7 +448,7 @@ test("F-T624-13: the board server reads an old logbook under a provider root tha
 
 test("F-T624-9 and F-T624-10: the chat board and the server judge a sources.tsv row by the same provider rule, with one root or two", t => {
   const w = world(t);
-  const oldOf = (sources, roots) => { const model = modelOf(sources, { providerRoots: roots }); return [model.diagnostics.map(item => item.message), model.tasks.filter(item => item.old).map(item => [item.id, item.holder])]; };
+  const oldOf = (sources, roots) => { const model = modelOf(sources, { providerRoots: roots }); return [model.notes.map(item => item.message), model.tasks.filter(item => item.old).map(item => [item.id, item.holder])]; };
   const refused = [["sources: line 2 does not name a moved logbook of its provider under a provider root"], []];
   // Two roots: a Claude row for the Codex root's folder, and a Codex row for the Claude root's folder, are refused in both.
   const session = view.sessionSources(w.claudeRoot, w.shared, "claude"), roots = view.sessionRoots(w.claudeRoot, [w.claudeRoot, w.codexRoot], "claude");
@@ -645,4 +645,115 @@ test("T633: one project with two linked clones: the board of this project from e
   renameSync(`${a}.away`, a); renameSync(b, `${b}.away`);
   assert.ok(chat(a).includes("T2 Task from clone B"));
   assert.equal(modelOf(sources).projects[0].sub, "no GitHub remote · folder lantern");
+});
+
+// T630: old-logbook and sources hardening before the move (PR 7). Each test names the finding it fixes.
+test("F-T630-1 and F-T624-23: a sources.tsv row that the board cannot search, or a folder name over 255 characters, refuses only its own row", t => {
+  const w = world(t), locked = join(w.claudeRoot, "locked-abcdef"), long = join(w.claudeRoot, `${"a".repeat(260)}-abcdef`);
+  logbook(locked, { tasks: [task("T1", "Locked", "merged")] }, LEGACY, { files: { "moved.json": "{}\n" } });
+  writeFileSync(join(w.shared, FOLDER, "sources.tsv"), `provider\tpath\tat\nclaude\t${join(w.claudeRoot, FOLDER)}\tx\nclaude\t${locked}\tx\nclaude\t${long}\tx\n`);
+  chmodSync(locked, 0o000);
+  try {
+    const shared = readBoardSources(w.sources, { now: NOW }).find(source => source.id === "shared");
+    assert.deepEqual(shared.diagnostics, []);
+    assert.deepEqual(shared.projects.map(project => project.key), [`shared/${FOLDER}`, `claude/${FOLDER}`], "the shared project and the good row stay");
+    assert.deepEqual(shared.projects[0].notes, ["sources: line 3 names a folder that the board cannot read (EACCES)", "sources: line 4 names a folder that the board cannot read (ENAMETOOLONG)"]);
+    const model = buildBoardModel(readBoardSources(w.sources, { now: NOW }), { now: iso() });
+    assert.ok(card(model, "T321") && card(model, "T316"), "every shared task shows");
+    assert.deepEqual(model.notes.map(note => [note.project, note.message]), [["lantern", "sources: line 3 names a folder that the board cannot read (EACCES)"], ["lantern", "sources: line 4 names a folder that the board cannot read (ENAMETOOLONG)"]]);
+  } finally { chmodSync(locked, 0o755); }
+});
+
+test("F-T624-14: a sources.tsv row reads only under the provider words claude and codex, also under a root of no known provider", t => {
+  const w = world(t), session = view.sessionSources(w.claudeRoot, w.shared, "claude"), roots = view.sessionRoots(w.claudeRoot, [w.claudeRoot, w.codexRoot], "claude");
+  writeFileSync(join(w.shared, FOLDER, "sources.tsv"), `provider\tpath\tat\ngemini\t${join(w.codexRoot, FOLDER)}\tx\n`);
+  const model = modelOf(session, { providerRoots: roots });
+  assert.deepEqual(model.tasks.filter(item => item.old).map(item => item.holder), [], "no Old · Gemini task");
+  assert.deepEqual(model.notes.map(note => note.message), ["sources: line 2 does not name a moved logbook of its provider under a provider root"]);
+  writeFileSync(join(w.shared, FOLDER, "sources.tsv"), `provider\tpath\tat\ncodex\t${join(w.codexRoot, FOLDER)}\tx\n`);
+  assert.deepEqual(modelOf(session, { providerRoots: roots }).tasks.filter(item => item.old).map(item => item.holder), ["Old · Codex · read-only"], "the codex word reads there");
+});
+
+test("F-T624-15 and F-T624-25: an open gate on a finished old task does not need you; an open row that did not move says that it is open", t => {
+  const w = world(t), old = join(w.claudeRoot, FOLDER);
+  writeFileSync(join(old, "tasks.tsv"), sheet(`${LEGACY.tasks} moved`, [task("T316", "Old finished task of Claude", "merged"), task("T91", "Open row that did not move", "building")]));
+  writeFileSync(join(old, "gates.tsv"), sheet(LEGACY.gates, [{ id: "G7", task: "T316", question: "An open plain gate on a finished old task?", options: "yes|no", at: iso(-DAY) }]));
+  const model = modelOf(w.sources);
+  assert.deepEqual(card(model, "T316").reasons, []);
+  assert.ok(!model.needsOwner.some(item => item.id === "T316"));
+  assert.ok(!renderBoardText(model).includes("An open plain gate on a finished old task"), "not in Needs you");
+  assert.ok(model.needsOwner.some(item => item.id === "T320"), "a gate of the shared logbook still needs you");
+  const open = card(model, "T91");
+  assert.deepEqual([open.holder, open.column, open.old.finished], ["Old · Claude · read-only", "building", false]);
+  assert.match(renderBoardHtml(model, { snapshot: false }), /<span class="who oldtag" title="An open task in the old Claude logbook\. The move did not take it to the shared logbook\.">Old · Claude · read-only<\/span>/);
+  assert.match(renderBoardHtml(model, { taskKey: `claude/${FOLDER}/T91`, snapshot: false }), /<b>An open task of the old Claude logbook\.<\/b> It stays there, read-only: the move did not take it to the shared logbook\./);
+  assert.match(renderTaskText(open), /An open task of the old Claude logbook\\\. The move did not take it to the shared logbook\\\. It stays there/);
+  assert.doesNotMatch(renderBoardHtml(model, { taskKey: `claude/${FOLDER}/T91`, snapshot: false }), /A finished task/);
+  assert.match(renderBoardHtml(model, { snapshot: false }), /title="A finished task in the old Claude logbook\. It did not move\.">Old · Claude · read-only/, "a finished one keeps its words");
+});
+
+test("F-T624-16: a source of another id at the shared root's path reads as the shared root, as readSources counts it", t => {
+  const w = world(t), env = { HOME: join(w.base, "home"), SAGE_SHARED_HOME: w.shared };
+  const sources = readSources([...w.sources.slice(0, 2), { id: "mine", label: "Mine", path: w.shared }], env);
+  assert.deepEqual(sources.map(source => [source.id, source.label]), [["claude", "Claude"], ["codex", "Codex"], ["shared", "Mine"]]);
+  const model = modelOf(sources), lantern = model.projects.find(project => project.books.includes(`shared/${FOLDER}`));
+  assert.equal(lantern?.sub, "sample-owner/lantern · folder lantern", "its checkout comes from bindings.tsv");
+  assert.equal(card(model, "T321").holder, "Claude · C1");
+});
+
+test("F-T624-20: a sources.tsv row that stays refused is a note: the server stays live for every project", async t => {
+  const w = world(t), port = await freePort(), dir = join(w.claudeRoot, HARBOR);
+  const server = createBoardServer({ sources: w.sources, port, settleReads: [] });
+  t.after(() => server.close());
+  await server.start();
+  assert.match((await get(port, "/")).body, /Legacy task at work/);
+  rmSync(join(w.codexRoot, FOLDER), { recursive: true, force: true });
+  await until(port, body => body.includes("Logbook notes"));
+  rewrite(dir, "A change after the refused row");
+  const page = await until(port, body => body.includes("A change after the refused row"));
+  assert.match(page, /sources: line 3 does not name a moved logbook/);
+  assert.doesNotMatch(page, /Incomplete sources/);
+});
+
+test("F-T624-21: the in-session task view of a shared logbook finds an old finished task by its id", t => {
+  const w = world(t), sources = view.sessionSources(w.claudeRoot, w.shared, "claude"), providerRoots = view.sessionRoots(w.claudeRoot, [w.claudeRoot, w.codexRoot], "claude");
+  const task = id => view.boardView({ sources, scope: "this", project: w.checkout, logbookKey: `shared/${FOLDER}`, providerRoots, taskId: id, format: "task" });
+  assert.match(task("T316"), /^\*\*T316 Old finished task of Claude\*\*\nOld · Claude · read-only/);
+  assert.match(task("T96"), /^\*\*T96 Old finished task of Codex\*\*\nOld · Codex · read-only/);
+  assert.match(task("T321"), /^\*\*T321 Show the board in both providers\*\*\nClaude · C1/);
+});
+
+test("F-T624-22: a shared root that is a link or a file gives a legacy-only owner one quiet note, not a lasting diagnostic", t => {
+  const w = world(t), link = join(w.base, "shared-link"), file = join(w.base, "shared-file");
+  symlinkSync(w.shared, link); writeFileSync(file, "");
+  for (const [path, what] of [[link, "a link"], [file, "not a folder"]]) {
+    const model = modelOf([w.sources[0], { id: "shared", label: "Shared", path }]);
+    assert.deepEqual(model.diagnostics, [], path);
+    assert.deepEqual(model.notes, [{ source: "shared", project: "Shared", message: `The shared root is ${what}, so the board reads no shared project there.` }]);
+    assert.ok(card(model, "T41"), "the legacy project shows");
+    assert.doesNotMatch(renderBoardText(model), /Incomplete source/);
+  }
+});
+
+test("F-T625-2, F-T625-5 and F-T625-6: a checkout name loses bidi characters; a folder past the 64 checks says not checked; a file or an empty folder is gone", t => {
+  const w = world(t), dir = join(w.shared, FOLDER), bidi = join(w.base, "abc‮fdp.exe"), file = join(w.base, "now-a-file"), empty = join(w.base, "now-empty");
+  writeFileSync(file, ""); mkdirSync(empty);
+  const many = Array.from({ length: 64 }, (_, i) => join(w.base, `c${i}`));
+  writeFileSync(join(dir, "runs.tsv"), sheet(`${COLS.runs} checkout`, [
+    run("R1", "T321", "implementer", "done", iso(-90 * MIN), { chief: "C1", checkout: bidi }),
+    run("R2", "T321", "implementer", "done", iso(-80 * MIN), { chief: "C1", checkout: file }),
+    run("R3", "T321", "implementer", "done", iso(-70 * MIN), { chief: "C1", checkout: empty }),
+    ...many.map((checkout, i) => run(`R${i + 10}`, "T320", "qa", "done", iso(-60 * MIN), { chief: "C1", checkout })),
+    run("R90", "T320", "qa", "running", iso(-MIN), { chief: "C1", checkout: w.checkout }),
+  ]));
+  const model = modelOf(w.sources), t321 = renderBoardHtml(model, { taskKey: `shared/${FOLDER}/T321`, snapshot: false });
+  assert.ok(!t321.includes("‮") && t321.includes("checkout abcfdp.exe"), "no bidi character on the page");
+  assert.equal(card(model, "T321").runs[0].checkoutName, "abcfdp.exe");
+  assert.match(t321, /checkout now-a-file <span class="gone gone-active"/);
+  assert.match(t321, /checkout now-empty <span class="gone gone-active"/);
+  const t320 = card(model, "T320"), past = t320.runs.find(item => item.id === "R90");
+  assert.deepEqual([past.checkoutName, past.checkoutGone], ["lantern", null], "the 68th distinct path is not checked");
+  assert.equal(t320.runs.find(item => item.id === "R10").checkoutGone, true, "a path within the 64 checks is");
+  assert.match(renderBoardHtml(model, { taskKey: `shared/${FOLDER}/T320`, snapshot: false }), /checkout lantern <span title="The board checks at most 64 checkout folders of a logbook, so it did not check if this one is on this Mac\.">· not checked/);
+  assert.match(renderTaskText(t320), /^R90 Claude · qa · checkout lantern \(not checked\) · running · /m);
 });
