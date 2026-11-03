@@ -11,7 +11,7 @@ import { basename, delimiter, dirname, join } from "node:path";
 import { test } from "node:test";
 import { fileURLToPath } from "node:url";
 import { deflateSync } from "node:zlib";
-import { keepReport, sage as sageTool } from "../plugins/sage/skills/sage/sage.mjs";
+import { chiefFor, keepReport, sage as sageTool } from "../plugins/sage/skills/sage/sage.mjs";
 import { tool as codex } from "../plugins/sage-codex/skills/sage/sage.mjs";
 import { backed } from "./verdict-backing.mjs";
 
@@ -82,11 +82,12 @@ else if (args[1] === "merge") {
  * owner/repo, a logbook with task T1 on branch claude/t1 and a mirror whose config sends that address to the stand-in
  * (route), the fake gh, and a fake ps. The script starts with the kill spy (node --import, not NODE_OPTIONS), so a
  * liveness probe of the lock signals no real process: it lands in kills. Each helper runs one program with an argument array.
+ * shared: the logbook is a shared one in the world's own shared root (sage link --separate), and each write names chief C1.
  */
-function world() {
+function world({ shared = false } = {}) {
   const t = realpathSync(mkdtempSync(join(tmpdir(), "sage-pr-test-")));
   const at = (...p) => join(t, ...p);
-  for (const d of ["home", "gh-config", "sage", "worktrees", "bin"]) mkdirSync(at(d));
+  for (const d of ["home", "gh-config", "sage", "shared", "worktrees", "bin"]) mkdirSync(at(d));
   writeFileSync(at("bin", "gh"), FAKE_GH);
   writeFileSync(at("bin", "ps"), `#!/bin/sh\ntouch ${at("ps-RAN")}\necho "Sat Jan  1 00:00:00 2000"\n`);
   for (const b of ["gh", "ps"]) chmodSync(at("bin", b), 0o755);
@@ -96,6 +97,7 @@ function world() {
     GH_CONFIG_DIR: at("gh-config"),
     GH_TOKEN: "dummy-token-not-real",
     SAGE_HOME: at("sage"),
+    ...(shared ? { SAGE_SHARED_HOME: at("shared") } : {}),
     SAGE_WORKTREES: at("worktrees"),
     SAGE_PROJECT: at("project"),
     SAGE_REPO: "owner/repo",
@@ -114,17 +116,20 @@ function world() {
   };
   const git = (...a) => execFileSync("git", a, { encoding: "utf8", env, stdio: ["ignore", "pipe", "pipe"] }).trim();
   const p = (...a) => git("-C", at("project"), ...a);
+  const chief = [];
   const run = (...a) => {
-    const r = spawnSync("node", [TOOL, ...a, "--project", at("project")], { encoding: "utf8", env, timeout });
+    const r = spawnSync("node", [TOOL, ...a, "--project", at("project"), ...(a[0] === "logbook" ? [] : chief)], { encoding: "utf8", env, timeout });
     assert.equal(r.status, 0, r.stderr);
     return r.stdout;
   };
   // A review or QA verdict gets its backing run first, with its helper's report kept as the hook keeps it (T483).
   const sage = (...a) => run(...backed(a, { cli: (...b) => run(...b).trim(), keep: (fields) => keepReport(at("project"), fields, env) }));
-  const pr = (...a) => {
+  /** sage-pr as the chief runs it: in SAGE_PROJECT, or with SAGE_PROJECT set to the folder given (another clone). */
+  const prIn = (project, ...a) => {
     writeFileSync(at("bin", "fake.json"), JSON.stringify(env));
-    return spawnSync("node", [`--import=${SPY}`, PR, ...a], { encoding: "utf8", env, cwd: at("home"), timeout });
+    return spawnSync("node", [`--import=${SPY}`, PR, ...a], { encoding: "utf8", env: { ...env, SAGE_PROJECT: project }, cwd: at("home"), timeout });
   };
+  const pr = (...a) => prIn(env.SAGE_PROJECT, ...a);
   git("init", "-q", "--bare", "-b", "main", at("remote.git"));
   git("init", "-q", "-b", "main", at("project"));
   writeFileSync(at("project", "a.txt"), "a\n");
@@ -133,7 +138,10 @@ function world() {
   p("remote", "add", "origin", at("remote.git"));
   p("push", "-q", "origin", "main");
   p("remote", "set-url", "origin", ORIGIN);
-  sage("init");
+  if (shared) {
+    run("link", "--separate");
+    chief.push("--chief", chiefFor(at("project"), "session-a", env));
+  } else sage("init");
   sage("task", "add", "--priority", "P2", "--title", "Add b", "--size", "small");
   sage("task", "T1", "set", "branch=claude/t1");
   p("checkout", "-q", "-b", "claude/t1");
@@ -200,7 +208,7 @@ function world() {
   /** The refs of the mirror: none until the script fetched. */
   const mirrored = () => git("--git-dir", mirror, "for-each-ref");
   const kills = () => (existsSync(at("kills")) ? readFileSync(at("kills"), "utf8") : "");
-  return { at, env, git, p, sage, pr, logbook, mirror, route, mirrored, kills, bundle, commit, imports, review, calls, remote, task, forge, github };
+  return { at, env, git, p, sage, pr, prIn, logbook, mirror, route, mirrored, kills, bundle, commit, imports, review, calls, remote, task, forge, github };
 }
 
 /** The id of the latest run of a role, from runs.tsv. */
@@ -1576,5 +1584,97 @@ test("T165-Q8-TRANSIENT: a git failure that is not git's own result 'not a repos
   refused(w.pr("create", "T1"), /the bundle is not a git bundle of the branch claude\/t1/);
   w.p("bundle", "create", "-q", w.bundle, "main..claude/t1");
   assert.equal(w.pr("create", "T1").status, 0, "after the transient failures, the same call passes");
+  assert.equal(w.remote("refs/heads/claude/t1"), head);
+});
+
+// T634 (PR 6a of the T306 shared logbook): in a shared logbook with two clones, sage-pr reads the task branch's origin in
+// the checkout of the branch's writer run, not in the chief's folder. A gone checkout refuses and names the run, and one
+// logbook has one repository. A legacy logbook does not change.
+/**
+ * A shared logbook with two clones: A is the world's project, B a clone of it linked to the same logbook. B's origin
+ * (originB) goes to its own stand-in (remote-b.git, a copy of A's), so a test sees which clone's origin got the push. The
+ * implementer R1 writes the branch in A, unless writer is "B".
+ */
+function clones({ originB = "https://github.com/owner/repo/", writer = "A" } = {}) {
+  const w = world({ shared: true }), b = w.at("clone-b");
+  w.git("clone", "-q", "--bare", w.at("remote.git"), w.at("remote-b.git"));
+  w.git("clone", "-q", w.at("project"), b);
+  w.git("-C", b, "remote", "set-url", "origin", originB);
+  const tool = (...a) => {
+    const r = spawnSync("node", [TOOL, ...a], { encoding: "utf8", env: w.env, timeout });
+    assert.equal(r.status, 0, r.stderr);
+  };
+  tool("link", "--to", basename(w.logbook), "--project", b);
+  const chief = chiefFor(w.at("project"), "session-a", w.env);
+  tool("run", "add", "T1", "--role", "implementer", "--branch", "claude/t1", "--project", writer === "A" ? w.at("project") : b, "--chief", chief);
+  w.git("--git-dir", w.mirror, "config", "--add", `url.${w.at("remote-b.git")}.insteadOf`, originB);
+  const tables = () => ["tasks", "runs", "ledger"].map((n) => readFileSync(join(w.logbook, `${n}.tsv`), "utf8")).join("\f");
+  const remoteB = (ref) => spawnSync("git", ["--git-dir", w.at("remote-b.git"), "rev-parse", "--verify", "-q", ref], { encoding: "utf8" }).stdout.trim();
+  return { ...w, b, tables, remoteB };
+}
+
+/** runs.tsv with one run's checkout cell set to value, as an older sage leaves a run from before T625. */
+function setCheckout(w, id, value) {
+  const file = join(w.logbook, "runs.tsv"), [head, ...lines] = readFileSync(file, "utf8").trimEnd().split("\n"), k = head.split("\t").indexOf("checkout");
+  writeFileSync(file, [head, ...lines.map((l) => { const c = l.split("\t"); if (c[0] === id) c[k] = value; return c.join("\t"); })].join("\n") + "\n");
+}
+
+test("T634: create from clone B pushes to the origin of clone A, where the writer run made the branch", () => {
+  const w = clones();
+  const head = w.commit("b.txt");
+  w.sage("verdict", "T1", "--sha", head, "--kind", "checks-pass");
+  const r = w.prIn(w.b, "create", "T1");
+  assert.equal(r.stderr, "");
+  assert.equal(r.stdout, `pushed ${head.slice(0, 7)} to claude/t1; opened https://github.com/owner/repo/pull/1; T1 has PR 1 in the logbook\n`);
+  assert.equal(w.remote("refs/heads/claude/t1"), head, "A's origin has the branch");
+  assert.equal(w.remoteB("refs/heads/claude/t1"), "", "B's origin has nothing");
+});
+
+test("T634: a writer checkout whose origin is another repository than the logbook's refuses, and nothing is pushed", () => {
+  const w = clones({ originB: "https://github.com/other/repo.git", writer: "B" });
+  const head = w.commit("b.txt", { imported: false });
+  w.sage("verdict", "T1", "--sha", head, "--kind", "checks-pass");
+  const tables = w.tables();
+  for (const [from, verb] of [[w.at("project"), "create"], [w.b, "create"], [w.at("project"), "import"]]) {
+    refused(w.prIn(from, verb, "T1"),/^sage-pr: refused: claude\/t1 is in .*\/clone-b, whose origin is other\/repo, but the logbook's repository is owner\/repo \(the origin of .*\/project\)\. One logbook has one repository, so nothing was pushed: ask the user\n$/);
+  }
+  assert.equal(w.remote("refs/heads/claude/t1"), "");
+  assert.equal(w.remoteB("refs/heads/claude/t1"), "");
+  assert.deepEqual(w.calls(), [], "gh never ran");
+  assert.equal(w.tables(), tables);
+});
+
+test("T634: a gone checkout of the writer run refuses with exit 1 and names the run; nothing is pushed and no table changes", () => {
+  const w = clones();
+  const head = w.commit("b.txt");
+  w.sage("verdict", "T1", "--sha", head, "--kind", "checks-pass");
+  const tables = w.tables();
+  rmSync(w.at("project"), { recursive: true, force: true });
+  refused(w.prIn(w.b, "create", "T1"), /^sage-pr: refused: The checkout of R1 \(project\) is gone, so sage cannot read claude\/t1\. Nothing changed\. Nothing was pushed\.\n$/);
+  assert.equal(w.remote("refs/heads/claude/t1"), "");
+  assert.equal(w.remoteB("refs/heads/claude/t1"), "");
+  assert.deepEqual(w.calls(), [], "gh never ran");
+  assert.equal(w.tables(), tables);
+});
+
+test("T634: a writer run with no checkout cell reads the origin of the chief's own folder", () => {
+  const w = clones();
+  const head = w.commit("b.txt");
+  w.sage("verdict", "T1", "--sha", head, "--kind", "checks-pass");
+  setCheckout(w, "R1", "");
+  const r = w.prIn(w.b, "create", "T1");
+  assert.equal(r.status, 0, r.stderr);
+  assert.equal(w.remoteB("refs/heads/claude/t1"), head, "B's origin has the branch");
+  assert.equal(w.remote("refs/heads/claude/t1"), "");
+});
+
+test("T634: a legacy logbook does not change: its writer run has no checkout, and create pushes to the project's own origin", () => {
+  const w = world();
+  w.sage("run", "add", "T1", "--role", "implementer", "--branch", "claude/t1");
+  assert.ok(!readFileSync(join(w.logbook, "runs.tsv"), "utf8").split("\n")[0].split("\t").includes("checkout"));
+  const head = w.commit("b.txt");
+  w.sage("verdict", "T1", "--sha", head, "--kind", "checks-pass");
+  const r = w.pr("create", "T1");
+  assert.equal(r.status, 0, r.stderr);
   assert.equal(w.remote("refs/heads/claude/t1"), head);
 });

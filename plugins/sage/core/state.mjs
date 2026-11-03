@@ -1570,6 +1570,16 @@ function branchCheckout(dir, project, branch, env) {
   if (rowGone(row)) throw Object.assign(new Refusal(`The checkout of ${writer.id} (${visible(basename(row.root))}) is gone, so sage cannot read ${branch}. Nothing changed.`), { goneRun: writer.id });
   return row.root;
 }
+/** Where a branch of a project lives (branchCheckout): sage-pr reads the branch's origin there. A gone checkout refuses with goneRun. */
+const branchHome = (project, branch, env = process.env) => branchCheckout(storeDir(project, env), project, branch, env);
+/** The tip of a branch where it lives (reviewHead), or "" on any failure, so that a hook fails closed. */
+function branchTip(project, branch, env = process.env) {
+  try {
+    return reviewHead(storeDir(project, env), project, branch, env);
+  } catch {
+    return "";
+  }
+}
 
 /**
  * Validate recorded work immediately before provider preparation or dispatch. This grants no role authority. An arena's
@@ -3819,5 +3829,5 @@ const { bindings, fillCommits, link, locate, notePlugin, refuseNewLogbook } = cr
   listed: (root) => known(root, undefined, undefined, true),
   enroll: (root, folder, make) => known(root, folder, make, false, true) });
 const { chiefs, chiefRow, rowOf } = createChiefs({ now, provider, readRegular, refuse, rowsOf, sheetText, swap });
-return { SIZES, BLOCKS, RISKS, KINDS, STATES, DEFAULTS, PR, sageRoot, locate, chiefFor, sessionBar, actorOptions, git, projectRoot, roleReadProject, optionsOf, slug, worktreeRoot, BRANCH, ofTask, branchOfTask, projectName, storeDir, config, cyclesFor, modelFor, read, mergeCheck, landingBar, boardLandingCheck, logbookView, sage, readTaskSnapshot, updateRequestedTask, assertTaskUpdateOpen, settleWrites, createRequestedTask, createRequestedRun, finishReportedRun, finishInterruptedRun, acceptReportedReview, keepReport, compareRetainedReport, verdictBacking, captureRunAssignment, captureReviewTarget, validateTerminalAssignment, withLock, board, answerPaths, command, runCli };
+return { SIZES, BLOCKS, RISKS, KINDS, STATES, DEFAULTS, PR, sageRoot, locate, chiefFor, sessionBar, actorOptions, git, projectRoot, roleReadProject, optionsOf, slug, worktreeRoot, BRANCH, ofTask, branchOfTask, branchHome, branchTip, projectName, storeDir, config, cyclesFor, modelFor, read, mergeCheck, landingBar, boardLandingCheck, logbookView, sage, readTaskSnapshot, updateRequestedTask, assertTaskUpdateOpen, settleWrites, createRequestedTask, createRequestedRun, finishReportedRun, finishInterruptedRun, acceptReportedReview, keepReport, compareRetainedReport, verdictBacking, captureRunAssignment, captureReviewTarget, validateTerminalAssignment, withLock, board, answerPaths, command, runCli };
 }

@@ -1117,16 +1117,14 @@ function keepDirect(input, slots) {
     stateTool.keepReport(folder, { task: run.task, run: mark.run, role, sha, text: input.last_assistant_message });
   } catch {}
 }
-/** The commit at the head of a task's branch, in the repository of the lead's folder, or "" (fail closed) (F-T289-5). */
+/**
+ * The commit at the head of a task's branch, or "" (fail closed) (F-T289-5): read where the branch lives, the checkout of
+ * its writer run in a shared logbook, else the lead's folder (branchTip, T634).
+ */
 function headOf(folder, task) {
   try {
     const branch = logbookOf(folder).task(task)?.branch;
-    if (!branch) return "";
-    const env = { ...process.env };
-    delete env.GIT_DIR, delete env.GIT_WORK_TREE;
-    const r = spawnSync("git", ["-C", folder, "rev-parse", "--verify", "--quiet", `refs/heads/${branch}^{commit}`], { encoding: "utf8", timeout: 3000, stdio: ["ignore", "pipe", "ignore"], env });
-    const sha = String(r.stdout ?? "").trim();
-    return r.status === 0 && /^[0-9a-f]{40}$/.test(sha) ? sha : "";
+    return branch ? stateTool.branchTip(folder, branch) : "";
   } catch {
     return "";
   }
