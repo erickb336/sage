@@ -708,10 +708,11 @@ test("F-T624-20: a sources.tsv row that stays refused is a note: the server stay
   await server.start();
   assert.match((await get(port, "/")).body, /Legacy task at work/);
   rmSync(join(w.codexRoot, FOLDER), { recursive: true, force: true });
-  await until(port, body => body.includes("Logbook notes"));
+  // The refused row shows (before T630 too, as a diagnostic); a later change of another project must show after it.
+  await until(port, body => body.includes("sources: line 3 does not name a moved logbook"));
   rewrite(dir, "A change after the refused row");
   const page = await until(port, body => body.includes("A change after the refused row"));
-  assert.match(page, /sources: line 3 does not name a moved logbook/);
+  assert.match(page, /<b>Logbook notes\.<\/b>.*sources: line 3 does not name a moved logbook/);
   assert.doesNotMatch(page, /Incomplete sources/);
 });
 
