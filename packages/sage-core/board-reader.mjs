@@ -5,7 +5,7 @@ import { createHash } from "node:crypto";
 import { validateObservations } from "./observations.mjs";
 import { logbookSettings } from "./logbook-fields.mjs";
 import { PROGRAM_ID, TASK_ID, checkPrograms } from "./program-rules.mjs";
-import { BINDING_COLUMNS, bindingRow, githubRemote, gone as goneRoot, ownerOf } from "./shared-root.mjs";
+import { BINDING_COLUMNS, bindingRow, checkoutGone, githubRemote, gone as goneRoot, ownerOf } from "./shared-root.mjs";
 import { chiefsWhole } from "./chiefs.mjs";
 
 const parseJson = text => { try { return JSON.parse(text); } catch { throw new Error("invalid JSON"); } };
@@ -224,11 +224,13 @@ function readLogbook(directory, project, budget, { now, bound, chiefs = true, du
     if (error.code !== "ENOENT") project.diagnostics.push(`observations: ${error.code ?? error.message}`);
   }
   Object.assign(project, logbookIdentity(directory, budget, project, bound));
-  // The run checkouts of a shared logbook that are gone from this Mac (T625), by the state tool's rule (gone): one lstat
-  // for each distinct absolute path, at most 64, with no content read and no Git command.
+  // The run checkouts of a shared logbook that are gone from this Mac (T625), by the state tool's rule (checkoutGone): one lstat
+  // for each distinct absolute path, at most 64, with no content read and no Git command. The board did not check the
+  // others, and says so (F-T625-5).
   if (bound !== undefined) {
-    const checkouts = [...new Set((project.tables.runs ?? []).map(run => run.checkout).filter(path => path && isAbsolute(path)))].slice(0, 64);
-    project.goneCheckouts = checkouts.filter(root => goneRoot({ root }));
+    const checkouts = [...new Set((project.tables.runs ?? []).map(run => run.checkout).filter(path => path && isAbsolute(path)))];
+    project.goneCheckouts = checkouts.slice(0, 64).filter(root => checkoutGone({ root }));
+    project.uncheckedCheckouts = checkouts.slice(64);
   }
   project.contents = {};
   for (const record of project.observations.records.filter(record => record.kind === "artifact" && record.data.path)) {
@@ -298,21 +300,27 @@ function linkedCheckouts(rows, folder, owner) {
  * The old logbooks that a shared logbook's sources.tsv names (T306, the move): each row is a provider, a path and a time.
  * The board reads a path only when it is a logbook folder directly under a known provider root, not a link, with the
  * move's mark moved.json, and its row names the root's provider (when the board knows it); any other row is a
- * diagnostic, and the board reads nothing there, so a live logbook stays on its own. Only the move (PR 7) writes this file.
+ * note, and the board reads nothing there, so a live logbook stays on its own. Only the move (PR 7) writes this file.
+ * A problem here is a note, not a diagnostic (F-T624-20): no table of the shared logbook is in doubt, so the board stays live.
  */
+const OLD_PROVIDERS = ["claude", "codex"];
 function oldSources(directory, roots, budget, project) {
   let found;
   try { found = sheet(join(directory, "sources.tsv"), budget); }
-  catch (error) { if (error.code !== "ENOENT") project.diagnostics.push(`sources: ${error.code ?? error.message}`); return []; }
-  if (!exact(found, ["provider", "path", "at"]) || found.rows.length > MAX_OLD) { project.diagnostics.push("sources: damaged table"); return []; }
+  catch (error) { if (error.code !== "ENOENT") project.notes.push(`sources: ${error.code ?? error.message}`); return []; }
+  if (!exact(found, ["provider", "path", "at"]) || found.rows.length > MAX_OLD) { project.notes.push("sources: damaged table"); return []; }
   return found.rows.flatMap((row, i) => {
     const path = isAbsolute(row.path) ? resolve(row.path) : null, root = path && roots.find(item => item.path === dirname(path));
     // A root of no known provider (SAGE_HOME stands for both) takes a row of any provider that no other root is known to hold.
     const provider = root && (root.provider ?? (roots.some(other => other.provider === row.provider) ? null : row.provider));
-    const named = root && provider === row.provider && /^[a-z0-9-]+-[0-9a-f]{6}$/.test(basename(path)) && /^[a-z][a-z0-9-]{0,30}$/.test(row.provider);
-    const stat = named ? lstatSync(path, { throwIfNoEntry: false }) : null;
-    if (!stat?.isDirectory() || stat.isSymbolicLink() || !lstatSync(join(path, "moved.json"), { throwIfNoEntry: false })?.isFile()) { project.diagnostics.push(`sources: line ${i + 2} does not name a moved logbook of its provider under a provider root`); return []; }
-    return [{ provider: row.provider, path, root }];
+    const named = root && provider === row.provider && /^[a-z0-9-]+-[0-9a-f]{6}$/.test(basename(path)) && OLD_PROVIDERS.includes(row.provider);
+    // A folder that the board cannot search, or a name too long for the disk, refuses its own row only (F-T624-17, F-T624-23).
+    try {
+      const stat = named ? lstatSync(path, { throwIfNoEntry: false }) : null;
+      if (stat?.isDirectory() && !stat.isSymbolicLink() && lstatSync(join(path, "moved.json"), { throwIfNoEntry: false })?.isFile()) return [{ provider: row.provider, path, root }];
+      project.notes.push(`sources: line ${i + 2} does not name a moved logbook of its provider under a provider root`);
+    } catch (error) { project.notes.push(`sources: line ${i + 2} names a folder that the board cannot read (${error.code ?? error.message})`); }
+    return [];
   });
 }
 
@@ -346,6 +354,8 @@ export function readBoardSources(sources, { now = Date.now(), logbookKey = null,
     try {
       const root = lstatSync(source.path, { throwIfNoEntry: !shared });
       if (!root) return result;
+      // A shared root that is a link or a file holds no project that the board reads: a note, as a missing one is none (F-T624-22).
+      if (shared && (!root.isDirectory() || root.isSymbolicLink())) return Object.assign(result, { notes: [`The shared root is ${root.isSymbolicLink() ? "a link" : "not a folder"}, so the board reads no shared project there.`] });
       if (!root.isDirectory() || root.isSymbolicLink()) throw new Error("source is not a directory");
       const identity = `${root.dev}:${root.ino}`;
       if (identities.has(identity)) throw new Error("duplicate physical source");
@@ -368,13 +378,16 @@ export function readBoardSources(sources, { now = Date.now(), logbookKey = null,
         if (bindings?.problem) project.diagnostics.push(bindings.problem);
         if (shared) Object.assign(project, linkedCheckouts(bindings.rows, entry.name, owner));
         result.projects.push(project);
-        if (!shared || logbookKey !== null) continue;
-        // The finished tasks of the old logbooks stay there, read-only. Each shows once, in this project, with its provider.
+        if (!shared) continue;
+        // The finished tasks of the old logbooks stay there, read-only. Each shows once, in this project, with its provider,
+        // also in the task view of this one logbook (F-T624-21).
+        project.notes = [];
         for (const old of oldSources(directory, roots, budget, project)) {
           const folder = basename(old.path), key = `${old.root.id ?? `old-${old.provider}`}/${folder}`;
-          if (moved.has(old.path) || result.projects.some(other => other.key === key)) { project.diagnostics.push(`sources: ${folder} is named twice`); continue; }
+          if (moved.has(old.path) || result.projects.some(other => other.key === key)) { project.notes.push(`sources: ${folder} is named twice`); continue; }
           moved.add(old.path);
-          result.projects.push(consistentRead(old.path, { key, source: source.id, name: folder, logbook: createHash("sha256").update(old.path).digest("hex"), old: { provider: old.provider, of: base.key } }, budget, { now, chiefs: false, duringRead }));
+          try { result.projects.push(consistentRead(old.path, { key, source: source.id, name: folder, logbook: createHash("sha256").update(old.path).digest("hex"), old: { provider: old.provider, of: base.key } }, budget, { now, chiefs: false, duringRead })); }
+          catch (error) { project.notes.push(`sources: ${folder} cannot be read (${error.code ?? error.message})`); }
         }
       }
       if (logbookKey === null) result.hooks = readHookNotes(source.path);

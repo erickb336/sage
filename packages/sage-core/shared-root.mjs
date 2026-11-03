@@ -59,6 +59,11 @@ export const gone = ({ root }) => {
   }
 };
 /**
+ * Is a run's checkout gone, so that git cannot read its branch there? A checkout has its .git, so a plain file or a
+ * folder without .git at its path is gone too (F-T625-6). The state tool and the board read a run's checkout by it.
+ */
+export const checkoutGone = ({ root }) => gone({ root: join(root, ".git") });
+/**
  * The row that a logbook belongs to: its oldest live row with first commits, or its oldest gone row when none is live.
  * A later row with none of them is the foreign one, so the owner keeps working. A row of a checkout that left stays
  * and does no harm: it can refuse a newcomer, but never the only live checkout. The board names a shared logbook's

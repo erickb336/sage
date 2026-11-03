@@ -47,7 +47,8 @@ export function boardView({ sources, scope = "all", project = null, logbookKey =
   // the Claude and the Codex logbook of one checkout are one project (R1069-3), and two clones stay two.
   if (logbookKey !== null) {
     if (!projects.some(book => book.key === logbookKey)) throw new RangeError("No recorded logbook matches this project.");
-    keys = new Set([logbookKey]);
+    // A shared logbook's old logbooks are part of it, so the task view finds an old finished task (F-T624-21).
+    keys = new Set([logbookKey, ...projects.filter(book => book.old?.of === logbookKey).map(book => book.key)]);
   }
   else if (projects.some(book => book.key === scope)) keys = new Set([scope]);
   else if (scope !== "all") {

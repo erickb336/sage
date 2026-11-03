@@ -1096,7 +1096,9 @@ test("T625: the review reads the branch in the checkout of its writer run, from 
   assert.deepEqual(codex.validateTerminalAssignment({ project: w.b, target, review: { branch: w.branch, sha: w.tip, round: 0, cycle: 1 } }, w.env), target);
 });
 
-test("T625: a gone checkout of the writer run refuses each head read with the run's ID, and no table changes", (t) => {
+// F-T625-6: a checkout that is now a plain file or an empty folder is gone too, with the same refusal, not a raw git error.
+const LEAVE = { "missing": () => {}, "a plain file": (path) => writeFileSync(path, ""), "an empty folder": (path) => mkdirSync(path) };
+for (const [form, leave] of Object.entries(LEAVE)) test(`T625: a gone checkout of the writer run (${form}) refuses each head read with the run's ID, and no table changes`, (t) => {
   const w = clones(t);
   const fields = { STATUS: "done", RESULT: "CLEAN", EVIDENCE: JSON.stringify({ commit: w.tip, round: 0, cycle: 1, summary: "s" }), FINDINGS: "[]", QUESTIONS: "none", "NOT VERIFIED": "x", BRANCH: w.branch };
   const text = Object.entries(fields).map(([key, value]) => `${key}: ${value}`).join("\n");
@@ -1110,6 +1112,7 @@ test("T625: a gone checkout of the writer run refuses each head read with the ru
   w.owner("task", "T1", "set", "state=reviewing");
   w.owner("task", "T1", "set", "state=verifying");
   rmSync(w.a, { recursive: true, force: true });
+  leave(w.a);
   const tables = w.tables(), gone = { message: `The checkout of R1 (project) is gone, so sage cannot read ${w.branch}. Nothing changed.` };
   assert.throws(() => w.capture("R3"), gone);
   assert.throws(() => codex.validateTerminalAssignment({ project: w.b, target, review: { branch: w.branch, sha: w.tip, round: 0, cycle: 1 } }, w.env), gone);
@@ -1120,6 +1123,21 @@ test("T625: a gone checkout of the writer run refuses each head read with the ru
     { native: "session-a", decide: never, acknowledge: never, release: never, void: never, history: never }),
   (e) => e.code === "readiness-checkout" && e.message === "Readiness needs the checkout of the task branch's run, and that folder is gone. Start the run again from a live checkout before submitting a new request. IDs: R1.");
   assert.equal(w.tables(), tables);
+});
+
+// F-T625-1: the head read takes the newest writer run on the branch, by its number (R10 after R9), not the oldest.
+test("T625: the review reads the branch in the checkout of the newest writer run, by run number", (t) => {
+  const w = clones(t), done = (id) => w.owner("run", "done", id, "--status", "failed");
+  done("R1");
+  w.inB("run", "add", "T1", "--role", "implementer", "--branch", w.branch);
+  assert.deepEqual(w.capture("R2"), { branch: w.branch, sha: w.behind, round: 0, cycle: 1 }, "R3 in B is newer than R1 in A");
+  done("R3");
+  for (let i = 4; i <= 8; i++) w.inB("run", "add", "T1", "--role", "qa");
+  w.inB("run", "add", "T1", "--role", "implementer", "--branch", w.branch);
+  done("R9");
+  w.owner("run", "add", "T1", "--role", "implementer", "--branch", w.branch);
+  assert.deepEqual([row(w.cells("runs"), "R9").checkout, row(w.cells("runs"), "R10").checkout], [realpathSync(w.b), w.a]);
+  assert.deepEqual(w.capture("R2"), { branch: w.branch, sha: w.tip, round: 0, cycle: 1 }, "R10 in A is newer than R9 in B");
 });
 
 test("T625: a writer run with no checkout cell reads the branch in the command's own folder", (t) => {
