@@ -479,3 +479,47 @@ test("F-T624-11: the changing note names the whole logbook, a table, a file or a
   assert.deepEqual(["tasks: file changed during the read", "chiefs: file changed during the read", "observations: file changed during the read", "checkout: file changed during the read", "artifact A3: artifact parent changed during the read", "artifact A4: file changed during the read", "project changed during the read"].map(changedPart),
     ["tasks.tsv", "chiefs.tsv", "observations.json", "checkout.txt", "artifact A3", "artifact A4", "the whole logbook"]);
 });
+
+// T625 (PR 5b of the T306 shared logbook): a shared run names its checkout. The task page shows the folder name only.
+test("T625: a shared run shows its checkout folder under its role, never the path; a gone folder says so, with one note while the task is active", t => {
+  const w = world(t), dir = join(w.shared, FOLDER), moved = join(w.base, "moved", "lantern");
+  writeFileSync(join(dir, "tasks.tsv"), readFileSync(join(dir, "tasks.tsv"), "utf8") + sheet(COLS.tasks, [task("T330", "Retry a sync", "reviewing", { chief: "C1" }), task("T318", "An ended task", "merged", { chief: "C1" })]).split("\n").slice(1).join("\n"));
+  writeFileSync(join(dir, "runs.tsv"), sheet(`${COLS.runs} checkout`, [
+    run("R407", "T321", "qa", "running", iso(-50 * MIN), { chief: "C1", checkout: w.checkout }),
+    run("R420", "T321", "lead", "running", iso(-60 * MIN), { chief: "C1" }),
+    run("R451", "T330", "implementer", "done", iso(-90 * MIN), { chief: "C1", ended: iso(-80 * MIN), checkout: moved }),
+    run("R452", "T330", "code-reviewer", "running", iso(-20 * MIN), { chief: "C1", checkout: moved }),
+    run("R460", "T318", "implementer", "done", iso(-DAY), { chief: "C1", ended: iso(-DAY + MIN), checkout: moved }),
+  ]));
+  const model = modelOf(w.sources), page = id => renderBoardHtml(model, { taskKey: `shared/${FOLDER}/${id}`, snapshot: false });
+  const html = page("T321"), text = renderTaskText(card(model, "T321"));
+  assert.match(html, /<td class="id">R407<\/td><td><span class="ptag ptag-claude">Claude<\/span><\/td><td>qa<div class="faint ck">checkout lantern<\/div><\/td>/);
+  assert.match(html, /<td class="id">R420<\/td><td><span class="ptag ptag-claude">Claude<\/span><\/td><td>lead<\/td>/, "a run with no checkout shows no line");
+  assert.match(text, /^R407 Claude · qa · checkout lantern · running · /m);
+  assert.match(text, /^R420 Claude · lead · running · /m);
+  assert.doesNotMatch(html, /class="cknote"/);
+  // The folder is gone: each row says so, and an active task gets one note under its table and one line after its runs.
+  const note = "The folder lantern is not on this Mac now, so sage cannot read the branch there. The next review step of T330 stops until the folder is back.";
+  const active = page("T330"), activeText = renderTaskText(card(model, "T330"));
+  assert.equal(active.match(/checkout lantern <span class="gone gone-active" tabindex="0"[^>]*>· gone/g)?.length, 2);
+  assert.equal(active.match(/class="cknote"/g)?.length, 1);
+  assert.match(active, /<p class="cknote"><svg[^]*?<\/svg><span>The folder <b>lantern<\/b> is not on this Mac now, so sage cannot read the branch there\. The next review step of T330 stops until the folder is back\.<\/span><\/p>/);
+  assert.match(activeText, /^R451 Claude · implementer · checkout lantern \(gone\) · done · /m);
+  assert.match(activeText, /^R452 Claude · code-reviewer · checkout lantern \(gone\) · running · /m);
+  assert.ok(activeText.includes(`\n${note}\n\n**Evidence**`), "one line after the runs");
+  // An ended task: the faint mark only, no note.
+  const ended = page("T318"), endedText = renderTaskText(card(model, "T318"));
+  assert.match(ended, /checkout lantern <span class="gone" tabindex="0"[^>]*>· gone/);
+  assert.doesNotMatch(ended, /class="cknote"|class="gone gone-active"/);
+  assert.match(endedText, /^R460 Claude · implementer · checkout lantern \(gone\) · done · /m);
+  assert.ok(!endedText.includes("is not on this Mac now"));
+  // No page and no chat text holds a run checkout's full path, and neither does the model.
+  for (const out of [html, text, active, activeText, ended, endedText, renderBoardHtml(model), renderBoardText(model), renderAgentsHtml(model), JSON.stringify(model.tasks)]) assert.ok(!out.includes(moved), "no full path");
+  // A legacy task page has no checkout line, also with a checkout cell in its runs table.
+  writeFileSync(join(w.claudeRoot, HARBOR, "runs.tsv"), sheet(`${LEGACY.runs} checkout`, [run("R5", "T41", "implementer", "running", iso(-5 * MIN), { checkout: moved })]));
+  const legacy = modelOf(w.sources), t41 = renderBoardHtml(legacy, { taskKey: `claude/${HARBOR}/T41`, snapshot: false });
+  assert.match(t41, /<td class="id">R5<\/td><td>[^<]*(<[^>]*>[^<]*)*? · implementer<\/td>/);
+  assert.doesNotMatch(t41, /class="faint ck"|class="cknote"|lantern \(gone\)/);
+  assert.match(renderTaskText(legacy.tasks.find(item => item.id === "T41")), /^R5 .* · implementer · running · /m);
+  assert.ok(!t41.includes(moved));
+});

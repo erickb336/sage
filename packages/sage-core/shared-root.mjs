@@ -43,7 +43,7 @@ const present = (path) => {
   }
 };
 /** Is a row's checkout gone from the disk? A path that cannot be read may still be there, so it counts as live. */
-const gone = ({ root }) => {
+export const gone = ({ root }) => {
   try {
     return !present(root);
   } catch {

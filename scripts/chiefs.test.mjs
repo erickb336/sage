@@ -6,7 +6,7 @@ import { execFileSync, spawn, spawnSync } from "node:child_process";
 import { createHash } from "node:crypto";
 import { cpSync, existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, realpathSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
-import { dirname, join } from "node:path";
+import { basename, dirname, join } from "node:path";
 import { test } from "node:test";
 import { fileURLToPath, pathToFileURL } from "node:url";
 import { shellCommands } from "../plugins/sage/core/command-reader.mjs";
@@ -781,7 +781,7 @@ test("F-T604-19: an older sage, whose tables have no chief column, refuses to wr
   const plugin = join(w.base, "older");
   cpSync(at("../plugins/sage-codex"), plugin, { recursive: true });
   const state = join(plugin, "core/state.mjs"), source = readFileSync(state, "utf8");
-  const older = source.replace(", tasks: [...PLAIN_TABLES.tasks, CHIEF_COLUMN], runs: [...PLAIN_TABLES.runs, CHIEF_COLUMN] };", " };");
+  const older = source.replace(", tasks: [...PLAIN_TABLES.tasks, CHIEF_COLUMN], runs: [...PLAIN_TABLES.runs, CHIEF_COLUMN, CHECKOUT_COLUMN] };", " };");
   assert.notEqual(older, source, "the fixture removes the column");
   writeFileSync(state, older);
   const { tool } = await import(pathToFileURL(join(plugin, "skills/sage/sage.mjs")).href);
@@ -995,4 +995,157 @@ test("the Claude hook keeps a lead on its lead run in a shared logbook, and a he
   assert.match(w.bash("standing add order --lead R1", "s1", lead), /A lead writes the logbook only with .* on a shared logbook with --lead <its lead run>/, "F-T604-10: the lead form names the option");
   assert.equal(w.bash("task T1 set state=building --lead R1", "s1", lead), undefined);
   assert.match(w.bash("task T1 set state=building", "s1", { agent_id: "qa-1", agent_type: "sage:qa" }), /writes the logbook, or is not a read command/);
+});
+
+// T625 (PR 5b of the T306 shared logbook): each run of a shared logbook saves its checkout, and the review reads a branch
+// in the checkout of the branch's writer run. A gone checkout refuses with its run's ID. A legacy logbook does not change.
+const git = (...args) => execFileSync("git", args, { encoding: "utf8", env: gitEnv }).trim();
+const header = (text) => text.split("\n")[0].split("\t");
+/** Two clones of one project on one shared logbook: the implementer R1 runs in A, the code reviewer R2 in B. A's branch is one commit ahead of B's. */
+function clones(t) {
+  const w = world(t, codex, codex), a = realpathSync(w.project), b = join(w.base, "clone-b"), branch = "sage/t1-a";
+  git("clone", "-q", a, b);
+  codex.sage(["link", "--to", basename(w.dir), "--project", b], w.env);
+  w.owner("task", "add", "--title", "a", ...ADD);
+  w.owner("task", "T1", "set", "state=briefed");
+  w.owner("task", "T1", "set", "state=building", `branch=${branch}`);
+  const tip = git("-C", a, "commit-tree", "HEAD^{tree}", "-p", "HEAD", "-m", "the implementer's work");
+  git("-C", a, "update-ref", `refs/heads/${branch}`, tip);
+  git("-C", b, "branch", branch);
+  const behind = git("-C", b, "rev-parse", branch);
+  const inB = (...args) => codex.sage([...args, "--project", b, "--chief", w.chief], w.env);
+  w.owner("run", "add", "T1", "--role", "implementer", "--branch", branch);
+  inB("run", "add", "T1", "--role", "code-reviewer", "--branch", branch);
+  const capture = (run) => codex.captureReviewTarget({ project: b, task: "T1", run, role: "code-reviewer", cycle: 1 }, w.env);
+  return { ...w, a, b, branch, tip, behind, inB, capture };
+}
+test("T625: after the first run add with a checkout, a sage of PR 5a refuses to write that shared logbook and says to update; its reads go on", async (t) => {
+  const w = world(t, claude, codex);
+  w.owner("task", "add", "--title", "a", ...ADD);
+  w.owner("run", "add", "T1", "--role", "qa");
+  // PR 5a's sage as a fixture: this plugin with the checkout column taken out.
+  const plugin = join(w.base, "older");
+  cpSync(at("../plugins/sage-codex"), plugin, { recursive: true });
+  const state = join(plugin, "core/state.mjs"), source = readFileSync(state, "utf8");
+  const older = source.replace("runs: [...PLAIN_TABLES.runs, CHIEF_COLUMN, CHECKOUT_COLUMN] };", "runs: [...PLAIN_TABLES.runs, CHIEF_COLUMN] };").replace("runs: [CHIEF_COLUMN, CHECKOUT_COLUMN], gates", "runs: [CHIEF_COLUMN], gates");
+  assert.notEqual(older, source, "the fixture removes the column");
+  writeFileSync(state, older);
+  const { tool } = await import(pathToFileURL(join(plugin, "skills/sage/sage.mjs")).href);
+  const run = (...args) => tool.sage([...args, "--project", w.project, "--chief", w.chief], w.env), before = w.tables();
+  assert.throws(() => run("run", "add", "T1", "--role", "qa"), /runs\.tsv has columns that this version of sage does not know \(checkout\).*Update the sage plugin/);
+  assert.equal(w.tables(), before, "nothing changed");
+  assert.match(tool.sage(["task", "T1", "--project", w.project], w.env), /^T1 framed /);
+  assert.match(tool.sage(["status", "--project", w.project], w.env), /tasks {3}1/);
+});
+
+/** A runs.tsv with one run's checkout cell set to another value, as a hand edit or an older sage leaves it. */
+function setCheckout(w, id, value) {
+  const [head, ...lines] = w.cells("runs").trimEnd().split("\n"), k = head.split("\t").indexOf("checkout");
+  writeFileSync(join(w.dir, "runs.tsv"), [head, ...lines.map((line) => { const cells = line.split("\t"); if (cells[0] === id) cells[k] = value; return cells.join("\t"); })].join("\n") + "\n");
+}
+
+for (const [name, own, other] of pairs) {
+  test(`T625 (${name}): a shared run add saves the main checkout, also from a linked worktree; a legacy logbook gets no checkout column`, (t) => {
+    const w = world(t, own, other), main = realpathSync(w.project), linked = join(w.base, "linked");
+    w.owner("task", "add", "--title", "a", ...ADD);
+    w.owner("run", "add", "T1", "--role", "qa");
+    git("-C", main, "worktree", "add", "-q", "-b", "linked", linked);
+    own.sage(["run", "add", "T1", "--role", "code-reviewer", "--project", linked, "--chief", w.chief], w.env);
+    assert.equal(header(w.cells("runs")).at(-1), "checkout");
+    assert.equal(row(w.cells("runs"), "R1").checkout, main);
+    assert.equal(row(w.cells("runs"), "R2").checkout, main, "the main checkout, not the worktree");
+    const l = scratch(t), run = (...args) => own.sage([...args, "--project", l.project], l.env);
+    run("init");
+    run("task", "add", "--title", "a", ...ADD);
+    const runs = join(own.storeDir(l.project, l.env), "runs.tsv"), before = header(readFileSync(runs, "utf8"));
+    run("run", "add", "T1", "--role", "qa");
+    assert.deepEqual(header(readFileSync(runs, "utf8")), before, "the header stays");
+    assert.ok(!before.includes("checkout") && before.includes("model"));
+    assert.equal(row(readFileSync(runs, "utf8"), "R1").checkout, undefined);
+  });
+}
+
+test("T625: a native run add saves the checkout; a retry gives the same row; a receipt with a changed or relative checkout is damaged", (t) => {
+  const w = world(t, codex, claude), main = realpathSync(w.project);
+  w.owner("task", "add", "--title", "a", ...ADD);
+  const input = { project: w.project, owner: "o", request: "00000000-0000-4000-8000-000000000625", task: "T1", role: "qa", branch: "", candidate: "" };
+  const made = codex.createRequestedRun(input, w.env, "session-a");
+  assert.equal(made.decision, "run-created");
+  assert.equal(made.run.checkout, main);
+  assert.equal(row(w.cells("runs"), "R1").checkout, main);
+  assert.deepEqual(codex.createRequestedRun(input, w.env, "session-a"), { decision: "already-created", run: made.run });
+  const folder = join(w.dir, "run-requests"), [file] = readdirSync(folder), receipt = join(folder, file), saved = readFileSync(receipt, "utf8");
+  const tables = w.tables();
+  // The receipt as the writer saves it: its value and the hash of the value, so only the checkout check can refuse it.
+  for (const checkout of [join(w.base, "elsewhere"), "project"]) {
+    const { value } = JSON.parse(saved);
+    value.result.checkout = checkout;
+    writeFileSync(receipt, JSON.stringify({ value, hash: createHash("sha256").update(JSON.stringify(value)).digest("hex") }) + "\n");
+    assert.throws(() => codex.createRequestedRun(input, w.env, "session-a"), { message: "The saved run update is damaged. No run table changed." }, checkout);
+  }
+  assert.equal(w.tables(), tables);
+});
+
+test("T625: the review reads the branch in the checkout of its writer run, from another clone of the logbook too", (t) => {
+  const w = clones(t);
+  assert.equal(row(w.cells("runs"), "R1").checkout, w.a);
+  assert.equal(row(w.cells("runs"), "R2").checkout, realpathSync(w.b));
+  assert.notEqual(w.tip, w.behind);
+  assert.deepEqual(w.capture("R2"), { branch: w.branch, sha: w.tip, round: 0, cycle: 1 });
+  const target = codex.captureRunAssignment({ project: w.b, task: "T1", run: "R2", role: "code-reviewer" }, w.env);
+  assert.deepEqual(codex.validateTerminalAssignment({ project: w.b, target, review: { branch: w.branch, sha: w.tip, round: 0, cycle: 1 } }, w.env), target);
+});
+
+test("T625: a gone checkout of the writer run refuses each head read with the run's ID, and no table changes", (t) => {
+  const w = clones(t);
+  const fields = { STATUS: "done", RESULT: "CLEAN", EVIDENCE: JSON.stringify({ commit: w.tip, round: 0, cycle: 1, summary: "s" }), FINDINGS: "[]", QUESTIONS: "none", "NOT VERIFIED": "x", BRANCH: w.branch };
+  const text = Object.entries(fields).map(([key, value]) => `${key}: ${value}`).join("\n");
+  const work = { project: w.b, task: "T1", run: "R2", role: "code-reviewer", assignment: "00000000-0000-4000-8000-000000000626", reportHash: createHash("sha256").update(text).digest("hex"), text };
+  codex.finishReportedRun(work, w.env);
+  w.inB("run", "add", "T1", "--role", "code-reviewer", "--branch", w.branch);
+  const target = codex.captureRunAssignment({ project: w.b, task: "T1", run: "R3", role: "code-reviewer" }, w.env);
+  // The clean cycle on A's tip, so that a move to verified reaches its head read.
+  const cli = (...args) => w.owner(...args), keep = (fields) => codex.keepReport(w.project, fields, w.env);
+  for (const kind of ["checks-pass", "review-clean", "qa-pass"]) cli(...backed(["verdict", "T1", "--sha", w.tip, "--kind", kind, "--cycle", "1"], { cli, keep }));
+  w.owner("task", "T1", "set", "state=reviewing");
+  w.owner("task", "T1", "set", "state=verifying");
+  rmSync(w.a, { recursive: true, force: true });
+  const tables = w.tables(), gone = { message: `The checkout of R1 (project) is gone, so sage cannot read ${w.branch}. Nothing changed.` };
+  assert.throws(() => w.capture("R3"), gone);
+  assert.throws(() => codex.validateTerminalAssignment({ project: w.b, target, review: { branch: w.branch, sha: w.tip, round: 0, cycle: 1 } }, w.env), gone);
+  assert.throws(() => codex.acceptReportedReview({ ...work, review: { sha: w.tip, branch: w.branch, round: 0, cycle: 1 } }, w.env, "session-a"), gone);
+  const never = () => { throw Error("a refused readiness reaches no decision"); };
+  const { version } = codex.readTaskSnapshot({ project: w.b, task: "T1" }, w.env);
+  assert.throws(() => codex.updateRequestedTask({ project: w.b, owner: "o", request: "00000000-0000-4000-8000-000000000627", task: "T1", version, changes: { state: "verified" } }, w.env,
+    { native: "session-a", decide: never, acknowledge: never, release: never, void: never, history: never }),
+  (e) => e.code === "readiness-checkout" && e.message === "Readiness needs the checkout of the task branch's run, and that folder is gone. Start the run again from a live checkout before submitting a new request. IDs: R1.");
+  assert.equal(w.tables(), tables);
+});
+
+test("T625: a writer run with no checkout cell reads the branch in the command's own folder", (t) => {
+  const w = clones(t);
+  setCheckout(w, "R1", "");
+  assert.equal(header(w.cells("runs")).at(-1), "checkout");
+  assert.equal(row(w.cells("runs"), "R2").checkout, realpathSync(w.b));
+  assert.deepEqual(w.capture("R2"), { branch: w.branch, sha: w.behind, round: 0, cycle: 1 }, "B's own branch");
+});
+
+test("T625: a writer run's checkout that is no bindings.tsv row of this logbook refuses before git reads it", (t) => {
+  const w = clones(t), planted = join(w.base, "planted"), fake = join(w.base, "fake-git"), calls = join(w.base, "git-calls");
+  git("init", "-q", "-b", "main", planted);
+  git("-C", planted, "commit", "-q", "--allow-empty", "-m", "planted");
+  git("-C", planted, "branch", w.branch);
+  setCheckout(w, "R1", planted);
+  // A git first on PATH that notes each call's arguments, then runs the real git: so the test sees whether git read the planted folder.
+  mkdirSync(fake);
+  writeFileSync(join(fake, "git"), `#!${process.execPath}\nconst { appendFileSync } = require("node:fs"), { spawnSync } = require("node:child_process");\nappendFileSync(${JSON.stringify(calls)}, JSON.stringify(process.argv.slice(2)) + "\\n");\nconst path = process.env.PATH.split(":").filter((dir) => dir !== ${JSON.stringify(fake)}).join(":");\nprocess.exit(spawnSync("git", process.argv.slice(2), { stdio: "inherit", env: { ...process.env, PATH: path } }).status ?? 1);\n`, { mode: 0o755 });
+  const env = { ...w.env, PATH: `${fake}:${w.env.PATH}` }, tables = w.tables();
+  assert.throws(() => codex.captureReviewTarget({ project: w.b, task: "T1", run: "R2", role: "code-reviewer", cycle: 1 }, env),
+    { message: `The checkout of R1 is not a checkout of this logbook in bindings.tsv, so sage cannot read ${w.branch}. Nothing changed.` });
+  assert.equal(existsSync(calls), false, "git never ran");
+  assert.equal(w.tables(), tables);
+  // The same read with the writer's own checkout runs the fake git there: so the fake is what the state tool calls.
+  setCheckout(w, "R1", w.a);
+  assert.equal(codex.captureReviewTarget({ project: w.b, task: "T1", run: "R2", role: "code-reviewer", cycle: 1 }, env).sha, w.tip);
+  assert.match(readFileSync(calls, "utf8"), new RegExp(`"-C","${w.a}","rev-parse"`));
 });
