@@ -278,7 +278,7 @@ The uninstall keeps your logbooks, the task pages in each project's pages folder
 A shared logbook is one logbook that Claude and Codex both use for a project. A project uses one when its checkout has a row in `bindings.tsv` in the shared root.
 
 - Sage finds the logbook again at each command.
-- Today a project gets a row only by a link. An existing project has no row, and it works as before.
+- A project gets a row by a link, or by [the move](#move-an-existing-project) of an existing project. An existing project that did not move has no row, and it works as before.
 - Linked worktrees use the row of their main checkout.
 
 The chief runs a link only after your answer in the chat:
@@ -302,8 +302,8 @@ No sage command can change the answer later. After a link, the board shows one p
 
 | Situation | Result |
 | --- | --- |
-| The project has a logbook in the Claude or Codex root | The link refuses, because the link would hide its tasks. Keep using that logbook. A later command moves existing projects. |
-| The checkout is already linked to another logbook | The link refuses. A checkout has one logbook, so keep using that one. Only the move can take a checkout to another logbook, and no command does the move today: a later sage adds it. |
+| The project has a logbook in the Claude or Codex root | The link refuses, because the link would hide its tasks. Keep using that logbook, or ask the chief to [move the project](#move-an-existing-project). |
+| The checkout is already linked to another logbook | The link refuses. A checkout has one logbook, so keep using that one. No command takes a linked checkout to another logbook. |
 | You moved a checkout or cloned it again, so its new path has no row | Each command and `init` refuse with the link prompt: it names the logbook with the same first commit, and the command of each choice (`sage link --to <folder>`, or `sage link --separate` for another project). The old row stays and does no harm. |
 | `--to` names a logbook whose owner has no first commit in common with this checkout | The link refuses. A shallow clone needs its full history first: `git fetch --unshallow`. |
 | A new clone is shallow, or Git cannot read its first commit (a damaged repository, or more than 5 s) | No refusal names the shared logbook, so `init` makes a legacy logbook, and a later link refuses: it would hide that logbook's tasks. Before `init`, run `git fetch --unshallow` or repair the repository, then run the command again. |
@@ -317,6 +317,7 @@ No sage command can change the answer later. After a link, the board shows one p
 | `bindings.tsv` is gone, and `bindings.made` shows that sage made it | Every command of every project refuses. Restore the table from a copy. If no project uses the shared root, remove `bindings.made`. |
 | `SAGE_SHARED_HOME` is a relative path | Every command refuses. Each folder must find the same root. |
 | A project has a marker that its move did not finish | Each command refuses and says to run the move again. |
+| A move of the project stopped, and its plan is saved | Each command of the project, in Claude and in Codex, refuses and names the command that finishes the move: `sage move --gate <G>`. |
 
 A moved folder with no Git commits, or that is no Git repository, has no first commit, so sage cannot compare it. This is a limit.
 
@@ -379,6 +380,63 @@ This check prevents mistakes. It does not stop an agent that gives another chief
 **The board.** The board shows a shared project as one project, in Claude and in Codex, in the chat and on the board page. It only reads, and an existing project looks as before ([board guide](board.md#a-shared-project-on-the-board)).
 
 After you update sage in Claude and in Codex, stop a running board server with the `board --stop` command that `board --ensure` prints, then ask for the board again. A board server that started before the update reads with its old code.
+
+### Move an existing project
+
+The move takes the open work of a project's Claude and Codex logbooks into one shared logbook. It runs once, after one gate, and no command undoes it.
+
+1. Update sage in Claude and in Codex, restart both sessions, and trust the Codex hooks again with `/hooks`.
+2. Tell either chief to move the project. The chief shows you the preview, which changes nothing.
+3. Answer the move gate: move, or keep.
+4. The chief moves the project and gives you the end check. Open the board in either provider: you see one project.
+
+| Command | Does |
+| --- | --- |
+| `sage move --preview` | Reads and changes nothing. It prints what moves by provider with the new numbers, what stays, the next numbers, the checks and the plan: a fingerprint of everything that the move would write. |
+| `sage move --plan <plan>` | Opens the move gate, if the logbooks still give that plan. Its first line is `G<n> · move · plan <plan>`. |
+| `sage move --gate <G>` | Moves, after your answer. It checks the plan again, then prints each step, the end check by table and by provider, the map page, the backup copies and the restore steps. |
+
+The move gate is your act, so the move names no chief. In Codex, a `move` tool of the same name comes with the Codex part of the move; until then, ask the Claude chief.
+
+| What | After the move |
+| --- | --- |
+| An open task | Moves with a new number, Claude's first, and starts unclaimed. Its priority, size, route, round, branch and PR stay: an adoption record of version 2 keeps the old task, its branch and its PR. A task in verifying, verified or pr-ready returns to reviewing. |
+| Its open findings, its gates (answered ones too), its program, its waits and its PR history | Move with new numbers. A wait on a merged or concluded task counts as met. Each moved finding's summary names its old key. |
+| An open gate with no task | Moves with a new number. The open gates take the first numbers. |
+| A task that a task of the other logbook adopted | Moves with the task that adopted it. |
+| A finished task, the runs, the verdicts and the kept reports | Stay in the old logbook, read-only. The board shows each finished task with its Old label. A moved task gets fresh reviews and QA. |
+| The standing orders | Claude's keep their numbers. Codex's follow under a heading, with new numbers and the old Codex number in brackets. A repeated order stays: ask the chief to remove it. |
+| The old logbooks | Each gets `moved.json`, a `moved` column in its task table with each new number, and a backup copy, `tasks.before-move.tsv`. Every write there refuses. |
+| Each checkout of the repository with a logbook | Gets a row in `bindings.tsv`. |
+
+The new logbook holds `sources.tsv` (its old logbooks, which the board reads) and `move-map.html`, a page of each old and new number with a find box. The map page shows paths, so it stays on your Mac.
+
+| Situation | Result |
+| --- | --- |
+| A run runs in the project | The preview refuses and names each run. The chief starts no new run. Tell the other provider's chief to start none either. |
+| A provider's plugin is below contract 2 | The preview refuses and shows each provider's contract. Update sage in that provider, restart it and trust its hooks again. |
+| A provider has no row in `plugins.tsv` | The gate has a third option: move, and record that provider as unused. It recommends keep while that provider has a logbook of the repository. |
+| A folder cannot be written (for example the Claude folder from the Codex sandbox) | The preview refuses and names each folder. Ask the other provider's chief to move the project. |
+| A wait names an abandoned task, or a program's pilot is finished | The preview refuses. Change the waits, or take the open tasks out of the program, then ask again. |
+| A logbook changed after the preview | Nothing moves. The refusal says what changed, and the chief shows a new preview and opens a new gate. |
+| The move stopped (the Mac slept) | Every command of the project, in Claude and in Codex, refuses and names the same command. The chief runs it at once, and it goes on from the next step. If an old logbook changed before the move marked it, nothing moves, the new logbook goes aside, and the chief starts again with a new preview. |
+| The end check finds a count that does not match | The plan stays, so every command of the project refuses. Compare the new logbook with the plan. To keep the new logbook as it is, remove the plan. |
+| `logbook repair --accept-loss decisions` in the moved logbook | The repair writes the move's id floors again, from the old logbooks, so no old number comes back. |
+
+To restore by hand (no command does this). Warning: work recorded after the move stays only in the new logbook, and these steps do not bring it back.
+
+1. Stop every session of this project in Claude and in Codex.
+2. In each old logbook folder, replace `tasks.tsv` with `tasks.before-move.tsv`.
+3. In each old logbook folder, delete `moved.json`.
+4. In `~/.sage/bindings.tsv`, delete the rows that name the new logbook.
+5. In `~/.sage/projects.tsv`, delete the row of the new logbook. Keep its folder until you are sure.
+
+**Limits.**
+
+- `plugins.tsv` shows the contract of the last command that each provider ran. A session that started before the update still runs the old code, so the gate asks you to check that every session restarted.
+- An older plugin refuses a write to an old logbook, because it does not know the `moved` column. In the new logbook it gives new numbers above the move's floors, but its merge check refuses a moved task: it does not know adoption version 2.
+- The move also takes the logbooks of each clone with the same first commit. A fork with the same first commit moves too: answer keep, and tell the chief which folder is another project.
+- The Codex journal and its open fences are the Codex part of the move: a Codex chief checks them before it opens the gate.
 
 ## Where sage keeps things
 

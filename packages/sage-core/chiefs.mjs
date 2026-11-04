@@ -15,8 +15,8 @@ const READ = { kind: "read" }, ANY = { kind: "any" }, NEW = { kind: "new" }, OWN
 const onTask = (task) => ({ kind: "task", task });
 /**
  * What a command writes, from its words: the design's table of writer classes, in one place.
- *   read: no guard. owner: the owner's own act, so no chief: a gate answer, which a hook checks, and a logbook repair or
- *   projects rebuild, which the owner may run in a terminal with no hook. any: any chief. new: a chief that gets the task.
+ *   read: no guard. owner: the owner's own act, so no chief: a gate answer, which a hook checks, a logbook repair or
+ *   projects rebuild, which the owner may run in a terminal with no hook, and the move, which the move gate's answer starts. any: any chief. new: a chief that gets the task.
  *   task: the owning chief of task, or of the task of run; with recipient, also the chief that the task's open offer
  *   names, so that it can decline the offer. program: the owning chief of each task that it names.
  * A task on an any class is only the place of a lead: such a command changes no task. link is a read here, because a
@@ -39,6 +39,7 @@ export function writerClass(cmd, [sub, id] = []) {
     case "standing": return sub === "add" ? ANY : READ;
     case "logbook": return sub === "repair" ? OWNER : READ;
     case "projects": return OWNER;
+    case "move": return OWNER; // the owner's answer to the move gate starts it, and a project that moves has no chief yet
     case "config": return sub === undefined ? READ : ANY;
     case "init": return ANY;
     default: return READ;
