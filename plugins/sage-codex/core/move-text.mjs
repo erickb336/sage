@@ -35,11 +35,13 @@ const by = (rows, provider) => rows.filter((r) => r.provider === provider);
 const books = (n) => (n === 1 ? "the logbook" : n === 2 ? "both logbooks" : `the ${n} logbooks`);
 const shortPlan = (plan) => plan.digest.slice(0, 8);
 
+/** The open tasks of a map: not an adopted task, which moves in the row of the task that adopted it, and not a finished task of a program (F-T640-59). */
+const opened = (tasks) => tasks.filter((m) => !m.adopted && !m.finished);
 /** The counts of the plan, by provider: what the preview shows and what the end check compares. */
 export function countsOf(plan, provider) {
   const { map } = plan;
   return {
-    tasks: by(map.tasks, provider).filter((m) => !m.adopted).length,
+    tasks: opened(by(map.tasks, provider)).length,
     findings: by(map.findings, provider).length,
     gates: by(map.gates, provider).filter((m) => m.open).length,
     programs: by(map.programs, provider).length,
@@ -67,7 +69,7 @@ export function previewText(plan, checks) {
     "Read only. Nothing changed.",
     "",
     `${"What moves".padEnd(21)}${providers.map((p) => title(p).padEnd(17)).join("").trimEnd()}`,
-    row("open tasks", providers.map((p) => [countsOf(plan, p).tasks, range(ids(by(plan.map.tasks, p).filter((m) => !m.adopted)))])),
+    row("open tasks", providers.map((p) => [countsOf(plan, p).tasks, range(ids(opened(by(plan.map.tasks, p))))])),
     row("open findings", providers.map((p) => [countsOf(plan, p).findings, "new keys"])),
     row("open gates", providers.map((p) => [countsOf(plan, p).gates, range(ids(by(plan.map.gates, p).filter((m) => m.open)))])),
     ...(plan.map.gates.some((m) => !m.open) ? [row("answered gates", providers.map((p) => [by(plan.map.gates, p).filter((m) => !m.open).length, range(ids(by(plan.map.gates, p).filter((m) => !m.open)))]))] : []),
@@ -87,7 +89,7 @@ export function previewText(plan, checks) {
 
 /** The move gate's question: its fixed first line holds the plan, and the next lines are the facts that the owner reads. */
 export function gateQuestion(plan, finished, others = []) {
-  const open = plan.map.tasks.filter((m) => !m.adopted).length;
+  const open = opened(plan.map.tasks).length;
   return [
     `move · plan ${shortPlan(plan)}`,
     `Move the ${plan.folder.slice(0, -7)} project into one shared logbook?`,
@@ -123,7 +125,7 @@ export function changedText(asked, plan, shown) {
   for (const p of [...new Set([...(asked ? providersOf(asked) : []), ...providersOf(plan)])]) {
     const was = asked ? countsOf(asked, p) : null, now = countsOf(plan, p);
     if (!was) continue;
-    const olds = (m) => new Set(by(m.tasks, p).filter((t) => !t.adopted).map((t) => t.old));
+    const olds = (m) => new Set(opened(by(m.tasks, p)).map((t) => t.old));
     const before = olds(asked.map), after = olds(plan.map);
     const added = [...after].filter((id) => !before.has(id)), gone = [...before].filter((id) => !after.has(id));
     const diffs = [
@@ -244,6 +246,8 @@ export function restoreSteps(plan, shown) {
       `In ${shown("projects.tsv")}, delete the row of ${folder}.`,
       // A folder with a dot name is not a logbook to the board or to a later move, so no task shows twice (F-T640-19).
       `Rename the folder ${shown(folder)} to ${shown(`.${folder}.restored-${shortPlan(plan)}`)}: the board reads no folder whose name starts with a dot. Keep it until you are sure.`,
+      // Last: while the plan is there, every command of the project refuses, also in the steps above (F-T640-45).
+      `If the plan ${shown(`moves/${folder}.json`)} is there (an end check that did not match keeps it), rename it to ${folder}.json.aside: while it is there, every command of this project refuses.`,
     ],
   };
 }
