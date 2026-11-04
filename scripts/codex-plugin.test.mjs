@@ -1,12 +1,14 @@
 import "./test-env.mjs";
 import assert from "node:assert/strict";
 import { spawnSync } from "node:child_process";
-import { cpSync, existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, truncateSync, writeFileSync } from "node:fs";
+import { chmodSync, cpSync, existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, realpathSync, rmSync, truncateSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join, relative, resolve } from "node:path";
 import { test } from "node:test";
 import { z } from "zod";
 import { ROOT } from "./build.mjs";
+import { sessionStatus } from "../plugins/sage-codex/hooks/session-start-hook.mjs";
+import { modeDirectory } from "../plugins/sage-codex/hooks/sage-codex-hook.mjs";
 
 const json = (path) => JSON.parse(readFileSync(join(ROOT, path), "utf8"));
 // A "./" path that stays inside its root (docs plugins/build.md, "Path rules" and "Marketplace metadata").
@@ -67,7 +69,7 @@ test("each hook command runs a file of the built plugin", () => {
 
 /** An installed copy of the built plugin in a scratch CODEX_HOME, as `codex plugin add sage@sage` makes it. */
 function installed(t, { trust = [], cliVersion } = {}) {
-  const home = mkdtempSync(join(tmpdir(), "sage-codex-home-"));
+  const home = realpathSync(mkdtempSync(join(tmpdir(), "sage-codex-home-")));
   t.after(() => rmSync(home, { recursive: true, force: true }));
   const root = join(home, "plugins/cache/sage/sage/0.1.0");
   mkdirSync(root, { recursive: true });
@@ -90,6 +92,84 @@ const { stateKey } = await import(new URL("../plugins/sage-codex/hooks/principle
 const output = (status, warning) => ({ ...(warning ? { systemMessage: warning } : {}), hookSpecificOutput: { hookEventName: "SessionStart", additionalContext: warning ? `${status}\n${warning}` : status } });
 const ALL = ["session_start:0:0", "session_start:1:0", "user_prompt_submit:0:0", "user_prompt_submit:1:0", "pre_tool_use:0:0", "pre_tool_use:1:0", "permission_request:0:0", "post_tool_use:0:0", "subagent_start:0:0", "subagent_stop:0:0"];
 const START = "To start sage mode, the user sends this message alone: sage mode";
+
+// Synthetic source fixtures only. These events do not establish native desktop mapping or authorization.
+function resetFixture(t) {
+  const home = realpathSync(mkdtempSync(join(tmpdir(), "sage-t96-reset-")));
+  t.after(() => rmSync(home, { recursive: true, force: true }));
+  const env = { HOME: home, CODEX_HOME: home, SAGE_HOME: join(home, "mode-root") };
+  const dir = modeDirectory(env);
+  mkdirSync(dir, { recursive: true, mode: 0o700 });
+  const input = { hook_event_name: "SessionStart", source: "resume", session_id: "synthetic-t96-root" };
+  const file = join(dir, `${stateKey(input)}.json`);
+  const options = { pluginRoot: PLUGIN, codexHome: home, env };
+  const run = (fields = {}) => sessionStatus({ ...input, ...fields }, options);
+  const put = (state) => writeFileSync(file, JSON.stringify(state), { mode: 0o600 });
+  return { dir, file, input, options, put, run };
+}
+
+test("T96 synthetic: startup and resume clear only autopilot before status, for every prior flag", (t) => {
+  const f = resetFixture(t);
+  for (const source of ["startup", "resume"]) for (const sage of [false, true]) for (const autopilot of [false, true]) {
+    const before = { sage, autopilot, given: true, off: "synthetic-note" };
+    f.put(before);
+    const result = f.run({ source });
+    assert.deepEqual(JSON.parse(readFileSync(f.file, "utf8")), { ...before, autopilot: false }, `${source}, sage=${sage}, autopilot=${autopilot}`);
+    assert.match(result.hookSpecificOutput.additionalContext, sage ? /sage mode is on in this session/ : /To start sage mode/);
+    assert.doesNotMatch(result.systemMessage ?? "", /autopilot reset is unavailable/);
+    f.run({ source });
+    assert.deepEqual(JSON.parse(readFileSync(f.file, "utf8")), { ...before, autopilot: false }, "repeated reset preserves other flags");
+  }
+  f.put({ sage: true, autopilot: true });
+  assert.throws(() => sessionStatus(f.input, { ...f.options, pluginRoot: join(f.dir, "missing-plugin") }));
+  assert.deepEqual(JSON.parse(readFileSync(f.file, "utf8")), { sage: true, autopilot: false }, "reset finishes before status reads plugin metadata");
+});
+
+test("T96 synthetic: missing state is off; clear, compact, fork and other events preserve saved modes", (t) => {
+  const f = resetFixture(t);
+  const missing = f.run();
+  assert.match(missing.hookSpecificOutput.additionalContext, /To start sage mode/);
+  assert.doesNotMatch(missing.systemMessage ?? "", /autopilot reset is unavailable/);
+  assert.equal(existsSync(f.file), false, "missing state needs no new mode file");
+  for (const source of ["clear", "compact", "fork", "unknown"]) {
+    f.put({ sage: true, autopilot: true, given: true });
+    f.run({ source });
+    assert.deepEqual(JSON.parse(readFileSync(f.file, "utf8")), { sage: true, autopilot: true, given: true });
+  }
+  assert.equal(f.run({ hook_event_name: "UserPromptSubmit" }), undefined);
+  assert.deepEqual(JSON.parse(readFileSync(f.file, "utf8")), { sage: true, autopilot: true, given: true });
+});
+
+test("T96 synthetic: missing or malformed identity reports unavailable without changing any saved mode", (t) => {
+  const f = resetFixture(t);
+  f.put({ sage: true, autopilot: true });
+  for (const fields of [{ session_id: undefined }, { session_id: null }, { session_id: 7 }, { session_id: "" }, { session_id: {} }, { agent_id: "synthetic-child" }, { agent_id: null }]) {
+    const result = f.run(fields);
+    assert.match(result.systemMessage, /autopilot reset is unavailable/);
+    assert.match(result.hookSpecificOutput.additionalContext, /autopilot reset is unavailable/);
+    assert.deepEqual(JSON.parse(readFileSync(f.file, "utf8")), { sage: true, autopilot: true });
+    assert.deepEqual(readdirSync(f.dir), [f.file.slice(f.file.lastIndexOf("/") + 1)]);
+  }
+});
+
+test("T96 synthetic: damaged state and reset write errors report unavailable without claiming off", (t) => {
+  const f = resetFixture(t);
+  for (const data of ["{", "null", '{"sage":true,"autopilot":"on"}']) {
+    writeFileSync(f.file, data, { mode: 0o600 });
+    const result = f.run();
+    assert.match(result.systemMessage, /autopilot reset is unavailable/);
+    assert.doesNotMatch(result.systemMessage, /autopilot (?:is|are|now) off/);
+    assert.equal(readFileSync(f.file, "utf8"), data);
+  }
+  f.put({ sage: true, autopilot: true });
+  chmodSync(f.dir, 0o500);
+  try {
+    const result = f.run();
+    assert.match(result.systemMessage, /autopilot reset is unavailable/);
+    assert.doesNotMatch(result.systemMessage, /autopilot (?:is|are|now) off/);
+    assert.deepEqual(JSON.parse(readFileSync(f.file, "utf8")), { sage: true, autopilot: true });
+  } finally { chmodSync(f.dir, 0o700); }
+});
 
 test("the SessionStart hook gives a trusted install on a tested Codex no warning: the status goes to the chief only (R1665-3)", (t) => {
   const { run } = installed(t, { trust: ALL, cliVersion: "0.164.0" });
@@ -119,12 +199,13 @@ test("the SessionStart hook says when it cannot read the Codex version, and igno
   assert.equal(run({ hook_event_name: "UserPromptSubmit", prompt: "hello" }), "");
 });
 
-test("on resume with sage mode on, the status says that sage mode is on, not how to start it (R1663-3)", (t) => {
+test("on resume with sage mode on, the hook process resets autopilot and keeps sage mode in its status (R1663-3, T96; synthetic)", (t) => {
   const { run, home } = installed(t, { trust: ALL, cliVersion: "0.164.0" });
   const folder = join(home, "sage/.hooks/codex");
   mkdirSync(folder, { recursive: true, mode: 0o700 });
-  writeFileSync(join(folder, `${stateKey({ session_id: "s1" })}.json`), JSON.stringify({ sage: true, autopilot: false, given: true }), { mode: 0o600 });
+  writeFileSync(join(folder, `${stateKey({ session_id: "s1" })}.json`), JSON.stringify({ sage: true, autopilot: true, given: true }), { mode: 0o600 });
   assert.deepEqual(run({ hook_event_name: "SessionStart", source: "resume" }), output("sage 0.1.0 is installed. Codex 0.164.0. sage hooks: 10 of 10 have a trust record (Codex checks each hash).\nsage mode is on in this session."));
+  assert.deepEqual(JSON.parse(readFileSync(join(folder, `${stateKey({ session_id: "s1" })}.json`), "utf8")), { sage: true, autopilot: false, given: true });
   writeFileSync(join(folder, `${stateKey({ session_id: "s1" })}.json`), JSON.stringify({ sage: false, autopilot: false }), { mode: 0o600 });
   assert.deepEqual(run({ hook_event_name: "SessionStart", source: "resume" }), output(`sage 0.1.0 is installed. Codex 0.164.0. sage hooks: 10 of 10 have a trust record (Codex checks each hash).\n${START}`));
 });

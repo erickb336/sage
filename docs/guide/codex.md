@@ -126,12 +126,15 @@ Send each phrase alone, as the whole message, in any letter case.
 - A message near a phrase switches nothing. The chief asks you for the exact phrase, unless your message was a question.
 - For a normal switch, the chief confirms the switch in one line of its reply.
 - For a limit or a fault, the hook gives Codex a warning line; the terminal UI and the app show it; `codex exec` does not. The faults: an event that the hook cannot read (it switches nothing and turns autopilot off), and a mode folder that it cannot use (the line names the folder).
-- A damaged mode file turns sage mode and autopilot off. The hook replaces the file with a clean one and gives one warning line. Send `sage mode` to turn sage mode on again.
+- A damaged mode file turns sage mode and autopilot off when the mode hook runs. That hook replaces the file with a clean one and gives one warning line. Send `sage mode` to turn sage mode on again.
+- At startup or resume, the status hook clears saved autopilot before it prepares the status. It preserves Sage mode. If the reset fails, it reports "autopilot reset is unavailable" and does not claim that saved mode changed.
 - A forked thread starts with sage mode and autopilot off, because Codex does not tell the hook which thread it came from. If the fork shows the chief's role, the chief tells you this in one line. Send `sage mode` in the fork to turn it on there.
 - With `SAGE_HOOKS=off`, a phrase switches nothing, and the hook gives one warning line that says so.
 - The hook keeps the mode of each session in `~/.codex/sage/.hooks/codex/` (or under `SAGE_HOME`).
 
 The hooks run only after you trust them (step 3). In `codex exec`, Codex skips hooks that you have not trusted, with no warning.
+
+The startup/resume reset has synthetic source tests only. Native desktop ordering and owner-input authorization remain unverified; this reset does not establish landing enforcement.
 
 ### The approval prompts of each task
 
