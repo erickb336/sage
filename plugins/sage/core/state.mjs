@@ -28,7 +28,7 @@ import { ROLES } from "./roles.mjs";
 import { AGENT_CAPS, BREAKS, FINDING_CLASSES, HIDDEN, LINE, NAME_MAX, PRIORITIES, PRIORITY_SCALE, TABLES as PLAIN_TABLES, TASK_KINDS, countOf, nameProblem, proposalOf } from "./logbook-fields.mjs";
 import { BREAKDOWN, ENDED, GATE_ID, MET, PROGRAM_ID, TASK_ID, breakdownGate, byIds, dead, droppedBy, gateLines, lostClause, programState, progressOf, progressText, shownGraph, shownWaits, unmetWaits, waitGraph, waitWords, waitsOf, waitsWithState } from "./program-rules.mjs";
 import { OBSERVATIONS_MAX_BYTES, OBSERVATION_DATA_MAX_BYTES, validateObservation, validateObservations } from "./observations.mjs";
-import { MOVES, PLAN_MAX, checkoutGone, createSharedRoot, sharedRoot } from "./shared-root.mjs";
+import { MOVES, PLAN_MAX, checkoutGone, createSharedRoot, sameDir, sharedRoot } from "./shared-root.mjs";
 import { changedText, countsOf, endText, gateQuestion, gateText, localTime, mapHtml, mismatchText, previewText, providersOf, reconciliationText, startText, stepText, stoppedText, title } from "./move-text.mjs";
 import { CHIEF, chiefOnly, createChiefs, offerOf, replaceOf, replaceQuestion, writerClass } from "./chiefs.mjs";
 
@@ -585,7 +585,7 @@ function ready(dir, env, skip = []) {
   if (lstatSync(join(dir, "moved.json"), { throwIfNoEntry: false })) refuse(`this logbook moved to the shared root (${join(dir, "moved.json")}), so sage writes no more to it. Nothing changed. Run the command again: it then finds the shared logbook.`);
   // The move saves its plan, then marks the old logbooks one by one: a stop between two marks leaves one unmarked, and a
   // writer that waited here must not change it, or the move cannot finish. So a plan that names this logbook refuses too (T647).
-  if (env) for (const { file, plan } of movePlans(rootOf(env))) if (!plan || plan.sources?.some((s) => s?.dir === dir)) refuse(stoppedText(plan, file));
+  if (env) for (const { file, plan } of movePlans(rootOf(env))) if (!plan || plan.sources?.some((s) => sameDir(s?.dir, dir))) refuse(stoppedText(plan, file));
   settle(dir);
   for (const file of ["status.md", "standing.md"]) target(join(dir, file));
   if (!skip.includes("tasks") && !lstatSync(join(dir, "tasks.tsv"), { throwIfNoEntry: false })) {
@@ -1846,7 +1846,7 @@ function moveScope(project, env) {
   const checkout = projectRoot(resolve(project)), shared = rootOf(env), folder = folderOf(checkout);
   if (lstatSync(shared, NO)?.isSymbolicLink()) refuse(`refused: the shared root ${visible(shared)} is a link, and the board reads no project there. Nothing changed. Ask the user to set SAGE_SHARED_HOME to the folder itself.`);
   const rows = bindings(shared), { sources, checkouts, gone } = repositoryLogbooks(checkout, env), key = checkouts[0].root;
-  for (const { file, plan } of movePlans(shared)) if (!plan || plan.folder === folder || plan.sources?.some((s) => sources.some((o) => o.dir === s.dir))) refuse(stoppedText(plan, file));
+  for (const { file, plan } of movePlans(shared)) if (!plan || plan.folder === folder || plan.sources?.some((s) => sources.some((o) => sameDir(s?.dir, o.dir)))) refuse(stoppedText(plan, file));
   const linked = rows.find((r) => checkouts.some((c) => c.root === r.root));
   if (linked) refuse(linked.root === key ? `refused: this project already uses the shared logbook ${linked.folder}, so nothing moves. Nothing changed.` : `refused: the checkout ${visible(linked.root)} of this repository already uses the shared logbook ${linked.folder}, and a checkout has one logbook. Nothing changed. Ask the user which project it belongs to.`);
   if (!sources.length) refuse("refused: this project has no logbook in the Claude or the Codex root, so nothing moves. Nothing changed.");
@@ -2014,15 +2014,16 @@ function movePlan(scope, env, gate) {
     if (BACK.includes(t.state)) back.push(named(b, t.id));
     // A round key whose finding closed stays a key of the round with a new key of its own, which names no row, so that the
     // next round counts as before the move: a round replans only when every key of the last round is open again (F-T640-61).
+    // Its decision row has the new key as its first word, so nextId counts it after the next round too (F-T647-4).
     const closed = [], round = roundKeys(t).map((k) => {
       const key = keys.get(`${b.i} ${t.id} ${k}`);
       if (key) return key;
       const fresh = newKey(id);
-      closed.push(`${k} is ${fresh}`);
+      closed.push({ at: "", task: id, decision: `${fresh} was the round key ${k} of ${named(b, t.id)}, whose finding closed before the move`, why: "the move keeps the round's keys, and no new finding takes this key" });
       return fresh;
     });
     // The board shows this row, so it names the old logbook's folder, never a path of the Mac (F-T640-13).
-    was.push({ at: "", task: id, decision: `${id} was ${named(b, t.id)}`, why: [`the move from the ${title(b.provider)} logbook ${basename(b.dir)}`, `its pages stay in ${basename(b.dir)}/pages/${t.id} of the worktree root`, metHere.length && `waits met before the move: ${metHere.join(", ")}`, BACK.includes(t.state) && `${t.state} → reviewing, because its verdicts stay in the old logbook`, closed.length && `closed round keys: ${closed.join(", ")}`].filter(Boolean).join("; ") });
+    was.push({ at: "", task: id, decision: `${id} was ${named(b, t.id)}`, why: [`the move from the ${title(b.provider)} logbook ${basename(b.dir)}`, `its pages stay in ${basename(b.dir)}/pages/${t.id} of the worktree root`, metHere.length && `waits met before the move: ${metHere.join(", ")}`, BACK.includes(t.state) && `${t.state} → reviewing, because its verdicts stay in the old logbook`].filter(Boolean).join("; ") }, ...closed);
     const via = !t.program && adoptedProgram(b, t);
     return keepColumns("tasks", { ...t, id, state: BACK.includes(t.state) ? "reviewing" : t.state, keys: round.join(","), waits: on.join(","), program: t.program ? programIds.get(`${b.i} ${t.program}`) : via ? programIds.get(`${via.b.i} ${via.t.program}`) : "", approvals: list(t.approvals).map((g) => gateIds.get(`${b.i} ${g}`)).filter(Boolean).join(","), adoption: JSON.stringify(record), chief: "", offer: "" });
   });

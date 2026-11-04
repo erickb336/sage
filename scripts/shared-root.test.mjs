@@ -2049,11 +2049,12 @@ test("a task moved after a key of its repair round closed keeps that key, so its
   const moved = rowsIn(join(dir, "tasks.tsv")).find((r) => r.id === "T4");
   const version = /--version ([0-9a-f]{64})/.exec(refusalOf(() => w.claude("round", "T4")))?.[1];
   if (version) w.claude("claim", "T4", "--version", version);
-  const added = w.claude("finding", "add", "T4", "--source", "sage", "--severity", "low", "--summary", "new");
-  assert.match(w.claude("round", "T4"), /^T4 repairing · round 2 of \d+ · fix F-T4-1 /, "as before the move: F-T2-1 closed, so the round fixed one key");
-  assert.match(added, /^F-T4-3 /, "while the round holds the carried key, a new finding takes the next key");
   assert.deepEqual([moved.round, moved.keys], ["1", "F-T4-2,F-T4-1"], "the closed key F-T2-1 is F-T4-2, and the open F-T2-2 is F-T4-1");
-  assert.match(rowsIn(join(dir, "decisions.tsv")).find((d) => d.task === "T4").why, /; closed round keys: F-T2-1 is F-T4-2$/);
+  assert.match(w.claude("round", "T4"), /^T4 repairing · round 2 of \d+ · fix F-T4-1 /, "as before the move: F-T2-1 closed, so the round fixed one key");
+  assert.equal(rowsIn(join(dir, "tasks.tsv")).find((r) => r.id === "T4").keys, "F-T4-1", "round 2 holds only the open key");
+  // F-T4-2 is in no round now, and no finding row has it: its decision row keeps it taken (F-T647-4).
+  assert.match(w.claude("finding", "add", "T4", "--source", "sage", "--severity", "low", "--summary", "new"), /^F-T4-3 /, "a new finding never takes the carried key F-T4-2");
+  assert.deepEqual(rowsIn(join(dir, "decisions.tsv")).filter((d) => d.task === "T4").map((d) => d.decision).slice(0, 2), ["T4 was Claude T2", "F-T4-2 was the round key F-T2-1 of Claude T2, whose finding closed before the move"]);
 });
 
 test("after a restore by hand, a new task or gate takes a number above the move's map (F-T640-47)", (t) => {
@@ -2081,20 +2082,22 @@ test("a chain of adoptions gives every old row the number of the task that moves
   assert.deepEqual(rowsIn(join(dir, "findings.tsv")).map((f) => [f.task, f.key]), [["T5", "F-T5-1"]], "the finding of Claude T2 moves with the task that adopted it");
 });
 
-test("a writer that waited on an old logbook's lock refuses while a move plan names that logbook, so a stop inside step 3 still finishes (T647)", async (t) => {
-  const w = moveWorld(t), { id } = w.ask(), file = planFileOf(w);
+/** A Codex writer that waits on the Codex logbook's lock while the move saves its plan and marks only the Claude logbook (T647). root gives the writer's root path. */
+async function waitingWriter(t, root = (w) => w.codexRoot) {
+  const w = moveWorld(t), { id } = w.ask(), file = planFileOf(w), codexRoot = root(w);
   stopAt(w, id, 2);
   const plan = readFileSync(file, "utf8");
   rmSync(file); // the moment before the move saved its plan: the writer finds the Codex logbook then
   const runner = join(w.base, "codex-writer.mjs");
-  writeFileSync(runner, `import { createStateTool } from ${JSON.stringify(join(REPO, "packages/sage-core/index.mjs"))};\nconst roots = () => [{ provider: "claude", path: ${JSON.stringify(w.claudeRoot)} }, { provider: "codex", path: ${JSON.stringify(w.codexRoot)} }];\nconst { code, text } = createStateTool({ provider: "codex", defaultRoot: () => ${JSON.stringify(w.codexRoot)}, legacyRoots: roots }).command(${JSON.stringify(["task", "add", "--title", "late", "--size", "tiny", "--priority", "P2", "--project", w.project])}, process.env, { project: ${JSON.stringify(w.project)}, native: "test-chief" });\nconsole.log(text);\nprocess.exit(code);\n`);
+  writeFileSync(runner, `import { createStateTool } from ${JSON.stringify(join(REPO, "packages/sage-core/index.mjs"))};\nconst roots = () => [{ provider: "claude", path: ${JSON.stringify(w.claudeRoot)} }, { provider: "codex", path: ${JSON.stringify(codexRoot)} }];\nconst { code, text } = createStateTool({ provider: "codex", defaultRoot: () => ${JSON.stringify(codexRoot)}, legacyRoots: roots }).command(${JSON.stringify(["task", "add", "--title", "late", "--size", "tiny", "--priority", "P2", "--project", w.project])}, process.env, { project: ${JSON.stringify(w.project)}, native: "test-chief" });\nconsole.log(text);\nprocess.exit(code);\n`);
   const saved = process.env.SAGE_TEST_PIDS;
   process.env.SAGE_TEST_PIDS = "{}";
   t.after(() => { if (saved === undefined) delete process.env.SAGE_TEST_PIDS; else process.env.SAGE_TEST_PIDS = saved; });
   const before = readFileSync(join(w.codexDir, "tasks.tsv"), "utf8");
   let writer;
   w.codexTool.withLock(w.codexDir, () => {
-    const child = spawn(process.execPath, [runner], { env: { ...w.codexEnv, NODE_TEST_CONTEXT: "child" }, stdio: ["ignore", "pipe", "pipe"] });
+    // SAGE_HOME gives the writer's root, as each provider sets it in production.
+    const child = spawn(process.execPath, [runner], { env: { ...w.codexEnv, SAGE_HOME: codexRoot, NODE_TEST_CONTEXT: "child" }, stdio: ["ignore", "pipe", "pipe"] });
     let out = "";
     child.stdout.on("data", (b) => { out += b; });
     child.stderr.on("data", (b) => { out += b; });
@@ -2113,4 +2116,17 @@ test("a writer that waited on an old logbook's lock refuses while a move plan na
   assert.match(wrote.out, /^sage: refused: the move of project project did not finish\n  stopped after step 2 of 6 .*\n.*\n.*\n  To finish: sage move --gate G2 \(the same command\)\n$/);
   assert.equal(readFileSync(join(w.codexDir, "tasks.tsv"), "utf8"), before, "the unmarked logbook keeps its rows");
   assert.match(w.claude("move", "--gate", id), /\nReconciliation · every count matches the plan\n/, "the same command finishes the move");
+}
+test("a writer that waited on an old logbook's lock refuses while a move plan names that logbook, so a stop inside step 3 still finishes (T647)", (t) => waitingWriter(t));
+// The plan names each old logbook as the mover's roots give it; a writer whose root is another path to the same folder refuses too (F-T648-1).
+test("a waiting writer whose root is a link to the old root refuses too (F-T648-1)", (t) => waitingWriter(t, (w) => {
+  const link = join(w.base, "codex-link");
+  symlinkSync(w.codexRoot, link);
+  return link;
+}));
+test("a waiting writer whose root differs in letter case refuses too, on a volume that ignores case (F-T648-1)", (t) => {
+  const probe = realpathSync(mkdtempSync(join(tmpdir(), "sage-case-")));
+  t.after(() => rmSync(probe, { recursive: true, force: true }));
+  if (!existsSync(probe.toUpperCase())) return t.skip("this volume tells letter case apart, so the other case is another folder");
+  return waitingWriter(t, (w) => join(w.base, "CODEX-ROOT"));
 });
