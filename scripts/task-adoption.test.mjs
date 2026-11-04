@@ -510,3 +510,57 @@ test('an ended blocked preparation does not prevent adoption or become review pr
   assert.match(s.no('verdict', 'T1', '--sha', SHA, '--pr', '362', '--kind', 'review-clean', '--run', run), /fresh done code-reviewer/);
   assert.equal(tool.read(s.dest, 'ledger').length, 0);
 });
+
+/**
+ * T641: the adoption record of a moved task, version 2, as the move will write it: the old provider, task and logbook,
+ * with pr and branch optional and the task's own version 1 record in from. Only the reader exists yet, so the test puts
+ * the cell in place.
+ */
+function adoptedV2(s, record) {
+  const v1 = JSON.parse(s.task().adoption), file = join(s.dest, 'tasks.tsv');
+  const [head, ...rows] = readFileSync(file, 'utf8').trimEnd().split('\n'), cols = head.split('\t');
+  const cells = rows[0].split('\t');
+  cells[cols.indexOf('adoption')] = JSON.stringify({ version: 2, provider: 'codex', task: 'T1', logbook: s.dest, project: v1.project, round: 4, digest: v1.digest, ...record(v1) });
+  writeFileSync(file, `${[head, cells.join('\t'), ...rows.slice(1)].join('\n')}\n`);
+}
+
+test('T641: a version 2 record keeps the adopted branch and PR through from, from the task set to the merge check', t => {
+  const s = overlap(t);
+  s.ok(...s.adopt);
+  adoptedV2(s, v1 => ({ from: v1 }));
+  for (const field of ['pr=356', 'branch=sage/t536-another']) {
+    const saved = s.bytes(s.dest);
+    assert.match(s.no('task', 'T1', 'set', field), /T1's adoption keeps PR 362 and branch codex\/t95-x\. Nothing changed\./);
+    assert.deepEqual(s.bytes(s.dest), saved);
+  }
+  reviewed(s, OVERLAP);
+  assert.equal(s.ok('merge-check', '--sha', SHA, '--pr', '362', '--head', OVERLAP), 'T1 may merge: 2 clean cycles on this SHA');
+});
+
+test('T641: a version 2 record without a PR or a branch pins neither, and its own branch is named for its task', t => {
+  const s = fixture(t);
+  s.ok(...s.adopt);
+  adoptedV2(s, () => ({}));
+  assert.match(s.ok('task', 'T1', 'set', 'branch=sage/t1-moved'), /T1/);
+  assert.equal(s.task().branch, 'sage/t1-moved');
+  adoptedV2(s, () => ({ branch: 'sage/t1-moved' }));
+  assert.match(s.no('task', 'T1', 'set', 'branch=sage/t1-other'), /T1's adoption keeps branch sage\/t1-moved\. Nothing changed\./);
+});
+
+test('T641: a damaged version 2 record refuses as a damaged adoption record', t => {
+  const s = fixture(t);
+  s.ok(...s.adopt);
+  for (const record of [
+    () => ({ version: 3 }),
+    () => ({ branch: 'sage/t999-other' }),
+    v1 => ({ from: { ...v1, pr: undefined } }),
+    v1 => ({ from: { ...v1, version: 2 } }),
+    () => ({ pr: 'x' }),
+    () => ({ round: -1 }),
+  ]) {
+    adoptedV2(s, record);
+    const saved = s.bytes(s.dest);
+    assert.match(s.no('task', 'T1', 'set', 'title=Must not change'), /T1 has a damaged adoption record\./);
+    assert.deepEqual(s.bytes(s.dest), saved);
+  }
+});

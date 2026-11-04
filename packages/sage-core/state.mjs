@@ -31,9 +31,19 @@ import { OBSERVATIONS_MAX_BYTES, OBSERVATION_DATA_MAX_BYTES, validateObservation
 import { checkoutGone, createSharedRoot, sharedRoot } from "./shared-root.mjs";
 import { CHIEF, chiefOnly, createChiefs, offerOf, replaceOf, replaceQuestion, writerClass } from "./chiefs.mjs";
 
-export function createStateTool({ defaultRoot, legacyRoots = () => [], provider, models = ["inherit"], modelDefaults = {}, usageInterfaces = [], claimStep = (task, version, chief) => `run sage claim ${task} --version ${version} --chief ${chief}`, replaceStep = (task, chief) => `run sage gate replace ${task} --to ${chief} --chief ${chief}` }) {
+export function createStateTool({ defaultRoot, legacyRoots: namedRoots = () => [], provider, models = ["inherit"], modelDefaults = {}, usageInterfaces = [], claimStep = (task, version, chief) => `run sage claim ${task} --version ${version} --chief ${chief}`, replaceStep = (task, chief) => `run sage gate replace ${task} --to ${chief} --chief ${chief}` }) {
 if (typeof defaultRoot !== "function") throw new TypeError("defaultRoot must be a function");
-if (typeof legacyRoots !== "function") throw new TypeError("legacyRoots must be a function");
+if (typeof namedRoots !== "function") throw new TypeError("legacyRoots must be a function");
+/**
+ * Each provider's legacy logbook root, as the adapter names it: { provider, path }, or a bare path, whose provider is
+ * unknown (null). The move needs the name of each old root; every other reader takes only the paths.
+ */
+const rootsOf = (env) => namedRoots(env).map((root) => {
+  if (typeof root === "string") return { provider: null, path: root };
+  if (typeof root?.path !== "string") refuse(`The plugin's legacyRoots gave ${JSON.stringify(root) ?? String(root)}, but each root must be a path or { provider, path } with a path. Nothing changed. Update the sage plugin.`);
+  return { provider: root.provider ?? null, path: root.path };
+});
+const legacyRoots = (env) => rootsOf(env).map((root) => root.path);
 const MODELS = [...models];
 const USAGE_INTERFACES = usageRegistry(usageInterfaces);
 
@@ -278,15 +288,26 @@ const candidateOf = (value) => {
   const k = cell(value);
   return /^[1-9]\d*$/.test(k) ? k : refuse(`--candidate is a whole number from 1, not ${JSON.stringify(visible(String(value)))}. Nothing changed.`);
 };
+/** The fields that each adoption version has: the source provider, task, logbook and project, the spent rounds and the source digest. */
+const adoptionBase = (a, version) => a?.version === version && /^[a-z][a-z0-9-]*$/.test(a.provider ?? "") && TASK_ID.test(a.task ?? "")
+  && isAbsolute(a.logbook ?? "") && isAbsolute(a.project ?? "") && Number.isSafeInteger(a.round) && a.round >= 0
+  && (a.cycles === undefined || (Number.isInteger(a.cycles) && a.cycles >= 1)) && /^[a-f0-9]{64}$/.test(a.digest ?? "");
+/** Version 1, from task-adopt: the PR and the branch, named for the source task, are required. */
+const adoptionV1 = (a) => adoptionBase(a, 1) && PR.test(a.pr ?? "") && ofTask(a.task, a.branch);
+/**
+ * Version 2, from the move (T641 reads it; the move writes it): the PR and the branch are optional, and from keeps the
+ * moved task's own version 1 record. A branch is named for the source task or is the branch of from.
+ */
+const adoptionV2 = (a) => adoptionBase(a, 2) && (a.from === undefined || adoptionV1(a.from)) && (a.pr === undefined || PR.test(a.pr))
+  && (a.branch === undefined || ofTask(a.task, a.branch) || a.branch === a.from?.branch);
+/** A task's adoption record. A version 2 record without its own PR, branch or cycles takes those of from, so its branch stays the task's own. */
 const adoptionOf = task => {
   if (!task.adoption) return null;
   let a;
   try { a = JSON.parse(task.adoption); } catch { /* Refuse below. */ }
-  if (!a || a.version !== 1 || !/^[a-z][a-z0-9-]*$/.test(a.provider ?? "") || !TASK_ID.test(a.task ?? "")
-    || !isAbsolute(a.logbook ?? "") || !isAbsolute(a.project ?? "") || !PR.test(a.pr ?? "") || !ofTask(a.task, a.branch)
-    || !Number.isSafeInteger(a.round) || a.round < 0 || (a.cycles !== undefined && (!Number.isInteger(a.cycles) || a.cycles < 1))
-    || !/^[a-f0-9]{64}$/.test(a.digest ?? "")) refuse(`${task.id} has a damaged adoption record.`);
-  return a;
+  if (adoptionV1(a)) return a;
+  if (!adoptionV2(a)) refuse(`${task.id} has a damaged adoption record.`);
+  return { ...a, pr: a.pr ?? a.from?.pr, branch: a.branch ?? a.from?.branch, cycles: a.cycles ?? a.from?.cycles };
 };
 /** Is a branch this task's own: named for its id, or the branch that it adopted, which carries the source task's number. */
 const branchOfTask = (task, name) => ofTask(task.id, name) || adoptionOf(task)?.branch === name;
@@ -557,6 +578,9 @@ const check = (dir, skip = [], max = Infinity) => {
 const hasRows = (dir, max = Infinity) => Object.keys(TABLES).some((t) => (readRegular(join(dir, `${t}.tsv`), { max }) ?? "").trim().split(/\r?\n/).length > 1);
 
 function ready(dir, skip = []) {
+  // A writer finds its logbook before it takes the lock, so a writer that waited here during the move would write into
+  // the old logbook, also by settling a saved change. A read may still read it: the board shows it read-only.
+  if (lstatSync(join(dir, "moved.json"), { throwIfNoEntry: false })) refuse(`this logbook moved to the shared root (${join(dir, "moved.json")}), so sage writes no more to it. Nothing changed. Run the command again: it then finds the shared logbook.`);
   settle(dir);
   for (const file of ["status.md", "standing.md"]) target(join(dir, file));
   if (!skip.includes("tasks") && !lstatSync(join(dir, "tasks.tsv"), { throwIfNoEntry: false })) {
@@ -1735,6 +1759,22 @@ function nextId(dir, prefix) {
   }
   return `${prefix}${max + 1n}`;
 }
+/** The words of each id floor that the move writes: the prefixes that count across the whole logbook. A finding's key counts within its task. */
+const FLOORS = { T: "task", R: "run", G: "gate", PG: "program" };
+/**
+ * The move's id floors (T641): for each prefix, one decision row in the new logbook whose first word is the highest id
+ * of the old logbooks, so that nextId, also an older sage's, never gives an old number again. sources are the old
+ * logbooks, as locate's old lists them. The caller holds the new logbook's lock. A prefix with no id gets no row.
+ */
+function writeIdFloors(dir, sources) {
+  const from = sources.map((s) => s.provider ?? s.dir).join(" and "), at = now();
+  const floors = Object.entries(FLOORS).map(([prefix, noun]) => {
+    const top = sources.map((s) => BigInt(nextId(s.dir, prefix).slice(prefix.length)) - 1n).reduce((a, b) => (b > a ? b : a), 0n);
+    return top > 0n && { at, task: "", decision: `${prefix}${top} is the ${noun} floor of the move from ${from}`, why: "the move keeps every new id above the ids of the old logbooks" };
+  }).filter(Boolean);
+  if (floors.length) write(dir, "decisions", [...read(dir, "decisions"), ...floors]);
+  return floors;
+}
 /** The next free name beside a file that a repair moves aside, under the logbook lock: an old file stays, however fast two repairs run. */
 const lostName = (file) => {
   let n = 1;
@@ -2027,7 +2067,7 @@ function planTaskChanges(before, id, changes, at, facts, legacyRounds = false) {
     const [k, v] = [kv.slice(0, kv.indexOf("=")), kv.slice(kv.indexOf("=") + 1)];
     if (k === "approval") continue; // validated with the whole request before any state transition
     const adoption = adoptionOf(task);
-    if (adoption && ((k === "branch" && v !== adoption.branch) || (k === "pr" && v !== adoption.pr))) refuse(`${task.id}'s adoption keeps PR ${adoption.pr} and branch ${adoption.branch}. Nothing changed.`);
+    if (adoption && ((k === "branch" && adoption.branch !== undefined && v !== adoption.branch) || (k === "pr" && adoption.pr !== undefined && v !== adoption.pr))) refuse(`${task.id}'s adoption keeps ${[adoption.pr && `PR ${adoption.pr}`, adoption.branch && `branch ${adoption.branch}`].filter(Boolean).join(" and ")}. Nothing changed.`);
     if (k === "state") {
       if (v === "repairing") refuse("start a repair with: sage round <task>");
       // Only an explicit, unused approval grants a round. Ordinary holds grant none.
@@ -2152,7 +2192,7 @@ function move(task, to) {
  */
 function setPr(task, pr, why, at = now()) {
   const adoption = adoptionOf(task);
-  if (adoption && pr !== adoption.pr) refuse(`${task.id}'s adoption keeps PR ${adoption.pr}. Nothing changed.`);
+  if (adoption?.pr !== undefined && pr !== adoption.pr) refuse(`${task.id}'s adoption keeps PR ${adoption.pr}. Nothing changed.`);
   if (pr && !builds(task)) refuse(`${task.id} is an investigation: it changes no code, so it has no pull request. A build is its own task: sage task add --size tiny, small or large, then give that task the PR.`);
   if (pr && !PR.test(pr)) refuse(`${JSON.stringify(pr)} is not a pull request number. Give only its digits, with no leading zero, for example pr=5 or --pr 5.`);
   const was = task.pr;
@@ -3825,9 +3865,9 @@ function runCli(argv = process.argv.slice(2)) {
 }
 
 const { board, answerPaths } = createBoard({ BLOCKS, BRANCH, RISKS, STATES, mergeCheck, optionsOf, projectName, projectRoot, read, sageRoot, slug, storeDir, withLock });
-const { bindings, fillCommits, link, locate, notePlugin, refuseNewLogbook } = createSharedRoot({ Refusal, refuse, legacyRoots, makeLogbook, now, projectRoot, provider, raiseCounts, readRegular, rowsOf, sageRoot, sheetText, slug, swap, visible, withLock,
+const { bindings, fillCommits, link, locate, notePlugin, refuseNewLogbook, waitingPlugins } = createSharedRoot({ Refusal, refuse, legacyRoots: rootsOf, makeLogbook, now, projectRoot, provider, raiseCounts, readRegular, rowsOf, sageRoot, sheetText, slug, swap, visible, withLock,
   listed: (root) => known(root, undefined, undefined, true),
   enroll: (root, folder, make) => known(root, folder, make, false, true) });
 const { chiefs, chiefRow, rowOf } = createChiefs({ now, provider, readRegular, refuse, rowsOf, sheetText, swap });
-return { SIZES, BLOCKS, RISKS, KINDS, STATES, DEFAULTS, PR, sageRoot, locate, chiefFor, sessionBar, actorOptions, git, projectRoot, roleReadProject, optionsOf, slug, worktreeRoot, BRANCH, ofTask, branchOfTask, branchHome, branchTip, projectName, storeDir, config, cyclesFor, modelFor, read, mergeCheck, landingBar, boardLandingCheck, logbookView, sage, readTaskSnapshot, updateRequestedTask, assertTaskUpdateOpen, settleWrites, createRequestedTask, createRequestedRun, finishReportedRun, finishInterruptedRun, acceptReportedReview, keepReport, compareRetainedReport, verdictBacking, captureRunAssignment, captureReviewTarget, validateTerminalAssignment, withLock, board, answerPaths, command, runCli };
+return { SIZES, BLOCKS, RISKS, KINDS, STATES, DEFAULTS, PR, sageRoot, locate, chiefFor, sessionBar, actorOptions, git, projectRoot, roleReadProject, optionsOf, slug, worktreeRoot, BRANCH, ofTask, branchOfTask, branchHome, branchTip, projectName, storeDir, config, cyclesFor, modelFor, read, mergeCheck, landingBar, boardLandingCheck, logbookView, sage, readTaskSnapshot, updateRequestedTask, assertTaskUpdateOpen, settleWrites, createRequestedTask, createRequestedRun, finishReportedRun, finishInterruptedRun, acceptReportedReview, keepReport, compareRetainedReport, verdictBacking, captureRunAssignment, captureReviewTarget, validateTerminalAssignment, withLock, board, answerPaths, command, runCli, waitingPlugins, writeIdFloors };
 }

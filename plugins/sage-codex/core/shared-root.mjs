@@ -13,8 +13,11 @@ import { readLocalGit } from "./local-git.mjs";
 
 const BINDINGS = ["root", "folder", "commits", "at"];
 const PLUGINS = ["provider", "contract", "at"];
-/** What plugins.tsv says that a provider's state tool understands. Raise it only when a change needs both providers to update. */
-const CONTRACT = "1";
+/**
+ * What plugins.tsv says that a provider's state tool understands. Raise it only when a change needs both providers to
+ * update. 2: the state tool knows the move (T641): a write refuses a moved logbook, so the move may start.
+ */
+const CONTRACT = "2";
 /** A logbook's folder name: today's rule, computed once and saved in the row. */
 const FOLDER = /^[a-z0-9-]+-[0-9a-f]{6}$/;
 const COMMITS = /^(?:[0-9a-f]{40,64}(?:,[0-9a-f]{40,64})*)?$/;
@@ -82,8 +85,15 @@ export function createSharedRoot({ Refusal, refuse, listed, legacyRoots, makeLog
   };
   /** Today's folder name: from the checkout's main root, as it was before any row. */
   const folderOf = (checkout) => `${slug(basename(checkout))}-${createHash("sha1").update(checkout).digest("hex").slice(0, 6)}`;
-  /** Every root that may hold this project's legacy logbook: this tool's own, then what the adapter names. */
-  const roots = (env) => [...new Set([sageRoot(env), ...legacyRoots(env)].map((root) => resolve(root)))];
+  /**
+   * Every root that may hold this project's legacy logbook, with its provider: this tool's own, then what the adapter
+   * names. A root that the adapter gives as a bare path has provider null. A path that comes twice keeps its first name.
+   */
+  const roots = (env) => {
+    const seenPaths = new Map();
+    for (const { provider: name, path } of [{ provider: provider ?? null, path: sageRoot(env) }, ...legacyRoots(env)]) if (!seenPaths.has(resolve(path))) seenPaths.set(resolve(path), name);
+    return [...seenPaths].map(([path, name]) => ({ provider: name, path }));
+  };
   /**
    * What the resolver sees in a provider root that it may not read: nothing. A project with a row never looks there, and
    * a project with no row keeps today's result, because today's commands never read the other root. Only the link stays
@@ -189,9 +199,11 @@ export function createSharedRoot({ Refusal, refuse, listed, legacyRoots, makeLog
     // owner: the checkout of the logbook's owner row (ownerOf), whose origin is the logbook's repository (sage-pr, T634).
     if (row) return { dir: boundFolder(shared, rows, row), row, get owner() { return ownerOf(rows, row.folder)?.root; }, checkout, shared: true };
     const folder = folderOf(checkout), all = roots(env);
-    const moved = all.map((root) => join(root, folder, "moved.json")).find(seen);
+    const moved = all.map((root) => join(root.path, folder, "moved.json")).find(seen);
     if (moved) refuse(`this project's logbook moved to the shared root, but the move did not finish (${moved}). Nothing changed. Run the move again.`);
-    return { dir: join(sageRoot(env), folder), checkout, shared: false, legacy: all.some((root) => seen(join(root, folder, "tasks.tsv"))) };
+    // old: each provider root's logbook of this project, with the root's provider (null when the adapter does not name it).
+    const old = all.map((root) => ({ provider: root.provider, dir: join(root.path, folder) })).filter(({ dir }) => seen(join(dir, "tasks.tsv")));
+    return { dir: join(sageRoot(env), folder), checkout, shared: false, legacy: old.length > 0, old };
   }
 
   /** The nearest folder, from the checkout up, with a .git entry: where Git looks for a repository. A path that cannot be read counts as one. */
@@ -308,6 +320,25 @@ export function createSharedRoot({ Refusal, refuse, listed, legacyRoots, makeLog
     } catch {}
   }
 
+  /**
+   * The providers that may still write a legacy logbook without the move's rules: every provider of a root and of
+   * plugins.tsv whose row is missing or below CONTRACT. A row with contract "unused" (the owner's answer in the move gate)
+   * counts as ready. A root whose provider the adapter does not name cannot be checked, so it waits too, with provider
+   * null and its path. An empty list means that the move may start. A damaged plugins.tsv refuses, and so do two rows for
+   * one provider: no plugin writes them (writePlugin keeps one row), so which one is true is unknown.
+   */
+  function waitingPlugins(env = process.env) {
+    const shared = rootOf(env), rows = table(shared, "plugins", PLUGINS), all = roots(env);
+    const twice = rows.find((r, i) => rows.findIndex((o) => o.provider === r.provider) !== i);
+    if (twice) refuse(`${join(shared, "plugins.tsv")} has two rows for the provider ${JSON.stringify(visible(twice.provider))}, so sage cannot tell which plugin contract it runs. Nothing changed. Ask the user to keep one row for each provider.`);
+    const names = [...new Set([...all.map((root) => root.provider), ...rows.map((r) => r.provider)].filter(Boolean))];
+    const ready = (contract) => contract === "unused" || (/^[1-9]\d*$/.test(contract ?? "") && Number(contract) >= Number(CONTRACT));
+    return [
+      ...names.map((name) => ({ provider: name, contract: rows.find((r) => r.provider === name)?.contract ?? null })).filter(({ contract }) => !ready(contract)),
+      ...all.filter((root) => !root.provider).map(({ path }) => ({ provider: null, contract: null, path })),
+    ];
+  }
+
   /** The next write of a row made before the first commit fills its commits. True when it wrote them, so the caller finds the logbook again. */
   function fillCommits(checkout, env) {
     let commits;
@@ -333,7 +364,7 @@ export function createSharedRoot({ Refusal, refuse, listed, legacyRoots, makeLog
       if (to !== undefined && row.folder !== to) refuse(`${visible(checkout)} is already linked to ${row.folder}, and a checkout has one logbook. Nothing changed. Keep using ${row.folder}. Only the move can take a checkout to another logbook, and no command does the move today: a later sage adds it.`);
       return `already linked: ${join(shared, row.folder)}. Nothing changed.`;
     }
-    const old = folderOf(checkout), all = roots(env);
+    const old = folderOf(checkout), all = roots(env).map((root) => root.path);
     const moved = all.map((root) => join(root, old, "moved.json")).find(present);
     if (moved) refuse(`this project's logbook moved to the shared root, but the move did not finish (${moved}). Nothing changed. Run the move again.`);
     const legacy = !row && all.map((root) => join(root, old)).find((path) => present(join(path, "tasks.tsv")));
@@ -379,5 +410,5 @@ export function createSharedRoot({ Refusal, refuse, listed, legacyRoots, makeLog
     }
   }
 
-  return { bindings, fillCommits, link, locate, notePlugin, refuseNewLogbook };
+  return { bindings, fillCommits, link, locate, notePlugin, refuseNewLogbook, waitingPlugins };
 }

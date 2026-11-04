@@ -1,14 +1,14 @@
 import "./test-env.mjs";
 import assert from "node:assert/strict";
-import { execFileSync } from "node:child_process";
-import { chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, realpathSync, rmSync, statSync, symlinkSync, writeFileSync } from "node:fs";
+import { execFileSync, spawn } from "node:child_process";
+import { chmodSync, cpSync, existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, realpathSync, rmSync, statSync, symlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { basename, dirname, join, resolve } from "node:path";
 import { test } from "node:test";
 import { fileURLToPath } from "node:url";
 import { actorOptions, locate as claudeLocate, sage as claudeRun, sageRoot as claudeRootOf } from "../plugins/sage/skills/sage/sage.mjs";
 import { tool } from "../plugins/sage-codex/skills/sage/sage.mjs";
-import { sharedRoot } from "../packages/sage-core/index.mjs";
+import { createStateTool, sharedRoot } from "../packages/sage-core/index.mjs";
 
 /** A write of a shared logbook names its chief (T604): each call here acts as one chief of its provider, as the hooks and the MCP server do. */
 const acting = (run, options) => (argv, env) => run([...argv, ...options(argv[argv.indexOf("--project") + 1], argv, { native: "test-chief" }, env)], env);
@@ -864,7 +864,7 @@ test("plugins.tsv gets each provider's row at its first locking command, never a
   w.claude("init");
   assert.equal(existsSync(join(w.shared, "plugins.tsv")), true, "the first command that takes the lock");
   const lines = () => w.table("plugins.tsv").trim().split("\n").map((line) => line.split("\t").slice(0, 2).join(" "));
-  assert.deepEqual(lines(), ["provider contract", "claude 1"]);
+  assert.deepEqual(lines(), ["provider contract", "claude 2"]);
   const first = w.table("plugins.tsv");
   w.claude("task", "add", "--title", "x", "--size", "tiny", "--priority", "P2");
   assert.equal(w.table("plugins.tsv"), first);
@@ -872,7 +872,7 @@ test("plugins.tsv gets each provider's row at its first locking command, never a
   assert.throws(() => w2.claude("status"), /no logbook/);
   assert.equal(existsSync(join(w2.shared, "plugins.tsv")), false, "a read writes no row");
   w.codex("init");
-  assert.deepEqual(lines(), ["provider contract", "claude 1", "codex 1"]);
+  assert.deepEqual(lines(), ["provider contract", "claude 2", "codex 2"]);
 });
 
 test("a shared root that cannot be written stops no legacy command: plugins.tsv only tells a later move what ran", (t) => {
@@ -1012,4 +1012,206 @@ test("a chief with another logbook root finds a receipt of a shared project, so 
   const seen = (env) => tool.settleWrites({ project: w.project }, env, (receipts) => !!receipts.update({ owner, request, digest }));
   assert.equal(seen(envA), true);
   assert.equal(seen(envB), true, "the row of the shared project gives both chiefs one folder and one lock");
+});
+
+/**
+ * Two provider roots that the test names (T641): a Claude tool and a Codex tool from the core, each with its own root and
+ * the legacyRoots that the test gives, so that HOME, SAGE_HOME and the shared root all stay in scratch. named: false gives
+ * bare paths, as an adapter that does not name its roots yet.
+ */
+function twoRoots(t, { named = true } = {}) {
+  const base = realpathSync(mkdtempSync(join(tmpdir(), "sage-two-roots-")));
+  t.after(() => rmSync(base, { recursive: true, force: true }));
+  const claudeRoot = join(base, "claude-root"), codexRoot = join(base, "codex-root"), shared = join(base, "shared");
+  // Each provider sets SAGE_HOME to its own root, as the Codex runtime does in production.
+  const env = { ...process.env, HOME: join(base, "home"), SAGE_HOME: claudeRoot, SAGE_SHARED_HOME: shared, SAGE_TEST_PIDS: "{}" }, codexEnv = { ...env, SAGE_HOME: codexRoot };
+  const roots = () => (named ? [{ provider: "claude", path: claudeRoot }, { provider: "codex", path: codexRoot }] : [claudeRoot, codexRoot]);
+  const claudeTool = createStateTool({ provider: "claude", defaultRoot: () => claudeRoot, legacyRoots: roots });
+  const codexTool = createStateTool({ provider: "codex", defaultRoot: () => codexRoot, legacyRoots: roots });
+  const repo = (name) => {
+    const project = join(base, name);
+    mkdirSync(project);
+    git(project, "init", "-q", "-b", "main");
+    git(project, "commit", "-q", "--allow-empty", "-m", `first of ${name}`);
+    return project;
+  };
+  const project = repo("project");
+  const runner = (tool, toolEnv) => (...args) => {
+    const at = args.indexOf("--project"), where = at < 0 ? project : args[at + 1];
+    const { code, text } = tool.command(at < 0 ? [...args, "--project", project] : args, toolEnv, { project: where, native: "test-chief" });
+    if (code) throw new Error(text);
+    return text;
+  };
+  const name = basename(claudeTool.storeDir(project, env)), folder = () => name;
+  return { base, env, codexEnv, claudeRoot, codexRoot, shared, repo, project, claudeTool, codexTool, claude: runner(claudeTool, env), codex: runner(codexTool, codexEnv), folder };
+}
+/** Replaces a file's text with an edit of it. */
+const rewrite = (file, edit) => writeFileSync(file, edit(readFileSync(file, "utf8")));
+
+test("the core names the provider of each old logbook of a project, and a bare path from an adapter still works with no name (T641)", (t) => {
+  const w = twoRoots(t);
+  w.claude("init");
+  w.codex("init");
+  const claudeDir = join(w.claudeRoot, w.folder()), codexDir = join(w.codexRoot, w.folder());
+  assert.deepEqual(w.claudeTool.locate(w.project, w.env).old, [{ provider: "claude", dir: claudeDir }, { provider: "codex", dir: codexDir }]);
+  assert.deepEqual(w.codexTool.locate(w.project, w.codexEnv).old, [{ provider: "codex", dir: codexDir }, { provider: "claude", dir: claudeDir }], "a tool's own root comes first");
+  const bare = twoRoots(t, { named: false });
+  bare.claude("init");
+  bare.codex("init");
+  assert.deepEqual(bare.claudeTool.locate(bare.project, bare.env).old, [{ provider: "claude", dir: join(bare.claudeRoot, bare.folder()) }, { provider: null, dir: join(bare.codexRoot, bare.folder()) }]);
+  assert.match(bare.claude("task", "add", "--title", "x", "--size", "tiny", "--priority", "P2"), /^T1 /);
+  const fresh = bare.repo("fresh");
+  assert.deepEqual(bare.claudeTool.locate(fresh, bare.env).old, [], "a project with no logbook has no old logbook");
+});
+
+test("the Claude adapter names the Claude and the Codex root (T641)", (t) => {
+  const w = world(t);
+  w.claude("init");
+  w.codex("init");
+  const folder = basename(claudeLocate(w.project, w.env).dir);
+  assert.deepEqual(claudeLocate(w.project, w.env).old, [{ provider: "claude", dir: join(w.claudeRoot, folder) }, { provider: "codex", dir: join(w.codexRoot, folder) }]);
+});
+
+test("the Codex adapter names the Claude and the Codex root, so its waitingPlugins empties when both are at contract 2 (T641)", (t) => {
+  const w = world(t);
+  const plugins = (...rows) => {
+    mkdirSync(w.shared, { recursive: true });
+    writeFileSync(join(w.shared, "plugins.tsv"), ["provider\tcontract\tat", ...rows.map((r) => `${r}\t2026-11-03T00:00:00Z`)].join("\n") + "\n");
+  };
+  plugins("claude\t2", "codex\t2");
+  assert.deepEqual(tool.waitingPlugins(w.env), [], "both providers are at the move's contract");
+  plugins("claude\t1", "codex\t2");
+  assert.deepEqual(tool.waitingPlugins(w.env), [{ provider: "claude", contract: "1" }], "the Claude root has its name, so its row counts");
+});
+
+test("an adapter root with no path refuses with a message that names the entry (T641)", (t) => {
+  const base = realpathSync(mkdtempSync(join(tmpdir(), "sage-bad-root-")));
+  t.after(() => rmSync(base, { recursive: true, force: true }));
+  const env = { ...process.env, HOME: join(base, "home"), SAGE_HOME: join(base, "root"), SAGE_SHARED_HOME: join(base, "shared"), SAGE_TEST_PIDS: "{}" };
+  for (const [entry, shown] of [[null, "null"], [{ provider: "codex" }, '{"provider":"codex"}'], [undefined, "undefined"]]) {
+    const bad = createStateTool({ provider: "claude", defaultRoot: () => join(base, "root"), legacyRoots: () => [entry] });
+    const message = refusalOf(() => bad.waitingPlugins(env));
+    assert.equal(message, `The plugin's legacyRoots gave ${shown}, but each root must be a path or { provider, path } with a path. Nothing changed. Update the sage plugin.`);
+  }
+});
+
+test("a writer that found the old logbook and waited on its lock during the move refuses, and its next run writes the shared logbook (T641)", async (t) => {
+  const w = twoRoots(t);
+  w.claude("init");
+  w.claude("task", "add", "--title", "before the move", "--size", "tiny", "--priority", "P2");
+  const dir = join(w.claudeRoot, w.folder());
+  // The writer runs in its own process with the same roots. It finds the old logbook, then waits on the lock that the move holds.
+  const runner = join(w.base, "writer.mjs");
+  writeFileSync(runner, `import { createStateTool } from ${JSON.stringify(join(REPO, "packages/sage-core/index.mjs"))};\ncreateStateTool({ provider: "claude", defaultRoot: () => ${JSON.stringify(w.claudeRoot)}, legacyRoots: () => [{ provider: "claude", path: ${JSON.stringify(w.claudeRoot)} }, { provider: "codex", path: ${JSON.stringify(w.codexRoot)} }] }).runCli();\n`);
+  const saved = process.env.SAGE_TEST_PIDS;
+  process.env.SAGE_TEST_PIDS = "{}"; // the lock's probe in this process is the fake one too: no real process is asked
+  t.after(() => { if (saved === undefined) delete process.env.SAGE_TEST_PIDS; else process.env.SAGE_TEST_PIDS = saved; });
+  const writer = spawn(process.execPath, [runner, "task", "add", "--title", "late", "--size", "tiny", "--priority", "P2", "--project", w.project], { env: { ...w.env, NODE_TEST_CONTEXT: "child" }, stdio: ["ignore", "pipe", "pipe"] });
+  let out = "";
+  writer.stdout.on("data", (b) => { out += b; });
+  writer.stderr.on("data", (b) => { out += b; });
+  const ended = new Promise((done) => writer.on("close", done));
+  const before = readFileSync(join(dir, "tasks.tsv"), "utf8");
+  w.claudeTool.withLock(dir, () => {
+    // The writer's temporary lock folder shows that it found this logbook and waits. The bound only ends a broken run.
+    for (let i = 0; !readdirSync(dir).some((name) => name.startsWith(".lock.")); i++) {
+      if (i > 4000) assert.fail("the writer never waited on the lock");
+      Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, 5);
+    }
+    writeFileSync(join(dir, "moved.json"), JSON.stringify({ folder: w.folder(), at: "2026-11-03T00:00:00Z" }) + "\n");
+  });
+  assert.equal(await ended, 1, out);
+  assert.match(out, /this logbook moved to the shared root \(.*moved\.json\), so sage writes no more to it\. Nothing changed\. Run the command again: it then finds the shared logbook\./);
+  assert.equal(readFileSync(join(dir, "tasks.tsv"), "utf8"), before, "the old logbook keeps its rows");
+  // The end of the move: the shared logbook and its row. The same command now writes there.
+  mkdirSync(w.shared, { recursive: true });
+  cpSync(dir, join(w.shared, w.folder()), { recursive: true, filter: (from) => basename(from) !== "moved.json" });
+  writeFileSync(join(w.shared, "bindings.tsv"), `root\tfolder\tcommits\tat\n${realpathSync(w.project)}\t${w.folder()}\t${commitOf(w.project)}\t2026-11-03T00:00:00Z\n`);
+  assert.match(w.claude("task", "add", "--title", "late", "--size", "tiny", "--priority", "P2"), /^T2 /);
+  assert.equal(w.claudeTool.storeDir(w.project, w.env), join(w.shared, w.folder()));
+  assert.equal(readFileSync(join(dir, "tasks.tsv"), "utf8"), before);
+  assert.match(w.claude("status"), /T1/, "a read still works");
+});
+
+test("the id floors of the move make nextId give the next number above both old logbooks, for each prefix (T641)", (t) => {
+  const w = twoRoots(t);
+  w.claude("init");
+  w.claude("task", "add", "--title", "old claude task", "--size", "tiny", "--priority", "P2");
+  w.claude("run", "add", "T1", "--role", "qa");
+  w.claude("gate", "add", "T1", "--question", "Go?", "--options", "yes|no", "--recommend", "yes");
+  // The shape of the real Claude logbook: tasks to T644, runs to R2469, gates to G103.
+  const renumber = (root, map) => {
+    for (const name of readdirSync(join(root, w.folder())).filter((n) => n.endsWith(".tsv"))) rewrite(join(root, w.folder(), name), (text) => text.replace(/(?<![A-Za-z0-9])(T|R|G)1(?![0-9])/g, (_, p) => map[p]));
+  };
+  renumber(w.claudeRoot, { T: "T644", R: "R2469", G: "G103" });
+  w.codex("init");
+  w.codex("task", "add", "--title", "old codex task", "--size", "tiny", "--priority", "P2");
+  w.codex("gate", "add", "T1", "--question", "Go?", "--options", "yes|no", "--recommend", "yes");
+  w.codex("log", "-", "PG4 was planned", "--why", "a program id in a decision counts");
+  renumber(w.codexRoot, { T: "T95", R: "R1", G: "G200" });
+  const fresh = w.repo("fresh");
+  w.claude("init", "--project", fresh);
+  const dir = w.claudeTool.storeDir(fresh, w.env);
+  assert.deepEqual(w.claudeTool.read(dir, "decisions"), [], "a fresh logbook with no rows");
+  const floors = w.claudeTool.writeIdFloors(dir, w.claudeTool.locate(w.project, w.env).old);
+  assert.deepEqual(w.claudeTool.read(dir, "decisions").map((r) => [r.task, r.decision]), [
+    ["", "T644 is the task floor of the move from claude and codex"],
+    ["", "R2469 is the run floor of the move from claude and codex"],
+    ["", "G200 is the gate floor of the move from claude and codex"],
+    ["", "PG4 is the program floor of the move from claude and codex"],
+  ]);
+  assert.equal(floors.length, 4);
+  assert.match(w.claude("task", "add", "--title", "new", "--size", "tiny", "--priority", "P2", "--project", fresh), /^T645 /);
+  assert.match(w.claude("run", "add", "T645", "--role", "qa", "--project", fresh), /^R2470 /);
+  assert.match(w.claude("gate", "add", "T645", "--question", "Go?", "--options", "yes|no", "--recommend", "yes", "--project", fresh), /^G201 /);
+  const none = w.repo("none");
+  w.claude("init", "--project", none);
+  const empty = w.claudeTool.storeDir(none, w.env);
+  assert.deepEqual(w.claudeTool.writeIdFloors(empty, [{ provider: "claude", dir: empty }]), [], "a logbook with no id gives no floor");
+  assert.deepEqual(w.claudeTool.read(empty, "decisions"), []);
+});
+
+test("an older sage reads the floor rows as they are written: plain decision rows whose first word is the id (T641)", (t) => {
+  // These rows are the text that writeIdFloors writes. nextId has read a decision's first word since T46, so an older
+  // plugin that writes this logbook still gives the next number above the floor.
+  const w = twoRoots(t);
+  w.claude("init");
+  const dir = w.claudeTool.storeDir(w.project, w.env);
+  writeFileSync(join(dir, "decisions.tsv"), ["at\ttask\tdecision\twhy",
+    ...["T644 is the task floor", "R2469 is the run floor", "G103 is the gate floor"].map((d) => `2026-11-03T00:00:00Z\t\t${d} of the move from claude\tthe move keeps every new id above the ids of the old logbooks`)].join("\n") + "\n");
+  assert.match(w.claude("task", "add", "--title", "new", "--size", "tiny", "--priority", "P2"), /^T645 /);
+  assert.match(w.claude("run", "add", "T645", "--role", "qa"), /^R2470 /);
+  assert.match(w.claude("gate", "add", "T645", "--question", "Go?", "--options", "yes|no", "--recommend", "yes"), /^G104 /);
+});
+
+test("waitingPlugins names each provider that is not at the move's contract, and an unused provider does not wait (T641)", (t) => {
+  const w = twoRoots(t);
+  const plugins = (...rows) => {
+    mkdirSync(w.shared, { recursive: true });
+    writeFileSync(join(w.shared, "plugins.tsv"), ["provider\tcontract\tat", ...rows.map((r) => `${r}\t2026-11-03T00:00:00Z`)].join("\n") + "\n");
+  };
+  const waiting = () => w.claudeTool.waitingPlugins(w.env);
+  assert.deepEqual(waiting(), [{ provider: "claude", contract: null }, { provider: "codex", contract: null }], "no plugins.tsv: no provider is known to be ready");
+  w.claude("init");
+  assert.deepEqual(waiting(), [{ provider: "codex", contract: null }], "this tool's first lock writes its row at contract 2");
+  plugins("claude\t2", "codex\t1");
+  assert.deepEqual(waiting(), [{ provider: "codex", contract: "1" }], "a provider at contract 1 waits");
+  plugins("claude\t2", "codex\tunused");
+  assert.deepEqual(waiting(), [], "the owner's unused answer");
+  plugins("claude\t2", "codex\t3");
+  assert.deepEqual(waiting(), [], "a newer contract knows the move too");
+  plugins("claude\t2", "codex\t2", "other\t1");
+  assert.deepEqual(waiting(), [{ provider: "other", contract: "1" }], "a provider of plugins.tsv that no root names");
+  plugins("claude\t2", "codex\tsoon");
+  assert.deepEqual(waiting(), [{ provider: "codex", contract: "soon" }], "a contract that is no number and not unused");
+  for (const rows of [["claude\t2", "codex\t2", "codex\t1"], ["claude\t2", "codex\t1", "codex\t2"]]) {
+    plugins(...rows);
+    assert.throws(() => waiting(), /plugins\.tsv has two rows for the provider "codex", so sage cannot tell which plugin contract it runs\. Nothing changed\./, "two rows for one provider, in either order");
+  }
+  const bare = twoRoots(t, { named: false });
+  mkdirSync(bare.shared, { recursive: true });
+  writeFileSync(join(bare.shared, "plugins.tsv"), "provider\tcontract\tat\nclaude\t2\tx\ncodex\t2\tx\n");
+  assert.deepEqual(bare.claudeTool.waitingPlugins(bare.env), [{ provider: null, contract: null, path: bare.codexRoot }], "a root with no provider name cannot be checked");
+  writeFileSync(join(w.shared, "plugins.tsv"), "provider\tcontract\nclaude\t2\n");
+  assert.throws(() => waiting(), /plugins\.tsv does not start with the column names provider, contract, at/);
 });
