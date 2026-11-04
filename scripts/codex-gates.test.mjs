@@ -927,6 +927,27 @@ for (const args of ["task T1", "board T1 --view task", "config"]) {
   });
 }
 
+test("T108: supported literal task reads work for a lead and an implementer", t => {
+  const w = world(t);
+  w.mode({ sage: true, autopilot: false });
+  for (const role of ["lead", "implementer"]) {
+    const child = w.child(`/root/sage_${role}_t1_r1`);
+    assert.equal(w.send(pre("Bash", `'${process.execPath}' '${TOOL}' task T1 --project '${w.project}'`, child)), undefined, role);
+  }
+});
+
+test("T108: a quoted plugin path in a digest remains a hook false positive, while supported reads pass", t => {
+  const w = world(t);
+  w.mode({ sage: true, autopilot: false });
+  const implementer = w.child("/root/sage_implementer_t1_r1");
+  const digest = text => `${process.execPath} -e "require('node:crypto').createHash('sha256').update('${text}').digest('hex')"`;
+  assert.equal(w.send(pre("Bash", digest("sample report"), implementer)), undefined);
+  assert.match(denied(w.send(pre("Bash", digest(TOOL), implementer))), /no agent writes Codex's config file or the sage plugin's folder/);
+  const lead = w.child("/root/sage_lead_t1_r1");
+  assert.equal(w.send(pre("Bash", "git config --get user.email", lead)), undefined);
+  assert.match(denied(w.send(pre("Bash", `node ${TOOL} task T1 --project ${w.project}`, lead))), /a lead records with the sage MCP tools/);
+});
+
 for (const position of ["interpreter", "script", "project"]) {
   test(`T49 round 2: ${position} shell expansions cannot replace checked paths`, t => {
     const w = world(t), child = w.child("/root/sage_implementer_t1_r1");

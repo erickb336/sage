@@ -6,7 +6,7 @@ Each role agent (lead, implementer, pe, designer, arena-judge, code-reviewer, se
 
 ## Steps
 
-1. Print the role text. Run the `role.mjs` script beside this skill with the role name, for example `node <this skill folder>/role.mjs implementer`.
+1. Print the role text. Run the `role.mjs` script beside this skill with inspected absolute Node and script paths, for example `<absolute Node path> <absolute skill folder>/role.mjs implementer`.
 2. Write the message: the whole output of step 1, without a change, then a blank line, then the brief (see [briefs and reports](briefs.md)).
 3. Call `spawn_agent` in the `collaboration` namespace with:
    - `task_name`: `sage_`, the role with `_` for `-`, the task, then the run id that `run_add` printed, for example `sage_implementer_t12_r40` or `sage_code_reviewer_t12_r41`. Codex refuses a task name that an open agent of the session already has, so the run id makes each name new, also for a second run of a role on the same task. A name without the run (`sage_implementer_t12`) still starts, but sage keeps no report for that run, so always give the run. The report check knows a sage role agent by the `sage_` start. A name that starts with `sage_` in another form counts as a read-only role: it changes no files.
@@ -31,7 +31,7 @@ The chief records the lead run, the checks verdicts, the move to verified, and i
 
 ## The lead's report
 
-Steps 3 and 4 need the network, as your other git writes and network steps do, also the push and the pull request after an arena. When the sandbox refuses one, run the same command again with escalated permissions, and wait for the owner. A sandbox refusal is not a failed check: a check fails only when `gh pr checks` lists it as failed. When the approval policy is `never` or the owner says no, record no verdict, and tell the owner which step stopped.
+Steps 3 and 4 need the network, as do the push and the pull request after an arena. Follow the active approval policy. Stop a denied action without an alternate route or escalated retry. A refusal is not a failed check: record only actual check results. Continue independent permitted work, and report which required step remains unchecked.
 
 1. Check the report against `status`: each run, finding and verdict that it names is in the logbook.
 2. Do what only you do: ask its QUESTIONS with `gate_add`, dismiss each medium or high finding that it names as wrong, when you agree, and end each run that it names as never started.
@@ -56,7 +56,7 @@ The check runs only after you trust the plugin hooks in Codex.
 
 ## Compare a retained report
 
-The chief can call `report_compare` through the sage MCP server for its assigned project. Supply `project`, `task`, `run` and `sha256`. Compute the SHA256 over the exact UTF-8 report text, including every newline and space. The comparison also works after the run ends.
+The chief can call `report_compare` through the sage MCP server for its assigned project. Supply `project`, `task`, `run` and `sha256`. Save the exact report with `pages`, and reuse its returned `sha256`. Do not embed report text in a shell digest command. Preserve Markdown, newlines and spaces. The comparison also works after the run ends.
 
 The result contains only `status`: `match`, `mismatch`, `missing` or `damaged`. A match requires valid stored identity fields and an equal recomputed digest. Existing records have no stored digest. Unknown or incomplete storage formats return `damaged`; access and input failures remain errors. No report text or private identifiers leave this operation.
 

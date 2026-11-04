@@ -5,7 +5,7 @@ Your task name is `sage_lead_t<n>_r<k>`, where `<n>` is the number of your task.
 **Start a helper.** Do these steps for each implementer, code reviewer, security reviewer, UX reviewer and QA agent:
 
 1. Call `run_add` with `task`, `role` and `"usage-interface": "collaboration-tools"`. For an implementer, also give `branch`, the task's branch. When the task has no branch, set it first with `task_set`. It prints the run id `R<k>`.
-2. Run `node <role.mjs> <role>`, and keep the whole output.
+2. Run `<node> <role.mjs> <role>`, and keep the whole output.
 3. Write the helper's brief, with the fields `GOAL` to `STANDING`. Call `brief` with the task name of step 4 and the whole brief. Fix each missing field.
 4. Call `spawn_agent` in the `collaboration` namespace with:
    - `task_name`: `sage_<role>_t<n>_r<k>`, with `_` for `-` in the role, for example `sage_code_reviewer_t12_r41`. The gate refuses another role, another task and another form. A name with no run still starts, but sage keeps no report for that run, and no verdict can use it, so always give the run.
@@ -15,11 +15,13 @@ Your task name is `sage_lead_t<n>_r<k>`, where `<n>` is the number of your task.
 **Wait and read.** Do not end your turn while a helper runs: a helper's report starts no turn, so you would never read it.
 
 1. Call `wait_agent`. It takes only `timeout_ms` (at most 3600000, one hour), and it has no target. It wakes on any message or at the time-out, and it returns no report. The report comes as a message in your next input, with the helper's path as its sender. Call `wait_agent` again until that helper's report comes.
-2. Save the whole report with `pages`: `task`, `run`, and the report as `text`. It prints a path.
+2. Save the whole report verbatim with `pages`: `task`, `run`, and the report as `text`. Preserve Markdown, spaces and newlines. It prints a path and `sha256`. Known retained text must match before the first save. A mismatch or damaged capture leaves the page unsaved. Do not reconstruct the report or overwrite an existing page. Missing capture still cannot back a verdict.
 3. For a review or QA, record the report's findings (step 1 of **A report with findings**).
 4. End the run with `run_done`. For a done run, give `"status": "done"`, `"usage": "unavailable"`, `"usage-source": "codex collaboration-tools"`, `"usage-evidence": "wait_agent gives no token count"` and the path as `report`. For another status, give `status` and `report`. For a helper with no report, give `"status": "failed"`.
 
 **Record your task.** You record only your own task, with the sage tools. They ask for no approval. The shell refuses a write of the logbook. `finding_move` stays the chief's tool: name a finding to move in your report.
+
+Use `status` for a logbook read, or the trusted literal command form in [commands](commands.md). Scoped task reads require the hook's absolute Node executable, this provider's absolute CLI and the assigned absolute project. A refused incidental action does not cancel independent allowed work; stop that action without another shell form.
 
 - `task_set`: give `task` and `fields`, with string values, for example `{"task": "T12", "fields": {"state": "reviewing"}}`. The fields are `state` (briefed to building, building to reviewing, reviewing to verifying, verifying to reviewing, repairing to reviewing), `branch` and `pr`.
 - `verdict`: give `task`, `kind` (`review-clean`, `security-clean`, `ux-clean`, `qa-pass`, `qa-fail` or `findings`), `sha`, `cycle`, `pr` and the `run` whose kept report backs it, after you end that run. The `checks-pass` and `checks-fail` verdicts are the chief's.
