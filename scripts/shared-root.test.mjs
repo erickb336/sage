@@ -1977,12 +1977,12 @@ function restoreByHand(w, plan) {
 test("a move gate moves once: after a restore by hand its answer moves nothing, and a new gate moves the project (F-T647-1)", (t) => {
   const w = moveWorld(t), folder = w.folder(), { id, plan } = w.ask();
   w.claude("move", "--gate", id);
-  assert.ok(rowsIn(join(w.claudeDir, "decisions.tsv")).some((d) => d.decision === `${id} moved this project to the shared logbook ${folder} with plan ${plan}`), "the logbook of the gate keeps that the gate moved");
   restoreByHand(w, plan);
   const used = `sage: refused: ${id} moved this project once already, and a move gate moves once: after a restore by hand, the owner answers a new gate. Nothing changed. Run sage move --preview, then open a new gate with sage move --plan <plan>.`;
   assert.equal(refusalOf(() => w.claude("move", "--gate", id)), used);
   assert.equal(existsSync(join(w.shared, folder)), false, "the old answer built no new logbook");
   assert.equal(existsSync(join(w.claudeDir, "moved.json")), false, "and marked nothing");
+  assert.ok(rowsIn(join(w.claudeDir, "decisions.tsv")).some((d) => d.decision === `${id} moved this project to the shared logbook ${folder} with plan ${plan}`), "the logbook of the gate keeps that the gate moved");
   // The restored folder alone refuses too: a decisions table that lost the row still keeps the gate from moving again.
   rewrite(join(w.claudeDir, "decisions.tsv"), (text) => text.split("\n").filter((l) => !l.includes(" moved this project to the shared logbook ")).join("\n"));
   assert.equal(refusalOf(() => w.claude("move", "--gate", id)), used);
@@ -2047,12 +2047,13 @@ test("a task moved after a key of its repair round closed keeps that key, so its
   setStates(w.claudeDir, { T2: "reviewing" });
   w.claude("move", "--gate", w.ask().id);
   const moved = rowsIn(join(dir, "tasks.tsv")).find((r) => r.id === "T4");
-  assert.deepEqual([moved.round, moved.keys], ["1", "F-T4-2,F-T4-1"], "the closed key F-T2-1 is F-T4-2, and the open F-T2-2 is F-T4-1");
-  assert.match(rowsIn(join(dir, "decisions.tsv")).find((d) => d.task === "T4").why, /; closed round keys: F-T2-1 is F-T4-2$/);
   const version = /--version ([0-9a-f]{64})/.exec(refusalOf(() => w.claude("round", "T4")))?.[1];
   if (version) w.claude("claim", "T4", "--version", version);
-  assert.match(w.claude("finding", "add", "T4", "--source", "sage", "--severity", "low", "--summary", "new"), /^F-T4-3 /, "while the round holds the carried key, a new finding takes the next key");
+  const added = w.claude("finding", "add", "T4", "--source", "sage", "--severity", "low", "--summary", "new");
   assert.match(w.claude("round", "T4"), /^T4 repairing · round 2 of \d+ · fix F-T4-1 /, "as before the move: F-T2-1 closed, so the round fixed one key");
+  assert.match(added, /^F-T4-3 /, "while the round holds the carried key, a new finding takes the next key");
+  assert.deepEqual([moved.round, moved.keys], ["1", "F-T4-2,F-T4-1"], "the closed key F-T2-1 is F-T4-2, and the open F-T2-2 is F-T4-1");
+  assert.match(rowsIn(join(dir, "decisions.tsv")).find((d) => d.task === "T4").why, /; closed round keys: F-T2-1 is F-T4-2$/);
 });
 
 test("after a restore by hand, a new task or gate takes a number above the move's map (F-T640-47)", (t) => {
