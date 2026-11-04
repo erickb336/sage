@@ -136,7 +136,7 @@ export const TOOLS = {
   pages: {
     describe: "Make and print the folder where agents save the task's pages, or record a page there (its path and sha256) in the decision trail. "
       + "With run and text, it saves that run's exact report in the folder and records it. Known retained text must match before the first save. Give the printed path as run_done's report; reuse the printed sha256 for report_compare.",
-    input: { task, record: optional("the absolute path of a page in that folder, to record it"),
+    input: { task, record: z.string().refine(isAbsolute, "an absolute path").optional().describe("the absolute path of a page in that folder, to record it"),
       run: optional("a run of the task, with text: whose report to save"), text: optional("the run's whole report, with run: the text to save") },
     pos: ["task", "record"], argv: (i) => ["pages", i.task, ...(i.record === undefined ? (i.text === undefined && i.run === undefined ? [] : ["record"]) : ["record", String(i.record)])],
   },
@@ -181,6 +181,8 @@ export function createStateServer({ env = process.env } = {}) {
       inputSchema: z.object({ project, ...spec.input }).strict(),
       annotations: { readOnlyHint: CHILD_READS.has(name), destructiveHint: false },
     }, async (input, caller, native) => {
+      if (name === "pages" && input.record !== undefined && (input.run !== undefined || input.text !== undefined))
+        return { isError: true, content: [{ type: "text", text: "sage: pages takes record or inline run and text, not both. Nothing saved." }] };
       // Admission above still owns role/task access. Compare only an inline report, never a caller-selected file.
       // Missing capture keeps the existing page behavior; it still cannot back a verdict without a retained report.
       if (name === "pages" && input.record === undefined && input.run !== undefined && input.text?.trim()

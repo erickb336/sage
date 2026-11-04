@@ -461,6 +461,31 @@ test("T108: a changed report cannot consume the save-once page; exact Markdown s
   assert.match(await w.lead("verdict", { task: "T1", kind: "review-clean", sha: SHA, pr: 5, run }), /^T1 review-clean/);
 });
 
+test("T108: record input cannot bypass report comparison or consume its first save", async t => {
+  const w = await leadWorld(t);
+  await w.lead("task_set", { task: "T1", fields: { state: "building" } });
+  const run = (await w.lead("run_add", { task: "T1", role: "implementer", branch: "sage/t1-a" })).split(" ")[0];
+  w.tool.keepReport(w.project, { task: "T1", run, role: "implementer", sha: SHA, text: CLEAN }, w.env);
+  const folder = await w.lead("pages", { task: "T1" });
+  const page = join(folder, `${run}-report.md`);
+  const decisions = join(w.tool.storeDir(w.project, w.env), "decisions.tsv");
+  const before = readFileSync(decisions, "utf8");
+  for (const input of [
+    { record: `--run=${run}`, text: "SAMPLE altered report" },
+    { record: page, run }, { record: page, text: CLEAN }, { record: page, run, text: CLEAN },
+    { record: page, text: "" }, { record: page, run: "" },
+    { record: `--run=${run}` }, { record: "relative/report.md" }, { record: "" },
+  ]) {
+    const refused = await w.lead("pages", { task: "T1", ...input });
+    assert.equal(typeof refused.error, "string", JSON.stringify(input));
+    assert.equal(existsSync(page), false, "invalid input leaves the first save available");
+    assert.equal(readFileSync(decisions, "utf8"), before, "no decision for invalid input");
+  }
+  assert.match(await w.lead("pages", { task: "T1", run, text: CLEAN }), / · sha256 /);
+  assert.equal(readFileSync(page, "utf8"), CLEAN);
+  assert.match(await w.lead("pages", { task: "T1", record: page }), / · sha256 /);
+});
+
 test("T108: page preflight preserves admission, damaged capture and missing-capture verdict refusals", async t => {
   const w = await leadWorld(t);
   await w.lead("task_set", { task: "T1", fields: { state: "building" } });
