@@ -28,7 +28,7 @@ import { ROLES } from "./roles.mjs";
 import { AGENT_CAPS, BREAKS, FINDING_CLASSES, HIDDEN, LINE, NAME_MAX, PRIORITIES, PRIORITY_SCALE, TABLES as PLAIN_TABLES, TASK_KINDS, countOf, nameProblem, proposalOf } from "./logbook-fields.mjs";
 import { BREAKDOWN, ENDED, GATE_ID, MET, PROGRAM_ID, TASK_ID, breakdownGate, byIds, dead, droppedBy, gateLines, lostClause, programState, progressOf, progressText, shownGraph, shownWaits, unmetWaits, waitGraph, waitWords, waitsOf, waitsWithState } from "./program-rules.mjs";
 import { OBSERVATIONS_MAX_BYTES, OBSERVATION_DATA_MAX_BYTES, validateObservation, validateObservations } from "./observations.mjs";
-import { MOVES, PLAN_MAX, checkoutGone, createSharedRoot, sameDir, sharedRoot } from "./shared-root.mjs";
+import { MOVES, PLAN_MAX, checkoutGone, createSharedRoot, sharedRoot } from "./shared-root.mjs";
 import { changedText, countsOf, endText, gateQuestion, gateText, localTime, mapHtml, mismatchText, previewText, providersOf, reconciliationText, startText, stepText, stoppedText, title } from "./move-text.mjs";
 import { CHIEF, chiefOnly, createChiefs, offerOf, replaceOf, replaceQuestion, writerClass } from "./chiefs.mjs";
 
@@ -4478,7 +4478,7 @@ function runCli(argv = process.argv.slice(2)) {
 }
 
 const { board, answerPaths } = createBoard({ BLOCKS, BRANCH, RISKS, STATES, mergeCheck, optionsOf, projectName, projectRoot, read, sageRoot, slug, storeDir, withLock });
-const { bindings, fillCommits, folderOf, link, locate, movePlans, notePlugin, pluginRows, projectMoves, refuseNewLogbook, repositoryLogbooks, rootOf, waitingPlugins, writeBindings, writePlugin } = createSharedRoot({ Refusal, refuse, legacyRoots: rootsOf, makeLogbook, now, projectRoot, provider, raiseCounts, readRegular, rowsOf, sageRoot, sheetText, slug, swap, visible, withLock,
+const { bindings, fillCommits, folderOf, link, locate, movePlans, notePlugin, pluginRows, projectMoves, refuseNewLogbook, repositoryLogbooks, rootOf, sameDir, waitingPlugins, writeBindings, writePlugin } = createSharedRoot({ Refusal, refuse, legacyRoots: rootsOf, makeLogbook, now, projectRoot, provider, raiseCounts, readRegular, rowsOf, sageRoot, sheetText, slug, swap, visible, withLock,
   listed: (root) => known(root, undefined, undefined, true),
   enroll });
 const { chiefs, chiefRow, rowOf } = createChiefs({ now, provider, readRegular, refuse, rowsOf, sheetText, swap });

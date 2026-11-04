@@ -80,24 +80,33 @@ export const checkoutGone = ({ root }) => gone({ root: join(root, ".git") });
  */
 export const ownerOf = (rows, folder) => rows.filter((r) => r.folder === folder && r.commits).sort((a, b) => gone(a) - gone(b) || a.at.localeCompare(b.at))[0];
 
-/**
- * Is a the same folder as b? A plan names each old logbook by the path that the mover's roots give, and a writer's root
- * may give another path to the same folder: through a link, or in another letter case on a volume that ignores case
- * (F-T648-1). So two folders that exist compare by device and inode, which every path to a folder shares.
- */
-export const sameDir = (a, b) => {
-  if (typeof a !== "string" || typeof b !== "string") return false;
-  if (a === b) return true;
-  // A path that the system cannot stat (too long, a NUL byte, no access) reaches no folder from here, so it is not this one;
-  // a throw would stop every writer, because a writer reads every plan of the shared root (F-T648-3).
-  const at = (path) => { try { return statSync(path, { bigint: true, throwIfNoEntry: false }); } catch { return undefined; } };
-  const x = at(a), y = at(b);
-  return Boolean(x?.isDirectory() && y?.isDirectory() && x.dev === y.dev && x.ino === y.ino);
-};
+/** The stat errors of a path that reaches no folder: it is missing, or it is no valid name (a NUL byte, a name too long). */
+const NO_FOLDER = ["ENOENT", "ENOTDIR", "ENAMETOOLONG", "ERR_INVALID_ARG_VALUE", "ERR_INVALID_ARG_TYPE"];
 
 export function createSharedRoot({ Refusal, refuse, listed, legacyRoots, makeLogbook, enroll, now, projectRoot, provider, raiseCounts, readRegular, rowsOf, sageRoot, sheetText, slug, swap, visible, withLock }) {
   const realOf = (path) => {
     try { return realpathSync.native(path); } catch { return path; }
+  };
+  /**
+   * Is a the same folder as b? A plan names each old logbook by the path that the mover's roots give, and a writer's root
+   * may give another path to the same folder: through a link, or in another letter case on a volume that ignores case
+   * (F-T648-1). So two folders that exist compare by device and inode, which every path to a folder shares. A path that
+   * reaches no folder is not this one (F-T648-3). Any other error (no right to search a folder on the way, a link loop, a
+   * disk error) may hide this very folder, so it refuses, and the write or the move stops before it changes anything (F-T648-6).
+   */
+  const sameDir = (a, b) => {
+    if (typeof a !== "string" || typeof b !== "string") return false;
+    if (a === b) return true;
+    const at = (path) => {
+      try {
+        return statSync(path, { bigint: true, throwIfNoEntry: false });
+      } catch (e) {
+        if (NO_FOLDER.includes(e.code)) return undefined;
+        refuse(`refused: sage cannot read ${visible(path)} (${e.code ?? e.name}), so it cannot tell whether a move plan names this logbook through it. Nothing changed. Ask the user to fix the rights of that path and of its folders, or to check the plans in the moves folder of the shared root.`);
+      }
+    };
+    const x = at(a), y = at(b);
+    return Boolean(x?.isDirectory() && y?.isDirectory() && x.dev === y.dev && x.ino === y.ino);
   };
   /** The shared root of a command. A relative SAGE_SHARED_HOME would name another root from another folder, and a project would lose its row in silence. */
   const rootOf = (env) => {
@@ -518,5 +527,5 @@ export function createSharedRoot({ Refusal, refuse, listed, legacyRoots, makeLog
     }
   }
 
-  return { bindings, fillCommits, folderOf, link, locate, movePlans, notePlugin, pluginRows, projectMoves, refuseNewLogbook, repositoryLogbooks, rootOf, waitingPlugins, writeBindings, writePlugin };
+  return { bindings, fillCommits, folderOf, link, locate, movePlans, notePlugin, pluginRows, projectMoves, refuseNewLogbook, repositoryLogbooks, rootOf, sameDir, waitingPlugins, writeBindings, writePlugin };
 }

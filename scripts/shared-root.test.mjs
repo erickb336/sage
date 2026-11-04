@@ -2101,11 +2101,17 @@ test("a chain of adoptions gives every old row the number of the task that moves
   assert.deepEqual(rowsIn(join(dir, "findings.tsv")).map((f) => [f.task, f.key]), [["T5", "F-T5-1"]], "the finding of Claude T2 moves with the task that adopted it");
 });
 
-/** A Codex writer that waits on the Codex logbook's lock while the move saves its plan and marks only the Claude logbook (T647). root gives the writer's root path. */
-async function waitingWriter(t, root = (w) => w.codexRoot) {
+/**
+ * A Codex writer that waits on the Codex logbook's lock while the move saves its plan and marks only the Claude logbook (T647).
+ * root gives the writer's root path; aside gives the path by which the plan names the Codex logbook; said is the writer's
+ * refusal; finish says whether the same command then finishes the move (a plan with another path no longer matches its own records).
+ */
+const STOPPED = /^sage: refused: the move of project project did not finish\n  stopped after step 2 of 6 .*\n.*\n.*\n  To finish: sage move --gate G2 \(the same command\)\n$/;
+async function waitingWriter(t, root = (w) => w.codexRoot, { aside, said = STOPPED, finish = !aside } = {}) {
   const w = moveWorld(t), { id } = w.ask(), file = planFileOf(w), codexRoot = root(w);
   stopAt(w, id, 2);
-  const plan = readFileSync(file, "utf8");
+  let plan = readFileSync(file, "utf8");
+  if (aside) plan = JSON.stringify({ ...JSON.parse(plan), sources: JSON.parse(plan).sources.map((s) => (s.dir === w.codexDir ? { ...s, dir: aside(w) } : s)) });
   rmSync(file); // the moment before the move saved its plan: the writer finds the Codex logbook then
   const runner = join(w.base, "codex-writer.mjs");
   writeFileSync(runner, `import { createStateTool } from ${JSON.stringify(join(REPO, "packages/sage-core/index.mjs"))};\nconst roots = () => [{ provider: "claude", path: ${JSON.stringify(w.claudeRoot)} }, { provider: "codex", path: ${JSON.stringify(codexRoot)} }];\nconst { code, text } = createStateTool({ provider: "codex", defaultRoot: () => ${JSON.stringify(codexRoot)}, legacyRoots: roots }).command(${JSON.stringify(["task", "add", "--title", "late", "--size", "tiny", "--priority", "P2", "--project", w.project])}, process.env, { project: ${JSON.stringify(w.project)}, native: "test-chief" });\nconsole.log(text);\nprocess.exit(code);\n`);
@@ -2132,9 +2138,9 @@ async function waitingWriter(t, root = (w) => w.codexRoot) {
   });
   const wrote = await writer;
   assert.equal(wrote.code, 1, wrote.out);
-  assert.match(wrote.out, /^sage: refused: the move of project project did not finish\n  stopped after step 2 of 6 .*\n.*\n.*\n  To finish: sage move --gate G2 \(the same command\)\n$/);
+  assert.match(wrote.out, said);
   assert.equal(readFileSync(join(w.codexDir, "tasks.tsv"), "utf8"), before, "the unmarked logbook keeps its rows");
-  assert.match(w.claude("move", "--gate", id), /\nReconciliation · every count matches the plan\n/, "the same command finishes the move");
+  if (finish) assert.match(w.claude("move", "--gate", id), /\nReconciliation · every count matches the plan\n/, "the same command finishes the move");
 }
 test("a writer that waited on an old logbook's lock refuses while a move plan names that logbook, so a stop inside step 3 still finishes (T647)", (t) => waitingWriter(t));
 // The plan names each old logbook as the mover's roots give it; a writer whose root is another path to the same folder refuses too (F-T648-1).
@@ -2194,10 +2200,10 @@ test("a move preview refuses while a plan names an old logbook of the project by
   assert.equal(existsSync(join(w.shared, w.folder())), false, "no new logbook");
 });
 
-// A damaged plan of another project names a dir that no system call can stat: it names no logbook of this project, so a
-// writer writes and gets no raw error (F-T648-3).
-for (const [what, dir] of [["a NUL byte", "/tmp/sage-\u0000-nul"], ["a name too long", `/tmp/${"x".repeat(300)}/${"y".repeat(5000)}`]]) {
-  test(`a writer writes when another project's plan names a dir with ${what} (F-T648-3)`, (t) => {
+// A plan of another project names a dir that reaches no folder (a bad name, or a missing path): it names no logbook of this
+// project, so a writer writes and gets no raw error (F-T648-3).
+for (const [what, dir] of [["a dir with a NUL byte", "/tmp/sage-\u0000-nul"], ["a dir with a name too long", `/tmp/${"x".repeat(300)}/${"y".repeat(5000)}`], ["a missing dir", "/sage-t648-missing/project-abcdef"], ["a dir under a file", "/dev/null/project-abcdef"]]) {
+  test(`a writer writes when another project's plan names ${what} (F-T648-3)`, (t) => {
     const w = moveWorld(t), file = join(w.shared, "moves", "elsewhere-abcdef.json");
     mkdirSync(dirname(file), { recursive: true });
     writeFileSync(file, JSON.stringify({ folder: "elsewhere-abcdef", gate: { id: "G9" }, step: 2, sources: [{ provider: "claude", dir }], checkouts: [] }));
@@ -2205,3 +2211,67 @@ for (const [what, dir] of [["a NUL byte", "/tmp/sage-\u0000-nul"], ["a name too 
     assert.equal(rowsIn(join(w.claudeDir, "tasks.tsv")).at(-1).title, "after");
   });
 }
+
+// A plan path that the system cannot stat for another reason than a missing path or a bad name (no right to search a
+// folder on the way, a link loop) may be another path to this very logbook, so a writer refuses and changes nothing (F-T648-6).
+const UNREAD = (code) => new RegExp(`^sage: refused: sage cannot read .* \\(${code}\\), so it cannot tell whether a move plan names this logbook through it\\. Nothing changed\\.`);
+const asRoot = () => process.getuid?.() === 0;
+/** A folder of mode 000 with a link to the Claude root in it: a plan that names the Claude logbook through it names it out of reach. */
+const shut = (w, root = w.claudeRoot) => {
+  const locked = join(w.base, "locked");
+  mkdirSync(locked, { recursive: true });
+  symlinkSync(root, join(locked, "root"));
+  chmodSync(locked, 0);
+  return { locked, dir: join(locked, "root", w.folder()) };
+};
+for (const [what, code, aside] of [
+  ["behind a folder that sage cannot search", "EACCES", (w) => shut(w).dir],
+  ["through a link loop", "ELOOP", (w) => {
+    const loop = join(w.base, "loop");
+    symlinkSync(loop, loop);
+    return join(loop, w.folder());
+  }],
+]) {
+  test(`a writer refuses while a plan names a logbook ${what}, and changes nothing (F-T648-6)`, (t) => {
+    if (code === "EACCES" && asRoot()) return t.skip("root searches a folder of mode 000, so the folder does not shut the path");
+    const w = moveWorld(t), file = join(w.shared, "moves", "elsewhere-abcdef.json");
+    try {
+      mkdirSync(dirname(file), { recursive: true });
+      writeFileSync(file, JSON.stringify({ folder: "elsewhere-abcdef", gate: { id: "G9" }, step: 2, sources: [{ provider: "claude", dir: aside(w) }], checkouts: [] }));
+      const before = readFileSync(join(w.claudeDir, "tasks.tsv"), "utf8");
+      assert.match(refusalOf(() => w.claude("task", "add", "--title", "after", "--size", "tiny", "--priority", "P2")), UNREAD(code));
+      assert.equal(readFileSync(join(w.claudeDir, "tasks.tsv"), "utf8"), before, "no task is added");
+    } finally {
+      if (existsSync(join(w.base, "locked"))) chmodSync(join(w.base, "locked"), 0o700);
+    }
+  });
+}
+test("a writer that waited on an old logbook's lock refuses while the plan names that logbook behind a folder that sage cannot search (F-T648-6)", async (t) => {
+  if (asRoot()) return t.skip("root searches a folder of mode 000, so the folder does not shut the path");
+  let locked;
+  try {
+    await waitingWriter(t, undefined, {
+      aside: (w) => { const it = shut(w, w.codexRoot); locked = it.locked; return it.dir; },
+      said: UNREAD("EACCES"),
+    });
+  } finally {
+    if (locked) chmodSync(locked, 0o700);
+  }
+});
+test("a stopped move refuses to finish while its plan names an old logbook behind a folder that sage cannot search, and changes nothing (F-T648-6)", (t) => {
+  if (asRoot()) return t.skip("root searches a folder of mode 000, so the folder does not shut the path");
+  const w = moveWorld(t), { id } = w.ask(), file = planFileOf(w);
+  stopAt(w, id, 2);
+  let locked;
+  try {
+    const plan = JSON.parse(readFileSync(file, "utf8")), it = shut(w, w.codexRoot);
+    locked = it.locked;
+    writeFileSync(file, JSON.stringify({ ...plan, sources: plan.sources.map((s) => (s.dir === w.codexDir ? { ...s, dir: it.dir } : s)) }));
+    const saved = readFileSync(file, "utf8"), before = readFileSync(join(w.codexDir, "tasks.tsv"), "utf8");
+    assert.match(refusalOf(() => w.claude("move", "--gate", id)), UNREAD("EACCES"));
+    assert.equal(readFileSync(file, "utf8"), saved, "the plan stays");
+    assert.equal(readFileSync(join(w.codexDir, "tasks.tsv"), "utf8"), before, "the unmarked logbook keeps its rows");
+  } finally {
+    if (locked) chmodSync(locked, 0o700);
+  }
+});
