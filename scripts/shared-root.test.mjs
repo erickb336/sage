@@ -8,7 +8,7 @@ import { test } from "node:test";
 import { fileURLToPath } from "node:url";
 import { actorOptions, locate as claudeLocate, sage as claudeRun, sageRoot as claudeRootOf } from "../plugins/sage/skills/sage/sage.mjs";
 import { tool } from "../plugins/sage-codex/skills/sage/sage.mjs";
-import { createStateTool, readBoardSources, sharedRoot } from "../packages/sage-core/index.mjs";
+import { buildBoardModel, createStateTool, readBoardSources, renderBoardHtml, renderTaskText, sharedRoot } from "../packages/sage-core/index.mjs";
 
 /** A write of a shared logbook names its chief (T604): each call here acts as one chief of its provider, as the hooks and the MCP server do. */
 const acting = (run, options) => (argv, env) => run([...argv, ...options(argv[argv.indexOf("--project") + 1], argv, { native: "test-chief" }, env)], env);
@@ -1377,6 +1377,13 @@ test("the move takes the open tasks of both old logbooks into one shared logbook
     [`shared/${folder}`, null, "T4,T5,T6,T7"], [`claude/${folder}`, "claude", "T1"], [`codex/${folder}`, "codex", "T2"]]);
   assert.deepEqual(shared.projects[0].notes, []);
   assert.deepEqual(results.filter((r) => r.id !== "shared").map((r) => r.projects.length), [0, 0], "an old logbook shows once, in its shared project");
+  // A moved card keeps its old number in view; a finished old task keeps its Old label and no such line (option A).
+  const model = buildBoardModel(results), card = (key) => model.tasks.find((task) => task.key === key);
+  assert.deepEqual([card(`shared/${folder}/T4`).was, card(`shared/${folder}/T6`).was, card(`shared/${folder}/T7`).was, card(`claude/${folder}/T1`).was], ["was Claude T2", "was Codex T1", undefined, undefined]);
+  assert.equal(card(`claude/${folder}/T1`).old.label, "Old · Claude · read-only");
+  assert.equal(model.projects.length, 1, "one project");
+  assert.match(renderBoardHtml(model), /<span class="id">T4<\/span>.*?<\/div><div class="nextline was">was Claude T2<\/div><div class="title" title="claude open">/);
+  assert.match(renderTaskText(card(`shared/${folder}/T6`)), /^\*\*T6 codex open\*\* · was Codex T1\n/);
 });
 
 test("the map page of a move lists each old and new number, the backups and the restore steps (T640)", (t) => {
