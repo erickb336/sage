@@ -317,7 +317,7 @@ No sage command can change the answer later. After a link, the board shows one p
 | `bindings.tsv` is gone, and `bindings.made` shows that sage made it | Every command of every project refuses. Restore the table from a copy. If no project uses the shared root, remove `bindings.made`. |
 | `SAGE_SHARED_HOME` is a relative path | Every command refuses. Each folder must find the same root. |
 | A project has a marker that its move did not finish | Each command refuses and says to run the move again. |
-| A move of the project stopped, and its plan is saved | Each command of the project, in Claude and in Codex, refuses and names the command that finishes the move: `sage move --gate <G>`. |
+| A move of the project stopped, and its plan is saved | Each command of the project, in Claude and in Codex, refuses and names the command that finishes the move: `sage move --gate <G>`. A link refuses too, also a `--to` that names the new logbook. |
 
 A moved folder with no Git commits, or that is no Git repository, has no first commit, so sage cannot compare it. This is a limit.
 
@@ -401,26 +401,31 @@ The move gate is your act, so the move names no chief. In Codex, a `move` tool o
 | What | After the move |
 | --- | --- |
 | An open task | Moves with a new number, Claude's first, and starts unclaimed. Its priority, size, route, round, branch and PR stay: an adoption record of version 2 keeps the old task, its branch and its PR. A task in verifying, verified or pr-ready returns to reviewing. |
-| Its open findings, its gates (answered ones too), its program, its waits and its PR history | Move with new numbers. A wait on a merged or concluded task counts as met. Each moved finding's summary names its old key. |
+| Its open findings, its gates (answered ones too), its program, its waits and its PR history | Move with new numbers, also each task or program number in a moved gate's question. A wait on a merged or concluded task counts as met. Each moved finding's summary names its old key. |
 | An open gate with no task | Moves with a new number. The open gates take the first numbers. |
-| A task that a task of the other logbook adopted | Moves with the task that adopted it. |
+| A task that a task of the other logbook adopted | Moves with the task that adopted it: its open findings, its gates and its program go to that task too. |
 | A finished task, the runs, the verdicts and the kept reports | Stay in the old logbook, read-only. The board shows each finished task with its Old label. A moved task gets fresh reviews and QA. |
-| The standing orders | Claude's keep their numbers. Codex's follow under a heading, with new numbers and the old Codex number in brackets. A repeated order stays: ask the chief to remove it. |
+| The standing orders | Claude's keep their numbers. Codex's follow under a heading, with new numbers and the old Codex number in brackets, and a Codex line with no number (the rest of an order, or a note) stays where it was. A repeated order stays: ask the chief to remove it. |
 | The old logbooks | Each gets `moved.json`, a `moved` column in its task table with each new number, and a backup copy, `tasks.before-move.tsv`. Every write there refuses. |
 | Each checkout of the repository with a logbook | Gets a row in `bindings.tsv`. |
 
 The new logbook holds `sources.tsv` (its old logbooks, which the board reads) and `move-map.html`, a page of each old and new number with a find box. The map page shows paths, so it stays on your Mac.
 
+For 7 days after the move, the board shows a banner that names the map page and the logbook folder that holds it. The move prints times in your Mac's own time zone.
+
 | Situation | Result |
 | --- | --- |
 | A run runs in the project | The preview refuses and names each run. The chief starts no new run. Tell the other provider's chief to start none either. |
 | A provider's plugin is below contract 2 | The preview refuses and shows each provider's contract. Update sage in that provider, restart it and trust its hooks again. |
-| A provider has no row in `plugins.tsv` | The gate has a third option: move, and record that provider as unused. It recommends keep while that provider has a logbook of the repository. |
+| A provider has no row in `plugins.tsv` | The gate offers "move, and record that provider as unused" in place of "move", because a plain move waits for that provider's row. It recommends keep while that provider has a logbook of the repository. |
+| The move also links other checkouts of the repository | The preview and the gate name each one by its path and provider. If one of them is another project (a fork), answer keep, and tell the chief which one. |
 | A folder cannot be written (for example the Claude folder from the Codex sandbox) | The preview refuses and names each folder. Ask the other provider's chief to move the project. |
 | A wait names an abandoned task, or a program's pilot is finished | The preview refuses. Change the waits, or take the open tasks out of the program, then ask again. |
 | A logbook changed after the preview | Nothing moves. The refusal says what changed, and the chief shows a new preview and opens a new gate. |
-| The move stopped (the Mac slept) | Every command of the project, in Claude and in Codex, refuses and names the same command. The chief runs it at once, and it goes on from the next step. If an old logbook changed before the move marked it, nothing moves, the new logbook goes aside, and the chief starts again with a new preview. |
-| The end check finds a count that does not match | The plan stays, so every command of the project refuses. Compare the new logbook with the plan. To keep the new logbook as it is, remove the plan. |
+| The move stopped (the Mac slept) | Every command of the project, in Claude and in Codex, refuses and names the same command. The chief runs it at once, from any checkout of the move, and it goes on from the next step. If an old logbook changed before the move marked it, nothing moves, the new logbook goes aside, and the chief starts again with a new preview. |
+| A saved plan names a folder, an old logbook or a checkout that is not this repository's | The move refuses, and it writes nothing. Ask the user to check the plan file. |
+| The end check finds a count that does not match | The refusal names each missing record and no command: running the move again does not change it. The old logbooks still hold every record, and every command of the project refuses while the plan stays, so start no work there. Compare the new logbook with the old logbooks and the map, then rename the plan file (`moves/<folder>.json` in the shared root) to `<folder>.json.aside` to keep the new logbook as it is, or restore by hand. |
+| A plan file in the shared root cannot be read | Every project of the shared root refuses and names that file, because sage cannot tell which project it moves. Ask the user to check the file. |
 | `logbook repair --accept-loss decisions` in the moved logbook | The repair writes the move's id floors again, from the old logbooks, so no old number comes back. |
 
 To restore by hand (no command does this). Warning: work recorded after the move stays only in the new logbook, and these steps do not bring it back.
@@ -429,7 +434,8 @@ To restore by hand (no command does this). Warning: work recorded after the move
 2. In each old logbook folder, replace `tasks.tsv` with `tasks.before-move.tsv`.
 3. In each old logbook folder, delete `moved.json`.
 4. In `~/.sage/bindings.tsv`, delete the rows that name the new logbook.
-5. In `~/.sage/projects.tsv`, delete the row of the new logbook. Keep its folder until you are sure.
+5. In `~/.sage/projects.tsv`, delete the row of the new logbook.
+6. Rename the new logbook's folder `~/.sage/<folder>` to `~/.sage/.<folder>.restored`. The board reads no folder whose name starts with a dot, so no task shows twice, and a later move can use the folder name again. Keep it until you are sure.
 
 **Limits.**
 
