@@ -302,8 +302,9 @@ export function createSharedRoot({ Refusal, refuse, listed, legacyRoots, makeLog
 
   /**
    * The one resolver, the same order for both providers. A row means shared. No row and a moved marker in a provider
-   * root refuses. No row and no marker is this provider's legacy path, whether a logbook is there or not: rule 3 stays
-   * off, so the caller keeps today's refusal or today's init. legacy says whether either provider root holds one.
+   * root refuses. No row and no marker is this provider's legacy path, whether a logbook is there or not: the caller keeps
+   * today's refusal, and init applies rule 3 (a link when no root holds a logbook and every plugin is ready). legacy
+   * says whether either provider root holds one.
    */
   function locate(project, env = process.env) {
     const checkout = projectRoot(resolve(project)), shared = rootOf(env), rows = bindings(shared);

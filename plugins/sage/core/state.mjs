@@ -3452,12 +3452,30 @@ function sage(argv, env = process.env) {
   const run = () => change(cmd, pos, opt, dir, env, skip, project, place.shared);
   if (cmd !== "init") return run();
   if (place.shared) guard(dir, cmd, pos, opt);
+  else if (!existsSync(dir) && startsShared(place.checkout, env)) return `${link(project, { separate: true }, env)}. Every plugin is ready, so the project starts there.`;
   // init takes the root's lock and checks the known project list first, so a refusal there makes no logbook.
   let out;
   known(dirname(dir), basename(dir), () => {
     out = makeLogbook(dir, project, env);
   });
   return out;
+}
+
+/**
+ * Rule 3: a new project starts in the shared root when the adapter names each provider root (an explicit SAGE_HOME
+ * gives a bare path, which stands for every root), every provider's plugin is ready (the move's contract, or "unused"),
+ * and no provider root holds a logbook of its repository. Rule 2 wins, also for a clone's logbook, so that one move later
+ * takes them together. Otherwise init makes a legacy logbook, as before, and the move takes it there later. A plugins.tsv
+ * or a root that sage cannot trust is not ready: init then works as before.
+ */
+function startsShared(checkout, env) {
+  try {
+    const named = rootsOf(env);
+    return named.length > 0 && named.every((root) => root.provider) && waitingPlugins(env).length === 0 && repositoryLogbooks(checkout, env).sources.length === 0;
+  } catch (e) {
+    if (e instanceof Refusal) return false;
+    throw e;
+  }
 }
 
 /** What a repair of a stuck saved change says: the loss in plain words, then the logbook check of what stays. */
