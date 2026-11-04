@@ -1786,6 +1786,16 @@ function idFloors(sources) {
     return top > 0n && { at, task: "", decision: `${prefix}${top} is the ${noun} floor of the move from ${from}`, why: "the move keeps every new id above the ids of the old logbooks" };
   }).filter(Boolean);
 }
+/**
+ * The round keys that name no finding: a key that the move carried for a finding that closed before it (F-T640-61). Only its
+ * decision row keeps it taken after the next round, so a new decisions table takes one row for each again (F-T648-5).
+ */
+function keyFloors(dir) {
+  let tasks = [], findings = [];
+  try { tasks = read(dir, "tasks"); findings = read(dir, "findings"); } catch {}
+  const have = new Set(findings.map((f) => `${f.task} ${f.key}`)), at = now();
+  return tasks.flatMap((t) => roundKeys(t).filter((k) => !have.has(`${t.id} ${k}`)).map((k) => ({ at, task: t.id, decision: `${k} is a round key of ${t.id} with no finding`, why: "the repair keeps the round's keys, and no new finding takes this key" })));
+}
 /** The old logbooks of a moved logbook, from its sources.tsv, that are still on the disk: a repair takes their floors again. */
 function movedFrom(dir) {
   try {
@@ -2217,10 +2227,11 @@ function finishMove(file, gateId, checkout, env) {
     if (!plan?.gate?.id || !Number.isInteger(plan.step) || !Array.isArray(plan.sources) || !Array.isArray(plan.checkouts)) refuse(stoppedText(plan, file));
     if (plan.gate.id !== gateId) refuse(stoppedText(plan, file));
     const { sources, checkouts, gone } = repositoryLogbooks(checkout, env, { moved: true });
-    const dirs = new Set(sources.map((s) => s.dir)), roots = new Set([...checkouts.map((c) => c.root), ...gone]);
+    // This provider's roots may give another path to the same folder than the mover's did: a link, or another letter case (F-T648-4).
+    const dirs = sources.map((s) => s.dir), roots = [...checkouts.map((c) => c.root), ...gone];
     const check = "Nothing changed. Ask the user to check that file: sage never guesses a move.";
     if (plan.folder !== basename(file).slice(0, -5)) refuse(`refused: the plan ${file} names ${visible(String(plan.folder))}, which is not the folder of its file name. ${check}`);
-    const strange = [...plan.sources.map((s) => s?.dir).filter((d) => !dirs.has(d)), ...plan.checkouts.map((c) => c?.root).filter((r) => !roots.has(r))];
+    const strange = [...plan.sources.map((s) => s?.dir).filter((d) => !dirs.some((o) => sameDir(d, o))), ...plan.checkouts.map((c) => c?.root).filter((r) => !roots.some((o) => sameDir(r, o)))];
     if (strange.length) refuse(`refused: the plan ${file} names ${visible(String(strange[0]))}, which is not a logbook or a checkout of this repository now. ${check}`);
     // The plan moves at least one old logbook, and its folder and its gate are this project's (F-T640-7, F-T640-25): the new
     // logbook takes the name of the old logbook that holds the move gate, and that gate, answered with a move, names this plan.
@@ -3762,6 +3773,7 @@ function act(cmd, pos, opt, dir, env, skip, project) {
       // A moved logbook's id floors are decision rows: a new decisions table takes them again from its old logbooks (F-T641-8).
       let floors = [];
       try { floors = trail ? idFloors(movedFrom(dir)) : []; } catch {}
+      if (trail) floors.push(...keyFloors(dir));
       write(dir, "decisions", [...(trail ? [] : read(dir, "decisions")), ...decided, ...floors]);
       if (change) renameSync(change.marker, change.aside);
       for (const { table, file, aside } of tables.filter((t) => t !== trail)) {

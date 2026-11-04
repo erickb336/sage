@@ -88,7 +88,10 @@ export const ownerOf = (rows, folder) => rows.filter((r) => r.folder === folder 
 export const sameDir = (a, b) => {
   if (typeof a !== "string" || typeof b !== "string") return false;
   if (a === b) return true;
-  const x = statSync(a, { bigint: true, throwIfNoEntry: false }), y = statSync(b, { bigint: true, throwIfNoEntry: false });
+  // A path that the system cannot stat (too long, a NUL byte, no access) reaches no folder from here, so it is not this one;
+  // a throw would stop every writer, because a writer reads every plan of the shared root (F-T648-3).
+  const at = (path) => { try { return statSync(path, { bigint: true, throwIfNoEntry: false }); } catch { return undefined; } };
+  const x = at(a), y = at(b);
   return Boolean(x?.isDirectory() && y?.isDirectory() && x.dev === y.dev && x.ino === y.ino);
 };
 

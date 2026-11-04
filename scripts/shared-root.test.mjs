@@ -2057,6 +2057,25 @@ test("a task moved after a key of its repair round closed keeps that key, so its
   assert.deepEqual(rowsIn(join(dir, "decisions.tsv")).filter((d) => d.task === "T4").map((d) => d.decision).slice(0, 2), ["T4 was Claude T2", "F-T4-2 was the round key F-T2-1 of Claude T2, whose finding closed before the move"]);
 });
 
+test("a repair of the decisions keeps a carried round key taken, so a finding after the next round takes a fresh key (F-T648-5)", (t) => {
+  const w = moveWorld(t), dir = join(w.shared, w.folder());
+  w.claude("finding", "add", "T2", "--source", "sage", "--severity", "medium", "--summary", "second");
+  for (const key of ["F-T2-1", "F-T2-2"]) w.claude("finding", "triage", "T2", key, "fix");
+  setStates(w.claudeDir, { T2: "reviewing" });
+  w.claude("round", "T2");
+  w.claude("finding", "close", "T2", "F-T2-1");
+  setStates(w.claudeDir, { T2: "reviewing" });
+  w.claude("move", "--gate", w.ask().id);
+  // The decisions table is lost while round 1 holds the carried key F-T4-2.
+  writeFileSync(join(dir, "decisions.tsv"), "");
+  w.claude("logbook", "repair", "--accept-loss", "decisions");
+  assert.ok(rowsIn(join(dir, "decisions.tsv")).some((d) => d.task === "T4" && d.decision === "F-T4-2 is a round key of T4 with no finding"));
+  const version = /--version ([0-9a-f]{64})/.exec(refusalOf(() => w.claude("round", "T4")))?.[1];
+  if (version) w.claude("claim", "T4", "--version", version);
+  assert.match(w.claude("round", "T4"), /^T4 repairing · round 2 of \d+ · fix F-T4-1 /);
+  assert.match(w.claude("finding", "add", "T4", "--source", "sage", "--severity", "low", "--summary", "new"), /^F-T4-3 /, "a new finding never takes the carried key F-T4-2");
+});
+
 test("after a restore by hand, a new task or gate takes a number above the move's map (F-T640-47)", (t) => {
   const w = moveWorld(t), { id, plan } = w.ask();
   w.claude("move", "--gate", id); // the map: tasks T4 to T6, gate G3
@@ -2130,3 +2149,59 @@ test("a waiting writer whose root differs in letter case refuses too, on a volum
   if (!existsSync(probe.toUpperCase())) return t.skip("this volume tells letter case apart, so the other case is another folder");
   return waitingWriter(t, (w) => join(w.base, "CODEX-ROOT"));
 });
+
+/** A move that Claude saved and stopped after step 2, finished from a Codex tool whose two roots are other paths to the same folders (F-T648-4). */
+function finishFromAlias(t, alias) {
+  const w = moveWorld(t), { id } = w.ask();
+  stopAt(w, id, 2);
+  const claudeRoot = alias(w, w.claudeRoot, "claude"), codexRoot = alias(w, w.codexRoot, "codex");
+  const codexTool = createStateTool({ provider: "codex", defaultRoot: () => codexRoot, legacyRoots: () => [{ provider: "claude", path: claudeRoot }, { provider: "codex", path: codexRoot }] });
+  const { code, text } = codexTool.command(["move", "--gate", id, "--project", w.project], { ...w.codexEnv, SAGE_HOME: codexRoot }, { project: w.project, native: "test-chief" });
+  assert.equal(code, 0, text);
+  assert.match(text, /\nReconciliation · every count matches the plan\n/);
+  assert.deepEqual(readdirSync(join(w.shared, "moves")), [], "the plan is gone: the move finished");
+  assert.deepEqual(rowsIn(join(w.shared, w.folder(), "tasks.tsv")).map((r) => r.title), ["claude open", "claude verified", "codex open"]);
+}
+test("a stopped move finishes from the other provider when its roots are links to the mover's roots (F-T648-4)", (t) => finishFromAlias(t, (w, root, name) => {
+  const link = join(w.base, `${name}-link`);
+  symlinkSync(root, link);
+  return link;
+}));
+test("a stopped move finishes from the other provider when its roots differ in letter case, on a volume that ignores case (F-T648-4)", (t) => {
+  const probe = realpathSync(mkdtempSync(join(tmpdir(), "sage-case-")));
+  t.after(() => rmSync(probe, { recursive: true, force: true }));
+  if (!existsSync(probe.toUpperCase())) return t.skip("this volume tells letter case apart, so the other case is another folder");
+  return finishFromAlias(t, (w, root) => join(w.base, basename(root).toUpperCase()));
+});
+
+/** A plan of another folder that names only this project's Claude logbook, by a link to its root: it stops the project all the same (F-T648-2). */
+function aliasPlan(w) {
+  const link = join(w.base, "claude-link");
+  symlinkSync(w.claudeRoot, link);
+  const file = join(w.shared, "moves", "elsewhere-abcdef.json");
+  mkdirSync(dirname(file), { recursive: true });
+  writeFileSync(file, JSON.stringify({ folder: "elsewhere-abcdef", gate: { id: "G9" }, step: 2, sources: [{ provider: "claude", dir: join(link, w.folder()) }], checkouts: [] }));
+}
+test("a read of the project refuses while a plan names its logbook by another path (F-T648-2)", (t) => {
+  const w = moveWorld(t);
+  aliasPlan(w);
+  assert.match(refusalOf(() => w.claude("status")), /^sage: refused: the move of project elsewhere did not finish\n/);
+});
+test("a move preview refuses while a plan names an old logbook of the project by another path (F-T648-2)", (t) => {
+  const w = moveWorld(t);
+  aliasPlan(w);
+  assert.match(refusalOf(() => w.claude("move", "--preview")), /^sage: refused: the move of project elsewhere did not finish\n/);
+  assert.equal(existsSync(join(w.shared, w.folder())), false, "no new logbook");
+});
+
+// A damaged plan of another project names a dir that no system call can stat: it names no logbook of this project, so a
+// writer writes and gets no raw error (F-T648-3).
+for (const [what, dir] of [["a NUL byte", "/tmp/sage-\u0000-nul"], ["a name too long", `/tmp/${"x".repeat(300)}/${"y".repeat(5000)}`]]) {
+  test(`a writer writes when another project's plan names a dir with ${what} (F-T648-3)`, (t) => {
+    const w = moveWorld(t), file = join(w.shared, "moves", "elsewhere-abcdef.json");
+    mkdirSync(dirname(file), { recursive: true });
+    writeFileSync(file, JSON.stringify({ folder: "elsewhere-abcdef", gate: { id: "G9" }, step: 2, sources: [{ provider: "claude", dir }], checkouts: [] }));
+    assert.match(w.claude("task", "add", "--title", "after", "--size", "tiny", "--priority", "P2"), /^T4 /);
+    assert.equal(rowsIn(join(w.claudeDir, "tasks.tsv")).at(-1).title, "after");
+  });
+}
