@@ -94,12 +94,14 @@ test("each default root reads the HOME of the env that the caller gives, and the
 test("a run with SAGE_HOME removed and HOME in scratch writes under that HOME, and the old fault lands in a scratch decoy, never the real root", (t) => {
   const base = realpathSync(mkdtempSync(join(tmpdir(), "sage-env-home-")));
   t.after(() => rmSync(base, { recursive: true, force: true }));
-  const decoy = join(base, "decoy"), home = join(base, "home");
+  const decoy = join(base, "decoy");
   mkdirSync(decoy);
   processHome(t, decoy); // Before any sage call: os.homedir() now returns the decoy, in place of the real home folder.
-  const env = { ...process.env, HOME: home, SAGE_TEST_PIDS: "{}" };
-  for (const name of ["SAGE_SHARED_HOME", "CLAUDE_CONFIG_DIR", "CODEX_HOME", "SAGE_WORKTREES"]) delete env[name];
+  const all = { ...process.env, SAGE_TEST_PIDS: "{}" };
+  for (const name of ["SAGE_SHARED_HOME", "CLAUDE_CONFIG_DIR", "CODEX_HOME", "SAGE_WORKTREES"]) delete all[name];
   for (const [name, run, root] of [["claude", claudeSage, ".claude"], ["codex", tool.sage, ".codex"]]) {
+    // A HOME for each provider: in one HOME, the second plugin's row would make both ready, and rule 3 would start shared.
+    const home = join(base, "home", name), env = { ...all, HOME: home };
     const project = join(base, name);
     mkdirSync(project);
     git(project, "init", "-q", "-b", "main");
@@ -1597,7 +1599,11 @@ test("a writer that found an old logbook before the move and waited on its lock 
 
 test("the move leaves a legacy project and a shared project as they were (T640)", (t) => {
   const w = moveWorld(t), other = w.repo("other");
+  // other is a project from before the Codex update: with Codex at contract 1, rule 3 gives it a legacy logbook.
+  const ready = readFileSync(join(w.shared, "plugins.tsv"), "utf8");
+  writeFileSync(join(w.shared, "plugins.tsv"), ready.replace(/\ncodex\t2\t/, "\ncodex\t1\t"));
   w.claude("init", "--project", other);
+  writeFileSync(join(w.shared, "plugins.tsv"), ready);
   w.claudeTool.command(["move", "--gate", w.ask().id, "--project", w.project], { ...w.env, SAGE_TEST_MOVE_STOP: "2" });
   assert.match(w.claude("task", "add", "--title", "legacy", "--size", "tiny", "--priority", "P2", "--project", other), /^T1 /, "another project works while a move stops");
   assert.equal(dirname(w.claudeTool.storeDir(other, w.env)), w.claudeRoot, "and keeps its legacy logbook");
@@ -2274,4 +2280,83 @@ test("a stopped move refuses to finish while its plan names an old logbook behin
   } finally {
     if (locked) chmodSync(locked, 0o700);
   }
+});
+
+/** Rule 3 (T642): a two-root world whose plugins.tsv holds the rows that the test gives, and its bindings as rows. */
+function ruleThree(t, rows, options) {
+  const w = twoRoots(t, options);
+  const plugins = (...lines) => {
+    mkdirSync(w.shared, { recursive: true });
+    writeFileSync(join(w.shared, "plugins.tsv"), ["provider\tcontract\tat", ...lines.map((r) => `${r}\t2026-11-03T00:00:00Z`)].join("\n") + "\n");
+  };
+  plugins(...rows);
+  const bound = () => (existsSync(join(w.shared, "bindings.tsv")) ? rowsIn(join(w.shared, "bindings.tsv")) : []);
+  return { ...w, plugins, bound };
+}
+const SHARED_INIT = (checkout, dir) => `${checkout} now uses the shared logbook ${dir}. Every plugin is ready, so the project starts there.`;
+
+test("rule 3: a new project starts in the shared root when both plugins are at contract 2, or the other is unused (T642)", (t) => {
+  for (const codex of ["2", "unused"]) {
+    const w = ruleThree(t, ["claude\t2", `codex\t${codex}`]), dir = join(w.shared, w.folder());
+    assert.equal(w.claude("init"), SHARED_INIT(w.project, dir), `codex ${codex}`);
+    assert.deepEqual(w.bound().map((r) => [r.root, r.folder, r.commits]), [[w.project, w.folder(), commitOf(w.project)]]);
+    assert.equal(existsSync(join(w.claudeRoot, w.folder())), false, "no legacy logbook");
+    assert.equal(existsSync(join(w.codexRoot, w.folder())), false);
+    assert.equal(w.claude("init"), `logbook ${dir}`, "a second init checks the shared logbook");
+    assert.match(w.codex("task", "add", "--title", "from codex", "--size", "tiny", "--priority", "P2"), /^T1 /, "the other provider writes the same logbook");
+    assert.equal(rowsIn(join(dir, "tasks.tsv"))[0].title, "from codex");
+  }
+});
+
+test("rule 3: a new project starts legacy, as before, while a plugin is below contract 2, has no row, or has a root with no name (T642)", (t) => {
+  // The provider that runs init writes its own row at contract 2 first, so the one that waits is always the other.
+  for (const [by, rows, options] of [["claude", ["claude\t2", "codex\t1"]], ["claude", ["claude\t2"]], ["codex", ["claude\t1", "codex\t2"]], ["claude", ["claude\t2", "codex\t2"], { named: false }]]) {
+    const w = ruleThree(t, rows, options);
+    assert.equal(w[by]("init"), `logbook ${join(by === "claude" ? w.claudeRoot : w.codexRoot, w.folder())}`, rows.join(" "));
+    assert.deepEqual(w.bound(), []);
+    assert.equal(existsSync(join(w.shared, w.folder())), false);
+    if (options) continue; // roots with no name never start shared
+    w.plugins("claude\t2", "codex\t2");
+    assert.match(w[by]("init", "--project", w.repo("after")), / now uses the shared logbook /, "after the update, the next new project starts shared");
+  }
+});
+
+test("rule 3: a legacy logbook of the repository in either root wins, also a clone's, so the project starts legacy (T642)", (t) => {
+  for (const [first, second] of [["claude", "codex"], ["codex", "claude"]]) {
+    const w = ruleThree(t, ["claude\t1", "codex\t1"]), root = (p) => (p === "claude" ? w.claudeRoot : w.codexRoot);
+    w[first]("init");
+    w.plugins("claude\t2", "codex\t2");
+    assert.equal(w[second]("init"), `logbook ${join(root(second), w.folder())}`, `a ${first} logbook, then ${second} init`);
+    const clone = join(w.base, "clone");
+    git(w.base, "clone", "-q", w.project, clone);
+    assert.match(w[second]("init", "--project", clone), new RegExp(`^logbook ${root(second)}/clone-[0-9a-f]{6}$`), "a clone of a legacy project");
+    assert.deepEqual(w.bound(), []);
+    const fresh = w.repo("fresh");
+    assert.match(w[second]("init", "--project", fresh), / now uses the shared logbook /, "another repository in the same roots starts shared");
+    assert.deepEqual(w.bound().map((r) => r.root), [fresh]);
+  }
+});
+
+test("rule 3: a checkout with the first commit of a shared logbook gets the link prompt from init, not a new logbook (T642)", (t) => {
+  const w = ruleThree(t, ["claude\t2", "codex\t2"]);
+  w.claude("init");
+  const clone = join(w.base, "clone");
+  git(w.base, "clone", "-q", w.project, clone);
+  const said = refusalOf(() => w.claude("init", "--project", clone));
+  assert.match(said, new RegExp(`\\*\\*This folder has no logbook yet:\\*\\* ${clone}\\n`));
+  assert.match(said, new RegExp(`for 1, sage link --to ${w.folder()}; for 2, sage link --separate\\.$`));
+  assert.deepEqual(w.bound().map((r) => r.root), [w.project], "no row for the clone");
+  assert.deepEqual(readdirSync(w.shared).filter((name) => name.startsWith("clone-")), []);
+});
+
+test("rule 3: a repository with no commit yet starts shared, and its row gets the first commit at a later write (T642)", (t) => {
+  const w = ruleThree(t, ["claude\t2", "codex\t2"]), empty = join(w.base, "empty");
+  mkdirSync(empty);
+  git(empty, "init", "-q", "-b", "main");
+  const said = w.claude("init", "--project", empty), [row] = w.bound();
+  assert.equal(said, SHARED_INIT(empty, join(w.shared, row.folder)));
+  assert.deepEqual([row.root, row.commits], [empty, ""]);
+  git(empty, "commit", "-q", "--allow-empty", "-m", "first");
+  w.claude("task", "add", "--title", "after the first commit", "--size", "tiny", "--priority", "P2", "--project", empty);
+  assert.equal(w.bound()[0].commits, commitOf(empty));
 });

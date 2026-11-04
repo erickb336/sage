@@ -278,8 +278,18 @@ The uninstall keeps your logbooks, the task pages in each project's pages folder
 A shared logbook is one logbook that Claude and Codex both use for a project. A project uses one when its checkout has a row in `bindings.tsv` in the shared root.
 
 - Sage finds the logbook again at each command.
-- A project gets a row by a link, or by [the move](#move-an-existing-project) of an existing project. An existing project that did not move has no row, and it works as before.
+- A project gets a row by a link, by [the move](#move-an-existing-project) of an existing project, or by `init` of a new project (see the table below). An existing project that did not move has no row, and it works as before.
 - Linked worktrees use the row of their main checkout.
+
+`sage init` of a project with no logbook picks its place:
+
+| When | `init` makes |
+| --- | --- |
+| Both plugins are at contract 2 in `plugins.tsv` (updated and restarted), or the other provider is recorded as unused, and neither provider root has a logbook of this repository | A shared logbook and its row. It says that the project now uses the shared logbook. |
+| A plugin is below contract 2 or has no row, or a provider root has a logbook of this repository (also a clone's) | A legacy logbook, as before. The chief can [move the project](#move-an-existing-project) later. |
+| The checkout has the first commit of a shared logbook | No logbook: it refuses with the link prompt below. |
+
+Only the move gate records a provider as unused today.
 
 The chief runs a link only after your answer in the chat:
 
