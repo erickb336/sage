@@ -2125,12 +2125,19 @@ function runMove(project, gateId, env) {
 
 /** A saved plan: the move goes on from the step after its last one, unless an old logbook that it did not mark yet changed. */
 function finishMove(file, gateId, env) {
-  let plan;
-  try { plan = JSON.parse(readRegular(file, { link: false, max: PLAN_MAX })); } catch {}
-  if (!plan?.gate?.id || !Number.isInteger(plan.step) || !Array.isArray(plan.sources)) refuse(stoppedText(null, file));
-  if (plan.gate.id !== gateId) refuse(stoppedText(plan, file));
   const shared = dirname(dirname(file)), shown = shownPath(env);
-  return withLock(shared, () => withLocks(plan.sources.map((s) => s.dir).sort(), () => {
+  // The plan is read under the shared root's lock: a move that another session finished meanwhile has no plan left.
+  return withLock(shared, () => {
+    let plan;
+    try { plan = JSON.parse(readRegular(file, { link: false, max: PLAN_MAX }) ?? "null"); } catch { plan = undefined; }
+    if (plan === null) refuse("refused: the move of this project finished just now, in another session. Nothing changed. Run the command that you need again.");
+    if (!plan?.gate?.id || !Number.isInteger(plan.step) || !Array.isArray(plan.sources)) refuse(stoppedText(null, file));
+    if (plan.gate.id !== gateId) refuse(stoppedText(plan, file));
+    return finishPlan(plan, file, env, shared, shown);
+  });
+}
+function finishPlan(plan, file, env, shared, shown) {
+  return withLocks(plan.sources.map((s) => s.dir).sort(), () => {
     const marked = plan.sources.filter((s) => lstatSync(join(s.dir, "moved.json"), NO));
     const changed = plan.sources.filter((s) => !marked.includes(s) && rawDigest(s.dir) !== plan.raw?.[s.dir]);
     if (changed.length) {
@@ -2144,7 +2151,7 @@ function finishMove(file, gateId, env) {
       refuse([`refused: the logbooks changed after plan ${plan.digest.slice(0, 8)}, and the move had not marked them yet`, ...which, `Nothing moved: the plan is removed${lstatSync(aside, NO) ? `, and the logbook it built is set aside in ${shown(aside)}` : ""}. Run the preview again.`].join("\n"));
     }
     return moveSteps(plan, file, env, true);
-  }));
+  });
 }
 
 /**
