@@ -1340,7 +1340,7 @@ test("the move takes the open tasks of both old logbooks into one shared logbook
     "3. In each old logbook folder, delete moved.json.",
     `4. In ${join(w.shared, "bindings.tsv")}, delete the rows that name ${folder}.`,
     `5. In ${join(w.shared, "projects.tsv")}, delete the row of ${folder}.`,
-    `6. Rename the folder ${join(w.shared, folder)} to ${join(w.shared, `.${folder}.restored`)}: the board reads no folder whose name starts with a dot. Keep it until you are sure.`,
+    `6. Rename the folder ${join(w.shared, folder)} to ${join(w.shared, `.${folder}.restored-${plan}`)}: the board reads no folder whose name starts with a dot. Keep it until you are sure.`,
   ].join("\n"));
   // Both providers find the one shared logbook now.
   assert.equal(w.claudeTool.storeDir(w.project, w.env), dir);
@@ -1411,7 +1411,7 @@ test("a move that stops after any step: every command of the project refuses and
     const w = moveWorld(t), { plan, id } = w.ask(), folder = w.folder();
     const stop = w.claudeTool.command(["move", "--gate", id, "--project", w.project], { ...w.env, SAGE_TEST_MOVE_STOP: String(step) });
     assert.match(stop.text, new RegExp(`test stop after step ${step}`), `the stop after step ${step}`);
-    const stopped = new RegExp(`^Error: sage: refused: the move of project project did not finish\\n  stopped after step ${step} of 6 at \\d\\d:\\d\\d \\(${done[step - 1].replace(/[()]/g, "\\$&")}\\)\\n  The plan is saved\\. Nothing is lost\\.\\n  To finish: sage move --gate ${id} \\(the same command\\)$`);
+    const stopped = new RegExp(`^Error: sage: refused: the move of project project did not finish\\n  stopped after step ${step} of 6 at \\d\\d:\\d\\d UTC(?:[+-]\\d\\d:\\d\\d)? \\(${done[step - 1].replace(/[()]/g, "\\$&")}\\)\\n  The plan is saved\\. Nothing is lost\\.\\n  To finish: sage move --gate ${id} \\(the same command\\)$`);
     assert.throws(() => w.claude("status"), stopped, `a read of Claude after step ${step}`);
     assert.throws(() => w.codex("task", "add", "--title", "late", "--size", "tiny", "--priority", "P2"), stopped, `a write of Codex after step ${step}`);
     assert.throws(() => w.claude("move", "--preview"), stopped);
@@ -1467,10 +1467,10 @@ test("the move refuses with nothing changed: running runs, an old plugin, a fold
   const w = moveWorld(t);
   w.claude("run", "add", "T2", "--role", "qa");
   const started = rowsIn(join(w.claudeDir, "runs.tsv"))[0].started.slice(11, 16);
-  assert.throws(() => w.claude("move", "--preview"), new RegExp(`^Error: sage: refused: 1 run is running in this project\\n  Claude  R1     T2    qa         started ${started}\\nThe move needs zero running runs\\. Nothing changed\\.$`));
+  assert.throws(() => w.claude("move", "--preview"), new RegExp(`^Error: sage: refused: 1 run is running in this project\\n  Claude  R1     T2    qa         started ${started} UTC\\nThe move needs zero running runs\\. Nothing changed\\.$`));
   const old = moveWorld(t);
   writeFileSync(join(old.shared, "plugins.tsv"), "provider\tcontract\tat\nclaude\t2\t2026-11-03T09:12:00Z\ncodex\t1\t2026-10-30T18:40:00Z\n");
-  assert.throws(() => old.claude("move", "--preview"), /^Error: sage: refused: the Codex plugin is at contract 1; the move needs 2\n  Claude  contract 2   written 2026-11-03 09:12\n  Codex   contract 1   written 2026-10-30 18:40\nNothing changed\.$/);
+  assert.throws(() => old.claude("move", "--preview"), /^Error: sage: refused: the Codex plugin is at contract 1; the move needs 2\n  Claude  contract 2   written 2026-11-03 09:12 UTC\n  Codex   contract 1   written 2026-10-30 18:40 UTC\nNothing changed\.$/);
   const shut = moveWorld(t);
   chmodSync(shut.claudeDir, 0o555);
   try {
@@ -1781,28 +1781,49 @@ test("an end check that does not match names the missing record and no command, 
   assert.match(w.claude("status"), /T4/, "the step that the text gives sets the plan aside");
 });
 
-test("the move prints the Mac's own time: a stopped move and a running run (F-T640-15)", (t) => {
+test("the move prints the Mac's own time with its zone, which the board's UTC times agree with: a stopped move, a running run and the map page (F-T640-15, F-T640-26)", (t) => {
   zone(t, "Asia/Tokyo"); // UTC+9 all year
   const w = moveWorld(t), { id } = w.ask();
   stopAt(w, id, 2);
   const tokyo = (iso) => new Date(Date.parse(iso) + 9 * 3600000).toISOString().slice(11, 16);
-  assert.match(refusalOf(() => w.claude("status")), new RegExp(`\\n  stopped after step 2 of 6 at ${tokyo(JSON.parse(readFileSync(planFileOf(w), "utf8")).at)} \\(`));
+  const plan = JSON.parse(readFileSync(planFileOf(w), "utf8"));
+  assert.match(refusalOf(() => w.claude("status")), new RegExp(`\\n  stopped after step 2 of 6 at ${tokyo(plan.at)} UTC\\+09:00 \\(`));
+  const local = new Date(Date.parse(plan.saved) + 9 * 3600000).toISOString();
+  assert.ok(readFileSync(join(w.shared, w.folder(), "move-map.html"), "utf8").includes(` on ${local.slice(0, 10)} at ${local.slice(11, 16)} UTC+09:00. `), "the map page names the zone too");
   const r = moveWorld(t);
   r.claude("run", "add", "T2", "--role", "qa");
-  assert.match(refusalOf(() => r.claude("move", "--preview")), new RegExp(`qa         started ${tokyo(rowsIn(join(r.claudeDir, "runs.tsv"))[0].started)}\\n`));
+  assert.match(refusalOf(() => r.claude("move", "--preview")), new RegExp(`qa         started ${tokyo(rowsIn(join(r.claudeDir, "runs.tsv"))[0].started)} UTC\\+09:00\\n`));
 });
 
-test("after the printed restore steps the board shows each task once, and a later move works (F-T640-19)", (t) => {
-  const w = moveWorld(t), folder = w.folder(), out = w.claude("move", "--gate", w.ask().id);
-  assert.match(out, /\n6\. Rename the folder .* to .*\/\.[a-z0-9-]+\.restored: the board reads no folder whose name starts with a dot\. Keep it until you are sure\.$/);
-  // The steps as the end of the move prints them, done by hand.
-  for (const d of [w.claudeDir, w.codexDir]) { renameSync(join(d, "tasks.before-move.tsv"), join(d, "tasks.tsv")); rmSync(join(d, "moved.json")); }
-  const drop = (file, column) => { const [head, ...lines] = readFileSync(file, "utf8").split("\n").filter(Boolean); writeFileSync(file, [head, ...lines.filter((l) => l.split("\t")[column] !== folder)].join("\n") + "\n"); };
-  drop(join(w.shared, "bindings.tsv"), 1);
-  drop(join(w.shared, "projects.tsv"), 0);
-  renameSync(join(w.shared, folder), join(w.shared, `.${folder}.restored`));
+test("a zone behind UTC with half an hour prints its offset with a minus sign (F-T640-26)", (t) => {
+  zone(t, "America/St_Johns"); // UTC-3:30, or UTC-2:30 in summer time
+  const n = moveWorld(t);
+  n.claude("run", "add", "T2", "--role", "qa");
+  assert.match(refusalOf(() => n.claude("move", "--preview")), /qa         started \d\d:\d\d UTC-0[23]:30\n/);
+});
+
+test("after the printed restore steps the board shows each task once, and a later move and a second restore work (F-T640-19, F-T640-29)", (t) => {
+  const w = moveWorld(t), folder = w.folder();
+  /** The move, then the restore steps that its end prints, done by hand: step 6 renames the folder to the printed name. */
+  const moveAndRestore = () => {
+    const { plan, id } = w.ask(), out = w.claude("move", "--gate", id);
+    const name = new RegExp(`\\n6\\. Rename the folder \\S+/${folder} to \\S+/(\\.${folder}\\.restored[^:\\s]*): the board reads no folder whose name starts with a dot\\. Keep it until you are sure\\.$`).exec(out)?.[1];
+    assert.ok(name, out);
+    for (const d of [w.claudeDir, w.codexDir]) { renameSync(join(d, "tasks.before-move.tsv"), join(d, "tasks.tsv")); rmSync(join(d, "moved.json")); }
+    const drop = (file, column) => { const [head, ...lines] = readFileSync(file, "utf8").split("\n").filter(Boolean); writeFileSync(file, [head, ...lines.filter((l) => l.split("\t")[column] !== folder)].join("\n") + "\n"); };
+    drop(join(w.shared, "bindings.tsv"), 1);
+    drop(join(w.shared, "projects.tsv"), 0);
+    renameSync(join(w.shared, folder), join(w.shared, name)); // the old fixed name made this fail on a second restore
+    return { name, plan };
+  };
+  const first = moveAndRestore();
   assert.deepEqual(boardOf(w).tasks.map((task) => task.title).sort(), ["claude done", "claude open", "claude verified", "codex done", "codex open"], "each task once, from its old logbook");
   assert.match(w.claude("status"), /T2/, "the old logbooks work again");
+  const second = moveAndRestore();
+  for (const { name, plan } of [first, second]) assert.equal(name, `.${folder}.restored-${plan}`, "the dot name holds the move's plan");
+  assert.notEqual(second.name, first.name, "the second restore has a free name");
+  assert.deepEqual(readdirSync(w.shared).filter((n) => n.includes(folder)).sort(), [first.name, second.name].sort(), "both restored folders stay, and no new logbook");
+  assert.deepEqual(boardOf(w).tasks.map((task) => task.title).sort(), ["claude done", "claude open", "claude verified", "codex done", "codex open"]);
   assert.match(w.claude("move", "--gate", w.ask().id), /\nReconciliation · every count matches the plan\n/, "a later move works");
 });
 
@@ -1819,6 +1840,72 @@ test("a move plan that cannot be read names its file, and does not call it this 
   mkdirSync(dirname(file), { recursive: true });
   writeFileSync(file, "{ not json");
   assert.equal(refusalOf(() => w.claude("status")), `sage: refused: a move plan in the shared root cannot be read: ${file}. Sage cannot tell which project it moves, so every project of this shared root refuses. Nothing changed. Ask the user to check that file: sage never guesses a move.`);
+});
+
+test("a moved gate's question names the same finding after the move: a finding key maps whole, and one that does not move stays (F-T640-23)", (t) => {
+  const w = moveWorld(t);
+  w.claude("finding", "add", "T2", "--source", "sage", "--severity", "medium", "--summary", "two");
+  w.claude("finding", "add", "T2", "--source", "sage", "--severity", "medium", "--summary", "three");
+  w.claude("finding", "triage", "T2", "F-T2-1", "dismiss", "--reason", "not real");
+  w.claude("gate", "add", "T2", "--question", "Move F-T2-2 to a follow-up task? F-T2-1 is dismissed, and T2 keeps F-T2-3.", "--options", "move|keep", "--recommend", "move");
+  const asked = rowsIn(join(w.claudeDir, "gates.tsv")).at(-1).id;
+  w.claude("gate", "answer", asked, "--option", "1");
+  w.claude("move", "--gate", w.ask().id);
+  const dir = join(w.shared, w.folder());
+  assert.deepEqual(rowsIn(join(dir, "findings.tsv")).map((f) => [f.key, f.summary]), [["F-T4-1", "two (was Claude F-T2-2)"], ["F-T4-2", "three (was Claude F-T2-3)"]]);
+  const moved = rowsIn(join(dir, "gates.tsv")).find((g) => g.options === "move|keep" && g.answer === "move");
+  assert.equal(moved.question, "Move F-T4-1 to a follow-up task? F-T2-1 is dismissed, and T4 keeps F-T4-2.", "the approval names the finding \"two\", as before the move");
+});
+
+test("a resumed plan must name the old logbook of this repository that holds its answered move gate: a plan with no old logbook writes nothing (F-T640-7, F-T640-25)", (t) => {
+  const w = moveWorld(t), { id } = w.ask(), file = join(w.shared, "moves", "other-abcdef.json");
+  mkdirSync(join(w.shared, "other-abcdef"), { recursive: true });
+  writeFileSync(join(w.shared, "other-abcdef", "tasks.tsv"), `${readFileSync(join(w.claudeDir, "tasks.tsv"), "utf8").split("\n")[0]}\n`);
+  // A planted plan for another folder that links this checkout and moves no logbook: the old code linked the checkout to it.
+  const planted = { version: 1, folder: "other-abcdef", checkout: realpathSync(w.project), sources: [], checkouts: [{ root: realpathSync(w.project), commits: "" }], gate: { id, dir: w.claudeDir }, step: 3, saved: "2026-11-03T00:00:00Z", at: "2026-11-03T00:00:00Z", digest: "0".repeat(64), raw: {}, marks: [], map: { tasks: [], findings: [], gates: [], programs: [], standing: [], waits: {}, finished: {} } };
+  mkdirSync(dirname(file), { recursive: true });
+  writeFileSync(file, JSON.stringify(planted));
+  const check = "Nothing changed. Ask the user to check that file: sage never guesses a move.";
+  let out;
+  try { out = w.claude("move", "--gate", id); } catch (e) { out = e.message; }
+  assert.equal(existsSync(join(w.shared, "bindings.tsv")), false, `no row links the checkout to the planted folder (the move printed: ${out.split("\n")[0]})`);
+  assert.equal(out, `sage: refused: the plan ${file} names no old logbook of this repository that holds its answered move gate ${id}. ${check}`);
+  // The same plan with this project's logbooks, but a gate that is not its answered move gate, refuses too.
+  writeFileSync(file, JSON.stringify({ ...planted, sources: [{ provider: "claude", dir: w.claudeDir, checkout: realpathSync(w.project) }] }));
+  assert.match(refusalOf(() => w.claude("move", "--gate", id)), /names no old logbook of this repository that holds its answered move gate/);
+  assert.equal(existsSync(join(w.claudeDir, "moved.json")), false, "a refused plan marks nothing");
+  rmSync(file);
+  assert.match(w.claude("move", "--gate", id), /\nReconciliation · every count matches the plan\n/, "the true move still runs");
+});
+
+test("the end check prints a missing record's old id through visible() (F-T640-24)", (t) => {
+  const w = moveWorld(t), dir = join(w.shared, w.folder());
+  rewrite(join(w.claudeDir, "findings.tsv"), (text) => text.replace("\tF-T2-1\t", "\tF-T2-1\u001b[2J\t"));
+  const { id } = w.ask();
+  stopAt(w, id, 2);
+  rewrite(join(dir, "findings.tsv"), (text) => text.split("\n")[0] + "\n");
+  // The state tool's own text, before the CLI's output filter: an adapter (the Codex MCP server) may show it as it is.
+  const out = refusalOf(() => w.claudeTool.sage(["move", "--gate", id, "--project", w.project], w.env));
+  assert.ok(out.includes("\nmissing in the new logbook: F-T4-1 (was Claude F-T2-1\\x1b[2J)\n"), out);
+  assert.equal(out.includes("\u001b"), false);
+});
+
+test("an open gate of a finished task refuses the preview, because no one could answer it after the move (F-T640-27)", (t) => {
+  const w = moveWorld(t);
+  // An open gate of T1, which merged after the gate was asked.
+  const row = { id: "G9", task: "T1", question: "Still want the docs?", options: "yes|no", recommendation: "yes", default: "no", answer: "", at: "2026-11-03T00:00:00Z" };
+  rewrite(join(w.claudeDir, "gates.tsv"), (text) => `${text.trimEnd()}\n${text.split("\n")[0].split("\t").map((c) => row[c] ?? "").join("\t")}\n`);
+  assert.equal(refusalOf(() => w.claude("move", "--preview")), "sage: refused: Claude G9 is open, but its task T1 is merged, and a finished task does not move, so no one could answer G9 after the move. Nothing changed. Ask the owner to answer it first (sage gate answer G9 --option <n>), then run the preview again.");
+  w.claude("gate", "answer", "G9", "--option", "2");
+  assert.match(w.claude("move", "--preview"), /^Move preview · /, "an answered gate of a finished task stays, and the move goes on");
+});
+
+test("a later logbook's own heading before its first order stays, and the end check counts it (F-T640-31)", (t) => {
+  const w = moveWorld(t);
+  writeFileSync(join(w.codexDir, "standing.md"), "# Standing orders\n\nEvery brief carries these lines word for word. Add a line when you notice that you repeat an instruction.\n\n# My own title line\n\n1. Codex order one.\n");
+  const out = w.claude("move", "--gate", w.ask().id);
+  assert.match(out, /\nstanding orders     5     5        1     1   match\nstanding notes      0     0        1     1   match\n/);
+  assert.match(readFileSync(join(w.shared, w.folder(), "standing.md"), "utf8"), /\n## From the Codex logbook \(moved [^)]*\)\n\n# My own title line\n\n6\. Codex order one\. \(Codex 1\)\n$/);
 });
 
 test("the board shows a banner for 7 days after a move, with the map page by name only (F-T640-4)", (t) => {

@@ -1815,6 +1815,8 @@ const BACK = ["verifying", "verified", "pr-ready"];
 const MOVE_HEAD = /^move · plan ([0-9a-f]{8})$/;
 const UNUSED = /^move, and record ([a-z][a-z0-9-]*) as unused$/i;
 const moveOf = (gate) => MOVE_HEAD.exec(String(gate?.question ?? "").split(LINE)[0])?.[1];
+/** Whether the owner answered a move gate with a move: its first option, or "move, and record <provider> as unused". */
+const movesOn = (g) => !!g.answer && (g.answer === optionsOf(g)[0] || (optionsOf(g).includes(g.answer) && UNUSED.test(g.answer)));
 const planFile = (shared, folder) => join(shared, MOVES, `${folder}.json`);
 const askedFile = (shared, folder, gate) => join(shared, MOVES, `${folder}.${gate}.asked.json`);
 /** The files of an old logbook that the move reads: a re-run finds out whether one changed after the plan was saved. */
@@ -1933,6 +1935,12 @@ function movePlan(scope, env, gate) {
   }
   // Gates: each gate of a moved task, answered ones too (approvals and a program's gate name them), and each open gate
   // with no task. A move gate stays. The open gates take the first numbers, so the owner's new gates are in one range.
+  // An open gate of a finished task would stay in its old logbook, which is read-only after the move: no one could answer
+  // it, and the board would not show it (F-T640-27). So the owner answers it first.
+  for (const b of books) for (const g of b.rows.gates.filter((g) => !g.answer && g.task && !moveOf(g) && !ids.has(`${b.i} ${g.task}`))) {
+    const state = b.rows.tasks.find((t) => t.id === g.task)?.state;
+    refuse(`refused: ${named(b, visible(g.id))} is open, but its task ${visible(g.task)} ${state ? `is ${state}` : "is not in the logbook"}, and a finished task does not move, so no one could answer ${visible(g.id)} after the move. Nothing changed. Ask the owner to answer it first (sage gate answer ${visible(g.id)} --option <n>), then run the preview again.`);
+  }
   const gatesOf = (b) => b.rows.gates.filter((g) => !moveOf(g) && !(gate && b.dir === gate.dir && g.id === gate.id) && (g.task ? ids.has(`${b.i} ${g.task}`) : !g.answer));
   const gateIds = new Map(), gateRows = [];
   for (const open of [true, false]) for (const b of books) for (const g of gatesOf(b).filter((g) => !g.answer === open).sort(byIdNumber)) {
@@ -1946,13 +1954,17 @@ function movePlan(scope, env, gate) {
     const { b, t } = rowOf(k);
     for (const f of b.rows.findings.filter((f) => f.task === t.id && f.status === "open")) {
       seq.set(id, (seq.get(id) ?? 0) + 1);
-      keys.set(`${b.i} ${t.id} ${f.key}`, `F-${id}-${seq.get(id)}`);
+      keys.set(`${b.i} ${f.key}`, `F-${id}-${seq.get(id)}`);
       findingRows.push({ b, f, key: `F-${id}-${seq.get(id)}` });
     }
   }
-  // The task and program ids in a moved gate's question get their new numbers, as its task cell does: a repair approval
-  // names its task, and a breakdown gate its program and tasks (F-T640-3). An id that does not move keeps its number.
-  const renumber = (b, text) => String(text).replace(/\b(?:PG|T)[1-9]\d*\b/g, (id) => (id.startsWith("PG") ? programIds : ids).get(`${b.i} ${id}`) ?? id);
+  // The ids in a moved gate's question get their new numbers, as its task cell does: a repair approval names its task, a
+  // breakdown gate its program and tasks (F-T640-3), and a move approval its finding (F-T640-23). A whole finding key maps
+  // first, through keys, because its new number is not its old one; a finding key that does not move stays whole. Then
+  // the task and program ids. An id that does not move keeps its number.
+  const findingKeys = books.map((b) => new Set(b.rows.findings.map((f) => f.key)));
+  const renumber = (b, text) => String(text).replace(/[\w-]+/g, (word) => keys.get(`${b.i} ${word}`)
+    ?? (findingKeys[b.i].has(word) ? word : word.replace(/\b(?:PG|T)[1-9]\d*\b/g, (id) => (id.startsWith("PG") ? programIds : ids).get(`${b.i} ${id}`) ?? id)));
   // A task with no program takes the program of a task that it adopted, so the pilot of that program is in it.
   const adoptedProgram = (b, t) => [...adopted].filter(([, to]) => to === `${b.i} ${t.id}`).map(([from]) => rowOf(from)).find(({ t: o }) => o.program);
   const met = [], back = [], was = [], waits = {};
@@ -1980,7 +1992,7 @@ function movePlan(scope, env, gate) {
     // The board shows this row, so it names the old logbook's folder, never a path of the Mac (F-T640-13).
     was.push({ at: "", task: id, decision: `${id} was ${named(b, t.id)}`, why: [`the move from the ${title(b.provider)} logbook ${basename(b.dir)}`, `its pages stay in ${basename(b.dir)}/pages/${t.id} of the worktree root`, metHere.length && `waits met before the move: ${metHere.join(", ")}`, BACK.includes(t.state) && `${t.state} → reviewing, because its verdicts stay in the old logbook`].filter(Boolean).join("; ") });
     const via = !t.program && adoptedProgram(b, t);
-    return keepColumns("tasks", { ...t, id, state: BACK.includes(t.state) ? "reviewing" : t.state, keys: roundKeys(t).map((k) => keys.get(`${b.i} ${t.id} ${k}`)).filter(Boolean).join(","), waits: on.join(","), program: t.program ? programIds.get(`${b.i} ${t.program}`) : via ? programIds.get(`${via.b.i} ${via.t.program}`) : "", approvals: list(t.approvals).map((g) => gateIds.get(`${b.i} ${g}`)).filter(Boolean).join(","), adoption: JSON.stringify(record), chief: "", offer: "" });
+    return keepColumns("tasks", { ...t, id, state: BACK.includes(t.state) ? "reviewing" : t.state, keys: roundKeys(t).map((k) => keys.get(`${b.i} ${k}`)).filter(Boolean).join(","), waits: on.join(","), program: t.program ? programIds.get(`${b.i} ${t.program}`) : via ? programIds.get(`${via.b.i} ${via.t.program}`) : "", approvals: list(t.approvals).map((g) => gateIds.get(`${b.i} ${g}`)).filter(Boolean).join(","), adoption: JSON.stringify(record), chief: "", offer: "" });
   });
   const findings = findingRows.map(({ b, f, key: k }) => keepColumns("findings", { ...f, task: ids.get(`${b.i} ${f.task}`), key: k, run: "", summary: `${f.summary} (was ${named(b, f.key)})` }));
   const gates = gateRows.map(({ b, g }) => keepColumns("gates", { ...g, id: gateIds.get(`${b.i} ${g.id}`), task: g.task ? ids.get(`${b.i} ${g.task}`) : "", question: renumber(b, g.question) }));
@@ -1995,8 +2007,9 @@ function movePlan(scope, env, gate) {
   let count = (texts[0].match(/^\d+\./gm) ?? []).length, standing = texts[0].trimEnd() || "# Standing orders";
   const parts = [{ provider: books[0].provider, count, first: count ? 1 : 0, last: count, base: true }];
   // A line with no number stays where it is: under its order (a continuation) or under the heading (a note), and the end
-  // check counts it (F-T640-21). Only the logbook's own title and the fixed first sentence before the list go.
-  const intro = STANDING.split("\n")[2];
+  // check counts it (F-T640-21). Only the logbook's own title and the fixed first sentence before the list go: a heading
+  // of the owner's own before the list stays (F-T640-31).
+  const [head, , intro] = STANDING.split("\n");
   for (const [i, b] of books.entries()) if (i) {
     const kept = [], first = count + 1;
     let orders = 0, notes = 0;
@@ -2004,7 +2017,7 @@ function movePlan(scope, env, gate) {
       const order = /^(\d+)\.\s*(.*)$/.exec(line);
       if (order) kept.push(`${count + ++orders}. ${order[2]} (${title(b.provider)} ${order[1]})`);
       else if (!line.trim()) { if (kept.length && kept.at(-1) !== "") kept.push(""); }
-      else if (orders || !(/^#\s/.test(line) || line.trim() === intro)) { kept.push(line); notes++; }
+      else if (orders || ![head, intro].includes(line.trim())) { kept.push(line); notes++; }
     }
     while (kept.at(-1) === "") kept.pop();
     count += orders;
@@ -2130,9 +2143,9 @@ function runMove(project, gateId, env) {
       for (const s of scope.sources) ready(s.dir);
       const found = scope.sources.flatMap((s) => read(s.dir, "gates").filter((g) => g.id === gateId && moveOf(g)).map((g) => ({ dir: s.dir, g })));
       if (found.length !== 1) refuse(`refused: ${gateId} is ${found.length ? "a move gate in more than one old logbook" : "not a move gate of this project's logbooks"}. Nothing changed. Run sage move --preview, then open the gate with sage move --plan <plan>.`);
-      const [{ dir, g }] = found, options = optionsOf(g);
+      const [{ dir, g }] = found;
       if (!g.answer) refuse(`refused: ${g.id} has no answer yet, so nothing moves. Nothing changed. The owner answers it first.`);
-      if (g.answer !== options[0] && !(options.includes(g.answer) && UNUSED.test(g.answer))) refuse(`refused: the owner answered ${g.id} with "${visible(g.answer)}", so nothing moves. Nothing changed. To move later, run the preview again.`);
+      if (!movesOn(g)) refuse(`refused: the owner answered ${g.id} with "${visible(g.answer)}", so nothing moves. Nothing changed. To move later, run the preview again.`);
       const { plan, norow } = movePlan(scope, env, { dir, id: g.id });
       if (plan.digest.slice(0, 8) !== moveOf(g)) {
         let asked = null;
@@ -2171,6 +2184,11 @@ function finishMove(file, gateId, checkout, env) {
     if (plan.folder !== basename(file).slice(0, -5)) refuse(`refused: the plan ${file} names ${visible(String(plan.folder))}, which is not the folder of its file name. ${check}`);
     const strange = [...plan.sources.map((s) => s?.dir).filter((d) => !dirs.has(d)), ...plan.checkouts.map((c) => c?.root).filter((r) => !roots.has(r))];
     if (strange.length) refuse(`refused: the plan ${file} names ${visible(String(strange[0]))}, which is not a logbook or a checkout of this repository now. ${check}`);
+    // The plan moves at least one old logbook, and its folder and its gate are this project's (F-T640-7, F-T640-25): the new
+    // logbook takes the name of the old logbook that holds the move gate, and that gate, answered with a move, names this plan.
+    const holder = plan.sources.find((s) => s.dir === plan.gate.dir && basename(s.dir) === plan.folder);
+    const asked = holder && read(holder.dir, "gates").find((g) => g.id === gateId && moveOf(g) === String(plan.digest).slice(0, 8));
+    if (!holder || !asked || !movesOn(asked)) refuse(`refused: the plan ${file} names no old logbook of this repository that holds its answered move gate ${gateId}. ${check}`);
     return finishPlan(plan, file, env, shared, shown);
   });
 }
@@ -2288,7 +2306,8 @@ function recount(plan, dir) {
   for (const s of plan.sources) add(s.provider, "marked", rowsOf(sheetText(readRegular(join(s.dir, "tasks.tsv")) ?? "")).filter((r) => r.moved).length);
   const lacking = (table, maps, key = "id") => {
     const have = new Set(read(dir, table).map((r) => r[key]));
-    return maps.filter((m) => !have.has(m.new)).map((m) => `${m.new} (was ${title(m.provider)} ${m.old})`);
+    // The old id is an old logbook's cell: it prints through visible(), as every logbook text of the move does (F-T640-24).
+    return maps.filter((m) => !have.has(m.new)).map((m) => visible(`${m.new} (was ${title(m.provider)} ${m.old})`));
   };
   const missing = [...lacking("tasks", plan.map.tasks.filter((m) => !m.adopted)), ...lacking("findings", plan.map.findings, "key"), ...lacking("gates", plan.map.gates), ...lacking("programs", plan.map.programs)];
   return { found, missing };

@@ -12,14 +12,20 @@ const range = (ids) => (!ids.length ? "none" : ids.length === 1 ? ids[0] : `${id
 const plural = (n, one, many = `${one}s`) => `${n} ${n === 1 ? one : many}`;
 const MONTHS = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"];
 const two = (n) => String(n).padStart(2, "0");
+/** The zone of a local time as its offset from UTC ("UTC+05:30", or "UTC"), the clock that the board's times use. */
+const zone = (d) => {
+  const m = -d.getTimezoneOffset();
+  return m ? `UTC${m > 0 ? "+" : "-"}${two(Math.floor(Math.abs(m) / 60))}:${two(Math.abs(m) % 60)}` : "UTC";
+};
 /**
- * A saved time (UTC, as the tables keep it) in the Mac's own time zone, as the chat shows it (F-T640-15): its clock
- * ("15:43"), its day ("3 Nov") and its date ("2026-11-03"). A cell that is no time gives empty text.
+ * A saved time (UTC, as the tables keep it) in the Mac's own time zone, as the chat shows it (F-T640-15): its clock with
+ * its zone ("15:43 UTC+09:00"), so that it agrees with the board's UTC times (F-T640-26), its day ("3 Nov") and its date
+ * ("2026-11-03"). A cell that is no time gives empty text.
  */
 export function localTime(at) {
   const d = new Date(String(at ?? ""));
   if (Number.isNaN(d.getTime())) return { clock: "", day: "", date: "" };
-  return { clock: `${two(d.getHours())}:${two(d.getMinutes())}`, day: `${d.getDate()} ${MONTHS[d.getMonth()]}`, date: `${d.getFullYear()}-${two(d.getMonth() + 1)}-${two(d.getDate())}` };
+  return { clock: `${two(d.getHours())}:${two(d.getMinutes())} ${zone(d)}`, day: `${d.getDate()} ${MONTHS[d.getMonth()]}`, date: `${d.getFullYear()}-${two(d.getMonth() + 1)}-${two(d.getDate())}` };
 }
 const clock = (at) => localTime(at).clock;
 /** The providers of the plan, in its order, each once. */
@@ -222,8 +228,12 @@ export function reconciliationText(plan, found, missing) {
   ].join("\n");
 }
 
-/** The restore steps by hand, with the warning first. */
-export function restoreSteps(folder, shown) {
+/**
+ * The restore steps by hand, with the warning first. Step 6's dot name holds the plan, so a second restore of the same
+ * project after a later move has a free name (F-T640-29).
+ */
+export function restoreSteps(plan, shown) {
+  const { folder } = plan;
   return {
     warning: "To restore by hand (no command does this). Warning: work recorded after the move stays only in the new logbook, and these steps do not bring it back.",
     steps: [
@@ -233,14 +243,14 @@ export function restoreSteps(folder, shown) {
       `In ${shown("bindings.tsv")}, delete the rows that name ${folder}.`,
       `In ${shown("projects.tsv")}, delete the row of ${folder}.`,
       // A folder with a dot name is not a logbook to the board or to a later move, so no task shows twice (F-T640-19).
-      `Rename the folder ${shown(folder)} to ${shown(`.${folder}.restored`)}: the board reads no folder whose name starts with a dot. Keep it until you are sure.`,
+      `Rename the folder ${shown(folder)} to ${shown(`.${folder}.restored-${shortPlan(plan)}`)}: the board reads no folder whose name starts with a dot. Keep it until you are sure.`,
     ],
   };
 }
 
 /** The end of a move: the map, the backups and the restore steps. */
 export function endText(plan, map, backups, shown) {
-  const { warning, steps } = restoreSteps(plan.folder, shown);
+  const { warning, steps } = restoreSteps(plan, shown);
   return [
     `map:     ${map}`,
     ...backups.map((b, i) => `${i ? "         " : "backups: "}${b}`),
@@ -253,7 +263,7 @@ export function endText(plan, map, backups, shown) {
 const esc = (s) => String(s).replace(/[&<>"']/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" })[c]);
 /** The old-to-new map as the Mac's own page, beside the new logbook: it may show paths, because it is no shared page. */
 export function mapHtml(plan, { at, backups, shown }) {
-  const { warning, steps } = restoreSteps(plan.folder, shown);
+  const { warning, steps } = restoreSteps(plan, shown);
   const rows = [
     ...plan.map.tasks.map((m) => [m.provider, m.old, m.new, m.title + (m.adopted ? " (adopted by the task it moved with)" : "")]),
     ...plan.map.gates.map((m) => [m.provider, m.old, m.new, m.open ? "open gate" : "answered gate"]),
