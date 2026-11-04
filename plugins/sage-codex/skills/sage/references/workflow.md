@@ -29,6 +29,29 @@ After compaction or restart, read current task/run records, reports, branch/head
 
 The manual logbook does not replace protected native preparation, report, review or completion receipts. Never switch to it as a workaround for a protected API denial. Preserve the chosen Codex model. Advice is optional; this workflow changes no hooks, settings or enforcement defaults.
 
+## Edit project files with explicit targets
+
+Use the native `apply_patch` tool for a permitted project edit. Give each target a literal path inside the assigned worktree. Put program text inside the patch body. Do not wrap the patch in a shell command or an interpreter.
+
+The shell guard examines program arguments and stdin as well as redirection targets. A dollar sign, backtick or pattern can make a word's location uncertain. This can refuse a benign program string. A refusal does not prove that the intended filename is protected. The guard does not interpret arbitrary programs to prove their writes safe.
+
+Before a refusal, prefer this form for an authorized implementer:
+
+```diff
+*** Begin Patch
+*** Add File: scripts/evaluate-sample.mjs
++export const caption = `SAMPLE [${label}`;
+*** Add File: tests/sample-guard.test.js
++// SAMPLE DATA: this is a disposable example.
+*** End Patch
+```
+
+After an edit, read the target files and inspect the diff. Run only the checks authorized by the brief. The patch guard still checks paths, protected folders and the agent's role. Literal patch targets grant no permission to change settings, credentials, logbooks or another task's files.
+
+If a protected action refuses, stop and report the action and refusal. Do not retry it through a shell, interpreter, CLI or another tool. Keep private payloads local. A later authorized task can establish a permitted project edit with explicit targets; it cannot override a protected denial.
+
+Fictional gate inputs check source behavior only. They do not establish which input caused an earlier refusal, or prove installed native behavior. Retain the exact input, normalized event, working folder, writer identity and executing revision when an investigation permits it.
+
 ## Review usage without a host measurement
 
 Keep actual token counts when the execution interface supplies them. A retrieval error does not make usage unavailable.

@@ -1265,6 +1265,47 @@ test("a project under the desktop app's ~/.codex/worktrees edits as usual, with 
   }
 });
 
+// T111 fixtures are classification inputs only. Never execute the shell strings.
+test("T111: literal project patch targets accept fictional program text without relaxing shell uncertainty", async (t) => {
+  const g = fixed(), child = sageChild(t, "/root/sage_implementer_t111_r1");
+  const source = 'export const caption = `SAMPLE [${label}`;';
+  const command = `node -e 'require("node:fs").writeFileSync("scripts/evaluate-sample.mjs", ${JSON.stringify(source)})'`;
+  assert.match(denied(await g.run(pre("Bash", command, child))), /writes a logbook file by its name outside the project/);
+  const edit = patch("*** Add File: scripts/evaluate-sample.mjs", `+${source}`,
+    "*** Add File: tests/sample-guard.test.js", '+// SAMPLE DATA: ../tasks.tsv and .codex/auth.json are text, not targets.');
+  assert.equal(await g.run(pre("apply_patch", edit, child)), undefined);
+  t.diagnostic(`SAMPLE ONLY, not executed: ${command}`);
+  t.diagnostic("Synthetic gate: shell refused; explicit two-file project patch passed");
+});
+
+test("T111: structured project edits preserve protected targets and read-only roles", async (t) => {
+  const g = fixed(), child = sageChild(t, "/root/sage_implementer_t111_r1");
+  for (const [path, reason] of [
+    ["../tasks.tsv", /logbook file by its name outside the project/],
+    ["../config.json", /logbook file by its name outside the project/],
+    [".codex/config.toml", /files under a \.codex folder/],
+    [".codex/auth.json", /files under a \.codex folder/],
+    [".git/config", /files under a \.git folder/],
+  ]) {
+    assert.match(denied(await g.run(pre("apply_patch", patch(`*** Add File: ${path}`, "+SAMPLE"), child))), reason, path);
+  }
+  for (const role of ["code_reviewer", "security_reviewer", "qa"]) {
+    assert.match(denied(await g.run(pre("apply_patch", patch("*** Add File: scripts/sample.mjs", "+// SAMPLE"),
+      sageChild(t, `/root/sage_${role}_t111_r2`)))), /changes no files/, role);
+  }
+  t.diagnostic("Synthetic gate: outside logbook, settings, credential path, git metadata and three read-only roles refused");
+});
+
+test("T111: shell patterns and ambiguous executable commands keep their refusals", async (t) => {
+  const g = fixed(), child = sageChild(t, "/root/sage_implementer_t111_r1");
+  for (const command of ["echo SAMPLE > ../task?.tsv", "echo SAMPLE > ../[tasks.tsv", "echo SAMPLE > $UNKNOWN/tasks.tsv",
+    'node -e \'require("node:fs").writeFileSync(process.argv[1], "SAMPLE")\' ../tasks.tsv']) {
+    assert.match(denied(await g.run(pre("Bash", command, child))) ?? "", /writes a logbook file by its name outside the project/, command);
+  }
+  assert.equal(denied(await g.run(pre("Bash", "$EDITOR codex/sample.txt", child))), UNREAD_CODEX);
+  t.diagnostic("Synthetic gate: patterns, unknown location, interpreter write and ambiguous executable refused; none executed");
+});
+
 /** A sage child's event fields: its agent_id and Codex's record of it, with its agent path. */
 const sageChild = (t, path) => ({ agent_id: "agent-9", transcript_path: record(t, { id: "019a0000-0000-7000-8000-0000000000ee", agent_path: path, source: { subagent: { thread_spawn: { depth: 1 } } } }) });
 
