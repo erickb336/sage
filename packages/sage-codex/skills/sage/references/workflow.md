@@ -52,6 +52,26 @@ If a protected action refuses, stop and report the action and refusal. Do not re
 
 Fictional gate inputs check source behavior only. They do not establish which input caused an earlier refusal, or prove installed native behavior. Retain the exact input, normalized event, working folder, writer identity and executing revision when an investigation permits it.
 
+### A managed worktree receives a protected-folder refusal
+
+Successful worktree creation and task lookup do not prove that a later patch is permitted. Stop when the native hook refuses it. Assignment and Git linkage do not override protected targets.
+
+The current source checks `.codex` segments below the detected project root, or the whole target path outside that root. Existing coverage allows ordinary files inside a detected project under `.codex/worktrees`. A linked checkout under `.codex` can still refuse when the event's working folder identifies another project root. This distinction does not establish the cause of a native refusal without its event and executing revision.
+
+The T111 evidence has two separate limits. R24 lacks the original payload and cannot establish its refusal's cause. R27 reports an actual native structured-patch refusal naming `.codex`, after managed worktree creation and task lookup succeeded. The earlier native demonstration outside `.codex` resolves neither case. Synthetic linked-worktree inputs demonstrate source behavior only.
+
+For a later task, the owner can keep the task blocked while investigating the installed behavior, or authorize a separate ordinary linked worktree. Recommend the ordinary worktree outside `.codex`, with a fresh branch and explicit owner/chief assignment. Leave the managed checkout untouched. These are proposed steps, not permission to retry an active denial:
+
+1. The owner/chief confirms the original branch's writer, status and exact head. Resolve any active or uncertain ownership first.
+2. Choose a new absolute worktree path outside `.codex`, settings, secrets and logbooks. Check its resolved parent path for symlink escapes.
+3. From the repository, run `git worktree list --porcelain` and `git branch --list <new-branch>`. Stop if the path or branch already exists.
+4. After separate authorization, run `git worktree add -b <new-branch> <absolute-new-path> <verified-head>`. Use a fresh `codex/` branch; do not force-checkout or move the managed checkout's branch.
+5. The owner/chief assigns the new path, branch, writer and allowed files in a new brief before any source edit.
+6. In that assigned checkout, verify `pwd -P`, `git status --short`, `git branch --show-current` and `git rev-parse HEAD` against the brief.
+7. Use native explicit patches only for the newly authorized scope. Stop and report any protected refusal; do not switch tools or weaken enforcement.
+
+This procedure changes no settings, credentials, logbooks or protected-path policy. It does not authorize edits to an unrelated checkout.
+
 ## Review usage without a host measurement
 
 Keep actual token counts when the execution interface supplies them. A retrieval error does not make usage unavailable.

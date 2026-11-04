@@ -1266,6 +1266,19 @@ test("a project under the desktop app's ~/.codex/worktrees edits as usual, with 
 });
 
 // T111 fixtures are classification inputs only. Never execute the shell strings.
+test("T111: linked worktree membership does not override protected codex ancestry outside the detected project root", (t) => {
+  const w = world(t);
+  const linked = join(w.dir, "home/.codex/worktrees/sample/app");
+  assert.equal(spawnSync("git", ["-C", w.project, "worktree", "add", "-qb", "sample", linked]).status, 0);
+  const child = w.child("/root/sage_implementer_t111_r3");
+  w.mode({ sage: true, autopilot: false });
+  for (const path of [join(linked, "src/sample.js"), join(linked, ".codex/config.toml"), join(linked, ".codex/auth.json")]) {
+    assert.match(denied(w.send(pre("apply_patch", patch(`*** Add File: ${path}`, "+// SAMPLE DATA"), child))) ?? "",
+      /files under a \.codex folder/, path);
+  }
+  t.diagnostic("SAMPLE ONLY: real scratch Git linkage; synthetic hook input from the main checkout. No target patch executed; not a native R27 reproduction.");
+});
+
 test("T111: literal project patch targets accept fictional program text without relaxing shell uncertainty", async (t) => {
   const g = fixed(), child = sageChild(t, "/root/sage_implementer_t111_r1");
   const source = 'export const caption = `SAMPLE [${label}`;';
