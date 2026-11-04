@@ -10,8 +10,18 @@ export const STEPS = 6;
 const DONE = ["plan saved, new logbook not built yet", "new logbook built, old logbooks not marked yet", "old logbooks marked, checkouts not linked yet", "checkouts linked, plan not removed yet"];
 const range = (ids) => (!ids.length ? "none" : ids.length === 1 ? ids[0] : `${ids[0]}–${ids.at(-1)}`);
 const plural = (n, one, many = `${one}s`) => `${n} ${n === 1 ? one : many}`;
-/** HH:MM of a saved time (UTC, as the tables keep it). */
-const clock = (at) => String(at ?? "").slice(11, 16);
+const MONTHS = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"];
+const two = (n) => String(n).padStart(2, "0");
+/**
+ * A saved time (UTC, as the tables keep it) in the Mac's own time zone, as the chat shows it (F-T640-15): its clock
+ * ("15:43"), its day ("3 Nov") and its date ("2026-11-03"). A cell that is no time gives empty text.
+ */
+export function localTime(at) {
+  const d = new Date(String(at ?? ""));
+  if (Number.isNaN(d.getTime())) return { clock: "", day: "", date: "" };
+  return { clock: `${two(d.getHours())}:${two(d.getMinutes())}`, day: `${d.getDate()} ${MONTHS[d.getMonth()]}`, date: `${d.getFullYear()}-${two(d.getMonth() + 1)}-${two(d.getDate())}` };
+}
+const clock = (at) => localTime(at).clock;
 /** The providers of the plan, in its order, each once. */
 export const providersOf = (plan) => [...new Set(plan.sources.map((s) => s.provider))];
 const by = (rows, provider) => rows.filter((r) => r.provider === provider);
@@ -28,6 +38,8 @@ export function countsOf(plan, provider) {
     gates: by(map.gates, provider).filter((m) => m.open).length,
     programs: by(map.programs, provider).length,
     standing: by(map.standing, provider).reduce((n, s) => n + s.count, 0),
+    // The lines of a later logbook's standing orders that have no number: a continuation or a note under the list (F-T640-21).
+    notes: by(map.standing, provider).reduce((n, s) => n + (s.notes ?? 0), 0),
     waits: map.waits[provider] ?? 0,
     marked: by(map.tasks, provider).length,
   };
@@ -62,18 +74,20 @@ export function previewText(plan, checks) {
     `${"next numbers".padEnd(18)}${["T", "R", "G", "PG"].map((p) => plan.next[p]).join(" · ")}`,
     "",
     "Checks",
-    ...checks.map(([mark, text, more]) => `${mark.padEnd(6)}${text}${more ? `\n      ${more}` : ""}`),
+    ...checks.map(([mark, text, ...more]) => [`${mark.padEnd(6)}${text}`, ...more.map((line) => `      ${line}`)].join("\n")),
   ];
   return lines.join("\n");
 }
 
 /** The move gate's question: its fixed first line holds the plan, and the next lines are the facts that the owner reads. */
-export function gateQuestion(plan, finished) {
+export function gateQuestion(plan, finished, others = []) {
   const open = plan.map.tasks.filter((m) => !m.adopted).length;
   return [
     `move · plan ${shortPlan(plan)}`,
     `Move the ${plan.folder.slice(0, -7)} project into one shared logbook?`,
     `${open} open tasks move with new numbers. ${finished} finished tasks stay, read-only.`,
+    // Each other checkout that the move links, by path, so that the owner can tell a clone from a fork (F-T640-6).
+    ...(others.length ? [`The move also links ${others.length === 1 ? "1 other checkout" : `${others.length} other checkouts`} of this repository to the new logbook: ${others.join("; ")}. If one of them is a separate project, answer keep.`] : []),
     "Hard to undo. No command undoes the move. Each old logbook keeps a backup copy of its task table, and I give you the steps to restore by hand.",
     "Start no work in Claude or Codex until I report the end.",
     // F-T641-16: plugins.tsv shows the last command of each provider, so a session that started before the update can still run old code.
@@ -117,16 +131,48 @@ export function changedText(asked, plan, shown) {
   return [`refused: the logbooks changed after plan ${shown}`, ...lines, "Nothing changed."].join("\n");
 }
 
-/** A move that stopped: every command of the project refuses with this, and the same command finishes it. */
+/** The project name in a plan file's name, <project>-<6 hex>.json: the folder of the new logbook, without its hex. */
+const projectOf = (file) => /^([a-z0-9-]+)-[0-9a-f]{6}\.json$/.exec(String(file).split("/").at(-1))?.[1];
+
+/**
+ * A move that stopped: every command of the project refuses with this. A plan that stopped at a step names the same
+ * command, which finishes it; a plan whose end check did not match names no command (mismatchText). A plan that cannot be
+ * read names no project, because sage cannot tell which project it moves (F-T640-22). The texts take the plan file's
+ * name for the project, so a plan's own cells print only as numbers that they are checked to be (F-T640-10).
+ */
 export function stoppedText(plan, file) {
-  if (!plan?.gate?.id || !Number.isInteger(plan.step)) return `refused: a move of this project did not finish, and its plan ${file} cannot be read. Nothing changed. Ask the user to check that file: sage never guesses a move.`;
+  if (plan === null || plan === undefined) return `refused: a move plan in the shared root cannot be read: ${file}. Sage cannot tell which project it moves, so every project of this shared root refuses. Nothing changed. Ask the user to check that file: sage never guesses a move.`;
+  const project = projectOf(file);
+  if (!project || !/^G[1-9]\d*$/.test(plan.gate?.id ?? "") || !Number.isInteger(plan.step) || plan.step < 1 || plan.step > DONE.length) return `refused: a move of this project did not finish, and its plan ${file} is not a whole plan. Nothing changed. Ask the user to check that file: sage never guesses a move.`;
+  // The new logbook is <shared>/<folder>, beside the plan's folder <shared>/moves.
+  const parts = String(file).split("/");
+  if (plan.mismatch) return mismatchText({ project, file, dir: [...parts.slice(0, -2), parts.at(-1).slice(0, -5)].join("/"), missing: Array.isArray(plan.mismatch) ? plan.mismatch : [] });
   const [built, rest] = DONE[plan.step - 1].split(", ");
   return [
-    `refused: the move of project ${plan.folder.slice(0, -7)} did not finish`,
+    `refused: the move of project ${project} did not finish`,
     `  stopped after step ${plan.step} of ${STEPS} at ${clock(plan.at)} (${built},`,
     `  ${rest})`,
     "  The plan is saved. Nothing is lost.",
     `  To finish: sage move --gate ${plan.gate.id} (the same command)`,
+  ].join("\n");
+}
+
+/**
+ * The end check did not match the plan (F-T640-11): the move ran steps 2 to 4, but the new logbook lacks a record of the
+ * plan. No command fixes this, so the text names no command: it shows what is missing, says to start no work, and gives
+ * the user's steps to set the plan aside. missing: each missing record as "<new> (was <provider> <old>)".
+ */
+export function mismatchText({ project, file, dir, missing }) {
+  const shown = missing.filter((m) => /^[\w ().-]{1,80}$/.test(String(m)));
+  return [
+    `refused: the end check of the move of project ${project} does not match the plan`,
+    ...(shown.length ? [`  missing in the new logbook: ${shown.join(", ")}`] : []),
+    "  The move ran, but the new logbook does not hold every record of the plan. Nothing was deleted: each old logbook still holds its records.",
+    `  Start no work in this project: every command of it refuses while the plan is at ${file}.`,
+    "  Running the move again does not change this. To set the plan aside, the user:",
+    `  1. compares the new logbook ${dir} with the old logbooks and the map ${dir}/move-map.html;`,
+    `  2. renames ${file} to ${file}.aside. The commands of this project then use the new logbook as it is.`,
+    "  To use the old logbooks again instead, the user follows the restore steps at the end of the map.",
   ].join("\n");
 }
 
@@ -158,7 +204,9 @@ export function startText(plan, resumed) {
  */
 export function reconciliationText(plan, found, missing) {
   const providers = providersOf(plan), wrong = [];
-  const rows = [["tasks (open)", "tasks"], ["findings (open)", "findings"], ["gates (open)", "gates"], ["programs", "programs"], ["standing orders", "standing"], ["wait links", "waits"], ["old rows marked", "marked"]].map(([label, key]) => {
+  // The row of unnumbered standing lines shows only when a later logbook has such a line (F-T640-21).
+  const notes = providers.some((p) => countsOf(plan, p).notes || found[p]?.notes) ? [["standing notes", "notes"]] : [];
+  const rows = [["tasks (open)", "tasks"], ["findings (open)", "findings"], ["gates (open)", "gates"], ["programs", "programs"], ["standing orders", "standing"], ...notes, ["wait links", "waits"], ["old rows marked", "marked"]].map(([label, key]) => {
     const pairs = providers.map((p) => [countsOf(plan, p)[key], found[p]?.[key] ?? 0]), ok = pairs.every(([a, b]) => a === b);
     if (!ok) wrong.push(label);
     return `${label.padEnd(18)}${pairs.map(([a, b], i) => `${String(a).padStart(i ? 9 : 3)}${String(b).padStart(6)}`).join("")}   ${ok ? "match" : "MISMATCH"}`;
@@ -183,7 +231,9 @@ export function restoreSteps(folder, shown) {
       "In each old logbook folder, replace tasks.tsv with tasks.before-move.tsv.",
       "In each old logbook folder, delete moved.json.",
       `In ${shown("bindings.tsv")}, delete the rows that name ${folder}.`,
-      `In ${shown("projects.tsv")}, delete the row of ${folder}. Keep its folder until you are sure.`,
+      `In ${shown("projects.tsv")}, delete the row of ${folder}.`,
+      // A folder with a dot name is not a logbook to the board or to a later move, so no task shows twice (F-T640-19).
+      `Rename the folder ${shown(folder)} to ${shown(`.${folder}.restored`)}: the board reads no folder whose name starts with a dot. Keep it until you are sure.`,
     ],
   };
 }
@@ -221,7 +271,7 @@ table{border-collapse:collapse;width:100%}th,td{border-bottom:1px solid var(--li
 input{font:inherit;padding:6px 8px;width:100%;max-width:360px;margin:8px 0}.muted{color:var(--muted)}code{overflow-wrap:anywhere}
 </style></head><body>
 <h1>The move of project ${esc(plan.folder.slice(0, -7))}</h1>
-<p>The open tasks of the old logbooks moved into the shared logbook <code>${esc(plan.folder)}</code> on ${esc(at.slice(0, 10))}. Each moved row has a new number. A finished task did not move: find it on the board under its old number.</p>
+<p>The open tasks of the old logbooks moved into the shared logbook <code>${esc(plan.folder)}</code> on ${esc(localTime(at).date)} at ${esc(localTime(at).clock)}. Each moved row has a new number. A finished task did not move: find it on the board under its old number.</p>
 <label for="find">Find an old or a new number</label><br><input id="find" type="search" placeholder="for example Codex T94">
 <table><thead><tr><th>Old</th><th>New</th><th>What</th></tr></thead><tbody>
 ${rows.map(([p, old, now, what]) => `<tr data-k="${esc(`${p} ${old} ${now}`.toLowerCase())}"><td>${esc(title(p))} ${esc(old)}</td><td><b>${esc(now)}</b></td><td>${esc(what)}</td></tr>`).join("\n")}

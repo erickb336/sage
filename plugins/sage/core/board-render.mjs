@@ -292,6 +292,8 @@ const legend = ctx => {
   return `<div class="legend">${ctx ? legendPill(false, names(0) || "Provider", "an agent at work now") + (names(1) ? legendPill(true, names(1), `the same for ${names(1)}`) : "") : ""}<span>${standIn("Dotted", "A stand-in value.")} a stand-in value: the logbook does not record the real one. On a task page, tap it or move the focus to it to see the reason.</span></div>`;
 };
 
+/** The banner's text after its first sentence, in the chat board too: the moved cards, the finished tasks and the map. */
+const movedText = item => `${item.tasks === 1 ? "1 open task has a new number" : `${item.tasks} open tasks have new numbers`}, and each card shows its old number. Finished tasks stay in Done as Old and read-only. The old-to-new map is move-map.html in the logbook folder ${item.folder}, on this Mac.`;
 function banners(model) {
   // A configured root that does not exist yet is a quiet note, not an incomplete source (F-T216-8).
   const notSetUp = model.notSetUp?.length ? `<div class="banner"><div>Not set up yet: ${model.notSetUp.map(esc).join(", ")}. The board adds a logbook when it appears.</div></div>` : "";
@@ -305,7 +307,9 @@ function banners(model) {
   const noted = model.notes?.length ? `<div class="banner warn">${ICON}<div><b>Logbook notes.</b> How the board joined the logbooks of each repository.${list(model.notes)}</div></div>` : "";
   // The logbook kept changing through 3 reads (T306, F9): the board shows its last read, and the note says so. It never hides the board.
   const changing = model.changing?.length ? `<div class="banner warn changing" role="status">${ICON}<div><b>The logbook is changing.</b> The board shows the last read. It reads again at the next change.<ul class="diag">${model.changing.map(item => `<li>${esc(item.project)} · last read ${esc(hhmm(item.at))} UTC${item.dropped ? ` · not shown, as it changed during that read: ${esc(item.dropped.join("; "))}` : ""}</li>`).join("")}</ul></div></div>` : "";
-  return `${changing}${note}${notSetUp}${model.diagnostics.length ? `<div class="banner warn">${ICON}<div><b>Incomplete sources.</b> The numbers can be low.${list(model.diagnostics)}</div></div>` : ""}${warned}${noted}`;
+  // A project that moved in the last 7 days (T640): the map page shows paths, so the board names it and its folder only.
+  const moved = (model.moved ?? []).map(item => `<div class="banner info moved" role="status"><div><b>${esc(item.project)} moved to one shared logbook on ${esc(day(item.at))} UTC.</b> ${esc(movedText(item))}</div></div>`).join("");
+  return `${changing}${moved}${note}${notSetUp}${model.diagnostics.length ? `<div class="banner warn">${ICON}<div><b>Incomplete sources.</b> The numbers can be low.${list(model.diagnostics)}</div></div>` : ""}${warned}${noted}`;
 }
 
 // Theme (bug bash R1023-4, T349): the page is dark until you choose light; a choice is kept in the browser and the head
@@ -1187,7 +1191,8 @@ export function renderBoardText(model) {
   // The count is the number of the numbered items above (n), so a pilot with a breakdown gate and another reason counts twice, as it shows.
   // The logbook kept changing through 3 reads (T306, F9): this board is its third read, which may mix two moments.
   const changing = (model.changing ?? []).map(item => `⧗ The logbook is changing: ${md(item.project)} · read at ${md(hhmm(item.at))} UTC${item.dropped ? `, without what changed during it (${md(item.dropped.join("; "))})` : ""}. The board shows that read; ask for the board again for a read with no change.`);
-  const top = block([`**sage board** · built ${md(day(model.at))} UTC`, ...changing,`🔴 ${n} needs you · ${counts.recordedAgents} agents at work${counts.inferredWork ? ` · ${counts.inferredWork} inferred PRs` : ""} · 🔁 ${counts.inReview} in review · ${counts.tasks} tasks`, standIns ? `${md("*")} A stand-in: the run does not record its provider, so the board names the logbook's source.` : ""]);
+  const moved = (model.moved ?? []).map(item => `⇢ ${md(`${item.project} moved to one shared logbook on ${day(item.at)} UTC. ${movedText(item)}`)}`);
+  const top = block([`**sage board** · built ${md(day(model.at))} UTC`, ...changing, ...moved,`🔴 ${n} needs you · ${counts.recordedAgents} agents at work${counts.inferredWork ? ` · ${counts.inferredWork} inferred PRs` : ""} · 🔁 ${counts.inReview} in review · ${counts.tasks} tasks`, standIns ? `${md("*")} A stand-in: the run does not record its provider, so the board names the logbook's source.` : ""]);
   const end = block([model.archived.length ? `Archived: ${model.archived.map(book => `${md(book.name)} (${archivedCounts(book)})`).join(", ")}` : "",
     ...model.diagnostics.map(d => `Incomplete source: ${md(d.source)}${d.project ? ` · ${md(d.project)}` : ""} · ${md(d.message)}`), ...model.warnings.map(d => `Setting ignored: ${md(d.source)} · ${md(d.project)} · ${md(d.message)}`), ...(model.notes ?? []).map(d => `Logbook note: ${md(d.source)} · ${md(d.project)} · ${md(d.message)}`)]);
   return [top, `### 🔴 Needs you\n${needs}`, programText, ...model.columns.map(section), end].filter(Boolean).join("\n\n");

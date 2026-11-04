@@ -317,7 +317,7 @@ function oldSources(directory, roots, budget, project) {
     // A folder that the board cannot search, or a name too long for the disk, refuses its own row only (F-T624-17, F-T624-23).
     try {
       const stat = named ? lstatSync(path, { throwIfNoEntry: false }) : null;
-      if (stat?.isDirectory() && !stat.isSymbolicLink() && lstatSync(join(path, "moved.json"), { throwIfNoEntry: false })?.isFile()) return [{ provider: row.provider, path, root }];
+      if (stat?.isDirectory() && !stat.isSymbolicLink() && lstatSync(join(path, "moved.json"), { throwIfNoEntry: false })?.isFile()) return [{ provider: row.provider, path, root, at: row.at }];
       project.notes.push(`sources: line ${i + 2} does not name a moved logbook of its provider under a provider root`);
     } catch (error) { project.notes.push(`sources: line ${i + 2} names a folder that the board cannot read (${error.code ?? error.message})`); }
     return [];
@@ -382,7 +382,11 @@ export function readBoardSources(sources, { now = Date.now(), logbookKey = null,
         // The finished tasks of the old logbooks stay there, read-only. Each shows once, in this project, with its provider,
         // also in the task view of this one logbook (F-T624-21).
         project.notes = [];
-        for (const old of oldSources(directory, roots, budget, project)) {
+        const olds = oldSources(directory, roots, budget, project);
+        // The time of the move, from sources.tsv: the board shows a banner for 7 days after it (T640, the design's Q5 a).
+        const movedAt = olds.map(old => old.at).filter(at => /^\d{4}-\d\d-\d\dT\d\d:\d\d:\d\d(?:\.\d+)?Z$/.test(at ?? "") && !Number.isNaN(Date.parse(at))).sort()[0];
+        if (movedAt) project.movedAt = movedAt;
+        for (const old of olds) {
           const folder = basename(old.path), key = `${old.root.id ?? `old-${old.provider}`}/${folder}`;
           if (moved.has(old.path) || result.projects.some(other => other.key === key)) { project.notes.push(`sources: ${folder} is named twice`); continue; }
           moved.add(old.path);

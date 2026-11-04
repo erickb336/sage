@@ -29,7 +29,7 @@ import { AGENT_CAPS, BREAKS, FINDING_CLASSES, HIDDEN, LINE, NAME_MAX, PRIORITIES
 import { BREAKDOWN, ENDED, GATE_ID, MET, PROGRAM_ID, TASK_ID, breakdownGate, byIds, dead, droppedBy, gateLines, lostClause, programState, progressOf, progressText, shownGraph, shownWaits, unmetWaits, waitGraph, waitWords, waitsOf, waitsWithState } from "./program-rules.mjs";
 import { OBSERVATIONS_MAX_BYTES, OBSERVATION_DATA_MAX_BYTES, validateObservation, validateObservations } from "./observations.mjs";
 import { MOVES, PLAN_MAX, checkoutGone, createSharedRoot, sharedRoot } from "./shared-root.mjs";
-import { changedText, countsOf, endText, gateQuestion, gateText, mapHtml, previewText, providersOf, reconciliationText, startText, stepText, stoppedText, title } from "./move-text.mjs";
+import { changedText, countsOf, endText, gateQuestion, gateText, localTime, mapHtml, mismatchText, previewText, providersOf, reconciliationText, startText, stepText, stoppedText, title } from "./move-text.mjs";
 import { CHIEF, chiefOnly, createChiefs, offerOf, replaceOf, replaceQuestion, writerClass } from "./chiefs.mjs";
 
 export function createStateTool({ defaultRoot, legacyRoots: namedRoots = () => [], provider, models = ["inherit"], modelDefaults = {}, usageInterfaces = [], claimStep = (task, version, chief) => `run sage claim ${task} --version ${version} --chief ${chief}`, replaceStep = (task, chief) => `run sage gate replace ${task} --to ${chief} --chief ${chief}` }) {
@@ -1831,7 +1831,6 @@ const testStop = (env, step) => {
 const shownPath = (env) => (path) => (env.HOME && path.startsWith(`${env.HOME}/`) ? `~${path.slice(env.HOME.length)}` : path);
 /** The day of the move in the heading of the moved standing orders, set when the logbook is built, so the plan does not change at midnight. */
 const DAY = "\u0000day";
-const dayOf = (at) => `${new Date(at).getUTCDate()} ${["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"][new Date(at).getUTCMonth()]}`;
 /** Keeps a table's columns, and leaves out an empty column that only some logbooks have (a moved task starts with no chief or offer). */
 const keepColumns = (table, row) => Object.fromEntries(TABLES[table].filter((c) => Object.hasOwn(row, c) && !(SPARSE[table]?.includes(c) && !row[c])).map((c) => [c, row[c]]));
 
@@ -1855,7 +1854,7 @@ function pluginRefusal(waiting, env) {
     : first.contract === null ? `refused: the ${title(first.provider)} plugin has no row in plugins.tsv; the move needs contract ${2}` : `refused: the ${title(first.provider)} plugin is at contract ${visible(first.contract)}; the move needs 2`;
   const line = (name) => {
     const row = rows.find((r) => r.provider === name);
-    return `  ${title(name).padEnd(8)}${row ? `contract ${visible(row.contract).padEnd(4)}written ${row.at.slice(0, 10)} ${row.at.slice(11, 16)}` : name === provider ? "contract 2   this session" : "no row"}`;
+    return `  ${title(name).padEnd(8)}${row ? `contract ${visible(row.contract).padEnd(4)}written ${localTime(row.at).date} ${localTime(row.at).clock}` : name === provider ? "contract 2   this session" : "no row"}`;
   };
   return [head, ...[...new Set([provider, ...rootsOf(env).map((r) => r.provider), ...rows.map((r) => r.provider)].filter(Boolean))].map(line), "Nothing changed."].join("\n");
 }
@@ -1874,7 +1873,7 @@ function movePlan(scope, env, gate) {
   });
   const named = (b, id) => `${title(b.provider)} ${id}`;
   const running = books.flatMap((b) => b.rows.runs.filter((r) => !RUN_ENDS.includes(r.status)).map((r) => ({ b, r })));
-  if (running.length) refuse([`refused: ${running.length === 1 ? "1 run is" : `${running.length} runs are`} running in this project`, ...running.map(({ b, r }) => `  ${title(b.provider).padEnd(8)}${r.id.padEnd(7)}${r.task.padEnd(6)}${r.role.padEnd(11)}started ${String(r.started).slice(11, 16)}`), "The move needs zero running runs. Nothing changed."].join("\n"));
+  if (running.length) refuse([`refused: ${running.length === 1 ? "1 run is" : `${running.length} runs are`} running in this project`, ...running.map(({ b, r }) => `  ${title(b.provider).padEnd(8)}${visible(r.id).padEnd(7)}${visible(r.task).padEnd(6)}${visible(r.role).padEnd(11)}started ${localTime(r.started).clock}`), "The move needs zero running runs. Nothing changed."].join("\n"));
   // This tool runs the move's contract, so its own provider is ready. A provider with no row may be one that the owner does not use.
   const waiting = waitingPlugins(env).filter((w) => w.provider !== provider), norow = waiting.filter((w) => w.provider && w.contract === null).map((w) => w.provider);
   const blocked = waiting.filter((w) => !norow.includes(w.provider));
@@ -1921,10 +1920,12 @@ function movePlan(scope, env, gate) {
     moving.push({ b, t });
   }
   for (const [from, to] of adopted) ids.set(from, ids.get(to));
-  const movingKeys = new Set(moving.map(({ b, t }) => `${b.i} ${t.id}`));
+  // Every old task that moves, as "<book> <id>": the moved tasks, then the adopted ones, whose rows (gates, findings, a
+  // program) move with the task that adopted them (F-T640-1, F-T640-18).
+  const rowOf = (k) => { const [i, id] = k.split(" "); return { b: books[i], t: books[i].rows.tasks.find((t) => t.id === id) }; };
   const programIds = new Map();
-  for (const b of books) for (const p of b.rows.programs.filter((p) => moving.some((m) => m.b === b && m.t.program === p.id)).sort(byIdNumber)) programIds.set(`${b.i} ${p.id}`, next("PG"));
-  for (const { b, t } of moving) if (t.program && !programIds.has(`${b.i} ${t.program}`)) refuse(`refused: ${named(b, t.id)} names the program ${visible(t.program)}, which its logbook lacks, so the move cannot map it. Nothing changed. Ask the user to fix its program cell.`);
+  for (const b of books) for (const p of b.rows.programs.filter((p) => [...ids.keys()].some((k) => rowOf(k).b === b && rowOf(k).t.program === p.id)).sort(byIdNumber)) programIds.set(`${b.i} ${p.id}`, next("PG"));
+  for (const k of ids.keys()) { const { b, t } = rowOf(k); if (t.program && !programIds.has(`${b.i} ${t.program}`)) refuse(`refused: ${named(b, t.id)} names the program ${visible(t.program)}, which its logbook lacks, so the move cannot map it. Nothing changed. Ask the user to fix its program cell.`); }
   for (const [k] of programIds) {
     const [i, id] = k.split(" "), b = books[i], p = b.rows.programs.find((x) => x.id === id);
     const state = b.rows.tasks.find((t) => t.id === p.pilot)?.state;
@@ -1932,22 +1933,28 @@ function movePlan(scope, env, gate) {
   }
   // Gates: each gate of a moved task, answered ones too (approvals and a program's gate name them), and each open gate
   // with no task. A move gate stays. The open gates take the first numbers, so the owner's new gates are in one range.
-  const gatesOf = (b) => b.rows.gates.filter((g) => !moveOf(g) && !(gate && b.dir === gate.dir && g.id === gate.id) && (g.task ? movingKeys.has(`${b.i} ${g.task}`) : !g.answer));
+  const gatesOf = (b) => b.rows.gates.filter((g) => !moveOf(g) && !(gate && b.dir === gate.dir && g.id === gate.id) && (g.task ? ids.has(`${b.i} ${g.task}`) : !g.answer));
   const gateIds = new Map(), gateRows = [];
   for (const open of [true, false]) for (const b of books) for (const g of gatesOf(b).filter((g) => !g.answer === open).sort(byIdNumber)) {
     gateIds.set(`${b.i} ${g.id}`, next("G"));
     gateRows.push({ b, g, open });
   }
-  // The open findings of each moved task: new keys of the new task, in table order; the summary names the old key.
-  const keys = new Map(), findingRows = [];
-  for (const { b, t } of moving) {
-    let n = 0;
+  // The open findings of each moved task, then of each task that it adopted: new keys of the new task, in table order;
+  // the summary names the old key.
+  const keys = new Map(), findingRows = [], seq = new Map();
+  for (const [k, id] of ids) {
+    const { b, t } = rowOf(k);
     for (const f of b.rows.findings.filter((f) => f.task === t.id && f.status === "open")) {
-      const key2 = `F-${ids.get(`${b.i} ${t.id}`)}-${++n}`;
-      keys.set(`${b.i} ${t.id} ${f.key}`, key2);
-      findingRows.push({ b, f, key: key2 });
+      seq.set(id, (seq.get(id) ?? 0) + 1);
+      keys.set(`${b.i} ${t.id} ${f.key}`, `F-${id}-${seq.get(id)}`);
+      findingRows.push({ b, f, key: `F-${id}-${seq.get(id)}` });
     }
   }
+  // The task and program ids in a moved gate's question get their new numbers, as its task cell does: a repair approval
+  // names its task, and a breakdown gate its program and tasks (F-T640-3). An id that does not move keeps its number.
+  const renumber = (b, text) => String(text).replace(/\b(?:PG|T)[1-9]\d*\b/g, (id) => (id.startsWith("PG") ? programIds : ids).get(`${b.i} ${id}`) ?? id);
+  // A task with no program takes the program of a task that it adopted, so the pilot of that program is in it.
+  const adoptedProgram = (b, t) => [...adopted].filter(([, to]) => to === `${b.i} ${t.id}`).map(([from]) => rowOf(from)).find(({ t: o }) => o.program);
   const met = [], back = [], was = [], waits = {};
   const tasks = moving.map(({ b, t }) => {
     const id = ids.get(`${b.i} ${t.id}`), on = [], metHere = [], { ids: wanted, odd } = waitsOf(t);
@@ -1970,14 +1977,13 @@ function movePlan(scope, env, gate) {
     if (from) record.from = from;
     if (!adoptionV2(record)) refuse(`refused: ${named(b, t.id)} has a round, PR or branch cell that the move cannot keep (round ${JSON.stringify(visible(t.round))}). Nothing changed. Ask the user to fix its row first.`);
     if (BACK.includes(t.state)) back.push(named(b, t.id));
-    was.push({ at: "", task: id, decision: `${id} was ${named(b, t.id)}`, why: [`the move from ${b.dir}`, `its pages stay in ${join(worktreeRoot(env), basename(b.dir), "pages", t.id)}`, metHere.length && `waits met before the move: ${metHere.join(", ")}`, BACK.includes(t.state) && `${t.state} → reviewing, because its verdicts stay in the old logbook`].filter(Boolean).join("; ") });
-    return keepColumns("tasks", { ...t, id, state: BACK.includes(t.state) ? "reviewing" : t.state, keys: roundKeys(t).map((k) => keys.get(`${b.i} ${t.id} ${k}`)).filter(Boolean).join(","), waits: on.join(","), program: t.program ? programIds.get(`${b.i} ${t.program}`) : "", approvals: list(t.approvals).map((g) => gateIds.get(`${b.i} ${g}`)).filter(Boolean).join(","), adoption: JSON.stringify(record), chief: "", offer: "" });
+    // The board shows this row, so it names the old logbook's folder, never a path of the Mac (F-T640-13).
+    was.push({ at: "", task: id, decision: `${id} was ${named(b, t.id)}`, why: [`the move from the ${title(b.provider)} logbook ${basename(b.dir)}`, `its pages stay in ${basename(b.dir)}/pages/${t.id} of the worktree root`, metHere.length && `waits met before the move: ${metHere.join(", ")}`, BACK.includes(t.state) && `${t.state} → reviewing, because its verdicts stay in the old logbook`].filter(Boolean).join("; ") });
+    const via = !t.program && adoptedProgram(b, t);
+    return keepColumns("tasks", { ...t, id, state: BACK.includes(t.state) ? "reviewing" : t.state, keys: roundKeys(t).map((k) => keys.get(`${b.i} ${t.id} ${k}`)).filter(Boolean).join(","), waits: on.join(","), program: t.program ? programIds.get(`${b.i} ${t.program}`) : via ? programIds.get(`${via.b.i} ${via.t.program}`) : "", approvals: list(t.approvals).map((g) => gateIds.get(`${b.i} ${g}`)).filter(Boolean).join(","), adoption: JSON.stringify(record), chief: "", offer: "" });
   });
   const findings = findingRows.map(({ b, f, key: k }) => keepColumns("findings", { ...f, task: ids.get(`${b.i} ${f.task}`), key: k, run: "", summary: `${f.summary} (was ${named(b, f.key)})` }));
-  const gates = gateRows.map(({ b, g }) => {
-    const pg = proposalOf(g), to = pg && programIds.get(`${b.i} ${pg}`);
-    return keepColumns("gates", { ...g, id: gateIds.get(`${b.i} ${g.id}`), task: g.task ? ids.get(`${b.i} ${g.task}`) : "", question: to ? g.question.replace(`Approve program ${pg}`, `Approve program ${to}`) : g.question });
-  });
+  const gates = gateRows.map(({ b, g }) => keepColumns("gates", { ...g, id: gateIds.get(`${b.i} ${g.id}`), task: g.task ? ids.get(`${b.i} ${g.task}`) : "", question: renumber(b, g.question) }));
   const programs = [...programIds].map(([k, id]) => {
     const [i, old] = k.split(" "), p = books[i].rows.programs.find((x) => x.id === old);
     return keepColumns("programs", { ...p, id, pilot: ids.get(`${i} ${p.pilot}`), gate: gateIds.get(`${i} ${p.gate}`) ?? "" });
@@ -1988,12 +1994,24 @@ function movePlan(scope, env, gate) {
   const texts = books.map((b) => readRegular(join(b.dir, "standing.md")) ?? "");
   let count = (texts[0].match(/^\d+\./gm) ?? []).length, standing = texts[0].trimEnd() || "# Standing orders";
   const parts = [{ provider: books[0].provider, count, first: count ? 1 : 0, last: count, base: true }];
+  // A line with no number stays where it is: under its order (a continuation) or under the heading (a note), and the end
+  // check counts it (F-T640-21). Only the logbook's own title and the fixed first sentence before the list go.
+  const intro = STANDING.split("\n")[2];
   for (const [i, b] of books.entries()) if (i) {
-    const lines = texts[i].split(/\r?\n/).map((l) => /^(\d+)\.\s*(.*)$/.exec(l)).filter(Boolean);
-    parts.push({ provider: b.provider, count: lines.length, first: count + 1, last: count + lines.length });
-    if (!lines.length) continue;
+    const kept = [], first = count + 1;
+    let orders = 0, notes = 0;
+    for (const line of texts[i].split(/\r?\n/)) {
+      const order = /^(\d+)\.\s*(.*)$/.exec(line);
+      if (order) kept.push(`${count + ++orders}. ${order[2]} (${title(b.provider)} ${order[1]})`);
+      else if (!line.trim()) { if (kept.length && kept.at(-1) !== "") kept.push(""); }
+      else if (orders || !(/^#\s/.test(line) || line.trim() === intro)) { kept.push(line); notes++; }
+    }
+    while (kept.at(-1) === "") kept.pop();
+    count += orders;
+    parts.push({ provider: b.provider, count: orders, first, last: count, ...(notes && { notes }) });
+    if (!kept.length) continue;
     const label = `${title(b.provider)}${books.filter((o) => o.provider === b.provider).length > 1 ? ` (${basename(b.dir)})` : ""}`;
-    standing += `\n\n## From the ${label} logbook (moved ${DAY}; the old ${title(b.provider)} number in brackets)\n\n${lines.map(([, n, text]) => `${++count}. ${text} (${title(b.provider)} ${n})`).join("\n")}`;
+    standing += `\n\n## From the ${label} logbook (moved ${DAY}; the old ${title(b.provider)} number in brackets)\n\n${kept.join("\n")}`;
   }
   // The owner's settings of the logbook (name, archive): the first logbook's win.
   const settings = books.map((b) => {
@@ -2030,7 +2048,9 @@ function movePlan(scope, env, gate) {
   // The checks that the preview prints: each refusal above has passed.
   const pending = books.filter((b) => hasPendingWrite(b.dir));
   const either = books.length === 1 ? "the logbook" : books.length === 2 ? "either logbook" : "any logbook";
-  const others = (p) => [...new Set(books.filter((b) => b.provider === p && b.checkout !== key).map((b) => b.checkout))].length;
+  // The other checkouts that the move links, by provider, each by its path: a clone and a fork look alike by count (F-T640-6).
+  const linked = new Set(scope.checkouts.map((c) => c.root));
+  const others = (p) => [...new Set(books.filter((b) => b.provider === p && b.checkout !== key && linked.has(b.checkout)).map((b) => b.checkout))];
   const branches = new Map();
   for (const { b, t } of moving) if (t.branch) branches.set(t.branch.toLowerCase(), [...(branches.get(t.branch.toLowerCase()) ?? []), { b, t }]);
   const checks = [
@@ -2040,10 +2060,10 @@ function movePlan(scope, env, gate) {
     ["ok", `${tried.length} folders can be written: ${[...new Set(books.map((b) => title(b.provider)))].join(", ")}, shared`],
     ...[...new Set([provider, ...rootsOf(env).map((r) => r.provider)].filter(Boolean))].map((p) => {
       const row = pluginRows(env).find((r) => r.provider === p);
-      return norow.includes(p) ? ["warn", `${title(p)} plugin: no row in plugins.tsv, so the gate asks whether you use ${title(p)} here`] : ["ok", `${title(p)} plugin: ${p === provider ? `contract ${2}` : row.contract === "unused" ? "unused" : `contract ${row.contract}`}`];
+      return norow.includes(p) ? ["warn", `${title(p)} plugin: no row in plugins.tsv, so the gate asks whether you use ${title(p)} here`] : ["ok", `${title(p)} plugin: ${p === provider ? `contract ${2}` : row.contract === "unused" ? "unused" : `contract ${visible(row.contract)}`}`];
     }),
-    ...[...new Set(books.map((b) => b.provider))].filter((p) => others(p)).map((p) => ["warn", `${others(p) === 1 ? "1 other" : `${others(p)} other`} ${title(p)} ${others(p) === 1 ? "checkout" : "checkouts"} of this repository:`, `the move links ${others(p) === 1 ? "it" : "them"} to the new logbook`]),
-    ...scope.gone.map((p) => ["note", `${shown(p)} is gone or has no first commit in common, so it gets no link`]),
+    ...[...new Set(books.map((b) => b.provider))].filter((p) => others(p).length).map((p) => { const n = others(p).length; return ["warn", `${n} other ${title(p)} ${n === 1 ? "checkout" : "checkouts"} of this repository:`, `the move links ${n === 1 ? "it" : "them"} to the new logbook:`, ...others(p).map((c) => visible(shown(c)))]; }),
+    ...scope.gone.map((p) => ["note", `${visible(shown(p))} is gone or has no first commit in common, so it gets no link`]),
     ...(back.length ? [["note", `${back.length === 1 ? "1 task" : `${back.length} tasks`} in verifying or pr-ready ${back.length === 1 ? "goes" : "go"} back to reviewing`]] : []),
     ...[...branches.values()].filter((g) => g.length > 1).map((g) => ["note", `${[...new Set(g.map(({ b }) => b.provider))].map((p) => `${title(p)} ${g.filter(({ b }) => b.provider === p).map(({ t }) => t.id).join(" and ")}`).join(" and ")} share one branch: ${g.length === 2 ? "two" : g.length} tasks`]),
     ...[...adopted].map(([from, to]) => ["note", `${named(books[from.split(" ")[0]], from.split(" ")[1])} is adopted by ${named(books[to.split(" ")[0]], to.split(" ")[1])}, so it moves with it`]),
@@ -2077,9 +2097,11 @@ function askMove(project, shown, env) {
     if (norow.length > 1) refuse(pluginRefusal(norow.map((p) => ({ provider: p, contract: null })), env));
     const [unused] = norow, used = unused && scope.sources.some((s) => s.provider === unused);
     const recommendation = !unused ? "move" : used ? "keep" : `move, and record ${title(unused)} as unused`;
-    const why = !unused ? ", because both plugins are ready and no run is running." : used ? `. This repository has ${title(unused)} checkouts, so you likely use ${title(unused)} here: update sage in ${title(unused)} first, then ask again. Choose 2 only if you never use ${title(unused)} on this project.` : `, because no ${title(unused)} logbook of this repository exists.`;
-    const lines = gateQuestion(plan, finished);
-    const g = { id, task: "", question: lines.join(LINE), options: unused ? `move|move, and record ${title(unused)} as unused|keep` : "move|keep", recommendation, default: "keep", at: now() };
+    const why = !unused ? ", because both plugins are ready and no run is running." : used ? `. This repository has ${title(unused)} checkouts, so you likely use ${title(unused)} here: update sage in ${title(unused)} first, then ask again. Choose 1 only if you never use ${title(unused)} on this project.` : `, because no ${title(unused)} logbook of this repository exists.`;
+    const path = shownPath(env), others = plan.checkouts.filter((c) => c.root !== plan.checkout).map((c) => `${[...new Set(plan.sources.filter((s) => s.checkout === c.root).map((s) => title(s.provider)))].join(" and ")} ${visible(path(c.root))}`);
+    const lines = gateQuestion(plan, finished, others);
+    // A provider with no row refuses a plain move at --gate, so the gate does not offer it (F-T640-20).
+    const g = { id, task: "", question: lines.join(LINE), options: unused ? `move, and record ${title(unused)} as unused|keep` : "move|keep", recommendation, default: "keep", at: now() };
     write(scope.own, "gates", [...read(scope.own, "gates"), g]);
     status(scope.own, true);
     mkdirSync(join(scope.shared, MOVES), { recursive: true });
@@ -2088,13 +2110,19 @@ function askMove(project, shown, env) {
   }));
 }
 
-/** --gate: the move, after the owner's answer, or the end of a move that stopped (the same command). */
+/** --gate: the move, after the owner's answer, or the end of a move that stopped (the same command, from any checkout of the move). */
 function runMove(project, gateId, env) {
   if (!GATE_ID.test(gateId ?? "")) refuse("--gate takes the move gate's id, for example --gate G104. Nothing changed.");
-  const checkout = projectRoot(resolve(project)), shared = rootOf(env), folder = folderOf(checkout), file = planFile(shared, folder);
+  const checkout = projectRoot(resolve(project)), shared = rootOf(env);
   notePlugin(env);
-  if (lstatSync(file, NO)) return finishMove(file, gateId, env);
-  const scope = moveScope(project, env);
+  // A saved plan of this project, from this checkout or from any other checkout that the move links (F-T640-2).
+  const [stoppedMove] = projectMoves(checkout, env);
+  if (stoppedMove) return finishMove(stoppedMove.file, gateId, checkout, env);
+  let scope = moveScope(project, env);
+  // The plan is made from the checkout whose logbook holds the gate, as --plan made it there: a clone gives the same plan.
+  const holder = scope.sources.find((s) => read(s.dir, "gates").some((g) => g.id === gateId && moveOf(g)));
+  if (holder && holder.checkout !== scope.key) scope = moveScope(holder.checkout, env);
+  const { folder } = scope, file = planFile(shared, folder);
   mkdirSync(shared, { recursive: true });
   return withLock(shared, () => {
     if (lstatSync(file, NO)) refuse("refused: another move of this project started just now. Nothing changed. Run the same command again.");
@@ -2123,16 +2151,26 @@ function runMove(project, gateId, env) {
   });
 }
 
-/** A saved plan: the move goes on from the step after its last one, unless an old logbook that it did not mark yet changed. */
-function finishMove(file, gateId, env) {
+/**
+ * A saved plan: the move goes on from the step after its last one, unless an old logbook that it did not mark yet changed.
+ * The plan file is only a record of the move, so its folder must be its file's name, and each old logbook and checkout that
+ * it names must be one of this repository now (F-T640-7): a planted plan writes nothing.
+ */
+function finishMove(file, gateId, checkout, env) {
   const shared = dirname(dirname(file)), shown = shownPath(env);
   // The plan is read under the shared root's lock: a move that another session finished meanwhile has no plan left.
   return withLock(shared, () => {
     let plan;
     try { plan = JSON.parse(readRegular(file, { link: false, max: PLAN_MAX }) ?? "null"); } catch { plan = undefined; }
     if (plan === null) refuse("refused: the move of this project finished just now, in another session. Nothing changed. Run the command that you need again.");
-    if (!plan?.gate?.id || !Number.isInteger(plan.step) || !Array.isArray(plan.sources)) refuse(stoppedText(null, file));
+    if (!plan?.gate?.id || !Number.isInteger(plan.step) || !Array.isArray(plan.sources) || !Array.isArray(plan.checkouts)) refuse(stoppedText(plan, file));
     if (plan.gate.id !== gateId) refuse(stoppedText(plan, file));
+    const { sources, checkouts, gone } = repositoryLogbooks(checkout, env, { moved: true });
+    const dirs = new Set(sources.map((s) => s.dir)), roots = new Set([...checkouts.map((c) => c.root), ...gone]);
+    const check = "Nothing changed. Ask the user to check that file: sage never guesses a move.";
+    if (plan.folder !== basename(file).slice(0, -5)) refuse(`refused: the plan ${file} names ${visible(String(plan.folder))}, which is not the folder of its file name. ${check}`);
+    const strange = [...plan.sources.map((s) => s?.dir).filter((d) => !dirs.has(d)), ...plan.checkouts.map((c) => c?.root).filter((r) => !roots.has(r))];
+    if (strange.length) refuse(`refused: the plan ${file} names ${visible(String(strange[0]))}, which is not a logbook or a checkout of this repository now. ${check}`);
     return finishPlan(plan, file, env, shared, shown);
   });
 }
@@ -2185,7 +2223,7 @@ function moveSteps(plan, file, env, resumed) {
       for (const t of ["runs", "ledger", "findings", "gates", "programs"]) write(temp, t, plan.rows[t] ?? []);
       write(temp, "decisions", stamp(plan.rows.decisions));
       writeIdFloors(temp, plan.sources); // under the old logbooks' locks, once for each build (F-T641-3)
-      put(join(temp, "standing.md"), plan.standing.replaceAll(DAY, dayOf(at)));
+      put(join(temp, "standing.md"), plan.standing.replaceAll(DAY, localTime(at).day));
       if (plan.config) swap(join(temp, "config.json"), JSON.stringify(plan.config, null, 2) + "\n");
       swap(join(temp, "sources.tsv"), ["provider\tpath\tat", ...plan.sources.map((s) => `${s.provider}\t${s.dir}\t${at}`)].join("\n") + "\n");
       swap(join(temp, "move-map.html"), mapHtml(plan, { at, backups, shown: (f) => shown(join(shared, f)) }));
@@ -2214,28 +2252,45 @@ function moveSteps(plan, file, env, resumed) {
   const { found, missing } = recount(plan, dir);
   const match = !missing.length && providersOf(plan).every((p) => Object.entries(countsOf(plan, p)).every(([k, v]) => found[p][k] === v));
   const recon = reconciliationText(plan, found, missing);
-  if (!match) refuse([...lines, "6/6 new logbook read again and counted", "", recon, "", `refused: the end check does not match the plan, so the plan stays at ${shown(file)}, and every command of this project refuses. Nothing more changed. Ask the user to compare the new logbook ${shown(dir)} with the plan. To keep the new logbook as it is, the user removes the plan.`].join("\n"));
+  if (!match) {
+    // The plan stays and says so: every command of the project then gives this refusal, with no command to run (F-T640-11).
+    Object.assign(plan, { mismatch: missing, at: now() });
+    swap(file, JSON.stringify(plan));
+    refuse([...lines, "6/6 new logbook read again and counted", "", recon, "", mismatchText({ project: plan.folder.slice(0, -7), file: shown(file), dir: shown(dir), missing })].join("\n"));
+  }
   unlinkSync(file);
   rmSync(askedFile(shared, plan.folder, plan.gate.id), { force: true });
   lines.push(stepText(plan, 5, null), stepText(plan, 6, null));
   return [...lines, "", recon, "", endText(plan, shown(join(dir, "move-map.html")), backups, (f) => shown(join(shared, f)))].join("\n");
 }
 
-/** The end check: the counts of the new logbook, by provider, read again from its own rows and the old logbooks' marks. */
+/**
+ * The end check: the counts of the new logbook, by provider, read again from its own rows and the old logbooks' marks.
+ * A task counts under the provider of its adoption record; a finding, a gate and a program under the provider of the
+ * logbook that it came from, as the plan counts them, also when it moved with a task of the other provider (F-T640-1).
+ * missing: each record of the plan that the new logbook lacks, as "<new> (was <provider> <old>)".
+ */
 function recount(plan, dir) {
   const tasks = read(dir, "tasks"), providerOf = new Map(tasks.map((t) => [t.id, adoptionOf(t)?.provider]));
-  const gateOf = new Map(plan.map.gates.map((m) => [m.new, m.provider]));
-  const found = Object.fromEntries(providersOf(plan).map((p) => [p, { tasks: 0, findings: 0, gates: 0, programs: 0, standing: 0, waits: 0, marked: 0 }]));
+  const from = (rows) => new Map(rows.map((m) => [m.new, m.provider]));
+  const findingOf = from(plan.map.findings), gateOf = from(plan.map.gates), programOf = from(plan.map.programs);
+  const found = Object.fromEntries(providersOf(plan).map((p) => [p, { tasks: 0, findings: 0, gates: 0, programs: 0, standing: 0, notes: 0, waits: 0, marked: 0 }]));
   const add = (p, k, n = 1) => { if (found[p]) found[p][k] += n; };
   for (const t of tasks) { add(providerOf.get(t.id), "tasks"); add(providerOf.get(t.id), "waits", waitsOf(t).ids.length); }
-  for (const f of read(dir, "findings")) if (f.status === "open") add(providerOf.get(f.task), "findings");
-  for (const g of read(dir, "gates")) if (!g.answer) add(g.task ? providerOf.get(g.task) : gateOf.get(g.id), "gates");
-  for (const p of read(dir, "programs")) add(providerOf.get(p.pilot), "programs");
-  const parts = plan.map.standing.filter((s) => s.base || s.count);
-  (readRegular(join(dir, "standing.md")) ?? "").split(/\n## From the /).forEach((text, k) => add(parts[k]?.provider, "standing", (text.match(/^\d+\./gm) ?? []).length));
+  for (const f of read(dir, "findings")) if (f.status === "open") add(findingOf.get(f.key), "findings");
+  for (const g of read(dir, "gates")) if (!g.answer) add(gateOf.get(g.id), "gates");
+  for (const p of read(dir, "programs")) add(programOf.get(p.id), "programs");
+  const parts = plan.map.standing.filter((s) => s.base || s.count || s.notes);
+  (readRegular(join(dir, "standing.md")) ?? "").split(/\n## From the /).forEach((text, k) => {
+    add(parts[k]?.provider, "standing", (text.match(/^\d+\./gm) ?? []).length);
+    if (k) add(parts[k]?.provider, "notes", text.split("\n").slice(1).filter((line) => line.trim() && !/^\d+\./.test(line)).length);
+  });
   for (const s of plan.sources) add(s.provider, "marked", rowsOf(sheetText(readRegular(join(s.dir, "tasks.tsv")) ?? "")).filter((r) => r.moved).length);
-  const have = (table, ids) => { const rows = new Set(read(dir, table).map((r) => (table === "findings" ? r.key : r.id))); return ids.filter((id) => !rows.has(id)); };
-  const missing = [...have("tasks", plan.map.tasks.filter((m) => !m.adopted).map((m) => m.new)), ...have("findings", plan.map.findings.map((m) => m.new)), ...have("gates", plan.map.gates.map((m) => m.new)), ...have("programs", plan.map.programs.map((m) => m.new))];
+  const lacking = (table, maps, key = "id") => {
+    const have = new Set(read(dir, table).map((r) => r[key]));
+    return maps.filter((m) => !have.has(m.new)).map((m) => `${m.new} (was ${title(m.provider)} ${m.old})`);
+  };
+  const missing = [...lacking("tasks", plan.map.tasks.filter((m) => !m.adopted)), ...lacking("findings", plan.map.findings, "key"), ...lacking("gates", plan.map.gates), ...lacking("programs", plan.map.programs)];
   return { found, missing };
 }
 /** The next free name beside a file that a repair moves aside, under the logbook lock: an old file stays, however fast two repairs run. */
@@ -4335,7 +4390,7 @@ function runCli(argv = process.argv.slice(2)) {
 }
 
 const { board, answerPaths } = createBoard({ BLOCKS, BRANCH, RISKS, STATES, mergeCheck, optionsOf, projectName, projectRoot, read, sageRoot, slug, storeDir, withLock });
-const { bindings, fillCommits, folderOf, link, locate, movePlans, notePlugin, pluginRows, refuseNewLogbook, repositoryLogbooks, rootOf, waitingPlugins, writeBindings, writePlugin } = createSharedRoot({ Refusal, refuse, legacyRoots: rootsOf, makeLogbook, now, projectRoot, provider, raiseCounts, readRegular, rowsOf, sageRoot, sheetText, slug, swap, visible, withLock,
+const { bindings, fillCommits, folderOf, link, locate, movePlans, notePlugin, pluginRows, projectMoves, refuseNewLogbook, repositoryLogbooks, rootOf, waitingPlugins, writeBindings, writePlugin } = createSharedRoot({ Refusal, refuse, legacyRoots: rootsOf, makeLogbook, now, projectRoot, provider, raiseCounts, readRegular, rowsOf, sageRoot, sheetText, slug, swap, visible, withLock,
   listed: (root) => known(root, undefined, undefined, true),
   enroll });
 const { chiefs, chiefRow, rowOf } = createChiefs({ now, provider, readRegular, refuse, rowsOf, sheetText, swap });

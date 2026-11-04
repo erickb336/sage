@@ -217,23 +217,25 @@ export function createSharedRoot({ Refusal, refuse, listed, legacyRoots, makeLog
     });
   }
   /**
-   * While the plan of a move exists, every command of the project refuses and names the command that finishes the move:
-   * the project's new logbook (folder), a checkout that the move links, or an old logbook that it moves (dirs).
+   * The plans of the moves of one project: those whose new logbook is one of folders, that link the checkout, or that move
+   * one of the old logbooks dirs. A plan that cannot be read counts for every project: sage cannot tell which one it moves.
    */
-  function stopped(shared, folder, checkout, dirs) {
-    for (const { file, plan } of movePlans(shared)) {
-      if (!plan || plan.folder === folder || plan.checkouts?.some((c) => c.root === checkout) || plan.sources?.some((s) => dirs.includes(s.dir))) refuse(stoppedText(plan, file));
-    }
+  const movesOf = (shared, folders, checkout, dirs) => movePlans(shared).filter(({ plan }) => !plan || folders.includes(plan.folder) || plan.checkouts?.some((c) => c.root === checkout) || plan.sources?.some((s) => dirs.includes(s.dir)));
+  /** While the plan of a move exists, every command of the project refuses and names the command that finishes the move. */
+  function stopped(shared, folders, checkout, dirs) {
+    for (const { file, plan } of movesOf(shared, folders, checkout, dirs)) refuse(stoppedText(plan, file));
   }
+  /** The move plans of a checkout's project, from this checkout or any other that the move links: the move finishes it from either (F-T640-2). */
+  const projectMoves = (checkout, env = process.env) => movesOf(rootOf(env), [folderOf(checkout)], realOf(checkout), roots(env).map((root) => join(root.path, folderOf(checkout))));
 
   /**
    * Every logbook of this repository in the provider roots, for the move: this checkout's folder in each root, and each
    * other logbook whose checkout.txt names another checkout with a first commit in common (a clone). A logbook that moved
-   * already is no source. The Claude logbooks come first, then the Codex ones, then any other provider; this checkout's
+   * already is no source, unless moved is set: a stopped move checks its plan against every logbook of the repository. The Claude logbooks come first, then the Codex ones, then any other provider; this checkout's
    * own folder first in each. checkouts: each checkout that the move links, with its first commits. A root that cannot be
    * read refuses: a logbook that the move does not see would stay behind, and its link would hide it.
    */
-  function repositoryLogbooks(checkout, env = process.env) {
+  function repositoryLogbooks(checkout, env = process.env, { moved = false } = {}) {
     const key = realOf(checkout), folder = folderOf(checkout), known = new Map();
     const commitsOf = (path) => {
       if (!known.has(path)) {
@@ -265,7 +267,7 @@ export function createSharedRoot({ Refusal, refuse, listed, legacyRoots, makeLog
         const at = told && isAbsolute(told) ? realOf(told) : undefined;
         if (name === folder) sources.push({ provider: root.provider, dir, checkout: at ?? key, own: true });
         // Another folder of this checkout (a path that reached it by another name), or of a clone with a first commit in common.
-        else if (at && !present(join(dir, "moved.json")) && (at === key || (lstatSync(at, { throwIfNoEntry: false })?.isDirectory() && shares(commitsOf(at), mine)))) sources.push({ provider: root.provider, dir, checkout: at });
+        else if (at && (moved || !present(join(dir, "moved.json"))) && (at === key || (lstatSync(at, { throwIfNoEntry: false })?.isDirectory() && shares(commitsOf(at), mine)))) sources.push({ provider: root.provider, dir, checkout: at });
       }
     }
     sources.sort((a, b) => rank(a.provider) - rank(b.provider) || (b.own ?? false) - (a.own ?? false));
@@ -283,7 +285,7 @@ export function createSharedRoot({ Refusal, refuse, listed, legacyRoots, makeLog
     const checkout = projectRoot(resolve(project)), shared = rootOf(env), rows = bindings(shared);
     const row = rows.find((r) => r.root === realOf(checkout));
     const folder = folderOf(checkout), all = roots(env);
-    stopped(shared, row?.folder ?? folder, realOf(checkout), row ? [] : all.map((root) => join(root.path, folder)));
+    stopped(shared, [row?.folder ?? folder], realOf(checkout), row ? [] : all.map((root) => join(root.path, folder)));
     // owner: the checkout of the logbook's owner row (ownerOf), whose origin is the logbook's repository (sage-pr, T634).
     if (row) return { dir: boundFolder(shared, rows, row), row, get owner() { return ownerOf(rows, row.folder)?.root; }, checkout, shared: true };
     const moved = all.map((root) => join(root.path, folder, "moved.json")).find(seen);
@@ -449,6 +451,8 @@ export function createSharedRoot({ Refusal, refuse, listed, legacyRoots, makeLog
   /** The link's work under the root's lock. See link. */
   function bind(shared, checkout, key, commits, { to }, env) {
     const rows = bindings(shared), row = rows.find((r) => r.root === key), folder = to ?? folderOf(checkout), dir = join(shared, folder);
+    // A move of this project that stopped, or of the logbook that --to names, finishes before any link (F-T640-9).
+    stopped(shared, [...new Set([folder, row?.folder, folderOf(checkout)].filter(Boolean))], key, roots(env).map((root) => join(root.path, folderOf(checkout))));
     if (row && healthy(shared, rows, row)) {
       if (to !== undefined && row.folder !== to) refuse(`${visible(checkout)} is already linked to ${row.folder}, and a checkout has one logbook. Nothing changed. Keep using ${row.folder}: no command takes a linked checkout to another logbook.`);
       return `already linked: ${join(shared, row.folder)}. Nothing changed.`;
@@ -499,5 +503,5 @@ export function createSharedRoot({ Refusal, refuse, listed, legacyRoots, makeLog
     }
   }
 
-  return { bindings, fillCommits, folderOf, link, locate, movePlans, notePlugin, pluginRows, refuseNewLogbook, repositoryLogbooks, rootOf, waitingPlugins, writeBindings, writePlugin };
+  return { bindings, fillCommits, folderOf, link, locate, movePlans, notePlugin, pluginRows, projectMoves, refuseNewLogbook, repositoryLogbooks, rootOf, waitingPlugins, writeBindings, writePlugin };
 }
