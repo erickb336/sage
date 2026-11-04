@@ -8,8 +8,8 @@ import { createStateTool, sharedRoot } from "../core/index.mjs";
  * from the real roots.
  */
 export const legacyRoots = (env) => (env.SAGE_HOME ? [env.SAGE_HOME] : [
-  join(env.CLAUDE_CONFIG_DIR ?? join(env.HOME ?? homedir(), ".claude"), "sage"),
-  join(env.CODEX_HOME ?? join(env.HOME ?? homedir(), ".codex"), "sage"),
+  { provider: "claude", path: join(env.CLAUDE_CONFIG_DIR ?? join(env.HOME ?? homedir(), ".claude"), "sage") },
+  { provider: "codex", path: join(env.CODEX_HOME ?? join(env.HOME ?? homedir(), ".codex"), "sage") },
 ]);
 
 /**

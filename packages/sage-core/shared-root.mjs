@@ -324,10 +324,13 @@ export function createSharedRoot({ Refusal, refuse, listed, legacyRoots, makeLog
    * The providers that may still write a legacy logbook without the move's rules: every provider of a root and of
    * plugins.tsv whose row is missing or below CONTRACT. A row with contract "unused" (the owner's answer in the move gate)
    * counts as ready. A root whose provider the adapter does not name cannot be checked, so it waits too, with provider
-   * null and its path. An empty list means that the move may start. A damaged plugins.tsv refuses.
+   * null and its path. An empty list means that the move may start. A damaged plugins.tsv refuses, and so do two rows for
+   * one provider: no plugin writes them (writePlugin keeps one row), so which one is true is unknown.
    */
   function waitingPlugins(env = process.env) {
-    const rows = table(rootOf(env), "plugins", PLUGINS), all = roots(env);
+    const shared = rootOf(env), rows = table(shared, "plugins", PLUGINS), all = roots(env);
+    const twice = rows.find((r, i) => rows.findIndex((o) => o.provider === r.provider) !== i);
+    if (twice) refuse(`${join(shared, "plugins.tsv")} has two rows for the provider ${JSON.stringify(visible(twice.provider))}, so sage cannot tell which plugin contract it runs. Nothing changed. Ask the user to keep one row for each provider.`);
     const names = [...new Set([...all.map((root) => root.provider), ...rows.map((r) => r.provider)].filter(Boolean))];
     const ready = (contract) => contract === "unused" || (/^[1-9]\d*$/.test(contract ?? "") && Number(contract) >= Number(CONTRACT));
     return [

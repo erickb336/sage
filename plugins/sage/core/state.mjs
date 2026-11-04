@@ -38,7 +38,11 @@ if (typeof namedRoots !== "function") throw new TypeError("legacyRoots must be a
  * Each provider's legacy logbook root, as the adapter names it: { provider, path }, or a bare path, whose provider is
  * unknown (null). The move needs the name of each old root; every other reader takes only the paths.
  */
-const rootsOf = (env) => namedRoots(env).map((root) => (typeof root === "string" ? { provider: null, path: root } : { provider: root.provider ?? null, path: root.path }));
+const rootsOf = (env) => namedRoots(env).map((root) => {
+  if (typeof root === "string") return { provider: null, path: root };
+  if (typeof root?.path !== "string") refuse(`The plugin's legacyRoots gave ${JSON.stringify(root) ?? String(root)}, but each root must be a path or { provider, path } with a path. Nothing changed. Update the sage plugin.`);
+  return { provider: root.provider ?? null, path: root.path };
+});
 const legacyRoots = (env) => rootsOf(env).map((root) => root.path);
 const MODELS = [...models];
 const USAGE_INTERFACES = usageRegistry(usageInterfaces);

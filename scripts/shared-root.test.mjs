@@ -1072,6 +1072,29 @@ test("the Claude adapter names the Claude and the Codex root (T641)", (t) => {
   assert.deepEqual(claudeLocate(w.project, w.env).old, [{ provider: "claude", dir: join(w.claudeRoot, folder) }, { provider: "codex", dir: join(w.codexRoot, folder) }]);
 });
 
+test("the Codex adapter names the Claude and the Codex root, so its waitingPlugins empties when both are at contract 2 (T641)", (t) => {
+  const w = world(t);
+  const plugins = (...rows) => {
+    mkdirSync(w.shared, { recursive: true });
+    writeFileSync(join(w.shared, "plugins.tsv"), ["provider\tcontract\tat", ...rows.map((r) => `${r}\t2026-11-03T00:00:00Z`)].join("\n") + "\n");
+  };
+  plugins("claude\t2", "codex\t2");
+  assert.deepEqual(tool.waitingPlugins(w.env), [], "both providers are at the move's contract");
+  plugins("claude\t1", "codex\t2");
+  assert.deepEqual(tool.waitingPlugins(w.env), [{ provider: "claude", contract: "1" }], "the Claude root has its name, so its row counts");
+});
+
+test("an adapter root with no path refuses with a message that names the entry (T641)", (t) => {
+  const base = realpathSync(mkdtempSync(join(tmpdir(), "sage-bad-root-")));
+  t.after(() => rmSync(base, { recursive: true, force: true }));
+  const env = { ...process.env, HOME: join(base, "home"), SAGE_HOME: join(base, "root"), SAGE_SHARED_HOME: join(base, "shared"), SAGE_TEST_PIDS: "{}" };
+  for (const [entry, shown] of [[null, "null"], [{ provider: "codex" }, '{"provider":"codex"}'], [undefined, "undefined"]]) {
+    const bad = createStateTool({ provider: "claude", defaultRoot: () => join(base, "root"), legacyRoots: () => [entry] });
+    const message = refusalOf(() => bad.waitingPlugins(env));
+    assert.equal(message, `The plugin's legacyRoots gave ${shown}, but each root must be a path or { provider, path } with a path. Nothing changed. Update the sage plugin.`);
+  }
+});
+
 test("a writer that found the old logbook and waited on its lock during the move refuses, and its next run writes the shared logbook (T641)", async (t) => {
   const w = twoRoots(t);
   w.claude("init");
@@ -1181,6 +1204,10 @@ test("waitingPlugins names each provider that is not at the move's contract, and
   assert.deepEqual(waiting(), [{ provider: "other", contract: "1" }], "a provider of plugins.tsv that no root names");
   plugins("claude\t2", "codex\tsoon");
   assert.deepEqual(waiting(), [{ provider: "codex", contract: "soon" }], "a contract that is no number and not unused");
+  for (const rows of [["claude\t2", "codex\t2", "codex\t1"], ["claude\t2", "codex\t1", "codex\t2"]]) {
+    plugins(...rows);
+    assert.throws(() => waiting(), /plugins\.tsv has two rows for the provider "codex", so sage cannot tell which plugin contract it runs\. Nothing changed\./, "two rows for one provider, in either order");
+  }
   const bare = twoRoots(t, { named: false });
   mkdirSync(bare.shared, { recursive: true });
   writeFileSync(join(bare.shared, "plugins.tsv"), "provider\tcontract\tat\nclaude\t2\tx\ncodex\t2\tx\n");
