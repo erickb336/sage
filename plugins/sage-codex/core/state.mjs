@@ -1937,10 +1937,9 @@ function movePlan(scope, env, gate) {
   // with no task. A move gate stays. The open gates take the first numbers, so the owner's new gates are in one range.
   // An open gate of a finished task would stay in its old logbook, which is read-only after the move: no one could answer
   // it, and the board would not show it (F-T640-27). So the owner answers it first.
-  for (const b of books) for (const g of b.rows.gates.filter((g) => !g.answer && g.task && !moveOf(g) && !ids.has(`${b.i} ${g.task}`))) {
-    const state = b.rows.tasks.find((t) => t.id === g.task)?.state;
-    refuse(`refused: ${named(b, visible(g.id))} is open, but its task ${visible(g.task)} ${state ? `is ${state}` : "is not in the logbook"}, and a finished task does not move, so no one could answer ${visible(g.id)} after the move. Nothing changed. Ask the owner to answer it first (sage gate answer ${visible(g.id)} --option <n>), then run the preview again.`);
-  }
+  // The refusal lists every such gate, so that the owner answers them all before the next preview (F-T640-34).
+  const stranded = books.flatMap((b) => b.rows.gates.filter((g) => !g.answer && g.task && !moveOf(g) && !ids.has(`${b.i} ${g.task}`)).map((g) => ({ b, g, state: b.rows.tasks.find((t) => t.id === g.task)?.state })));
+  if (stranded.length) refuse([`refused: ${stranded.length === 1 ? "1 open gate is" : `${stranded.length} open gates are`} of a finished task, and a finished task does not move, so no one could answer ${stranded.length === 1 ? "it" : "them"} after the move`, ...stranded.map(({ b, g, state }) => `  ${title(b.provider).padEnd(8)}${visible(g.id).padEnd(7)}${visible(g.task).padEnd(6)}${(state ? visible(state) : "not in the logbook").padEnd(11)}${visible(g.question)}`), `Nothing changed. Ask the owner to answer ${stranded.length === 1 ? "it" : "each one"} first (sage gate answer <G> --option <n>), then run the preview again.`].join("\n"));
   const gatesOf = (b) => b.rows.gates.filter((g) => !moveOf(g) && !(gate && b.dir === gate.dir && g.id === gate.id) && (g.task ? ids.has(`${b.i} ${g.task}`) : !g.answer));
   const gateIds = new Map(), gateRows = [];
   for (const open of [true, false]) for (const b of books) for (const g of gatesOf(b).filter((g) => !g.answer === open).sort(byIdNumber)) {
@@ -1954,17 +1953,23 @@ function movePlan(scope, env, gate) {
     const { b, t } = rowOf(k);
     for (const f of b.rows.findings.filter((f) => f.task === t.id && f.status === "open")) {
       seq.set(id, (seq.get(id) ?? 0) + 1);
-      keys.set(`${b.i} ${f.key}`, `F-${id}-${seq.get(id)}`);
+      keys.set(`${b.i} ${t.id} ${f.key}`, `F-${id}-${seq.get(id)}`);
       findingRows.push({ b, f, key: `F-${id}-${seq.get(id)}` });
     }
   }
   // The ids in a moved gate's question get their new numbers, as its task cell does: a repair approval names its task, a
   // breakdown gate its program and tasks (F-T640-3), and a move approval its finding (F-T640-23). A whole finding key maps
   // first, through keys, because its new number is not its old one; a finding key that does not move stays whole. Then
-  // the task and program ids. An id that does not move keeps its number.
-  const findingKeys = books.map((b) => new Set(b.rows.findings.map((f) => f.key)));
-  const renumber = (b, text) => String(text).replace(/[\w-]+/g, (word) => keys.get(`${b.i} ${word}`)
-    ?? (findingKeys[b.i].has(word) ? word : word.replace(/\b(?:PG|T)[1-9]\d*\b/g, (id) => (id.startsWith("PG") ? programIds : ids).get(`${b.i} ${id}`) ?? id)));
+  // the task and program ids. An id that does not move keeps its number. A key is unique only per task (finding add), so
+  // a key maps through the gate's own task first, then through the one task of the logbook that has it; a key that two
+  // other tasks have stays whole (F-T640-32).
+  const keyTasks = books.map((b) => b.rows.findings.reduce((m, f) => m.set(f.key, [...(m.get(f.key) ?? []), f.task]), new Map()));
+  const keyOf = (b, task, word) => {
+    const tasks = keyTasks[b.i].get(word), owner = tasks?.includes(task) ? task : tasks?.length === 1 ? tasks[0] : "";
+    return tasks && (keys.get(`${b.i} ${owner} ${word}`) ?? word);
+  };
+  const renumber = (b, task, text) => String(text).replace(/[\w-]+/g, (word) => keyOf(b, task, word)
+    || word.replace(/\b(?:PG|T)[1-9]\d*\b/g, (id) => (id.startsWith("PG") ? programIds : ids).get(`${b.i} ${id}`) ?? id));
   // A task with no program takes the program of a task that it adopted, so the pilot of that program is in it.
   const adoptedProgram = (b, t) => [...adopted].filter(([, to]) => to === `${b.i} ${t.id}`).map(([from]) => rowOf(from)).find(({ t: o }) => o.program);
   const met = [], back = [], was = [], waits = {};
@@ -1992,10 +1997,10 @@ function movePlan(scope, env, gate) {
     // The board shows this row, so it names the old logbook's folder, never a path of the Mac (F-T640-13).
     was.push({ at: "", task: id, decision: `${id} was ${named(b, t.id)}`, why: [`the move from the ${title(b.provider)} logbook ${basename(b.dir)}`, `its pages stay in ${basename(b.dir)}/pages/${t.id} of the worktree root`, metHere.length && `waits met before the move: ${metHere.join(", ")}`, BACK.includes(t.state) && `${t.state} → reviewing, because its verdicts stay in the old logbook`].filter(Boolean).join("; ") });
     const via = !t.program && adoptedProgram(b, t);
-    return keepColumns("tasks", { ...t, id, state: BACK.includes(t.state) ? "reviewing" : t.state, keys: roundKeys(t).map((k) => keys.get(`${b.i} ${k}`)).filter(Boolean).join(","), waits: on.join(","), program: t.program ? programIds.get(`${b.i} ${t.program}`) : via ? programIds.get(`${via.b.i} ${via.t.program}`) : "", approvals: list(t.approvals).map((g) => gateIds.get(`${b.i} ${g}`)).filter(Boolean).join(","), adoption: JSON.stringify(record), chief: "", offer: "" });
+    return keepColumns("tasks", { ...t, id, state: BACK.includes(t.state) ? "reviewing" : t.state, keys: roundKeys(t).map((k) => keys.get(`${b.i} ${t.id} ${k}`)).filter(Boolean).join(","), waits: on.join(","), program: t.program ? programIds.get(`${b.i} ${t.program}`) : via ? programIds.get(`${via.b.i} ${via.t.program}`) : "", approvals: list(t.approvals).map((g) => gateIds.get(`${b.i} ${g}`)).filter(Boolean).join(","), adoption: JSON.stringify(record), chief: "", offer: "" });
   });
   const findings = findingRows.map(({ b, f, key: k }) => keepColumns("findings", { ...f, task: ids.get(`${b.i} ${f.task}`), key: k, run: "", summary: `${f.summary} (was ${named(b, f.key)})` }));
-  const gates = gateRows.map(({ b, g }) => keepColumns("gates", { ...g, id: gateIds.get(`${b.i} ${g.id}`), task: g.task ? ids.get(`${b.i} ${g.task}`) : "", question: renumber(b, g.question) }));
+  const gates = gateRows.map(({ b, g }) => keepColumns("gates", { ...g, id: gateIds.get(`${b.i} ${g.id}`), task: g.task ? ids.get(`${b.i} ${g.task}`) : "", question: renumber(b, g.task, g.question) }));
   const programs = [...programIds].map(([k, id]) => {
     const [i, old] = k.split(" "), p = books[i].rows.programs.find((x) => x.id === old);
     return keepColumns("programs", { ...p, id, pilot: ids.get(`${i} ${p.pilot}`), gate: gateIds.get(`${i} ${p.gate}`) ?? "" });

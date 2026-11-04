@@ -401,7 +401,7 @@ The move gate is your act, so the move names no chief. In Codex, a `move` tool o
 | What | After the move |
 | --- | --- |
 | An open task | Moves with a new number, Claude's first, and starts unclaimed. Its priority, size, route, round, branch and PR stay: an adoption record of version 2 keeps the old task, its branch and its PR. A task in verifying, verified or pr-ready returns to reviewing. |
-| Its open findings, its gates (answered ones too), its program, its waits and its PR history | Move with new numbers, also each finding key, task or program number in a moved gate's question. A wait on a merged or concluded task counts as met. Each moved finding's summary names its old key. |
+| Its open findings, its gates (answered ones too), its program, its waits and its PR history | Move with new numbers, also each finding key (through the gate's own task first), task or program number in a moved gate's question. A wait on a merged or concluded task counts as met. Each moved finding's summary names its old key. |
 | An open gate with no task | Moves with a new number. The open gates take the first numbers. |
 | A task that a task of the other logbook adopted | Moves with the task that adopted it: its open findings, its gates and its program go to that task too. |
 | A finished task, the runs, the verdicts and the kept reports | Stay in the old logbook, read-only. The board shows each finished task with its Old label. A moved task gets fresh reviews and QA. |
@@ -421,7 +421,7 @@ For 7 days after the move, the board shows a banner that names the map page and 
 | The move also links other checkouts of the repository | The preview and the gate name each one by its path and provider. If one of them is another project (a fork), answer keep, and tell the chief which one. |
 | A folder cannot be written (for example the Claude folder from the Codex sandbox) | The preview refuses and names each folder. Ask the other provider's chief to move the project. |
 | A wait names an abandoned task, or a program's pilot is finished | The preview refuses. Change the waits, or take the open tasks out of the program, then ask again. |
-| A finished task has an open gate | The preview refuses and names the gate, because its old logbook is read-only after the move and no one could answer it there. Answer the gate, then ask again. |
+| A finished task has an open gate | The preview refuses and lists each such gate with its task, state and question, because its old logbook is read-only after the move and no one could answer it there. Answer each gate, then ask again. |
 | A logbook changed after the preview | Nothing moves. The refusal says what changed, and the chief shows a new preview and opens a new gate. |
 | The move stopped (the Mac slept) | Every command of the project, in Claude and in Codex, refuses and names the same command. The chief runs it at once, from any checkout of the move, and it goes on from the next step. If an old logbook changed before the move marked it, nothing moves, the new logbook goes aside, and the chief starts again with a new preview. |
 | A saved plan names a folder, an old logbook or a checkout that is not this repository's, or no old logbook that holds its answered move gate | The move refuses, and it writes nothing. Ask the user to check the plan file. |

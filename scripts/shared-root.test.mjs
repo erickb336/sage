@@ -1895,9 +1895,48 @@ test("an open gate of a finished task refuses the preview, because no one could 
   // An open gate of T1, which merged after the gate was asked.
   const row = { id: "G9", task: "T1", question: "Still want the docs?", options: "yes|no", recommendation: "yes", default: "no", answer: "", at: "2026-11-03T00:00:00Z" };
   rewrite(join(w.claudeDir, "gates.tsv"), (text) => `${text.trimEnd()}\n${text.split("\n")[0].split("\t").map((c) => row[c] ?? "").join("\t")}\n`);
-  assert.equal(refusalOf(() => w.claude("move", "--preview")), "sage: refused: Claude G9 is open, but its task T1 is merged, and a finished task does not move, so no one could answer G9 after the move. Nothing changed. Ask the owner to answer it first (sage gate answer G9 --option <n>), then run the preview again.");
+  assert.equal(refusalOf(() => w.claude("move", "--preview")), [
+    "sage: refused: 1 open gate is of a finished task, and a finished task does not move, so no one could answer it after the move",
+    "  Claude  G9     T1    merged     Still want the docs?",
+    "Nothing changed. Ask the owner to answer it first (sage gate answer <G> --option <n>), then run the preview again.",
+  ].join("\n"));
   w.claude("gate", "answer", "G9", "--option", "2");
   assert.match(w.claude("move", "--preview"), /^Move preview · /, "an answered gate of a finished task stays, and the move goes on");
+});
+
+test("the refusal lists every open gate of a finished task, each with its task, state and question (F-T640-34)", (t) => {
+  const w = moveWorld(t);
+  const gateRow = (dir, row) => rewrite(join(dir, "gates.tsv"), (text) => `${text.trimEnd()}\n${text.split("\n")[0].split("\t").map((c) => row[c] ?? "").join("\t")}\n`);
+  gateRow(w.claudeDir, { id: "G9", task: "T1", question: "Still want the docs?", options: "yes|no", recommendation: "yes", default: "no", answer: "", at: "2026-11-03T00:00:00Z" });
+  gateRow(w.codexDir, { id: "G4", task: "T2", question: "Keep the\u001b[2Jold flag?", options: "yes|no", recommendation: "yes", default: "no", answer: "", at: "2026-11-03T00:00:00Z" });
+  assert.equal(refusalOf(() => w.claude("move", "--preview")), [
+    "sage: refused: 2 open gates are of a finished task, and a finished task does not move, so no one could answer them after the move",
+    "  Claude  G9     T1    merged     Still want the docs?",
+    "  Codex   G4     T2    merged     Keep the\\x1b[2Jold flag?",
+    "Nothing changed. Ask the owner to answer each one first (sage gate answer <G> --option <n>), then run the preview again.",
+  ].join("\n"));
+});
+
+test("two tasks with the same finding key keep their own findings: round keys map by task, and a gate's key through its own task (F-T640-32)", (t) => {
+  const w = moveWorld(t);
+  w.claude("finding", "add", "T2", "--source", "sage", "--severity", "medium", "--summary", "T2 own F1", "--key", "F1");
+  w.claude("finding", "add", "T3", "--source", "sage", "--severity", "medium", "--summary", "T3 own F1", "--key", "F1");
+  rewrite(join(w.claudeDir, "tasks.tsv"), (text) => {
+    const [head, ...lines] = text.trimEnd().split("\n"), col = head.split("\t").indexOf("keys");
+    return [head, ...lines.map((l) => { const c = l.split("\t"); if (c[0] === "T2" || c[0] === "T3") c[col] = "F1"; return c.join("\t"); })].join("\n") + "\n";
+  });
+  w.claude("gate", "add", "T2", "--question", "Move F1 to a follow-up task?", "--options", "move|keep", "--recommend", "move");
+  w.claude("gate", "add", "T3", "--question", "Fix F1 in T3 now?", "--options", "fix|wait", "--recommend", "fix");
+  // An open gate with no task: a key of one task maps, and a key that two tasks have stays whole.
+  const row = { id: "G9", task: "", question: "F-T2-1 first, or F1?", options: "first|F1", recommendation: "first", default: "first", answer: "", at: "2026-11-03T00:00:00Z" };
+  rewrite(join(w.claudeDir, "gates.tsv"), (text) => `${text.trimEnd()}\n${text.split("\n")[0].split("\t").map((c) => row[c] ?? "").join("\t")}\n`);
+  w.claude("move", "--gate", w.ask().id);
+  const dir = join(w.shared, w.folder()), tasks = rowsIn(join(dir, "tasks.tsv")), gates = rowsIn(join(dir, "gates.tsv"));
+  assert.deepEqual(rowsIn(join(dir, "findings.tsv")).map((f) => [f.task, f.key, f.summary]), [["T4", "F-T4-1", "a loose end (was Claude F-T2-1)"], ["T4", "F-T4-2", "T2 own F1 (was Claude F1)"], ["T5", "F-T5-1", "T3 own F1 (was Claude F1)"]]);
+  assert.deepEqual(tasks.filter((x) => x.keys).map((x) => [x.id, x.keys]), [["T4", "F-T4-2"], ["T5", "F-T5-1"]], "each task's round keys name its own finding");
+  assert.equal(gates.find((g) => g.options === "move|keep").question, "Move F-T4-2 to a follow-up task?", "T2's gate names T2's finding");
+  assert.equal(gates.find((g) => g.options === "fix|wait").question, "Fix F-T5-1 in T5 now?", "T3's gate names T3's finding");
+  assert.equal(gates.find((g) => g.options === "first|F1").question, "F-T4-1 first, or F1?");
 });
 
 test("a later logbook's own heading before its first order stays, and the end check counts it (F-T640-31)", (t) => {
