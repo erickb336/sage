@@ -60,7 +60,10 @@ import { closeSync, existsSync, mkdirSync, openSync, readdirSync, readSync, real
 import { homedir } from "node:os";
 import { basename, dirname, isAbsolute, join, relative, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
-import { chiefEditDenied, commandWrites, createCommandPolicy, createPushPolicy, gitInternalPath, LOGBOOK_FILES, partNames, PR, programName, programsRun, pullRequestHead, readModeFile, roleEditDenied, sharedRoot, shellCommands, shellWriteEvidence, switchModes, TEAM } from "sage-core";
+import { chiefEditDenied, commandWrites as knownCommandWrites, createCommandPolicy, createPushPolicy, gitInternalPath, LOGBOOK_FILES, partNames, PR, programName, programsRun, pullRequestHead, readModeFile, roleEditDenied, sharedRoot, shellCommands, shellWriteEvidence, shellExecutionUncertain, switchModes, TEAM } from "sage-core";
+
+// Codex treats executable stdin conservatively without changing other callers' known-write classification.
+const commandWrites = (text, cwd) => knownCommandWrites(text, cwd) || shellExecutionUncertain(text, cwd);
 import { tool } from "../skills/sage/sage.mjs";
 import { verificationOptions } from "../skills/sage/verify-install.mjs";
 import { patchPaths, readState, stateKey } from "./principles-hook.mjs";
@@ -819,7 +822,9 @@ export async function gate(input, { mode = readMode, check = checkMerge, env = p
   if (parsedWrites?.uncertain) return deny("sage: the shell write target or its folder is uncertain. Use a literal target in the assigned project");
   const now = mode(f, env);
   if (!now.sage) return undefined; // outside sage mode the gate does not judge pushes or merges, as in the Claude hook
-  if (writeEvidence?.writes.some(({ word, dir }) => gitInternalPath(resolve(dir, word))))
+  if (writeEvidence?.writes.some(({ word, dir }) => gitInternalPath(resolve(dir, word))) ||
+    (shellExecutionUncertain(f.command, f.cwd) && (gitInternalPath(f.cwd) ||
+      shellCommands(f.command).some(c => c.words.some(gitInternalPath)))))
     return deny("sage: this command writes a file under a .git folder, where git keeps its hooks and settings, so sage mode refuses it. Ask the user");
   if (writeEvidence ? namesReference(writeEvidence.writes, namesLogbookFile) : commandWrites(f.command, f.cwd) && namesLogbookFile(f.command, env, f.cwd)) return deny(LOGBOOK_FILE);
   const gh = ghProblem(f.command, f.cwd, env);

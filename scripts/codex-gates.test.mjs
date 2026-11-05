@@ -1305,6 +1305,21 @@ test("T114: source redirects do not inherit protected reader inputs or literal b
     sageChild(t, "/root/sage_code_reviewer_t1_r2")))), RO("code-reviewer"));
 });
 
+test("F-T114-3: Codex keeps executable stdin checks for protected writes and read-only roles", async t => {
+  const g = fixed(), implementer = sageChild(t, "/root/sage_implementer_t1_r1");
+  const reviewer = sageChild(t, "/root/sage_code_reviewer_t1_r2");
+  for (const command of [
+    "bash <<'EOF'\necho x > .codex/config.toml\nEOF",
+    "python3 - <<'EOF'\nopen('.codex/config.toml', 'w').write('x')\nEOF",
+  ]) assert.match(denied(await g.run(pre("Bash", command, implementer))), /^sage: no agent changes files under a \.codex folder/);
+  assert.equal(denied(await g.run(pre("Bash", "bash <<'EOF'\ngrep -n 'merge' *.md\nEOF", reviewer))), RO("code-reviewer"));
+  assert.equal(await g.run(pre("Bash", "cat <<'EOF'\nliteral\nEOF", reviewer)), undefined);
+  for (const [command, cwd] of [
+    ["python3 - <<'EOF'\nprint('fixture')\nEOF", `${CWD}/.git/hooks`],
+    ["python3 - .git/hooks/pre-commit <<'EOF'\nprint('fixture')\nEOF", CWD],
+  ]) assert.match(denied(await g.run(pre("Bash", command, { ...implementer, cwd }))), /writes a file under a \.git folder/);
+});
+
 test("F-T114-2: expanding input redirects retain protected read checks", async t => {
   const g = fixed(), child = sageChild(t, "/root/sage_implementer_t1_r1");
   // These strings go only to the gate. No shell executes them or reads a session file.

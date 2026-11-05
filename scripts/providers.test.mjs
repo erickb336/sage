@@ -805,6 +805,29 @@ test("check rejects a hook change made only in the generated Claude plugin", (t)
   assert.equal(current.status, 0, current.stderr);
 });
 
+test("F-T114-3: shared write classification keeps executable stdin separate from known writes", async t => {
+  for (const provider of ["claude", "codex"]) {
+    const f = isolated(t, provider);
+    const { commandWrites, shellWriteEvidence, shellExecutionUncertain } = await import(pathToFileURL(join(f.plugin, "core/index.mjs")));
+    for (const command of [
+      "bash <<'EOF'\ngrep -n 'merge' *.md\nEOF",
+      "python3 - <<'EOF'\nimport subprocess\nsubprocess.run([\"gh\", \"pr\", \"merge\", \"41\"])\nEOF",
+      "cat script.txt | sh",
+    ]) {
+      assert.equal(commandWrites(command, f.dir), false, `${provider}: ${command}`);
+      assert.equal(shellExecutionUncertain(command, f.dir), true, `${provider}: executable stdin`);
+      assert.equal(shellWriteEvidence(command, f.dir, ""), undefined, "executable input is not proven reader data");
+    }
+    for (const command of ["cat <<'EOF' > src/a.mjs\nliteral\nEOF", "bash -c 'echo x > out'", "cat < input > output"])
+      assert.equal(commandWrites(command, f.dir), true, `${provider}: ${command}`);
+    assert.equal(shellExecutionUncertain("cat <<'EOF' > src/a.mjs\nliteral\nEOF", f.dir), false);
+    assert.deepEqual(shellWriteEvidence("cat < input > output", f.dir, ""), {
+      reads: [{ word: "cat", dir: f.dir }, { word: "input", dir: f.dir }],
+      writes: [{ word: "output", dir: f.dir }],
+    });
+  }
+});
+
 test("F-T114-2: shared write evidence preserves redirect expansion in both isolated bundles", async t => {
   for (const provider of ["claude", "codex"]) {
     const f = isolated(t, provider);

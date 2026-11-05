@@ -96,13 +96,22 @@ export function commandWrites(text, cwd) {
   try {
     const commands = shellCommands(text);
     if (commands.some(writesIn)) return true;
-    if (commands.some(c => c.bodies.length) && commands.some(c => c.grouped || REDEFINES.test(c.words[0] ?? ""))) return true;
     const evidence = programsRun(text, cwd, undefined, { contextEvidence: true, redirectParts: true });
-    if (commands.some(c => c.bodies.length) && evidence.programs.some(p => p.shellFunction || p.resolvedDeclaration)) return true;
-    return evidence.redirects.some(toFile) || evidence.programs.some(entry => readerDispatch(entry) || outputDispatchWrites(entry) || executesStdin(entry));
+    return evidence.redirects.some(toFile) || evidence.programs.some(entry => readerDispatch(entry) || outputDispatchWrites(entry));
   } catch {
     return true;
   }
+}
+
+/** Executable stdin and redefined heredoc consumers need the caller's conservative execution policy, not a known-write verdict. */
+export function shellExecutionUncertain(text, cwd) {
+  try {
+    const commands = shellCommands(text);
+    const evidence = programsRun(text, cwd, undefined, { contextEvidence: true, redirectParts: true });
+    return evidence.programs.some(executesStdin) || (commands.some(c => c.bodies.length) &&
+      (commands.some(c => c.grouped || REDEFINES.test(c.words[0] ?? "")) ||
+        evidence.programs.some(p => p.shellFunction || p.resolvedDeclaration)));
+  } catch { return true; }
 }
 
 /** A word that opens or closes shell control flow: such a line is not a plain list of parts. */

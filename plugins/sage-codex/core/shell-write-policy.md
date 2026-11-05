@@ -4,6 +4,10 @@
 that can run another program. It parses text without executing it. Non-text or
 unreadable input counts as a write form.
 
+`shellExecutionUncertain(text, cwd)` identifies executable stdin and uncertain
+heredoc consumers. Codex combines this with known writes for its conservative
+gate checks. Other callers keep their own execution rules and refusal reasons.
+
 Executable-name checks ignore case and a trailing `.exe`, using the shared
 normalizer. Reader-option parsing keeps the original arguments and option case.
 
