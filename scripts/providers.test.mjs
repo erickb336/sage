@@ -805,6 +805,27 @@ test("check rejects a hook change made only in the generated Claude plugin", (t)
   assert.equal(current.status, 0, current.stderr);
 });
 
+test("F-T114-2: shared write evidence preserves redirect expansion in both isolated bundles", async t => {
+  for (const provider of ["claude", "codex"]) {
+    const f = isolated(t, provider);
+    const { shellWriteEvidence } = await import(pathToFileURL(join(f.plugin, "core/index.mjs")));
+    for (const target of ["~/.codex/sessions/private.jsonl", "$HOME/.codex/sage/private.json",
+      '"$HOME/.codex/sessions/private.jsonl"', "${HOME}/.codex/sage/private.json", "input*", "$(printf input)"]) {
+      assert.equal(shellWriteEvidence(`cat < ${target} > src/a.mjs`, f.dir, ""), undefined, `${provider}: ${target}`);
+    }
+    for (const target of ["'.codex/AGENTS.md'", "\".codex/AGENTS.md\""]) {
+      assert.deepEqual(shellWriteEvidence(`cat < ${target} > src/a.mjs`, f.dir, ""), {
+        reads: [{ word: "cat", dir: f.dir }, { word: ".codex/AGENTS.md", dir: f.dir }],
+        writes: [{ word: "src/a.mjs", dir: f.dir }],
+      }, provider);
+    }
+    assert.deepEqual(shellWriteEvidence("cat < '$HOME/input*' > src/a.mjs", f.dir, ""), {
+      reads: [{ word: "cat", dir: f.dir }, { word: "$HOME/input*", dir: f.dir }],
+      writes: [{ word: "src/a.mjs", dir: f.dir }],
+    }, provider);
+  }
+});
+
 test("shared command extraction parses executable text in both isolated bundles", async t => {
   for (const provider of ["claude", "codex"]) {
     const f = isolated(t, provider);

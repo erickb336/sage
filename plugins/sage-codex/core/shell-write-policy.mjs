@@ -135,7 +135,7 @@ export function shellWriteEvidence(text, cwd, path) {
     if (writes.some(r => r.uncertainDirectory || /[$`*?\[\]{}~!]/.test(r.target))) return { uncertain: true };
     if (!commands.length || commands.some(c => c.host || c.grouped || FLOW_WORD.test(c.words[0] ?? "") ||
       REDEFINES.test(c.words[0] ?? "") || c.syntax.some(s => s.assignment) ||
-      c.wordLiterals.some(literal => !literal) || c.bodyLiterals.some(literal => !literal) ||
+      c.wordLiterals.some(literal => !literal) || c.bodyLiterals.some(literal => !literal) || c.redirectLiterals.some(literal => !literal) ||
       (c.words.length && !plainReader(c, cwd) && !/^(?:cd|pushd)$/.test(c.words[0])) ||
       (c.words[0] === "printf" && (c.words.slice(1).some(word => /^-v/.test(word)) ||
         /%[^%]*n/.test(c.words[c.words[1] === "--" ? 2 : 1] ?? ""))))) return undefined;

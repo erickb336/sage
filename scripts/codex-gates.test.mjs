@@ -1305,6 +1305,20 @@ test("T114: source redirects do not inherit protected reader inputs or literal b
     sageChild(t, "/root/sage_code_reviewer_t1_r2")))), RO("code-reviewer"));
 });
 
+test("F-T114-2: expanding input redirects retain protected read checks", async t => {
+  const g = fixed(), child = sageChild(t, "/root/sage_implementer_t1_r1");
+  // These strings go only to the gate. No shell executes them or reads a session file.
+  for (const target of ["~/.codex/sessions/private.jsonl", "$HOME/.codex/sessions/private.jsonl",
+    "~/.codex/sage/private.json", "$HOME/.codex/sage/private.json"]) {
+    await t.test(target, async () => {
+      for (const suffix of ["", " > src/a.mjs", " | head -n 1 > src/a.mjs"]) {
+        const command = `cat < ${target}${suffix}`;
+        assert.equal(typeof denied(await g.run(pre("Bash", command, child))), "string", command);
+      }
+    });
+  }
+});
+
 test("T114: shared parser proves literal heredoc data without trusting expanding input", async () => {
   const { shellCommands, shellWriteEvidence } = await import("../packages/sage-core/index.mjs");
   const body = '.codex/config.toml ${value} `x` [';

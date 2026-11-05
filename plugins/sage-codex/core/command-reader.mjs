@@ -799,7 +799,7 @@ function program(word, dir, path, uncertain = false) {
  * commands of its own, whose host is the command and word they land in (index -1: a heredoc; quoted: true inside double
  * quotes, where the shell does not split the result), and so does a process substitution, <( ) or >( ). Throws when it cannot read the line: an open quote, substitution, heredoc, "(" or case,
  * or a ")" with no "(". The hook's rules then refuse a line that names what they guard (fail closed).
- * With provenance, wordLiterals and bodyLiterals identify data without shell expansion; redirectParts separates each
+ * With provenance, wordLiterals, bodyLiterals and redirectLiterals identify data without shell expansion; redirectParts separates each
  * operator from its target. A quoted heredoc is literal even when its body contains shell syntax.
  */
 const FLOWS = new WeakMap();
@@ -814,6 +814,7 @@ export function shellCommands(src, { provenance = false } = {}) {
     const context = COMMAND_CONTEXT.get(command);
     command.wordLiterals = context.wordLiterals;
     command.bodyLiterals = context.bodyLiterals;
+    command.redirectLiterals = context.redirectLiterals;
     command.redirectParts = REDIRECT_PARTS.get(command.redirects);
   }
   return out;
@@ -831,7 +832,7 @@ function readCommands(src, i, close, out, host, flow) {
   };
   const fresh = () => {
     const command = { words: [], syntax: [], bodies: [], host, piped: false, grouped: false, writes: false, redirects: [], heredoc: false };
-    COMMAND_CONTEXT.set(command, { children: [], rawWords: [], wordLiterals: [], bodyLiterals: [] });
+    COMMAND_CONTEXT.set(command, { children: [], rawWords: [], wordLiterals: [], bodyLiterals: [], redirectLiterals: [] });
     REDIRECT_PARTS.set(command.redirects, []);
     return command;
   };
@@ -853,6 +854,7 @@ function readCommands(src, i, close, out, host, flow) {
     else if (target) {
       cmd.redirects.push(target + word);
       REDIRECT_PARTS.get(cmd.redirects).push({ operator: target, target: word });
+      COMMAND_CONTEXT.get(cmd).redirectLiterals.push(literal);
     }
     else {
       if (!quoted && !cmd.words.length && /^(?:if|for|while|until|select|case)$/.test(word)) openScope("opaque");
