@@ -1,6 +1,7 @@
 import "./test-env.mjs"; // first: no variable of the developer's shell changes a result
 import assert from "node:assert/strict";
 import { spawnSync } from "node:child_process";
+import { randomUUID } from "node:crypto";
 import { appendFileSync, chmodSync, cpSync, existsSync, lstatSync, linkSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, realpathSync, rmSync, statSync, symlinkSync, truncateSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -253,14 +254,16 @@ test("the approval request of the verified merge is allowed; every other request
 });
 
 /** A git checkout on the task's branch, a sage home and a fake gh that answers gh pr view and logs every call. */
-function world(t, { at = "project" } = {}) {
+function world(t, { at = "project", commitDate } = {}) {
   const dir = realpathSync(mkdtempSync(join(tmpdir(), "sage-codex-gate-")));
   t.after(() => rmSync(dir, { recursive: true, force: true }));
   const project = join(dir, at), bin = join(dir, "bin");
   mkdirSync(bin);
   mkdirSync(project, { recursive: true });
   spawnSync("git", ["init", "-q", "-b", "sage/t1", project]);
-  spawnSync("git", ["-C", project, "-c", "user.name=t", "-c", "user.email=t@t", "commit", "-q", "--allow-empty", "-m", "start"]);
+  const gitEnv = { ...process.env, ...(commitDate ? { GIT_AUTHOR_DATE: commitDate, GIT_COMMITTER_DATE: commitDate } : {}) };
+  // Shared logbooks recognize projects by their first commits. Independent fixtures must not look like clones.
+  assert.equal(spawnSync("git", ["-C", project, "-c", "user.name=t", "-c", "user.email=t@t", "commit", "-q", "--allow-empty", "-m", `start ${randomUUID()}`], { env: gitEnv }).status, 0);
   // GitHub's default branch (T536): the text of default-branch in the world's folder, main when there is none, and a failed call for "fail".
   writeFileSync(join(bin, "gh"), `#!/bin/sh\necho "$@" >> "${dir}/gh-calls.log"\nif [ "$1" = api ] && [ "$6" = .default_branch ]; then d=main; [ -f "${dir}/default-branch" ] && d=$(cat "${dir}/default-branch"); [ "$d" = fail ] && exit 1; echo "$d"; exit 0; fi\n[ "$1 $2" = "pr view" ] && printf '{"headRefName":"sage/t1","isCrossRepository":false}'\nexit 0\n`);
   chmodSync(join(bin, "gh"), 0o755);
@@ -295,6 +298,17 @@ function world(t, { at = "project" } = {}) {
   };
   return { dir, project, env, sage, mode, send, typed, child, transcript };
 }
+
+test("T455: independent gate fixtures initialize together while a clone still needs a link decision", t => {
+  const options = { commitDate: "2000-01-01T00:00:00Z" };
+  const first = world(t, options), second = world(t, options);
+  codexTool.sage(["link", "--separate", "--project", first.project], first.env);
+  const next = second.sage("init");
+  assert.equal(next.status, 0, next.stderr);
+  const clone = join(first.dir, "clone");
+  assert.equal(spawnSync("git", ["clone", "-q", first.project, clone], { env: first.env }).status, 0);
+  assert.throws(() => codexTool.sage(["init", "--project", clone], first.env), /It has the same first commit/);
+});
 
 test("the hook process reads the mode file and the ledger: a verified merge passes and its request is allowed", (t) => {
   const w = world(t);
