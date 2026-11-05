@@ -1,17 +1,19 @@
 #!/usr/bin/env node
 // Codex SessionStart hook: one short sage status at the start of a session, for the owner (systemMessage) and the
-// model (additionalContext). It reads files only and never blocks the session. One script for each event, after
+// model (additionalContext). Startup and resume reset autopilot before status; the hook never blocks the session.
+// One script for each event, after
 // oh-my-codex (MIT, github.com/Yeachan-Heo/oh-my-codex).
 import { readFileSync, realpathSync } from "node:fs";
 import { homedir } from "node:os";
 import { basename, dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { PHRASES, readModeFile } from "sage-core";
-import { readState, stateKey } from "./principles-hook.mjs";
+import { privateDirectory, readState, saveState, stateKey } from "./principles-hook.mjs";
 import { sessionMeta } from "./report-gate.mjs";
 import { modeDirectory, TESTED_CODEX } from "./sage-codex-hook.mjs";
 
 const ON_PHRASE = Object.keys(PHRASES).find((phrase) => PHRASES[phrase].sage === true);
+const RESET_UNAVAILABLE = "sage: autopilot reset is unavailable. The hook could not confirm the saved mode. This warning does not enforce a landing restriction. Check the session identity and mode file before using autopilot.";
 
 const readJson = (path) => JSON.parse(readFileSync(path, "utf8"));
 const minor = (version) => /^(\d+)\.(\d+)/.exec(version)?.slice(1).map(Number);
@@ -55,13 +57,30 @@ function sageOn(input, env) {
   try { return readModeFile(readState, join(modeDirectory(env), `${stateKey(input)}.json`)).state.sage === true; } catch { return false; }
 }
 
+/** Reset only autopilot at startup/resume. Keep damaged state intact and report any reset failure honestly. */
+function resetAutopilot(input, env) {
+  if (input.source !== "startup" && input.source !== "resume") return undefined;
+  if (typeof input.session_id !== "string" || !input.session_id || "agent_id" in input) return RESET_UNAVAILABLE;
+  try {
+    const dir = modeDirectory(env);
+    privateDirectory(dir);
+    const file = join(dir, `${stateKey(input)}.json`);
+    const { state, damaged } = readModeFile(readState, file);
+    if (damaged) return RESET_UNAVAILABLE;
+    if (state.autopilot === true) saveState(file, { ...state, autopilot: false });
+  } catch { return RESET_UNAVAILABLE; }
+  return undefined;
+}
+
 /**
  * The hook's output JSON for one SessionStart input, or undefined for any other event. The chief always gets the
- * status. The user gets a warning (a systemMessage) only for a limit: a sage hook without a trust record, or a Codex
- * outside the tested range.
+ * status. The user gets a warning (a systemMessage) for a failed reset, a sage hook without a trust record, or a
+ * Codex outside the tested range.
  */
 export function sessionStatus(input, { pluginRoot, codexHome, env = process.env }) {
   if (input?.hook_event_name !== "SessionStart") return undefined;
+  // One ordered handler: finish the reset before reading or constructing any startup/resume status.
+  const resetWarning = resetAutopilot(input, env);
   const plugin = readJson(join(pluginRoot, ".codex-plugin/plugin.json")).version;
   const version = codexVersion(input.transcript_path);
   const keys = hookKeys(pluginRoot);
@@ -69,7 +88,7 @@ export function sessionStatus(input, { pluginRoot, codexHome, env = process.env 
   const [low, high] = TESTED_CODEX.map(minor);
   const at = version && minor(version);
   const inRange = at && (at[0] - low[0] || at[1] - low[1]) >= 0 && (at[0] - high[0] || at[1] - high[1]) <= 0;
-  const limits = [];
+  const limits = resetWarning ? [resetWarning] : [];
   if (trusted < keys.length) limits.push(`sage: ${keys.length - trusted} of the ${keys.length} sage hooks ${keys.length - trusted === 1 ? "is" : "are"} not trusted yet, so some sage rules do not run. To trust them, type /hooks in the Codex CLI.`);
   if (!inRange) limits.push(`sage: ${version ? `this is Codex ${version}` : "the hook could not read the Codex version"}, and sage is tested only with Codex ${TESTED_CODEX.join(" to ")}. Some sage rules may not run.`);
   // Codex trusts a plugin hook only when its record matches the hash of the hook and of the plugin's files. Codex
