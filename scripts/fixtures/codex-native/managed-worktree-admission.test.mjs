@@ -1,4 +1,4 @@
-import "../../../scripts/test-env.mjs";
+import "../../test-env.mjs";
 import assert from "node:assert/strict";
 import { execFileSync } from "node:child_process";
 import fs from "node:fs";
