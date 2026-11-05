@@ -21,11 +21,14 @@ export function managedPatchPath(path, { cwd, env, pluginRoot }) {
       || target.traversed.some(place => canonicalRoots.some(root => checkoutContains(root, place)))) return false;
     const names = value => value.split("/").some(part => [".codex", ".git"].includes(part.normalize("NFKC").toLowerCase()));
     const worktrees = join(home, "worktrees");
-    const parts = relative(worktrees, target.canonicalTarget).split("/");
-    const managed = checkoutContains(worktrees, target.canonicalTarget) && parts.length >= 3;
-    if (managed) {
+    // Keep the first outer checkout crossed in filesystem order, before a link or .. can leave it.
+    const entered = target.traversed.find(place => checkoutContains(worktrees, place)
+      && relative(worktrees, place).split("/").length >= 2);
+    if (entered) {
+      const parts = relative(worktrees, entered).split("/");
       if (names(parts.slice(0, 2).join("/"))) return false;
       const outer = join(worktrees, ...parts.slice(0, 2));
+      if (!checkoutContains(outer, target.canonicalTarget)) return false;
       const proof = verifiedCheckout(outer);
       if (!proof.verified || proof.checkoutRoot !== outer || !event.verified || !destination.verified
         || proof.commonGitDir !== event.commonGitDir || destination.commonGitDir !== event.commonGitDir) return false;

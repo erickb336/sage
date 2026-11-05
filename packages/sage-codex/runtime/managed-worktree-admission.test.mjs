@@ -12,10 +12,10 @@ import { checkoutContains, resolveCheckoutPath, verifiedCheckout } from "../../.
 
 // Only local Git initialization and worktree creation run in disposable fixtures.
 // No gate mode reader, shell command, process control, or installed plugin runs.
-function fixture(t) {
+function fixture(t, homeName = ".codex") {
   const dir = realpathSync(mkdtempSync(join(tmpdir(), "sage-managed-admission-")));
   t.after(() => rmSync(dir, { recursive: true, force: true }));
-  const main = join(dir, "main"), home = join(dir, ".codex");
+  const main = join(dir, "main"), home = join(dir, homeName);
   const linked = join(home, "worktrees", "id", "project");
   const git = (...args) => execFileSync("git", ["-c", "core.hooksPath=/dev/null", ...args], { stdio: "pipe" });
   git("init", "-q", main);
@@ -41,6 +41,33 @@ test("T119: ordinary source in a verified managed sibling passes patch checks", 
   }
   assert.match((await w.send(join(w.linked, ".codex", "config.toml")))?.hookSpecificOutput?.permissionDecisionReason ?? "", /codex|protected/i);
 });
+
+for (const homeName of ["codex-home", ".codex"]) {
+  test(`T119: ${homeName} retains the original managed checkout across escaping symlinks`, async t => {
+    const w = fixture(t, homeName);
+    const outside = homeName === "codex-home" ? join(w.dir, "ordinary") : join(w.home, "worktrees", "other", "project");
+    if (homeName === "codex-home") mkdirSync(outside);
+    else w.git("-C", w.main, "worktree", "add", "-qb", "other", outside);
+    mkdirSync(join(outside, "deep"));
+    symlinkSync(outside, join(w.linked, "escape"));
+    symlinkSync(join(outside, "deep"), join(w.linked, "ordered-escape"));
+    // The destination itself is ordinary and admitted; only the escaping traversal must refuse.
+    assert.equal(await w.send(join(outside, "new.mjs")), undefined);
+    for (const sage of [false, true]) {
+      for (const [cwd, path] of [
+        [w.main, `${w.linked}/escape/new.mjs`],
+        [w.main, `${w.linked}/ordered-escape/../new.mjs`],
+        [w.linked, "escape/new.mjs"],
+        [w.linked, "ordered-escape/../new.mjs"],
+      ]) {
+        assert.equal(resolveCheckoutPath(path, cwd).canonicalTarget, join(outside, "new.mjs"));
+        const out = await w.send(path, { cwd }, sage);
+        assert.equal(out?.hookSpecificOutput?.permissionDecision, "deny", `${cwd}: ${path}`);
+        assert.match(out.hookSpecificOutput.permissionDecisionReason, /codex|protected/i);
+      }
+    }
+  });
+}
 
 test("T119: exact identity, symlink order, forged backlink and absent Git", t => {
   const w = fixture(t);
@@ -105,7 +132,7 @@ test("T119: protected endpoints, aliases, traversal and patch shapes refuse", as
   symlinkSync(join(w.dir, ".claude", "sage"), join(w.linked, "legacy-alias"));
   symlinkSync("safe", join(w.linked, "safe-link"));
   symlinkSync(join(w.home, "sessions"), join(w.linked, "private-link"));
-  for (const path of [source, join(w.linked, "hard.mjs"), join(w.linked, "dangling", "new"), join(w.linked, "loop", "new"),
+  for (const path of [source, join(w.linked, "hard.mjs"), join(w.linked, "escape", "new"), join(w.linked, "dangling", "new"), join(w.linked, "loop", "new"),
     `${w.linked}/missing/../new`, `${w.linked}/.codex/../new`, `${w.linked}/.git/../new`, join(w.linked, "private-link", "new"),
     join(w.home, "config.toml"), join(w.home, "plugins", "new"), join(w.home, "cache", "new"), join(w.home, "sessions", "new"),
     w.home, join(w.linked, "protected-parent"), join(w.linked, "legacy-alias", "x"), join(w.dir, ".claude", "sage", "x"),
