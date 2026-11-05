@@ -205,12 +205,49 @@ test("T453: hooks.json runs the sage hook on UserPromptSubmit and on SessionStar
   assert.deepEqual(hooks.SessionStart.map((g) => g.matcher), ["startup|resume|clear", "compact|fork"], "the start status keeps its own group");
 });
 
-test("T453: the README and the Codex guide say what the hook really does in Codex (R1653)", () => {
+function assertMergePolicyMatches(guide, help) {
+  const policies = (text) => {
+    const prose = text.replace(/\s+/g, " ");
+    return {
+      automatic: /autopilot merges verified work|sage merges a pull request by itself/i.test(prose),
+      owner: /automatic merging is unavailable/i.test(prose),
+    };
+  };
+  const documented = policies(guide);
+  const reported = policies(help);
+  for (const [label, policy] of [["guide", documented], ["runtime help", reported]]) {
+    assert.equal(Number(policy.automatic) + Number(policy.owner), 1, `${label}: exactly one merge policy`);
+  }
+  assert.deepEqual(documented, reported, "guide and runtime help agree on merge policy");
+  if (documented.owner) {
+    assert.match(guide.replace(/\s+/g, " "), /merge directly in GitHub/, "guide names the owner's merge action");
+    assert.match(help, /the owner merges directly in GitHub/, "runtime help names the owner's merge action");
+  }
+}
+
+test("T453: merge policy consistency rejects missing, contradictory and mismatched claims (T116)", () => {
+  const automaticGuide = "With autopilot on, autopilot merges verified work.";
+  const automaticHelp = "With autopilot on, sage merges a pull request by itself after its clean reviews and checks.";
+  const ownerGuide = "The exact on phrase reports that automatic merging is unavailable. The chief prepares a reviewed pull request for you to merge directly in GitHub.";
+  const ownerHelp = "Automatic merging is unavailable in Codex. Sage prepares the checks; the owner merges directly in GitHub.";
+  assertMergePolicyMatches(automaticGuide, automaticHelp);
+  assertMergePolicyMatches(ownerGuide, ownerHelp);
+  for (const [guide, help] of [
+    ["", automaticHelp], [automaticGuide, ""],
+    [automaticGuide, ownerHelp], [ownerGuide, automaticHelp],
+    [automaticGuide + ownerGuide, automaticHelp], [ownerGuide, automaticHelp + ownerHelp],
+    ["Automatic merging is unavailable.", ownerHelp],
+    [ownerGuide, "Automatic merging is unavailable."],
+  ]) assert.throws(() => assertMergePolicyMatches(guide, help), assert.AssertionError);
+});
+
+test("T453: the README and the Codex guide say what the hook really does in Codex (R1653)", async () => {
   const readme = readFileSync(new URL("../README.md", import.meta.url), "utf8");
   const guide = readFileSync(new URL("../docs/guide/codex.md", import.meta.url), "utf8");
+  assertMergePolicyMatches(guide, contextOf(await session().prompt("sage help")) ?? "");
   const found = (text, pattern) => pattern.test(text.replace(/\s+/g, " "));
   assert.deepEqual({
-    "guide: autopilot merges verified work in Codex": found(guide, /With autopilot on, autopilot merges verified work: the hook allows only the exact merge command when the merge check passes, with no prompt\./) && !found(guide + readme, /merges nothing yet/),
+    "guide and README: no obsolete merge status": !found(guide + readme, /merges nothing yet/),
     "README: no claim that every phrase works as in Claude Code": !found(readme, /`autopilot off` and `sage help` work as in Claude Code/),
     "guide: the warning line, and that codex exec does not show it": found(guide, /gives Codex a warning line; the terminal UI and the app show it; `codex exec` does not\./),
     "guide: no claim that the hook shows one line": !found(guide, /and shows one line/),
@@ -220,7 +257,7 @@ test("T453: the README and the Codex guide say what the hook really does in Code
     "guide: the desktop app, not yet checked": found(guide, /desktop app.*This desktop path is not checked yet\./i),
     "guide: step 3 starts Codex with no flags and trusts the hooks": found(guide, /3\. Run `codex` in a project folder\. At the "Hooks need review" screen .*choose \*\*Trust all and continue\*\*/),
     "guide: a fork starts with sage mode off": found(guide, /A forked thread starts with sage mode and autopilot off/),
-  }, Object.fromEntries(["guide: autopilot merges verified work in Codex", "README: no claim that every phrase works as in Claude Code", "guide: the warning line, and that codex exec does not show it", "guide: no claim that the hook shows one line", "guide: a damaged mode file", "guide: send a phrase when Codex is idle", "guide: no exact phrase for a question", "guide: the desktop app, not yet checked", "guide: step 3 starts Codex with no flags and trusts the hooks", "guide: a fork starts with sage mode off"].map((k) => [k, true])));
+  }, Object.fromEntries(["guide and README: no obsolete merge status", "README: no claim that every phrase works as in Claude Code", "guide: the warning line, and that codex exec does not show it", "guide: no claim that the hook shows one line", "guide: a damaged mode file", "guide: send a phrase when Codex is idle", "guide: no exact phrase for a question", "guide: the desktop app, not yet checked", "guide: step 3 starts Codex with no flags and trusts the hooks", "guide: a fork starts with sage mode off"].map((k) => [k, true])));
 });
 
 test("T462: the guide, the README and the CHANGELOG say what is checked in Codex and what is not (R1665-1, R1665-2, R1664-7, R1664-8)", () => {
