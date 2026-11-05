@@ -1268,6 +1268,114 @@ test("a project under the desktop app's ~/.codex/worktrees edits as usual, with 
 /** A sage child's event fields: its agent_id and Codex's record of it, with its agent path. */
 const sageChild = (t, path) => ({ agent_id: "agent-9", transcript_path: record(t, { id: "019a0000-0000-7000-8000-0000000000ee", agent_path: path, source: { subagent: { thread_spawn: { depth: 1 } } } }) });
 
+test("T114: source redirects do not inherit protected reader inputs or literal bodies", async t => {
+  const g = fixed(), child = sageChild(t, "/root/sage_implementer_t1_r1");
+  const body = 'const source = `.codex/config.toml ${value} `; // [ $SAGE_HOME ~/.codex/sessions .git/hooks ../runs.tsv';
+  for (const command of [
+    "cat .codex/AGENTS.md; echo x > src/a.mjs",
+    "echo x > src/a.mjs; cat .codex/AGENTS.md",
+    "cat .codex/AGENTS.md | head -n 2 > 'src/a file.mjs'",
+    "cat < .codex/AGENTS.md > src/a.mjs 2> src/errors.txt",
+    `cat <<'SOURCE' > src/a.mjs\n${body}\nSOURCE`,
+    `printf '%s' '${body}' > src/a.mjs`,
+    `cat <<'SOURCE' | head -n 5 > src/a.mjs\n${body}\nSOURCE`,
+    `cat <<\\SOURCE > src/a.mjs\n${body}\nSOURCE`,
+    `cat <<< '${body}' > src/a.mjs`,
+  ]) assert.equal(await g.run(pre("Bash", command, child)), undefined, command);
+  for (const command of [
+    "cat .codex/AGENTS.md; echo x > .codex/config.toml",
+    "cat < .codex/AGENTS.md > src/a.mjs 2> .codex/errors.txt",
+    "cat <> .codex/config.toml", "cat > '.codex/file with spaces'",
+    "cat > .git/hooks/pre-commit", "cat ../tasks.tsv > ../runs.tsv",
+    "cat ~/.codex/sessions/private.jsonl > src/a.mjs",
+    "cat > $DEST", "cat > unknown*", "cat > $(printf x)",
+    "cat <<'SOURCE' | sh\necho x > .codex/config.toml\nSOURCE",
+    "cat <<'SOURCE' | node --input-type=module\nwrite('.codex/config.toml')\nSOURCE",
+    "cat <<'SOURCE' | python -u\nwrite('.codex/config.toml')\nSOURCE",
+    "cat <<'SOURCE' > generated.sh\necho x > .codex/config.toml\nSOURCE\nsh generated.sh",
+    "cat <<SOURCE > src/a.mjs\n$(echo x > .codex/config.toml)\nSOURCE",
+    "rg --pre 'echo x > .codex/config.toml' x > src/a.mjs",
+    "file -z .codex/config.toml > src/a.mjs",
+    "alias cat=sh; cat <<'SOURCE' > src/a.mjs\necho x > .codex/config.toml\nSOURCE",
+    "printf -vPATH '%s' evil; cat <<'SOURCE' > src/a.mjs\n.codex/config.toml\nSOURCE",
+    "cat() { sh; }; cat <<'SOURCE'\necho x > .codex/config.toml\nSOURCE",
+    "node -e 'const x = `.codex/config.toml`' > src/a.mjs",
+  ]) assert.equal(typeof denied(await g.run(pre("Bash", command, child))), "string", command);
+  assert.equal(denied(await g.run(pre("Bash", "cat .codex/AGENTS.md; echo x > src/a.mjs",
+    sageChild(t, "/root/sage_code_reviewer_t1_r2")))), RO("code-reviewer"));
+});
+
+test("F-T114-3: Codex keeps executable stdin checks for protected writes and read-only roles", async t => {
+  const g = fixed(), implementer = sageChild(t, "/root/sage_implementer_t1_r1");
+  const reviewer = sageChild(t, "/root/sage_code_reviewer_t1_r2");
+  for (const command of [
+    "bash <<'EOF'\necho x > .codex/config.toml\nEOF",
+    "python3 - <<'EOF'\nopen('.codex/config.toml', 'w').write('x')\nEOF",
+  ]) assert.match(denied(await g.run(pre("Bash", command, implementer))), /^sage: no agent changes files under a \.codex folder/);
+  assert.equal(denied(await g.run(pre("Bash", "bash <<'EOF'\ngrep -n 'merge' *.md\nEOF", reviewer))), RO("code-reviewer"));
+  assert.equal(await g.run(pre("Bash", "cat <<'EOF'\nliteral\nEOF", reviewer)), undefined);
+  for (const [command, cwd] of [
+    ["python3 - <<'EOF'\nprint('fixture')\nEOF", `${CWD}/.git/hooks`],
+    ["python3 - .git/hooks/pre-commit <<'EOF'\nprint('fixture')\nEOF", CWD],
+  ]) assert.match(denied(await g.run(pre("Bash", command, { ...implementer, cwd }))), /writes a file under a \.git folder/);
+});
+
+test("F-T114-2: expanding input redirects retain protected read checks", async t => {
+  const g = fixed(), child = sageChild(t, "/root/sage_implementer_t1_r1");
+  // These strings go only to the gate. No shell executes them or reads a session file.
+  for (const target of ["~/.codex/sessions/private.jsonl", "$HOME/.codex/sessions/private.jsonl",
+    "~/.codex/sage/private.json", "$HOME/.codex/sage/private.json"]) {
+    await t.test(target, async () => {
+      for (const suffix of ["", " > src/a.mjs", " | head -n 1 > src/a.mjs"]) {
+        const command = `cat < ${target}${suffix}`;
+        assert.equal(typeof denied(await g.run(pre("Bash", command, child))), "string", command);
+      }
+    });
+  }
+});
+
+test("T114: shared parser proves literal heredoc data without trusting expanding input", async () => {
+  const { shellCommands, shellWriteEvidence } = await import("../packages/sage-core/index.mjs");
+  const body = '.codex/config.toml ${value} `x` [';
+  const command = `cat <<'SOURCE' > 'src/a file.mjs'\n${body}\nSOURCE`;
+  const [parsed] = shellCommands(command, { provenance: true });
+  assert.deepEqual(parsed.bodyLiterals, [true]);
+  assert.deepEqual(parsed.redirectParts, [{ operator: ">", target: "src/a file.mjs" }]);
+  assert.deepEqual(shellWriteEvidence(command, CWD, ""), {
+    reads: [{ word: "cat", dir: CWD }], writes: [{ word: "src/a file.mjs", dir: CWD }],
+  });
+  assert.deepEqual(shellCommands("cat <<SOURCE\n$value\nSOURCE", { provenance: true })[0].bodyLiterals, [false]);
+  assert.deepEqual(shellWriteEvidence("cat > $DEST", CWD, ""), { uncertain: true });
+});
+
+test("T114: directory context locates targets but grants no protected-path authority", async t => {
+  const w = world(t), linked = join(w.dir, "linked");
+  assert.equal(spawnSync("git", ["-C", w.project, "worktree", "add", "-qb", "linked", linked]).status, 0);
+  const child = w.child("/root/sage_implementer_t1_r1");
+  for (const project of [w.project, linked]) mkdirSync(join(project, "src"));
+  const run = (command, cwd, more = {}) => gate(pre("Bash", command, { ...child, cwd, ...more }),
+    { env: w.env, mode: () => ({ sage: true, autopilot: false }) });
+  for (const [cwd, other] of [[w.project, linked], [linked, w.project]]) {
+    for (const command of [
+      `cat .codex/AGENTS.md; echo x > '${other}/src/a.mjs'`,
+      `cd '${other}/src' && cat ../.codex/AGENTS.md > 'a file.mjs'`,
+      `cat <<'SOURCE' > '${other}/src/a.mjs'\n$CODEX_HOME/plugins [ \`literal\`\nSOURCE`,
+      "cat .codex/AGENTS.md > 'src/<quoted filename'",
+    ]) assert.equal(await run(command, cwd), undefined, command);
+    for (const command of [
+      `cd '${other}' && echo x > .codex/config.toml`,
+      `cd '${w.dir}' && echo x > runs.tsv`,
+      `echo x > '${w.env.CODEX_HOME}/config.toml'`,
+      `echo x > '${w.env.SAGE_HOME}/forged.json'`,
+      `echo x > '${other}/.git'`,
+      `cat '${w.env.CODEX_HOME}/sessions/private.jsonl'`,
+      "cat .codex/AGENTS.md; echo x > 'unfinished",
+    ]) assert.equal(typeof denied(await run(command, cwd)), "string", command);
+    assert.equal(typeof denied(await run("echo x > .codex/config.toml", cwd,
+      { tool_input: { command: "echo x > .codex/config.toml", workdir: other } })), "string");
+  }
+});
+
 test("in sage mode, normal commands that name codex run for every agent: a program by a path, in a subfolder, or behind a pipe (R1733-1)", async (t) => {
   const reads = ["~/bin/tool codex", "pushd packages/sage-codex && ../../node_modules/.bin/esbuild hooks/gate-hook.mjs",
     "(cd packages/sage-codex && ../../node_modules/.bin/esbuild hooks/gate-hook.mjs)", "cat codex.json | python3 -mjson.tool",

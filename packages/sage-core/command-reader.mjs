@@ -799,15 +799,24 @@ function program(word, dir, path, uncertain = false) {
  * commands of its own, whose host is the command and word they land in (index -1: a heredoc; quoted: true inside double
  * quotes, where the shell does not split the result), and so does a process substitution, <( ) or >( ). Throws when it cannot read the line: an open quote, substitution, heredoc, "(" or case,
  * or a ")" with no "(". The hook's rules then refuse a line that names what they guard (fail closed).
+ * With provenance, wordLiterals, bodyLiterals and redirectLiterals identify data without shell expansion; redirectParts separates each
+ * operator from its target. A quoted heredoc is literal even when its body contains shell syntax.
  */
 const FLOWS = new WeakMap();
 const COMMAND_CONTEXT = new WeakMap();
 const REDIRECT_PARTS = new WeakMap();
 
-export function shellCommands(src) {
+export function shellCommands(src, { provenance = false } = {}) {
   const out = [], flow = { nodes: [] };
   FLOWS.set(out, flow);
   readCommands(src, 0, "", out, undefined, flow);
+  if (provenance) for (const command of out) {
+    const context = COMMAND_CONTEXT.get(command);
+    command.wordLiterals = context.wordLiterals;
+    command.bodyLiterals = context.bodyLiterals;
+    command.redirectLiterals = context.redirectLiterals;
+    command.redirectParts = REDIRECT_PARTS.get(command.redirects);
+  }
   return out;
 }
 
@@ -823,13 +832,13 @@ function readCommands(src, i, close, out, host, flow) {
   };
   const fresh = () => {
     const command = { words: [], syntax: [], bodies: [], host, piped: false, grouped: false, writes: false, redirects: [], heredoc: false };
-    COMMAND_CONTEXT.set(command, { children: [], rawWords: [] });
+    COMMAND_CONTEXT.set(command, { children: [], rawWords: [], wordLiterals: [], bodyLiterals: [], redirectLiterals: [] });
     REDIRECT_PARTS.set(command.redirects, []);
     return command;
   };
   let cmd = fresh();
   let word, wordStart;
-  let quoted = false, assignment = false;
+  let quoted = false, assignment = false, literal = true;
   let depth = 0;
   let target; // after a redirection: its operator, kept with its target in redirects, or "body" for the text of a here-string
   const cases = []; // each open case: { depth } where it opens, and pattern: true before an arm's ")", false after it
@@ -838,10 +847,14 @@ function readCommands(src, i, close, out, host, flow) {
   const add = (text) => (word = (word ?? "") + text);
   const endWord = () => {
     if (word === undefined) return;
-    if (target === "body") cmd.bodies.push(word);
+    if (target === "body") {
+      cmd.bodies.push(word);
+      COMMAND_CONTEXT.get(cmd).bodyLiterals.push(literal);
+    }
     else if (target) {
       cmd.redirects.push(target + word);
       REDIRECT_PARTS.get(cmd.redirects).push({ operator: target, target: word });
+      COMMAND_CONTEXT.get(cmd).redirectLiterals.push(literal);
     }
     else {
       if (!quoted && !cmd.words.length && /^(?:if|for|while|until|select|case)$/.test(word)) openScope("opaque");
@@ -855,9 +868,11 @@ function readCommands(src, i, close, out, host, flow) {
       if (!quoted && !cmd.words.length && word === "}" && /^(?:brace|function)$/.test(flow.kind)) COMMAND_CONTEXT.get(cmd).closesScope = true;
       cmd.words.push(word); cmd.syntax.push({ quoted, assignment });
       COMMAND_CONTEXT.get(cmd).rawWords.push(src.slice(wordStart, i));
+      COMMAND_CONTEXT.get(cmd).wordLiterals.push(literal);
     }
     word = target = undefined;
     quoted = assignment = false;
+    literal = true;
     const [first, , third] = cmd.words;
     if (first === "case" && !cmd.syntax[0].quoted && cmd.words.length === 3 && third === "in" && !cmd.syntax[2].quoted) {
       endCommand();
@@ -915,12 +930,15 @@ function readCommands(src, i, close, out, host, flow) {
     } else if (c === '"') {
       quoted = true;
       const r = readExpanding(src, i + 1, '"', out, { ...here(), quoted: true });
+      if (/[$`]/.test(r.text)) literal = false;
       add(r.text);
       i = r.i;
     } else if (c === "`" || (c === "$" && src[i + 1] === "(")) {
+      literal = false;
       i = readCommands(src, i + (c === "`" ? 1 : 2), c === "`" ? "`" : ")", out, here());
       add("$(…)");
     } else if ((c === "<" || c === ">") && src[i + 1] === "(") { // a process substitution, <( ) or >( ): commands of its own
+      literal = false;
       i = readCommands(src, i + 2, ")", out, here());
       add("$(…)");
     } else if (c === "#" && word === undefined) {
@@ -978,6 +996,7 @@ function readCommands(src, i, close, out, host, flow) {
       }
       i += (c === "|" || c === "&") && src[i + 1] === c ? 2 : 1;
     } else {
+      if (c === "$" || /[*?\[\]{}~]/.test(c)) literal = false;
       if (c === "=" && !quoted && /^[A-Za-z_]\w*$/.test(word ?? "")) assignment = true;
       add(c);
       i++;
@@ -1054,6 +1073,7 @@ function readBodies(src, i, heredocs, out) {
     }
     const body = lines.join("\n");
     cmd.bodies.push(body);
+    COMMAND_CONTEXT.get(cmd).bodyLiterals.push(!expand || !/[$`]/.test(body));
     if (expand) readExpanding(body, 0, "", out, { cmd, index: -1 });
   }
   return Math.min(i, src.length);

@@ -41,11 +41,11 @@ after(() => {
 /** A plugin folder of the fixture's own, for a test that changes a file of the package. Call it before the fixture's server starts. */
 const ownPlugin = f => { rmSync(f.plugin); cpSync(PACKAGE, f.plugin, { recursive: true }); };
 
-function fixture(t, policy = "normal") {
+function fixture(t, policy = "normal", packagePath = PACKAGE) {
   const dir = mkdtempSync(join(realpathSync(tmpdir()), "sage-native-server-"));
   t.after(() => rmSync(dir, { recursive: true, force: true }));
   const plugin = join(dir, "plugin");
-  symlinkSync(PACKAGE, plugin);
+  symlinkSync(packagePath, plugin);
   assert.ok(existsSync(join(plugin, "runtime/mcp-server.mjs")), "the native server ships in the plugin");
   const sessions = join(dir, "sessions"); mkdirSync(sessions);
   const transcript = join(sessions, "root.jsonl");
@@ -427,8 +427,8 @@ function assignmentLogbookFixture(core, options) {
   return { assignmentTool, assignmentEnv, assignmentCli, assignmentLogbook };
 }
 
-async function preparationServerFixture(t) {
-  const f = fixture(t);
+async function preparationServerFixture(t, packagePath = PACKAGE) {
+  const f = fixture(t, "normal", packagePath);
   assert.ok(existsSync(join(f.plugin, "runtime/preparation-server.mjs")), "the separate preparation server must ship");
   const core = await import(pathToFileURL(join(f.plugin, "core/index.mjs")));
   const events = await import(pathToFileURL(join(f.plugin, "runtime/events.mjs")));
@@ -638,8 +638,8 @@ test("shared server configuration leaves invalid preparation connections unavail
   await repaired.close();
 });
 
-async function composedPolicyFixture(t) {
-  const f = await preparationServerFixture(t);
+async function composedPolicyFixture(t, packagePath = PACKAGE) {
+  const f = await preparationServerFixture(t, packagePath);
   const module = join(f.plugin, "runtime/policy.mjs");
   assert.ok(existsSync(module), "the composed native policy must ship");
   const { createNativePolicy } = await import(pathToFileURL(module));
@@ -2535,8 +2535,8 @@ function recordedFixtureRole(f, role) {
   if (f.core.REVIEW_ROLES.includes(role)) f.input.reviewCycle = 1;
 }
 
-async function roleEditFixture(t, role) {
-  const f = await composedPolicyFixture(t);
+async function roleEditFixture(t, role, packagePath = PACKAGE) {
+  const f = await composedPolicyFixture(t, packagePath);
   recordedFixtureRole(f, role);
   f.api.prepareNativeTask(f.input, f.native(session), f.options);
   f.api.reservePreparedSpawn(f.spawnInput(), f.native(session), f.options);
@@ -2656,6 +2656,59 @@ test('native role edit enforcement blocks the chief and restores ordinary evalua
   assert.equal(evaluated, 1); assert.equal(received.role, null); assert.equal(received.sage, false);
 });
 
+
+test('T114: parked native role and path decisions match the original baseline for executable stdin', async t => {
+  // Read the actual original Git objects, not expectations copied from current code.
+  // This is a disposable archive, not a worktree or an installed native runtime.
+  const baseline = '78bbb2f9b119ca92a426d5229d1bd7c534688176';
+  const archive = mkdtempSync(join(realpathSync(tmpdir()), 'sage-t114-baseline-'));
+  t.after(() => rmSync(archive, { recursive: true, force: true }));
+  execFileSync('tar', ['-x', '-C', archive], { input: execFileSync('git',
+    ['-C', ROOT, 'archive', baseline, 'plugins/sage-codex'], { maxBuffer: 64 * 1024 * 1024 }) });
+  const original = join(archive, 'plugins/sage-codex');
+  for (const role of ['chief-of-staff', 'lead', 'implementer']) {
+    const results = [];
+    for (const packagePath of [original, PACKAGE]) {
+      const f = role === 'chief-of-staff' ? await composedPolicyFixture(t, packagePath)
+        : await roleEditFixture(t, role, packagePath);
+      const { shellPathDecision } = await import(pathToFileURL(join(f.plugin, 'runtime/file-policy.mjs')));
+      const root = join(f.dir, 'protected'); mkdirSync(root);
+      const protectedFile = join(root, 'ledger.tsv'); writeFileSync(protectedFile, 'unchanged');
+      let evaluated = 0;
+      const policy = f.createNativePolicy(f.options, () => { evaluated++; return { decision: 'pass' }; });
+      const actor = role === 'chief-of-staff' ? session : childActor;
+      // Every command below is parser data. Neither evaluator executes it.
+      const cases = [
+        ['ordinary read', 'cat ordinary.txt', 'pass', 'pass'],
+        ['protected read', `cat ${protectedFile}`, 'pass', 'pass'],
+        ['ordinary write', 'printf fixed > ordinary.txt', 'write', 'pass'],
+        ['protected write', `printf fixed > ${protectedFile}`, 'write', 'deny'],
+        ['ordinary pipeline', 'cat script.txt | sh', 'pass', 'pass'],
+        ['protected pipeline', `cat ${protectedFile} | sh`, 'pass', 'pass'],
+        ['reader heredoc', "cat <<'EOF'\nliteral\nEOF", 'pass', 'pass'],
+        ['shell read heredoc', `bash <<'EOF'\ncat ${protectedFile}\nEOF`, 'pass', 'pass'],
+        ['shell write heredoc', `bash <<'EOF'\nprintf changed > ${protectedFile}\nEOF`, 'write', 'deny'],
+        ['interpreter heredoc', `python3 - <<'EOF'\nopen('${protectedFile}', 'w').write('changed')\nEOF`, 'pass', 'pass'],
+      ];
+      const decisions = [];
+      for (const [name, command, roleKind, pathExpected] of cases) {
+        const { input } = commandPolicyInput(f, actor, command);
+        const before = evaluated;
+        const roleResult = await f.evaluate(policy, input, actor);
+        const pathResult = shellPathDecision(command, { cwd: f.dir, roots: [root] });
+        const roleExpected = roleKind === 'write' && role !== 'implementer' ? 'deny' : 'pass';
+        assert.equal(roleResult.decision, roleExpected, `${role}: ${name}: role`);
+        assert.equal(pathResult.decision, pathExpected, `${role}: ${name}: path`);
+        assert.equal(evaluated - before, roleExpected === 'pass' ? 1 : 0, `${role}: ${name}: evaluator`);
+        decisions.push({ name, role: roleResult, path: pathResult });
+      }
+      assert.equal(readFileSync(protectedFile, 'utf8'), 'unchanged');
+      assert.equal(existsSync(join(f.dir, 'ordinary.txt')), false);
+      results.push(decisions);
+    }
+    assert.deepEqual(results[1], results[0], `${role}: candidate versus ${baseline}`);
+  }
+});
 
 test('native shell role enforcement refuses known writes from each read-only child before evaluation', async t => {
   // These strings reach only the policy parser, never a real shell.
