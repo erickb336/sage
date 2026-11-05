@@ -60,7 +60,7 @@ import { closeSync, existsSync, mkdirSync, openSync, readdirSync, readSync, real
 import { homedir } from "node:os";
 import { basename, dirname, isAbsolute, join, relative, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
-import { chiefEditDenied, commandWrites, createCommandPolicy, createPushPolicy, gitInternalPath, LOGBOOK_FILES, partNames, PR, programName, programsRun, pullRequestHead, readModeFile, roleEditDenied, sharedRoot, shellCommands, switchModes, TEAM } from "../core/index.mjs";
+import { chiefEditDenied, commandWrites, createCommandPolicy, createPushPolicy, gitInternalPath, LOGBOOK_FILES, partNames, PR, programName, programsRun, pullRequestHead, readModeFile, roleEditDenied, sharedRoot, shellCommands, shellWriteEvidence, switchModes, TEAM } from "../core/index.mjs";
 import { tool } from "../skills/sage/sage.mjs";
 import { verificationOptions } from "../skills/sage/verify-install.mjs";
 import { patchPaths, readState, stateKey } from "./principles-hook.mjs";
@@ -298,7 +298,7 @@ export function callerRefusal(caller, name, input, env = process.env) {
 }
 
 /** A path segment named .codex, in any letter case (the Mac file system ignores case). */
-const CODEX_SEGMENT = /(?:^|[\s/\\'"=:<>])\.codex(?=$|[\s/\\'"<>;|&)])/i;
+const CODEX_SEGMENT = /(?:^|[\s/\\'"`=:<>])\.codex(?=$|[\s/\\'"`<>;|&)])/i;
 const text = (value) => typeof value === "string" && value.length > 0 && value.length <= 4096;
 const record = (value) => value !== null && typeof value === "object" && !Array.isArray(value);
 
@@ -793,14 +793,17 @@ export async function gate(input, { mode = readMode, check = checkMerge, env = p
     const why = childChange(thread, sage);
     return why ? refuse(thread, why) : undefined;
   }
-  if (namesSageFolder(f.command, env, f.cwd)) return deny(SAGE_FOLDER);
+  const parsedWrites = shellWriteEvidence(f.command, f.cwd, env.PATH ?? "");
+  const writeEvidence = parsedWrites?.uncertain ? undefined : parsedWrites;
+  const namesReference = (references, test) => references.some(({ word, dir }) => test(asWord(resolve(dir, word)), env, f.cwd));
+  if (writeEvidence ? namesReference([...writeEvidence.reads, ...writeEvidence.writes], namesSageFolder) : namesSageFolder(f.command, env, f.cwd)) return deny(SAGE_FOLDER);
   const runs = codexRuns(f.command, f.cwd, env);
   // A command that the reader cannot read and that names codex: refused when it may resume, fork or queue a turn, and
   // for a role agent in sage mode. Any other thread runs it, for example "$EDITOR codex/a.txt".
   if (runs === null && /codex/i.test(f.command)
     && (/\b(?:resume|fork|queue)\b/i.test(f.command) || (thread.child && underSage(thread) !== false && mode(f, env).sage))) return deny(UNREAD_CODEX);
   if (runs?.some((args) => !printsOnly(args))) return deny(CODEX_RUN);
-  if (codexShellWrite(f.command, f.cwd, env)) return deny(CODEX_FOLDER);
+  if (writeEvidence ? writeEvidence.writes.some(({ word, dir }) => codexPath(projectRoot(f.cwd), resolve(dir, word))) : codexShellWrite(f.command, f.cwd, env)) return deny(CODEX_FOLDER);
   // The dedicated package read grants no general shell or protected-write exception, in any mode or role.
   if (namesVerification(f.command, f.cwd, env)) {
     if ((!thread.child || thread.codex || thread.parts?.length) && scopedStateRead(f.command, f.cwd, env, true)) return undefined;
@@ -812,10 +815,13 @@ export async function gate(input, { mode = readMode, check = checkMerge, env = p
     const why = commandWrites(f.command, f.cwd) || runsPatch(f.command, f.cwd, env) ? childChange(thread, mode(f, env).sage) : undefined;
     if (why) return refuse(thread, why);
   }
-  if (commandWrites(f.command, f.cwd) && namesCodexSettings(f.command, env, f.cwd)) return deny(CODEX_SETTINGS);
+  if (writeEvidence ? namesReference(writeEvidence.writes, namesCodexSettings) : commandWrites(f.command, f.cwd) && namesCodexSettings(f.command, env, f.cwd)) return deny(CODEX_SETTINGS);
+  if (parsedWrites?.uncertain) return deny("sage: the shell write target or its folder is uncertain. Use a literal target in the assigned project");
   const now = mode(f, env);
   if (!now.sage) return undefined; // outside sage mode the gate does not judge pushes or merges, as in the Claude hook
-  if (commandWrites(f.command, f.cwd) && namesLogbookFile(f.command, env, f.cwd)) return deny(LOGBOOK_FILE);
+  if (writeEvidence?.writes.some(({ word, dir }) => gitInternalPath(resolve(dir, word))))
+    return deny("sage: this command writes a file under a .git folder, where git keeps its hooks and settings, so sage mode refuses it. Ask the user");
+  if (writeEvidence ? namesReference(writeEvidence.writes, namesLogbookFile) : commandWrites(f.command, f.cwd) && namesLogbookFile(f.command, env, f.cwd)) return deny(LOGBOOK_FILE);
   const gh = ghProblem(f.command, f.cwd, env);
   if (gh) return deny(gh);
   const push = pushes.pushProblem(f.command, f.cwd);

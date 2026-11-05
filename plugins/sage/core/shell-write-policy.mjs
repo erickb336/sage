@@ -84,13 +84,22 @@ function writesIn({ words }) {
     /^(?:eval|source|\.|exec)$/.test(base[low.findIndex((w) => !/^\w+=/.test(w))] ?? "")
   );
 }
+/** An interpreter with executable stdin is opaque, even when its producer is a literal reader. */
+const executesStdin = ({ run }) => (run.piped || run.stdin.length > 0) &&
+  /^(?:node|nodejs|python[\d.]*|perl|ruby|php|sh|bash|zsh|dash|ksh|fish)$/.test(programName(run.word)) &&
+  // Python's module mode consumes stdin as module data. Other option-led launches stay opaque.
+  !(/^python[\d.]*$/.test(programName(run.word)) && /^-m/.test(run.args[0] ?? "")) &&
+  (run.args.length === 0 || run.args[0].startsWith("-"));
 /** Does one field of a command's text have a write form? A text that the hook cannot read counts as one (fail closed). */
 export function commandWrites(text, cwd) {
   if (typeof text !== "string") return true;
   try {
-    if (shellCommands(text).some(writesIn)) return true;
+    const commands = shellCommands(text);
+    if (commands.some(writesIn)) return true;
+    if (commands.some(c => c.bodies.length) && commands.some(c => c.grouped || REDEFINES.test(c.words[0] ?? ""))) return true;
     const evidence = programsRun(text, cwd, undefined, { contextEvidence: true, redirectParts: true });
-    return evidence.redirects.some(toFile) || evidence.programs.some(entry => readerDispatch(entry) || outputDispatchWrites(entry));
+    if (commands.some(c => c.bodies.length) && evidence.programs.some(p => p.shellFunction || p.resolvedDeclaration)) return true;
+    return evidence.redirects.some(toFile) || evidence.programs.some(entry => readerDispatch(entry) || outputDispatchWrites(entry) || executesStdin(entry));
   } catch {
     return true;
   }
@@ -112,6 +121,31 @@ const plainReader = ({ words }, cwd) =>
   (words[0] === "git" ? GIT_READS.test(words[1] ?? "") : READERS.test(words[0] ?? "") && !/^(?:cd|pushd)$/.test(words[0])) &&
   !commandWrites(words.map(shellQuoted).join(" "), cwd);
 const shown = (commands) => commands.map(c => [...c.words, ...c.redirects, ...c.bodies].join(" ")).join(" | ");
+
+/**
+ * Proven non-executing readers, with read references separate from write targets. Literal stdin and echo/printf data
+ * cannot name a target. Undefined retains the caller's conservative whole-command policy for opaque execution.
+ * No caller-supplied directory grants authority: dir is only the parser's execution context for each path.
+ */
+export function shellWriteEvidence(text, cwd, path) {
+  try {
+    const commands = shellCommands(text, { provenance: true });
+    const evidence = programsRun(text, cwd, path, { contextEvidence: true, redirectParts: true });
+    const writes = evidence.redirects.filter(toFile);
+    if (writes.some(r => r.uncertainDirectory || /[$`*?\[\]{}~!]/.test(r.target))) return { uncertain: true };
+    if (!commands.length || commands.some(c => c.host || c.grouped || FLOW_WORD.test(c.words[0] ?? "") ||
+      REDEFINES.test(c.words[0] ?? "") || c.syntax.some(s => s.assignment) ||
+      c.wordLiterals.some(literal => !literal) || c.bodyLiterals.some(literal => !literal) ||
+      (c.words.length && !plainReader(c, cwd) && !/^(?:cd|pushd)$/.test(c.words[0])) ||
+      (c.words[0] === "printf" && (c.words.slice(1).some(word => /^-v/.test(word)) ||
+        /%[^%]*n/.test(c.words[c.words[1] === "--" ? 2 : 1] ?? ""))))) return undefined;
+    if (evidence.programs.some(p => p.wrapper || p.shellFunction || p.resolvedDeclaration || p.uncertainDirectory)) return undefined;
+    const reads = evidence.programs.flatMap(({ run }) => /^(?:echo|printf)$/.test(run.word) ? [] :
+      [run.word, ...run.args].map(word => ({ word, dir: run.dir ?? cwd })));
+    reads.push(...evidence.redirects.filter(r => !toFile(r)).map(r => ({ word: r.target, dir: r.dir ?? cwd })));
+    return { reads, writes: writes.map(r => ({ word: r.target, dir: r.dir ?? cwd })) };
+  } catch { return undefined; }
+}
 /**
  * The text of a POSIX shell command line that the rule for a logbook write judges (T621), one item for each pipeline, so
  * that a read beside a write gives no evidence against it. A pipeline's last commands are dropped when they are plain

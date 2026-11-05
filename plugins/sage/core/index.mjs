@@ -10,7 +10,7 @@ export { createPushPolicy, gitHubRepository, gitInternalPath } from "./push-poli
 export { PR, pullRequestHead } from "./pull-request.mjs";
 export { branchProtection, protectionNote } from "./branch-protection.mjs";
 export { fileWriteOutsideRoots, partNames } from "./protected-paths.mjs";
-export { commandWrites, writeParts } from "./shell-write-policy.mjs";
+export { commandWrites, writeParts, shellWriteEvidence } from "./shell-write-policy.mjs";
 export { shellWriteOutsideRoots } from "./shell-path-policy.mjs";
 export { chiefEditDenied } from "./file-policy.mjs";
 export { PHRASES, exactPhrase, hasPhrase, phrasesNear, phraseHelp, switchModes, readModeFile, MODE_DAMAGED } from "./mode-policy.mjs";
