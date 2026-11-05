@@ -1,12 +1,15 @@
 import "./test-env.mjs";
 import assert from "node:assert/strict";
 import { spawnSync } from "node:child_process";
-import { cpSync, existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, truncateSync, writeFileSync } from "node:fs";
+import { chmodSync, cpSync, existsSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, truncateSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join, relative, resolve } from "node:path";
 import { test } from "node:test";
 import { z } from "zod";
 import { ROOT } from "./build.mjs";
+import { sessionStatus } from "../plugins/sage-codex/hooks/session-start-hook.mjs";
+import { modeDirectory, answer } from "../plugins/sage-codex/hooks/sage-codex-hook.mjs";
+import { readMode, gate } from "../plugins/sage-codex/hooks/gate-hook.mjs";
 
 const json = (path) => JSON.parse(readFileSync(join(ROOT, path), "utf8"));
 // A "./" path that stays inside its root (docs plugins/build.md, "Path rules" and "Marketplace metadata").
@@ -67,7 +70,7 @@ test("each hook command runs a file of the built plugin", () => {
 
 /** An installed copy of the built plugin in a scratch CODEX_HOME, as `codex plugin add sage@sage` makes it. */
 function installed(t, { trust = [], cliVersion } = {}) {
-  const home = mkdtempSync(join(tmpdir(), "sage-codex-home-"));
+  const home = realpathSync(mkdtempSync(join(tmpdir(), "sage-codex-home-")));
   t.after(() => rmSync(home, { recursive: true, force: true }));
   const root = join(home, "plugins/cache/sage/sage/0.1.0");
   mkdirSync(root, { recursive: true });
@@ -87,9 +90,58 @@ function installed(t, { trust = [], cliVersion } = {}) {
 const { stateKey } = await import(new URL("../plugins/sage-codex/hooks/principles-hook.mjs", import.meta.url));
 
 /** The hook's output: the status for the chief always, and a warning for the user only when there is a limit. */
-const output = (status, warning) => ({ ...(warning ? { systemMessage: warning } : {}), hookSpecificOutput: { hookEventName: "SessionStart", additionalContext: warning ? `${status}\n${warning}` : status } });
+const output = (status, warning) => ({ ...(warning ? { systemMessage: warning } : {}), hookSpecificOutput: { hookEventName: "SessionStart", additionalContext: `${status}\nAutomatic merging is unavailable in Codex. Sage prepares the checks; the owner merges directly in GitHub.${warning ? `\n${warning}` : ""}` } });
 const ALL = ["session_start:0:0", "session_start:1:0", "user_prompt_submit:0:0", "user_prompt_submit:1:0", "pre_tool_use:0:0", "pre_tool_use:1:0", "permission_request:0:0", "post_tool_use:0:0", "subagent_start:0:0", "subagent_stop:0:0"];
 const START = "To start sage mode, the user sends this message alone: sage mode";
+
+test("T115 synthetic lifecycle: legacy state never grants merge authority, even when reset fails", async (t) => {
+  const home = realpathSync(mkdtempSync(join(tmpdir(), "sage-t115-reset-")));
+  t.after(() => rmSync(home, { recursive: true, force: true }));
+  const env = { HOME: home, CODEX_HOME: home, SAGE_HOME: join(home, "mode-root") };
+  const dir = modeDirectory(env);
+  mkdirSync(dir, { recursive: true, mode: 0o700 });
+  const input = { hook_event_name: "SessionStart", source: "resume", session_id: "synthetic-t115-root" };
+  const file = join(dir, `${stateKey(input)}.json`);
+  const options = { pluginRoot: join(ROOT, "plugins/sage-codex"), codexHome: home, env };
+  const before = { sage: true, autopilot: true, given: true, off: "legacy" };
+  const put = () => writeFileSync(file, JSON.stringify(before), { mode: 0o600 });
+  const refusal = async () => {
+    assert.deepEqual(readMode({ session: input.session_id }, env), { sage: true, autopilot: false });
+    for (const extra of [{}, { agent_id: "child" }]) {
+      const result = await gate({ ...input, ...extra, hook_event_name: "PreToolUse", tool_name: "Bash", cwd: home,
+        tool_input: { command: `gh pr merge 41 --squash --delete-branch --match-head-commit ${"a".repeat(40)}` } }, { env });
+      assert.equal(result.hookSpecificOutput.permissionDecision, "deny");
+      assert.match(result.hookSpecificOutput.permissionDecisionReason, /automatic merging is unavailable/);
+    }
+  };
+  for (const source of ["startup", "resume", "compact", "fork"]) {
+    put();
+    await refusal();
+    const result = sessionStatus({ ...input, source }, options);
+    assert.match(result.hookSpecificOutput.additionalContext, /Automatic merging is unavailable/);
+    assert.deepEqual(JSON.parse(readFileSync(file, "utf8")), { ...before, autopilot: !["startup", "resume"].includes(source) });
+    await refusal();
+  }
+  put();
+  assert.throws(() => sessionStatus(input, { ...options, pluginRoot: join(home, "missing") }));
+  assert.deepEqual(JSON.parse(readFileSync(file, "utf8")), { ...before, autopilot: false }, "reset precedes status metadata reads");
+  put();
+  chmodSync(dir, 0o500);
+  try {
+    assert.match(sessionStatus(input, options).systemMessage, /autopilot reset is unavailable/);
+    assert.deepEqual(JSON.parse(readFileSync(file, "utf8")), before, "failed reset does not claim to save");
+    const failure = answer({ ...input, hook_event_name: "UserPromptSubmit", prompt: "autopilot on" }, env);
+    assert.match(failure.systemMessage, /could not read or save/);
+    assert.match(failure.systemMessage, /automatic merging is unavailable/);
+    await refusal();
+  } finally { chmodSync(dir, 0o700); }
+  for (const data of ["{", "null", '{"sage":true,"autopilot":"on"}']) {
+    writeFileSync(file, data);
+    assert.match(sessionStatus(input, options).systemMessage, /autopilot reset is unavailable/);
+    assert.equal(readFileSync(file, "utf8"), data);
+    assert.deepEqual(readMode({ session: input.session_id }, env), { sage: false, autopilot: false });
+  }
+});
 
 test("the SessionStart hook gives a trusted install on a tested Codex no warning: the status goes to the chief only (R1665-3)", (t) => {
   const { run } = installed(t, { trust: ALL, cliVersion: "0.164.0" });

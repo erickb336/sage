@@ -94,8 +94,8 @@ Give each round to a fresh agent, with the original brief, the later decisions a
 - **A round hold** resumes only after the owner explicitly answers approve: ask the gate that the tool's refusal names, with no default, and use each approval once. The sage skill has the steps.
 - **A change log built on main only** (sage): the project's CONTRIBUTING.md has its rules. After task pull requests merge, frame a tiny task with one implementer run that opens the change-log pull request.
 - **Autopilot off** (the start): the work stops at verified, and the user merges the pull request.
-- **Autopilot off:** the user merges. Never push to main, force-push, or change branch protection on another provider's approval.
-- **Autopilot on** ("autopilot on" alone): after clean cycles and a passing `merge_check`, run `gh pr merge <n> --squash --delete-branch --match-head-commit <sha>`, escalated. The plugin's hook allows only this exact command when the merge check passes: no prompt.
+- **Automatic merging is unavailable in Codex.** No phrase, saved mode or configuration flag enables it. Sage prepares the checks; the owner merges directly in GitHub. Never push to main, force-push, or change branch protection on another provider's approval.
+- Keep both required review and QA cycles for auth, input and data risks, even with autopilot off. Hand off only after CI passes on the final head, both cycles pass and `merge_check` passes. Give the owner the PR link, exact head SHA and evidence. A passing check grants no merge authority.
 - Always ask the user first, also on autopilot: a deploy, deleting data, a force-push, closing a pull request that is not ours.
 
 ## The arena

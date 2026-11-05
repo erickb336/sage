@@ -18,7 +18,7 @@ Only a direct owner message can change mode. Use `commands.mjs` beside this skil
 | --- | --- |
 | `sage mode`, `sage mode on` | The hook turns Sage on. Accept work in the next message. |
 | `sage mode off` | The hook turns Sage and autopilot off. Stop dispatch. Interrupt only owned active agents through supported tools, inspect the outcome and preserve work. Unknown status stays unresolved. |
-| `autopilot on` | The hook turns autopilot on while Sage is on. Nothing else is needed. |
+| `autopilot on` | Automatic merging is unavailable in Codex. The owner merges directly in GitHub. |
 | `autopilot off` | The hook turns autopilot off and keeps Sage’s current mode. |
 | `sage help` | Show these phrases, board/status forms, actual known mode and capability limits. Do no work. |
 
@@ -28,7 +28,9 @@ Board/status requests work without activation. Preserve `show board`, `sage boar
 
 ## Landing a PR
 
-Land a PR the same way as in Claude Code. After its clean cycles and a passing `merge_check`, the chief runs `gh pr merge <n> --squash --delete-branch --match-head-commit <sha>` from the main thread. The sage gate gets the session, its own settings and the owner's typed phrases from Codex. It allows the command only with autopilot on and a passing merge check for that head commit. With autopilot off, it refuses: report the PR as ready, and the owner lands it. An agent never lands a PR.
+Automatic merging is unavailable in Codex. Sage prepares the checks; the owner merges directly in GitHub. Keep both required review and QA cycles for auth, input and data risks, even with autopilot off. Hand off only after CI passes on the final head, both cycles pass and `merge_check` passes. Give the owner the PR link, exact head SHA and evidence. No phrase, saved mode or configuration flag grants merge authority.
+
+The hook refuses recognized shell merge commands in every Sage mode. This is a bounded guard: non-Sage MCP tools and arbitrary interpreter programs are outside its merge coverage. Do not claim universal merge enforcement.
 
 ## Continuity and limits
 
