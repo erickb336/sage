@@ -1261,6 +1261,7 @@ test("the sage folder rule also covers the Codex sessions folder, where the type
 
 test("a project under the desktop app's ~/.codex/worktrees edits as usual, with sage mode off and on; its own .codex folder stays closed (R1666-1)", (t) => {
   const w = world(t, { at: "home/.codex/worktrees/w1/app" });
+  w.env.CODEX_HOME = join(w.env.HOME, ".codex");
   const p = (path) => patch(`*** Add File: ${path}`, "+x");
   const project = w.project;
   w.mode({ sage: false, autopilot: false });
