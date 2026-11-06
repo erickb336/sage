@@ -341,7 +341,11 @@ test("T603: the Codex pages hold no v1 path for a task, and the guide gives the 
     assert.doesNotMatch(text, /AgentLimitReached|does the lead's work|do the lead's work|On multi-agent v1|Multi-agent v1\.|only in the `multi_agent_v1`|4 times/, name);
   }
   assert.match(guide, /sage on Codex needs a multi-agent v2 model for the chief and each child\./);
-  assert.match(guide, /each small task still asks you at least 5 times before its merge/);
+  assert.match(guide, /Codex can ask for permission during ordinary Sage work before the owner merges\./);
+  assert.match(guide, /The following count describes the default `workspace-write` sandbox used in the pilot\./);
+  assert.match(guide, /The count of 5 is for the first five rows, in one small task with separate commands\./);
+  assert.match(guide, /A model that joins `git add` and `git commit` in one command gets one prompt for both\./);
+  assert.match(guide, /The sage hook never grants automatic approval through `PermissionRequest`\./);
   assert.match(guide, /\| Read the pull request and its checks \(`gh pr view`, `gh pr checks`\) \| The chief's check of a ready task, before the merge \| It needs the network \|/);
   assert.match(guide, /- A multi-agent v2 model for the chief and each child\. In Codex 0\.164\.0's bundled catalog, the `gpt-6-sol` models are v2, and `gpt-5\.6-luna` is not/);
   const needs = guide.slice(guide.indexOf("## What you need"), guide.indexOf("## Install"));

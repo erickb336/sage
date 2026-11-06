@@ -1,4 +1,4 @@
-// T547: when autopilot turns on, the hook warns once if the default branch needs no pull request. It warns only. Both hooks
+// T547: Claude warns on unprotected activation; Codex refuses activation without reading protection. Both hooks
 // run as their hosts run them (one process for each event), with a fake gh on PATH: no test reaches GitHub.
 import "./test-env.mjs";
 import assert from "node:assert/strict";
@@ -69,7 +69,7 @@ const UNREADABLE = /sage could not check whether the default branch of this repo
 const AUTOPILOT = /sage: autopilot is on\./;
 const NO_PLAN = /Warning: GitHub offers no branch protection for this private repository on your plan, so nothing locks the default branch \(main\)\. A merge or a push can land with no lock\. Autopilot still runs\. To get a lock, make the repository public or upgrade to GitHub Pro\./;
 
-for (const host of ["claude", "codex"]) {
+for (const host of ["claude"]) {
   for (const [mode, expected] of [["rules", "no line"], ["classic", "no line"], ["unprotected", "warning"], ["status", "warning"], ["broken", "could not check"]]) {
     test(`T547 ${host}: autopilot on with GitHub in the state "${mode}" gives ${expected}, and autopilot stays on`, () => {
       const s = session(host, mode);
@@ -137,6 +137,39 @@ for (const host of ["claude", "codex"]) {
     assert.deepEqual(s.calls(), []);
   });
 }
+
+const CODEX_UNAVAILABLE = "sage: automatic merging is unavailable in Codex. Sage prepares the checks; the owner merges directly in GitHub.";
+
+for (const mode of ["rules", "classic", "unprotected", "status", "broken", "private", "private-classic", "slow"]) {
+  test(`T547 codex: autopilot stays off with GitHub in the state "${mode}", without protection reads`, () => {
+    const s = session("codex", mode);
+    s.prompt("sage mode");
+    assert.equal(s.prompt("autopilot on"), CODEX_UNAVAILABLE);
+    assert.match(s.prompt("sage help"), /Now: sage mode is on, and autopilot is off\./);
+    assert.deepEqual(s.calls(), [], "unavailable activation never checks GitHub protection");
+  });
+}
+
+test("T547 codex: repeated activation stays unavailable without protection reads or retries", () => {
+  for (const mode of ["unprotected", "broken"]) {
+    const s = session("codex", mode);
+    s.prompt("sage mode");
+    assert.equal(s.prompt("autopilot on"), CODEX_UNAVAILABLE);
+    s.prompt("autopilot off");
+    assert.equal(s.prompt("autopilot on"), CODEX_UNAVAILABLE);
+    assert.match(s.prompt("sage help"), /Now: sage mode is on, and autopilot is off\./);
+    assert.deepEqual(s.calls(), [], "neither a warning cache nor a failed read enables a protection lookup");
+  }
+});
+
+test("T547 codex: a normal session or another phrase reads nothing from GitHub", () => {
+  const s = session("codex", "unprotected");
+  s.prompt("fix the login bug");
+  s.prompt("sage mode");
+  assert.match(s.prompt("sage help"), /Now: sage mode is on, and autopilot is off\./);
+  s.prompt("autopilot off");
+  assert.deepEqual(s.calls(), []);
+});
 
 test("T547 claude: a merge after the warning is judged by the merge check alone, not refused for protection", () => {
   const s = session("claude", "unprotected");
