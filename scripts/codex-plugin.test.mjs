@@ -1,12 +1,15 @@
 import "./test-env.mjs";
 import assert from "node:assert/strict";
 import { spawnSync } from "node:child_process";
-import { cpSync, existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, truncateSync, writeFileSync } from "node:fs";
+import { chmodSync, cpSync, existsSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, truncateSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join, relative, resolve } from "node:path";
 import { test } from "node:test";
 import { z } from "zod";
 import { ROOT } from "./build.mjs";
+import { sessionStatus } from "../plugins/sage-codex/hooks/session-start-hook.mjs";
+import { modeDirectory, answer } from "../plugins/sage-codex/hooks/sage-codex-hook.mjs";
+import { readMode, gate } from "../plugins/sage-codex/hooks/gate-hook.mjs";
 
 const json = (path) => JSON.parse(readFileSync(join(ROOT, path), "utf8"));
 // A "./" path that stays inside its root (docs plugins/build.md, "Path rules" and "Marketplace metadata").
@@ -67,7 +70,7 @@ test("each hook command runs a file of the built plugin", () => {
 
 /** An installed copy of the built plugin in a scratch CODEX_HOME, as `codex plugin add sage@sage` makes it. */
 function installed(t, { trust = [], cliVersion } = {}) {
-  const home = mkdtempSync(join(tmpdir(), "sage-codex-home-"));
+  const home = realpathSync(mkdtempSync(join(tmpdir(), "sage-codex-home-")));
   t.after(() => rmSync(home, { recursive: true, force: true }));
   const root = join(home, "plugins/cache/sage/sage/0.1.0");
   mkdirSync(root, { recursive: true });
@@ -87,9 +90,58 @@ function installed(t, { trust = [], cliVersion } = {}) {
 const { stateKey } = await import(new URL("../plugins/sage-codex/hooks/principles-hook.mjs", import.meta.url));
 
 /** The hook's output: the status for the chief always, and a warning for the user only when there is a limit. */
-const output = (status, warning) => ({ ...(warning ? { systemMessage: warning } : {}), hookSpecificOutput: { hookEventName: "SessionStart", additionalContext: warning ? `${status}\n${warning}` : status } });
+const output = (status, warning) => ({ ...(warning ? { systemMessage: warning } : {}), hookSpecificOutput: { hookEventName: "SessionStart", additionalContext: `${status}\nAutomatic merging is unavailable in Codex. Sage prepares the checks; the owner merges directly in GitHub.${warning ? `\n${warning}` : ""}` } });
 const ALL = ["session_start:0:0", "session_start:1:0", "user_prompt_submit:0:0", "user_prompt_submit:1:0", "pre_tool_use:0:0", "pre_tool_use:1:0", "permission_request:0:0", "post_tool_use:0:0", "subagent_start:0:0", "subagent_stop:0:0"];
 const START = "To start sage mode, the user sends this message alone: sage mode";
+
+test("T115 synthetic lifecycle: legacy state never grants merge authority, even when reset fails", async (t) => {
+  const home = realpathSync(mkdtempSync(join(tmpdir(), "sage-t115-reset-")));
+  t.after(() => rmSync(home, { recursive: true, force: true }));
+  const env = { HOME: home, CODEX_HOME: home, SAGE_HOME: join(home, "mode-root") };
+  const dir = modeDirectory(env);
+  mkdirSync(dir, { recursive: true, mode: 0o700 });
+  const input = { hook_event_name: "SessionStart", source: "resume", session_id: "synthetic-t115-root" };
+  const file = join(dir, `${stateKey(input)}.json`);
+  const options = { pluginRoot: join(ROOT, "plugins/sage-codex"), codexHome: home, env };
+  const before = { sage: true, autopilot: true, given: true, off: "legacy" };
+  const put = () => writeFileSync(file, JSON.stringify(before), { mode: 0o600 });
+  const refusal = async () => {
+    assert.deepEqual(readMode({ session: input.session_id }, env), { sage: true, autopilot: false });
+    for (const extra of [{}, { agent_id: "child" }]) {
+      const result = await gate({ ...input, ...extra, hook_event_name: "PreToolUse", tool_name: "Bash", cwd: home,
+        tool_input: { command: `gh pr merge 41 --squash --delete-branch --match-head-commit ${"a".repeat(40)}` } }, { env });
+      assert.equal(result.hookSpecificOutput.permissionDecision, "deny");
+      assert.match(result.hookSpecificOutput.permissionDecisionReason, /automatic merging is unavailable/);
+    }
+  };
+  for (const source of ["startup", "resume", "compact", "fork"]) {
+    put();
+    await refusal();
+    const result = sessionStatus({ ...input, source }, options);
+    assert.match(result.hookSpecificOutput.additionalContext, /Automatic merging is unavailable/);
+    assert.deepEqual(JSON.parse(readFileSync(file, "utf8")), { ...before, autopilot: !["startup", "resume"].includes(source) });
+    await refusal();
+  }
+  put();
+  assert.throws(() => sessionStatus(input, { ...options, pluginRoot: join(home, "missing") }));
+  assert.deepEqual(JSON.parse(readFileSync(file, "utf8")), { ...before, autopilot: false }, "reset precedes status metadata reads");
+  put();
+  chmodSync(dir, 0o500);
+  try {
+    assert.match(sessionStatus(input, options).systemMessage, /autopilot reset is unavailable/);
+    assert.deepEqual(JSON.parse(readFileSync(file, "utf8")), before, "failed reset does not claim to save");
+    const failure = answer({ ...input, hook_event_name: "UserPromptSubmit", prompt: "autopilot on" }, env);
+    assert.match(failure.systemMessage, /could not read or save/);
+    assert.match(failure.systemMessage, /automatic merging is unavailable/);
+    await refusal();
+  } finally { chmodSync(dir, 0o700); }
+  for (const data of ["{", "null", '{"sage":true,"autopilot":"on"}']) {
+    writeFileSync(file, data);
+    assert.match(sessionStatus(input, options).systemMessage, /autopilot reset is unavailable/);
+    assert.equal(readFileSync(file, "utf8"), data);
+    assert.deepEqual(readMode({ session: input.session_id }, env), { sage: false, autopilot: false });
+  }
+});
 
 test("the SessionStart hook gives a trusted install on a tested Codex no warning: the status goes to the chief only (R1665-3)", (t) => {
   const { run } = installed(t, { trust: ALL, cliVersion: "0.164.0" });
@@ -134,7 +186,7 @@ test("the Codex guide carries the owner's lines for install, trust, removal, the
   for (const line of [
     "To get it, run `npm install -g @openai/codex@0.164.0`.", // R1670-3
     "one tool for each command of the state tool that the chief uses.", // R1665-8, R1670-2
-    "A reviewer's commit through these forms can also be pushed to the task's branch. Read the branch's commits before a merge, or keep autopilot off for such a task.", // R1670-6
+    "A reviewer's commit through these forms can also be pushed to the task's branch. Read the branch's commits before the owner merges.", // R1670-6
     "when no sage hook is trusted, no sage hook runs, so you see no sage line at all, also no warning. If sage mode does not start, type `/hooks` in the Codex CLI", // R1671-1
     "Codex keeps the trust records of the sage hooks in your Codex config", // R1671-3
     "sage: this is Codex 0.167.0, and sage is tested only with Codex 0.160 to 0.166. Some sage rules may not run.", // R1670-7
@@ -153,11 +205,12 @@ test("T470: the Codex guide, the README and the CHANGELOG carry the owner's copy
     guide: [
       "Codex 0.164.0 runs no hook for text that an agent types into a shell that still runs (`write_stdin`, for example after `zsh -i`). That text passes every sage rule, also a push or a merge. Autopilot off does not stop such a merge.", // F-T470-13
       "- In workspace-write, the sandbox keeps this text off the network and keeps the logbook and the sessions folder closed. Keep network access off for the session (`[sandbox_workspace_write] network_access = false`, the default). When Codex asks to run an interactive shell (for example `zsh -i`) outside the sandbox, refuse.", // F-T470-13
-      "- `gh`, logged in (`gh auth login`), and a GitHub remote for the project. sage uses them for pull requests and the merge check; without them, work stops at a verified branch and autopilot merges nothing.", // F-T470-15
+      "- `gh`, logged in (`gh auth login`), and a GitHub remote for the project. sage uses them for pull requests and the merge check; without them, work stops at a verified branch.", // F-T470-15
       "Codex's review thread runs in the chief's session and has no agent id, but its record names a review source |", // F-T470-1, a table cell
       "If an agent says that the hook could not read Codex's record of its thread, start a new session in the project folder. If it happens again, report it with your Codex version.", // F-T470-2
       "4. Send the on phrase alone (see [Turn on sage mode](#turn-on-sage-mode)). When all is well, you see no sage line", // F-T470-8
-      "To stop merges at once, press Esc to stop Codex's turn, then send the off phrase for autopilot alone.", // F-T470-9
+      "Send a phrase when Codex is idle. To stop Codex's current turn, press Esc.", // F-T470-9
+      "Before that report, CI must pass on the final head, both required risk cycles must pass, and `merge_check` must pass. Auth, input and data risks still require both review and QA cycles; owner merging does not waive them.",
       "For a local clone, run `git pull` in the clone instead of the upgrade command.", // F-T470-12
       "The Codex logbook in `~/.codex/sage` stays; delete that folder yourself to remove it.", // F-T470-12
       "- Under full access (`danger-full-access`), sage mode gives no guarantee", // F-T470-14: in the guide since the README's limits table went (T521)

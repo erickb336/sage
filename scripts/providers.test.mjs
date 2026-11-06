@@ -2693,7 +2693,7 @@ test("T586: the Codex arena steps come in Claude's order, and the Codex steps na
   assert.doesNotMatch(judge, /leaves? the pull request to the chief/);
 });
 
-test("shared chief Codex instructions keep unsupported routes inactive, and merge only by autopilot through the plugin's hook", async t => {
+test("shared chief Codex instructions keep unsupported routes inactive and hand reviewed work to the owner for merging", async t => {
   const f = isolated(t, "codex");
   const api = await import(pathToFileURL(join(f.plugin, "core/index.mjs")));
   assert.equal(typeof api.renderChiefInstructions, "function");
@@ -2714,8 +2714,11 @@ test("shared chief Codex instructions keep unsupported routes inactive, and merg
   assert.match(text, /first read the sage skill's `references\/arena\.md`/);
   assert.doesNotMatch(text, /arena[^\n]*(?:unavailable|not yet integrated)/i);
   assert.match(text, /installed acceptance/);
-  assert.match(text, /Autopilot off:\*\* the user merges\. Never push to main, force-push/);
-  assert.match(text, /The plugin's hook allows only this exact command when the merge check passes/);
+  assert.match(text, /Automatic merging is unavailable in Codex\.\*\* No phrase, saved mode or configuration flag enables it\./);
+  assert.match(text, /Sage prepares the checks; the owner merges directly in GitHub\. Never push to main, force-push/);
+  assert.match(text, /Keep both required review and QA cycles for auth, input and data risks/);
+  assert.match(text, /Hand off only after CI passes on the final head, both cycles pass and `merge_check` passes\./);
+  assert.match(text, /Give the owner the PR link, exact head SHA and evidence\. A passing check grants no merge authority\./);
   assert.match(text, /state tool checks at least one cycle/);
   assert.doesNotMatch(text, /CLAUDE\.md|~\/workspace|\.claude|sage:report|model fable|opus|sonnet|gh api|gate G15|\{\{|sage-core-chief/);
   // Rendering this document must not register the chief as an admitted child role.

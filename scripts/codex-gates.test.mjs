@@ -36,7 +36,7 @@ const ask = (command, extra = {}) => ({ ...base, hook_event_name: "PermissionReq
 const patch = (...lines) => `*** Begin Patch\n${lines.join("\n")}\n*** End Patch`;
 const CHILD = { agent_id: "agent-1", agent_type: "worker" };
 const denied = (out) => (out?.hookSpecificOutput?.permissionDecision === "deny" ? out.hookSpecificOutput.permissionDecisionReason : undefined);
-const ALLOW = { hookSpecificOutput: { hookEventName: "PermissionRequest", decision: { behavior: "allow" } } };
+const OWNER_MERGE = "sage: automatic merging is unavailable in Codex. Sage prepares the checks; the owner merges directly in GitHub";
 const BAD_NAME = (name) => `sage: "${name}" starts with sage_ but is not a sage task name (sage_<role>_t<n>_r<k>), so this agent counts as a read-only role: it changes no files. Report instead`;
 const RO = (role) => `sage: in sage mode, the ${role} agent changes no files. Report the finding instead`;
 const LOGBOOK = "sage: role agents report; only the chief records the logbook. Put this in your report";
@@ -195,7 +195,7 @@ test("Codex's own threads (review, guardian) share the session id and have no ag
         assert.match(got.spawn ?? "", UNREAD, name);
         if (sage) assert.match(got.edit ?? "", UNREAD, name);
       }
-      assert.equal(got.merge, sage ? "sage: an agent never merges. Report the pull request as ready" : undefined, name);
+      assert.equal(got.merge, OWNER_MERGE, name);
       assert.equal(await g.run({ ...ask(MERGE), transcript_path }), undefined, `${name}: no approval decision`);
     }
   }
@@ -225,30 +225,25 @@ test("a chief's transcript over Node's string limit still reads as the chief; a 
     "sage: the hook could not read Codex's record of this thread, so it refuses this call. Tell the user");
 });
 
-test("a merge runs only on the root thread, with autopilot on and a passing merge check", async () => {
-  const off = fixed({ autopilot: false });
-  assert.equal(denied(await off.run(pre("Bash", MERGE))), 'sage: autopilot is off, so the user merges. Report the pull request as ready. The user turns it on with the message "autopilot on", alone');
-  assert.equal(off.checks.length, 0, "autopilot off refuses before the merge check");
-  const failing = fixed({ autopilot: true, ok: false });
-  assert.equal(denied(await failing.run(pre("Bash", MERGE))), "sage: the merge check refuses: no verdicts recorded");
-  assert.deepEqual(failing.checks, [{ pr: "41", sha: SHA }]);
-  const passing = fixed({ autopilot: true });
-  assert.equal(await passing.run(pre("Bash", MERGE)), undefined, "the verified merge runs");
-  assert.equal(denied(await passing.run(pre("Bash", MERGE, CHILD))), "sage: an agent never merges. Report the pull request as ready");
-  for (const command of [`gh pr merge 41 --squash --match-head-commit ${SHA}`, "gh pr merge 41 --squash --delete-branch", `${MERGE} && echo done`, `bash -c "${MERGE}"`, "gh api -X PUT repos/o/r/pulls/41/merge"]) {
-    assert.match(denied(await passing.run(pre("Bash", command))) ?? "", /^sage: (?:merge only|the hook cannot prove)/, command);
+test("T115: every recognized merge refuses in every mode, role and check result", async () => {
+  for (const sage of [false, true]) for (const autopilot of [false, true]) for (const ok of [false, true]) {
+    const g = fixed({ sage, autopilot, ok });
+    for (const extra of [{}, CHILD]) for (const command of [MERGE, `gh pr merge 41 --squash --match-head-commit ${SHA}`, "gh pr merge 41 --squash --delete-branch", `${MERGE} && echo done`, `bash -c "${MERGE}"`, "gh api -X PUT repos/o/r/pulls/41/merge"]) {
+      assert.equal(denied(await g.run(pre("Bash", command, extra))), OWNER_MERGE, command);
+      assert.equal(await g.run(ask(command, extra)), undefined);
+    }
+    assert.equal(g.checks.length, 0, "no merge authority depends on merge_check");
+    assert.equal(await g.run(pre("Bash", "git status")), undefined, "safe reads still pass");
   }
-  assert.equal(passing.checks.length, 1, "only the exact form reaches the merge check");
-  assert.equal(await fixed({ sage: false }).run(pre("Bash", MERGE)), undefined, "outside sage mode the gate does not judge merges");
 });
 
-test("the approval request of the verified merge is allowed; every other request gets no decision", async () => {
+test("T115: permission requests never receive automatic approval", async () => {
   const passing = fixed({ autopilot: true });
-  assert.deepEqual(await passing.run(ask(MERGE)), ALLOW);
+  assert.equal(await passing.run(ask(MERGE)), undefined);
   for (const input of [ask(MERGE, CHILD), ask("curl https://example.com"), ask(`${MERGE} && echo done`), ask(`gh pr merge 41 --merge --match-head-commit ${SHA}`), { ...ask(MERGE), tool_name: "apply_patch" }]) {
     assert.equal(await passing.run(input), undefined, JSON.stringify(input.tool_input));
   }
-  assert.equal(passing.checks.length, 1);
+  assert.equal(passing.checks.length, 0);
   assert.equal(await fixed({ autopilot: false }).run(ask(MERGE)), undefined, "autopilot off: Codex asks the user");
   assert.equal(await fixed({ autopilot: true, ok: false }).run(ask(MERGE)), undefined, "a failing check: Codex asks the user");
 });
@@ -310,28 +305,28 @@ test("T455: independent gate fixtures initialize together while a clone still ne
   assert.throws(() => codexTool.sage(["init", "--project", clone], first.env), /It has the same first commit/);
 });
 
-test("the hook process reads the mode file and the ledger: a verified merge passes and its request is allowed", (t) => {
+test("T115: the hook process refuses merges with saved state and passing ledger verdicts", (t) => {
   const w = world(t);
   w.typed("sage mode", "autopilot on");
   w.mode({ sage: true, autopilot: false });
-  assert.match(denied(w.send(pre("Bash", MERGE))) ?? "", /^sage: autopilot is off/);
+  assert.equal(denied(w.send(pre("Bash", MERGE))), OWNER_MERGE);
   assert.equal(w.send(ask(MERGE)), undefined);
   w.mode({ sage: true, autopilot: true });
-  assert.match(denied(w.send(pre("Bash", MERGE))) ?? "", /^sage: the merge check refuses: /, "no verdicts yet");
+  assert.equal(denied(w.send(pre("Bash", MERGE))), OWNER_MERGE, "no verdicts yet");
   assert.equal(w.send(ask(MERGE)), undefined, "a failing check leaves the prompt to Codex");
   assert.equal(w.sage("init").status, 0);
   assert.equal(w.sage("task", "add", "--priority", "P2", "--title", "t", "--size", "small").status, 0);
   for (const kind of ["checks-pass", "review-clean", "qa-pass"]) assert.equal(w.sage("verdict", "T1", "--sha", SHA, "--kind", kind, "--cycle", "1", "--pr", "41").status, 0);
-  assert.equal(w.send(pre("Bash", MERGE)), undefined, "the verified merge runs");
-  assert.deepEqual(w.send(ask(MERGE)), ALLOW, "and Codex shows no prompt for it");
-  assert.match(denied(w.send(pre("Bash", MERGE, CHILD))) ?? "", /^sage: an agent never merges/);
+  assert.equal(denied(w.send(pre("Bash", MERGE))), OWNER_MERGE, "passing verdicts grant no authority");
+  assert.equal(w.send(ask(MERGE)), undefined);
+  assert.equal(denied(w.send(pre("Bash", MERGE, CHILD))), OWNER_MERGE);
   w.mode({ sage: false, autopilot: true });
   assert.equal(w.send(ask(MERGE)), undefined, "autopilot counts only in sage mode");
   assert.match(denied(w.send(pre("apply_patch", patch("*** Add File: .codex/config.toml", "+x")))) ?? "", /^sage: no agent changes files under a \.codex folder/);
   assert.equal(denied(w.send("{not json")), UNREADABLE);
 });
 
-test("F-T618-17: in the Codex hook a replaced chief's gh pr merge refuses and names the owning chief; a legacy project and the owning chief merge as before", (t) => {
+test("T115: legacy, owning and replaced chiefs all receive the merge refusal", (t) => {
   const w = world(t);
   w.typed("sage mode", "autopilot on");
   w.mode({ sage: true, autopilot: true });
@@ -343,17 +338,17 @@ test("F-T618-17: in the Codex hook a replaced chief's gh pr merge refuses and na
   };
   run("init");
   verified();
-  assert.equal(w.send(pre("Bash", MERGE)), undefined, "a legacy project has no chief");
-  assert.deepEqual(w.send(ask(MERGE)), ALLOW);
+  assert.equal(denied(w.send(pre("Bash", MERGE))), OWNER_MERGE, "a legacy project has no chief");
+  assert.equal(w.send(ask(MERGE)), undefined);
   rmSync(codexTool.storeDir(w.project, w.env), { recursive: true });
   codexTool.sage(["link", "--separate", "--project", w.project], w.env);
   const first = codexTool.chiefFor(w.project, base.session_id, w.env), second = codexTool.chiefFor(w.project, "another-session", w.env);
   verified("--chief", first);
-  assert.equal(w.send(pre("Bash", MERGE)), undefined, "the owning chief merges");
-  assert.deepEqual(w.send(ask(MERGE)), ALLOW, "and Codex shows no prompt for it");
+  assert.equal(denied(w.send(pre("Bash", MERGE))), OWNER_MERGE, "the owning chief cannot merge");
+  assert.equal(w.send(ask(MERGE)), undefined);
   run("gate", "replace", "T1", "--to", second, "--chief", second);
   run("gate", "answer", "G1", "--option", "1");
-  assert.equal(denied(w.send(pre("Bash", MERGE))), `sage: the merge check refuses: T1 belongs to chief ${second} (codex), not to ${first}. Nothing changed. Change only your own tasks. If ${second} stopped, open a replace gate for the owner to answer: call the gate_replace tool with this task and to ${first}`);
+  assert.equal(denied(w.send(pre("Bash", MERGE))), OWNER_MERGE);
   assert.equal(w.send(ask(MERGE)), undefined, "the request of the replaced chief gets no allow");
 });
 
@@ -363,7 +358,7 @@ test("the core reader of the mode file: no file is no mode, and a damaged file o
   w.typed("sage mode", "autopilot on");
   assert.deepEqual(readMode(at, w.env), { sage: false, autopilot: false }, "no file is no mode");
   const folder = w.mode({ sage: true, autopilot: true });
-  assert.deepEqual(readMode(at, w.env), { sage: true, autopilot: true });
+  assert.deepEqual(readMode(at, w.env), { sage: true, autopilot: false });
   const file = join(folder, `${stateKey({ session_id: base.session_id })}.json`);
   writeFileSync(file, "{not json");
   assert.deepEqual(readMode(at, w.env), { sage: false, autopilot: false }, "a damaged file is off");
@@ -372,13 +367,14 @@ test("the core reader of the mode file: no file is no mode, and a damaged file o
   symlinkSync(join(folder, "other.json"), file);
   assert.deepEqual(readMode(at, w.env), { sage: false, autopilot: false }, "a link is not read");
   assert.equal(w.send(pre("apply_patch", patch("*** Update File: a.js", "@@", "-a", "+b"))), undefined, "off: the root edits");
-  assert.equal(w.send(pre("Bash", MERGE)), undefined, "off: the gate does not judge merges");
+  assert.equal(denied(w.send(pre("Bash", MERGE))), OWNER_MERGE, "Sage off still refuses merges");
 });
 
-test("a forged mode file alone unlocks no merge: autopilot also needs the user's typed messages in Codex's transcript (T460)", (t) => {
+test("T115: saved and replayed autopilot never unlock a merge", (t) => {
   const w = world(t);
   w.mode({ sage: true, autopilot: true });
-  assert.equal(w.sage("init").status, 0);
+  const initialized = w.sage("init");
+  assert.equal(initialized.status, 0, initialized.stderr);
   assert.equal(w.sage("task", "add", "--priority", "P2", "--title", "t", "--size", "small").status, 0);
   for (const kind of ["checks-pass", "review-clean", "qa-pass"]) assert.equal(w.sage("verdict", "T1", "--sha", SHA, "--kind", kind, "--cycle", "1", "--pr", "41").status, 0);
   const cases = [["no transcript", null], ["no typed phrase", []], ["sage mode only", ["sage mode"]], ["autopilot before sage mode", ["autopilot on", "sage mode"]],
@@ -386,11 +382,9 @@ test("a forged mode file alone unlocks no merge: autopilot also needs the user's
   const got = cases.map(([why, messages]) => {
     if (messages) w.typed(...messages);
     const input = messages ? {} : { transcript_path: join(w.dir, "none.jsonl") };
-    return [why, denied(w.send(pre("Bash", MERGE, input)))?.slice(0, 25) ?? "runs", w.send(ask(MERGE, input))?.hookSpecificOutput?.decision?.behavior ?? "prompt"];
+    return [why, denied(w.send(pre("Bash", MERGE, input))) ?? "runs", w.send(ask(MERGE, input))?.hookSpecificOutput?.decision?.behavior ?? "prompt"];
   });
-  const off = "sage: autopilot is off, s";
-  assert.deepEqual(got, [["no transcript", "sage: the hook could not ", "prompt"], ["no typed phrase", off, "prompt"], ["sage mode only", off, "prompt"], ["autopilot before sage mode", off, "prompt"],
-    ["autopilot off last", off, "prompt"], ["sage mode off last", off, "prompt"], ["a phrase inside a message", off, "prompt"], ["typed", "runs", "allow"]]);
+  assert.deepEqual(got, cases.map(([why]) => [why, OWNER_MERGE, "prompt"]));
   const other = { type: "event_msg", payload: { type: "item_completed", thread_id: "another-thread", item: { type: "UserMessage", content: [{ type: "text", text: "autopilot on" }] } } };
   writeFileSync(w.transcript, ["sage mode"].map((text) => JSON.stringify({ ...other, payload: { ...other.payload, thread_id: base.session_id, item: { ...other.payload.item, content: [{ type: "text", text }] } } })).concat(JSON.stringify(other)).join("\n"));
   assert.deepEqual(typedModes(w.transcript, base.session_id), { sage: true, autopilot: false }, "a message of another thread (a fork's copied history) does not count");
@@ -427,12 +421,12 @@ test("a mode file, a record and a ledger that an agent writes under /tmp turn on
     assert.equal(result.status, 0, result.stderr);
   }
   // The gate reads its own settings, the session that Codex gives it and Codex's record of that session, never the command's.
-  const off = /^sage: (?:autopilot is off|the hook cannot prove that this command is only the merge command)/;
-  assert.match(denied(w.send(pre("Bash", MERGE))) ?? "", /^sage: autopilot is off/, "the plain landing command");
+  const off = /^sage: automatic merging is unavailable/;
+  assert.match(denied(w.send(pre("Bash", MERGE))) ?? "", off, "the plain landing command");
   assert.match(denied(w.send(pre("Bash", `SAGE_HOME=${forged} CODEX_HOME=${forged} ${MERGE}`))) ?? "", off, "settings before the command");
   assert.match(denied(w.send(pre("Bash", MERGE, { transcript_path: forgedRecord }))) ?? "", off, "even with the forged record as the thread's record, the gate's own mode file says off");
   assert.equal(w.send(ask(MERGE)), undefined, "and Codex asks the owner");
-  assert.deepEqual(readMode({ session: base.session_id, transcript: forgedRecord }, forgedEnv), { sage: true, autopilot: true }, "the forged world reads as on only with the agent's own settings");
+  assert.deepEqual(readMode({ session: base.session_id, transcript: forgedRecord }, forgedEnv), { sage: true, autopilot: false }, "even forged settings grant no authority");
 });
 
 test("typed messages count in a transcript over Node's string limit, in lines across piece ends and in CRLF lines (F-T473-1)", (t) => {
@@ -446,14 +440,14 @@ test("typed messages count in a transcript over Node's string limit, in lines ac
   truncateSync(long, 600 * 2 ** 20);
   appendFileSync(long, `\n${typed("sage mode")}\n${typed("autopilot on")}\n`);
   const started = performance.now();
-  assert.deepEqual(typedModes(long, base.session_id), { sage: true, autopilot: true }, "a 600 MiB session");
+  assert.deepEqual(typedModes(long, base.session_id), { sage: true, autopilot: false }, "a 600 MiB session");
   console.log(`typedModes, 600 MiB sparse transcript: ${Math.round(performance.now() - started)} ms`); // evidence only: no time limit (order 26)
   appendFileSync(long, `${typed("autopilot off")}\n`);
   assert.deepEqual(typedModes(long, base.session_id), { sage: true, autopilot: false }, "the off phrase after the gap counts too");
   // A thread id of 3 MiB of 3-byte characters: each line crosses piece ends, and some ends cut a character in two.
   const wide = `s-${"€".repeat(2 ** 20)}`;
-  assert.deepEqual(typedModes(file("wide.jsonl", `${meta}\n${typed("sage mode", wide)}\n${typed("autopilot on", wide)}`), wide), { sage: true, autopilot: true }, "lines across pieces");
-  assert.deepEqual(typedModes(file("crlf.jsonl", `${meta}\r\n${typed("sage mode")}\r\n${typed("autopilot on")}\r\n`), base.session_id), { sage: true, autopilot: true }, "CRLF lines");
+  assert.deepEqual(typedModes(file("wide.jsonl", `${meta}\n${typed("sage mode", wide)}\n${typed("autopilot on", wide)}`), wide), { sage: true, autopilot: false }, "lines across pieces");
+  assert.deepEqual(typedModes(file("crlf.jsonl", `${meta}\r\n${typed("sage mode")}\r\n${typed("autopilot on")}\r\n`), base.session_id), { sage: true, autopilot: false }, "CRLF lines");
 });
 
 test("no thread names the Codex sage folder in a shell command (T460)", (t) => {
@@ -782,7 +776,7 @@ test("T553: the gate runs for v1's resume_agent: a role agent restarts no closed
 test("T553: the commands of a lead's steps pass the gate: it prints a helper's role text, opens the pull request and stops a helper", async (t) => {
   const g = fixed({ sage: true }), lead = sageChild(t, LEAD);
   for (const command of ["node /plugin/skills/sage/role.mjs code-reviewer", "gh pr create --head sage/t12-a --title T12 --body done", "gh pr view 7 --json headRefOid"]) assert.equal(await g.run(pre("Bash", command, lead)), undefined, command);
-  assert.equal(denied(await g.run(pre("Bash", "gh pr merge 7 --squash --delete-branch --match-head-commit " + "a".repeat(40), lead))), "sage: an agent never merges. Report the pull request as ready", "and it never merges");
+  assert.equal(denied(await g.run(pre("Bash", "gh pr merge 7 --squash --delete-branch --match-head-commit " + "a".repeat(40), lead))), OWNER_MERGE, "and it never merges");
   assert.equal(gateMatcher().test("collaborationinterrupt_agent"), false, "the gate does not judge the stop tool of the steps");
 });
 
@@ -1600,7 +1594,7 @@ test("in sage mode gh runs only the command paths that sage uses, by name, with 
   const refused = [["gh land 360", "gh land"], ["gh co 360", "gh co"], [`cd /work && gh ship 41 ${SHA}`, "gh ship"], ["env FOO=1 gh land 41", "gh land"],
     // F-T534-1, R1940-2: a two-word alias under a built-in group, and an option before the subcommand, which hides it.
     ["gh pr mrg 360", "gh pr mrg"], ["gh pr land 360 --admin", "gh pr land"], ["gh issue mrg 1", "gh issue mrg"], ["gh run x", "gh run x"], ["gh pr -R o/r mrg 41", "gh pr -R"],
-    ["gh alias set 'pr mrg' 'pr merge --admin'", "gh alias"], ["gh auth token", "gh auth token"],
+    ["gh alias set 'pr mrg' 'pr merge --admin'", OWNER_MERGE], ["gh auth token", "gh auth token"],
     ["$(which gh) land 41", LITERAL], ["G=gh; $G land 41", LITERAL], ["`which gh` land 41", LITERAL],
     // R1946-2: alias, extension and config are no path that sage uses.
     ["gh alias import aliases.yml", "gh alias"], ["gh alias list", "gh alias"], ["gh extension install o/gh-land", "gh extension"], ["gh ext create land", "gh ext"],
@@ -1616,7 +1610,7 @@ test("in sage mode gh runs only the command paths that sage uses, by name, with 
     assert.equal(denied(await g.run(pre("Bash", command))), undefined, command);
   }
   assert.equal(await fixed({ sage: false }).run(pre("Bash", "gh land 360")), undefined, "outside sage mode the gate does not judge gh");
-  assert.equal(await g.run(pre("Bash", MERGE)), undefined, "the landing command itself still runs");
+  assert.equal(denied(await g.run(pre("Bash", MERGE))), OWNER_MERGE, "the merge command always refuses");
 });
 
 

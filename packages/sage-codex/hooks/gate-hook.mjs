@@ -46,11 +46,9 @@
 //     MCP hook name of Codex 0.164.0 handlers/mcp.rs:139-161) runs
 //     its code in its own process, where no hook sees a shell command. The owner chose to allow it, so the manifest
 //     does not match it and the gate never sees it.
-//   - A merge (sage mode): only the one merge form of core, only on the root thread, only with autopilot on and a passing
-//     merge check for that head SHA. Autopilot counts only when the mode file and the user's own typed messages in
-//     Codex's transcript of the thread both give it, so a forged mode file alone unlocks nothing. PreToolUse denies every
-//     other merge with one reason line. PermissionRequest allows the escalation of that exact command when the same
-//     rules pass, so Codex shows no prompt; for every other request it declines to decide, so Codex shows its own prompt.
+//   - A recognized shell merge: refused in every mode and thread, regardless of saved or replayed autopilot.
+//     PermissionRequest never grants automatic approval. Non-Sage MCP and arbitrary interpreter programs remain
+//     outside this bounded shell-command guard.
 // It fails closed: a PreToolUse event that it cannot read is denied with one plain line. A PermissionRequest that it
 // cannot read gets no decision, so the user decides in Codex's own prompt.
 import { execFileSync } from "node:child_process";
@@ -93,8 +91,7 @@ const UNREADABLE = "sage: the hook could not read this tool call, so it refuses 
 const CODEX_FOLDER = "sage: no agent changes files under a .codex folder, because Codex reads its project settings there. Ask the user to make this change.";
 const CODEX_SETTINGS = "sage: no agent writes Codex's config file or the sage plugin's folder from the shell, because the trust of sage's hooks is there. Ask the user to make this change.";
 const CHIEF = 'sage: sage mode is on, so the chief does not change files. Brief an implementer to make this change. The user ends sage mode with the message "sage mode off", alone.';
-const AGENT_MERGE = "sage: an agent never merges. Report the pull request as ready.";
-const AUTOPILOT_OFF = 'sage: autopilot is off, so the user merges. Report the pull request as ready. The user turns it on with the message "autopilot on", alone.';
+const OWNER_MERGE = "sage: automatic merging is unavailable in Codex. Sage prepares the checks; the owner merges directly in GitHub";
 const LOGBOOK_FILE = "sage: in sage mode, no agent writes a logbook file by its name outside the project. Use the sage MCP tools for the logbook.";
 const SAGE_FOLDER = "sage: no agent runs a shell command that names the Codex sage folder, the shared root or the Codex sessions folder, and no patch changes them, because the logbook, the mode files and the user's typed messages are there. Use the sage MCP tools for the logbook.";
 const CODEX_RUN = "sage: no agent runs codex from the shell, except codex --version and codex --help, because a new session runs outside these hooks, and Codex records the prompt of a resumed, forked or queued turn as the user's typed message, also a mode phrase. Ask the user.";
@@ -347,18 +344,17 @@ export function typedModes(transcript, session) {
     }
     endLine();
   } catch { return off; } finally { closeSync(fd); }
-  return { sage: state.sage === true, autopilot: state.sage === true && state.autopilot === true };
+  return { sage: state.sage === true, autopilot: false };
 }
 
 /**
  * The mode of the session's root thread: { sage, autopilot }. The mode hook keeps it in one file for each thread, with
- * the core reader: no file is no mode, and a damaged file is off. Autopilot also needs the user's typed messages, so the
- * gate reads the transcript only when it asks for autopilot (a merge).
+ * the core reader: no file is no mode, and a damaged file is off. Autopilot is always effectively off.
  */
 export function readMode({ session, transcript }, env = process.env) {
   const { state } = readModeFile(readState, join(modeDirectory(env), `${stateKey({ session_id: session })}.json`));
   const sage = state.sage === true;
-  return { sage, get autopilot() { return sage && state.autopilot === true && typeof transcript === "string" && typedModes(transcript, session).autopilot; } };
+  return { sage, autopilot: false };
 }
 
 /** The role of one sage task name (sage_<role with _ for ->_t<n>, with _r<k> or not), or null for a name that is not one. */
@@ -700,7 +696,6 @@ const deny = (reason) => ({ hookSpecificOutput: { hookEventName: "PreToolUse", p
 const UNREAD_THREAD = "sage: the hook could not read Codex's record of this thread, so it refuses this call. Tell the user.";
 /** A refusal of a child rule; a thread whose record the hook cannot read gets the line that says so. */
 const refuse = (thread, reason) => deny(thread.unread ? UNREAD_THREAD : reason);
-const ALLOW = { hookSpecificOutput: { hookEventName: "PermissionRequest", decision: { behavior: "allow" } } };
 const UNREAD_REQUEST = { systemMessage: "sage: the hook could not read this approval request, so Codex asks you." };
 
 /** The input fields that the gate reads, or undefined for a shape that it does not know. */
@@ -746,12 +741,10 @@ export async function gate(input, { mode = readMode, check = checkMerge, env = p
   const f = fieldsOf(input);
   if (!f) return input?.hook_event_name === "PermissionRequest" ? UNREAD_REQUEST : deny(UNREADABLE);
   const thread = threadOf(f);
-  if (f.event === "PermissionRequest") {
-    if (f.tool !== "Bash" || thread.child || !mode(f, env).autopilot) return undefined;
-    const merge = policy.mergeIn(f.command);
-    if (!merge || merge.problem) return undefined;
-    return (await check(merge, f.cwd, env, f.session)).ok === true ? ALLOW : undefined;
-  }
+  if (f.event === "PermissionRequest") return undefined;
+  // Refuse every recognized merge before mode, role or saved-state checks. A passing
+  // merge_check prepares an owner handoff; it never grants this hook merge authority.
+  if (f.tool === "Bash" && policy.mergeIn(f.command)) return deny(OWNER_MERGE);
   const sageTool = SAGE_TOOL.exec(f.tool);
   if (sageTool) {
     const caller = callerOf(thread, f.cwd), why = callerRefusal(caller, sageTool[1], f.input, env);
@@ -821,7 +814,7 @@ export async function gate(input, { mode = readMode, check = checkMerge, env = p
   if (writeEvidence ? namesReference(writeEvidence.writes, namesCodexSettings) : commandWrites(f.command, f.cwd) && namesCodexSettings(f.command, env, f.cwd)) return deny(CODEX_SETTINGS);
   if (parsedWrites?.uncertain) return deny("sage: the shell write target or its folder is uncertain. Use a literal target in the assigned project");
   const now = mode(f, env);
-  if (!now.sage) return undefined; // outside sage mode the gate does not judge pushes or merges, as in the Claude hook
+  if (!now.sage) return undefined; // the merge refusal above applies in every mode
   if (writeEvidence?.writes.some(({ word, dir }) => gitInternalPath(resolve(dir, word))) ||
     (shellExecutionUncertain(f.command, f.cwd) && (gitInternalPath(f.cwd) ||
       shellCommands(f.command).some(c => c.words.some(gitInternalPath)))))
@@ -831,13 +824,7 @@ export async function gate(input, { mode = readMode, check = checkMerge, env = p
   if (gh) return deny(gh);
   const push = pushes.pushProblem(f.command, f.cwd);
   if (push) return deny(`sage: ${push}`);
-  const merge = policy.mergeIn(f.command);
-  if (!merge) return undefined;
-  if (merge.problem) return deny(`sage: ${merge.problem}`);
-  if (thread.child) return refuse(thread, AGENT_MERGE);
-  if (!now.autopilot) return deny(AUTOPILOT_OFF);
-  const verdict = await check(merge, f.cwd, env, f.session);
-  return verdict.ok === true ? undefined : deny(verdict.reason ?? "sage: the merge check refuses.");
+  return undefined;
 }
 
 if (process.argv[1] && realpathSync(process.argv[1]) === fileURLToPath(import.meta.url)) {

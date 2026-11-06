@@ -60,6 +60,18 @@ async function modes(s) {
 }
 const ROLE = /^sage: sage mode is on\. You are the user's chief of staff until the user sends the message "sage mode off", alone\.\n\nThe state tool, for reads only: node "[^"]+\/skills\/sage\/sage\.mjs" <command> --project <path>\. Write the logbook only with the sage MCP tools\.\n/;
 
+test("T115: exact autopilot on is unavailable, including repeats and saved true", async () => {
+  const s = session();
+  for (const sage of [false, true]) {
+    mkdirSync(MODE_DIR, { recursive: true, mode: 0o700 });
+    writeFileSync(modeFile(s), JSON.stringify({ sage, autopilot: true, given: true }), { mode: 0o600 });
+    for (const phrase of ["autopilot on", " AUTOPILOT ON. ", "autopilot on"]) {
+      assert.match(contextOf(await s.prompt(phrase)), /automatic merging is unavailable/);
+      assert.deepEqual(JSON.parse(readFileSync(modeFile(s), "utf8")), { sage, autopilot: false, given: true });
+    }
+  }
+});
+
 test("T453: the Claude hook's phrase table gives the same modes and near-miss notes in Codex", async () => {
   const got = await Promise.all(PHRASE_CASES.map(async ([why, before, message]) => {
     const s = session();
@@ -67,7 +79,7 @@ test("T453: the Claude hook's phrase table gives the same modes and near-miss no
     const note = contextOf(await s.prompt(message)) ?? "";
     return [why, await modes(s), NEAR_NOTE.exec(note)?.[1] ?? null];
   }));
-  assert.deepEqual(got, PHRASE_CASES.map(([why, , , after, near]) => [why, after, near]));
+  assert.deepEqual(got, PHRASE_CASES.map(([why, , , after, near]) => [why, after.replace("autopilot on", "autopilot off"), near]));
 });
 
 test("T453: the on phrase gives the chief role once; the off phrase ends it; a compaction gives it again only in sage mode", async () => {
@@ -88,21 +100,21 @@ test("T453: the on phrase gives the chief role once; the off phrase ends it; a c
   assert.match(contextOf(await s.prompt("SAGE MODE ON.")), ROLE, "the on phrase gives the role again");
 });
 
-test("T453: the autopilot phrases record autopilot with no warning line, and the chief confirms the switch", async () => {
+test("T115: autopilot stays unavailable while ordinary Sage modes work", async () => {
   const s = session();
-  assert.deepEqual(await s.prompt("autopilot on"), { hookSpecificOutput: { hookEventName: "UserPromptSubmit", additionalContext: 'sage: autopilot did not switch on, because it turns on only while sage mode is on. Ask the user to send "sage mode" first, then "autopilot on", each as a message alone.' } });
+  assert.match(contextOf(await s.prompt("autopilot on")), /automatic merging is unavailable/);
   await s.prompt("sage mode");
-  assert.deepEqual(await s.prompt("autopilot on"), {
-    hookSpecificOutput: { hookEventName: "UserPromptSubmit", additionalContext: "sage: autopilot is on. In Codex, autopilot merges verified work: the hook allows only the exact merge command when the merge check passes, with no prompt. After a task's clean cycles and a passing merge_check, merge with gh pr merge <n> --squash --delete-branch --match-head-commit <sha>. sage could not check whether the default branch of this repository requires a pull request on GitHub. Autopilot still runs.\n\n---\n\nsage: confirm the switch to the user in one line of your reply: sage mode is on, and autopilot is on." },
-  }, "T547: this test has no gh on PATH, so the read fails and the note says so (the cases with a fake gh are in branch-protection.test.mjs)");
-  assert.equal(await modes(s), "sage mode on, autopilot on");
-  assert.deepEqual(await s.prompt("autopilot off"), { hookSpecificOutput: { hookEventName: "UserPromptSubmit", additionalContext: "sage: autopilot is off. Work stops at verified, and the user merges.\n\n---\n\nsage: confirm the switch to the user in one line of your reply: sage mode is on, and autopilot is off." } });
+  assert.match(contextOf(await s.prompt("autopilot on")), /automatic merging is unavailable/);
+  assert.equal(await modes(s), "sage mode on, autopilot off");
+  assert.equal(await s.prompt("autopilot off"), undefined);
   assert.equal(await modes(s), "sage mode on, autopilot off");
 });
 
 test("T453: the help phrase says when to send a phrase and that autopilot merges verified work in Codex, with no board phrase or Claude command", async () => {
   const help = contextOf(await session().prompt("sage help"));
-  assert.match(help, /^Switches: send the phrase alone, as the whole message, in any letter case\. Spaces at the ends and one full stop are fine\. Any other message switches nothing\.\nSend a phrase when Codex is idle\. With autopilot on, sage merges a pull request by itself after its clean reviews and checks, and Codex does not ask you first\.\n- "sage mode": turns sage mode on\.$/m);
+  assert.match(help, /Automatic merging is unavailable in Codex\. Sage prepares the checks; the owner merges directly in GitHub\./);
+  assert.match(help, /"autopilot on": automatic merging is unavailable in Codex\./);
+  assert.doesNotMatch(help, /turns autopilot on/);
   assert.doesNotMatch(help, /the hook allows|exact merge command|merge_check/, "the help list is in the user's words (R1665-5)");
   assert.doesNotMatch(help, /Board:|claude plugin update|Claude|switches when its turn starts/);
 });
@@ -115,7 +127,7 @@ test("T453: a review or guardian subsession's prompt, with the root session id a
     const output = contextOf(await s.prompt(prompt)) ?? "";
     got.push([why, await modes(s), /chief of staff|confirm the switch/.test(output)]);
   }
-  assert.deepEqual(got, SUBSESSION_PROMPTS.map(([why]) => [why, "sage mode on, autopilot on", false]));
+  assert.deepEqual(got, SUBSESSION_PROMPTS.map(([why]) => [why, "sage mode on, autopilot off", false]));
 });
 
 test("T453: a fork starts with sage mode off, and the chief gets one note to tell the user if its history shows the role", async () => {
@@ -160,7 +172,7 @@ test("T453: a damaged mode file turns sage mode and autopilot off, tells the use
     writeFileSync(file, damage);
     got.push([damage, await s.prompt("autopilot on"), JSON.parse(readFileSync(file, "utf8")), await s.start("compact"), await modes(s)]);
   }
-  const once = { systemMessage: DAMAGED, hookSpecificOutput: { hookEventName: "UserPromptSubmit", additionalContext: DAMAGED_NOTE } };
+  const once = { systemMessage: `${DAMAGED} sage: automatic merging is unavailable in Codex. Sage prepares the checks; the owner merges directly in GitHub.`, hookSpecificOutput: { hookEventName: "UserPromptSubmit", additionalContext: DAMAGED_NOTE } };
   assert.deepEqual(got, ["{not json", "[]", "null", '{"sage":"yes","autopilot":true}'].map((damage) => [damage, once, { sage: false, autopilot: false }, undefined, "sage mode off, autopilot off"]));
 });
 
@@ -329,7 +341,11 @@ test("T603: the Codex pages hold no v1 path for a task, and the guide gives the 
     assert.doesNotMatch(text, /AgentLimitReached|does the lead's work|do the lead's work|On multi-agent v1|Multi-agent v1\.|only in the `multi_agent_v1`|4 times/, name);
   }
   assert.match(guide, /sage on Codex needs a multi-agent v2 model for the chief and each child\./);
-  assert.match(guide, /each small task still asks you at least 5 times before its merge/);
+  assert.match(guide, /Codex can ask for permission during ordinary Sage work before the owner merges\./);
+  assert.match(guide, /The following count describes the default `workspace-write` sandbox used in the pilot\./);
+  assert.match(guide, /The count of 5 is for the first five rows, in one small task with separate commands\./);
+  assert.match(guide, /A model that joins `git add` and `git commit` in one command gets one prompt for both\./);
+  assert.match(guide, /The sage hook never grants automatic approval through `PermissionRequest`\./);
   assert.match(guide, /\| Read the pull request and its checks \(`gh pr view`, `gh pr checks`\) \| The chief's check of a ready task, before the merge \| It needs the network \|/);
   assert.match(guide, /- A multi-agent v2 model for the chief and each child\. In Codex 0\.164\.0's bundled catalog, the `gpt-6-sol` models are v2, and `gpt-5\.6-luna` is not/);
   const needs = guide.slice(guide.indexOf("## What you need"), guide.indexOf("## Install"));
