@@ -1343,7 +1343,9 @@ test("T111: shell patterns and ambiguous executable commands keep their refusals
   const g = fixed(), child = sageChild(t, "/root/sage_implementer_t111_r1");
   for (const command of ["echo SAMPLE > ../task?.tsv", "echo SAMPLE > ../[tasks.tsv", "echo SAMPLE > $UNKNOWN/tasks.tsv",
     'node -e \'require("node:fs").writeFileSync(process.argv[1], "SAMPLE")\' ../tasks.tsv']) {
-    assert.match(denied(await g.run(pre("Bash", command, child))) ?? "", /writes a logbook file by its name outside the project/, command);
+    // A glob target is refused as uncertain before the logbook-name check; either refusal keeps the command out.
+    assert.match(denied(await g.run(pre("Bash", command, child))) ?? "",
+      /writes a logbook file by its name outside the project|shell write target or its folder is uncertain/, command);
   }
   assert.equal(denied(await g.run(pre("Bash", "$EDITOR codex/sample.txt", child))), UNREAD_CODEX);
   t.diagnostic("Synthetic gate: patterns, unknown location, interpreter write and ambiguous executable refused; none executed");
