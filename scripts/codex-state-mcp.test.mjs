@@ -673,13 +673,13 @@ test("T658: the Codex move tool takes only its three forms, and no other text re
   const preview = await s.call("move", { preview: true });
   assert.match(preview, /What moves {11}Codex\n/);
   const gate = await s.call("move", { plan: planOf(preview) });
-  assert.match(gate, /\n1 · move, and record Claude as unused RECOMMENDED\nOnly if you do not use Claude on this project\. Sage writes "Claude: unused" and does not wait for the Claude plugin\.\n2 · keep\n/);
+  assert.match(gate, /\n1 · move, and record Claude as unused RECOMMENDED\nOnly if you do not use Claude on this project\. Sage writes "Claude: unused" and does not wait for the Claude plugin\. This answer counts for every project of this shared root: a later move or a new project does not wait for the Claude plugin either\.\n2 · keep\n/);
   // The logbooks change after the gate: the answered gate moves nothing and says what changed, and the old plan opens no new gate.
   const id = /^(G\d+) /.exec(gate)[1];
   await s.call("task_add", { title: "after the preview", size: "tiny", priority: "P2" });
   await s.call("gate_answer", { gate: id, option: 1 });
-  assert.equal((await s.call("move", { gate: id })).error, `sage: refused: the logbooks changed after plan ${planOf(preview)}\n  Codex: 1 more open task (T2)\nNothing changed.`);
-  assert.match((await s.call("move", { plan: planOf(preview) })).error, /^sage: refused: the logbooks changed after plan [0-9a-f]{8}\n  the preview now gives plan [0-9a-f]{8}\nNothing changed\.$/);
+  assert.equal((await s.call("move", { gate: id })).error, `sage: refused: the logbooks changed after plan ${planOf(preview)}\n  Codex: 1 more open task (T2)\nNothing changed. ${id} is closed: its answer covers plan ${planOf(preview)} only, and a move gate answers once. Show the owner a new preview (sage move --preview), then open a new gate (sage move --plan <plan>).`);
+  assert.match((await s.call("move", { plan: planOf(preview) })).error, /^sage: refused: plan [0-9a-f]{8} is not the plan of the logbooks now: the preview now gives plan [0-9a-f]{8}\n {2}If plan [0-9a-f]{8} was typed by hand, check its 8 hex\. If not, a logbook changed after the preview\.\nNothing changed\. Show the owner the preview again \(sage move --preview\), then open the gate with its plan\.$/);
   assert.equal(existsSync(join(codexDir, "moved.json")), false, "nothing moved");
 });
 
