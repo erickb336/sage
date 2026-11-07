@@ -6386,6 +6386,18 @@ test('T294: a native move to verified refuses a qa-fail verdict, and goes on aft
   assert.equal(f.update().task.state, 'verified');
 });
 
+test('T671: a native move to verified refuses an open medium finding, and passes with an open low one on the polish list', async t => {
+  const f = await taskUpdateReadinessFixture(t);
+  const run = /^R\d+/.exec(f.cli('run', 'add', 'T1', '--role', 'qa'))[0];
+  f.cli('run', 'done', run, '--status', 'done', '--tokens', '1');
+  const key = /^\S+/.exec(f.cli('finding', 'add', 'T1', '--source', 'qa', '--severity', 'medium', '--summary', 'A lost write', '--run', run, '--class', 'other'))[0];
+  assert.throws(() => f.update(), error => error.code === 'readiness-findings');
+  f.cli('finding', 'triage', 'T1', key, 'dismiss', '--reason', 'the write is retried');
+  f.cli('finding', 'add', 'T1', '--source', 'qa', '--severity', 'low', '--summary', 'A vague name', '--run', run, '--class', 'other');
+  assert.equal(f.update().task.state, 'verified');
+  assert.equal(f.snapshot().task.state, 'verified');
+});
+
 test('T584: a native move to verified refuses an open arena step, and goes on after a judge ended done', async t => {
   const f = await taskUpdateReadinessFixture(t);
   f.cli('run', 'add', 'T1', '--role', 'implementer', '--branch', 'codex/t1-c1', '--candidate', '1');

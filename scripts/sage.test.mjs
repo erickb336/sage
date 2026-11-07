@@ -181,6 +181,55 @@ test("no dropped findings: a task cannot reach verifying while a finding is open
   assert.match(s.ok("task", "T1", "set", "state=verifying"), /^T1 verifying/);
 });
 
+test("T671: an open low finding, at any triage, never blocks verifying, verified or the merge check; an open medium one still does", () => {
+  const s = store(), other = "0123456789abcdef0123456789abcdef01234567";
+  for (const title of ["lows only", "a low and a medium"]) s.ok("task", "add", "--priority", "P2", "--title", title, "--size", "small");
+  for (const [task, sha] of [["T1", SHA], ["T2", other]]) {
+    toReviewing(s, task);
+    for (const kind of ["checks-pass", "review-clean", "qa-pass"]) s.ok("verdict", task, "--sha", sha, "--kind", kind);
+  }
+  finding(s, "T1", "--source", "qa", "--severity", "low", "--summary", "a vague name");
+  finding(s, "T1", "--source", "code-reviewer", "--severity", "low", "--summary", "a typo");
+  s.ok("finding", "triage", "T1", "F-T1-2", "fix");
+  assert.equal(s.ok("merge-check", "--sha", SHA, "--cycles", "1"), "T1 may merge: 1 clean cycle on this SHA", "two open lows, one marked fix, do not block the merge");
+  assert.match(s.ok("task", "T1", "set", "state=verifying"), /^T1 verifying/);
+  assert.match(s.ok("task", "T1", "set", "state=verified"), /^T1 verified/);
+  assert.deepEqual(rows(s.dir, "findings").filter((f) => f.task === "T1").map((f) => `${f.key}:${f.status}`), ["F-T1-1:open", "F-T1-2:open"], "the lows stay open, on the polish list");
+
+  finding(s, "T2", "--source", "qa", "--severity", "low", "--summary", "a vague name");
+  finding(s, "T2", "--source", "code-reviewer", "--severity", "medium", "--summary", "a lost write");
+  assert.equal(s.no("merge-check", "--sha", other, "--cycles", "1"), "sage: T2 has open findings: F-T2-2. Triage and close them first.", "the medium blocks the merge, and the refusal names only it");
+  assert.equal(s.no("task", "T2", "set", "state=verifying"), "sage: T2 has open findings: F-T2-2 (not triaged). Close or dismiss each one first.");
+});
+
+test("T671: an investigation reaches verifying and concluded with an open low finding, not with an open medium one", () => {
+  const s = store();
+  s.ok("task", "add", "--priority", "P2", "--title", "Why are writes lost?", "--size", "investigate");
+  toReviewing(s, "T1");
+  finding(s, "T1", "--source", "evidence-review", "--severity", "low", "--summary", "a source without its date");
+  assert.match(s.ok("task", "T1", "set", "state=verifying"), /^T1 verifying/);
+  s.ok("verdict", "T1", "--kind", "evidence-clean");
+  finding(s, "T1", "--source", "evidence-review", "--severity", "medium", "--summary", "a claim without its command");
+  assert.equal(s.no("task", "T1", "set", "state=concluded"), "sage: T1 has open findings: F-T1-2 (not triaged). Close or dismiss each one first.");
+  s.ok("finding", "triage", "T1", "F-T1-2", "dismiss", "--reason", "the command is in the notes");
+  assert.match(s.ok("task", "T1", "set", "state=concluded"), /^T1 concluded/, "the open low does not block the conclusion");
+  assert.equal(rows(s.dir, "findings")[0].status, "open", "and it stays on the polish list");
+});
+
+test("T671: triage clears a findings verdict whose medium is dismissed while a low of the same run stays open", () => {
+  const s = store();
+  s.ok("task", "add", "--priority", "P2", "--title", "t", "--size", "small");
+  toReviewing(s, "T1");
+  const run = s.ok("run", "add", "T1", "--role", "code-reviewer").split(" ")[0];
+  s.keep({ task: "T1", run, role: "code-reviewer", sha: SHA, text: reportFor("findings") });
+  s.ok("run", "done", run, "--status", "done", "--tokens", "1");
+  for (const [severity, summary] of [["medium", "a lost write"], ["low", "a typo"]]) s.ok("finding", "add", "T1", "--source", "code-reviewer", "--severity", severity, "--summary", summary, "--run", run, "--class", "other");
+  s.ok("verdict", "T1", "--sha", SHA, "--kind", "findings", "--run", run);
+  s.ok("finding", "triage", "T1", "F-T1-1", "dismiss", "--reason", "the write is retried");
+  for (const kind of ["checks-pass", "review-clean", "qa-pass"]) s.ok("verdict", "T1", "--sha", SHA, "--kind", kind, "--cycle", "2");
+  assert.equal(s.ok("merge-check", "--sha", SHA, "--cycles", "1"), "T1 may merge: 1 clean cycle on this SHA", "the open low of the findings run blocks nothing");
+});
+
 test("repair rounds are bounded, and a round that fixes nothing re-plans the task", () => {
   const s = store();
   s.ok("task", "add", "--priority", "P2", "--title", "t", "--size", "small");
@@ -2470,29 +2519,26 @@ test("unknown-options: a command refuses an option that it does not take, and an
   assert.equal(rows(s.dir, "findings")[0].summary, "--risk is ignored");
 });
 
-test("clean-rule: a cycle is clean when no medium or high finding is open, and every low one is fixed, moved or dismissed", () => {
+test("clean-rule: a cycle is clean when no medium or high finding is open, and an open low one never blocks the merge (T671)", () => {
   const s = store();
   s.ok("task", "add", "--priority", "P2", "--title", "lows only", "--size", "small");
   s.ok("task", "add", "--priority", "P2", "--title", "a medium", "--size", "small");
   for (const kind of ["checks-pass", "qa-pass"]) s.ok("verdict", "T1", "--sha", SHA, "--kind", kind);
   finding(s, "T1", "--source", "code-reviewer", "--severity", "low", "--summary", "a typo");
   finding(s, "T1", "--source", "code-reviewer", "--severity", "low", "--summary", "a vague name");
-  const clean = (kind, ok) => `sage: T1 has no open medium or high finding, so ${kind} is refused. If this review found a medium or high problem, record it first: sage finding add T1 --source <role> --severity <medium or high> --summary "<the problem>", then ${kind} again. If it found only low ones, its cycle is clean: record ${ok}, and fix, move or dismiss each low finding before the merge.`;
+  const clean = (kind, ok) => `sage: T1 has no open medium or high finding, so ${kind} is refused. If this review found a medium or high problem, record it first: sage finding add T1 --source <role> --severity <medium or high> --summary "<the problem>", then ${kind} again. If it found only low ones, its cycle is clean: record ${ok}. An open low finding never blocks a merge; it stays on the task's polish list.`;
   assert.deepEqual([s.no("verdict", "T1", "--sha", SHA, "--kind", "findings"), s.no("verdict", "T1", "--sha", SHA, "--kind", "qa-fail")], [clean("findings", "review-clean"), clean("qa-fail", "qa-pass")]);
   s.ok("verdict", "T1", "--sha", SHA, "--kind", "review-clean");
-  assert.match(s.no("merge-check", "--sha", SHA, "--cycles", "1"), /^sage: T1 has open findings: F-T1-1, F-T1-2\./, "an open low finding blocks the merge");
+  assert.equal(s.ok("merge-check", "--sha", SHA, "--cycles", "1"), "T1 may merge: 1 clean cycle on this SHA", "an open low finding never blocks the merge");
   s.ok("finding", "triage", "T1", "F-T1-1", "fix");
-  assert.match(s.no("merge-check", "--sha", SHA, "--cycles", "1"), /^sage: T1 has open findings: F-T1-1, F-T1-2\./, "a low one marked fix is not fixed yet");
-  s.ok("finding", "close", "T1", "F-T1-1");
-  s.ok("finding", "triage", "T1", "F-T1-2", "dismiss", "--reason", "moved to T9");
-  assert.equal(s.ok("merge-check", "--sha", SHA, "--cycles", "1"), "T1 may merge: 1 clean cycle on this SHA");
+  assert.equal(s.ok("merge-check", "--sha", SHA, "--cycles", "1"), "T1 may merge: 1 clean cycle on this SHA", "nor does a low one marked fix");
 
   const other = "0123456789abcdef0123456789abcdef01234567";
   for (const kind of ["checks-pass", "qa-pass"]) s.ok("verdict", "T2", "--sha", other, "--kind", kind);
   finding(s, "T2", "--source", "code-reviewer", "--severity", "medium", "--summary", "a lost write");
   finding(s, "T2", "--source", "code-reviewer", "--severity", "low", "--summary", "a typo");
   assert.equal(s.ok("verdict", "T2", "--sha", other, "--kind", "findings"), "T2 findings · 0123456 · cycle 1");
-  assert.match(s.no("merge-check", "--sha", other, "--cycles", "1"), /^sage: T2 has open findings: F-T2-1, F-T2-2\./);
+  assert.match(s.no("merge-check", "--sha", other, "--cycles", "1"), /^sage: T2 has open findings: F-T2-1\./, "the medium blocks, and the refusal names only it");
   s.ok("finding", "triage", "T2", "F-T2-1", "fix");
   s.ok("finding", "close", "T2", "F-T2-1");
   s.ok("finding", "triage", "T2", "F-T2-2", "dismiss", "--reason", "moved to T9");
@@ -2653,13 +2699,13 @@ const damaged = (file, cols) => `the header of ${file} is damaged: its first lin
 const reshape = (file, edit) => writeFileSync(file, edit(readFileSync(file, "utf8").split("\n").filter(Boolean)).join("\n") + "\n");
 
 test("F-R65-1: a table that lost its header line fails the merge check closed and names the file, in one logbook or two", () => {
-  // hdr65b: T1 has clean verdicts on the SHA and two open low findings; then findings.tsv loses its first line.
+  // hdr65b: T1 has clean verdicts on the SHA and two open low findings, which never block (T671); then findings.tsv loses its first line.
   const s = store();
   s.ok("task", "add", "--priority", "P2", "--title", "a", "--size", "small");
   finding(s, "T1", "--source", "qa", "--severity", "low", "--summary", "l1");
   s.ok("finding", "add", "T1", "--source", "code-review", "--severity", "low", "--summary", "l2");
   for (const kind of ["checks-pass", "review-clean", "qa-pass"]) s.ok("verdict", "T1", "--sha", SHA, "--kind", kind);
-  assert.match(s.no("merge-check", "--sha", SHA, "--cycles", "1"), /^sage: T1 has open findings: F-T1-1, F-T1-2\./);
+  assert.equal(s.ok("merge-check", "--sha", SHA, "--cycles", "1"), "T1 may merge: 1 clean cycle on this SHA");
   const findings = join(s.dir, "findings.tsv");
   reshape(findings, (lines) => lines.slice(1)); // sed 1d, or tail -n +2
   const why = damaged(findings, "task, key, round, source, severity, summary, triage, reason, status, run, class");
@@ -2690,7 +2736,7 @@ test("F-R64-1: a refused findings or qa-fail verdict names the finding first, so
   s.ok("task", "add", "--priority", "P2", "--title", "t4", "--size", "tiny");
   s.ok("verdict", "T1", "--sha", SHA, "--kind", "checks-pass");
   finding(s, "T1", "--source", "qa", "--severity", "low", "--summary", "a typo");
-  assert.equal(s.no("verdict", "T1", "--sha", SHA, "--kind", "qa-fail"), `sage: T1 has no open medium or high finding, so qa-fail is refused. If this review found a medium or high problem, record it first: sage finding add T1 --source <role> --severity <medium or high> --summary "<the problem>", then qa-fail again. If it found only low ones, its cycle is clean: record qa-pass, and fix, move or dismiss each low finding before the merge.`);
+  assert.equal(s.no("verdict", "T1", "--sha", SHA, "--kind", "qa-fail"), `sage: T1 has no open medium or high finding, so qa-fail is refused. If this review found a medium or high problem, record it first: sage finding add T1 --source <role> --severity <medium or high> --summary "<the problem>", then qa-fail again. If it found only low ones, its cycle is clean: record qa-pass. An open low finding never blocks a merge; it stays on the task's polish list.`);
   finding(s, "T1", "--source", "qa", "--severity", "medium", "--summary", "a lost write"); // the first advice
   assert.equal(s.ok("verdict", "T1", "--sha", SHA, "--kind", "qa-fail"), "T1 qa-fail · a1b2c3d · cycle 1");
   s.ok("finding", "triage", "T1", "F-T1-1", "dismiss", "--reason", "cosmetic");
@@ -2699,9 +2745,9 @@ test("F-R64-1: a refused findings or qa-fail verdict names the finding first, so
   assert.equal(s.no("merge-check", "--sha", SHA, "--cycles", "1"), "sage: T1: cycle 1 found problems on this SHA (qa-fail). Repair, then review the new SHA.", "the SHA stays blocked");
   // A findings verdict names the clean verdict of the task's review blocks: the one that it has, or the list.
   s.ok("task", "add", "--priority", "P2", "--title", "large", "--size", "large");
-  assert.match(s.no("verdict", "T2", "--sha", SHA, "--kind", "findings"), /its cycle is clean: record this review's clean verdict \(review-clean, security-clean, ux-clean\), and fix/);
+  assert.match(s.no("verdict", "T2", "--sha", SHA, "--kind", "findings"), /its cycle is clean: record this review's clean verdict \(review-clean, security-clean, ux-clean\)\. An open low finding never blocks a merge/);
   s.ok("task", "add", "--priority", "P2", "--title", "inv", "--size", "investigate");
-  assert.match(s.no("verdict", "T3", "--kind", "findings"), /its cycle is clean: record evidence-clean, and fix/);
+  assert.match(s.no("verdict", "T3", "--kind", "findings"), /its cycle is clean: record evidence-clean\. An open low finding never blocks a merge/);
 });
 
 test("F-R65-2: only a header with every known column and more is a newer sage's; one without them is damaged; a BOM and CRLF line ends read as plain", () => {

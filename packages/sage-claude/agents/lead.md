@@ -90,11 +90,12 @@ The hook blocks your stop while a helper of yours runs, and its line gives this 
 2. Start the helper with the Agent tool: `subagent_type` `sage:<role>`, a `description` that starts with `R<n>` (the run id) and a space, and a full brief. When the Agent tool has the fields `name` and `run_in_background`, also pass `name` `R<n>` and `run_in_background` true. The first line of the brief is `Run R<n> · task T<n>`. The brief has all ten fields, GOAL to STANDING. STANDING is the pointer of your own brief, word for word: the helper reads the orders itself, so never copy them. REPORT asks for the report of the `sage:report` skill. Never name a helper `main` or `lead-T<n>`.
 3. Wait for the helper's stop: the Agent call's return when the tool has no `run_in_background` field, else its completion notice or `wait <T>`. Do not end while a helper runs: the hook blocks your stop.
 4. For a review or QA, also a re-check: record each finding of its report with `sage finding add <T> --source <role> --severity <severity> --summary=<word> --run <R> --class <class>`, with the helper's role as `--source`, the same severity, the helper's run as `--run`, and the problem's class: state-edge, speed, copy, layout, security or other. A medium or high finding goes on to triage (step 4 of the steps). For each low finding, do one of these:
+   - leave it open: it stays on the task's polish list;
    - dismiss it with a reason (`sage finding triage <T> <K> dismiss --reason=<word>`), when it is not worth a fix;
    - triage it fix, when a round comes, so that it joins that round;
-   - when it needs a fix and no round comes, list it and end blocked (see "When you end blocked"), after the cycle or the re-check.
+   - when it needs its own follow-up task and no round comes, list it and end blocked (see "When you end blocked"), after the cycle or the re-check: the sage moves it.
 
-   An open finding blocks the move to verifying and the merge.
+   An open medium or high finding blocks the move to verifying and the merge. An open low finding never blocks a merge; it stays on the task's polish list.
 5. `sage run done <R> --status done --tokens <n>`, with the tokens from the notice. When no notice reached you, leave out `--tokens`.
 6. For a review or QA, the verdict: `sage verdict <T> --sha <sha> --kind <kind> --cycle <n> --pr <n> --run <R>`. The SHA is the head of the task's branch when the helper started (`git rev-parse <branch>`, the full 40 characters). The kind says what the helper reported:
 
@@ -143,7 +144,7 @@ A helper that ends with no report (the sage stopped it, or it died) ends as `sag
 
 You end at once, with STATUS blocked, when a step needs the sage. Wait for your running helpers first.
 
-- **A finding that you cannot clear:** a low finding that needs a fix with no round, a new finding from a re-check, or an unconfirmed low fix that `round` refuses. RESULT names the finding keys and ends with `Left:` and what remains, such as `Left: verifying`. `Left:` only describes; the sage sets no state from it. The state tool never moves a high finding to a follow-up task, and it moves a fix key of the round only after the owner's answer.
+- **A finding that you cannot clear:** a low finding that needs its own follow-up task with no round, a new finding from a re-check, or an unconfirmed low fix that `round` refuses. RESULT names the finding keys and ends with `Left:` and what remains, such as `Left: verifying`. `Left:` only describes; the sage sets no state from it. The state tool never moves a high finding to a follow-up task, and it moves a fix key of the round only after the owner's answer.
 - **A review or QA report that the hook cannot read:** list its run in FINDINGS as a gap, when the wait says that no helper of yours runs. The sage reads it and ends the run.
 - **The checks fail, still run, or there are none:** `Left: the checks`. The sage records the checks verdict.
 - **A cap:** when the hook refuses a helper for a cap, wait for a helper's stop (`wait <T>`) and try again. With no helper running, end with RESULT `cap`. List each run that you added and did not start: the sage ends it.
@@ -242,7 +243,7 @@ $ sage task T1 set state=verifying
 
 ## An example that ends blocked
 
-The same task. The cycle is clean, but QA's low finding needs a fix and no round comes. The lead ends blocked; the sage moves the finding, sets no state, and starts a fresh lead (`! start lead-T1`). The fresh lead reads the logbook, finds T1 at reviewing after its clean cycle, and goes on to step 6.
+The same task. The cycle is clean, but QA's low finding needs its own follow-up task and no round comes. The lead ends blocked; the sage moves the finding, sets no state, and starts a fresh lead (`! start lead-T1`). The fresh lead reads the logbook, finds T1 at reviewing after its clean cycle, and goes on to step 6.
 
 ```text
 $ sage task T1 set state=building branch=sage/t1-example

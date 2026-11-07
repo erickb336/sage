@@ -680,7 +680,7 @@ function planNativeTaskUpdate(before, reference, at, facts, columns = Object.fro
   if (needsReady) {
     if (!facts.readiness || !task.branch) throw new TaskUpdateError("readiness-branch");
     if (task.state === "pr-ready" && !task.pr) throw new TaskUpdateError("readiness-pr");
-    const blocking = facts.findings.filter(row => row.task === task.id && row.status === "open");
+    const blocking = blockingOf(facts.findings, task.id);
     if (blocking.length) throw new TaskUpdateError("readiness-findings", blocking.map(row => row.key));
     const gate = facts.gates.find(row => row.task === task.id && !row.answer);
     if (gate) throw new TaskUpdateError("readiness-gates", [gate.id]);
@@ -758,7 +758,7 @@ function updateRequestedTask(input, env, coordination) {
       Object.hasOwn(reference.changes, "approval") ? config(env, dir).max_rounds : undefined);
     const needsReady = ["verified", "pr-ready"].includes(reference.changes.state ?? current[0].state);
     phase = needsReady ? "readiness" : "plan";
-    const openFindings = facts.findings.filter(row => row.task === reference.task && row.status === "open");
+    const openFindings = blockingOf(facts.findings, reference.task);
     if (needsReady && openFindings.length) throw new TaskUpdateError("readiness-findings", openFindings.map(row => row.key));
     const at = now();
     const changes = Object.entries(reference.changes).map(([key, value]) => `${key}=${value}`);
@@ -1187,6 +1187,8 @@ function compareRetainedReport(input, env = process.env) {
   }
 }
 
+/** A task's open findings that block it (T671): an open low finding never blocks a merge; it stays on the task's polish list. */
+const blockingOf = (findings, id) => findings.filter((f) => f.task === id && f.status === "open" && f.severity !== "low");
 /** Is a finding one of this run's, by its run cell or by the run in an older key? */
 const ofRun = (f, run) => f.run === run || f.key.startsWith(`${run}-`);
 /** The decisions that moved a task's findings of one run to a follow-up task, of one severity when given: a move clears the finding's run, so only these keep the link. */
@@ -1197,11 +1199,12 @@ const movedOf = (decisions, task, run, severity = "") => decisions.filter((d) =>
  * moved, or dismissed by a triage that still says so, below high. A row back on the task under a moved key counts as that
  * finding. A closed finding does not clear it: a new head confirms a fix, not this one. A high finding needs a new head
  * too. With no link, the verdict stays a block. A cleared verdict only stops refusing: it never counts toward a clean cycle.
+ * An open low finding of the run does not count: it stays on the task's polish list (T671).
  */
 function cleared(verdict, task, findings, decisions) {
   if (!FOUND.includes(verdict.kind) || !verdict.run) return false;
   const moved = movedOf(decisions, task, verdict.run), keys = moved.map((d) => d.decision.split(" ")[0]);
-  const stayed = findings.filter((f) => f.task === task.id && (ofRun(f, verdict.run) || keys.includes(f.key)));
+  const stayed = findings.filter((f) => f.task === task.id && (ofRun(f, verdict.run) || keys.includes(f.key)) && !(f.status === "open" && f.severity === "low"));
   return stayed.every((f) => f.status === "dismissed" && f.triage === "dismiss" && f.severity !== "high") && stayed.length + moved.length > 0;
 }
 
@@ -2775,7 +2778,7 @@ function planTaskChanges(before, id, changes, at, facts, legacyRounds = false) {
       const build = builds(task);
       if ((v === "verified" && !build) || (v === "concluded" && build)) refuse(`${task.id} ${build ? "has a build block, so it ends at verified" : "has no build block, so it ends at concluded"}`);
       if (v === "verifying" || v === "concluded") {
-        const open = facts.findings.filter((f) => f.task === task.id && f.status === "open");
+        const open = blockingOf(facts.findings, task.id);
         if (open.length) refuse(`${task.id} has open findings: ${open.map((f) => `${f.key} (${f.triage || "not triaged"})`).join(", ")}. Close or dismiss each one first.`);
       }
       if (v === "concluded" && facts.ledger.filter((r) => r.task === task.id).at(-1)?.kind !== "evidence-clean") {
@@ -2920,7 +2923,7 @@ function judge(dir, task, findings, decisions, id, rows, cycles, repaired, cfg, 
   const who = task.state === "abandoned" ? `${task.id} (abandoned)` : task.id; // it still counts: the merge check fails closed
   if (!rows.length && !builds(task)) return { ok: false, reason: `${who} is an investigation, so it has no pull request, but it has PR ${task.pr}: clear its PR (sage task ${task.id} set pr=).` };
   if (!rows.length) return { ok: false, reason: `${who} ${prNumber(task.pr) === pr ? "is" : "was"} a task of PR ${pr} but has no verdicts on this SHA. Every task that was ever on PR ${pr} counts for its merge, also after its pr= changed (see decisions.tsv): record its verdicts on this SHA, or the user merges.` };
-  const open = findings.filter((f) => f.task === task.id && f.status === "open");
+  const open = blockingOf(findings, task.id);
   if (open.length) return { ok: false, reason: `${who} has open findings: ${open.map((f) => f.key).join(", ")}. Triage and close them first.` };
   const bad = rows.find((r) => NOT_CLEAN.includes(r.kind) && !cleared(r, task, findings, decisions));
   if (bad) return { ok: false, reason: `${who}: cycle ${bad.cycle} found problems on this SHA (${bad.kind}). Repair, then review the new SHA.` };
@@ -4226,15 +4229,15 @@ function act(cmd, pos, opt, dir, env, skip, project) {
         if (matches.length !== 1 || run.task !== task.id || run.role !== role || run.status !== "done" || !run.ended
           || run.round !== task.round || (run.branch && run.branch !== task.branch)) refuse(`${task.id}'s adoption needs a fresh done ${role} run on its current branch and round for ${kind}. Nothing changed.`);
       }
-      // The clean rule: a cycle is clean when no medium or high finding is open. Low ones are fixed, moved or dismissed
-      // before a merge, and an open one blocks it. So a problem verdict needs an open finding that is not low.
+      // The clean rule: a cycle is clean when no medium or high finding is open. An open low finding never blocks a
+      // merge; it stays on the task's polish list (T671). So a problem verdict needs an open finding that is not low.
       const findings = read(dir, "findings").filter((f) => f.task === task.id && f.status === "open");
       // The refusal names the finding first: a chief that recorded the verdict before its finding must not hide the finding.
       if (FOUND.includes(kind) && findings.every((f) => f.severity === "low")) {
         const reviews = CLEAN.filter((k) => k !== "qa-pass"); // the clean verdicts of the blocks that give findings
         const fits = kind === "qa-fail" ? ["qa-pass"] : reviews.filter((k) => list(task.route).some((b) => VERDICT[b] === k));
         const clean = fits.length === 1 ? fits[0] : `this review's clean verdict (${(fits.length ? fits : reviews).join(", ")})`;
-        refuse(`${task.id} has no open medium or high finding, so ${kind} is refused. If this review found a medium or high problem, record it first: sage finding add ${task.id} --source <role> --severity <medium or high> --summary "<the problem>", then ${kind} again. If it found only low ones, its cycle is clean: record ${clean}, and fix, move or dismiss each low finding before the merge.`);
+        refuse(`${task.id} has no open medium or high finding, so ${kind} is refused. If this review found a medium or high problem, record it first: sage finding add ${task.id} --source <role> --severity <medium or high> --summary "<the problem>", then ${kind} again. If it found only low ones, its cycle is clean: record ${clean}. An open low finding never blocks a merge; it stays on the task's polish list.`);
       }
       // A route without build has no commit to judge. Its rows have no SHA, so the merge check never reads them.
       if (builds(task) && !opt.sha) refuse(`${task.id} has a build block, so each verdict names its commit: add --sha with the full 40-character SHA (git rev-parse <branch>)`);
