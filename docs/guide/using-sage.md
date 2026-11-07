@@ -134,11 +134,13 @@ A tiny task has no review and no QA in its route, so its lead runs only the impl
 | A finding of a helper | What the lead does |
 | --- | --- |
 | Medium or high | It sends the finding to a repair round. |
-| Low | It dismisses the finding with a reason, adds it to a round, or gives it to the chief to move to a follow-up task. |
+| Low | It leaves the finding open on the task's polish list, dismisses it with a reason, adds it to a round, or gives it to the chief to move to a follow-up task. |
+
+An open low finding never blocks a merge; it stays on the task's polish list. The board shows that list on the task's card and page. An open medium or high finding blocks the move to verifying and the merge.
 
 The lead ends blocked when it cannot clear a finding itself:
 
-- a low finding with no round;
+- a low finding that needs its own follow-up task, with no round;
 - a new finding from a round's re-check;
 - a low fix that the re-check does not confirm, with no medium or high finding open.
 

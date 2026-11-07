@@ -143,7 +143,7 @@ function card(ctx, task, { archived = false, i = 0 } = {}) {
     // that needs you keeps its Needs you line, with the question, on every card (F-T305-4).
     + (done ? "" : stepLine(task) + now + offerLine(task)) + agents(ctx, task, "", false)
     + (task.inferredWork ? `<div class="nextline">Inferred work on the open PR</div>` : "")
-    + `<div class="tags">${tags(task)}<span class="more">Open</span></div></a>`;
+    + `<div class="tags">${tags(task)}${polishTag(task)}<span class="more">Open</span></div></a>`;
 }
 
 function column(ctx, col) {
@@ -197,13 +197,22 @@ function evidence(task) {
   return ledger || proof ? ledger + proof : `<div class="empty">No verdicts recorded.</div>`;
 }
 
+/** A task's polish list (T671): its open low findings. An open low finding never blocks a merge. */
+const polishOf = task => task.findings.filter(row => row.status === "open" && row.severity === "low");
+const polishTag = task => {
+  const n = polishOf(task).length;
+  return n ? `<span class="tag" title="Polish list: ${n} open low finding${n === 1 ? "" : "s"}, which never block a merge">polish ${n}</span>` : "";
+};
+
 function findings(task) {
   if (!task.findings.length) return `<div class="empty">No findings recorded.</div>`;
   // N8: a moved finding says where it went, and the follow-up task's finding says where it came from.
   const where = row => row.movedTo ? ` · moved to ${esc(row.movedTo)}` : row.movedFrom ? ` · from ${esc(row.movedFrom)}` : "";
   const one = row => `<li>${row.severity ? `<span class="sev ${known(SEVERITIES, row.severity)}">${esc(row.severity)}</span>` : ""}<span class="${row.status === "open" ? "" : "closed-text"}">${esc(row.summary)}</span> <span class="faint">· ${esc(row.status)}${where(row)}${row.reason ? ` · ${esc(row.reason)}` : ""}</span></li>`;
-  const open = task.findings.filter(row => row.status === "open"), rest = task.findings.filter(row => row.status !== "open");
-  return `${open.length ? `<ul class="finds">${open.map(one).join("")}</ul>` : `<div class="empty">No open findings.</div>`}${rest.length ? `<details class="fold" data-key="findings"><summary id="sum-findings">Closed, dismissed or moved (${rest.length})</summary><ul class="finds">${rest.map(one).join("")}</ul></details>` : ""}`;
+  const polish = polishOf(task), open = task.findings.filter(row => row.status === "open" && !polish.includes(row)), rest = task.findings.filter(row => row.status !== "open");
+  // T671: the open low findings are the task's polish list, apart from the findings that block it.
+  const list = polish.length ? `<h4>Polish list <span class="n">${polish.length}</span></h4><p class="faint">Open low findings. They never block a merge.</p><ul class="finds">${polish.map(one).join("")}</ul>` : "";
+  return `${open.length ? `<ul class="finds">${open.map(one).join("")}</ul>` : `<div class="empty">No open findings${polish.length ? " that block the merge" : ""}.</div>`}${list}${rest.length ? `<details class="fold" data-key="findings"><summary id="sum-findings">Closed, dismissed or moved (${rest.length})</summary><ul class="finds">${rest.map(one).join("")}</ul></details>` : ""}`;
 }
 
 function artifacts(task) {
