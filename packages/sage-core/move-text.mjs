@@ -287,6 +287,9 @@ export function endText(plan, map, backups, shown) {
 }
 
 const esc = (s) => String(s).replace(/[&<>"']/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" })[c]);
+/** Where the map page sends a finished task: a program with an open task moves whole, its finished tasks too (F-T640-59, F-T645-9). */
+const FINISHED = "A finished task stays on the board under its old number, unless its program moved: then it moved with its program, and this page lists it.";
+
 /** The old-to-new map as the Mac's own page, beside the new logbook: it may show paths, because it is no shared page. */
 export function mapHtml(plan, { at, backups, shown }) {
   const { warning, steps } = restoreSteps(plan, shown);
@@ -312,13 +315,13 @@ input{font:inherit;padding:6px 8px;width:100%;max-width:360px;margin:8px 0;box-s
 .tabs{display:flex;flex-wrap:wrap;gap:6px;margin:4px 0 10px}.tabs button{font:inherit;padding:4px 12px;border-radius:999px;border:1px solid var(--line);background:var(--bg);color:var(--fg);cursor:pointer}.tabs button[aria-pressed=true]{background:var(--fg);color:var(--bg)}
 </style></head><body>
 <h1>The move of project ${esc(plan.folder.slice(0, -7))}</h1>
-<p>The open tasks of the old logbooks moved into the shared logbook <code>${esc(plan.folder)}</code> on ${esc(local.date)} at ${esc(local.clock)}${esc(board)}. Each moved row has a new number. A finished task did not move: find it on the board under its old number.</p>
+<p>The open tasks of the old logbooks moved into the shared logbook <code>${esc(plan.folder)}</code> on ${esc(local.date)} at ${esc(local.clock)}${esc(board)}. Each moved row has a new number. ${FINISHED}</p>
 <label for="find">Find an old or a new number</label><br><input id="find" type="search" placeholder="for example Codex T94">
 <div class="tabs" role="group" aria-label="Kind of row">${kinds.map(([k, n], i) => `<button type="button" data-tab="${k}" aria-pressed="${i ? "false" : "true"}">${k[0].toUpperCase()}${k.slice(1)} ${n}</button>`).join("")}</div>
 <table><thead><tr><th>Old</th><th>New</th><th>What</th></tr></thead><tbody>
 ${rows.map(([kind, p, old, now, what]) => `<tr data-kind="${kind}" data-k="${esc(`${p} ${old} ${now}`.toLowerCase())}"${kind === kinds[0]?.[0] ? "" : " hidden"}><td>${esc(title(p))} ${esc(old)}</td><td><b>${esc(now)}</b></td><td>${esc(what)}</td></tr>`).join("\n")}
 </tbody></table>
-<p class="muted" id="none" hidden>No row has this number. A finished task did not move: find it on the board under its old number.</p>
+<p class="muted" id="none" hidden>No row has this number. ${FINISHED}</p>
 <h2>Backups</h2><ul>${backups.map((b) => `<li><code>${esc(b)}</code></li>`).join("")}</ul>
 <h2>Restore by hand</h2><p>${esc(warning)}</p><ol>${steps.map((s) => `<li>${esc(s)}</li>`).join("")}</ol>
 <script>const f=document.getElementById("find"),n=document.getElementById("none"),tabs=[...document.querySelectorAll("[data-tab]")];let tab=tabs[0]?.dataset.tab;const show=()=>{const q=f.value.trim().toLowerCase();let k=0;for(const r of document.querySelectorAll("tbody tr")){r.hidden=q?!r.dataset.k.includes(q):r.dataset.kind!==tab;k+=!r.hidden}n.hidden=k>0||!q};f.oninput=show;for(const b of tabs)b.onclick=()=>{tab=b.dataset.tab;f.value="";for(const o of tabs)o.setAttribute("aria-pressed",String(o===b));show()}</script>

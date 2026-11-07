@@ -2581,6 +2581,17 @@ test("the move banner says that the finished tasks of a moved program have new n
   assert.match(renderBoardHtml(model), /Finished tasks stay in Done as Old and read-only, except 1 finished task of a program, which moved with its program and has a new number too\./);
 });
 
+test("the map page lists a finished task of a moved program and says that it moved with its program (F-T645-9)", (t) => {
+  const w = programWorld(t);
+  w.claude("move", "--gate", w.ask().id);
+  const page = readFileSync(join(w.shared, w.folder(), "move-map.html"), "utf8");
+  assert.match(page, /<td>Claude T4<\/td><td><b>T\d+<\/b><\/td><td>pilot<\/td>/, "the merged pilot has a row");
+  const finished = "A finished task stays on the board under its old number, unless its program moved: then it moved with its program, and this page lists it.";
+  assert.ok(page.includes(` Each moved row has a new number. ${finished}</p>`), "the intro");
+  assert.ok(page.includes(`>No row has this number. ${finished}</p>`), "the line of a search with no row");
+  assert.equal(page.includes("A finished task did not move"), false);
+});
+
 test("the board shows no move banner while a stopped move's plan waits to finish (F-T647-8)", (t) => {
   const w = moveWorld(t), { id } = w.ask();
   stopAt(w, id, 3);
