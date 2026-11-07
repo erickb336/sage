@@ -206,7 +206,7 @@ The plugin starts a local MCP server, `sage`, in the desktop app and in the CLI.
 | `claim` | `claim <T>`: take a task with no owning chief in a [shared logbook](using-sage.md#shared-logbooks) |
 | `offer`, `cancel`, `accept`, `release` | `offer <T>`, `cancel <T>`, `accept <T>`, `release <T>`: [hand a task to another chief](using-sage.md#shared-logbooks) |
 | `task_add`, `task_set` | `task add`, `task <T> set` |
-| `task_adopt` | `task-adopt <T>`: adopt another provider's task and PR, with fresh destination reviews |
+| `task_adopt` | `task-adopt <T>`: adopt another provider's task and PR from a separate logbook, with fresh destination reviews. In a shared logbook it refuses: use the takeover gate |
 | `run_add`, `run_done` | `run add`, `run done` |
 | `finding_add`, `finding_triage`, `finding_close`, `finding_move` | `finding add`, `triage`, `close`, `move` |
 | `verdict`, `round`, `merge_check`, `log` | `verdict`, `round`, `merge-check`, `log` |
@@ -248,7 +248,9 @@ Protected native completion remains unverified, and a lead's first real run is t
 
 ## Task adoption
 
-Ask the chief to take over an existing task and its PR when you change providers. Use the normal Codex app or CLI with the Sage plugin. The chief frames a destination task, then calls `task_adopt` before it starts new work.
+Task adoption works only between two separate logbooks. In a [shared logbook](using-sage.md#shared-logbooks), `task_adopt` refuses and changes nothing, because the other provider's tasks are in that logbook already. There, a chief takes a task of another chief only through your answer to a takeover gate: the chief calls `gate_replace`, or `accept` for an offer to it.
+
+With separate logbooks, ask the chief to take over an existing task and its PR when you change providers. Use the normal Codex app or CLI with the Sage plugin. The chief frames a destination task, then calls `task_adopt` before it starts new work.
 
 Example tool arguments, with sample paths and task numbers:
 

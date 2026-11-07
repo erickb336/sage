@@ -778,9 +778,10 @@ test("T656: the takeover gate's recommendation says that the owning chief offere
   writeFileSync(file, `${readFileSync(file, "utf8")}${[gate("G8", "T321", "C1", "C2"), gate("G9", "T323", "C2", "C2"), gate("G10", "T322", "", "C1", true), old].join("\n")}\n`);
   const model = modelOf(w.sources), first = id => card(model, id).reasons.find(reason => reason.replace);
   assert.deepEqual([first("T321").text, first("T321").recommendation], ["Hand T321 and PR 88 from Claude · C1 to Codex · C2? No run ends as failed.", "approve, because Claude · C1 offered T321 to Codex · C2"]);
-  assert.equal(first("T323").recommendation, "approve, when you know that Codex · C2 stopped", "an offer to another chief is not this gate's");
+  // F-T656-25: a gate with no offer and no run that ends recommends approve with a reason; "when you know" is for a gate that ends a run (T320).
+  assert.equal(first("T323").recommendation, "approve, because no run of T323 ends as failed", "an offer to another chief is not this gate's");
   assert.deepEqual([first("T322").text, first("T322").recommendation], ["Hand T322 to Claude · C1? It has no owning chief. No run ends as failed. Claude · C1 runs one fresh cycle before it merges.", "approve, because T322 has no owning chief"]);
-  assert.deepEqual([first("T324").text, first("T324").recommendation], ["Hand T324 from C9 to Claude · C1? No run ends as failed.", "replace, when you know that C9 stopped"]);
+  assert.deepEqual([first("T324").text, first("T324").recommendation], ["Hand T324 from C9 to Claude · C1? No run ends as failed.", "replace, because no run of T324 ends as failed"]);
   assert.equal(card(model, "T320").reasons[0].recommendation, "approve, when you know that Claude · C1 stopped", "a gate with no offer keeps the T631 text");
   // F-T656-13: the two recommendation forms read alike, with no second colon.
   assert.match(renderBoardText(model), /Recommended: approve, because Claude · C1 offered T321 to Codex · C2/);

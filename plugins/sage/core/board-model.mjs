@@ -327,8 +327,10 @@ function card(source, project, group, task, now, graph, landing) {
     const text = replace ? `${replace.from ? `Hand ${what} from ${label(replace.from)} to ${label(replace.to)}?` : `Hand ${what} to ${label(replace.to)}? It has no owning chief.`} ${replace.runs.length ? `${and(replace.runs)} ${replace.runs.length === 1 ? "ends" : "end"} as failed.` : "No run ends as failed."}${replace.fresh ? ` ${label(replace.to)} runs one fresh cycle before it merges.` : ""}` : [...gateLines(gate, graph.programs), ...lost].join(LINE);
     // A takeover may take the task from a chief that still works, so the design's recommendation says when (F-T624-5).
     // After an accept, the owning chief offered it to the gate's new chief, and the recommendation says that instead (T656).
+    // The "when you know" form is only for a gate that ends a run: with none, no work of the owning chief is lost (F-T656-25).
     const offered = replace && offerOf(task), handed = offered && offered.from === replace.from && offered.to === replace.to;
-    const recommendation = replace && gate.recommendation === options[0] ? `${options[0]}, ${handed ? `because ${label(replace.from)} offered ${task.id} to ${label(replace.to)}` : replace.from ? `when you know that ${label(replace.from)} stopped` : `because ${task.id} has no owning chief`}` : gate.recommendation || null;
+    const why = !replace ? "" : handed ? `because ${label(replace.from)} offered ${task.id} to ${label(replace.to)}` : !replace.from ? `because ${task.id} has no owning chief` : replace.runs.length ? `when you know that ${label(replace.from)} stopped` : `because no run of ${task.id} ends as failed`;
+    const recommendation = replace && gate.recommendation === options[0] ? `${options[0]}, ${why}` : gate.recommendation || null;
     return { kind: "gate", ...(replace && { replace: true }), key: `${project.key}/${gate.id}`, text, recommendation, gateId: gate.id, options,
       breakdown: breakdown ? { key: `${project.key}/${breakdown}`, id: breakdown, name: graph.programs.get(breakdown).name } : null };
   });
