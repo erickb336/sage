@@ -2656,12 +2656,16 @@ test("rule 3: a damaged plugins.tsv starts a legacy logbook, as before (F-T642-2
   assert.deepEqual(w.bound(), []);
 });
 
-test("rule 3: a shallow clone starts a legacy logbook, not a shared logbook of its own (F-T642-3)", (t) => {
-  const w = ruleThree(t, ["claude\t2", "codex\t2"]), shallow = join(w.base, "shallow");
+test("rule 3: a shallow clone starts a legacy logbook when the shared root has no logbook, and gets the shallow prompt when it has one (F-T642-3, F-T645-1)", (t) => {
+  const w = ruleThree(t, ["claude\t2", "codex\t2"]), shallow = join(w.base, "shallow"), later = join(w.base, "later");
   git(w.project, "commit", "-q", "--allow-empty", "-m", "second");
-  w.claude("init");
   git(w.base, "clone", "-q", "--depth", "1", `file://${w.project}`, shallow);
   assert.match(w.claude("init", "--project", shallow), new RegExp(`^logbook ${w.claudeRoot}/shallow-[0-9a-f]{6}$`));
+  assert.deepEqual(w.bound(), []);
+  // Once the shared root has a logbook, a shallow clone gets T631's prompt (F-T633-9), not a legacy logbook.
+  assert.equal(w.claude("init"), SHARED_INIT(w.project, join(w.shared, w.folder())));
+  git(w.base, "clone", "-q", "--depth", "1", `file://${w.project}`, later);
+  assert.match(refusalOf(() => w.claude("init", "--project", later)), /It is a shallow clone, so its first commit is its newest one/);
   assert.deepEqual(w.bound().map((r) => r.root), [w.project]);
 });
 
