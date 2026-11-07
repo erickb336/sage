@@ -58,6 +58,8 @@ export function boardView({ sources, scope = "all", project = null, logbookKey =
       if (!project) throw new RangeError("this board needs the current project");
       let mine = projects.filter(book => book.key === here);
       if (!mine.length) mine = projects.filter(book => book.checkout && resolve(book.checkout) === resolve(project));
+      // A linked checkout of a shared logbook is its row's root, also a second clone of the same folder name (F-T633-11).
+      if (!mine.length) mine = projects.filter(book => book.shared && (book.checkouts ?? []).some(item => item.root === resolve(project)));
       // A folder name never finds a shared logbook or its old ones: an unlinked clone of one name is not linked (T633).
       if (!mine.length) mine = projects.filter(book => !book.shared && !book.old && fold(bare(book.name)) === fold(basename(project)));
       selected = groups.filter(group => group.books.some(key => mine.some(book => book.key === key)));

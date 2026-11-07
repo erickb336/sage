@@ -4,6 +4,7 @@ import { githubRepository, hookProvider } from "./board-reader.mjs";
 import { LINE, PRIORITIES, TASK_KINDS, agentCaps, proposalOf } from "./logbook-fields.mjs";
 import { ENDED, MET, breakdownGate, dead, gateLines, lostWhy, namedText, progressOf, progressText, shownGraph, shownWaits, waitGraph, waitsOf } from "./program-rules.mjs";
 import { offerOf, replaceOf } from "./chiefs.mjs";
+import { checkoutLabel, plainName } from "./shared-root.mjs";
 // One semantic model for HTML, chat and the read-only server.
 const COLUMNS = [
   ["backlog", "Backlog", ["framed"]],
@@ -41,18 +42,16 @@ const movesOf = once(decisions => {
 });
 // N1: the name that stands in for a run's provider when the run does not record it: the source's provider, else its label.
 const standIn = source => source.provider ?? source.label ?? source.id;
+// In a shared logbook the source is the shared root, which is no provider: a run with no chief has an unknown one, and a
+// run of an old logbook has that logbook's provider (F-T624-24).
+const standInOf = (source, project) => project.old?.provider ?? (project.shared ? "unknown" : standIn(source));
 // N9: a project's name: the owner's display name, else the repository name of its upstream remote, then of its origin,
 // then its main checkout's folder, then its logbook folder without the hash.
+// A folder's name keeps no control, format (bidi) or line separator character (plainName, F-T630-2).
 export const projectName = project => project.displayName ?? [project.upstream, project.repository].map(url => githubRepository(url)?.split("/").at(-1)).find(Boolean)
-  ?? (project.checkout ? basename(project.checkout) : project.name.replace(/-[0-9a-f]{6}$/, ""));
-// A linked checkout's label (T633): its folder name, and " #n" by link order when two checkouts of its logbook share
-// that name. A gone checkout keeps its place, so a number never moves to another folder. ("clone n" names two projects.)
-// The name leaves no control or format character (bidi), as md() drops them from the chat text (F-T625-2).
-const folderName = root => basename(root).replace(/[\p{Cc}\p{Cf}\u2028\u2029]/gu, "");
-const checkoutLabel = (checkouts, root) => {
-  const name = folderName(root), same = (checkouts ?? NONE).filter(item => folderName(item.root) === name), n = same.findIndex(item => item.root === root);
-  return same.length > 1 && n >= 0 ? `${name} #${n + 1}` : name;
-};
+  ?? (project.checkout ? plainName(basename(project.checkout)) : project.name.replace(/-[0-9a-f]{6}$/, ""));
+/** The roles whose newest run on a branch holds the checkout where a review reads it: the state tool's writer runs (branchCheckout). */
+const WRITERS = ["implementer", "designer", "arena-judge"];
 // A priority's rank: P0 first, no priority last.
 const rank = task => task.priority ? PRIORITIES.indexOf(task.priority) : PRIORITIES.length;
 const positive =value => /^([1-9]\d*)$/.test(String(value)) ? Number(value) : null;
@@ -305,8 +304,11 @@ function card(source, project, group, task, now, graph, landing) {
   // A run's checkout (T625) leaves the model as its folder name and a gone flag, never as a path, so no page can print the path (R1069-2).
   // checkoutGone is null for a folder past the reader's 64 checks: the board did not check it (F-T625-5).
   const goneCheckouts = project.goneCheckouts ?? NONE, unchecked = project.uncheckedCheckouts ?? NONE;
-  const where = checkout => shared && checkout?.startsWith("/") ? { checkoutName: checkoutLabel(project.checkouts, checkout), checkoutGone: unchecked.includes(checkout) ? null : goneCheckouts.includes(checkout) } : {};
+  const where = checkout => shared && checkout?.startsWith("/") ? { checkoutName: checkoutLabel(project.checkouts ?? NONE, checkout), checkoutGone: unchecked.includes(checkout) ? null : goneCheckouts.includes(checkout) } : {};
   const runs = rows(project, "runs", task).map(({ checkout, ...run }) => { const evidence = latest(records, "run", data => data.run === run.id); const chief = shared ? chiefOf(run.chief) : null; return { ...run, ...where(checkout), evidence, provider: evidence?.data.provider ?? (chief ? title(chief.provider) : null), clock: runClock(run.started, now, lastActivity) }; });
+  // A review reads the branch in the checkout of the branch's newest writer run, as the state tool does: only that run's
+  // gone folder stops the next review step, so only it gets the note (F-T625-4, the chief's option A).
+  const writer = runs.filter(run => WRITERS.includes(run.role) && String(run.branch ?? "").toLowerCase() === String(task.branch ?? "").toLowerCase() && /^R[1-9]\d*$/.test(run.id)).sort((a, b) => Number(a.id.slice(1)) - Number(b.id.slice(1))).at(-1);
   const agents = runs.filter(run => run.status === "running").map(run => ({ id: run.id, role: run.role, provider: run.provider, evidence: run.evidence, recordedStatus: run.status, stale: run.clock.stale }));
   const label = id => chiefOf(id) ? `${title(chiefOf(id).provider)} · ${id}` : id;
   // Needs you: an open gate, or a state that waits for the owner (R1077). Held and replan wait for the chief, not for you.
@@ -321,7 +323,9 @@ function card(source, project, group, task, now, graph, landing) {
     // A Replace gate (T618) says its question in one line, from its fixed start: the chiefs, and the runs that end as failed.
     const replace = gate.kind === "replace" && replaceOf(gate);
     const text = replace ? `Replace the owning chief of ${task.id}, ${label(replace.from)}, with ${label(replace.to)}? ${replace.runs.length ? `${and(replace.runs)} ${replace.runs.length === 1 ? "ends" : "end"} as failed.` : "No run ends as failed."}` : [...gateLines(gate, graph.programs), ...lost].join(LINE);
-    return { kind: "gate", ...(replace && { replace: true }), key: `${project.key}/${gate.id}`, text, recommendation: gate.recommendation || null, gateId: gate.id, options: gate.options ? gate.options.split("|").map(option => option.trim()) : [],
+    // Replace takes the task from a chief that may still work, so the design's recommendation says when (F-T624-5).
+    const recommendation = replace && gate.recommendation === "replace" ? `replace, when you know that ${label(replace.from)} stopped` : gate.recommendation || null;
+    return { kind: "gate", ...(replace && { replace: true }), key: `${project.key}/${gate.id}`, text, recommendation, gateId: gate.id, options: gate.options ? gate.options.split("|").map(option => option.trim()) : [],
       breakdown: breakdown ? { key: `${project.key}/${breakdown}`, id: breakdown, name: graph.programs.get(breakdown).name } : null };
   });
   if (task.state === "awaiting-you" && !gates.length && !allGates.at(-1)?.answer) reasons.push({ kind: "design", text: "The design waits for your answer." });
@@ -392,7 +396,7 @@ function card(source, project, group, task, now, graph, landing) {
     ...rows(project, "findings", task).map(row => ({ ...row, movedFrom: (moves.to.get(task.id) ?? NONE).find(({ move }) => move[3] === row.key)?.row.task ?? null })),
     ...(moves.from.get(task.id) ?? NONE).map(({ row, move }) => ({ severity: "", summary: row.decision.slice(row.decision.indexOf(":") + 1).trim(), ...found(move[2], move[3]), task: task.id, key: move[1], status: "moved", reason: "", movedTo: move[2] })),
   ];
-  return { key: `${project.key}/${task.id}`, source: source.id, sourceLabel: source.label, providerStandIn: standIn(source), repository: githubRepository(pr?.data.repository) ?? githubRepository(project.repository), lastActivity, headBasis, project: project.key, group: group.key, projectName: group.name, archived: group.archived, program: task.program ? { key: `${project.key}/${task.program}`, id: task.program, name: program?.name ?? null, pilot: program?.pilot === task.id } : null, waits, waitLine: waitLine(task, waits, column), priority: PRIORITIES.includes(task.priority) ? task.priority : "", kind: TASK_KINDS.includes(task.kind) ? task.kind : "", ...Object.fromEntries(["id", "title", "size", "risk", "route", "state", "branch", "pr", "round", "keys", "hold"].map(field => [field, task[field] ?? ""])), column, prEvidence: pr, currentHead: head, modeEvidence: mode, completedAt, visible: column !== "done" || completedAt !== null && completedAt <= now && completedAt >= now - 7 * 86400000, agents, inferredWork: inferred, cycles, requiredCycles: required, reasons, runs, ledger, gates, findings, decisions: rows(project, "decisions", task).slice(-10), brief, briefFields: briefFields(brief), projectCheck, mergeCheck: merge, loop: stepLine({ task, route, cycles, required: count, head, judged, reasons, merge, gates: allGates, runs, ledger, rounds: positive(source.config?.max_rounds) ?? 3, autopilot: mode?.data.autopilot === true }), runClocks: Object.fromEntries(runs.filter(run => run.status === "running").map(run => [run.id, run.clock])), artifacts: records.filter(record => record.kind === "artifact").map(record => ({ ...record, content: project.contents?.[record.id] ?? null })), diagnostics: [...project.diagnostics], ...holderOf(project, task, runs, label), ...(wasOf(project, task) && { was: wasOf(project, task) }) };
+  return { key: `${project.key}/${task.id}`, source: source.id, sourceLabel: source.label, providerStandIn: standInOf(source, project), repository: githubRepository(pr?.data.repository) ?? githubRepository(project.repository), lastActivity, headBasis, project: project.key, group: group.key, projectName: group.name, archived: group.archived, program: task.program ? { key: `${project.key}/${task.program}`, id: task.program, name: program?.name ?? null, pilot: program?.pilot === task.id } : null, waits, waitLine: waitLine(task, waits, column), priority: PRIORITIES.includes(task.priority) ? task.priority : "", kind: TASK_KINDS.includes(task.kind) ? task.kind : "", ...Object.fromEntries(["id", "title", "size", "risk", "route", "state", "branch", "pr", "round", "keys", "hold"].map(field => [field, task[field] ?? ""])), column, prEvidence: pr, currentHead: head, modeEvidence: mode, completedAt, visible: column !== "done" || completedAt !== null && completedAt <= now && completedAt >= now - 7 * 86400000, agents, inferredWork: inferred, cycles, requiredCycles: required, reasons, runs, ledger, gates, findings, decisions: rows(project, "decisions", task).slice(-10), brief, briefFields: briefFields(brief), projectCheck, mergeCheck: merge, loop: stepLine({ task, route, cycles, required: count, head, judged, reasons, merge, gates: allGates, runs, ledger, rounds: positive(source.config?.max_rounds) ?? 3, autopilot: mode?.data.autopilot === true }), runClocks: Object.fromEntries(runs.filter(run => run.status === "running").map(run => [run.id, run.clock])), goneRun: writer?.checkoutGone ? writer.id : null, artifacts: records.filter(record => record.kind === "artifact").map(record => ({ ...record, content: project.contents?.[record.id] ?? null })), diagnostics: [...project.diagnostics], ...holderOf(project, task, runs, label), ...(wasOf(project, task) && { was: wasOf(project, task) }) };
 }
 
 /**
@@ -480,7 +484,7 @@ function projectGroups(sources) {
     const archived = trusted.filter(book => book.project.archived);
     if (archived.length && archived.length < trusted.length) note(trusted, `Archived in ${keys(archived)} only: the board does not archive the project.`);
     const merged = { name: projects[0].name, displayName: first("displayName"), upstream: first("upstream"), repository: first("repository"), checkout: first("checkout") };
-    const full = repoPath(merged.upstream) ?? repoPath(merged.repository), folder = merged.checkout ? basename(merged.checkout) : null;
+    const full = repoPath(merged.upstream) ?? repoPath(merged.repository), folder = merged.checkout ? plainName(basename(merged.checkout)) : null;
     const all = group.books.map(book => book.project), problem = all.flatMap(project => project.diagnostics)[0] ?? null;
     // The quiet second line names the next source of the name (notes, section 2): the repository as owner/repo, or first
     // that there is no GitHub remote, then the folder. Two projects that would show the same lines show the end of their paths.
@@ -502,7 +506,7 @@ function projectGroups(sources) {
       sub: unique(sub).join(" · "),
       // Search matches every name a person may know: the display names, the repositories, the folder and the logbook keys.
       // The checkout paths are apart: only the Mac's own page carries them (R1069-2).
-      terms: unique([...names, repoPath(merged.upstream), ...all.map(project => repoPath(project.repository)), folder, ...linked.map(item => basename(item.root)), merged.name, ...all.map(project => project.key)]),
+      terms: unique([...names, repoPath(merged.upstream), ...all.map(project => repoPath(project.repository)), folder, ...linked.map(item => plainName(basename(item.root))), merged.name, ...all.map(project => project.key)]),
       paths: unique([...all.map(project => project.checkout), ...linked.map(item => item.root)]),
     });
   }
@@ -578,7 +582,7 @@ function agentsOf(sources, groups, groupOf, cards, at) {
   const runs = sources.flatMap(source => source.projects.filter(book => !book.old).flatMap(book => (book.tables.runs ?? []).filter(run => run.status === "running" && /^R[1-9]\d*$/.test(run.id)).map(run => ({ source, book, run }))));
   const leadKey = item => sha256(`${item.book.logbook}:${item.run.id}`);
   // A run's provider: its evidence, else its chief's row in a shared logbook, else its source's.
-  const providerOf = item => runRecords(item.book.observations?.records ?? NONE).get(item.run.id)?.data.provider ?? (item.book.shared ? (item.book.chiefs ?? NONE).find(chief => chief.id === item.run.chief)?.provider : null) ?? item.source.provider ?? standIn(item.source);
+  const providerOf = item => runRecords(item.book.observations?.records ?? NONE).get(item.run.id)?.data.provider ?? (item.book.shared ? (item.book.chiefs ?? NONE).find(chief => chief.id === item.run.chief)?.provider : null) ?? standInOf(item.source, item.book);
   // The hook notes that know a run: its own source's, or for a shared run its provider's source.
   const notesOf = (item, prov) => item.source.shared ? hooked.find(entry => !entry.source.shared && entry.writer === prov) : hooked.find(entry => entry.source === item.source);
   const taken = new Set();
@@ -731,7 +735,8 @@ function programsOf(source, project, group, graph, cards) {
       : state === "lost" && !(gates.get(program.gate) && !gates.get(program.gate).answer && inNeeds(card({ id: gates.get(program.gate).task }))) ? { kind: "lost", title: lostWhy(program), text: title(LOST_FIX(program.id)) }
       : null;
     return { key: `${project.key}/${program.id}`, id: program.id, name: program.name, goal: program.goal, pilot: program.pilot, pilotState: pilotState ?? null, gate: program.gate, gateFound: program.gateFound, questions: questions.get(program.id) ?? [], ...(program.named !== undefined && { named: program.named }), open: open.length,
-      source: source.id, sourceLabel: source.label, project: project.key, group: group.key, projectName: group.name, archived: group.archived,
+      // An old logbook's program names that logbook, not the shared root that the board reads it through (F-T624-19).
+      source: source.id, sourceLabel: project.old ? `Old ${title(project.old.provider)}` : source.label, project: project.key, group: group.key, projectName: group.name, archived: group.archived,
       state, progress, progressText: progressText(progress), tasks: ordered.map(task => `${project.key}/${task.id}`), depths: layered.map(([, depth]) => depth),
       next: first ? { key: first.key, id: first.id, word: stateWord(first.state), pilot: first.id === program.pilot } : null,
       waiting: waiting.filter(item => !item.waitLine.never).length, cannotStart: waiting.filter(item => item.waitLine.never).map(item => item.id),

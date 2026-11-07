@@ -4464,7 +4464,8 @@ test("T314 R1044-2 R1041-1: config refuses a name with a line or paragraph separ
   const hidden = "has a control, format or hidden character (such as a tab, a line break, a zero-width space or a right-to-left mark). Nothing changed.";
   // Each one shows as nothing, or breaks the line, in a terminal or on the board.
   for (const [cp, why] of [[0x2028, "line separator"], [0x2029, "paragraph separator"], [0x34f, "combining grapheme joiner"], [0x115f, "Hangul choseong filler"], [0x1160, "Hangul jungseong filler"], [0x3164, "Hangul filler"], [0xffa0, "halfwidth Hangul filler"], [0x2800, "braille blank"]])
-    assert.equal(s.no("config", `name=sea${c(cp)}cc`), `sage: the name "sea${c(cp)}cc" ${hidden}`, why);
+    // A printed line or paragraph separator would break the refusal's line, so it prints as an escape (F-T639-1).
+    assert.equal(s.no("config", `name=sea${c(cp)}cc`), `sage: the name "sea${[0x2028, 0x2029].includes(cp) ? `\\u{${cp.toString(16)}}` : c(cp)}cc" ${hidden}`, why);
   assert.equal(s.no("config", `name=${c(0x3164)}`), `sage: the name "${c(0x3164)}" ${hidden}`, "a name of a filler alone");
   assert.equal(s.no("config", `name=${c(0x301, 0x301)}`), `sage: the name "${c(0x301, 0x301)}" has no visible character. Nothing changed.`);
   const flood = `x${c(0x300, 0x301, 0x302, 0x303)}`;
