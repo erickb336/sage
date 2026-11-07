@@ -11,6 +11,7 @@
 //   - SessionStart with source compact: a compaction can drop the role, so the hook gives it again while sage mode is on.
 //   - SessionStart with source fork: a fork has a new session id, and Codex does not give the hook the parent's id.
 //     So a fork starts with sage mode off, and the hook tells the chief so, because its history can show the role.
+//     It also saves the fork's start mark (start-mark.mjs). A compaction saves none: it is no new start.
 //   - A subagent's event (agent_id) switches nothing and gets no role.
 //   - The hook tells the user directly (a systemMessage) only for a limit or a fault: a damaged mode file, an unknown input shape, a mode folder that it cannot use, or SAGE_HOOKS=off. For a normal switch, the
 //     note tells the chief to confirm the switch in one line of its reply.
@@ -22,6 +23,7 @@ import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { exactPhrase, MODE_DAMAGED, readModeFile, renderChiefInstructions, switchModes } from "sage-core";
 import { privateDirectory, readState, saveState, stateKey } from "./principles-hook.mjs";
+import { saveStartMark } from "./start-mark.mjs";
 
 const ROOT = join(dirname(fileURLToPath(import.meta.url)), "..");
 const TOOL = join(ROOT, "skills/sage/sage.mjs");
@@ -99,8 +101,18 @@ export function handle(input, state, env = process.env) {
 /** The mode files: under the Codex logbook root (SAGE_HOME, or CODEX_HOME/sage), as the Codex state tool finds it. */
 export const modeDirectory = (env) => resolve(env.SAGE_HOME ?? join(env.CODEX_HOME ?? join(env.HOME ?? homedir(), ".codex"), "sage"), ".hooks", "codex");
 
-/** The hook's whole answer to one parsed event: it reads and saves the session's mode file with the core reader. */
+/**
+ * The hook's whole answer to one parsed event. A fork of the root thread also saves its start mark (start-mark.mjs): a
+ * failed save adds a limit line for the user and never blocks.
+ */
 export function answer(input, env) {
+  const output = modeAnswer(input, env);
+  const markWarning = known(input) && input.hook_event_name === "SessionStart" && input.source === "fork" ? saveStartMark(modeDirectory(env), input) : undefined;
+  return markWarning ? { ...output, systemMessage: [output?.systemMessage, markWarning].filter(Boolean).join("\n") } : output;
+}
+
+/** The answer of the mode rules: it reads and saves the session's mode file with the core reader. */
+function modeAnswer(input, env) {
   const unavailable = known(input) && input.hook_event_name === "UserPromptSubmit"
     && !("agent_id" in input) && exactPhrase(input.prompt) === "autopilot on";
   const failureNote = (text) => unavailable ? `${text} ${AUTOPILOT_UNAVAILABLE}` : text;

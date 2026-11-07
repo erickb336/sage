@@ -1,6 +1,7 @@
 #!/usr/bin/env node
 // Codex SessionStart hook: one short sage status at the start of a session, for the owner (systemMessage) and the
-// model (additionalContext). Startup and resume reset legacy autopilot before status. One script for each event, after
+// model (additionalContext). Startup and resume reset legacy autopilot before status. Startup, resume and clear save the
+// session's start mark (start-mark.mjs); a failed save is a limit line and never blocks. One script for each event, after
 // oh-my-codex (MIT, github.com/Yeachan-Heo/oh-my-codex).
 import { readFileSync, realpathSync } from "node:fs";
 import { homedir } from "node:os";
@@ -10,6 +11,7 @@ import { PHRASES, readModeFile } from "../core/index.mjs";
 import { privateDirectory, readState, saveState, stateKey } from "./principles-hook.mjs";
 import { sessionMeta } from "./report-gate.mjs";
 import { modeDirectory, TESTED_CODEX } from "./sage-codex-hook.mjs";
+import { saveStartMark } from "./start-mark.mjs";
 
 const ON_PHRASE = Object.keys(PHRASES).find((phrase) => PHRASES[phrase].sage === true);
 const RESET_UNAVAILABLE = "sage: autopilot reset is unavailable. The hook could not confirm the saved mode. Automatic merging remains unavailable in Codex.";
@@ -79,6 +81,7 @@ function resetAutopilot(input, env) {
 export function sessionStatus(input, { pluginRoot, codexHome, env = process.env }) {
   if (input?.hook_event_name !== "SessionStart") return undefined;
   const resetWarning = resetAutopilot(input, env);
+  const markWarning = ["startup", "resume", "clear"].includes(input.source) ? saveStartMark(modeDirectory(env), input) : undefined;
   const plugin = readJson(join(pluginRoot, ".codex-plugin/plugin.json")).version;
   const version = codexVersion(input.transcript_path);
   const keys = hookKeys(pluginRoot);
@@ -86,7 +89,7 @@ export function sessionStatus(input, { pluginRoot, codexHome, env = process.env 
   const [low, high] = TESTED_CODEX.map(minor);
   const at = version && minor(version);
   const inRange = at && (at[0] - low[0] || at[1] - low[1]) >= 0 && (at[0] - high[0] || at[1] - high[1]) <= 0;
-  const limits = resetWarning ? [resetWarning] : [];
+  const limits = [resetWarning, markWarning].filter(Boolean);
   if (trusted < keys.length) limits.push(`sage: ${keys.length - trusted} of the ${keys.length} sage hooks ${keys.length - trusted === 1 ? "is" : "are"} not trusted yet, so some sage rules do not run. To trust them, type /hooks in the Codex CLI.`);
   if (!inRange) limits.push(`sage: ${version ? `this is Codex ${version}` : "the hook could not read the Codex version"}, and sage is tested only with Codex ${TESTED_CODEX.join(" to ")}. Some sage rules may not run.`);
   // Codex trusts a plugin hook only when its record matches the hash of the hook and of the plugin's files. Codex
