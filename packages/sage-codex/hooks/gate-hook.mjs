@@ -686,7 +686,9 @@ const AGENT_MERGE = "sage: only the chief merges, not an agent. Report the pull 
 const AUTOPILOT_OFF = 'sage: autopilot is off, so the owner merges. Report the pull request as ready. The owner turns autopilot on with the message "autopilot on", alone, while sage mode is on';
 const READY = "Report the pull request as ready: the owner merges it in GitHub";
 /** The folders that Codex's sandbox lets a command write: the project and its working folder, and the temporary folders. */
-const writableRoots = (cwd, env) => [projectRoot(cwd), cwd, env.TMPDIR, "/tmp", "/private/tmp", "/var/tmp"].filter(Boolean).map((dir) => real(dir) ?? resolve(dir));
+const writableRoots = (cwd, env, temporary) => [projectRoot(cwd), cwd, env.TMPDIR, ...temporary].filter(Boolean).map((dir) => real(dir) ?? resolve(dir));
+/** The temporary folders that Codex's sandbox can write on every machine, beside TMPDIR. */
+export const TEMPORARY = ["/tmp", "/private/tmp", "/var/tmp"];
 const inside = (path, roots) => roots.some((root) => { const at = relative(root, path); return at === "" || (!at.startsWith("..") && !isAbsolute(at)); });
 /** The hook's PATH without the folders that the sandbox can write (and without relative folders). */
 const trustedPath = (roots, env) => (env.PATH ?? "").split(":").filter((dir) => isAbsolute(dir) && !inside(real(dir) ?? resolve(dir), roots)).join(":");
@@ -751,11 +753,11 @@ function permitted(f) {
  * The gate's admission of the merge command's exact form from the root thread: undefined when it saved the call's
  * merge permit, else the reason to refuse. ppid is the Codex process that runs the hook.
  */
-async function admit(f, merge, { env, check, ppid }) {
+async function admit(f, merge, { env, check, ppid, temporary }) {
   const mode = modeFile(f.session, env);
   const { state } = readModeFile(readState, mode);
   if (state.sage !== true || state.autopilot !== true) return AUTOPILOT_OFF;
-  const roots = writableRoots(f.cwd, env);
+  const roots = writableRoots(f.cwd, env, temporary);
   const version = runningCodex(roots, env);
   if (!RECORD_VERSION.test(version ?? "")) return `sage: ${version ? `this session runs Codex ${version}` : "sage cannot tell which Codex runs this session"}, and autopilot merges only in Codex 0.164 to 0.166. ${READY}`;
   const codexRecord = readRecord(f.transcript ?? "");
@@ -830,7 +832,7 @@ const codexShellWrite = (command, cwd, env) => {
  * The gate's answer to one hook event: a hook output object, or undefined for no decision. deps replaces the mode
  * reader and the merge check, for tests.
  */
-export async function gate(input, { mode = readMode, check = checkMerge, env = process.env, ppid = process.ppid } = {}) {
+export async function gate(input, { mode = readMode, check = checkMerge, env = process.env, ppid = process.ppid, temporary = TEMPORARY } = {}) {
   // The manifest's send pattern has no lookahead (Codex reads it with Rust's regex), so it also matches an MCP tool such
   // as mcp__slack__send_message. The owner allows MCP tools: the gate judges only sage's own (F-T534-3).
   if (typeof input?.tool_name === "string" && /^mcp__/.test(input.tool_name) && !SAGE_TOOL.test(input.tool_name)) return undefined;
@@ -845,7 +847,7 @@ export async function gate(input, { mode = readMode, check = checkMerge, env = p
     const merge = mergeForm(f.command);
     if (!merge) return deny(MERGE_FORM);
     if (thread.child) return refuse(thread, AGENT_MERGE);
-    const why = await admit(f, merge, { env, check, ppid });
+    const why = await admit(f, merge, { env, check, ppid, temporary });
     return why ? deny(why) : undefined;
   }
   const sageTool = SAGE_TOOL.exec(f.tool);

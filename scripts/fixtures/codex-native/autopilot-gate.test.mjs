@@ -84,7 +84,9 @@ function world({ lines = withMode(RECORDS["exec-on"]), mode = { sage: true, auto
   if (mode) writeFileSync(modeFile, typeof mode === "string" ? mode : JSON.stringify(mode), { mode: 0o600 });
   if (mark) writeFileSync(join(dir, "marks", `${stateKey({ session_id: SESSION })}.json`), JSON.stringify({ session: SESSION, source: "startup", ...mark }), { mode: 0o600 });
   const checks = [], paths = [];
-  const deps = { env, ppid: PPID, check: async (merge, cwd, checkEnv) => (checks.push({ ...merge, cwd }), paths.push(checkEnv.PATH), { ok: true }) };
+  // The fakes are under the test's temporary folder (/tmp on Linux), which the gate counts as writable by the sandbox:
+  // so the tests give the gate no fixed temporary folder, and the R2611 test gives it this one.
+  const deps = { env, ppid: PPID, temporary: [], check: async (merge, cwd, checkEnv) => (checks.push({ ...merge, cwd }), paths.push(checkEnv.PATH), { ok: true }) };
   const input = (command = COMMAND, extra = {}) => ({ hook_event_name: "PreToolUse", session_id: SESSION, turn_id: TURN, transcript_path: transcript, cwd: project,
     model: "m", permission_mode: "default", tool_name: "Bash", tool_use_id: CALL, tool_input: { command }, ...extra });
   const ask = (command = COMMAND, extra = {}) => ({ hook_event_name: "PermissionRequest", session_id: SESSION, turn_id: TURN, transcript_path: transcript, cwd: project,
@@ -216,6 +218,10 @@ test("R2611: node and gh never come from a folder that Codex's sandbox can write
   assert.deepEqual(first.paths, [`${ARG0}:${FAKES}`], "the merge check runs with the trusted PATH too");
   clearPermits();
   rmSync(GH_LOG);
+  // A fixed temporary folder of the sandbox (here the folder that holds the fakes): gh and the Codex binary there do not count.
+  const temporary = world();
+  assert.equal(denied(await temporary.run(temporary.input(), { temporary: [SCRATCH] })), `sage: sage cannot tell which Codex runs this session, and autopilot merges only in Codex 0.164 to 0.166. ${READY}`);
+  assert.deepEqual(permits(), []);
   // node: the gate's own node, which must be outside those folders too (here the temporary folder names node's folder).
   const node = world();
   assert.match(denied(await node.run(node.input(), { env: { ...node.env, TMPDIR: dirname(process.execPath) } })) ?? "", /^sage: node runs from a folder that Codex's sandbox can write/);
