@@ -1403,16 +1403,21 @@ function stuckChange(dir, skip, env) {
   }
   refuse("This saved change can finish, so it needs no repair: any write in this project finishes it. Nothing changed.");
 }
-/** Settle for a provider that has its own journal: journal runs under the same lock, and reads each receipt through its two readers. */
+/**
+ * Settle for a provider that has its own journal: journal runs under the same lock, and reads each receipt through its two
+ * readers. After a move, a change saved before the move has its receipt in an old logbook (T680), so each reader also reads
+ * the old logbooks that sources.tsv names. It only reads them: a moved logbook takes no more writes.
+ */
 function settleWrites({ project }, env, journal) {
   const dir = storeDir(project, env);
   if (realpathSync(dir) !== resolve(dir)) refuse("Invalid logbook location");
   return withLock(dir, () => {
     settle(dir);
+    const books = [dir, ...movedFrom(dir).map((s) => s.dir)], first = (read) => books.reduce((found, book) => found ?? read(book), undefined);
     return journal({
-      update: ({ owner, request, digest }) => taskUpdates.outcome(dir, owner, request, digest),
+      update: ({ owner, request, digest }) => first((book) => taskUpdates.outcome(book, owner, request, digest)),
       finish: reference => {
-        const receipt = interruptedWrites.readReceipt(dir, reference);
+        const receipt = first((book) => interruptedWrites.readReceipt(book, reference));
         return receipt && { receiptHash: createHash("sha256").update(JSON.stringify(receipt)).digest("hex") };
       },
     });
