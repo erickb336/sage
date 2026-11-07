@@ -1542,7 +1542,7 @@ test("the move refuses with nothing changed: running runs, an old plugin, a fold
   const shut = moveWorld(t);
   chmodSync(shut.claudeDir, 0o555);
   try {
-    assert.throws(() => shut.codex("move", "--preview"), new RegExp(`^Error: sage: refused: cannot write the Claude logbook folder\\n  ${shut.claudeDir}  test write refused \\(no write permission\\)\\n  ${shut.codexDir}  ok\\n  ${shut.shared}  ok\\nNothing changed\\.$`));
+    assert.throws(() => shut.codex("move", "--preview"), new RegExp(`^Error: sage: refused: cannot write the Claude logbook folder\\n  ${shut.claudeDir}  test write refused \\(no write permission\\)\\n  ${shut.codexDir}  ok\\n  ${shut.shared}  ok\\nNothing changed\\. Ask the other provider's chief to move the project\\.$`));
   } finally {
     chmodSync(shut.claudeDir, 0o755);
   }

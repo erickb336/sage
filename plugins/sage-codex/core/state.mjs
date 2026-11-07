@@ -1926,7 +1926,7 @@ function movePlan(scope, env, gate) {
     }
   });
   const unwritable = tried.filter((t) => t.why);
-  if (unwritable.length) refuse([`refused: cannot write the ${unwritable.map((t) => t.what).join(" and the ")}`, ...tried.map((t) => `  ${shown(t.dir).padEnd(27)}  ${t.why ? `test write refused (${t.why})` : "ok"}`), "Nothing changed."].join("\n"));
+  if (unwritable.length) refuse([`refused: cannot write the ${unwritable.map((t) => t.what).join(" and the ")}`, ...tried.map((t) => `  ${shown(t.dir).padEnd(27)}  ${t.why ? `test write refused (${t.why})` : "ok"}`), "Nothing changed. Ask the other provider's chief to move the project."].join("\n"));
 
   const real = (dir) => { try { return realpathSync(dir); } catch { return dir; } };
   // A task that a task of another old logbook adopted moves with it: its row gets the adopter's new number (F7).
