@@ -487,7 +487,7 @@ test("T625: a shared run shows its checkout folder under its role, never the pat
   writeFileSync(join(dir, "runs.tsv"), sheet(`${COLS.runs} checkout`, [
     run("R407", "T321", "qa", "running", iso(-50 * MIN), { chief: "C1", checkout: w.checkout }),
     run("R420", "T321", "lead", "running", iso(-60 * MIN), { chief: "C1" }),
-    run("R451", "T330", "implementer", "done", iso(-90 * MIN), { chief: "C1", ended: iso(-80 * MIN), checkout: moved }),
+    run("R451", "T330", "implementer", "done", iso(-90 * MIN), { chief: "C1", ended: iso(-80 * MIN), checkout: moved, branch: "sage/t330" }),
     run("R452", "T330", "code-reviewer", "running", iso(-20 * MIN), { chief: "C1", checkout: moved }),
     run("R460", "T318", "implementer", "done", iso(-DAY), { chief: "C1", ended: iso(-DAY + MIN), checkout: moved }),
   ]));
@@ -498,12 +498,14 @@ test("T625: a shared run shows its checkout folder under its role, never the pat
   assert.match(text, /^R407 Claude · qa · checkout lantern · running · /m);
   assert.match(text, /^R420 Claude · lead · running · /m);
   assert.doesNotMatch(html, /class="cknote"/);
-  // The folder is gone: each row says so, and an active task gets one note under its table and one line after its runs.
-  const note = "The folder lantern is not on this Mac now, so sage cannot read the branch there. The next review step of T330 stops until the folder is back.";
+  // The folder is gone: each row says so. The folder of the branch's newest writer run (R451) stops the review, so it
+  // has the warning colour, and an active task gets one note under its table and one line after its runs (F-T625-4).
+  const note = "The folder lantern of R451 is not on this Mac now, so sage cannot read the branch there. The next review step of T330 stops until the folder is back.";
   const active = page("T330"), activeText = renderTaskText(card(model, "T330"));
-  assert.equal(active.match(/checkout lantern <span class="gone gone-active" tabindex="0"[^>]*>· gone/g)?.length, 2);
+  assert.equal(active.match(/checkout lantern <span class="gone gone-active" tabindex="0"[^>]*>· gone/g)?.length, 1);
+  assert.equal(active.match(/checkout lantern <span class="gone" tabindex="0" title="The folder is not on this Mac now\. A review reads the branch in the folder of a newer run, so nothing waits on it\."[^>]*>· gone/g)?.length, 1, "the reviewer's own folder does not stop the review");
   assert.equal(active.match(/class="cknote"/g)?.length, 1);
-  assert.match(active, /<p class="cknote"><svg[^]*?<\/svg><span>The folder <b>lantern<\/b> is not on this Mac now, so sage cannot read the branch there\. The next review step of T330 stops until the folder is back\.<\/span><\/p>/);
+  assert.match(active, /<p class="cknote"><svg[^]*?<\/svg><span>The folder <b>lantern<\/b> of R451 is not on this Mac now, so sage cannot read the branch there\. The next review step of T330 stops until the folder is back\.<\/span><\/p>/);
   assert.match(activeText, /^R451 Claude · implementer · checkout lantern \(gone\) · done · /m);
   assert.match(activeText, /^R452 Claude · code-reviewer · checkout lantern \(gone\) · running · /m);
   assert.ok(activeText.includes(`\n${note}\n\n**Evidence**`), "one line after the runs");
@@ -741,20 +743,113 @@ test("F-T625-2, F-T625-5 and F-T625-6: a checkout name loses bidi characters; a 
   writeFileSync(file, ""); mkdirSync(empty);
   const many = Array.from({ length: 64 }, (_, i) => join(w.base, `c${i}`));
   writeFileSync(join(dir, "runs.tsv"), sheet(`${COLS.runs} checkout`, [
-    run("R1", "T321", "implementer", "done", iso(-90 * MIN), { chief: "C1", checkout: bidi }),
-    run("R2", "T321", "implementer", "done", iso(-80 * MIN), { chief: "C1", checkout: file }),
-    run("R3", "T321", "implementer", "done", iso(-70 * MIN), { chief: "C1", checkout: empty }),
+    run("R1", "T321", "implementer", "done", iso(-90 * MIN), { chief: "C1", checkout: bidi, branch: "sage/t321" }),
+    run("R2", "T321", "implementer", "done", iso(-80 * MIN), { chief: "C1", checkout: file, branch: "sage/t321" }),
+    run("R3", "T321", "implementer", "done", iso(-70 * MIN), { chief: "C1", checkout: empty, branch: "sage/t321" }),
     ...many.map((checkout, i) => run(`R${i + 10}`, "T320", "qa", "done", iso(-60 * MIN), { chief: "C1", checkout })),
     run("R90", "T320", "qa", "running", iso(-MIN), { chief: "C1", checkout: w.checkout }),
   ]));
   const model = modelOf(w.sources), t321 = renderBoardHtml(model, { taskKey: `shared/${FOLDER}/T321`, snapshot: false });
   assert.ok(!t321.includes("‮") && t321.includes("checkout abcfdp.exe"), "no bidi character on the page");
   assert.equal(card(model, "T321").runs[0].checkoutName, "abcfdp.exe");
-  assert.match(t321, /checkout now-a-file <span class="gone gone-active"/);
-  assert.match(t321, /checkout now-empty <span class="gone gone-active"/);
+  assert.match(t321, /checkout now-a-file <span class="gone"/);
+  assert.match(t321, /checkout now-empty <span class="gone gone-active"/, "the newest writer run's folder stops the review");
   const t320 = card(model, "T320"), past = t320.runs.find(item => item.id === "R90");
   assert.deepEqual([past.checkoutName, past.checkoutGone], ["lantern", null], "the 68th distinct path is not checked");
   assert.equal(t320.runs.find(item => item.id === "R10").checkoutGone, true, "a path within the 64 checks is");
   assert.match(renderBoardHtml(model, { taskKey: `shared/${FOLDER}/T320`, snapshot: false }), /checkout lantern <span title="The board checks at most 64 checkout folders of a logbook, so it did not check if this one is on this Mac\.">· not checked/);
   assert.match(renderTaskText(t320), /^R90 Claude · qa · checkout lantern \(not checked\) · running · /m);
+});
+
+// T631: the copy, layout and hardening follow-ups of PRs 5a, 5b, 6b and T630.
+test("F-T624-5: the Replace gate's recommendation says when, as the design does: when you know that the chief stopped", t => {
+  const model = modelOf(world(t).sources);
+  assert.equal(card(model, "T320").reasons[0].recommendation, "replace, when you know that Claude · C1 stopped");
+  assert.match(renderBoardText(model), /Recommended: replace, when you know that Claude · C1 stopped/);
+  assert.match(renderBoardHtml(model), /I recommend: replace, when you know that Claude · C1 stopped/);
+});
+
+test("F-T624-24 and F-T624-19: a shared run with no chief stands in as Unknown, not Shared; an old logbook's program names that logbook", t => {
+  const w = world(t), model = modelOf(w.sources), t322 = card(model, "T322");
+  const page = renderBoardHtml(model, { taskKey: `shared/${FOLDER}/T322`, snapshot: false });
+  assert.match(page, /<td class="id">R430<\/td><td><span class="standin" tabindex="0" title="Stand-in: the run names no chief, so the board does not know its provider\." data-why="[^"]*">Unknown<span class="vh">/);
+  assert.match(renderTaskText(t322), /^R430 Unknown \(the run names no chief\) · implementer · done/m);
+  assert.doesNotMatch(page + renderTaskText(t322), /Shared(<span| \(logbook source\))/);
+  // An old logbook's runs stand in with its provider; a legacy run keeps its source (Claude).
+  assert.equal(card(model, "T316").providerStandIn, "claude");
+  assert.equal(card(model, "T41").providerStandIn, "claude");
+  // A finished program of the old Claude logbook says "Old Claude" where a shared program says "Shared".
+  const old = join(w.claudeRoot, FOLDER);
+  rmSync(old, { recursive: true });
+  logbook(old, {
+    tasks: [task("T6", "Old export", "merged", { program: "PG2" })],
+    programs: [{ id: "PG2", name: "Export", goal: "Export", pilot: "T6", gate: "G2", at: iso(-3 * DAY) }],
+    gates: [{ id: "G2", task: "T6", question: "Approve the breakdown?", options: "approve|change|drop", recommendation: "approve", answer: "approve", at: iso(-3 * DAY) }],
+    decisions: [{ at: iso(-DAY), task: "T6", decision: "state merged" }],
+  }, LEGACY, { cols: { tasks: `${LEGACY.tasks} program moved` }, files: { "checkout.txt": `${w.checkout}\n`, "moved.json": "{}\n" } });
+  const programs = modelOf(w.sources).programs.filter(program => program.id === "PG2");
+  assert.deepEqual(programs.map(program => [program.key, program.sourceLabel]), [[`claude/${FOLDER}/PG2`, "Old Claude"]]);
+});
+
+test("F-T625-4, F-T625-8 and F-T625-9: only the gone folder of the branch's newest writer run stops the review, and its note names that run", t => {
+  const w = world(t), dir = join(w.shared, FOLDER), gone1 = join(w.base, "moved", "lantern"), gone2 = join(w.base, "other", "lantern");
+  writeFileSync(join(dir, "tasks.tsv"), readFileSync(join(dir, "tasks.tsv"), "utf8") + sheet(COLS.tasks, [task("T330", "Retry a sync", "reviewing", { chief: "C1" })]).split("\n").slice(1).join("\n"));
+  const runs = list => writeFileSync(join(dir, "runs.tsv"), sheet(`${COLS.runs} checkout`, list));
+  const writer = (id, at, checkout) => run(id, "T330", "implementer", "done", iso(-at * MIN), { chief: "C1", ended: iso(-(at - 5) * MIN), checkout, branch: "sage/t330" });
+  const view = () => { const model = modelOf(w.sources); return { html: renderBoardHtml(model, { taskKey: `shared/${FOLDER}/T330`, snapshot: false }), text: renderTaskText(card(model, "T330")), task: card(model, "T330") }; };
+  // The newest writer run's folder is here: an older run's gone folder does not stop the review, so no note and no warning.
+  runs([writer("R451", 90, gone1), writer("R455", 40, w.checkout), run("R456", "T330", "qa", "done", iso(-30 * MIN), { chief: "C1", checkout: gone2 })]);
+  let page = view();
+  assert.equal(page.task.goneRun, null);
+  assert.doesNotMatch(page.html, /class="cknote"|class="gone gone-active"/);
+  assert.equal(page.html.match(/· gone<span class="vh"> \(The folder is not on this Mac now\. A review reads the branch in the folder of a newer run, so nothing waits on it\.\)/g)?.length, 2);
+  assert.ok(!page.text.includes("is not on this Mac now"));
+  // Two gone writer folders, and a present folder of the same name (lantern, R407's): one note, for the newest, by its run.
+  runs([writer("R451", 90, gone1), writer("R455", 40, gone2), run("R407", "T330", "qa", "done", iso(-20 * MIN), { chief: "C1", checkout: w.checkout })]);
+  page = view();
+  assert.equal(page.task.goneRun, "R455");
+  assert.equal(page.html.match(/class="gone gone-active"/g)?.length, 1);
+  assert.match(page.html, /<span>The folder <b>lantern<\/b> of R455 is not on this Mac now, so sage cannot read the branch there\. The next review step of T330 stops until the folder is back\.<\/span>/);
+  assert.ok(page.text.includes("\nThe folder lantern of R455 is not on this Mac now, so sage cannot read the branch there. The next review step of T330 stops until the folder is back.\n"));
+  // A writer run of another branch is not this branch's writer.
+  runs([writer("R451", 90, w.checkout), { ...writer("R460", 10, gone1), branch: "sage/other" }]);
+  assert.equal(view().task.goneRun, null);
+});
+
+test("F-T630-2 and F-T633-10: a project named by its folder, and the picker's folder line, keep no bidi or control character", t => {
+  const w = world(t), folder = join(w.base, "evil\u202egnp.exe\u2028");
+  mkdirSync(join(folder, ".git"), { recursive: true });
+  logbook(join(w.claudeRoot, "evil-abc123"), { tasks: [task("T1", "A task", "framed")] }, LEGACY, { files: { "checkout.txt": `${folder}\n` } });
+  const model = modelOf(w.sources), project = model.projects.find(item => item.books.includes("claude/evil-abc123"));
+  assert.deepEqual([project.name, project.sub], ["evilgnp.exe", "no GitHub remote · folder evilgnp.exe"]);
+  const all = renderBoardHtml(model, { snapshot: false }) + renderBoardText(model);
+  assert.ok(!/[\u202e\u2028]/.test(all), "no bidi or line separator on a page or in the chat");
+});
+
+test("F-T630-3: the picker counts a linked checkout by the run rule: a folder with no Git checkout is gone in both", t => {
+  const w = linked(t, [["clones/lantern-b", "2026-10-02T00:00:00Z"]], { live: [] });
+  mkdirSync(w.at("clones/lantern-b"), { recursive: true }); // here, but no .git: git cannot read a branch there
+  const { model, lantern } = withRuns(w, [w.checkout, w.at("clones/lantern-b")]);
+  assert.equal(lantern.sub, "sample-owner/lantern · folder lantern", "one live checkout");
+  assert.equal(card(model, "T321").runs.find(item => item.id === "R501").checkoutGone, true);
+});
+
+test("F-T633-7: with the first checkout gone, a live clone keeps the logbook, and the note names the foreign row, not the clone", t => {
+  const w = linked(t, [["work/harbor-new", "2026-10-02T00:00:00Z", "b".repeat(40)], ["clones/lantern-c", "2026-10-03T00:00:00Z"]]);
+  rmSync(w.checkout, { recursive: true });
+  const { model, lantern } = withRuns(w, [w.at("clones/lantern-c")]);
+  assert.equal(lantern.sub, "sample-owner/lantern · folder lantern-c", "the live clone names the project");
+  assert.deepEqual(model.notes.map(note => note.message.split(" is linked")[0]), ["A checkout named harbor-new"]);
+});
+
+test("F-T633-11: the task lookup from a linked second clone finds the shared project, also with the same folder name", t => {
+  const w = linked(t, [["clones/lantern", "2026-10-02T00:00:00Z"]]);
+  const text = view.boardView({ sources: w.sources, scope: "this", project: w.at("clones/lantern"), taskId: "T321", format: "task" });
+  assert.match(text, /^\*\*T321 Show the board in both providers\*\*/);
+});
+
+test("F-T633-12: a folder named lantern #2 beside two lantern folders gets its own label", t => {
+  const w = linked(t, [["clones/lantern", "2026-10-02T00:00:00Z"], ["work/lantern #2", "2026-10-03T00:00:00Z"]]);
+  const { lantern } = withRuns(w, [w.checkout]);
+  assert.equal(lantern.sub, "sample-owner/lantern · 3 checkouts: lantern #1, lantern #2, lantern #2 #3");
 });
