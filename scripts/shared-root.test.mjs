@@ -2637,6 +2637,18 @@ test("a GitHub remote that Git cannot read refuses the move preview, never takes
   assert.equal(refusalOf(() => w.claude("move", "--preview")), `sage: refused: sage cannot read the GitHub remote of ${clone} (ENOBUFS), so it cannot tell a clone of this repository from a fork. Nothing changed. Ask the owner to check that checkout's Git config.`);
 });
 
+test("rule 3: a fork's logbook, the only logbook of the repository, makes init start a legacy logbook, as before (T646, F-T645-3)", (t) => {
+  const w = ruleThree(t, ["claude\t1", "codex\t1"]), fork = join(w.base, "fork");
+  git(w.base, "clone", "-q", w.project, fork);
+  origin(w.project, "https://github.com/owner/sage.git");
+  origin(fork, "https://github.com/someone/sage.git");
+  const forkDir = w.codex("init", "--project", fork).replace(/^logbook /, "");
+  assert.equal(dirname(forkDir), w.codexRoot);
+  w.plugins("claude\t2", "codex\t2");
+  assert.equal(w.claude("init"), `logbook ${join(w.claudeRoot, w.folder())}`);
+  assert.deepEqual(w.bound(), []);
+});
+
 test("a clone with the same GitHub remote, or one with no GitHub remote, still moves and is named in the gate (T646)", (t) => {
   for (const url of ["https://github.com/Owner/Sage", null]) {
     const w = moveWorld(t), clone = join(w.base, "clone");
