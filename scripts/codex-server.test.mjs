@@ -5919,6 +5919,50 @@ test('T594: a chief with another logbook root settles a committed row of a share
   assert.deepEqual([row.void, row.released], [undefined, true]);
 });
 
+test('T658: after the move, the open fences of moved tasks close with no receipt in the new logbook, and the settle writes neither logbook', async t => {
+  const f = await nativeTaskUpdateFixture(t);
+  const { settleNativeWrites } = await import(pathToFileURL(join(f.plugin, 'runtime/task-settle.mjs')));
+  const shared = process.env.SAGE_SHARED_HOME, old = f.assignmentLogbook, folder = basename(old), dir = join(shared, folder);
+  t.after(() => { for (const file of ['bindings.tsv', 'bindings.made', 'plugins.tsv', 'projects.tsv', 'projects.made', 'moves']) rmSync(join(shared, file), { recursive: true, force: true }); rmSync(dir, { recursive: true, force: true }); });
+  for (const id of ['R1', 'R2', 'R3']) f.assignmentCli('run', 'done', id, '--status', 'blocked'); // the move needs zero running runs
+  // The Codex chief stops after the commit of a T1 update, before its release: the row has its receipt's hash.
+  const first = await taskUpdateCoordinator(f, f.request({ title: 'Before the move' }));
+  assert.throws(() => first.run({ ...first.coordination, release() { throw Error('Injected stop'); } }), { code: 'uncertain-outcome' });
+  // It stops on a T2 update after the commit, before the acknowledgement: the row has no hash, and the saved change stays.
+  const second = { request: 'a3333333-3333-4333-8333-333333333333', task: 'T2', changes: { title: 'Also before the move' },
+    version: f.assignmentTool.readTaskSnapshot({ project: f.options.projectDirectory, task: 'T2' }, f.assignmentEnv).version };
+  const other = await taskUpdateCoordinator(f, second);
+  assert.throws(() => other.run({ ...other.coordination, acknowledge() { throw Error('Injected stop'); } }));
+  const open = () => f.core.readAdmission(f.options.directory).taskUpdates.map(row => [row.update.task, Boolean(row.receiptHash), row.released ?? false, row.void ?? false]);
+  assert.deepEqual(open(), [['T1', true, false, false], ['T2', false, false, false]]);
+  // The owner's move, as the state tool runs it, with the two provider roots named (Claude has no logbook and no plugin row).
+  const roots = () => [{ provider: 'claude', path: join(f.dir, 'claude-root') }, { provider: 'codex', path: f.options.logbookRoot }];
+  const mover = f.core.createStateTool({ provider: 'codex', defaultRoot: () => f.options.logbookRoot, legacyRoots: roots });
+  const move = (...args) => {
+    const { code, text } = mover.command([...args, '--project', f.options.projectDirectory], f.assignmentEnv, { project: f.options.projectDirectory, native: 'test-chief' });
+    assert.equal(code, 0, text);
+    return text;
+  };
+  // The preview refuses while T2's change is saved, and any write finishes it (its receipt rolls it forward). The journal does not see that write.
+  assert.match(mover.command(['move', '--preview', '--project', f.options.projectDirectory], f.assignmentEnv, {}).text, /A saved change is incomplete\. Any write in this project finishes it/);
+  move('log', '-', 'move', '--why', 'a saved change finishes before the preview');
+  const plan = /plan ([0-9a-f]{8})\n/.exec(move('move', '--preview'))[1], gate = /^(G\d+) /.exec(move('move', '--plan', plan))[1];
+  move('gate', 'answer', gate, '--option', '1');
+  assert.match(move('move', '--gate', gate), /Reconciliation · every count matches the plan/);
+  assert.ok(existsSync(join(old, 'moved.json')), 'the move ran');
+  // The move finished T2's saved change first (its receipt rolls it forward), so both titles moved.
+  assert.deepEqual(readFileSync(join(dir, 'tasks.tsv'), 'utf8').split('\n').slice(1, -1).map(line => line.split('\t')[1]), ['Before the move', 'Also before the move']);
+  const bytes = folder => tree(folder);
+  const before = { old: bytes(old), moved: bytes(dir) };
+  settleNativeWrites(f.options);
+  // T1 committed: the journal never voids a row with a receipt, so its own acknowledgement releases it. T2 has no hash: void.
+  assert.deepEqual(open(), [['T1', true, true, false], ['T2', false, false, true]]);
+  assert.deepEqual({ old: bytes(old), moved: bytes(dir) }, before, 'the settle wrote no logbook');
+  assert.equal(existsSync(join(dir, 'task-updates')), false, 'no receipt in the new logbook');
+  settleNativeWrites(f.options); // a second settle finds no open row, and still writes nothing
+  assert.deepEqual({ old: bytes(old), moved: bytes(dir) }, before);
+});
+
 test('T578: a task update behind an unresolved one gets a step that its chief can do', async t => {
   const f = await nativeTaskUpdateFixture(t);
   const first = await taskUpdateCoordinator(f, f.request({ title: 'First' }));
