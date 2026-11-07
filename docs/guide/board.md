@@ -63,7 +63,8 @@ Needs you also has items that no card holds:
 - a program that tasks name but the logbook does not have;
 - a programs table that the board cannot read;
 - a logbook that it cannot read;
-- a provider's logbook folder that it cannot read ("The Codex logbooks cannot be read").
+- a provider's logbook folder that it cannot read ("The Codex logbooks cannot be read");
+- an open move gate ("The move gate G104 waits for your answer"): [the move](using-sage.md#move-an-existing-project) of the project waits for your answer to its gate.
 
 Each item says why and what to do, and counts in "needs you".
 
@@ -95,7 +96,8 @@ A project with a [shared logbook](using-sage.md#shared-logbooks) shows as one pr
 | `sample-owner/lantern · 2 checkouts: lantern, lantern-b` | The second line of a shared project in the project picker | Two or more linked checkouts of the project are on this Mac, in link order. A gone checkout does not count, by the same rule as `· gone` on a run, and one checkout shows `folder lantern`, as before. A folder name shows without control or bidi characters. |
 | `A checkout named harbor-new is linked to this logbook, but it has no first commit in common with it.` | Logbook notes, over the board | A row of `bindings.tsv` links that folder to the logbook of another project. The board does not count it as a checkout. Commands in that folder stop: ask the chief there. |
 | `was Claude T640` | Under the top line of a card, beside the id on the task page, and in the chat | A task that [the move](using-sage.md#move-an-existing-project) took to the shared logbook, with its old provider and number. It stays for the life of the task. |
-| `sage moved to one shared logbook on 2026-11-03 15:44 UTC.` | A banner over the board, and a line at the top of the chat board | The project moved in the last 7 days. The banner names the map page of old and new numbers, `move-map.html`, and the logbook folder that holds it on your Mac. It shows no path. |
+| `sage moved to one shared logbook on 2026-11-03 15:44 UTC.` | A banner over the board, and a line at the top of the chat board | The project moved in the last 7 days. The banner names the map page of old and new numbers, `move-map.html`, and the logbook folder that holds it on your Mac. It shows no path, and it says when a finished task of a moved program has a new number too. |
+| (no banner) | The board | A stopped move waits to finish: the banner shows only after the move ends. The map page gives its time in UTC beside your Mac's time, as the banner does. |
 | `Old · Claude · read-only` or `Old · Codex · read-only` | A card in Done, and its task page | A finished task that stayed in its old logbook when the project moved. Its number belongs to the old logbook, and an open gate of it is not in Needs you. On a card in another column, it is an open task that a move did not finish: its hover text and its page say so. |
 | `The logbook is changing.` | A note over the board | The board read the logbook 3 times, and it changed during each read. When a part of the last read changed while the board read it, the note names that part, because it does not show. |
 | `The owning chief is not in chiefs.tsv.` | The task page | The task names a chief id that `chiefs.tsv` does not list, so the board does not know its provider. The card shows the id. |
