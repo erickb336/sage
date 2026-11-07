@@ -1,5 +1,9 @@
 # The team workflow
 
+Keep report text exact when the chief or lead saves it with `pages`. Preserve Markdown and every newline; reuse the returned digest for `report_compare`. A known mismatch refuses before the first page save. Missing capture remains a limitation and grants no verdict.
+
+Stop only the denied action after an incidental refusal. Continue independent work that the brief and active policy allow. A refused progress message is not a failed check. Follow [sandbox refusals](sandbox-refusal.md); do not retry through another route.
+
 The parent is the chief. It writes the logbook, and a lead writes only the records of its own task. The chief frames work, asks product questions and shows results. One lead coordinates each build task and its PR. Specialists implement or review. This is a procedure followed by agents; it is not strict runtime admission.
 
 1. Resolve the project and inspect current tasks, standing orders, worktrees and known active ownership. Preserve other sessions' work.

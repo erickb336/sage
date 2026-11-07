@@ -326,10 +326,17 @@ test("T603: the chief role holds the pilot's rules: a v2 model only, no fresh le
   assert.doesNotMatch(role, /AgentLimitReached|multi-agent v1|do the lead's work/);
   const roles = readFileSync(new URL("../plugins/sage-codex/skills/sage/references/roles.md", import.meta.url), "utf8").replace(/\s+/g, " ");
   assert.match(roles, /A lead that has no spawn tools is the exception: start no fresh lead until the owner says that the session runs on a v2 model\./);
-  // F-T603-1: the line comes before the steps that it guards, so a refused `gh pr checks` never reaches the checks-fail step.
-  const report = roles.slice(roles.indexOf("## The lead's report"));
-  const refusal = report.search(/When the sandbox refuses one, run the same command again with escalated permissions, and wait for the owner\. A sandbox refusal is not a failed check: a check fails only when `gh pr checks` lists it as failed\. When the approval policy is `never` or the owner says no, record no verdict, and tell the owner which step stopped\./);
-  assert.ok(refusal > 0 && refusal < report.indexOf("When a check fails, record `checks-fail`"), String(refusal));
+  // F-T603-1, F-T108-3: the active-policy guard precedes all report steps; a refusal is no check result.
+  const reportStart = roles.indexOf("## The lead's report"), reportEnd = roles.indexOf("## Thread limit");
+  assert.ok(reportStart >= 0 && reportEnd > reportStart, "the lead report has its own section");
+  const report = roles.slice(reportStart, reportEnd);
+  const refusal = report.indexOf("Follow the active approval policy. Stop a denied action without an alternate route or escalated retry. A refusal is not a failed check: record only actual check results. Continue independent permitted work, and report which required step remains unchecked.");
+  const firstStep = report.indexOf("1. Check the report against `status`");
+  const checkRun = report.indexOf("4. Run `gh pr checks <n>`.");
+  const checkFailure = report.indexOf("5. When a check fails, record `checks-fail`");
+  assert.ok(refusal > 0, "the report stops denied actions, records only actual checks, and reports unchecked work");
+  assert.ok(firstStep > refusal && checkRun > firstStep && checkFailure > checkRun, "the refusal guard precedes report review, check execution and a failed-check verdict");
+  assert.doesNotMatch(report, /run the same command again with escalated permissions/, "the report does not restore the superseded escalation instruction");
 });
 
 test("T603: the Codex pages hold no v1 path for a task, and the guide gives the approval count, what the pilot did not prove and the turn rule", () => {

@@ -17,6 +17,10 @@ STANDING    the complete output of the CLI standing command
 
 Include the available skill names relevant to the assignment and their actual paths. The child reads each needed skill itself unless its content is demonstrably inherited. Do not claim a missing skill or role exists. Include this report contract in every brief; it does not require Claude's report skill.
 
+Name the active approval policy and inspected absolute Node path. Use `git config --get user.email` for the identity read. For repository work, authorize dependency preparation in that worktree, such as `npm ci --ignore-scripts`, with no manifest or lockfile changes. A new worktree does not inherit another worktree's dependencies. Build before tests that import generated plugin files. Import the built provider hooks; source imports of `sage-core` need the build's package resolution.
+
+Scope refusals to the denied action. Keep independent permitted work active, and require a precise NOT VERIFIED entry. Do not turn a refused progress message into a failed test or permission to send another message.
+
 ```text
 STATUS        done, blocked or question
 RESULT        outcome requested by the brief, such as PASS/FAIL or CLEAN/FINDINGS
