@@ -288,7 +288,7 @@ A shared logbook is one logbook that Claude and Codex both use for a project. A 
 | Both plugins are at contract 2 in `plugins.tsv` (updated and restarted), or the other provider is recorded as unused, and neither provider root has a logbook of this repository | A shared logbook and its row. It says that the project now uses the shared logbook. |
 | A plugin is below contract 2 or has no row, or a provider root has a logbook of this repository (also a clone's or a fork's, also through a link) | A legacy logbook, as before. The chief can [move the project](#move-an-existing-project) later. |
 | The folder is not a Git repository, the folder is a shallow clone and the shared root has no logbook yet, the shared root cannot be written, or sage cannot read a folder of the other provider's root | A legacy logbook, as before. A shallow clone gets the prompt below when the shared root has a logbook. |
-| Sage cannot read a folder of the root of the provider that runs `init` | No logbook: `init` refuses, names the folder and asks the owner to fix its rights. |
+| Sage cannot read a folder of the root of the provider that runs `init`, and the root has no known project list yet (its first command) | No logbook: `init` refuses, names the folder and asks the owner to fix its rights. After that first command, `init` starts a legacy logbook, as in the row above. |
 | The checkout has the first commit of a shared logbook | No logbook: it refuses with the link prompt below. |
 
 Only the move gate records a provider as unused today. That answer counts for every project of the shared root.
