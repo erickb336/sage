@@ -1,7 +1,8 @@
 // The start mark of a Codex session (T663): where this start of the session begins in Codex's record, and which Codex
 // process started it. A resume writes no session_meta line into the record (T662 proof, case 5c), so the owner record
 // reader counts only the owner's messages after the mark. The SessionStart hooks write it for startup, resume, clear
-// (session-start-hook.mjs) and fork (sage-codex-hook.mjs), never for compact: a compaction is no new start.
+// (session-start-hook.mjs) and fork (sage-codex-hook.mjs), never for compact: a compaction is no new start. Text for
+// the user calls the mark sage's "note of this session start".
 import { readFileSync, unlinkSync } from "node:fs";
 import { join } from "node:path";
 import { privateDirectory, saveState, stateKey } from "./principles-hook.mjs";
@@ -34,6 +35,6 @@ export function saveStartMark(dir, input) {
     return undefined;
   } catch (error) {
     try { unlinkSync(file); } catch { /* No older mark, or the folder cannot change. */ }
-    return `sage: the hook could not save the start mark of this session (${error.code ?? error.message}), so autopilot merges nothing in this session. Check the folder ${dir}.`;
+    return `sage: the sage hook could not save its note of this session start, so autopilot merges nothing until the session starts again. Check that sage can write to the folder ${dir}${error.code ? ` (${error.code})` : ""}.`;
   }
 }
