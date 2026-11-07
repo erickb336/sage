@@ -1016,7 +1016,8 @@ test("the merge check of a shared project reads its verdicts from the shared roo
   w.claude("task", "add", "--title", "x", "--size", "tiny", "--priority", "P2");
   w.claude("verdict", "T1", "--sha", sha, "--kind", "checks-pass");
   assert.match(w.claude("merge-check", "--sha", sha), /T1 may merge/);
-  assert.match(w.codex("merge-check", "--sha", sha), /T1 may merge/, "from either provider");
+  assert.match(tool.sage(["merge-check", "--sha", sha, "--project", w.project], w.env), /T1 may merge/, "from either provider");
+  assert.throws(() => w.codex("merge-check", "--sha", sha), /^Error: T1 belongs to chief C1 \(claude\), not to C2\./, "T656: a Codex chief's check judges for its chief");
   // A folder of the shared root with verdicts on the SHA, that link never listed, refuses.
   const planted = join(w.shared, "planted-123456");
   mkdirSync(planted);

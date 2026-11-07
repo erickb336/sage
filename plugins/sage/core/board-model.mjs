@@ -322,9 +322,11 @@ function card(source, project, group, task, now, graph, landing) {
     const lost = (graph.byGate.get(gate.id) ?? []).filter(program => program.state === "lost").map(program => `${lostWhy(program)}: ${LOST_FIX(program.id)}`);
     // A Replace gate (T618) says its question in one line, from its fixed start: the chiefs, and the runs that end as failed.
     const replace = gate.kind === "replace" && replaceOf(gate);
-    const text = replace ? `Replace the owning chief of ${task.id}, ${label(replace.from)}, with ${label(replace.to)}? ${replace.runs.length ? `${and(replace.runs)} ${replace.runs.length === 1 ? "ends" : "end"} as failed.` : "No run ends as failed."}` : [...gateLines(gate, graph.programs), ...lost].join(LINE);
-    // Replace takes the task from a chief that may still work, so the design's recommendation says when (F-T624-5).
-    const recommendation = replace && gate.recommendation === "replace" ? `replace, when you know that ${label(replace.from)} stopped` : gate.recommendation || null;
+    const text = replace ? `${replace.from ? `Replace the owning chief of ${task.id}, ${label(replace.from)}, with ${label(replace.to)}?` : `Give ${task.id}, which has no owning chief, to ${label(replace.to)}?`} ${replace.runs.length ? `${and(replace.runs)} ${replace.runs.length === 1 ? "ends" : "end"} as failed.` : "No run ends as failed."}` : [...gateLines(gate, graph.programs), ...lost].join(LINE);
+    // Replace takes the task from a chief that may still work, so the design's recommendation says when (F-T624-5). After
+    // an accept, the owning chief offered it to the gate's new chief, and the recommendation says that instead (T656).
+    const offered = replace && offerOf(task), handed = offered && offered.from === replace.from && offered.to === replace.to;
+    const recommendation = replace && gate.recommendation === "replace" ? handed ? `replace: ${label(replace.from)} offered ${task.id} to ${label(replace.to)}` : replace.from ? `replace, when you know that ${label(replace.from)} stopped` : `replace: ${task.id} has no owning chief` : gate.recommendation || null;
     return { kind: "gate", ...(replace && { replace: true }), key: `${project.key}/${gate.id}`, text, recommendation, gateId: gate.id, options: gate.options ? gate.options.split("|").map(option => option.trim()) : [],
       breakdown: breakdown ? { key: `${project.key}/${breakdown}`, id: breakdown, name: graph.programs.get(breakdown).name } : null };
   });
@@ -381,7 +383,10 @@ function card(source, project, group, task, now, graph, landing) {
     // A merge check that passes says that triage cleared this verdict (T294).
     if (!newer && !merge?.ok) reasons.push({ kind: row.kind, text: `${row.kind === "checks-fail" ? "Checks" : "QA"} failed on the recorded PR head.`, evidence: row });
   }
-  const inferred = pr?.data.state === "open" && task.branch.startsWith("codex/") && !agents.length;
+  // Work on an open PR that the board cannot see: of a provider whose hook writes no agent slots. In a shared logbook the
+  // owning chief's provider says whose work it is, because a takeover keeps the branch's name (T656); else the branch name.
+  const worker = project.shared ? NO_SLOT_NOTES.includes(String(chiefOf(task.chief)?.provider ?? "").toLowerCase()) : task.branch.startsWith("codex/");
+  const inferred = pr?.data.state === "open" && worker && !agents.length;
   if (inferred && !["merged", "concluded", "abandoned"].includes(task.state)) reasons.push({ kind: "review-wait", text: "The PR has inferred provider work and waits for review." });
   // A verified PR that the merge check did not pass stays in review: the Ready to merge column holds only what may land.
   const column = merge && !merge.ok ? "review" : COLUMNS.find(([, , states]) => states.includes(task.state))?.[0] ?? null;

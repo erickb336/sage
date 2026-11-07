@@ -769,6 +769,29 @@ test("F-T624-5: the Replace gate's recommendation says when, as the design does:
   assert.match(renderBoardHtml(model), /I recommend: replace, when you know that Claude · C1 stopped/);
 });
 
+test("T656: the takeover gate's recommendation says that the owning chief offered the task, when its open offer names the gate's new chief; a task with no owning chief says so", t => {
+  const w = world(t), file = join(w.shared, FOLDER, "gates.tsv"), label = id => `${id} (${id === "C1" ? "claude" : "codex"})`;
+  const gate = (id, taskId, from, to) => [id, taskId, replaceQuestion({ from, to, task: taskId, title: "x", runs: [], label }), "replace|keep", "replace", "", "", iso(-MIN), "replace"].join("\t");
+  // T321 has the open offer O1 from C1 to C2 (as an accept leaves it); T323 has O2 from C2 to C1, so a gate to C2 is no offer's; T322 has no chief.
+  writeFileSync(file, `${readFileSync(file, "utf8")}${[gate("G8", "T321", "C1", "C2"), gate("G9", "T323", "C2", "C2"), gate("G10", "T322", "", "C2")].join("\n")}\n`);
+  const model = modelOf(w.sources), first = id => card(model, id).reasons.find(reason => reason.replace);
+  assert.deepEqual([first("T321").text, first("T321").recommendation], ["Replace the owning chief of T321, Claude · C1, with Codex · C2? No run ends as failed.", "replace: Claude · C1 offered T321 to Codex · C2"]);
+  assert.equal(first("T323").recommendation, "replace, when you know that Codex · C2 stopped", "an offer to another chief is not this gate's");
+  assert.deepEqual([first("T322").text, first("T322").recommendation], ["Give T322, which has no owning chief, to Codex · C2? No run ends as failed.", "replace: T322 has no owning chief"]);
+  assert.equal(card(model, "T320").reasons[0].recommendation, "replace, when you know that Claude · C1 stopped", "a gate with no offer keeps the T631 text");
+  assert.match(renderBoardText(model), /Recommended: replace\\: Claude · C1 offered T321 to Codex · C2/);
+});
+
+test("T656: inferred work on an open PR reads the owning chief's provider, not the codex/ prefix of the branch, which a takeover keeps", () => {
+  const head = "c".repeat(40), at = iso();
+  const pr = (taskId, number) => ({ id: `O${number}`, task: taskId, kind: "pr", source: "sample recorder", basis: "observed", observedAt: at, recordedAt: at, data: { number, head, state: "open" } });
+  const tasks = [task("T1", "Taken from Codex", "reviewing", { chief: "C1", branch: "codex/t1-retry", pr: "12" }), task("T2", "Codex work", "reviewing", { chief: "C2", branch: "sage/t2-sync", pr: "13" })];
+  const project = { key: `shared/${FOLDER}`, name: FOLDER, shared: true, chiefs: [{ id: "C1", provider: "claude" }, { id: "C2", provider: "codex" }], diagnostics: [], tables: { tasks }, observations: { version: 1, records: [pr("T1", 12), pr("T2", 13)] } };
+  const model = buildBoardModel([{ id: "shared", label: "Shared", diagnostics: [], projects: [project] }], { now: at });
+  assert.deepEqual(model.tasks.map(item => [item.id, item.inferredWork]), [["T1", false], ["T2", true]]);
+  assert.equal(model.counts.inferredWork, 1);
+});
+
 test("F-T624-24 and F-T624-19: a shared run with no chief stands in as Unknown, not Shared; an old logbook's program names that logbook", t => {
   const w = world(t), model = modelOf(w.sources), t322 = card(model, "T322");
   const page = renderBoardHtml(model, { taskKey: `shared/${FOLDER}/T322`, snapshot: false });

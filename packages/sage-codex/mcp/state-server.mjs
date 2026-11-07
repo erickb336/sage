@@ -101,7 +101,7 @@ export const TOOLS = {
     pos: ["task"], argv: (i) => ["verdict", i.task],
   },
   claim: {
-    describe: "Take a task with no owning chief in a shared logbook. The version is the one that the refusal of your last write printed.",
+    describe: "Take a task with no owning chief in a shared logbook: one that you released, or one that your provider started. The version is the one that the refusal of your last write printed. A task that another chief released last, or that came from the other provider's logbook, needs the owner's takeover gate (gate_replace).",
     input: { task, version }, pos: ["task"], argv: (i) => ["claim", i.task],
   },
   offer: {
@@ -113,16 +113,16 @@ export const TOOLS = {
     input: { task, offer: offerId }, pos: ["task"], argv: (i) => ["cancel", i.task],
   },
   accept: {
-    describe: "Take a task that another chief offered to you. No run of the task may be active. sage_read_task gives the offer's id (in the task's offer cell) and the version; so does the line that the offer printed.",
+    describe: "Ask for a task that another chief offered to you: it opens a takeover gate, and the task is yours only after the owner's answer replace. No run of the task may be active. sage_read_task gives the offer's id (in the task's offer cell) and the version; so does the line that the offer printed.",
     input: { task, offer: offerId, version }, pos: ["task"], argv: (i) => ["accept", i.task],
   },
   release: {
-    describe: "Give up your task, so that any chief can claim it. The task needs no open offer and no active run. Its work and reports stay.",
+    describe: "Give up your task. Only you claim it back; another chief takes it through the owner's takeover gate. The task needs no open offer and no active run. Its work and reports stay.",
     input: { task }, pos: ["task"], argv: (i) => ["release", i.task],
   },
   round: { describe: "Start a repair round on the open findings marked fix. It names the roles to run again.", input: { task }, pos: ["task"], argv: (i) => ["round", i.task] },
   merge_check: {
-    describe: "Check that the logbook allows the merge of this head SHA: clean cycles, no open findings, no open gates.",
+    describe: "Check that the logbook allows the merge of this head SHA: clean cycles, no open findings, no open gates. It judges for your chief: a task of another chief refuses.",
     input: { sha, pr: count("the pull request number"), cycles: count("a higher count of clean cycles"), head: optional("the pull request's branch") },
     argv: () => ["merge-check"],
   },
@@ -147,7 +147,7 @@ export const TOOLS = {
     pos: ["task"], argv: (i) => ["gate", "add", i.task],
   },
   gate_replace: {
-    describe: "For an owning chief that stopped: ask the owner to give its task to another chief. The gate names each run that ends as failed. The owner's answer does the Replace, through gate_answer.",
+    describe: "The takeover gate: ask the owner to give a task of another chief, or a task with no owning chief that you may not claim, to a chief (to). The gate names each run that ends as failed. The owner's answer does the takeover, through gate_answer.",
     input: { task, to: chief }, pos: ["task"], argv: (i) => ["gate", "replace", i.task],
   },
   gate_answer: {

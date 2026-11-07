@@ -23,7 +23,7 @@ import { execFileSync } from "node:child_process";
 import { closeSync, constants, existsSync, fstatSync, lstatSync, mkdirSync, mkdtempSync, openSync, readFileSync, readSync, readdirSync, realpathSync, renameSync, rmSync, writeFileSync, writeSync } from "node:fs";
 import { basename, dirname, join, resolve, sep } from "node:path";
 import { fileURLToPath } from "node:url";
-import { PR, branchHome, branchOfTask, landingBar, locate, mergeCheck, projectRoot, read, sage, withLock, worktreeRoot } from "./sage.mjs";
+import { PR, branchHome, branchOfTask, landingBar, locate, mergeCheck, projectRoot, read, sage, takeoverAt, withLock, worktreeRoot } from "./sage.mjs";
 
 const BASE = "main";
 /**
@@ -367,10 +367,13 @@ function importTask(rec, temp, env) {
 /**
  * Refuses the reviewed head unless its review copy is older than the first verdict on it in the logbook: a verdict
  * recorded before the import may be on what the agent's clone showed, not on the objects that create pushes. The ledger
- * holds times to the second, so a verdict in the same second as the import refuses too.
+ * holds times to the second, so a verdict in the same second as the import refuses too. A task that came from another
+ * provider's chief through a takeover gate counts only its verdicts after that answer: the ones before are the other
+ * provider's, and the merge check needs one cycle after it (T656, the owner's Q2).
  */
 function imported({ dir, t, head }) {
-  const first = Math.min(...read(dir, "ledger").filter((r) => r.sha === head).map((r) => Date.parse(r.at)));
+  const since = Date.parse(takeoverAt(dir, t.id)) || -Infinity;
+  const first = Math.min(...read(dir, "ledger").filter((r) => r.sha === head && !(r.task === t.id && Date.parse(r.at) <= since)).map((r) => Date.parse(r.at)));
   const st = lstatSync(reviewOf(dir, t.id, head).diff, { throwIfNoEntry: false });
   if (!st?.isFile() || !(st.mtimeMs < first)) no(`${short(head)} has no review copy from before its first verdict, so the reviews may have read other objects than the ones that sage-pr pushes: run sage-pr import ${t.id}, have the reviewers read the review copy that it names, and record their verdicts again`);
 }

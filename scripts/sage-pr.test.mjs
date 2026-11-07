@@ -309,6 +309,34 @@ test("merge runs the merge check, merges only the reviewed head, and fetches the
   assert.notEqual(main, head); // the stand-in squashed: the new main is a new commit that the mirror fetched
 });
 
+test("T656: a task that came from a Codex chief through a takeover gate merges after one Claude cycle on its review copy; the Codex verdicts before the takeover do not refuse the import", () => {
+  const w = world({ shared: true });
+  const project = w.at("project"), head = w.commit("b.txt");
+  w.sage("verdict", "T1", "--sha", head, "--kind", "checks-pass");
+  assert.equal(w.pr("create", "T1").status, 0);
+  w.forge("T1", "state", "verified");
+  // T1 goes to a Codex chief, which records its cycle; then the owner gives it to the Claude chief C1.
+  const c2 = codex.chiefFor(project, "session-b", w.env), cx = (...a) => codex.sage([...a, "--project", project, "--chief", c2], w.env);
+  w.sage("gate", "replace", "T1", "--to", c2);
+  w.sage("gate", "answer", "G1", "--option", "1");
+  for (const kind of ["review-clean", "qa-pass"]) cx(...backed(["verdict", "T1", "--sha", head, "--kind", kind], { cli: cx, keep: (fields) => codex.keepReport(project, fields, w.env) }));
+  cx("gate", "replace", "T1", "--to", "C1");
+  w.sage("gate", "answer", "G2", "--option", "1");
+  // The Codex cycle and the answer at earlier seconds than this test's verdicts; the review copy is an hour old (imports).
+  const retime = (table, match, at) => {
+    const file = join(w.logbook, `${table}.tsv`), [top, ...lines] = readFileSync(file, "utf8").split("\n"), k = top.split("\t").indexOf("at");
+    writeFileSync(file, [top, ...lines.map((l) => (l && match(l) ? l.split("\t").with(k, at).join("\t") : l))].join("\n"));
+  };
+  retime("ledger", () => true, "2026-01-01T00:00:00Z");
+  retime("decisions", (l) => l.includes("of T1 with C2 (codex)?") && l.endsWith("→ replace\tthe user's answer"), "2026-01-01T00:00:01Z");
+  retime("decisions", (l) => l.includes("of T1 with C1 (claude)?") && l.endsWith("→ replace\tthe user's answer"), "2026-01-01T00:00:02Z");
+  refused(w.pr("merge", "T1"), /merge check: T1 came from a chief of another provider through a takeover gate \(2026-01-01T00:00:02Z\), so the cycles before that do not merge it alone: run sage-pr import T1/);
+  for (const kind of ["review-clean", "qa-pass"]) w.sage("verdict", "T1", "--sha", head, "--kind", kind, "--cycle", "2");
+  const r = w.pr("merge", "T1");
+  assert.equal(r.status, 0, r.stderr);
+  assert.match(r.stdout, new RegExp(`^merged claude/t1 at ${head.slice(0, 7)};`));
+});
+
 /** A task ready to merge, with a project write of a finished run stopped half way: a saved change waits in the logbook. */
 function savedChange(t) {
   const w = world();

@@ -135,13 +135,20 @@ test("the transfer commands through the server: offer, accept, cancel, release a
   assert.deepEqual([JSON.parse(snapshot.task.offer).id, snapshot.version], [offer, version]);
   assert.match((await s.call("accept", { task: "T1", offer: first, version }, as)).error, /has the open offer/);
   assert.match((await s.call("accept", { task: "T1", offer, version })).error, /names C2, not C1/);
-  assert.equal(await s.call("accept", { task: "T1", offer, version }, as), "T1 accepted · chief C2");
+  // T656: accept opens a takeover gate, and the owner's answer gives the task.
+  assert.match(await s.call("accept", { task: "T1", offer, version }, as), /^G1 open · Replace chief C1 \(codex\) of T1 with C2 \(codex\)\? Runs that end as failed: none\. Replace: C2 owns T1, .* Title of T1: first$/);
+  assert.match((await s.call("task_set", { task: "T1", fields: { title: "x" } }, as)).error, /^sage: T1 belongs to chief C1 \(codex\), not to C2\./, "the gate alone gives nothing");
+  assert.equal(await s.call("gate_answer", { gate: "G1", option: 1 }), "G1 answered · replace · T1 chief C2");
   assert.equal(await s.call("release", { task: "T2" }, as), "T2 released · no owning chief. Any chief can claim it.");
   // C1 opens the gate on C2's T1; the owner's answer comes through gate_answer, with no chief.
   assert.match(await s.call("run_add", { task: "T1", role: "qa" }, as), /^R1 running/);
-  assert.match(await s.call("gate_replace", { task: "T1", to: "C1" }), /^G1 open · Replace chief C2 \(codex\) of T1 with C1 \(codex\)\? Runs that end as failed: R1 \(qa\)\. Replace: C1 owns T1, .* Keep: nothing changes, and C2 stays the owning chief\. Title of T1: first$/);
-  assert.equal(await s.call("gate_answer", { gate: "G1", option: 1 }), "G1 answered · replace · T1 chief C1 · R1 failed");
+  assert.match(await s.call("gate_replace", { task: "T1", to: "C1" }), /^G2 open · Replace chief C2 \(codex\) of T1 with C1 \(codex\)\? Runs that end as failed: R1 \(qa\)\. Replace: C1 owns T1, .* Keep: nothing changes, and C2 stays the owning chief\. Title of T1: first$/);
+  assert.equal(await s.call("gate_answer", { gate: "G2", option: 1 }), "G2 answered · replace · T1 chief C1 · R1 failed");
   assert.match((await s.call("task_set", { task: "T1", fields: { title: "x" } }, as)).error, /^sage: T1 belongs to chief C1 \(codex\), not to C2\./);
+  // T656: merge_check judges for the caller's chief, which the server passes: the chief that lost T1 gets the owner refusal.
+  assert.match(await s.call("verdict", { task: "T1", kind: "checks-pass", sha: SHA }), /^T1 checks-pass/);
+  assert.match((await s.call("merge_check", { sha: SHA }, as)).error, /^sage: T1 belongs to chief C1 \(codex\), not to C2\. Nothing changed\./);
+  assert.match((await s.call("merge_check", { sha: SHA })).error, /^sage: T1: 0 of 1 clean cycles on this SHA/, "the owning chief gets the cycle rule");
 });
 
 const BRIEF = ["GOAL", "SCOPE", "CONTEXT", "DECISIONS", "ACCEPTANCE", "VERIFY", "BUDGET", "FORBIDDEN", "REPORT", "STANDING"].map((field) => `${field}: the ${field.toLowerCase()}.`).join("\n");

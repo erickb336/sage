@@ -32,7 +32,7 @@ import { MOVES, PLAN_MAX, checkoutGone, createSharedRoot, sharedRoot } from "./s
 import { changedText, countsOf, endText, gateQuestion, gateText, localTime, mapHtml, mismatchText, previewText, providersOf, reconciliationText, startText, stepText, stoppedText, title } from "./move-text.mjs";
 import { CHIEF, chiefOnly, createChiefs, offerOf, replaceOf, replaceQuestion, writerClass } from "./chiefs.mjs";
 
-export function createStateTool({ defaultRoot, legacyRoots: namedRoots = () => [], provider, models = ["inherit"], modelDefaults = {}, usageInterfaces = [], claimStep = (task, version, chief) => `run sage claim ${task} --version ${version} --chief ${chief}`, replaceStep = (task, chief) => `run sage gate replace ${task} --to ${chief} --chief ${chief}` }) {
+export function createStateTool({ defaultRoot, legacyRoots: namedRoots = () => [], provider, models = ["inherit"], modelDefaults = {}, usageInterfaces = [], claimStep = (task, version, chief) => `run sage claim ${task} --version ${version} --chief ${chief}`, replaceStep = (task, chief) => `run sage gate replace ${task} --to ${chief} --chief ${chief}`, takeoverCycle }) {
 if (typeof defaultRoot !== "function") throw new TypeError("defaultRoot must be a function");
 if (typeof namedRoots !== "function") throw new TypeError("legacyRoots must be a function");
 /**
@@ -2877,6 +2877,14 @@ const cleanKinds = (task) => list(task.route).map((b) => VERDICT[b]).filter((k) 
 /** The cycles of a task's ledger rows on one SHA that have every clean verdict of its route (the judge's count). */
 const cleanCycles = (task, rows) => [...new Set(rows.map((r) => r.cycle))].filter((c) => cleanKinds(task).every((k) => rows.some((r) => r.cycle === c && r.kind === k))).length;
 
+/**
+ * The time of the owner's last answer that gave a task to a chief of another provider through a takeover gate, from the
+ * task's decision rows, or "". A question that names no provider of a side (no chief, or a chief with no row) counts as another provider.
+ */
+const takenAt = (decisions) => decisions.filter((d) => d.decision.endsWith(" → replace") && ((p) => p && (!p.fromProvider || p.fromProvider !== p.toProvider))(replaceOf({ question: d.decision }))).at(-1)?.at ?? "";
+/** takenAt of one task of a logbook folder: the PR script reads only the verdicts after it as the task's own (T656). */
+const takeoverAt = (dir, id) => takenAt(read(dir, "decisions").filter((d) => d.task === id));
+
 /** The rows of a table by their task. */
 const group = (rows) => rows.reduce((m, r) => (m.has(r.task) ? m.get(r.task).push(r) : m.set(r.task, [r]), m), new Map());
 
@@ -2998,7 +3006,7 @@ function assessMerge(sha, env, options, logbook = null) {
   return skipped.length ? { ...verdict, reason: `${verdict.reason} Skipped ${skipped.map(visible).join(", ")}: a saved change is incomplete there, and it has no row for this commit. Any write there finishes it or says what to do.` } : verdict;
 }
 
-function judgeMerge(sha, env, { cycles, pr, readOnly, head, project, locked, session }, logbook, skipped) {
+function judgeMerge(sha, env, { cycles, pr, readOnly, head, project, locked, session, chief: merger }, logbook, skipped) {
   let root = sageRoot(env);
   try {
     if (notFull(sha)) return { ok: false, reason: notFull(sha) };
@@ -3056,7 +3064,7 @@ function judgeMerge(sha, env, { cycles, pr, readOnly, head, project, locked, ses
       // task's branch cannot merge that task's work on its own verdicts (F-T273-8).
       if (head !== undefined && ofPr.size) absent.push(...tasks.filter((t) => !ofPr.has(t.id) && owns(t.id)).map((t) => ({ name: `${visible(dir)} ${t.id}`, how: how(t.id) })));
       const graph = waitGraph(tasks, book ? rowsOf(book.programs) : [], book ? rowsOf(book.gates) : [], decisions);
-      const chief = session !== undefined && basename(dir) === mine ? chiefFor(project, session, env) : undefined;
+      const chief = basename(dir) !== mine ? undefined : merger ?? (session !== undefined ? chiefFor(project, session, env) : undefined);
       const checked =[...new Set([...rows.map((r) => r.task), ...ofPr])].map((id) => {
         const [own, task] = [ownOf.get(id) ?? [], byId.get(id)];
         // A held task never merges until the sage moves it (F-T273-12).
@@ -3068,10 +3076,14 @@ function judgeMerge(sha, env, { cycles, pr, readOnly, head, project, locked, ses
         const busy = verdict.ok && live.length > 0 && { ok: false, reason: `${id} has a review or QA run that still runs: ${live.join(", ")}. End it with its report's findings recorded, then check again.` };
         // With no --head, the task's branch= says what would land.
         const bar = candidateBar(task ?? { id }, head ?? task?.branch, candidates, runsOf.get(id) ?? []), arena = bar && { ok: false, reason: bar };
+        // A provider whose merge path needs it (takeoverCycle): a task that came from another provider's chief through a
+        // takeover gate passes only with one clean cycle on this SHA recorded after that answer (T656, the owner's Q2).
+        const since = takeoverCycle && verdict.ok && takenAt(decisionsOf.get(id) ?? []);
+        const fresh = since && !cleanCycles(task, own.filter((r) => Date.parse(r.at) > Date.parse(since))) && { ok: false, reason: `${id} came from a chief of another provider through a takeover gate (${since}), so the cycles before that do not merge it alone: ${takeoverCycle(id)}.` };
         // Nothing else helps a chief that does not own the task, so this refusal comes last and replaces the others.
         // An ended task (merged, concluded or abandoned) never bars another task's merge: its chief has nothing left to do with it.
         const notOwn = chief && task && !ENDED.includes(task.state) && ownerBar(dir, task, chief), owner = notOwn && { ok: false, reason: notOwn };
-        return { dir, id, ofPr: ofPr.has(id), owns: owns(id), back: !owns(id) && back(id), own: own.length, ...verdict, ...busy, ...arena, ...held, ...owner };
+        return { dir, id, ofPr: ofPr.has(id), owns: owns(id), back: !owns(id) && back(id), own: own.length, ...verdict, ...fresh, ...busy, ...arena, ...held, ...owner };
       });
       // A task with an unmet wait does not merge. A wait on a task of the same PR is met when that task passes in this merge
       // too, its own waits included: else two tasks of one PR could never merge. The same PR is the PR of --pr for both
@@ -3402,7 +3414,8 @@ function sage(argv, env = process.env) {
   if (cmd === "merge-check") {
     const cycles = opt.cycles === undefined ? undefined : (typed("cycles.small", opt.cycles) ?? refuse("--cycles is a whole number from 1 to 10")); // the chief's explicit count: it only raises a task's own count
     if (opt.pr !== undefined && !PR.test(opt.pr)) refuse("--pr is the pull request's number, with no leading zero, for example --pr 5");
-    const r = mergeCheck(opt.sha ?? refuse("merge-check needs --sha with the full 40-character SHA of the head commit: git rev-parse <branch>"), env, { cycles, pr: opt.pr, head: opt.head, project });
+    // With --chief, the check judges for that chief, as the hook does for its session: a task of another chief does not merge.
+    const r = mergeCheck(opt.sha ?? refuse("merge-check needs --sha with the full 40-character SHA of the head commit: git rev-parse <branch>"), env, { cycles, pr: opt.pr, head: opt.head, project, chief: opt.chief });
     return r.ok ? r.reason : refuse(r.reason);
   }
   if (cmd === "config" && !pos.some(ownKey)) {
@@ -3552,19 +3565,49 @@ function chiefNamed(dir, to) {
   return to;
 }
 
-/** The owner's answer to a replace gate: the one way to take a task with no consent from its chief. Tables and receipt publish as one saved change. */
-function replaceChief(dir, g, answer) {
+/**
+ * The owner's answer to a takeover gate (kind replace): the one way that a task goes to a chief from another chief, or
+ * from no chief when the claim is not that chief's to make. Tables and receipt publish as one saved change.
+ */
+function replaceChief(dir, g, answer, project, env) {
   const plan = replaceOf(g), task = read(dir, "tasks").find((t) => t.id === g.task);
   if (!plan || !task) refuse(`${g.id} does not name a task and two chiefs, so it replaces nobody. Answer keep. Nothing changed.`);
   const active = activeRuns(dir, task.id).map((r) => r.id), added = active.filter((id) => !plan.runs.includes(id));
   const again = `Answer keep, then open a new replace gate. Nothing changed.`;
-  if (task.chief !== plan.from) refuse(`${task.id} now belongs to ${task.chief ? `chief ${task.chief}` : "no chief"}, not to ${plan.from}, so ${g.id} is out of date. ${again}`);
+  if (task.chief !== plan.from) refuse(`${task.id} now belongs to ${task.chief ? `chief ${task.chief}` : "no chief"}, not to ${plan.from || "no chief"}, so ${g.id} is out of date. ${again}`);
   if (added.length) refuse(`${added.join(", ")} started after ${g.id} opened, so ${g.id} does not name each run that ends as failed. ${again}`);
   const receipt = { reference: { gate: g.id, task: task.id, to: plan.to, runs: active }, result: { at: now(), answer } };
   const rows = Object.fromEntries(REPLACE_TABLES.map((table) => [table, read(dir, table)]));
   replaceDelta(receipt, rows);
   replaceWrites.commit(dir, receipt, Object.fromEntries(REPLACE_TABLES.map((table) => [table, tableText(table, rows[table])])));
-  return `${g.id} answered · ${answer} · ${task.id} chief ${plan.to}${active.length ? ` · ${active.join(", ")} failed` : ""}`;
+  return `${g.id} answered · ${answer} · ${task.id} chief ${plan.to}${active.length ? ` · ${active.join(", ")} failed` : ""}${branchHeld(project, task.branch, env)}`;
+}
+/**
+ * The one safe step that frees a task's branch when another worktree of the repository holds it, so that the new owning
+ * chief can check it out (T656, the owner's Q3): a detach keeps that worktree's files and changes, and is never --force.
+ */
+function branchHeld(project, branch, env) {
+  if (!branch) return "";
+  let list = "";
+  try { list = git(["-C", project, "worktree", "list", "--porcelain"], env); } catch { return ""; }
+  const holder = list.split(/\n\n+/).find((block) => block.split("\n").includes(`branch refs/heads/${branch}`))?.match(/^worktree (.+)$/m)?.[1];
+  return holder ? `\n${branch} is checked out in the worktree ${holder}, and git checks out a branch in one worktree only. To free it, with its files kept: git -C ${holder} switch --detach` : "";
+}
+/** Opens a takeover gate (kind replace) that asks the owner to give a task to chief to; it names each active run that ends as failed. */
+function takeoverGate(dir, task, to) {
+  const g = { id: nextId(dir, "G"), task: task.id, question: replaceQuestion({ from: task.chief, to, task: task.id, title: oneLine(task.title), runs: activeRuns(dir, task.id), label: (chief) => chiefLabel(dir, chief) }), options: "replace|keep", recommendation: "replace", default: "", at: now(), kind: "replace" };
+  write(dir, "gates", [...read(dir, "gates"), g]);
+  return `${g.id} open · ${g.question}`;
+}
+/**
+ * Why a task with no owning chief is not this chief's to claim, or "": another chief released it last, or the move
+ * brought it from the logbook of another provider (the owner's Q1 of T656). Then only the owner's takeover gate gives it.
+ */
+function claimBar(dir, task, chief) {
+  const released = read(dir, "decisions").filter((d) => d.task === task.id).map((d) => /^T[1-9]\d* released by (C[1-9]\d*)$/.exec(d.decision)?.[1]).filter(Boolean).at(-1);
+  if (released) return released === chief ? "" : `${chiefLabel(dir, released)} released ${task.id} last`;
+  const moved = adoptionOf(task), mine = chiefs(dir).find((r) => r.id === chief)?.provider;
+  return moved?.version === 2 && moved.provider !== mine ? `${task.id} came in the move from the ${moved.provider} logbook` : "";
 }
 
 /**
@@ -3605,10 +3648,12 @@ function chiefFor(project, native, env = process.env) {
 
 /**
  * The options that a provider adds to a command that it runs for its caller: --chief, --lead for a lead, or none for a
- * read, a gate answer or a legacy project. A refusal here is the real cause, such as a damaged chiefs.tsv or a busy lock.
+ * read, a gate answer or a legacy project. The merge check reads, but it gets --chief, because it judges for the
+ * session's chief (T656). A refusal here is the real cause, such as a damaged chiefs.tsv or a busy lock.
  */
 function actorOptions(project, [cmd, ...rest], { native, leadTask }, env = process.env) {
   const { pos } = parse(cmd, rest);
+  if (cmd === "merge-check") return locate(project, env).shared ? [`--chief=${chiefFor(project, native, env)}`] : [];
   if (["read", "owner"].includes(writerClass(cmd, pos).kind) || !locate(project, env).shared) return [];
   if (!leadTask) return [`--chief=${chiefFor(project, native, env)}`];
   const run = logbookView(project, env).leadRun(leadTask) ?? refuse(`${leadTask} has no running lead run, so this lead writes nothing. Report to your chief. Nothing changed.`);
@@ -3661,6 +3706,8 @@ function act(cmd, pos, opt, dir, env, skip, project) {
   switch (cmd) {
     case "task-adopt": {
       if (pos.length !== 1) refuse("task-adopt takes one destination task id.");
+      // After the move, the other provider's tasks are here already, and only the owner's takeover gate moves one (the owner's Q4 of T656).
+      if (isShared(dir, env)) refuse(`this logbook is shared, so task-adopt takes in no task: the other provider's tasks are in it already. A task of another chief comes to you only through the owner's takeover gate: ${replaceStep("<task>", opt.chief)}. Nothing changed.`);
       const { tasks, task } = taskOf(dir, need(sub, "the destination task id"));
       const provider = need(opt["source-provider"], "--source-provider"), sourceTask = need(opt["source-task"], "--source-task");
       const path = need(opt["source-logbook"], "--source-logbook"), pr = need(opt.pr, "--pr"), branch = branchOf(need(opt.branch, "--branch"));
@@ -3720,6 +3767,8 @@ function act(cmd, pos, opt, dir, env, skip, project) {
     case "claim": {
       const { tasks, task } = taskOf(dir, need(sub, "the task id"));
       if (task.chief) refuse(`${task.id} belongs to chief ${task.chief}, so it takes no claim. Nothing changed.`);
+      const held = claimBar(dir, task, opt.chief);
+      if (held) refuse(`${held}, so ${opt.chief} takes it only through the owner's takeover gate. Nothing changed. Open one for the owner to answer: ${replaceStep(task.id, opt.chief)}.`);
       if (opt.version !== taskVersion(task)) refuse(`${task.id} changed, so this claim is out of date: read it again, then claim it with --version ${taskVersion(task)}. Nothing changed.`);
       task.chief = opt.chief;
       write(dir, "tasks", tasks);
@@ -3744,14 +3793,12 @@ function act(cmd, pos, opt, dir, env, skip, project) {
       return declined ? `${task.id} offer ${open.id} declined by ${opt.chief} · chief ${task.chief} keeps ${task.id}` : `${task.id} offer ${open.id} cancelled`;
     }
     case "accept": {
-      const { tasks, task } = taskOf(dir, need(sub, "the task id")), open = exactOffer(task, opt.offer);
+      const { task } = taskOf(dir, need(sub, "the task id")), open = exactOffer(task, opt.offer);
       if (open.to !== opt.chief) refuse(`offer ${open.id} of ${task.id} names ${open.to}, not ${opt.chief}. Nothing changed. Only ${open.to} accepts it. ${task.chief === opt.chief ? `You own ${task.id}: to end this offer, cancel it.` : `To get ${task.id}, ask its owning chief ${task.chief} to cancel this offer and offer it to you.`}`);
       if (opt.version !== taskVersion(task)) refuse(`${task.id} changed, so this acceptance is out of date: read it again, then accept it with --version ${taskVersion(task)}. Nothing changed.`);
       runsBar(dir, task, "accept", opt.chief);
-      Object.assign(task, { chief: opt.chief, offer: "" });
-      write(dir, "tasks", tasks);
-      ownership(dir, task.id, `accepted by ${opt.chief} from ${open.from}`, "accept");
-      return `${task.id} accepted · chief ${opt.chief}`;
+      // The owner decides each change of owning chief (T656): accept asks through a takeover gate, and the answer moves the task (replaceChief).
+      return takeoverGate(dir, task, opt.chief);
     }
     case "release": {
       const { tasks, task } = taskOf(dir, need(sub, "the task id")), open = offerOf(task);
@@ -4201,11 +4248,8 @@ function act(cmd, pos, opt, dir, env, skip, project) {
       }
       if (sub === "replace") {
         const { task } = taskOf(dir, need(id, "the task id")), to = chiefNamed(dir, opt.to);
-        if (!task.chief) refuse(`${task.id} has no owning chief, so it needs no Replace: claim it. Nothing changed.`);
         if (task.chief === to) refuse(`${task.id} already belongs to ${to}. Nothing changed.`);
-        const g = { id: nextId(dir, "G"), task: task.id, question: replaceQuestion({ from: task.chief, to, task: task.id, title: oneLine(task.title), runs: activeRuns(dir, task.id), label: (chief) => chiefLabel(dir, chief) }), options: "replace|keep", recommendation: "replace", default: "", at: now(), kind: "replace" };
-        write(dir, "gates", [...gates, g]);
-        return `${g.id} open · ${g.question}`;
+        return takeoverGate(dir, task, to);
       }
       if (sub === "answer") {
         const g = gates.find((x) => x.id === id) ?? missing(`gate ${id}`, gates.map((x) => x.id));
@@ -4226,7 +4270,7 @@ function act(cmd, pos, opt, dir, env, skip, project) {
         if (more.length || (opt.option === undefined) === (own === undefined) || (own !== undefined && unhex(own) === undefined)) refuse(how);
         if (own !== undefined) g.answer = `other: ${need(cell(unhex(own)), "the owner's own words: --other-hex gives only spaces")}`;
         else g.answer = (/^[1-9]\d*$/.test(opt.option) && options[Number(opt.option) - 1]) || refuse(how);
-        if (g.kind === "replace" && g.answer === options[0]) return replaceChief(dir, g, g.answer);
+        if (g.kind === "replace" && g.answer === options[0]) return replaceChief(dir, g, g.answer, project, env);
         write(dir, "gates", gates);
         write(dir, "decisions", [...read(dir, "decisions"), { at: now(), task: g.task, decision: `${g.question} → ${g.answer}`, why: own === undefined ? "the user's answer" : "the user's own words" }]);
         // Any answer but replace replaces nobody, and a replace gate answers once: the line says so, so no chief reports a replacement.
@@ -4503,5 +4547,5 @@ const { bindings, fillCommits, folderOf, link, locate, movePlans, notePlugin, pl
   listed: (root) => known(root, undefined, undefined, true),
   enroll });
 const { chiefs, chiefRow, rowOf } = createChiefs({ now, provider, readRegular, refuse, rowsOf, sheetText, swap });
-return { SIZES, BLOCKS, RISKS, KINDS, STATES, DEFAULTS, PR, sageRoot, locate, chiefFor, sessionBar, actorOptions, git, projectRoot, roleReadProject, optionsOf, slug, worktreeRoot, BRANCH, ofTask, branchOfTask, branchHome, branchTip, projectName, storeDir, config, cyclesFor, modelFor, read, mergeCheck, landingBar, boardLandingCheck, logbookView, sage, readTaskSnapshot, updateRequestedTask, assertTaskUpdateOpen, settleWrites, createRequestedTask, createRequestedRun, finishReportedRun, finishInterruptedRun, acceptReportedReview, keepReport, compareRetainedReport, verdictBacking, captureRunAssignment, captureReviewTarget, validateTerminalAssignment, withLock, board, answerPaths, command, runCli, waitingPlugins, writeIdFloors };
+return { SIZES, BLOCKS, RISKS, KINDS, STATES, DEFAULTS, PR, sageRoot, locate, chiefFor, sessionBar, actorOptions, git, projectRoot, roleReadProject, optionsOf, slug, worktreeRoot, BRANCH, ofTask, branchOfTask, branchHome, branchTip, projectName, storeDir, config, cyclesFor, modelFor, read, mergeCheck, landingBar, boardLandingCheck, logbookView, sage, readTaskSnapshot, updateRequestedTask, assertTaskUpdateOpen, settleWrites, createRequestedTask, createRequestedRun, finishReportedRun, finishInterruptedRun, acceptReportedReview, keepReport, compareRetainedReport, verdictBacking, takeoverAt, captureRunAssignment, captureReviewTarget, validateTerminalAssignment, withLock, board, answerPaths, command, runCli, waitingPlugins, writeIdFloors };
 }
