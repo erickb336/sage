@@ -407,7 +407,7 @@ test("the state server lists one tool for each state-tool command, and marks onl
   const s = await connect(t);
   const tools = await s.tools();
   assert.deepEqual(tools.map((tool) => tool.name).sort(), ["accept", "brief", "cancel", "claim", "finding_add", "finding_close", "finding_move", "finding_triage", "gate_add", "gate_answer", "gate_replace",
-    "init", "link", "log", "merge_check", "offer", "pages", "release", "report_compare", "round", "run_add", "run_done", "standing", "standing_add", "status", "task_add", "task_adopt", "task_set", "verdict"]);
+    "init", "link", "log", "merge_check", "move", "offer", "pages", "release", "report_compare", "round", "run_add", "run_done", "standing", "standing_add", "status", "task_add", "task_adopt", "task_set", "verdict"]);
   assert.deepEqual(tools.filter((tool) => tool.annotations.readOnlyHint).map((tool) => tool.name).sort(), ["merge_check", "report_compare", "standing", "status"]);
   assert.ok(tools.every((tool) => tool.inputSchema.required.includes("project") && tool.inputSchema.additionalProperties === false));
   // T500: a task_add needs its priority, from the scale.
@@ -596,6 +596,114 @@ test("T594 with T552: a lead's rules read the shared logbook, and only the chief
 test("the Codex chief's list of tools names the link tool, with the owner's answer first", () => {
   const { PROJECT_SETUP } = JSON.parse(readFileSync(join(ROOT, "plugins/sage-codex/chief-bindings.json"), "utf8"));
   assert.match(PROJECT_SETUP, /`link`\. Call `link` only after the owner's answer in the chat\./);
+});
+
+/**
+ * A project with a Claude logbook and a Codex logbook, both roots and the shared root in scratch: the Codex state server
+ * (s), and the Claude state tool in this process (claude), as the Claude plugin runs it. With claudeRow false, the Claude
+ * logbook is not made, and plugins.tsv has no Claude row.
+ */
+async function moveWorld(t, { claudeRow = true } = {}) {
+  const base = realpathSync(mkdtempSync(join(tmpdir(), "sage-state-mcp-move-")));
+  t.after(() => rmSync(base, { recursive: true, force: true }));
+  const shared = join(base, "shared"), claudeRoot = join(base, "claude-config", "sage");
+  const s = await connect(t, { SAGE_SHARED_HOME: shared, CLAUDE_CONFIG_DIR: join(base, "claude-config"), SAGE_TEST_PIDS: "{}" });
+  const codexRoot = join(s.env.CODEX_HOME, "sage");
+  execFileSync("git", ["-C", s.project, "-c", "user.name=Fixture", "-c", "user.email=fixture@users.noreply.github.com", "commit", "-q", "--allow-empty", "-m", "first"]);
+  const roots = () => [{ provider: "claude", path: claudeRoot }, { provider: "codex", path: codexRoot }];
+  const { createStateTool } = await import("../packages/sage-core/index.mjs");
+  const tool = createStateTool({ provider: "claude", defaultRoot: () => claudeRoot, legacyRoots: roots });
+  const env = { ...process.env, HOME: s.env.HOME, SAGE_HOME: claudeRoot, SAGE_SHARED_HOME: shared, SAGE_TEST_PIDS: "{}" };
+  const claude = (args, extra = {}) => {
+    const { code, text } = tool.command([...args, "--project", s.project], { ...env, ...extra }, { project: s.project, native: "claude-chief" });
+    if (code) throw new Error(text);
+    return text;
+  };
+  if (claudeRow) {
+    claude(["init"]);
+    claude(["task", "add", "--title", "claude open", "--size", "tiny", "--priority", "P2"]);
+  }
+  await s.call("init");
+  await s.call("task_add", { title: "codex open", size: "tiny", priority: "P2" });
+  const folder = basename(tool.storeDir(s.project, env));
+  return { s, claude, shared, folder, claudeDir: join(claudeRoot, folder), codexDir: join(codexRoot, folder) };
+}
+const planOf = (preview) => /plan ([0-9a-f]{8})\n/.exec(preview)[1];
+
+test("T658: the Codex move tool moves a project with a Claude and a Codex logbook: preview, gate, the owner's answer, then the move, with the Claude logbook marked", async (t) => {
+  const { s, claude, shared, folder, claudeDir, codexDir } = await moveWorld(t);
+  // A run that runs: the preview refuses and changes nothing.
+  claude(["run", "add", "T1", "--role", "pe"]);
+  assert.match((await s.call("move", { preview: true })).error, /^sage: refused: 1 run is running in this project\n[\s\S]*The move needs zero running runs\. Nothing changed\.$/);
+  claude(["run", "done", "R1", "--status", "blocked"]);
+  const preview = await s.call("move", { preview: true });
+  assert.match(preview, /^Move preview · project project {2,}plan [0-9a-f]{8}\nRead only\. Nothing changed\.\n\nWhat moves {11}Claude {11}Codex\n/);
+  const plan = planOf(preview);
+  const gate = await s.call("move", { plan });
+  const id = /^(G\d+) · move · plan /.exec(gate)[1];
+  assert.match(gate, /\n1 · move RECOMMENDED\nMoves the project now, exactly as in the preview\.\n2 · keep\n/);
+  assert.match(readFileSync(join(codexDir, "gates.tsv"), "utf8"), new RegExp(`\\n${id}\\t\\tmove · plan ${plan}`), "the Codex logbook holds the move gate");
+  // No move before the owner's answer.
+  assert.equal((await s.call("move", { gate: id })).error, `sage: refused: ${id} has no answer yet, so nothing moves. Nothing changed. The owner answers it first.`);
+  assert.match(await s.call("gate_answer", { gate: id, option: 1 }), new RegExp(`^${id} `));
+  const moved = await s.call("move", { gate: id });
+  assert.match(moved, /Reconciliation · every count matches the plan/);
+  // The Codex server took the lock and wrote under the Claude root: the marker, the backup and the moved column.
+  assert.equal(JSON.parse(readFileSync(join(claudeDir, "moved.json"), "utf8")).folder, folder);
+  assert.ok(existsSync(join(claudeDir, "tasks.before-move.tsv")));
+  assert.match(readFileSync(join(claudeDir, "tasks.tsv"), "utf8").split("\n")[0], /\tmoved$/);
+  assert.ok(existsSync(join(codexDir, "moved.json")));
+  assert.match(readFileSync(join(shared, "bindings.tsv"), "utf8"), new RegExp(`\\n${s.project}\\t${folder}\\t`));
+  // Both providers now write the one shared logbook.
+  const added = /^(T\d+) /.exec(await s.call("task_add", { title: "after the move", size: "tiny", priority: "P2" }))[1];
+  assert.equal(added, "T4", "the new numbers start above both old logbooks: T2 and T3 are the moved tasks");
+  assert.equal(claude(["task", added]), "T4 framed · tiny · round 0 · route build · P2 · chief C1", "Claude reads the Codex chief's new task");
+});
+
+test("T658: the Codex move tool takes only its three forms, and no other text reaches the state tool", async (t) => {
+  const { s, codexDir } = await moveWorld(t, { claudeRow: false });
+  const gates = () => readFileSync(join(codexDir, "gates.tsv"), "utf8");
+  const before = gates();
+  for (const input of [{ preview: false }, { plan: "7C41E09A" }, { plan: "--gate=G1" }, { plan: "7c41e09a extra" }, { gate: "G1 --plan=7c41e09a" }, { gate: "g1" }, { gate: "G0" }, { other: "x" }])
+    assert.match((await s.call("move", input)).error, /^Input validation error: /, JSON.stringify(input));
+  const one = /^(?:.*: )?move takes one of --preview, --plan <plan> \(the 8 hex that the preview printed\) or --gate <G> \(the answered move gate\); --preview takes no value\. Nothing changed\.$/;
+  for (const input of [{}, { preview: true, plan: "7c41e09a" }, { plan: "7c41e09a", gate: "G1" }]) assert.match((await s.call("move", input)).error, one, JSON.stringify(input));
+  assert.equal(gates(), before, "no refused call opens a gate");
+  // Claude has no plugin row and no logbook here: the gate offers to record Claude as unused, in place of a plain move.
+  const preview = await s.call("move", { preview: true });
+  assert.match(preview, /What moves {11}Codex\n/);
+  const gate = await s.call("move", { plan: planOf(preview) });
+  assert.match(gate, /\n1 · move, and record Claude as unused RECOMMENDED\nOnly if you do not use Claude on this project\. Sage writes "Claude: unused" and does not wait for the Claude plugin\.\n2 · keep\n/);
+  // The logbooks change after the gate: the answered gate moves nothing and says what changed, and the old plan opens no new gate.
+  const id = /^(G\d+) /.exec(gate)[1];
+  await s.call("task_add", { title: "after the preview", size: "tiny", priority: "P2" });
+  await s.call("gate_answer", { gate: id, option: 1 });
+  assert.equal((await s.call("move", { gate: id })).error, `sage: refused: the logbooks changed after plan ${planOf(preview)}\n  Codex: 1 more open task (T2)\nNothing changed.`);
+  assert.match((await s.call("move", { plan: planOf(preview) })).error, /^sage: refused: the logbooks changed after plan [0-9a-f]{8}\n  the preview now gives plan [0-9a-f]{8}\nNothing changed\.$/);
+  assert.equal(existsSync(join(codexDir, "moved.json")), false, "nothing moved");
+});
+
+test("T658: a move that stopped in Claude refuses every Codex tool of the project, and the Codex move tool with the same gate finishes it", async (t) => {
+  const { s, claude, shared, folder, claudeDir } = await moveWorld(t);
+  const plan = planOf(claude(["move", "--preview"])), id = /^(G\d+) /.exec(claude(["move", "--plan", plan]))[1];
+  claude(["gate", "answer", id, "--option", "1"]);
+  // The Claude session stops after step 3: the old logbooks are marked, and no checkout is linked yet.
+  assert.throws(() => claude(["move", "--gate", id], { SAGE_TEST_MOVE_STOP: "3" }), /test stop after step 3/);
+  assert.ok(existsSync(join(claudeDir, "moved.json")) && existsSync(join(shared, "moves", `${folder}.json`)));
+  const stopped = await s.call("task_add", { title: "while it stopped", size: "tiny", priority: "P2" });
+  assert.match(stopped.error, new RegExp(`refused: the move of project project did not finish[\\s\\S]*To finish: sage move --gate ${id} \\(the same command\\)`));
+  const finished = await s.call("move", { gate: id });
+  assert.match(finished, /Reconciliation · every count matches the plan/);
+  assert.equal(existsSync(join(shared, "moves", `${folder}.json`)), false, "the plan is removed");
+  assert.match(await s.call("task_add", { title: "after the finish", size: "tiny", priority: "P2" }), /^T\d+ /);
+});
+
+test("T658: the Codex chief's list of tools names the move tool, with the owner's answer before gate", () => {
+  const { PROJECT_SETUP } = JSON.parse(readFileSync(join(ROOT, "plugins/sage-codex/chief-bindings.json"), "utf8"));
+  const [list] = /The tools are .*?\./.exec(PROJECT_SETUP);
+  assert.ok(list.includes("`move`"), list);
+  assert.match(PROJECT_SETUP, /To move a project into one shared logbook when the owner asks, call `move` with `preview`, then with `plan`, and put the gate to the owner word for word; call it with `gate` only after the owner's answer in the chat\./);
+  assert.match(PROJECT_SETUP, /When a tool refuses with `sage move --gate <G>`, call `move` with that gate at once\./);
 });
 
 test("F-T618-3: the Codex chief's list of tools names each tool that moves a task between chiefs", () => {

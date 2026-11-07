@@ -203,6 +203,7 @@ The plugin starts a local MCP server, `sage`, in the desktop app and in the CLI.
 | --- | --- |
 | `init`, `status` | `init`, `status` |
 | `link` | `link --to <folder>`, `link --separate`: [shared logbooks](using-sage.md#shared-logbooks), only after your answer |
+| `move` | `move --preview`, `move --plan <plan>`, `move --gate <G>`: [move an existing project](using-sage.md#move-an-existing-project), with `gate` only after your answer |
 | `claim` | `claim <T>`: take a task with no owning chief in a [shared logbook](using-sage.md#shared-logbooks) |
 | `offer`, `cancel`, `accept`, `release` | `offer <T>`, `cancel <T>`, `accept <T>`, `release <T>`: [hand a task to another chief](using-sage.md#shared-logbooks) |
 | `task_add`, `task_set` | `task add`, `task <T> set` |

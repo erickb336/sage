@@ -406,7 +406,7 @@ The move takes the open work of a project's Claude and Codex logbooks into one s
 | `sage move --plan <plan>` | Opens the move gate, if the logbooks still give that plan. Its first line is `G<n> · move · plan <plan>`. |
 | `sage move --gate <G>` | Moves, after your answer. It checks the plan again, then prints each step, the end check by table and by provider, the map page, the backup copies and the restore steps. |
 
-The move gate is your act, so the move names no chief. In Codex, a `move` tool of the same name comes with the Codex part of the move; until then, ask the Claude chief.
+The move gate is your act, so the move names no chief. In Codex, the chief uses the `move` tool of the sage MCP server, with the same three forms.
 
 | What | After the move |
 | --- | --- |
