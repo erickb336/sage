@@ -1605,6 +1605,50 @@ test("a merge passes only as the one merge form; any other command that names a 
   for (const s of [off, on]) for (const command of refused) assert.match(denied(s.send(bash(command))) ?? "", CANNOT, command);
 });
 
+test("T670-MERGETEXT: the word merge in a program's text, or a local git merge-tree in a loop, is no merge (T670)", () => {
+  const off = session();
+  off.send(prompt("sage mode"));
+  const on = autopilotSession();
+  const text = [
+    `gh pr view 41 --json headRefOid,mergeStateStatus | node -e 'const d = JSON.parse(require("fs").readFileSync(0, "utf8")); console.log(d.mergeStateStatus === "CLEAN" ? "ready to merge" : "no merge yet")'`,
+    `gh pr list --json number,headRefName | python3 - <<'EOF'\nimport json, sys\nfor p in json.load(sys.stdin):\n    print(p["number"], "check the merge with git merge-tree")\nEOF`,
+    `gh pr view 41 --json title | python3 -c 'import json, sys; print("merge" in json.load(sys.stdin)["title"])'`,
+    "for b in sage/t656-x sage/t671-y; do git merge-tree --write-tree origin/main origin/$b; gh pr list --head $b; done",
+    "for n in 447 452; do b=$(gh pr view $n --json headRefName -q .headRefName); git -C /x merge-tree --write-tree origin/main origin/$b; done",
+    "gh pr checks 41 && if git merge-base --is-ancestor a b; then echo behind; fi",
+  ];
+  for (const s of [off, on]) for (const command of text) assert.equal(denied(s.send(bash(command))), undefined, command);
+});
+
+test("T670-KEEP-MERGES: any other merge form, and a merge as a real command, also in a loop, a chain, bash -c, sh -c or eval, by the API, or put together from two commands, is still refused", () => {
+  const off = session();
+  off.send(prompt("sage mode"));
+  const on = autopilotSession();
+  const refused = {
+    "gh pr merge 5 --merge": /"--merge" is not part of it/,
+    "gh pr merge 5 --squash --admin": /"--admin" is not part of it/,
+    "for n in 5 6; do gh pr merge $n --squash --delete-branch; done": CANNOT,
+    "gh pr view 5 && gh pr merge 5 --rebase": CANNOT,
+    "gh pr view 5 | jq .title; gh pr merge 5 --admin": CANNOT,
+    "bash -c 'gh pr merge 5 --rebase'": CANNOT,
+    'sh -c "gh pr view 5; gh pr merge 5"': CANNOT,
+    'eval "gh pr merge 5 --admin"': CANNOT,
+    "gh api -X PUT repos/o/r/pulls/5/merge": CANNOT,
+    "for n in 5; do gh api -X PUT repos/o/r/pulls/$n/merge; done": CANNOT,
+    "gh pr view 5 && gh api --method PUT repos/o/r/pulls/5/merge -f merge_method=squash": CANNOT,
+    "sh -c \"gh api graphql -f query='mutation { mergePullRequest(input: {pullRequestId: 1}) { clientMutationId } }'\"": CANNOT,
+    // A merge that a variable, a substitution, xargs or a file puts together from the words of two commands.
+    "M=merge; gh pr view 5; gh pr $M 5": CANNOT,
+    "gh pr view 5 && gh pr $(echo merge) 5": CANNOT,
+    "echo merge 5 | xargs gh pr": CANNOT,
+    "gh pr view 5 > x.sh; echo merge >> x.sh; sh x.sh": CANNOT,
+    "{ gh pr view 5; echo merge; } | sh": CANNOT,
+    "export G=gh; node -e 'require(\"child_process\").execSync(process.env.G + \" pr merge 5\")'": CANNOT,
+    "gh pr view 5 | node; node -e 'console.log(\"merge\")'": CANNOT,
+  };
+  for (const s of [off, on]) for (const [command, why] of Object.entries(refused)) assert.match(denied(s.send(bash(command))) ?? "", why, command);
+});
+
 test("the merge form: one --match-head-commit with the full SHA, the pull request's number, --squash and --delete-branch", () => {
   const s = autopilotSession();
   const OTHER = "b".repeat(40);
@@ -3504,6 +3548,57 @@ test("S2-UNIQ: uniq IN OUT, sort -o FILE and less -o FILE write, so they are ref
     assert.match(denied(s.send(bash(command))) ?? "", /the chief never writes, moves or removes a logbook file/, `chief: ${command}`);
   }
   assert.equal(denied(s.send(bash("sort rows.txt | uniq -c > counts.txt", FEATURE, AGENT))), undefined, "uniq in a project");
+});
+
+test("T670-UNIQ: uniq with no output operand only reads, also a logbook file, for an agent and the chief", () => {
+  const s = session();
+  s.send(prompt("sage mode"));
+  const root = s.vars.SAGE_HOME;
+  const reads = [`uniq ${root}/p/tasks.tsv`, `uniq -c ${root}/p/tasks.tsv`, `cut -f6 ${root}/p/tasks.tsv | sort | uniq -c`, `uniq -f 1 -s2 -- ${root}/p/ledger.tsv`, `LC_ALL=C uniq -cd ${root}/p/runs.tsv`];
+  for (const command of reads) {
+    assert.equal(denied(s.send(bash(command, FEATURE, AGENT))), undefined, `agent: ${command}`);
+    assert.equal(denied(s.send(bash(command))), undefined, `chief: ${command}`);
+  }
+});
+
+test("T670-KEEP-WRITES: uniq IN OUT, an operand that can expand, xargs uniq or a redirection into the logbook, and a pattern that names a logbook file, are still refused", () => {
+  const s = session();
+  s.send(prompt("sage mode"));
+  const root = s.vars.SAGE_HOME;
+  // The output operand, an operand that can expand to more words, and a uniq that another program runs still write.
+  const writes = [`uniq x ${root}/p/tasks.tsv`, `uniq -c x ${root}/p/tasks.tsv`, `uniq -f 2 x ${root}/p/tasks.tsv`, `uniq -- x ${root}/p/tasks.tsv`, `uniq ${root}/p/tasks.tsv -c`,
+    `uniq ${root}/p/*.tsv`, `uniq ${root}/p/$T`, `ls ${root}/p | xargs uniq`, `cut -f1 ${root}/p/runs.tsv > ${root}/p/tasks.tsv`];
+  for (const command of writes) {
+    assert.match(denied(s.send(bash(command, FEATURE, AGENT))) ?? "", LOGBOOK_SHELL, `agent: ${command}`);
+    assert.match(denied(s.send(bash(command))) ?? "", /the chief never writes, moves or removes a logbook file/, `chief: ${command}`);
+  }
+  // A slice's brackets read as one pattern: one that names a logbook file, or that the hook cannot read, is still refused.
+  for (const command of ["cp x tasks.ts[v:w]", "cp x tasks.ts[[:alpha:]]", "cp x ledger.ts?", "python3 -c 'f = open(\"tasks.tsv\")'", `jq -r '.[].sha[0:8]' x.json > ${root}/p/tasks.tsv`]) {
+    assert.match(denied(s.send(bash(command))) ?? "", /the chief never writes, moves or removes a logbook file/, command);
+  }
+});
+
+test("T670-SLICE: a jq slice (.headSha[0:8]) or a Python slice (s[i:j], sha[:8]) in a chief's command names no logbook file", () => {
+  const s = session();
+  s.send(prompt("sage mode"));
+  for (const command of [
+    "gh pr list --json number,headSha | jq -r '.[].headSha[0:8]' | tee heads.txt",
+    "python3 -c 'import sys; s = sys.stdin.read(); i, j = 0, 8; print(s[i:j])'",
+    "python3 -c 'sha = \"abc\"; print(sha[:8])' > short.txt",
+  ]) assert.equal(denied(s.send(bash(command))), undefined, command);
+});
+
+test("T670-ROOTVAR: SAGE_HOME set from a variable is still refused, and the refusal names the plain way: an absolute scratch path, which passes", () => {
+  const s = session();
+  s.send(prompt("sage mode"));
+  const scratch = realpathSync(mkdtempSync(join(tmpdir(), "sage-scratch-")));
+  const PLAIN_WAY = /The hook does not expand a variable, ~ or a pattern, so it cannot tell where SAGE_HOME points\. Set it to a plain absolute path in your scratch folder instead/;
+  const variable = `S=${scratch}; SAGE_HOME=$S/home/sage node --test a.test.mjs > $S/out.txt 2>&1`;
+  assert.match(denied(s.send(bash(variable, FEATURE, AGENT))) ?? "", PLAIN_WAY, "agent");
+  assert.match(denied(s.send(bash(variable))) ?? "", PLAIN_WAY, "chief");
+  const plain = `SAGE_HOME=${scratch}/home/sage node --test a.test.mjs > ${scratch}/out.txt 2>&1`;
+  assert.equal(denied(s.send(bash(plain, FEATURE, AGENT))), undefined, "agent, plain path");
+  assert.equal(denied(s.send(bash(plain))), undefined, "chief, plain path");
 });
 
 test("R5-DOLLARQUOTE: $? is a pattern character to the hook, so a test log with echo exit=$? is refused, named, with the plain way; the $'' forms are refused too (T83 round 6)", () => {
@@ -5886,6 +5981,43 @@ test("R1991-1: a lead moves a tiny task without a risk flag to verifying with no
   const small = leadSession();
   setState(small, "T1", "reviewing");
   assert.match(denied(stateRun(small, "task T1 set state=verifying")) ?? "", /^sage: T1's head [0-9a-f]{7} has no full clean cycle yet .*\(R1836-3, R1846-1\)\./, "a small task with no clean cycle");
+});
+
+/**
+ * A lead session whose T1 is reviewing, and whose origin copy of claude/t1 (refs/remotes/origin/claude/t1) is one commit
+ * on top of the local tip, as after GitHub's update-branch and a fetch. That commit has a full clean cycle (T670).
+ */
+function originAhead() {
+  const s = leadSession();
+  const git = (...args) => spawnSync("git", ["-C", s.dir, "-c", "user.name=t", "-c", "user.email=t@t", ...args], { encoding: "utf8" }).stdout.trim();
+  const tree = git("rev-parse", "claude/t1^{tree}");
+  const child = (parent, message) => git("commit-tree", tree, "-p", parent, "-m", message);
+  const local = s.head(), origin = child(local, "update branch");
+  git("update-ref", "refs/remotes/origin/claude/t1", origin);
+  for (const kind of ["review-clean", "qa-pass"]) s.sage("verdict", "T1", "--kind", kind, "--sha", origin, "--cycle", "1", "--pr", "5");
+  setState(s, "T1", "reviewing");
+  return { s, git, child, local, origin };
+}
+
+test("T670-ORIGIN: the hook reads a task's head from origin when the local branch is behind it (gh pr update-branch, then a fetch)", () => {
+  const { s, origin } = originAhead();
+  assert.equal(denied(stateRun(s, "task T1 set state=verifying")), undefined, "local is behind: the head is origin's, which has the clean cycle");
+  assert.notEqual(s.head(), origin, "the hook moved no local ref");
+});
+
+test("T670-KEEP-ORIGIN: a local branch that has diverged from origin, or is ahead of it, stays the head, and the hook moves no ref", () => {
+  const { s, git, child, local, origin } = originAhead();
+  const NO_CYCLE = (sha) => new RegExp(`^sage: T1's head ${sha.slice(0, 7)} has no full clean cycle yet`);
+  // Diverged: a local commit that origin does not have.
+  const diverged = child(local, "local fix");
+  git("update-ref", "refs/heads/claude/t1", diverged);
+  assert.match(denied(stateRun(s, "task T1 set state=verifying")) ?? "", NO_CYCLE(diverged), "diverged: the local tip");
+  // Ahead: a local commit on top of origin's tip.
+  const ahead = child(origin, "next fix");
+  git("update-ref", "refs/heads/claude/t1", ahead);
+  assert.match(denied(stateRun(s, "task T1 set state=verifying")) ?? "", NO_CYCLE(ahead), "ahead: the local tip");
+  assert.equal(s.head(), ahead, "the hook moved no local ref");
+  assert.equal(git("rev-parse", "refs/remotes/origin/claude/t1"), origin, "nor origin's");
 });
 
 test("F-T273-3: a lead's run add --branch must be a branch of its own task", () => {

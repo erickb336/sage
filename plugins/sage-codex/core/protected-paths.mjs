@@ -43,6 +43,7 @@ export function partNames(part, name) {
   if (part === name) return true;
   if (!/[*?[{]/.test(part)) return false;
   if (part.replace(/[^*?[{]/g, "").length > 8) return true; // many wildcards could name anything, and would make a slow match
+  if (/\[[^\]]*\[[:=.]/.test(part)) return true; // a class such as [[:alpha:]] or [[.v.]], which the match below does not read
   const re = part.replace(/[.+^$()|\\]/g, "\\$&").replace(/\*/g, ".*").replace(/\?/g, ".").replace(/\[!/g, "[^").replace(/\{([^{}]*)\}/g, (_, alts) => `(?:${alts.split(",").join("|")})`);
   try {
     return new RegExp(`^${re}$`).test(name);

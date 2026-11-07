@@ -670,12 +670,15 @@ const fold = (text) => text.normalize("NFKC").toLowerCase();
  * character to the hook, which does not expand variables (T83-R5-DOLLARQUOTE).
  */
 const unquote = (text) => text.replace(/\$(?=['"])/g, "").replace(/['"\\]/g, "");
-/** The words of a command's text, in their own case, without quotes. */
+/**
+ * The words of a command's text, in their own case, without quotes. A bracket group keeps its = and : (a jq slice
+ * .sha[0:8], a Python slice s[i:j]), so that the hook reads the group as one pattern, not as two halves that it cannot
+ * read and that could name any file (T670).
+ */
 const wordsOf = (text) =>
   unquote(text)
     .replace(/\$\{(\w+)\}/g, "$$$1")
-    .split(/[\s;&|()<>`=:]+/)
-    .filter(Boolean);
+    .match(/(?:\[[^\]\s/;&|()<>`]*\]|[^\s;&|()<>`=:])+/g) ?? [];
 /** The words of the text, each once (a long line repeats words), with the folded form (low) and its path parts. The word keeps its own capitals, for the refusal. */
 const partsOf = (text) => [...new Set(wordsOf(text))].map((word) => ({ word, low: fold(word), parts: fold(word).split("/") }));
 const GLOB = /[*?[{]/;
@@ -723,6 +726,14 @@ function usesRootVar(text, real, cwd) {
   }
   return undefined;
 }
+/**
+ * The plain way, when a root variable is set to a value that the hook cannot read (T670). The hook does not expand a
+ * variable, ~ or a pattern, so SAGE_HOME=$S/home/sage could be the real root (S unset, or set to it before the line).
+ */
+const rootVarHint = (word) => {
+  const [, name, value] = /^(SAGE_HOME|SAGE_SHARED_HOME|CLAUDE_CONFIG_DIR)=(.*)$/i.exec(word ?? "") ?? [];
+  return name && (!value || /[$`*?[{%~]/.test(value)) ? ` The hook does not expand a variable, ~ or a pattern, so it cannot tell where ${name} points. Set it to a plain absolute path in your scratch folder instead, for example ${name}=/tmp/<your scratch folder>/sage.` : "";
+};
 /** The word that names a logbook file, in any case or as a pattern. */
 const namesTable = (words) => words.find(({ parts }) => parts.some((p) => TABLES.some((t) => names(p, t))))?.word;
 /** A path into a project's worktrees (<project>/.claude/worktrees/<name>), where agents work: plain, with no "..", pattern or variable. */
@@ -994,7 +1005,7 @@ function chiefProblem(input, sage) {
   }
   if (!SHELL_TOOLS.test(input.tool_name ?? "")) return undefined;
   const word = shellWrite(input.tool_input ?? {}, sage, input.cwd ?? process.cwd(), input.tool_name);
-  return word && `the chief never writes, moves or removes a logbook file from the shell (${quoted(word)} names the logbook).`;
+  return word && `the chief never writes, moves or removes a logbook file from the shell (${quoted(word)} names the logbook).${rootVarHint(word)}`;
 }
 /**
  * The name rule (T83 round 7, G84): for an agent, a text that names sage.mjs or sage-pr.mjs (in any case, after its
@@ -1607,7 +1618,7 @@ function agentCheck(input, file, slots) {
   }
   if (!texts.some(t => writes(t, cwd))) return undefined;
   const word = nearLogbook(writeText(texts, roots, cwd, input.tool_name), roots, cwd) ?? canonicalRoots(roots).flatMap((root) => texts.map((t) => linksNear(t, root, cwd))).find(Boolean);
-  const hint = word && /\$\?/.test(word) ? " The hook does not expand $?, so its ? is a pattern character: to show an exit code, write || echo FAIL or ; echo done after the command instead." : "";
+  const hint = word && /\$\?/.test(word) ? " The hook does not expand $?, so its ? is a pattern character: to show an exit code, write || echo FAIL or ; echo done after the command instead." : rootVarHint(word);
   return word && `an agent never writes, moves or removes a logbook file from the shell, and never writes near one with a pattern, a variable or a link to it. ${quoted(word)} makes this command near the logbook: change or remove it.${hint}${note}`;
 }
 /**

@@ -4,8 +4,8 @@ import { outputDispatchWrites } from "./output-writes.mjs";
 import { programName } from "./command-policy.mjs";
 
 const CODE = /^-(?:[a-z]*[ce]|p|-eval|-print|command)$/;
-/** The commands that write, move, remove or link a file, also in PowerShell (case does not matter there). uniq IN OUT and less -o FILE write, so uniq and less always count. */
-const WRITE_NAMES = new Set(["uniq", "less", "tee", "cp", "mv", "rm", "rmdir", "ln", "link", "install", "touch", "dd", "truncate", "rsync", "sponge", "patch", "unlink", "shred", "tar", "unzip", "set-content", "out-file", "add-content", "copy-item", "move-item", "remove-item", "rename-item", "new-item", "ni", "sc", "ac", "del"]);
+/** The commands that write, move, remove or link a file, also in PowerShell (case does not matter there). less -o FILE writes, so less always counts; uniq has its own rule (uniqWrites). */
+const WRITE_NAMES = new Set(["less", "tee", "cp", "mv", "rm", "rmdir", "ln", "link", "install", "touch", "dd", "truncate", "rsync", "sponge", "patch", "unlink", "shred", "tar", "unzip", "set-content", "out-file", "add-content", "copy-item", "move-item", "remove-item", "rename-item", "new-item", "ni", "sc", "ac", "del"]);
 /** The commands that only read: their words name no command to run, so only a redirection makes them write. */
 const READERS = /^(?:cat|grep|egrep|fgrep|rg|head|tail|wc|echo|printf|ls|diff|cut|stat|file|jq|cd|pushd)$/;
 /** Audited option grammars: rg 15.2, file 5.46/macOS, and GNU diff 3.12/Apple diff. */
@@ -69,13 +69,34 @@ function toFile({ operator: op, target: to }) {
   if (op === "<" || op === "<&" || (op === ">&" && /^(?:\d+-?|-)$/.test(to))) return false;
   return !/^\/dev\/(?:null|stdout|stderr)$/.test(to);
 }
+/**
+ * uniq [option]... [input [output]] writes only its second operand (T670): uniq IN and uniq -c IN read. It counts as a
+ * write when uniq is not the command's own word (xargs uniq, env uniq), when an operand can expand to more words ($, a
+ * backtick or a pattern), or when it has two operands. -f, -s and -w take the next word; after the first operand every
+ * word is an operand, as BSD uniq reads them; an unknown option that takes a value makes its value an operand (fail closed).
+ */
+function uniqWrites(words, base) {
+  const at = base.indexOf("uniq");
+  if (at < 0) return false;
+  if (at !== words.findIndex((w) => !FLOW_WORD.test(w) && !/^\w+=/.test(w)) || base.indexOf("uniq", at + 1) >= 0) return true;
+  let operands = 0, options = true;
+  for (let k = at + 1; k < words.length; k++) {
+    const w = words[k];
+    if (options && w === "--") options = false;
+    else if (options && /^(?:-[cdDiuz]*[fsw]|--(?:skip-fields|skip-chars|check-chars))$/.test(w)) k++;
+    else if (options && /^-./.test(w)) continue;
+    else if (/[$`*?[{]/.test(w)) return true;
+    else { operands++; options = false; }
+  }
+  return operands > 1;
+}
 function writesIn({ words }) {
   const low = words.map((w) => w.toLowerCase());
   const base = words.map(programName);
   if (READERS.test(base[low.findIndex((w) => !/^\w+=/.test(w))] ?? "")) return false;
   const has = (re) => base.some((w) => re.test(w));
   return (
-    base.some((w) => WRITE_NAMES.has(w)) ||
+    base.some((w) => WRITE_NAMES.has(w)) || uniqWrites(words, base) ||
     (has(/^g?sed$|^perl$|^ruby$/) && low.some((w) => /^-[a-z]*i|^--in-place/.test(w))) ||
     (has(/^g?awk$/) && low.includes("inplace")) ||
     (has(/^g?sort$/) && low.some((w) => /^-[a-z]*o|^--o/.test(w))) || // sort takes a shortened long option: --out=FILE, --outp=FILE (T83-R5-SORTABBR)

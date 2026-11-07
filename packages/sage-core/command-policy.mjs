@@ -95,7 +95,31 @@ export function createCommandPolicy({ stateToolPath, prPattern = PR } = {}) {
     } catch (e) {
       return mentionsMerge(bare(command)) ? { problem: `${CANNOT} (It cannot read the command: ${e.message}.)` } : undefined;
     }
-    return mentionsMerge(codeText(commands)) || commands.some(expandedMerge) ? { problem: CANNOT } : undefined;
+    const runs = runnable(commands), texts = runs.map(ownText), last = commands.at(-1);
+    const structure = commands.some((c) => STRUCTURE.test(c.words[0] ?? ""));
+    // A gh that runs by its literal name, with no expansion, whose output reaches no command that can run it, merges only
+    // by its own words. Its word gh then joins no other command's merge text: a node or python program that reads gh's
+    // JSON and says merge is no merge (T670). Each command's own text still counts, also in a loop, a chain or bash -c.
+    // In a group or a loop, the output of the whole can go on to a shell, so no gh there is plain.
+    const plainGh = ({ cmd: c }) => !structure && c.words[0] === "gh" && !c.host && !c.grouped && !(c.writes && c !== last) &&
+      ![...c.words, ...c.bodies].some((w) => /[$`]/.test(w)) && (!c.piped || readsData(c.pipeTo, last));
+    const lineText = texts.filter((_, k) => !plainGh(runs[k])).join("\n");
+    return texts.some(mentionsMerge) || mentionsMerge(lineText) || commands.some(expandedMerge) ? { problem: CANNOT } : undefined;
+  }
+
+  /** The index of a command's own word: after the words that open shell control flow, and after its assignments. */
+  const LEAD = /^(?:do|then|else|elif|if|while|until|time|!|\{)$/;
+  const commandWord = (words) => words.findIndex((w) => !LEAD.test(w) && !/^\w+=/.test(w));
+  /**
+   * Does a command only read the text piped into it, and pass it on only to such commands? A filter, jq, grep, rg without
+   * --pre, or node or python with its program in an option, a script or a heredoc (not from the pipe).
+   */
+  function readsData(c, last) {
+    const words = c.words.slice(Math.max(commandWord(c.words), 0)), name = programName(words[0] ?? "");
+    const program = /^(?:node|nodejs)$/.test(name) ? words.some((w) => /^(?:-e|--eval|-p|--print)$/.test(w)) || /^[^-]/.test(words[1] ?? "-")
+      : /^python[\d.]*$/.test(name) ? words.includes("-c") || /^[^-]/.test(words[1] ?? "-") || c.bodies.length > 0
+      : /^(?:jq|grep|egrep|fgrep)$/.test(name) || (name === "rg" && !words.some((w) => /^--pre\b/.test(w))) || filters({ words });
+    return program && !c.grouped && !c.host && !(c.writes && c !== last) && (!c.piped || readsData(c.pipeTo, last));
   }
 
   /** A command whose name comes from an expansion ($'…', $( ), a backtick or $VAR), with the word merge in its words. */
@@ -158,11 +182,17 @@ export function createCommandPolicy({ stateToolPath, prPattern = PR } = {}) {
     return commands.map((c) => (contained(c) ? { cmd: c, words: c.words.slice(0, harmless(c.words)), bodies: [] } : { cmd: c, words: c.words, bodies: c.bodies }));
   }
 
-  /** The text of a command line that can run. A local "git merge" is not a merge of a pull request, so its subcommand word is left out. */
-  const codeText = (commands) =>
-    runnable(commands)
-      .map(({ words, bodies }) => [...(words[0] === "git" && /^merge(?:-base|-file|-tree)?$/.test(words[1] ?? "") ? [words[0], ...words.slice(2)] : words), ...bodies].join(" "))
-      .join("\n");
+  /**
+   * The text of one command that can run: its words and heredocs. A local "git merge" (also merge-base, merge-file and
+   * merge-tree, after git's own options or in a loop) is not a merge of a pull request, so its subcommand word is left out.
+   */
+  function ownText({ words, bodies }) {
+    const k = commandWord(words);
+    let sub = k + 1;
+    while (words[sub]?.startsWith("-")) sub += GIT_VALUE.test(words[sub]) ? 2 : 1;
+    const local = k >= 0 && words[k] === "git" && /^merge(?:-base|-file|-tree)?$/.test(words[sub] ?? "");
+    return [...(local ? words.filter((_, i) => i !== sub) : words), ...bodies].join(" ");
+  }
 
   return Object.freeze({ expansionProblem, mergeIn, runnable });
 }
