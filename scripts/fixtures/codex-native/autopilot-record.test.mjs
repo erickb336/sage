@@ -1,9 +1,9 @@
 import "../../test-env.mjs"; // first: no variable of the developer's shell changes a result
 import assert from "node:assert/strict";
 import { spawnSync } from "node:child_process";
-import { appendFileSync, chmodSync, existsSync, mkdtempSync, readFileSync, realpathSync, rmSync, truncateSync, writeFileSync } from "node:fs";
+import { appendFileSync, chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, truncateSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { dirname, join } from "node:path";
 import { test } from "node:test";
 import { fileURLToPath } from "node:url";
 
@@ -38,6 +38,18 @@ const decide = (lines, from = 0) => {
 const ON = { on: true };
 const NONE = { on: false, reason: "the owner has not turned autopilot on, with sage mode on, since this session started" };
 const OFF = { on: false, reason: "the owner's latest autopilot switch is off" };
+// The refusals (F-T663-14): a plain cause and one next step, then a short technical detail in brackets, if any.
+const IN_GITHUB = "The owner merges the pull request in GitHub";
+const FORM = (detail) => ({ refused: `sage does not know the form of Codex's record of this session. ${IN_GITHUB} (${detail})` });
+const RESUME = "Resume the session, then the owner turns autopilot on again. Or the owner merges the pull request in GitHub";
+const NO_MARK = { refused: `sage saved no note when this session started, so it cannot tell which of the owner's switches are from this start. ${RESUME}` };
+const BAD_MARK = { refused: `sage's note of this session start does not match Codex's record of this session. ${RESUME}` };
+const VERSION = (version) => ({ refused: `this session runs Codex ${version}, and sage reads the records of Codex 0.164 to 0.166 only. Use Codex 0.164 to 0.166, or the owner merges the pull request in GitHub` });
+/** Each sentence of a text for the owner, without its bracketed detail, has 25 words or fewer and no internal name. */
+function assertPlain(text) {
+  assert.doesNotMatch(text.replace(/ \([^()]*\)$/, ""), /session_meta|\bline \d|partial|unknown type|ENOENT|EACCES/, text);
+  for (const sentence of text.replace(/ \([^()]*\)$/, "").split(/(?<=\.) /)) assert.ok(sentence.split(" ").length <= 25, sentence);
+}
 
 // Real lines of the proof records, for synthetic cases.
 const real = RECORDS["exec-on"];
@@ -116,12 +128,11 @@ test("the boundary is the later of the last session_meta line and the start mark
   assert.deepEqual(decide([...before, META], 1), NONE, "an earlier mark does not move the boundary back");
   assert.deepEqual(decide(before, 3), ON);
   assert.deepEqual(decide(before, 4), NONE);
-  for (const from of [5, -1, 1.5, "1", null]) assert.deepEqual(decide(before, from), { refused: "sage's note of this session start does not fit Codex's session record" }, String(from));
+  for (const from of [5, -1, 1.5, "1", null]) assert.deepEqual(decide(before, from), BAD_MARK, String(from));
   // No start mark refuses: no default line (such as 0) stands for a missing mark, so an on from before a resume never counts.
   const record = read(before);
-  for (const mark of [undefined, null, 0, 3, "3", []]) {
-    assert.deepEqual(autopilotSwitch(record, mark), { refused: "sage saved no note when this session started, so it cannot tell which switches of the owner are from this start" }, JSON.stringify(mark));
-  }
+  for (const mark of [undefined, null, 0, 3, "3", []]) assert.deepEqual(autopilotSwitch(record, mark), NO_MARK, JSON.stringify(mark));
+  for (const { refused } of [NO_MARK, BAD_MARK]) assertPlain(refused);
   assert.deepEqual(autopilotSwitch(record, { session: "s", source: "resume", lines: 3, pid: 7 }), ON, "the mark as start-mark.mjs saves it");
 });
 
@@ -142,7 +153,7 @@ test("switches: exact phrases only; off from any owner message, on only in a tur
   assert.deepEqual(decide([META, ...turn("user", "sage mode", "autopilot on"), ...turn("exec", "turn autopilot off now")]), ON, "a sentence is no off");
 });
 
-test("only the owner's message counts: one metadata item with provenance user for each content item, and only text", () => {
+test("only the owner's message counts: one metadata item with provenance user for each content item; an on needs text only, an off does not", () => {
   const user = started(TURN, "user");
   const mode = owner(TURN, "sage mode");
   assert.deepEqual(decide([META, user, mode, owner(TURN, "autopilot on")]), ON, "the owner's own message");
@@ -160,6 +171,26 @@ test("only the owner's message counts: one metadata item with provenance user fo
   const image = owner(TURN, "autopilot on");
   image.payload = { ...image.payload, content: [...image.payload.content, { type: "input_image", image_url: "data:" }], internal_chat_message_metadata_passthrough: { ...image.payload.internal_chat_message_metadata_passthrough, content_item_metadata: [{ provenance: { type: "user" } }, { provenance: { type: "user" } }] } };
   assert.deepEqual(decide([META, user, mode, image]), NONE, "an image beside the phrase");
+  // F-T663-11: Codex gives the sage hook only the text items of a message (0.160 UserMessageItem::message() joins them),
+  // so an off phrase with an image switches the hook off. The reader counts that off too; an on still needs text only.
+  /** An owner's message of these items, each with this provenance. */
+  const items = (content, provenance = "user") => {
+    const message = owner(TURN, "");
+    message.payload = { ...message.payload, content, internal_chat_message_metadata_passthrough: { ...message.payload.internal_chat_message_metadata_passthrough,
+      content_item_metadata: content.map(() => ({ provenance: { type: provenance } })) } };
+    return message;
+  };
+  const picture = { type: "input_image", image_url: "data:" };
+  const on = owner(TURN, "autopilot on");
+  for (const off of ["autopilot off", "sage mode off", " Autopilot OFF. "]) {
+    assert.deepEqual(decide([META, user, mode, on, items([{ type: "input_text", text: off }, picture])]), OFF, `${off} with an image after it`);
+    assert.deepEqual(decide([META, user, mode, on, items([picture, { type: "input_text", text: off }])]), OFF, `${off} with an image before it`);
+  }
+  assert.deepEqual(decide([META, user, mode, on, items([{ type: "input_text", text: "autopilot" }, picture, { type: "input_text", text: " off" }])]), OFF, "text items joined, as Codex joins them");
+  assert.deepEqual(decide([META, user, mode, on, items([{ type: "input_text", text: "autopilot off" }, picture], "harness")]), ON, "an off that is not the owner's");
+  assert.deepEqual(decide([META, user, mode, on, items([picture])]), ON, "an image alone");
+  assert.deepEqual(decide([META, user, items([{ type: "input_text", text: "sage mode" }, picture]), on]), NONE, "the mode phrase with an image turns no mode on");
+  assert.deepEqual(decide([META, user, mode, items([{ type: "input_text", text: "autopilot on" }, picture])]), NONE, "the on phrase with an image counts for nothing");
   const developer = owner(TURN, "autopilot on");
   developer.payload = { ...developer.payload, role: "developer" };
   assert.deepEqual(decide([META, user, mode, developer]), NONE);
@@ -171,26 +202,29 @@ test("only the owner's message counts: one metadata item with provenance user fo
 
 test("the record format fails closed: each unknown or broken record refuses", () => {
   const base = RECORDS["exec-on"];
-  const refused = (reason) => ({ refused: reason });
-  assert.deepEqual(decide([...base, { type: "brand_new_type", payload: {} }]), refused("line 22 of Codex's session record has an unknown type"));
-  assert.deepEqual(decide([...base.slice(0, 5), "{not json", ...base.slice(5)]), refused("line 6 of Codex's session record is not JSON"));
-  assert.deepEqual(decide([...base.slice(0, 5), "", ...base.slice(5)]), refused("line 6 of Codex's session record is not JSON"), "a blank line");
+  assert.deepEqual(decide([...base, { type: "brand_new_type", payload: {} }]), FORM("line 22 has an unknown type"));
+  assert.deepEqual(decide([...base.slice(0, 5), "{not json", ...base.slice(5)]), FORM("line 6 is not JSON"));
+  assert.deepEqual(decide([...base.slice(0, 5), "", ...base.slice(5)]), FORM("line 6 is not JSON"), "a blank line");
   for (const bad of ["null", "[]", '"text"', '{"type":"event_msg"}', '{"type":"event_msg","payload":null}', '{"type":"event_msg","payload":[]}']) {
-    assert.deepEqual(decide([...base, bad]), refused("line 22 of Codex's session record has an unknown type"), bad);
+    assert.deepEqual(decide([...base, bad]), FORM("line 22 has an unknown type"), bad);
   }
-  assert.deepEqual(decide(base.slice(1)), refused("Codex's session record has no session_meta line"));
-  assert.deepEqual(readRecord(recordFile([], "")), refused("Codex's session record has no session_meta line"), "an empty record");
-  assert.deepEqual(readRecord(join(SCRATCH, "missing.jsonl")), refused("Codex's session record cannot be read (ENOENT)"));
-  assert.deepEqual(readRecord(SCRATCH), refused("Codex's session record cannot be read (EISDIR)"));
-  for (const path of [undefined, null, "", 7]) assert.deepEqual(readRecord(path), refused("Codex gave no path to its session record"), String(path));
+  assert.deepEqual(decide(base.slice(1)), FORM("no session_meta line"));
+  assert.deepEqual(readRecord(recordFile([], "")), FORM("no session_meta line"), "an empty record");
+  const unread = (code) => ({ refused: `sage cannot read Codex's record of this session. Ask for the merge again. If it refuses again, the owner merges the pull request in GitHub (${code})` });
+  assert.deepEqual(readRecord(join(SCRATCH, "missing.jsonl")), unread("ENOENT"));
+  assert.deepEqual(readRecord(SCRATCH), unread("EISDIR"));
+  const noRecord = { refused: `Codex keeps no record of this session, so sage cannot read the owner's autopilot switch. ${IN_GITHUB}` };
+  for (const path of [undefined, null, "", 7]) assert.deepEqual(readRecord(path), noRecord, String(path));
+  for (const { refused } of [FORM("line 6 is not JSON"), unread("ENOENT"), noRecord]) assertPlain(refused);
 });
 
 test("Codex versions: 0.164 to 0.166 in the strict form read; any other version refuses", () => {
   const record = withMode(RECORDS["exec-on"]);
   for (const version of ["0.164.0", "0.165.3", "0.166.0", "0.166.0-alpha.6", "0.166.12"]) assert.deepEqual(decide([meta(version), ...record.slice(1)]), ON, version);
   for (const version of ["0.163.9", "0.167.0", "0.170.0", "1.164.0", "0.164", "0.164.0.1", "0.164.01", "v0.164.0", " 0.164.0", "0.164.0-alpha", "0.164.0+build", "0.164.0-alpha.6\n", undefined, 164]) {
-    assert.deepEqual(decide([meta(version), ...record.slice(1)]), { refused: `Codex's session record is from Codex ${version}, and sage reads only the session records of Codex 0.164 to 0.166` }, String(version));
+    assert.deepEqual(decide([meta(version), ...record.slice(1)]), VERSION(version), String(version));
   }
+  assertPlain(VERSION("0.170.0").refused);
   assert.ok(decide([meta("0.170.0"), ...record.slice(1), META]).refused, "every session_meta line is checked");
 });
 
@@ -198,7 +232,9 @@ test("a partial last line is re-read up to 3 times, then refuses", () => {
   const lines = withMode(RECORDS["exec-on"]).map((o) => JSON.stringify(o));
   const file = recordFile(lines.slice(0, -1), `\n${lines.at(-1).slice(0, 20)}`);
   const pauses = [];
-  assert.deepEqual(readRecord(file, { pause: (ms) => pauses.push(ms) }), { refused: "Codex's session record ends in a partial line" });
+  const writing = { refused: "Codex is still writing its record of this session. Ask for the merge again in a moment (the last line is incomplete)" };
+  assertPlain(writing.refused);
+  assert.deepEqual(readRecord(file, { pause: (ms) => pauses.push(ms) }), writing);
   assert.deepEqual(pauses, [50, 50, 50]);
   // Codex finishes the line during the second pause: the next read sees the whole record.
   let pause = 0;
@@ -211,9 +247,11 @@ test("a partial last line is re-read up to 3 times, then refuses", () => {
 test("a record over 64 MiB refuses before it is read", () => {
   const file = recordFile(RECORDS["exec-on"]);
   truncateSync(file, RECORD_LIMIT + 1); // a sparse file: no 64 MiB write
-  assert.deepEqual(readRecord(file), { refused: "Codex's session record is over 64 MiB" });
+  const long = { refused: "Codex's record of this session is too long for sage to read. Start a new session for autopilot, or the owner merges the pull request in GitHub (over 64 MiB)" };
+  assertPlain(long.refused);
+  assert.deepEqual(readRecord(file), long);
   truncateSync(file, RECORD_LIMIT);
-  assert.deepEqual(readRecord(file), { refused: "Codex's session record ends in a partial line" }, "at the limit it reads (and finds no newline at the end)");
+  assert.match(readRecord(file).refused, /\(the last line is incomplete\)$/, "at the limit it reads (and finds no newline at the end)");
 });
 
 test("turnAborted finds Codex's turn_aborted event of that turn only (Esc)", () => {
@@ -226,12 +264,18 @@ test("turnAborted finds Codex's turn_aborted event of that turn only (Esc)", () 
 
 // Start marks: the SessionStart hooks of the built plugin, run as Codex runs them (one node process, JSON on stdin).
 const SESSION = "019a0000-0000-7000-8000-00000000c0de";
-/** A scratch home for the hooks, with a record of the session. */
+/** The record of the session's root thread: a proof record whose session_meta names the session, with sage mode and an on. */
+const ROOT_RECORD = withMode([{ ...META, payload: { ...META.payload, id: SESSION } }, ...RECORDS["exec-on"].slice(1)]);
+/** A scratch home for the hooks, with the root thread's record. */
 function hookHome() {
   const home = realpathSync(mkdtempSync(join(SCRATCH, "home-")));
   const env = { PATH: process.env.PATH, HOME: home, CODEX_HOME: join(home, "codex"), SAGE_HOME: join(home, "sage"), SAGE_SHARED_HOME: process.env.SAGE_SHARED_HOME };
-  return { env, transcript: recordFile(RECORDS["exec-on"]), dir: modeDirectory(env) };
+  return { env, transcript: recordFile(ROOT_RECORD), dir: modeDirectory(env) };
 }
+/** The limit line when the hook cannot count the record (F-T663-12), and when it cannot write a folder (F-T663-13, F-T663-16). */
+const RECORD_LINE = (detail) => `sage: the sage hook could not read Codex's record of this session, so autopilot merges nothing until the session starts again. Start or resume the session again${detail ? ` (${detail})` : ""}.`;
+const FOLDER_LINE = (folder, code) => `sage: the sage hook could not save its note of this session start, so autopilot merges nothing until the session starts again. Check that sage can write to the folder ${folder} (${code}), then start or resume the session again.`;
+const limits = (output) => (output?.systemMessage ?? "").split("\n").filter((line) => /note of this session start|record of this session/.test(line));
 /** Run one built hook on a SessionStart event of the session; its output object, or undefined. */
 function start(h, script, source, extra = {}) {
   const r = spawnSync(process.execPath, [join(PLUGIN, "hooks", script)], { env: h.env, encoding: "utf8",
@@ -246,9 +290,9 @@ test("startup, resume and clear (session-start-hook) and fork (sage-codex-hook) 
   for (const source of ["startup", "resume", "clear", "fork"]) {
     const h = hookHome();
     const output = start(h, HOOK_OF[source], source);
-    assert.doesNotMatch(output?.systemMessage ?? "", /could not save/, source);
+    assert.deepEqual(limits(output), [], source);
     // pid: the hook's parent, which is Codex when Codex runs the hook (here, this test process).
-    assert.deepEqual(markOf(h), { session: SESSION, source, lines: RECORDS["exec-on"].length, pid: process.pid }, source);
+    assert.deepEqual(markOf(h), { session: SESSION, source, lines: ROOT_RECORD.length, pid: process.pid }, source);
   }
 });
 
@@ -259,43 +303,110 @@ test("a later start replaces the mark; compact saves none and keeps the earlier 
   start(h, HOOK_OF.startup, "startup");
   appendFileSync(h.transcript, `${JSON.stringify(RECORDS["exec-on"][2])}\n`);
   start(h, HOOK_OF.compact, "compact");
-  assert.deepEqual(markOf(h), { session: SESSION, source: "startup", lines: RECORDS["exec-on"].length, pid: process.pid });
+  assert.deepEqual(markOf(h), { session: SESSION, source: "startup", lines: ROOT_RECORD.length, pid: process.pid });
   start(h, HOOK_OF.resume, "resume");
-  assert.deepEqual(markOf(h), { session: SESSION, source: "resume", lines: RECORDS["exec-on"].length + 1, pid: process.pid });
+  assert.deepEqual(markOf(h), { session: SESSION, source: "resume", lines: ROOT_RECORD.length + 1, pid: process.pid });
   const child = hookHome();
   start(child, HOOK_OF.startup, "startup", { agent_id: "agent-1" });
   start(child, HOOK_OF.fork, "fork", { agent_id: "agent-1" });
   assert.equal(markOf(child), undefined);
 });
 
-test("a start before Codex writes the record marks line 0; a partial last line counts as a line", () => {
-  const h = hookHome();
-  rmSync(h.transcript);
-  start(h, HOOK_OF.startup, "startup");
-  assert.equal(markOf(h).lines, 0);
-  writeFileSync(h.transcript, `${JSON.stringify(META)}\n{"type":"event_m`);
-  start(h, HOOK_OF.fork, "fork");
-  assert.equal(markOf(h).lines, 2);
+test("a start whose record is another thread's saves no mark and keeps the root thread's mark (F-T663-10)", () => {
+  // Codex's review and guardian threads send hook events with the root session id and no agent_id; their own record
+  // tells them apart, as the gate's threadOf reads it: another thread id, or a source that names a subagent or an
+  // internal thread. Proof case 5c: if such a start moved the mark to its own short record, an on from before the
+  // resume would count again.
+  const other = "019a0000-0000-7000-8000-0000000c41d0";
+  const threads = {
+    "a review thread": { id: other, source: { subagent: "review" } },
+    "a thread with the session's id and a subagent source": { id: SESSION, source: { subagent: { other: "guardian" } } },
+    "an internal thread": { id: SESSION, source: { internal: "guardian" } },
+    "a record of another thread id": { id: other, source: "cli" },
+  };
+  for (const [name, fields] of Object.entries(threads)) {
+    for (const source of ["startup", "resume", "clear", "fork"]) {
+      const h = hookHome();
+      start(h, HOOK_OF.resume, "resume");
+      const root = markOf(h);
+      assert.equal(root.lines, ROOT_RECORD.length);
+      const childRecord = recordFile([{ ...META, payload: { ...META.payload, ...fields } }]);
+      const output = start(h, HOOK_OF[source], source, { transcript_path: childRecord });
+      assert.deepEqual(markOf(h), root, `${name}, ${source}: the root thread's mark stays`);
+      assert.deepEqual(limits(output), [], `${name}, ${source}: no limit line`);
+      // The reader with the kept mark: the on of the earlier start does not count. With the child's line count it would.
+      const record = readRecord(h.transcript);
+      assert.deepEqual(autopilotSwitch(record, markOf(h)), NONE, `${name}, ${source}`);
+      assert.deepEqual(autopilotSwitch(record, { lines: 1 }), ON, "a mark at the child's line count lets the earlier on count");
+    }
+  }
 });
 
-test("a failed mark save gives the user a plain limit line, never blocks, and removes the earlier mark", () => {
+test("a start of a new record before Codex writes it marks line 0, only for a session with no mark; a partial last line counts", () => {
+  // Startup, clear and fork start a new record (a new thread id), which can be empty when the hook runs. The reader
+  // starts at its session_meta anyway, so line 0 lets no earlier on count.
+  for (const source of ["startup", "clear", "fork"]) {
+    const h = hookHome();
+    rmSync(h.transcript);
+    assert.deepEqual(limits(start(h, HOOK_OF[source], source)), [], source);
+    assert.equal(markOf(h).lines, 0, source);
+    writeFileSync(h.transcript, `${JSON.stringify(ROOT_RECORD[0])}\n{"type":"event_m`);
+    start(h, HOOK_OF[source], source);
+    assert.equal(markOf(h).lines, 2, `${source}: a partial last line counts as a line`);
+  }
+  // A session that has a mark already has a record: a start that cannot show it is the root thread's (a thread whose
+  // record Codex has not written, F-T663-10) saves no line 0 over it. It removes the mark, so the reader refuses.
+  for (const source of ["startup", "clear", "fork"]) {
+    const h = hookHome();
+    start(h, HOOK_OF.startup, "startup");
+    assert.equal(markOf(h).lines, ROOT_RECORD.length);
+    const output = start(h, HOOK_OF[source], source, { transcript_path: join(SCRATCH, "not-written-yet.jsonl") });
+    assert.deepEqual(limits(output), [RECORD_LINE()], source);
+    assert.equal(markOf(h), undefined, source);
+  }
+});
+
+test("a resume whose record cannot be counted saves no mark, removes the earlier one, and gives a limit line (F-T663-12)", () => {
+  // A resume continues a record that holds the earlier starts: line 0 would let an on from before the resume count.
+  for (const [name, path] of [["a record that is not found", join(SCRATCH, "missing.jsonl")], ["no record path", undefined], ["an empty path", ""]]) {
+    const h = hookHome();
+    start(h, HOOK_OF.startup, "startup");
+    assert.ok(markOf(h), name);
+    const output = start(h, HOOK_OF.resume, "resume", { transcript_path: path });
+    assert.deepEqual(limits(output), [RECORD_LINE()], name);
+    assert.equal(output.hookSpecificOutput.hookEventName, "SessionStart", `${name}: the event's own answer stays`);
+    assert.equal(markOf(h), undefined, `${name}: no mark, so the reader refuses`);
+    const fresh = hookHome();
+    assert.deepEqual(limits(start(fresh, HOOK_OF.resume, "resume", { transcript_path: path })), [RECORD_LINE()], `${name}, no earlier mark`);
+    assert.equal(markOf(fresh), undefined, name);
+  }
+});
+
+test("a failed mark save gives the user a plain limit line with its next step, never blocks, and removes the earlier mark", () => {
+  for (const sentence of [...RECORD_LINE("EACCES").split(/(?<=\.) /), ...FOLDER_LINE("X", "EACCES").split(/(?<=\.) /)]) assert.ok(sentence.split(" ").length <= 25, sentence);
   for (const source of ["resume", "fork"]) {
     const h = hookHome();
-    // The limit line in plain words (F-T663-6): what failed and what it means, then the folder to check.
-    const limit = `sage: the sage hook could not save its note of this session start, so autopilot merges nothing until the session starts again. Check that sage can write to the folder ${h.dir} (EACCES).`;
-    for (const sentence of limit.replace(h.dir, "X").split(/(?<=\.) /)) assert.ok(sentence.split(" ").length <= 25, sentence);
     start(h, HOOK_OF[source], source);
     assert.ok(markOf(h), source);
     chmodSync(h.transcript, 0o000); // the record cannot be read, so the hook cannot count its lines
     try {
       const output = start(h, HOOK_OF[source], source);
-      assert.ok(output.systemMessage.split("\n").includes(limit), `${source}: ${output.systemMessage}`);
+      assert.deepEqual(limits(output), [RECORD_LINE("EACCES")], source);
       assert.equal(output.hookSpecificOutput.hookEventName, "SessionStart", "the event's own answer stays");
       assert.equal(markOf(h), undefined, `${source}: no stale mark stays`);
     } finally { chmodSync(h.transcript, 0o600); }
-    chmodSync(join(h.dir, "marks"), 0o500); // the marks folder cannot change
+    // F-T663-16: the line names the folder that cannot change, here the marks folder.
+    chmodSync(join(h.dir, "marks"), 0o500);
     try {
-      assert.ok(start(h, HOOK_OF[source], source).systemMessage.split("\n").includes(limit), source);
+      assert.deepEqual(limits(start(h, HOOK_OF[source], source)), [FOLDER_LINE(join(h.dir, "marks"), "EACCES")], source);
     } finally { chmodSync(join(h.dir, "marks"), 0o700); }
+    // And here the mode folder, which sage cannot make.
+    const blocked = hookHome();
+    mkdirSync(blocked.env.SAGE_HOME);
+    mkdirSync(dirname(blocked.dir), { mode: 0o500 });
+    try {
+      assert.ok(limits(start(blocked, HOOK_OF[source], source)).includes(FOLDER_LINE(blocked.dir, "EACCES")), source);
+      assert.equal(markOf(blocked), undefined);
+    } finally { chmodSync(dirname(blocked.dir), 0o700); }
   }
 });

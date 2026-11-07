@@ -92,7 +92,6 @@ function merge(s, args = ["41", SHA], env = {}) {
 }
 const refused = (reason) => ({ status: 1, stdout: "", stderr: `sage: the merge command refuses: ${reason}.\n` });
 const AGAIN = "Ask for the merge again";
-const IN_GITHUB = `${AGAIN}. If it refuses again, the owner can merge the pull request in GitHub`;
 const SWITCH_ON = 'To merge on autopilot, the owner sends "autopilot on" alone while sage mode is on, then asks for the merge again. Or the owner merges the pull request in GitHub';
 /** Each refusal runs no gh. */
 function assertRefused(result, reason, label) {
@@ -191,6 +190,16 @@ test("right before gh it reads the record again: the owner's switch must be on, 
   const off = session("tui-on-then-off");
   permit(off);
   assertRefused(merge(off), `the owner's latest autopilot switch is off. ${SWITCH_ON}`, "on, then off");
+  // F-T663-11: the off phrase with an image switches the sage hook off (Codex gives it the text items only), so the
+  // merge command reads that off too.
+  const picture = session();
+  const on = picture.lines.find((line) => line.payload.role === "user" && line.payload.content?.[0]?.text === "autopilot on");
+  const p = on.payload;
+  const offWithImage = { ...on, payload: { ...p, content: [{ type: "input_text", text: "autopilot off" }, { type: "input_image", image_url: "data:" }],
+    internal_chat_message_metadata_passthrough: { ...p.internal_chat_message_metadata_passthrough, content_item_metadata: [{ provenance: { type: "user" } }, { provenance: { type: "user" } }] } } };
+  writeFileSync(picture.transcript, `${readFileSync(picture.transcript, "utf8")}${JSON.stringify(offWithImage)}\n`);
+  permit(picture);
+  assertRefused(merge(picture), `the owner's latest autopilot switch is off. ${SWITCH_ON}`, "on, then off with an image");
   for (const name of ["queue-on", "hook-text-on", "goal-on", "fork"]) {
     const s = session(name);
     permit(s);
@@ -209,14 +218,19 @@ test("right before gh it reads the record again: the owner's switch must be on, 
   assertRefused(merge(marked), NONE, "a mark after the on");
   const outside = session();
   permit(outside, { mark: { lines: outside.lines.length + 1 } });
-  assertRefused(merge(outside), `sage's note of this session start does not fit Codex's session record. ${IN_GITHUB}`, "a mark past the record");
+  // F-T663-14: each record refusal gives a plain cause and one next step; a short technical detail comes last, in brackets.
+  assertRefused(merge(outside), "sage's note of this session start does not match Codex's record of this session. Resume the session, then the owner turns autopilot on again. Or the owner merges the pull request in GitHub", "a mark past the record");
   const missing = session();
   permit(missing, { transcript: join(SCRATCH, "no-record.jsonl") });
-  assertRefused(merge(missing), `Codex's session record cannot be read (ENOENT). ${IN_GITHUB}`, "no record");
+  assertRefused(merge(missing), "sage cannot read Codex's record of this session. Ask for the merge again. If it refuses again, the owner merges the pull request in GitHub (ENOENT)", "no record");
   const version = session();
   writeFileSync(version.transcript, readFileSync(version.transcript, "utf8").replace('"cli_version":"0.164.0"', '"cli_version":"0.167.0"'));
   permit(version);
-  assertRefused(merge(version), `Codex's session record is from Codex 0.167.0, and sage reads only the session records of Codex 0.164 to 0.166. ${IN_GITHUB}`, "a newer Codex");
+  assertRefused(merge(version), "this session runs Codex 0.167.0, and sage reads the records of Codex 0.164 to 0.166 only. Use Codex 0.164 to 0.166, or the owner merges the pull request in GitHub", "a newer Codex");
+  const form = session();
+  writeFileSync(form.transcript, `${readFileSync(form.transcript, "utf8")}{not json\n`);
+  permit(form);
+  assertRefused(merge(form), `sage does not know the form of Codex's record of this session. The owner merges the pull request in GitHub (line ${form.lines.length + 1} is not JSON)`, "a record of an unknown form");
   const esc = session("tui-on-then-esc");
   permit(esc);
   assertRefused(merge(esc), "the owner stopped the turn of this merge with Esc. Ask for the merge again only if the owner wants it", "turn_aborted for the permit's turn");

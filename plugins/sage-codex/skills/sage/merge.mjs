@@ -44,7 +44,6 @@ const PERMIT_FIELDS = [["session", text], ["repo", (v) => REPOSITORY.test(v)], [
   ["transcript", text], ["mark", (v) => v !== null && typeof v === "object"], ["time", Number.isFinite]];
 
 const AGAIN = "Ask for the merge again";
-const IN_GITHUB = `${AGAIN}. If it refuses again, the owner can merge the pull request in GitHub`;
 const SWITCH_ON = 'To merge on autopilot, the owner sends "autopilot on" alone while sage mode is on, then asks for the merge again. Or the owner merges the pull request in GitHub';
 
 /** The one form of the merge command, as the gate admits it and as the permit names it. */
@@ -82,10 +81,11 @@ function check(args, env, now) {
   if (permit.pr !== pr) return { why: `the merge permit is for another pull request. ${AGAIN}` };
   if (permit.sha !== sha) return { why: `the merge permit is for another head SHA. ${AGAIN}` };
   if (permit.command !== mergeCommand(pr, sha)) return { why: `the merge permit is for another command. ${AGAIN}` };
+  // The reader's refusals give their own cause and next step.
   const record = readRecord(permit.transcript);
-  if (record.refused) return { why: `${record.refused}. ${IN_GITHUB}` };
+  if (record.refused) return { why: record.refused };
   const owner = autopilotSwitch(record, permit.mark);
-  if (owner.refused) return { why: `${owner.refused}. ${IN_GITHUB}` };
+  if (owner.refused) return { why: owner.refused };
   if (!owner.on) return { why: `${owner.reason}. ${SWITCH_ON}` };
   if (turnAborted(record, permit.turn)) return { why: "the owner stopped the turn of this merge with Esc. Ask for the merge again only if the owner wants it" };
   return { repo: permit.repo };
