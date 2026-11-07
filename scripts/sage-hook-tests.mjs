@@ -353,6 +353,11 @@ test("a brief to a sage agent needs every field; other agents and other sessions
   s.send(prompt("sage mode"));
   assert.match(denied(s.send(spawnAgent("sage:implementer", "GOAL fix it\nSCOPE src/"))), /the brief has no CONTEXT, DECISIONS, ACCEPTANCE, VERIFY, BUDGET, FORBIDDEN, REPORT, STANDING/);
   assert.equal(s.send(spawnAgent("sage:implementer", BRIEF)), undefined);
+  // STANDING points to the orders and does not copy them (T669): the hook checks only that the field is there.
+  const pointer = BRIEF.replace(/^STANDING .*$/m, "STANDING The standing orders apply in full: read them with `node /x/skills/sage/sage.mjs standing --project /x/app` before you start, and put the same pointer in every helper brief.");
+  assert.notEqual(pointer, BRIEF);
+  assert.equal(s.send(spawnAgent("sage:implementer", pointer, "tu3")), undefined, "a pointer in STANDING passes");
+  assert.match(denied(s.send(spawnAgent("sage:implementer", pointer.replace(/^STANDING /m, "Standing orders: "), "tu4"))) ?? "", /the brief has no STANDING\./, "the field keeps its name");
   assert.equal(s.send(spawnAgent("Explore", "where is the date parser?", "tu2")), undefined);
 });
 

@@ -24,7 +24,7 @@ const TEXT = readFileSync(LEAD_FILE, "utf8");
 // Each child call normally takes under 1 s: one that runs 60 s is stuck, and fails instead of stalling the run.
 const spawnSync = (command, args, options) => rawSpawnSync(command, args, { timeout: 60_000, killSignal: "SIGKILL", encoding: "utf8", ...options });
 const BRIEF = ["GOAL build the form", "SCOPE src/", "CONTEXT none", "DECISIONS none", "ACCEPTANCE it works", "VERIFY npm test", "BUDGET 1 hour of agent time",
-  "FORBIDDEN no merge", "REPORT the report of the sage:report skill", "STANDING 1. Work only in your own worktree."].join("\n");
+  "FORBIDDEN no merge", "REPORT the report of the sage:report skill", "STANDING The standing orders apply in full: read them with `sage standing` before you start, and put the same pointer in every helper brief."].join("\n");
 const report = (result, findings) => ["STATUS        done", `RESULT        ${result}`, "EVIDENCE      npm test: pass", `FINDINGS      ${findings}`,
   "QUESTIONS     none", "NOT VERIFIED  none", "BRANCH        sage/t1-example"].join("\n");
 const denied = (out) => out?.hookSpecificOutput?.permissionDecision === "deny" ? out.hookSpecificOutput.permissionDecisionReason : undefined;

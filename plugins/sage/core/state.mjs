@@ -157,7 +157,7 @@ const OPTIONS = {
 const prNumber = (pr) => (/^\d+$/.test(pr ?? "") ? String(BigInt(pr)) : pr);
 const STANDING = `# Standing orders
 
-Every brief carries these lines word for word. Add a line when you notice that you repeat an instruction.
+Every agent reads these orders before it starts; a brief points to them. Add a line when you notice that you repeat an instruction.
 
 1. Work only in your own worktree and branch. Never merge, never force-push, never push to main.
 2. Stop at a product question: report it with your recommendation. Do not guess.
@@ -2056,6 +2056,8 @@ function movePlan(scope, env, gate) {
   // check counts it (F-T640-21). Only the logbook's own title and the fixed first sentence before the list go: a heading
   // of the owner's own before the list stays (F-T640-31).
   const [head, , intro] = STANDING.split("\n");
+  // A logbook that init made before T669 keeps its older first sentence until the chief edits it: it goes too.
+  const intros = [head, intro, "Every brief carries these lines word for word. Add a line when you notice that you repeat an instruction."];
   for (const [i, b] of books.entries()) if (i) {
     const kept = [], first = count + 1;
     let orders = 0, notes = 0;
@@ -2063,7 +2065,7 @@ function movePlan(scope, env, gate) {
       const order = /^(\d+)\.\s*(.*)$/.exec(line);
       if (order) kept.push(`${count + ++orders}. ${order[2]} (${title(b.provider)} ${order[1]})`);
       else if (!line.trim()) { if (kept.length && kept.at(-1) !== "") kept.push(""); }
-      else if (orders || ![head, intro].includes(line.trim())) { kept.push(line); notes++; }
+      else if (orders || !intros.includes(line.trim())) { kept.push(line); notes++; }
     }
     while (kept.at(-1) === "") kept.pop();
     count += orders;
@@ -4473,7 +4475,7 @@ function withLock(dir, fn) {
 
 /** The text that the tool prints: its lines, each with its control characters shown as \xNN. Ids, columns and paths come from files and the user. */
 const shown = (text) => text.split("\n").map(visible).join("\n");
-/** The standing orders as a person wrote them, for briefs to copy word for word: tabs stay, a CRLF or CR line end prints as a plain one, and no hidden character stays. */
+/** The standing orders as a person wrote them, for agents to read: tabs stay, a CRLF or CR line end prints as a plain one, and no hidden character stays. */
 const orders = (text) => text.replace(/\r\n?/g, "\n").replace(HIDDEN, "");
 
 /**
