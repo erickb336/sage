@@ -2,8 +2,8 @@
 // The sage gates for Codex (T456). Codex sends one PreToolUse or PermissionRequest event on stdin; the hook answers with
 // one JSON object on stdout, or nothing. The rules come from core and the state tool, as in the Claude sage hook:
 //   - A .codex folder: no thread, in any mode, writes under a folder named .codex inside the project (apply_patch, or
-//     a plain shell write form that names one), because Codex reads project settings from it. Only the part of the
-//     path from the project folder down counts, so a project in the desktop app's ~/.codex/worktrees edits as usual.
+//     a plain shell write form that names one), because Codex reads project settings from it. A direct patch in a
+//     trusted managed checkout may pass only after exact path and repository verification.
 //   - The thread: Codex's record of the thread (the session_meta line that starts transcript_path) says which thread
 //     an event comes from. Only the session's root thread is the chief. A thread that Codex starts itself (its review
 //     thread, guardian) shares the session id and has no agent_id, but its record names a subagent source or another
@@ -64,7 +64,9 @@ import { chiefEditDenied, commandWrites as knownCommandWrites, createCommandPoli
 const commandWrites = (text, cwd) => knownCommandWrites(text, cwd) || shellExecutionUncertain(text, cwd);
 import { tool } from "../skills/sage/sage.mjs";
 import { verificationOptions } from "../skills/sage/verify-install.mjs";
-import { patchPaths, readState, stateKey } from "./principles-hook.mjs";
+import { readState, stateKey } from "./principles-hook.mjs";
+import { patchTargets } from "../runtime/patch-targets.mjs";
+import { managedPatchPath } from "../runtime/managed-worktree.mjs";
 import { agentPathOf, sageName, sessionMeta, TASK_NAME } from "./report-gate.mjs";
 import { modeDirectory } from "./sage-codex-hook.mjs";
 
@@ -776,10 +778,20 @@ export async function gate(input, { mode = readMode, check = checkMerge, env = p
     return why ? refuse(thread, why) : undefined;
   }
   if (f.tool === "apply_patch") {
-    const paths = patchPaths(f.command);
+    let paths;
+    try {
+      if (Object.keys(f.input).length !== 1) throw Error("unsupported patch shape");
+      paths = patchTargets(f.command);
+    } catch { return deny("sage: the hook could not read this patch, so it refuses it. Send one patch from *** Begin Patch to *** End Patch."); }
     if (!paths.length) return deny("sage: the hook could not read this patch, so it refuses it. Send one patch from *** Begin Patch to *** End Patch.");
-    const root = projectRoot(f.cwd);
-    if (paths.some((path) => codexPath(root, resolve(f.cwd, path)))) return deny(CODEX_FOLDER);
+    for (const path of paths) {
+      if (managedPatchPath(path, { cwd: f.cwd, env, pluginRoot: ROOT })) continue;
+      if (codexPath(projectRoot(f.cwd), resolve(f.cwd, path))) return deny(CODEX_FOLDER);
+      if (namesSageFolder(asWord(path), env, f.cwd)) return deny(SAGE_FOLDER);
+      if (mode(f, env).sage && namesLogbookFile(asWord(path), env, f.cwd)) return deny(LOGBOOK_FILE);
+      if (mode(f, env).sage && gitInternalPath(resolve(f.cwd, path))) return deny(GIT_FOLDER);
+      return deny("sage: this patch reaches protected storage or has unverified checkout paths");
+    }
     if (paths.some((path) => namesSageFolder(asWord(path), env, f.cwd))) return deny(SAGE_FOLDER);
     const { sage } = mode(f, env);
     if (sage && paths.some((path) => namesLogbookFile(asWord(path), env, f.cwd))) return deny(LOGBOOK_FILE);
