@@ -5,8 +5,9 @@ import { createHash } from "node:crypto";
 import { validateObservations } from "./observations.mjs";
 import { logbookSettings } from "./logbook-fields.mjs";
 import { PROGRAM_ID, TASK_ID, checkPrograms } from "./program-rules.mjs";
-import { BINDING_COLUMNS, MOVES, bindingRow, checkoutGone, githubRemote, gone as goneRoot, ownerOf } from "./shared-root.mjs";
+import { BINDING_COLUMNS, bindingRow, checkoutGone, githubRemote, gone as goneRoot, ownerOf } from "./shared-root.mjs";
 import { chiefsWhole } from "./chiefs.mjs";
+import { MOVES } from "./shared-root.mjs";
 
 const parseJson = text => { try { return JSON.parse(text); } catch { throw new Error("invalid JSON"); } };
 const MAX_FILE = 4 * 1024 * 1024;
