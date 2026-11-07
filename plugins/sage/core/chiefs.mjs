@@ -60,14 +60,46 @@ export function offerOf(task) {
 }
 
 /**
- * A replace gate's question, which only gate replace writes, on one line. The owner decides from it with no other page,
- * and the answer reads it back (replaceOf). The title comes last, and replaceOf reads only the fixed start, so a title cannot pass for a rule.
+ * A takeover gate's question (the gate kind "replace"), which only gate replace and accept write, on one line, in the
+ * design's words (T656). The owner decides from it with no other page, and the answer reads it back (replaceOf). An empty
+ * from is a task with no owning chief: then released names the chief that released it last, or moved the provider of the
+ * logbook that the move brought it from. fresh: the new chief runs one fresh cycle before it merges (its provider's rule).
+ * offered: an accept of the open offer opened the gate, so a decline ends that offer too (F-T656-28). pr is a plain
+ * number or empty, so that replaceOf reads the question back (F-T656-21). Only ids and fixed words come before the
+ * title, which comes last, so a title cannot pass for a rule.
  */
-export const replaceQuestion = ({ from, to, task, title, runs, label }) => `Replace chief ${label(from)} of ${task} with ${label(to)}? Runs that end as failed: ${runs.map((r) => `${r.id} (${r.role})`).join(", ") || "none"}. Replace: ${to} owns ${task}, each of those runs ends as failed and work that it did not report may be lost, ${from} can no longer write ${task}, and an open offer is cleared. Then ${to} goes on with ${task}. Keep: nothing changes, and ${from} stays the owning chief. Title of ${task}: ${title}`;
+export const replaceQuestion = ({ from, to, task, pr, title, runs, label, released, moved, fresh, offered }) => {
+  const what = `${task}${pr ? ` and PR ${pr}` : ""}`;
+  const ask = from ? `Hand ${what} from ${label(from)} to ${label(to)}?` : `Hand ${what} to ${label(to)}? ${task} has no owning chief${released ? `: ${label(released)} released it last` : moved ? `: it came in the move from the ${moved} logbook` : ""}.`;
+  const approve = [`${to} owns ${task}.`, runs.length ? "Each of those runs ends as failed, and work that it did not report may be lost." : "", from ? `${from} can no longer write ${task}.` : "", "The answer clears an open offer.",
+    `The branch keeps its name${pr ? `, and PR ${pr} keeps its number` : ""}.`, fresh ? `The verdicts stay, and ${to} runs one fresh cycle on its head before it merges.` : "The verdicts on its head still count."].filter(Boolean).join(" ");
+  const decline = offered ? `${from} stays the owning chief, and ${OFFER_ENDS(to)}` : `nothing changes, and ${from ? `${from} stays the owning chief` : `${task} stays with no owning chief`}`;
+  return `${ask} Runs that end as failed: ${runs.map((r) => `${r.id} (${r.role})`).join(", ") || "none"}. Approve: ${approve} Decline: ${decline}. Title of ${task}: ${title}`;
+};
+/** The end of the Decline sentence of a gate that an accept opened: the decline ends the offer to that chief (F-T656-28). */
+const OFFER_ENDS = (to) => `the offer to ${to} ends`;
+/** The options of a takeover gate: the first one moves the task. A gate of T618 to T656 has replace|keep, and still answers. */
+export const TAKEOVER_OPTIONS = "approve|decline";
+const ID = (c) => `(?<${c}>C[1-9]\\d*)(?: \\((?<${c}P>\\S+)\\))?`, RUNS = "(?<runs>none|R[1-9]\\d* \\([^)]*\\)(?:, R[1-9]\\d* \\([^)]*\\))*)";
+const HAND = new RegExp(`^Hand T[1-9]\\d*(?: and PR [1-9]\\d*)? (?:from ${ID("from")} to ${ID("to")}\\?|to ${ID("to2")}\\? T[1-9]\\d* has no owning chief(?:: (?:${ID("rel")} released it last|it came in the move from the (?<moved>\\S+) logbook))?\\.) Runs that end as failed: ${RUNS}\\. Approve: (?<approve>.*?) Decline: (?<decline>[^.]*)\\. `);
+const REPLACE = new RegExp(`^Replace chief ${ID("from")} of T[1-9]\\d* with ${ID("to")}\\? Runs that end as failed: ${RUNS}\\. Replace: `);
+/**
+ * The chiefs, their providers when the question names them, the runs, the fresh-cycle rule and the offer of a takeover
+ * question; also of the decision row of its answer. fromProvider is the provider of the chief that held the task last:
+ * the owning chief, or for a task with no owning chief the chief that released it, or the logbook that the move brought
+ * it from. offered: a decline ends the open offer from that chief to the new one, because an accept of it opened the gate.
+ */
 export function replaceOf(gate) {
-  const [, from, to, runs] = /^Replace chief (C[1-9]\d*)(?: \(\S+\))? of T[1-9]\d* with (C[1-9]\d*)(?: \(\S+\))?\? Runs that end as failed: (none|R[1-9]\d* \([^)]*\)(?:, R[1-9]\d* \([^)]*\))*)\. Replace: /.exec(gate.question) ?? [];
-  return from && { from, to, runs: runs === "none" ? [] : runs.split(", ").map((r) => r.split(" ")[0]) };
+  const { from = "", fromP, to, toP, to2, to2P, relP, moved, runs, approve, decline } = (HAND.exec(gate.question) ?? REPLACE.exec(gate.question))?.groups ?? {};
+  const chief = to ?? to2;
+  return chief && { from, to: chief, fromProvider: fromP ?? relP ?? moved, toProvider: toP ?? to2P, runs: runs === "none" ? [] : runs.split(", ").map((r) => r.split(" ")[0]),
+    fresh: !!approve?.endsWith(`The verdicts stay, and ${chief} runs one fresh cycle on its head before it merges.`), offered: !!from && decline === `${from} stays the owning chief, and ${OFFER_ENDS(chief)}` };
 }
+/**
+ * Did the task come from a chief of another provider? A side with no provider counts as another one, except for a task
+ * that no chief held: then no chief of another provider worked on it (F-T656-2: a move between two chiefs of one provider is none).
+ */
+export const crossed = (p) => (p.fromProvider || p.from ? p.fromProvider !== p.toProvider || !p.toProvider : false);
 
 /**
  * Does chiefs.tsv read as the table: its column names, a cell for each column, a chief id and a session identity on each

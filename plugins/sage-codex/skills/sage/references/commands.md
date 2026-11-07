@@ -52,8 +52,8 @@ The JSON output gives the reference commit, tracked and matched counts, and rela
 | `verdict`, `round`, `merge_check`, `log` | `verdict <T>`, `round <T>`, `merge-check`, `log <T> <decision>` | the command's options |
 | `standing`, `standing_add`, `pages` | `standing`, `standing add <order>`, `pages <T> [record <file>]`, `pages <T> record --run <R> --text <report>` | `order`, `task`, `record`, `run`, `text` |
 | `gate_add`, `gate_answer` | `gate add <T>`, `gate answer <G>` | the command's options (`option`, `other-hex`) |
-| `gate_replace` | `gate replace <T>` | `to`, the new chief: for an owning chief that stopped. The owner's answer of `gate_answer` does the Replace. A chief never answers this gate by itself: this rule is an instruction, not a check |
-| `offer`, `cancel`, `accept`, `release` | `offer <T>`, `cancel <T>`, `accept <T>`, `release <T>` | `to` (offer); `offer`, the offer's id (cancel, accept); `version` (accept). Shared logbook only |
+| `gate_replace` | `gate replace <T>` | `to`, the new chief. The takeover gate: for a task of another chief, for a task with no owning chief that you may not claim, or for an owning chief that stopped. The owner's answer approve (option 1) of `gate_answer` does the takeover; decline changes nothing. A gate of the same task and chiefs that is open already is the one, and no second one opens. A chief never answers this gate by itself: this rule is an instruction, not a check |
+| `offer`, `cancel`, `accept`, `release` | `offer <T>`, `cancel <T>`, `accept <T>`, `release <T>` | `to` (offer); `offer`, the offer's id (cancel, accept); `version` (accept). Shared logbook only. `accept` opens a takeover gate, and the owner's answer gives the task; the answer decline ends the offer. After `release`, only the chief that released the task claims it back |
 
 Each tool takes `project`, the verified absolute checkout. An option field has the option's name without `--`, for example `usage-interface`. A tool result is the command's text; a refusal is a tool error that starts with `sage:` and gives the command's reason. The CLI examples below give the syntax and the rules of each command.
 

@@ -342,11 +342,11 @@ A moved folder with no Git commits, or that is no Git repository, has no first c
 
 - Each chief has a row in `chiefs.tsv`, with its provider and its session.
 - A resume keeps the session, so it is the same chief.
-- Claude's `/clear` starts a new session, so it is a new chief. To go on with its tasks, the new chief opens a Replace gate, and you answer it.
+- Claude's `/clear` starts a new session, so it is a new chief. To go on with its tasks, the new chief opens a takeover gate, and you answer it.
 
 | Who | Writes |
 | --- | --- |
-| The owning chief | Its own task: `task <T> set`, `round`, `run add`, `run done`, `finding add`, `triage`, `close`, `move`, `verdict`, `task-adopt`, `gate add <T>`, `program propose` for its pilot and each of its tasks, `log <T>`, `offer`, `cancel` and `release`. |
+| The owning chief | Its own task: `task <T> set`, `round`, `run add`, `run done`, `finding add`, `triage`, `close`, `move`, `verdict`, `gate add <T>`, `program propose` for its pilot and each of its tasks, `log <T>`, `offer`, `cancel` and `release`. |
 | A lead | What the chief of its lead run may write, on the task of that run only, while that run runs. |
 | Any chief | `task add`, `claim`, `accept` or `cancel` (a decline) of an offer that names it, `gate add` with no task, `gate replace`, `init`, `standing add`, `config`, `log -`, `pages <T> record`, `observe` and `run usage`. |
 | You | `gate answer`, in your own words, from either provider, each form of `logbook repair` (`--accept-loss`, `--accept-change-loss`, or both) and `projects rebuild`: each is your act and names no chief, so the line that sage prints works in your terminal. |
@@ -360,28 +360,40 @@ A moved folder with no Git commits, or that is no Git repository, has no first c
 
 | Situation | Result |
 | --- | --- |
-| The task belongs to another chief | The write refuses, names the owning chief and changes nothing, on every path. If that chief stopped, a chief opens a Replace gate. |
+| The task belongs to another chief | The write refuses, names the owning chief and changes nothing, on every path. To take the task, a chief opens a takeover gate for you. |
 | The task has no owning chief | The write refuses and prints the claim that works for that chief. A Claude chief runs `sage claim <T> --version <version> --chief C<n>`. A Codex chief calls the `claim` tool with the task and that version. |
 | The task changed before the claim, or another chief claimed it first | The claim refuses and changes nothing. |
+| Another chief released the task last, or the move brought it from the other provider's logbook | The claim refuses, changes nothing and names the takeover gate. The chief that released a task claims it back, and after the move each chief claims the tasks that its own provider started. |
+| `task-adopt` in a shared logbook | It refuses: after the move, the other provider's tasks are in the logbook already. An old, separate logbook keeps `task-adopt` as before. |
 
-**Hand a task to another chief.** A Claude chief adds `--chief C<n>` to each command below. A Codex chief calls the tool of the same name: `offer`, `cancel`, `accept`, `release` or `gate_replace`.
+**Hand a task to another chief.** You decide each change of owning chief away from another chief, in either direction between Claude and Codex: it ends in your answer to a takeover gate. To start one, tell either chief to take over a task, and answer the gate in either chat.
+
+A Claude chief adds `--chief C<n>` to each command below. A Codex chief calls the tool of the same name: `offer`, `cancel`, `accept`, `release` or `gate_replace`.
 
 | Command | Who and when | Result |
 | --- | --- | --- |
 | `sage offer <T> --to C<n>` | The owning chief. The task has no open offer. | The offer names one other chief. The owning chief stays, and active runs go on. |
 | `sage cancel <T> --offer <id>` | The owning chief, with the exact open offer. The chief that the offer names runs the same command to decline it. Active runs do not stop it. | The offer clears, and it never becomes valid again. After a decline, the line says that the recipient declined, and the owning chief keeps the task. |
-| `sage accept <T> --offer <id> --version <version>` | The chief that the offer names, with the exact open offer and the current version. The task has no active or unknown run. | That chief owns the task, and the offer clears. |
-| `sage release <T>` | The owning chief. The task has no open offer and no active or unknown run. | The task has no owning chief, so any chief can claim it. Its work and reports stay. |
-| `sage gate replace <T> --to C<n>` | Any chief, for an owning chief that stopped. | A gate for you, with the options replace and keep. It names the task's title, both chiefs with their providers and each run that will end as failed, with its role. It says what each answer does. |
+| `sage accept <T> --offer <id> --version <version>` | The chief that the offer names, with the exact open offer and the current version. The task has no active or unknown run. | A takeover gate for you, from the owning chief to that chief. Approve gives that chief the task, and decline ends the offer. A second accept prints the open gate and opens no other. |
+| `sage release <T>` | The owning chief. The task has no open offer and no active or unknown run. | The task has no owning chief. Only that chief claims it back; another chief takes it through a takeover gate. Its work and reports stay. |
+| `sage gate replace <T> --to C<n>` | Any chief: for a task of another chief, for a task with no owning chief that it may not claim, or for an owning chief that stopped. | The takeover gate for you, with the options approve and decline, or the gate that is open already for the same task and chiefs. It asks "Hand T331 and PR 92 from C2 (codex) to C1 (claude)?", names each run that will end as failed, with its role, and the task's title. It says what each answer does, and that the branch keeps its name, the PR its number and the verdicts stay. |
 
 - `offer` and `task <T>` print the offer's id and the version that `accept` needs. A Codex chief reads them with `sage_read_task`.
-- An accept or a release that waits for a run names the Replace gate too: a run of unknown status may never end, and only a Replace ends it.
+- An accept or a release that waits for a run names the takeover gate too: a run of unknown status may never end, and only a takeover ends it.
 - A run that ends does not advance a transfer: the recipient still accepts. A transfer changes no run: each run keeps the chief that dispatched it.
-- Sage cannot see that a chief ended, so a stopped chief stays the owning chief until you answer. A Replace is the only way to take a task with no consent from its chief.
-- You answer a Replace gate as you answer any gate, and only once. The answer replace does one write: it sets the chief, clears an open offer and ends each named run as failed.
-- Keep, or your own words, change nothing, and the line says so: the task keeps its chief, no run ended, and the gate is spent. To replace the chief later, a chief opens a new gate.
-- A chief never answers a replace gate by itself: only your answer counts. This rule is an instruction, not a check. No code ties the answer to your message, as for other gates.
-- A replace gate refuses your answer replace when the owning chief changed, or when a new run started after it opened. Answer keep, and the chief opens a new gate.
+- Sage cannot see that a chief ended, so a stopped chief stays the owning chief until you answer. A takeover gate is the only way to take a task with no consent from its chief.
+- You answer a takeover gate as you answer any gate, and only once. The answer approve does one write: it sets the chief, clears an open offer and ends each named run as failed. A gate of an older sage has the options replace and keep, and still answers: replace does the same write.
+- The branch keeps its name, and the PR keeps its number.
+- When another worktree of the repository holds the branch, the answer's line names it. Below it, one safe command that frees it, with its files kept, stands alone on a line, with the path quoted for the shell: `git -C '<worktree>' switch --detach`. Then the new chief checks out the branch in its own worktree.
+- Sage never prints `--force`. For a worktree path with a control character, it prints no command.
+- One ledger: a verdict counts on its commit, whichever chief recorded it. A Codex chief that took a Claude task counts the Claude cycles, and you merge in GitHub.
+- A Claude chief that took a task from a Codex chief runs one Claude cycle on a `sage-pr import` of the head first, then merges with `sage-pr merge`. That cycle counts only the verdicts of review and QA runs that started after your answer. The gate's question says so, and the board shows the task in review until that cycle.
+- A move between two chiefs of one provider needs no new cycle.
+- `merge-check --chief C<n>` judges for that chief, as the hook does: a live task of another chief refuses. A Codex chief's `merge_check` passes its chief by itself.
+- Decline, or your own words, change nothing, and the line says so: the task keeps its chief, no run ended, and the gate is spent. To change the chief later, a chief opens a new gate.
+- One exception: a decline of a gate that an accept opened also ends the offer, in the same write. Its question says so. The board then shows no offer line, so the recipient does not accept again at once.
+- A chief never answers a takeover gate by itself: only your answer counts. This rule is an instruction, not a check. No code ties the answer to your message, as for other gates.
+- A takeover gate refuses your answer approve when the owning chief changed, or when a new run started after it opened. Answer decline, and the chief opens a new gate.
 - The replaced chief gets a refusal that names the new owning chief, also for `sage-pr create`, `sage-pr merge` and `gh pr merge`. Its lead writes nothing, because the lead run ended.
 - A run that ended as blocked or failed keeps a late report once, with its arrival time, so no report is lost. `task <T>` prints its path. That report backs no verdict.
 - Claude's stop hook keeps the late report of any role with a known run. Codex keeps it for a child that has the run in its task name.

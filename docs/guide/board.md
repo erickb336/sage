@@ -83,11 +83,11 @@ A project with a [shared logbook](using-sage.md#shared-logbooks) shows as one pr
 | Line | Where | What it says |
 | --- | --- | --- |
 | `Claude · C1` on the card's top line | Each card of a shared task, in place of the logbook's name | The owning chief and its provider. |
-| `Unclaimed`, with a dashed outline | A shared task with no owning chief | Any chief can claim it. |
+| `Unclaimed`, with a dashed outline | A shared task with no owning chief | The chief that released it can claim it back; another chief needs your takeover gate. |
 | `Offered to Codex · C2. It waits for R407 to end, then Codex · C2 accepts.` | Under the step line, and on the task page | An open offer, while a run of the task runs. |
 | `Offered to Claude · C1. Ready: Claude · C1 can accept.` | The same | An open offer with no running run. |
-| `Replace the owning chief of T320, Claude · C1, with Codex · C2? R410 and R411 end as failed.` | Needs you | An open Replace gate, with its options and recommendation: `replace, when you know that Claude · C1 stopped`. |
-| `The owning chief, Codex · C2, may have stopped: R412 shows no change for over 24 h.` | Needs you | A running run of the owning chief has no change in the task's rows for over 24 h. Ask any chief to open a Replace gate. |
+| `Hand T320 from Claude · C1 to Codex · C2? R410 and R411 end as failed.` | Needs you | An open takeover gate, with its options and recommendation: `approve, when you know that Claude · C1 stopped`, or after an accept `approve, because Claude · C1 offered T320 to Codex · C2`. Then the offer line says `Codex · C2 asks to take this. Needs you: G7.` |
+| `The owning chief, Codex · C2, may have stopped: R412 shows no change for over 24 h.` | Needs you | A running run of the owning chief has no change in the task's rows for over 24 h. Ask any chief to open a takeover gate. |
 | A Provider column | The runs of a shared task's page | The provider of each run, from the run's chief in `chiefs.tsv`. A run with no chief shows the dotted stand-in `Unknown`. A finished task of an old logbook stands in with that logbook's provider. |
 | `checkout lantern`, under the role | The runs of a shared task's page | The folder of the checkout that the run started from: its name only, never its path. A run from before this line has none. |
 | `checkout lantern · gone` | The same | That folder is not on this Mac now, or it is a file or a folder with no Git checkout. A review reads the branch in the folder of the branch's newest implementer, designer or arena judge run: while the task is active and that folder is gone, its mark has the warning colour, and one note under the runs names the folder and the run. Its next review step stops until the folder is back, and any other gone folder is faint. |
