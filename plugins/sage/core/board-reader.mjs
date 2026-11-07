@@ -5,7 +5,7 @@ import { createHash } from "node:crypto";
 import { validateObservations } from "./observations.mjs";
 import { logbookSettings } from "./logbook-fields.mjs";
 import { PROGRAM_ID, TASK_ID, checkPrograms } from "./program-rules.mjs";
-import { BINDING_COLUMNS, bindingRow, checkoutGone, githubRemote, gone as goneRoot, ownerOf } from "./shared-root.mjs";
+import { BINDING_COLUMNS, MOVES, bindingRow, checkoutGone, githubRemote, gone as goneRoot, ownerOf } from "./shared-root.mjs";
 import { chiefsWhole } from "./chiefs.mjs";
 
 const parseJson = text => { try { return JSON.parse(text); } catch { throw new Error("invalid JSON"); } };
@@ -385,7 +385,8 @@ export function readBoardSources(sources, { now = Date.now(), logbookKey = null,
         const olds = oldSources(directory, roots, budget, project);
         // The time of the move, from sources.tsv: the board shows a banner for 7 days after it (T640, the design's Q5 a).
         const movedAt = olds.map(old => old.at).filter(at => /^\d{4}-\d\d-\d\dT\d\d:\d\d:\d\d(?:\.\d+)?Z$/.test(at ?? "") && !Number.isNaN(Date.parse(at))).sort()[0];
-        if (movedAt) project.movedAt = movedAt;
+        // A move that stopped did not move the project yet: its plan is still in the moves folder, so no banner (F-T647-8).
+        if (movedAt && !lstatSync(join(source.path, MOVES, `${entry.name}.json`), { throwIfNoEntry: false })) project.movedAt = movedAt;
         for (const old of olds) {
           const folder = basename(old.path), key = `${old.root.id ?? `old-${old.provider}`}/${folder}`;
           if (moved.has(old.path) || result.projects.some(other => other.key === key)) { project.notes.push(`sources: ${folder} is named twice`); continue; }

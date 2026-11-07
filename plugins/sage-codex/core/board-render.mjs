@@ -293,7 +293,8 @@ const legend = ctx => {
 };
 
 /** The banner's text after its first sentence, in the chat board too: the moved cards, the finished tasks and the map. */
-const movedText = item => `${item.tasks === 1 ? "1 open task has a new number" : `${item.tasks} open tasks have new numbers`}, and each card shows its old number. Finished tasks stay in Done as Old and read-only. The old-to-new map is move-map.html in the logbook folder ${item.folder}, on this Mac.`;
+// A finished task of a program moved with it and has a new number too (F-T647-5).
+const movedText = item => `${item.tasks === 1 ? "1 open task has a new number" : `${item.tasks} open tasks have new numbers`}, and each card shows its old number. Finished tasks stay in Done as Old and read-only${item.finished ? `, except ${item.finished === 1 ? "1 finished task of a program, which moved with its program and has" : `${item.finished} finished tasks of programs, which moved with their programs and have`} a new number too` : ""}. The old-to-new map is move-map.html in the logbook folder ${item.folder}, on this Mac.`;
 function banners(model) {
   // A configured root that does not exist yet is a quiet note, not an incomplete source (F-T216-8).
   const notSetUp = model.notSetUp?.length ? `<div class="banner"><div>Not set up yet: ${model.notSetUp.map(esc).join(", ")}. The board adds a logbook when it appears.</div></div>` : "";

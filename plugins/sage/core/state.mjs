@@ -1794,7 +1794,9 @@ function keyFloors(dir) {
   let tasks = [], findings = [];
   try { tasks = read(dir, "tasks"); findings = read(dir, "findings"); } catch {}
   const have = new Set(findings.map((f) => `${f.task} ${f.key}`)), at = now();
-  return tasks.flatMap((t) => roundKeys(t).filter((k) => !have.has(`${t.id} ${k}`)).map((k) => ({ at, task: t.id, decision: `${k} is a round key of ${t.id} with no finding`, why: "the repair keeps the round's keys, and no new finding takes this key" })));
+  // The keys that the move carried stay in the task's adoption record after the round that held them ended (F-T648-7).
+  const carried = (t) => { try { const k = JSON.parse(t.adoption || "{}").carried; return Array.isArray(k) ? k.filter((x) => typeof x === "string" && x.startsWith(`F-${t.id}-`) && /^F-T[1-9]\d*-[1-9]\d*$/.test(x)): []; } catch { return []; } };
+  return tasks.flatMap((t) => [...new Set([...roundKeys(t), ...carried(t)])].filter((k) => !have.has(`${t.id} ${k}`)).map((k) => ({ at, task: t.id, decision: `${k} is a round key of ${t.id} with no finding`, why: "the repair keeps the round's keys, and no new finding takes this key" })));
 }
 /** The old logbooks of a moved logbook, from its sources.tsv, that are still on the disk: a repair takes their floors again. */
 function movedFrom(dir) {
@@ -1820,8 +1822,16 @@ function movedFrom(dir) {
  */
 const NO = { throwIfNoEntry: false };
 const hash = (text) => createHash("sha256").update(text).digest("hex");
+/** The parts of a plan that its digest covers, in this order: a saved plan's digest is computed again from them (F-T640-50). */
+const PLAN_CONTENT = ["version", "folder", "checkout", "sources", "checkouts", "floors", "next", "rows", "standing", "config", "marks", "map"];
+const planDigest = (plan) => hash(JSON.stringify(Object.fromEntries(PLAN_CONTENT.map((k) => [k, plan[k]]))));
 const idNumber = (id) => BigInt(String(id).replace(/^\D+/, ""));
 const byIdNumber = (a, b) => (idNumber(a.id) < idNumber(b.id) ? -1 : idNumber(a.id) > idNumber(b.id) ? 1 : 0);
+/**
+ * Why a test write failed, in plain words (F-T640-17): EACCES is the folder's rights, EPERM a sandbox (as the Codex one)
+ * or a lock of the system. Any other code prints as it is.
+ */
+const WRITE_REFUSED = { EACCES: "no write permission", EPERM: "a sandbox or the system does not permit it", EROFS: "the disk is read-only" };
 /** A task in verifying, verified or pr-ready goes back to reviewing: its verdicts stay in the old logbook. */
 const BACK = ["verifying", "verified", "pr-ready"];
 /** The fixed first line of a move gate, which holds the first 8 hex of the plan, and its option that records a provider as unused. */
@@ -1854,14 +1864,14 @@ const keepColumns = (table, row) => Object.fromEntries(TABLES[table].filter((c) 
 /** What the move works on: this checkout, the shared root, the new folder, and every old logbook of the repository. */
 function moveScope(project, env) {
   const checkout = projectRoot(resolve(project)), shared = rootOf(env), folder = folderOf(checkout);
-  if (lstatSync(shared, NO)?.isSymbolicLink()) refuse(`refused: the shared root ${visible(shared)} is a link, and the board reads no project there. Nothing changed. Ask the user to set SAGE_SHARED_HOME to the folder itself.`);
-  const rows = bindings(shared), { sources, checkouts, gone } = repositoryLogbooks(checkout, env), key = checkouts[0].root;
+  if (lstatSync(shared, NO)?.isSymbolicLink()) refuse(`refused: the shared root ${visible(shared)} is a link, and the board reads no project there. Nothing changed. Ask the owner to set SAGE_SHARED_HOME to the folder itself.`);
+  const rows = bindings(shared), { sources, checkouts, gone, forks } = repositoryLogbooks(checkout, env), key = checkouts[0].root;
   for (const { file, plan } of movePlans(shared)) if (!plan || plan.folder === folder || plan.sources?.some((s) => sources.some((o) => sameDir(s?.dir, o.dir)))) refuse(stoppedText(plan, file));
   const linked = rows.find((r) => checkouts.some((c) => c.root === r.root));
-  if (linked) refuse(linked.root === key ? `refused: this project already uses the shared logbook ${linked.folder}, so nothing moves. Nothing changed.` : `refused: the checkout ${visible(linked.root)} of this repository already uses the shared logbook ${linked.folder}, and a checkout has one logbook. Nothing changed. Ask the user which project it belongs to.`);
+  if (linked) refuse(linked.root === key ? `refused: this project already uses the shared logbook ${linked.folder}, so nothing moves. Nothing changed.` : `refused: the checkout ${visible(linked.root)} of this repository already uses the shared logbook ${linked.folder}, and a checkout has one logbook. Nothing changed. Ask the owner which project it belongs to.`);
   if (!sources.length) refuse("refused: this project has no logbook in the Claude or the Codex root, so nothing moves. Nothing changed.");
-  if (lstatSync(join(shared, folder), NO)) refuse(`refused: the folder ${visible(join(shared, folder))} is already in the shared root, so the new logbook has no place. Nothing changed. Ask the user to rename or remove it.`);
-  return { checkout, key, shared, folder, sources, checkouts, gone, own: join(sageRoot(env), folder) };
+  if (lstatSync(join(shared, folder), NO)) refuse(`refused: the folder ${visible(join(shared, folder))} is already in the shared root, so the new logbook has no place. Nothing changed. Ask the owner to rename or remove it.`);
+  return { checkout, key, shared, folder, sources, checkouts, gone, forks, own: join(sageRoot(env), folder) };
 }
 
 /** The refusal of a provider whose plugin may still write an old logbook without the move's rules. */
@@ -1884,11 +1894,15 @@ function pluginRefusal(waiting, env) {
 function movePlan(scope, env, gate) {
   const { folder, sources, key } = scope, shown = shownPath(env);
   const books = sources.map((s, i) => {
-    if (lstatSync(join(s.dir, "moved.json"), NO)) refuse(`refused: the logbook ${visible(s.dir)} has a moved marker (moved.json), but no move of it runs. Nothing changed. Ask the user to check that folder.`);
+    if (lstatSync(join(s.dir, "moved.json"), NO)) refuse(`refused: the logbook ${visible(s.dir)} has a moved marker (moved.json), but no move of it runs. Nothing changed. Ask the owner to check that folder.`);
     for (const [table, { cols }] of Object.entries(check(s.dir))) knownColumns(s.dir, table, cols);
     return { ...s, i, rows: Object.fromEntries(Object.keys(TABLES).map((t) => [t, read(s.dir, t)])) };
   });
   const named = (b, id) => `${title(b.provider)} ${id}`;
+  // Only the chief of a logbook's provider writes that logbook, so a refusal that names a command says whose (F-T640-60).
+  const chief = (b) => `the ${title(b.provider)} chief runs it`;
+  // A damaged adoption cell, of an open task or of a finished task that moves with its program, names its file and row (F-T647-2).
+  const damaged = (b, t) => refuse(`refused: ${visible(join(b.dir, "tasks.tsv"))} has a damaged adoption cell in the row of ${visible(t.id)}, so the move cannot keep the task's record. Nothing changed. Ask the owner to fix that row.`);
   const running = books.flatMap((b) => b.rows.runs.filter((r) => !RUN_ENDS.includes(r.status)).map((r) => ({ b, r })));
   if (running.length) refuse([`refused: ${running.length === 1 ? "1 run is" : `${running.length} runs are`} running in this project`, ...running.map(({ b, r }) => `  ${title(b.provider).padEnd(8)}${visible(r.id).padEnd(7)}${visible(r.task).padEnd(6)}${visible(r.role).padEnd(11)}started ${localTime(r.started).clock}`), "The move needs zero running runs. Nothing changed."].join("\n"));
   // This tool runs the move's contract, so its own provider is ready. A provider with no row may be one that the owner does not use.
@@ -1905,7 +1919,7 @@ function movePlan(scope, env, gate) {
       unlinkSync(file);
       return { what, dir, why: "" };
     } catch (e) {
-      return { what, dir, why: e.code === "EPERM" ? "sandbox" : e.code ?? e.message };
+      return { what, dir, why: WRITE_REFUSED[e.code] ?? e.code ?? e.message };
     }
   });
   const unwritable = tried.filter((t) => t.why);
@@ -1917,12 +1931,13 @@ function movePlan(scope, env, gate) {
   for (const b of books) {
     const ids = new Set();
     for (const t of b.rows.tasks) {
-      if (!TASK_ID.test(t.id) || ids.has(t.id)) refuse(`refused: ${visible(join(b.dir, "tasks.tsv"))} has ${ids.has(t.id) ? `two rows for ${t.id}` : `a row whose id is not a task id (${visible(t.id)})`}, so the move cannot number its tasks. Nothing changed. Ask the user to fix that row.`);
+      if (!TASK_ID.test(t.id) || ids.has(t.id)) refuse(`refused: ${visible(join(b.dir, "tasks.tsv"))} has ${ids.has(t.id) ? `two rows for ${t.id}` : `a row whose id is not a task id (${visible(t.id)})`}, so the move cannot number its tasks. Nothing changed. Ask the owner to fix that row.`);
       ids.add(t.id);
     }
     for (const t of b.rows.tasks.filter((t) => !ENDED.includes(t.state) && t.adoption)) {
-      const a = adoptionOf(t);
-      if (a.version !== 1) refuse(`refused: ${named(b, t.id)} has an adoption record of version ${a.version}, which only a move writes. Nothing changed. Ask the user to check ${visible(b.dir)}.`);
+      let a;
+      try { a = adoptionOf(t); } catch (e) { if (e instanceof Refusal) damaged(b, t); throw e; }
+      if (a.version !== 1) refuse(`refused: ${named(b, t.id)} has an adoption record of version ${a.version}, which only a move writes. Nothing changed. Ask the owner to check ${visible(b.dir)}.`);
       const from = books.find((o) => o !== b && o.provider === a.provider && real(o.dir) === a.logbook);
       if (from) adopted.set(`${from.i} ${a.task}`, `${b.i} ${t.id}`);
     }
@@ -1933,7 +1948,7 @@ function movePlan(scope, env, gate) {
   // A chain of adoptions (Codex T3 adopted Claude T2, which adopted Codex T1) ends at the task that moves (F-T640-49).
   const adopter = (k, seen = []) => {
     if (!adopted.has(k)) return k;
-    if (seen.includes(k)) { const [i, id] = k.split(" "); refuse(`refused: ${named(books[i], id)} is in a loop of adoptions, so no task of the loop moves. Nothing changed. Ask the user to fix their adoption records.`); }
+    if (seen.includes(k)) { const [i, id] = k.split(" "); refuse(`refused: ${named(books[i], id)} is in a loop of adoptions, so no task of the loop moves. Nothing changed. Ask the owner to fix their adoption records.`); }
     return adopter(adopted.get(k), [...seen, k]);
   };
   // A program moves whole: its finished tasks, the pilot too, move with its open ones as finished rows, so that its pilot,
@@ -1953,11 +1968,11 @@ function movePlan(scope, env, gate) {
   const rowOf = (k) => { const [i, id] = k.split(" "); return { b: books[i], t: books[i].rows.tasks.find((t) => t.id === id) }; };
   const programIds = new Map();
   for (const b of books) for (const p of b.rows.programs.filter((p) => [...ids.keys()].some((k) => rowOf(k).b === b && rowOf(k).t.program === p.id)).sort(byIdNumber)) programIds.set(`${b.i} ${p.id}`, next("PG"));
-  for (const k of ids.keys()) { const { b, t } = rowOf(k); if (t.program && !programIds.has(`${b.i} ${t.program}`)) refuse(`refused: ${named(b, t.id)} names the program ${visible(t.program)}, which its logbook lacks, so the move cannot map it. Nothing changed. Ask the user to fix its program cell.`); }
+  for (const k of ids.keys()) { const { b, t } = rowOf(k); if (t.program && !programIds.has(`${b.i} ${t.program}`)) refuse(`refused: ${named(b, t.id)} names the program ${visible(t.program)}, which its logbook lacks, so the move cannot map it. Nothing changed. Ask the owner to fix its program cell.`); }
   for (const [k] of programIds) {
     const [i, id] = k.split(" "), b = books[i], p = b.rows.programs.find((x) => x.id === id);
     const state = b.rows.tasks.find((t) => t.id === p.pilot)?.state;
-    if (!ids.has(`${i} ${p.pilot}`)) refuse(`refused: ${named(b, id)}'s pilot ${visible(p.pilot)} ${state ? `is ${state}, but not a task of ${id}` : "is not in the logbook"}, so ${id} would lose its pilot. Nothing changed. Ask the user to fix the pilot's program cell, or take the open tasks out of ${id} (sage task <T> set program=none), then run the preview again.`);
+    if (!ids.has(`${i} ${p.pilot}`)) refuse(`refused: ${named(b, id)}'s pilot ${visible(p.pilot)} ${state ? `is ${state}, but not a task of ${id}` : "is not in the logbook"}, so ${id} would lose its pilot. Nothing changed. Ask the owner to fix the pilot's program cell, or take the open tasks out of ${id} (sage task <T> set program=none; ${chief(b)}), then run the preview again.`);
   }
   // Gates: each gate of a moved task, answered ones too (approvals and a program's gate name them), and each open gate
   // with no task. A move gate stays. The open gates take the first numbers, so the owner's new gates are in one range.
@@ -1965,7 +1980,9 @@ function movePlan(scope, env, gate) {
   // it, and the board would not show it (F-T640-27). So the owner answers it first.
   // The refusal lists every such gate, so that the owner answers them all before the next preview (F-T640-34).
   const stranded = books.flatMap((b) => b.rows.gates.filter((g) => !g.answer && g.task && !moveOf(g) && !ids.has(`${b.i} ${g.task}`)).map((g) => ({ b, g, state: b.rows.tasks.find((t) => t.id === g.task)?.state })));
-  if (stranded.length) refuse([`refused: ${stranded.length === 1 ? "1 open gate is" : `${stranded.length} open gates are`} of a finished task, and a finished task does not move, so no one could answer ${stranded.length === 1 ? "it" : "them"} after the move`, ...stranded.map(({ b, g, state }) => `  ${title(b.provider).padEnd(8)}${visible(g.id).padEnd(7)}${visible(g.task).padEnd(6)}${(state ? visible(state) : "not in the logbook").padEnd(11)}${visible(g.question)}`), `Nothing changed. Ask the owner to answer ${stranded.length === 1 ? "it" : "each one"} first (sage gate answer <G> --option <n>), then run the preview again.`].join("\n"));
+  // Each gate shows its options, so that the owner can answer it from this text, and the chief of its provider records the answer (F-T640-37).
+  const whose = [...new Set(stranded.map(({ b }) => title(b.provider)))].map((p) => `the ${p} chief for a ${p} gate`);
+  if (stranded.length) refuse([`refused: ${stranded.length === 1 ? "1 open gate is" : `${stranded.length} open gates are`} of a finished task, and a finished task does not move, so no one could answer ${stranded.length === 1 ? "it" : "them"} after the move`, ...stranded.map(({ b, g, state }) => `  ${title(b.provider).padEnd(8)}${visible(g.id).padEnd(7)}${visible(g.task).padEnd(6)}${(state ? visible(state) : "not in the logbook").padEnd(11)}${visible(g.question)} (options: ${optionsOf(g).map((o, i) => `${i + 1} ${visible(o)}`).join(", ")})`), `Nothing changed. Ask the owner to answer ${stranded.length === 1 ? "it" : "each one"} first. The chief of the gate's provider records the answer (sage gate answer <G> --option <n>): ${whose.join(", ")}. Then run the preview again.`].join("\n"));
   const gatesOf = (b) => b.rows.gates.filter((g) => !moveOf(g) && !(gate && b.dir === gate.dir && g.id === gate.id) && (g.task ? ids.has(`${b.i} ${g.task}`) : !g.answer));
   const gateIds = new Map(), gateRows = [];
   for (const open of [true, false]) for (const b of books) for (const g of gatesOf(b).filter((g) => !g.answer === open).sort(byIdNumber)) {
@@ -2002,26 +2019,27 @@ function movePlan(scope, env, gate) {
   const met = [], back = [], was = [], waits = {};
   const tasks = moving.map(({ b, t }) => {
     const id = ids.get(`${b.i} ${t.id}`), on = [], metHere = [], { ids: wanted, odd } = waitsOf(t);
-    if (odd) refuse(`refused: ${named(b, t.id)} has text in its waits cell that is not a task id, so the move cannot map it. Nothing changed. Set its waits again first: sage task ${t.id} set waits=<task ids>.`);
+    if (odd) refuse(`refused: ${named(b, t.id)} has text in its waits cell that is not a task id, so the move cannot map it. Nothing changed. Set its waits again first: sage task ${t.id} set waits=<task ids> (${chief(b)}).`);
     for (const w of wanted) {
       const to = ids.get(`${b.i} ${w}`), state = b.rows.tasks.find((x) => x.id === w)?.state;
       if (to) on.push(to);
       // A finished task of a program waits for nothing more, so its other waits stay as text in its decision row.
       else if (MET.includes(state) || ENDED.includes(t.state)) metHere.push(`${w} (${state ?? "not in the logbook"})`);
-      else refuse(`refused: ${named(b, t.id)} waits for ${w}, which ${state ? "was abandoned" : "is not in the logbook"}, so it can never start. Nothing changed. Change its waits first (sage task ${t.id} set waits=<task ids>), then run the preview again.`);
+      else refuse(`refused: ${named(b, t.id)} waits for ${w}, which ${state ? "was abandoned" : "is not in the logbook"}, so it can never start. Nothing changed. Change its waits first (sage task ${t.id} set waits=<task ids>; ${chief(b)}), then run the preview again.`);
     }
     met.push(...metHere);
     waits[b.provider] = (waits[b.provider] ?? 0) + on.length;
     // The adoption record of version 2: the old task, its logbook, its round, and its PR and branch, which stay its own.
-    const from = t.adoption ? JSON.parse(t.adoption) : undefined;
+    let from;
+    try { from = t.adoption ? JSON.parse(t.adoption) : undefined; } catch { damaged(b, t); }
     const record = { version: 2, provider: b.provider, task: t.id, logbook: real(b.dir), project: b.checkout, round: Number(t.round), digest: hash(JSON.stringify(t)) };
     const cycles = cyclesFor(t, config({ ...env, SAGE_HOME: dirname(b.dir) }));
     if (Number.isSafeInteger(cycles) && cycles >= 1) record.cycles = cycles;
     if (PR.test(prNumber(t.pr) ?? "")) record.pr = prNumber(t.pr);
     if (t.branch && (ofTask(t.id, t.branch) || t.branch === from?.branch)) record.branch = t.branch;
     if (from) record.from = from;
-    if (!adoptionV2(record)) refuse(`refused: ${named(b, t.id)} has a round, PR or branch cell that the move cannot keep (round ${JSON.stringify(visible(t.round))}). Nothing changed. Ask the user to fix its row first.`);
-    if (BACK.includes(t.state)) back.push(named(b, t.id));
+    if (!adoptionV2(record)) refuse(`refused: ${named(b, t.id)} has a round, PR or branch cell that the move cannot keep (round ${JSON.stringify(visible(t.round))}). Nothing changed. Ask the owner to fix its row first.`);
+    if (BACK.includes(t.state)) back.push(t.state);
     // A round key whose finding closed stays a key of the round with a new key of its own, which names no row, so that the
     // next round counts as before the move: a round replans only when every key of the last round is open again (F-T640-61).
     // Its decision row has the new key as its first word, so nextId counts it after the next round too (F-T647-4).
@@ -2033,6 +2051,9 @@ function movePlan(scope, env, gate) {
       return fresh;
     });
     // The board shows this row, so it names the old logbook's folder, never a path of the Mac (F-T640-13).
+    // The adoption record keeps the carried keys too: a later round drops them from the keys cell, and a repair of the
+    // decisions takes them again from this record, so no new finding takes one (F-T648-7).
+    if (closed.length) record.carried = closed.map((c) => c.decision.split(" ")[0]);
     was.push({ at: "", task: id, decision: `${id} was ${named(b, t.id)}`, why: [`the move from the ${title(b.provider)} logbook ${basename(b.dir)}`, `its pages stay in ${basename(b.dir)}/pages/${t.id} of the worktree root`, metHere.length && `waits met before the move: ${metHere.join(", ")}`, BACK.includes(t.state) && `${t.state} → reviewing, because its verdicts stay in the old logbook`].filter(Boolean).join("; ") }, ...closed);
     const via = !t.program && adoptedProgram(b, t);
     return keepColumns("tasks", { ...t, id, state: BACK.includes(t.state) ? "reviewing" : t.state, keys: round.join(","), waits: on.join(","), program: t.program ? programIds.get(`${b.i} ${t.program}`) : via ? programIds.get(`${via.b.i} ${via.t.program}`) : "", approvals: list(t.approvals).map((g) => gateIds.get(`${b.i} ${g}`)).filter(Boolean).join(","), adoption: JSON.stringify(record), chief: "", offer: "" });
@@ -2041,7 +2062,9 @@ function movePlan(scope, env, gate) {
   const gates = gateRows.map(({ b, g }) => keepColumns("gates", { ...g, id: gateIds.get(`${b.i} ${g.id}`), task: g.task ? ids.get(`${b.i} ${g.task}`) : "", question: renumber(b, g.task, g.question) }));
   const programs = [...programIds].map(([k, id]) => {
     const [i, old] = k.split(" "), p = books[i].rows.programs.find((x) => x.id === old);
-    return keepColumns("programs", { ...p, id, pilot: ids.get(`${i} ${p.pilot}`), gate: gateIds.get(`${i} ${p.gate}`) ?? "" });
+    // A gate that its logbook lost gets a new number that names no gate, so the program stays as it was (its gate not in
+    // the logbook) and its row stays one that the board reads: a gate cell is never empty (F-T640-38).
+    return keepColumns("programs", { ...p, id, pilot: ids.get(`${i} ${p.pilot}`), gate: gateIds.get(`${i} ${p.gate}`) ?? next("G") });
   });
   // prHistory reads a task's PR decisions, so a moved task stays in the merge check of each PR that it ever had.
   const decisions = [...moving.flatMap(({ b, t }) => b.rows.decisions.filter((d) => d.task === t.id && /^PR (\S+) → (\S+)$/.test(d.decision)).map((d) => ({ ...d, task: ids.get(`${b.i} ${t.id}`) }))), ...was];
@@ -2074,7 +2097,7 @@ function movePlan(scope, env, gate) {
     const text = readRegular(join(b.dir, "config.json"));
     let parsed;
     try { parsed = text === undefined ? {} : JSON.parse(text); } catch {}
-    if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) refuse(`refused: ${visible(join(b.dir, "config.json"))} is not a JSON object, so the move cannot keep the logbook's settings. Nothing changed. Ask the user to fix or remove it.`);
+    if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) refuse(`refused: ${visible(join(b.dir, "config.json"))} is not a JSON object, so the move cannot keep the logbook's settings. Nothing changed. Ask the owner to fix or remove it.`);
     return parsed;
   });
   const merged = Object.assign({}, ...[...settings].reverse());
@@ -2096,13 +2119,13 @@ function movePlan(scope, env, gate) {
   const old = books.reduce((n, b) => n + RAW.reduce((m, f) => m + (statSync(join(b.dir, f), NO)?.size ?? 0), 0), 0);
   const total = sizes.reduce((n, [, s]) => n + s, old) + Buffer.byteLength(standing);
   const large = sizes.find(([, s]) => s > 4 * 1024 * 1024);
-  if (large || total > 16 * 1024 * 1024) refuse(`refused: the board could not read the moved project: ${large ? `its ${large[0]}.tsv would be ${(large[1] / 1048576).toFixed(1)} MiB, and the board reads at most 4 MiB a file` : `it and its old logbooks hold ${(total / 1048576).toFixed(1)} MiB, and the board reads at most 16 MiB`}. Nothing changed. Ask the user to abandon finished work in an old logbook first.`);
+  if (large || total > 16 * 1024 * 1024) refuse(`refused: the board could not read the moved project: ${large ? `its ${large[0]}.tsv would be ${(large[1] / 1048576).toFixed(1)} MiB, and the board reads at most 4 MiB a file` : `it and its old logbooks hold ${(total / 1048576).toFixed(1)} MiB, and the board reads at most 16 MiB`}. Nothing changed. Ask the owner to abandon finished work in an old logbook first.`);
   const content = {
     version: 1, folder, checkout: key, sources: books.map(({ provider: p, dir, checkout }) => ({ provider: p, dir, checkout })), checkouts: scope.checkouts,
     floors: Object.fromEntries(Object.entries(floors).map(([k, v]) => [k, String(v)])), next: { T: `T${counter.T + 1n}`, R: `R${counter.R + 1n}`, G: `G${counter.G + 1n}`, PG: `PG${counter.PG + 1n}` },
     rows, standing: `${standing}\n`, config: Object.keys(merged).length ? merged : null, marks, map,
   };
-  const plan = { ...content, digest: hash(JSON.stringify(content)) };
+  const plan = { ...content, digest: planDigest(content) };
   // The checks that the preview prints: each refusal above has passed.
   const pending = books.filter((b) => hasPendingWrite(b.dir));
   const either = books.length === 1 ? "the logbook" : books.length === 2 ? "either logbook" : "any logbook";
@@ -2115,14 +2138,18 @@ function movePlan(scope, env, gate) {
     ["ok", "no running runs"],
     pending.length ? ["warn", `a saved change waits in the ${pending.map((b) => title(b.provider)).join(" and the ")} logbook: the move finishes it first`] : ["ok", `no saved change in ${either}`],
     ["ok", `every wait resolves${met.length ? ` (${met.length === 1 ? "1 wait on a finished task counts" : `${met.length} waits on finished tasks count`} as met)` : ""}`],
-    ["ok", `${tried.length} folders can be written: ${[...new Set(books.map((b) => title(b.provider)))].join(", ")}, shared`],
+    // Each folder by name: a provider with two logbooks (a clone's) names each one by its folder (F-T640-40).
+    ["ok", `${tried.length} folders can be written: ${books.map((b) => `${title(b.provider)}${books.filter((o) => o.provider === b.provider).length > 1 ? ` (${basename(b.dir)})` : ""}`).join(", ")}, shared`],
     ...[...new Set([provider, ...rootsOf(env).map((r) => r.provider)].filter(Boolean))].map((p) => {
       const row = pluginRows(env).find((r) => r.provider === p);
       return norow.includes(p) ? ["warn", `${title(p)} plugin: no row in plugins.tsv, so the gate asks whether you use ${title(p)} here`] : ["ok", `${title(p)} plugin: ${p === provider ? `contract ${2}` : row.contract === "unused" ? "unused" : `contract ${visible(row.contract)}`}`];
     }),
     ...[...new Set(books.map((b) => b.provider))].filter((p) => others(p).length).map((p) => { const n = others(p).length; return ["warn", `${n} other ${title(p)} ${n === 1 ? "checkout" : "checkouts"} of this repository:`, `the move links ${n === 1 ? "it" : "them"} to the new logbook:`, ...others(p).map((c) => visible(shown(c)))]; }),
     ...scope.gone.map((p) => ["note", `${visible(shown(p))} is gone or has no first commit in common, so it gets no link`]),
-    ...(back.length ? [["note", `${back.length === 1 ? "1 task" : `${back.length} tasks`} in verifying or pr-ready ${back.length === 1 ? "goes" : "go"} back to reviewing`]] : []),
+    // A fork keeps its own logbook (T646): the preview and the gate name it, so the owner sees what stays out.
+    ...scope.forks.map((f) => ["note", `${visible(shown(f.root))} is a fork: its GitHub remote is ${visible(f.remote)}, not ${visible(f.of)}.`, "It keeps its own logbook, and the move leaves it out."]),
+    // The states that the tasks are in, each once (F-T640-63).
+    ...(back.length ? [["note", `${back.length === 1 ? "1 task" : `${back.length} tasks`} in ${BACK.filter((s) => back.includes(s)).join(" or ")} ${back.length === 1 ? "goes" : "go"} back to reviewing`]] : []),
     ...[...branches.values()].filter((g) => g.length > 1).map((g) => ["note", `${[...new Set(g.map(({ b }) => b.provider))].map((p) => `${title(p)} ${g.filter(({ b }) => b.provider === p).map(({ t }) => t.id).join(" and ")}`).join(" and ")} share one branch: ${g.length === 2 ? "two" : g.length} tasks`]),
     ...[...adopted].map(([from, to]) => ["note", `${named(books[from.split(" ")[0]], from.split(" ")[1])} is adopted by ${named(books[to.split(" ")[0]], to.split(" ")[1])}, so it moves with it`]),
     ...(done.length ? [["note", `${done.length === 1 ? "1 finished task moves" : `${done.length} finished tasks move`} with ${done.length === 1 ? "its program" : "their programs"}, as ${done.length === 1 ? "it is" : "they are"}: ${done.map(({ b, t }) => `${named(b, t.id)} (${t.state})`).join(", ")}`]] : []),
@@ -2136,7 +2163,7 @@ function moveCommand(project, opt, env) {
   if (given.length !== 1 || (opt.preview !== undefined && opt.preview !== true)) refuse("move takes one of --preview, --plan <plan> (the 8 hex that the preview printed) or --gate <G> (the answered move gate); --preview takes no value. Nothing changed.");
   if (opt.preview) {
     const scope = moveScope(project, env), own = scope.sources.find((s) => s.dir === scope.own);
-    const { plan, checks } = movePlan(scope, env, own && { dir: own.dir, id: nextId(own.dir, "G") });
+    const { plan, checks } = movePlan(scope, env, own && { dir: own.dir, id: moveGateId(scope.sources) });
     return previewText(plan, checks);
   }
   return opt.plan !== undefined ? askMove(project, opt.plan, env) : runMove(project, opt.gate, env);
@@ -2151,23 +2178,39 @@ function askMove(project, shown, env) {
   mkdirSync(scope.shared, { recursive: true });
   return withLock(scope.shared, () => withLocks(scope.sources.map((s) => s.dir).sort(), () => {
     for (const s of scope.sources) ready(s.dir, env); // a saved change finishes first, under its lock
-    const id = nextId(scope.own, "G"), { plan, norow, finished } = movePlan(scope, env, { dir: scope.own, id });
+    // The same --plan again: the open gate of that plan is the answer, and no second gate opens (F-T640-43).
+    for (const g of read(scope.own, "gates").filter((g) => !g.answer && moveOf(g) === shown)) {
+      const again = movePlan(scope, env, { dir: scope.own, id: g.id });
+      if (again.plan.digest.slice(0, 8) === shown) return gateText(g, g.question.split(LINE), moveAdvice(scope, again.norow));
+    }
+    const id = moveGateId(scope.sources), { plan, norow, finished } = movePlan(scope, env, { dir: scope.own, id });
     if (plan.digest.slice(0, 8) !== shown) refuse(changedText(null, plan, shown));
     if (norow.length > 1) refuse(pluginRefusal(norow.map((p) => ({ provider: p, contract: null })), env));
-    const [unused] = norow, used = unused && scope.sources.some((s) => s.provider === unused);
-    const recommendation = !unused ? "move" : used ? "keep" : `move, and record ${title(unused)} as unused`;
-    const why = !unused ? ", because both plugins are ready and no run is running." : used ? `. This repository has ${title(unused)} checkouts, so you likely use ${title(unused)} here: update sage in ${title(unused)} first, then ask again. Choose 1 only if you never use ${title(unused)} on this project.` : `, because no ${title(unused)} logbook of this repository exists.`;
+    const advice = moveAdvice(scope, norow), { unused, recommendation } = advice;
     const path = shownPath(env), others = plan.checkouts.filter((c) => c.root !== plan.checkout).map((c) => `${[...new Set(plan.sources.filter((s) => s.checkout === c.root).map((s) => title(s.provider)))].join(" and ")} ${visible(path(c.root))}`);
-    const lines = gateQuestion(plan, finished, others);
+    const lines = gateQuestion(plan, finished, others, scope.forks.map((f) => visible(path(f.root))));
     // A provider with no row refuses a plain move at --gate, so the gate does not offer it (F-T640-20).
     const g = { id, task: "", question: lines.join(LINE), options: unused ? `move, and record ${title(unused)} as unused|keep` : "move|keep", recommendation, default: "keep", at: now() };
     write(scope.own, "gates", [...read(scope.own, "gates"), g]);
     status(scope.own, true);
     mkdirSync(join(scope.shared, MOVES), { recursive: true });
     swap(askedFile(scope.shared, scope.folder, id), JSON.stringify(plan));
-    return gateText(g, lines, { unused, recommendation, why });
+    return gateText(g, lines, advice);
   }));
 }
+
+/** The recommendation of a move gate: move, or keep while a provider with no plugin row has a logbook of this repository. */
+function moveAdvice(scope, norow) {
+  const [unused] = norow, used = unused && scope.sources.some((s) => s.provider === unused);
+  const recommendation = !unused ? "move" : used ? "keep" : `move, and record ${title(unused)} as unused`;
+  const why = !unused ? ", because both plugins are ready and no run is running." : used ? `. This repository has ${title(unused)} checkouts, so you likely use ${title(unused)} here: update sage in ${title(unused)} first, then ask again. Choose 1 only if you never use ${title(unused)} on this project.` : `, because no ${title(unused)} logbook of this repository exists.`;
+  return { unused, recommendation, why };
+}
+/**
+ * The id of a new move gate: above every gate of each old logbook, not only of the logbook that holds it, so that no two
+ * old logbooks hold a move gate of one id and --gate always finds one (F-T640-64).
+ */
+const moveGateId = (sources) => `G${sources.reduce((m, s) => { const n = idNumber(nextId(s.dir, "G")); return n > m ? n : m; }, 1n)}`;
 
 /** --gate: the move, after the owner's answer, or the end of a move that stopped (the same command, from any checkout of the move). */
 function runMove(project, gateId, env) {
@@ -2196,9 +2239,14 @@ function runMove(project, gateId, env) {
       if (read(dir, "decisions").some((d) => d.decision.startsWith(`${g.id} ${MOVED_BY} `)) || lstatSync(join(shared, `.${folder}.restored-${moveOf(g)}`), NO)) refuse(`refused: ${g.id} moved this project once already, and a move gate moves once: after a restore by hand, the owner answers a new gate. Nothing changed. Run sage move --preview, then open a new gate with sage move --plan <plan>.`);
       const { plan, norow } = movePlan(scope, env, { dir, id: g.id });
       if (plan.digest.slice(0, 8) !== moveOf(g)) {
+        // A newer move gate asks about the logbooks of a later preview: this one is older, not a sign of a change (F-T640-43).
+        const newer = scope.sources.flatMap((s) => read(s.dir, "gates").filter((o) => moveOf(o) && idNumber(o.id) > idNumber(g.id))).sort(byIdNumber).at(-1);
+        if (newer) refuse(`refused: ${g.id} is an older move gate: ${newer.id} asks about plan ${moveOf(newer)}, of a later preview. Nothing changed. ${newer.answer ? `Run sage move --gate ${newer.id}.` : `Ask the owner to answer ${newer.id}, then run sage move --gate ${newer.id}.`}`);
+        const file = askedFile(shared, folder, g.id);
         let asked = null;
-        try { asked = JSON.parse(readRegular(askedFile(shared, folder, g.id), { link: false, max: PLAN_MAX })); } catch {}
-        refuse(changedText(asked, plan, moveOf(g)));
+        try { asked = JSON.parse(readRegular(file, { link: false, max: PLAN_MAX })); } catch {}
+        rmSync(file, { force: true }); // the gate is closed now, so its asked plan goes (F-T640-66)
+        refuse(changedText(asked, plan, moveOf(g), g.id));
       }
       const unused = UNUSED.exec(g.answer)?.[1].toLowerCase(), left = norow.filter((p) => p !== unused);
       if (left.length) refuse(pluginRefusal(left.map((p) => ({ provider: p, contract: null })), env));
@@ -2229,7 +2277,7 @@ function finishMove(file, gateId, checkout, env) {
     const { sources, checkouts, gone } = repositoryLogbooks(checkout, env, { moved: true });
     // This provider's roots may give another path to the same folder than the mover's did: a link, or another letter case (F-T648-4).
     const dirs = sources.map((s) => s.dir), roots = [...checkouts.map((c) => c.root), ...gone];
-    const check = "Nothing changed. Ask the user to check that file: sage never guesses a move.";
+    const check = "Nothing changed. Ask the owner to check that file: sage never guesses a move.";
     if (plan.folder !== basename(file).slice(0, -5)) refuse(`refused: the plan ${file} names ${visible(String(plan.folder))}, which is not the folder of its file name. ${check}`);
     const strange = [...plan.sources.map((s) => s?.dir).filter((d) => !dirs.some((o) => sameDir(d, o))), ...plan.checkouts.map((c) => c?.root).filter((r) => !roots.some((o) => sameDir(r, o)))];
     if (strange.length) refuse(`refused: the plan ${file} names ${visible(String(strange[0]))}, which is not a logbook or a checkout of this repository now. ${check}`);
@@ -2238,6 +2286,8 @@ function finishMove(file, gateId, checkout, env) {
     const holder = plan.sources.find((s) => s.dir === plan.gate.dir && basename(s.dir) === plan.folder);
     const asked = holder && read(holder.dir, "gates").find((g) => g.id === gateId && moveOf(g) === String(plan.digest).slice(0, 8));
     if (!holder || !asked || !movesOn(asked)) refuse(`refused: the plan ${file} names no old logbook of this repository that holds its answered move gate ${gateId}. ${check}`);
+    // The rows that the move writes are the rows that the owner's answer covers: the plan's digest is computed again (F-T640-50).
+    if (planDigest(plan) !== plan.digest) refuse(`refused: the plan ${file} does not match its own fingerprint, so its rows are not the rows that the owner's answer covers. ${check}`);
     return finishPlan(plan, file, env, shared, shown);
   });
 }
@@ -2247,7 +2297,7 @@ function finishPlan(plan, file, env, shared, shown) {
     const changed = plan.sources.filter((s) => !marked.includes(s) && rawDigest(s.dir) !== plan.raw?.[s.dir]);
     if (changed.length) {
       const which = changed.map((s) => `  ${title(s.provider)} logbook ${shown(s.dir)}`);
-      if (marked.length) refuse([`refused: the move of project ${plan.folder.slice(0, -7)} cannot finish: an old logbook changed after the plan was saved, before the move marked it`, ...which, `Nothing more changed. The plan stays, so every command of this project refuses. Ask the user to compare that logbook with the plan ${shown(file)}.`].join("\n"));
+      if (marked.length) refuse([`refused: the move of project ${plan.folder.slice(0, -7)} cannot finish: an old logbook changed after the plan was saved, before the move marked it`, ...which, `Nothing more changed. The plan stays, so every command of this project refuses. Ask the owner to compare that logbook with the plan ${shown(file)}.`].join("\n"));
       // Nothing is marked, so the old logbooks still hold everything: the new logbook goes aside, and a new preview starts again.
       const dir = join(shared, plan.folder), aside = join(shared, `.${plan.folder}.stale-${Date.now()}`);
       if (lstatSync(dir, NO)) renameSync(dir, aside);
@@ -2326,7 +2376,9 @@ function moveSteps(plan, file, env, resumed) {
     // The plan stays and says so: every command of the project then gives this refusal, with no command to run (F-T640-11).
     Object.assign(plan, { mismatch: missing, at: now() });
     swap(file, JSON.stringify(plan));
-    refuse([...lines, "6/6 new logbook read again and counted", "", recon, "", mismatchText({ project: plan.folder.slice(0, -7), file: shown(file), dir: shown(dir), missing })].join("\n"));
+    // The refusal starts with its own line, and the end check alone names the missing records (F-T640-57).
+    const [head, ...rest] = mismatchText({ project: plan.folder.slice(0, -7), file: shown(file), dir: shown(dir), missing, counted: true });
+    refuse([head, ...lines, "6/6 new logbook read again and counted", "", recon, "", ...rest].join("\n"));
   }
   unlinkSync(file);
   rmSync(askedFile(shared, plan.folder, plan.gate.id), { force: true });
@@ -3170,6 +3222,8 @@ function programsLine({ byId, programs, byProgram }) {
 const gateShort = (g, programs) => {
   const [first, ...rest] = gateLines(g, programs);
   const n = rest.filter((l) => l.startsWith("  ")).length;
+  // A move gate's first two lines: its plan and its question, as a breakdown gate shows its first line (F-T640-55).
+  if (moveOf(g)) return String(g.question).split(LINE).slice(0, 2).join(" · ");
   return breakdownGate(g, programs) ? `${first} (breakdown, ${n} ${n === 1 ? "task" : "tasks"})` : first;
 };
 /** The status lines. With save, also status.md: only a command that holds the lock saves, so status.md never lags. */
@@ -3452,7 +3506,8 @@ function sage(argv, env = process.env) {
   const run = () => change(cmd, pos, opt, dir, env, skip, project, place.shared);
   if (cmd !== "init") return run();
   if (place.shared) guard(dir, cmd, pos, opt);
-  else if (!existsSync(dir) && startsShared(place.checkout, env)) return `${link(project, { separate: true }, env)}. Every plugin is ready, so the project starts there.`;
+  // A logbook that locate sees in a provider root (also through a link, which the move does not take) wins (F-T642-5).
+  else if (!existsSync(dir) && !place.legacy && startsShared(place.checkout, env)) return `${link(project, { separate: true }, env)}. Every plugin is ready, so the project starts there.`;
   // init takes the root's lock and checks the known project list first, so a refusal there makes no logbook.
   let out;
   known(dirname(dir), basename(dir), () => {
@@ -3466,14 +3521,27 @@ function sage(argv, env = process.env) {
  * gives a bare path, which stands for every root), every provider's plugin is ready (the move's contract, or "unused"),
  * and no provider root holds a logbook of its repository. Rule 2 wins, also for a clone's logbook, so that one move later
  * takes them together. Otherwise init makes a legacy logbook, as before, and the move takes it there later. A plugins.tsv
- * or a root that sage cannot trust is not ready: init then works as before.
+ * or a root that sage cannot trust is not ready: init then works as before. So is a folder that is no whole Git repository:
+ * with no repository, the row would have no first commit, and Git would run at each write to look for one (F-T642-6); a
+ * shallow clone's first commit is its newest, so it would miss the shared logbook of its repository (F-T642-3). A folder
+ * that sage cannot read or a shared root that it cannot write also starts legacy, with no stack (F-T642-4, F-T649-1).
  */
 function startsShared(checkout, env) {
   try {
     const named = rootsOf(env);
-    return named.length > 0 && named.every((root) => root.provider) && waitingPlugins(env).length === 0 && repositoryLogbooks(checkout, env).sources.length === 0;
+    if (!named.length || !named.every((root) => root.provider)) return false;
+    let shallow;
+    try { shallow = readLocalGit(checkout, ["rev-parse", "--is-shallow-repository"]).toString().trim(); } catch { return false; }
+    // A fork's logbook counts too, as before the move left forks out (T646): rule 2 wins for every logbook of the repository.
+    const logbooks = shallow === "false" && !waitingPlugins(env).length && repositoryLogbooks(checkout, env);
+    if (!logbooks || logbooks.sources.length || logbooks.forks.length) return false;
+    const shared = rootOf(env), test = join(shared, `.sage-init-test-${randomUUID()}`);
+    mkdirSync(shared, { recursive: true });
+    writeFileSync(test, "", { flag: "wx" });
+    unlinkSync(test);
+    return true;
   } catch (e) {
-    if (e instanceof Refusal) return false;
+    if (e instanceof Refusal || /^E[A-Z]+$/.test(e.code ?? "")) return false;
     throw e;
   }
 }
@@ -3791,8 +3859,9 @@ function act(cmd, pos, opt, dir, env, skip, project) {
       // A moved logbook's id floors are decision rows: a new decisions table takes them again from its old logbooks (F-T641-8).
       let floors = [];
       try { floors = trail ? idFloors(movedFrom(dir)) : []; } catch {}
-      if (trail) floors.push(...keyFloors(dir));
-      write(dir, "decisions", [...(trail ? [] : read(dir, "decisions")), ...decided, ...floors]);
+      // The line about the move's id floors prints only when those came back, not for round keys alone (F-T648-8).
+      const keys = trail ? keyFloors(dir) : [];
+      write(dir, "decisions", [...(trail ? [] : read(dir, "decisions")), ...decided, ...floors, ...keys]);
       if (change) renameSync(change.marker, change.aside);
       for (const { table, file, aside } of tables.filter((t) => t !== trail)) {
         if (aside) renameSync(file, aside);

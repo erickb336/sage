@@ -102,7 +102,7 @@ export function createSharedRoot({ Refusal, refuse, listed, legacyRoots, makeLog
         return statSync(path, { bigint: true, throwIfNoEntry: false });
       } catch (e) {
         if (NO_FOLDER.includes(e.code)) return undefined;
-        refuse(`refused: sage cannot read ${visible(path)} (${e.code ?? e.name}), so it cannot tell whether a move plan names this logbook through it. Nothing changed. Ask the user to fix the rights of that path and of its folders, or to check the plans in the moves folder of the shared root.`);
+        refuse(`refused: sage cannot read ${visible(path)} (${e.code ?? e.name}), so it cannot tell whether a move plan names this logbook through it. Nothing changed. Ask the owner to fix the rights of that path and of its folders, or to check the plans in the moves folder of the shared root.`);
       }
     };
     const x = at(a), y = at(b);
@@ -258,6 +258,10 @@ export function createSharedRoot({ Refusal, refuse, listed, legacyRoots, makeLog
    * already is no source, unless moved is set: a stopped move checks its plan against every logbook of the repository. The Claude logbooks come first, then the Codex ones, then any other provider; this checkout's
    * own folder first in each. checkouts: each checkout that the move links, with its first commits. A root that cannot be
    * read refuses: a logbook that the move does not see would stay behind, and its link would hide it.
+   * forks: each other checkout whose GitHub origin is another repository than this checkout's (T646). It and its logbooks
+   * stay out: they keep working as a project of their own. A checkout or an origin with no GitHub remote cannot be told
+   * from a clone, so it stays in (the preview and the gate name it). An origin that Git cannot read refuses: sage never
+   * guesses that a checkout is a clone.
    */
   function repositoryLogbooks(checkout, env = process.env, { moved = false } = {}) {
     const key = realOf(checkout), folder = folderOf(checkout), known = new Map();
@@ -279,11 +283,18 @@ export function createSharedRoot({ Refusal, refuse, listed, legacyRoots, makeLog
       try {
         names = readdirSync(root.path).sort();
       } catch (e) {
-        if (!["ENOENT", "ENOTDIR"].includes(e.code)) refuse(`refused: cannot read the ${root.provider ?? "unnamed"} logbook root ${visible(root.path)} (${e.code}), so the move cannot see each logbook of this project. Nothing changed. Ask the user to fix its rights, or run the move from the other provider.`);
+        if (!["ENOENT", "ENOTDIR"].includes(e.code)) refuse(`refused: cannot read the ${root.provider ?? "unnamed"} logbook root ${visible(root.path)} (${e.code}), so the move cannot see each logbook of this project. Nothing changed. Ask the owner to fix its rights, or run the move from the other provider.`);
       }
       for (const name of names) {
         const dir = join(root.path, name);
-        if (!FOLDER.test(name) || !lstatSync(dir, { throwIfNoEntry: false })?.isDirectory() || !present(join(dir, "tasks.tsv"))) continue;
+        let logbook;
+        try {
+          logbook = FOLDER.test(name) && lstatSync(dir, { throwIfNoEntry: false })?.isDirectory() && present(join(dir, "tasks.tsv"));
+        } catch (e) {
+          // A folder that sage may not search may hold a logbook of this project: a clear refusal, never a stack (F-T642-4).
+          refuse(`refused: cannot read the logbook folder ${visible(dir)} (${e.code ?? e.message}), so sage cannot tell whether it holds a logbook of this project. Nothing changed. Ask the owner to fix its rights.`);
+        }
+        if (!logbook) continue;
         let told;
         try {
           told = readRegular(join(dir, "checkout.txt"), { link: false, max: 65536 })?.trim();
@@ -297,7 +308,10 @@ export function createSharedRoot({ Refusal, refuse, listed, legacyRoots, makeLog
     sources.sort((a, b) => rank(a.provider) - rank(b.provider) || (b.own ?? false) - (a.own ?? false));
     const paths = [...new Set([key, ...sources.map((s) => s.checkout)])];
     const live = paths.filter((p) => p === key || (lstatSync(p, { throwIfNoEntry: false })?.isDirectory() && shares(commitsOf(p), mine)));
-    return { sources: sources.map(({ own, ...s }) => s), checkouts: live.map((root) => ({ root, commits: commitsOf(root) ?? "" })), gone: paths.filter((p) => !live.includes(p)) };
+    const remote = live.length > 1 ? originOf(key) : null;
+    const forks = remote ? live.filter((p) => p !== key).map((root) => ({ root, remote: originOf(root), of: remote })).filter((f) => f.remote && f.remote.toLowerCase() !== remote.toLowerCase()) : [];
+    const left = new Set(forks.map((f) => f.root));
+    return { sources: sources.filter((s) => !left.has(s.checkout)).map(({ own, ...s }) => s), checkouts: live.filter((p) => !left.has(p)).map((root) => ({ root, commits: commitsOf(root) ?? "" })), gone: paths.filter((p) => !live.includes(p)), forks };
   }
 
   /**
@@ -318,6 +332,21 @@ export function createSharedRoot({ Refusal, refuse, listed, legacyRoots, makeLog
     // old: each provider root's logbook of this project, with the root's provider (null when the adapter does not name it).
     const old = all.map((root) => ({ provider: root.provider, dir: join(root.path, folder) })).filter(({ dir }) => seen(join(dir, "tasks.tsv")));
     return { dir: join(sageRoot(env), folder), checkout, shared: false, legacy: old.length > 0, old };
+  }
+
+  /**
+   * The <owner>/<repo> of a checkout's GitHub origin, or null when it has no origin or one that is not on GitHub. Any other
+   * failure of Git refuses (T646): a fork that the move takes as a clone would join another project's logbook.
+   */
+  function originOf(checkout) {
+    let url;
+    try {
+      url = readLocalGit(checkout, ["config", "--get", "remote.origin.url"]).toString().trim();
+    } catch (e) {
+      if (e.status === 1) return null; // no remote.origin.url
+      refuse(`refused: sage cannot read the GitHub remote of ${visible(checkout)} (${e.code ?? `git exit ${e.status}`}), so it cannot tell a clone of this repository from a fork. Nothing changed. Ask the owner to check that checkout's Git config.`);
+    }
+    return githubRemote(url);
   }
 
   /** The nearest folder, from the checkout up, with a .git entry: where Git looks for a repository. A path that cannot be read counts as one. */
