@@ -56,8 +56,11 @@ A void row is never a decision: a retry gets a fresh one. After a move, the
 receipts stay in the old logbook, so the settle reads the old logbooks that the
 new logbook's `sources.tsv` names too: a change saved before the move closes as
 done, and only a change that was never saved is void. When an old logbook is
-gone, a row that has its receipt's hash committed before the move: the journal
-never voids it, so its own acknowledgement releases it.
+gone, or the settle cannot read it (a damaged receipt, a path through a link),
+it holds no receipt for the settle. A row with its receipt's hash committed
+before the move, so the journal never voids it, and its own acknowledgement
+releases it. A row with no hash is void. A read error in the new logbook still
+refuses.
 
 The isolated `--sage-update-task` lifecycle probe uses simulated model replies.
 It checks the native read, update, historical retry and fresh-read route. It does

@@ -5991,32 +5991,106 @@ test('T658, T680: after the move, the settle reads the receipts in the old logbo
   assert.deepEqual({ old: tree(old), moved: tree(dir) }, before);
 });
 
-test('T681: after the move and its settle, a later update of a moved task goes through', async t => {
-  const { f, open, dir } = await movedUpdatesFixture(t);
-  // The move gives the old T1 a new number in the new logbook.
+/** The moved T1 by its new number in the new logbook, claimed by this chief: a task of a shared logbook takes a change only from its owning chief (T604). */
+async function claimMovedTask(f, dir) {
   const [task] = readFileSync(join(dir, 'tasks.tsv'), 'utf8').split('\n').map(line => line.split('\t')).find(cells => cells[1] === 'Before the move');
   const project = f.options.projectDirectory, snapshot = () => f.assignmentTool.readTaskSnapshot({ project, task }, f.assignmentEnv);
-  // A task of a shared logbook takes a change only from its owning chief (T604): this chief claims it first.
   const { chiefLogbook } = await import(pathToFileURL(join(f.plugin, 'runtime/logbook-owner.mjs')));
   const context = chiefLogbook(f.native(session), f.options);
   const chief = context.tool.chiefFor(project, context.native, f.assignmentEnv);
-  context.tool.sage(['claim', task, '--version', snapshot().version, '--chief', chief, '--project', project], f.assignmentEnv);
+  const cli = (...args) => context.tool.sage([...args, '--chief', chief, '--project', project], f.assignmentEnv);
+  cli('claim', task, '--version', snapshot().version);
+  return { task, snapshot, cli };
+}
+
+test('T681: after the move and its settle, a later update of a moved task goes through', async t => {
+  const { f, open, dir } = await movedUpdatesFixture(t);
+  const { task, snapshot } = await claimMovedTask(f, dir);
   // The update settles first: a fence that still blocked would stop it there, before its decision.
   const result = f.update({ request: 'a7777777-7777-4777-8777-777777777777', task, version: snapshot().version, changes: { title: 'After the move' } });
   assert.deepEqual([result.decision, result.task.title, snapshot().task.title], ['task-updated', 'After the move', 'After the move']);
   assert.deepEqual(open().map(([id, , released, voided]) => [id, released || voided]), [['T1', true], ['T2', true], ['T3', true], [task, true]]);
 });
 
-test('T680: after the move, the settle ends an interrupted run finish whose receipt is in the old logbook, and writes neither logbook', async t => {
+/**
+ * An old logbook that the settle cannot read, as sources.tsv names it: its receipt files are damaged, its path is a link,
+ * or its path goes through a linked folder. The receipt readers refuse each one.
+ */
+const unreadableOldLogbook = {
+  'a damaged receipt': (f, old) => { for (const name of readdirSync(join(old, 'task-updates'))) writeFileSync(join(old, 'task-updates', name), 'damaged'); },
+  'a linked path': (f, old, dir) => {
+    symlinkSync(old, join(f.dir, 'old-logbook-link'));
+    nameSource(dir, old, join(f.dir, 'old-logbook-link'));
+  },
+  'a linked folder on its path': (f, old, dir) => {
+    symlinkSync(dirname(old), join(f.dir, 'linked-root'));
+    nameSource(dir, old, join(f.dir, 'linked-root', basename(old)));
+  },
+};
+function nameSource(dir, old, path) {
+  const sources = join(dir, 'sources.tsv'), text = readFileSync(sources, 'utf8');
+  assert.ok(text.includes(`\t${old}\t`), 'sources.tsv names the old logbook');
+  writeFileSync(sources, text.replace(`\t${old}\t`, `\t${path}\t`));
+}
+
+for (const [fault, make] of Object.entries(unreadableOldLogbook)) for (const first of ['update', 'assignment']) {
+  test(`T687: after the move, an old logbook with ${fault} reads as no receipt: the settle closes each row, and a later ${first} goes through`, async t => {
+    const { f, open, old, dir } = await movedUpdatesFixture(t);
+    make(f, old, dir);
+    const { task, snapshot, cli } = await claimMovedTask(f, dir);
+    cli('run', 'add', task, '--role', 'lead');
+    const [run] = f.assignmentTool.read(dir, 'runs').filter(row => row.task === task).map(row => row.id);
+    const update = () => f.update({ request: 'a7777777-7777-4777-8777-777777777777', task, version: snapshot().version, changes: { title: 'After the move' } });
+    const assign = () => f.api.prepareNativeTask({ ...f.input, task, run, name: 'after_move' }, f.native(session), f.options);
+    // The first step settles. With no receipt read, the T658 fallback closes each row: T1 has its receipt's hash, so its
+    // acknowledgement releases it; T2 and T3 have none, so they are void.
+    const steps = first === 'update' ? [update, assign] : [assign, update];
+    steps[0]();
+    assert.deepEqual(open().slice(0, 3), [['T1', true, true, false], ['T2', false, false, true], ['T3', false, false, true]]);
+    steps[1]();
+    assert.equal(snapshot().task.title, 'After the move');
+    assert.equal(f.core.readAdmission(f.options.directory).preparations.filter(row => row.task === task && row.run === run).length, 1);
+  });
+}
+
+test('T687: after the move, a damaged receipt in the new logbook still refuses the settle, and its row stays open', async t => {
+  const { f, settleNativeWrites, open, dir } = await movedUpdatesFixture(t);
+  settleNativeWrites(f.options); // the rows of the old logbook close first
+  const { task, snapshot, cli } = await claimMovedTask(f, dir);
+  cli('run', 'add', task, '--role', 'lead');
+  const [run] = f.assignmentTool.read(dir, 'runs').filter(row => row.task === task).map(row => row.id);
+  // The chief stops a later update after its commit, before its release: its receipt is in the new logbook.
+  const stopped = await taskUpdateCoordinator(f, { request: 'a8888888-8888-4888-8888-888888888888', task, version: snapshot().version, changes: { title: 'After the move' } });
+  assert.throws(() => stopped.run({ ...stopped.coordination, release() { throw Error('Injected stop'); } }), { code: 'uncertain-outcome' });
+  const [receipt] = readdirSync(join(dir, 'task-updates')).map(name => join(dir, 'task-updates', name)), bytes = readFileSync(receipt);
+  const version = snapshot().version; // a damaged receipt refuses the snapshot too
+  writeFileSync(receipt, 'damaged');
+  const update = () => f.update({ request: 'a9999999-9999-4999-8999-999999999999', task, version, changes: { title: 'Later' } });
+  const assign = () => f.api.prepareNativeTask({ ...f.input, task, run, name: 'after_move' }, f.native(session), f.options);
+  assert.throws(update, { code: 'invalid-state' });
+  assert.throws(assign, /The saved change or its receipt is damaged/);
+  assert.deepEqual(open().at(-1), [task, true, false, false]);
+  // The same steps go through once the receipt is whole again: the damaged receipt was what refused them.
+  writeFileSync(receipt, bytes);
+  assign();
+  assert.deepEqual(open().at(-1), [task, true, true, false]);
+  assert.equal(update().task.title, 'Later');
+});
+
+for (const damaged of [false, true]) test(damaged
+  ? 'T687: after the move, a damaged interrupted run receipt in the old logbook reads as no receipt: the settle voids its finish, and writes neither logbook'
+  : 'T680: after the move, the settle ends an interrupted run finish whose receipt is in the old logbook, and writes neither logbook', async t => {
   const { f } = await stuckWithOpenFinish(t, { stuck: false });
   for (const id of ['R2', 'R3']) f.cli('run', 'done', id, '--status', 'blocked'); // the move needs zero running runs; R1 finished
   const { old, dir, run } = fixtureMove(t, f);
   run();
   assert.equal(existsSync(join(dir, 'interrupted-runs')), false, 'no receipt in the new logbook');
+  const file = join(old, 'interrupted-runs', `${f.core.readAdmission(f.options.directory).bindings[0].assignment}.json`);
+  if (damaged) writeFileSync(file, 'damaged');
   const before = { old: tree(old), moved: tree(dir) }, settle = await settleOf(f);
   settle();
-  const { receiptHash, void: voided } = finishRow(f), file = join(old, 'interrupted-runs', `${f.core.readAdmission(f.options.directory).bindings[0].assignment}.json`);
-  assert.deepEqual([receiptHash, voided], [JSON.parse(readFileSync(file, 'utf8')).hash, undefined]);
+  const { receiptHash, void: voided } = finishRow(f);
+  assert.deepEqual([receiptHash, voided], damaged ? [undefined, true] : [JSON.parse(readFileSync(file, 'utf8')).hash, undefined]);
   assert.deepEqual({ old: tree(old), moved: tree(dir) }, before, 'the settle wrote no logbook');
 });
 
