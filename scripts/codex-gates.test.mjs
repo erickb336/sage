@@ -2,7 +2,7 @@ import "./test-env.mjs"; // first: no variable of the developer's shell changes 
 import assert from "node:assert/strict";
 import { spawnSync } from "node:child_process";
 import { randomUUID } from "node:crypto";
-import { appendFileSync, chmodSync, cpSync, existsSync, lstatSync, linkSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, realpathSync, rmSync, statSync, symlinkSync, truncateSync, writeFileSync } from "node:fs";
+import { chmodSync, cpSync, existsSync, lstatSync, linkSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, realpathSync, rmSync, statSync, symlinkSync, truncateSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { test } from "node:test";
@@ -22,7 +22,7 @@ process.on("exit", () => rmSync(SCRATCH_HOME, { recursive: true, force: true }))
 // the gate a fixed mode and merge check; the process tests run the built hook with a mode file, a logbook and a fake gh.
 const HOOK = fileURLToPath(new URL("../plugins/sage-codex/hooks/gate-hook.mjs", import.meta.url));
 const TOOL = fileURLToPath(new URL("../plugins/sage-codex/skills/sage/sage.mjs", import.meta.url));
-const { gate, readMode, typedModes, namesSageFolder, codexRuns } = await import(HOOK);
+const { gate, readMode, namesSageFolder, codexRuns } = await import(HOOK);
 // Codex adds ". Command: <the command>" after a refusal reason, so no reason ends with a period (F-T470-6).
 const UNREADABLE = "sage: the hook could not read this tool call, so it refuses it. Codex may have changed its hook input: update the sage plugin, or tell the user";
 const { stateKey } = await import(new URL("../plugins/sage-codex/hooks/principles-hook.mjs", import.meta.url));
@@ -36,7 +36,8 @@ const ask = (command, extra = {}) => ({ ...base, hook_event_name: "PermissionReq
 const patch = (...lines) => `*** Begin Patch\n${lines.join("\n")}\n*** End Patch`;
 const CHILD = { agent_id: "agent-1", agent_type: "worker" };
 const denied = (out) => (out?.hookSpecificOutput?.permissionDecision === "deny" ? out.hookSpecificOutput.permissionDecisionReason : undefined);
-const OWNER_MERGE = "sage: automatic merging is unavailable in Codex. Sage prepares the checks; the owner merges directly in GitHub";
+// T677: only sage's merge command merges (autopilot-gate.test.mjs); every gh merge form is refused in every mode.
+const OWNER_MERGE = "sage: in Codex, only sage's merge command merges, on autopilot, as the chief's instructions say. Without autopilot, the owner merges the pull request in GitHub";
 const BAD_NAME = (name) => `sage: "${name}" starts with sage_ but is not a sage task name (sage_<role>_t<n>_r<k>), so this agent counts as a read-only role: it changes no files. Report instead`;
 const RO = (role) => `sage: in sage mode, the ${role} agent changes no files. Report the finding instead`;
 const LOGBOOK = "sage: role agents report; only the chief records the logbook. Put this in your report";
@@ -358,7 +359,10 @@ test("the core reader of the mode file: no file is no mode, and a damaged file o
   w.typed("sage mode", "autopilot on");
   assert.deepEqual(readMode(at, w.env), { sage: false, autopilot: false }, "no file is no mode");
   const folder = w.mode({ sage: true, autopilot: true });
-  assert.deepEqual(readMode(at, w.env), { sage: true, autopilot: false });
+  assert.deepEqual(readMode(at, w.env), { sage: true, autopilot: true }, "T677: the mode file's autopilot counts in sage mode");
+  w.mode({ sage: false, autopilot: true });
+  assert.deepEqual(readMode(at, w.env), { sage: false, autopilot: false }, "autopilot counts only in sage mode");
+  w.mode({ sage: true, autopilot: true });
   const file = join(folder, `${stateKey({ session_id: base.session_id })}.json`);
   writeFileSync(file, "{not json");
   assert.deepEqual(readMode(at, w.env), { sage: false, autopilot: false }, "a damaged file is off");
@@ -385,9 +389,6 @@ test("T115: saved and replayed autopilot never unlock a merge", (t) => {
     return [why, denied(w.send(pre("Bash", MERGE, input))) ?? "runs", w.send(ask(MERGE, input))?.hookSpecificOutput?.decision?.behavior ?? "prompt"];
   });
   assert.deepEqual(got, cases.map(([why]) => [why, OWNER_MERGE, "prompt"]));
-  const other = { type: "event_msg", payload: { type: "item_completed", thread_id: "another-thread", item: { type: "UserMessage", content: [{ type: "text", text: "autopilot on" }] } } };
-  writeFileSync(w.transcript, ["sage mode"].map((text) => JSON.stringify({ ...other, payload: { ...other.payload, thread_id: base.session_id, item: { ...other.payload.item, content: [{ type: "text", text }] } } })).concat(JSON.stringify(other)).join("\n"));
-  assert.deepEqual(typedModes(w.transcript, base.session_id), { sage: true, autopilot: false }, "a message of another thread (a fork's copied history) does not count");
 });
 
 test("a mode file, a record and a ledger that an agent writes under /tmp turn on no autopilot for the gate (T534, R1929-1/2)", (t) => {
@@ -421,33 +422,11 @@ test("a mode file, a record and a ledger that an agent writes under /tmp turn on
     assert.equal(result.status, 0, result.stderr);
   }
   // The gate reads its own settings, the session that Codex gives it and Codex's record of that session, never the command's.
-  const off = /^sage: automatic merging is unavailable/;
-  assert.match(denied(w.send(pre("Bash", MERGE))) ?? "", off, "the plain landing command");
-  assert.match(denied(w.send(pre("Bash", `SAGE_HOME=${forged} CODEX_HOME=${forged} ${MERGE}`))) ?? "", off, "settings before the command");
-  assert.match(denied(w.send(pre("Bash", MERGE, { transcript_path: forgedRecord }))) ?? "", off, "even with the forged record as the thread's record, the gate's own mode file says off");
+  assert.equal(denied(w.send(pre("Bash", MERGE))), OWNER_MERGE, "the plain landing command");
+  assert.equal(denied(w.send(pre("Bash", `SAGE_HOME=${forged} CODEX_HOME=${forged} ${MERGE}`))), OWNER_MERGE, "settings before the command");
+  assert.equal(denied(w.send(pre("Bash", MERGE, { transcript_path: forgedRecord }))), OWNER_MERGE, "even with the forged record as the thread's record");
   assert.equal(w.send(ask(MERGE)), undefined, "and Codex asks the owner");
-  assert.deepEqual(readMode({ session: base.session_id, transcript: forgedRecord }, forgedEnv), { sage: true, autopilot: false }, "even forged settings grant no authority");
-});
-
-test("typed messages count in a transcript over Node's string limit, in lines across piece ends and in CRLF lines (F-T473-1)", (t) => {
-  const dir = mkdtempSync(join(tmpdir(), "sage-typed-"));
-  t.after(() => rmSync(dir, { recursive: true, force: true }));
-  const typed = (text, thread = base.session_id) => JSON.stringify({ type: "event_msg", payload: { type: "item_completed", thread_id: thread, item: { type: "UserMessage", content: [{ type: "text", text }] } } });
-  const meta = JSON.stringify({ type: "session_meta", payload: { id: base.session_id } });
-  const file = (name, text) => { writeFileSync(join(dir, name), text); return join(dir, name); };
-  // 600 MiB: the first line, a sparse gap of zero bytes (no disk), then the typed messages after it.
-  const long = file("long.jsonl", `${meta}\n`);
-  truncateSync(long, 600 * 2 ** 20);
-  appendFileSync(long, `\n${typed("sage mode")}\n${typed("autopilot on")}\n`);
-  const started = performance.now();
-  assert.deepEqual(typedModes(long, base.session_id), { sage: true, autopilot: false }, "a 600 MiB session");
-  console.log(`typedModes, 600 MiB sparse transcript: ${Math.round(performance.now() - started)} ms`); // evidence only: no time limit (order 26)
-  appendFileSync(long, `${typed("autopilot off")}\n`);
-  assert.deepEqual(typedModes(long, base.session_id), { sage: true, autopilot: false }, "the off phrase after the gap counts too");
-  // A thread id of 3 MiB of 3-byte characters: each line crosses piece ends, and some ends cut a character in two.
-  const wide = `s-${"€".repeat(2 ** 20)}`;
-  assert.deepEqual(typedModes(file("wide.jsonl", `${meta}\n${typed("sage mode", wide)}\n${typed("autopilot on", wide)}`), wide), { sage: true, autopilot: false }, "lines across pieces");
-  assert.deepEqual(typedModes(file("crlf.jsonl", `${meta}\r\n${typed("sage mode")}\r\n${typed("autopilot on")}\r\n`), base.session_id), { sage: true, autopilot: false }, "CRLF lines");
+  assert.deepEqual(readMode({ session: base.session_id }, w.env), { sage: true, autopilot: false }, "the gate's own mode file says off; the forged one is not read");
 });
 
 test("no thread names the Codex sage folder in a shell command (T460)", (t) => {

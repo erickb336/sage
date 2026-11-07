@@ -46,29 +46,39 @@
 //     MCP hook name of Codex 0.164.0 handlers/mcp.rs:139-161) runs
 //     its code in its own process, where no hook sees a shell command. The owner chose to allow it, so the manifest
 //     does not match it and the gate never sees it.
-//   - A recognized shell merge: refused in every mode and thread, regardless of saved or replayed autopilot.
-//     PermissionRequest never grants automatic approval. Non-Sage MCP and arbitrary interpreter programs remain
-//     outside this bounded shell-command guard.
+//   - A merge (T677): only sage's merge command (skills/sage/merge.mjs) merges, in its one exact form, from the root
+//     thread. A recognized gh merge, and a run of merge.mjs in any other form, is refused in every mode and thread.
+//     The gate admits the exact form only when, in this order: the mode file has sage mode and autopilot on; the Codex
+//     that runs is 0.164 to 0.166 (its own --version: a resume writes no version into the record); the owner record
+//     reader reads Codex's record and finds autopilot on after the session's start mark, and that mark is of the Codex
+//     process that runs now (its pid, F-T663-22); the call itself is in the record after the mark; node and gh are
+//     outside every folder that Codex's sandbox can write; the repository is known; and checkMerge passes. Then it
+//     saves the call's one-time merge permit. PermissionRequest allows the escalation of that call only with a matching
+//     unused permit (same session, turn, exact command and working folder); for every other request it declines to
+//     decide, so Codex shows its own prompt. Non-Sage MCP and arbitrary interpreter programs remain outside this
+//     bounded shell-command guard; merge.mjs itself checks the permit, the record and the mode file again.
 // It fails closed: a PreToolUse event that it cannot read is denied with one plain line. A PermissionRequest that it
 // cannot read gets no decision, so the user decides in Codex's own prompt.
 import { execFileSync } from "node:child_process";
-import { constants } from "node:buffer";
-import { createHash } from "node:crypto";
-import { closeSync, existsSync, mkdirSync, openSync, readdirSync, readSync, realpathSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { createHash, randomUUID } from "node:crypto";
+import { accessSync, constants, existsSync, linkSync, mkdirSync, readdirSync, realpathSync, readFileSync, rmSync, statSync, writeFileSync } from "node:fs";
 import { homedir } from "node:os";
 import { basename, dirname, isAbsolute, join, relative, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
-import { chiefEditDenied, commandWrites as knownCommandWrites, createCommandPolicy, createPushPolicy, gitInternalPath, LOGBOOK_FILES, partNames, PR, programName, programsRun, pullRequestHead, readModeFile, roleEditDenied, sharedRoot, shellCommands, shellWriteEvidence, shellExecutionUncertain, switchModes, TEAM } from "sage-core";
+import { chiefEditDenied, commandWrites as knownCommandWrites, createCommandPolicy, createPushPolicy, gitInternalPath, LOGBOOK_FILES, partNames, PR, programName, programsRun, pullRequestHead, readModeFile, roleEditDenied, sharedRoot, shellCommands, shellWriteEvidence, shellExecutionUncertain, TEAM } from "sage-core";
 
 // Codex treats executable stdin conservatively without changing other callers' known-write classification.
 const commandWrites = (text, cwd) => knownCommandWrites(text, cwd) || shellExecutionUncertain(text, cwd);
 import { tool } from "../skills/sage/sage.mjs";
 import { verificationOptions } from "../skills/sage/verify-install.mjs";
-import { readState, stateKey } from "./principles-hook.mjs";
+import { privateDirectory, readState, stateKey } from "./principles-hook.mjs";
 import { patchTargets } from "../runtime/patch-targets.mjs";
 import { managedPatchPath } from "../runtime/managed-worktree.mjs";
 import { agentPathOf, sageName, sessionMeta, TASK_NAME } from "./report-gate.mjs";
 import { modeDirectory } from "./sage-codex-hook.mjs";
+import { autopilotSwitch, callInRecord, readRecord, RECORD_VERSION } from "./owner-record.mjs";
+import { markFile } from "./start-mark.mjs";
+import { mergeCommand, permitFile, permitFolder } from "../skills/sage/merge.mjs";
 
 const ROOT = join(dirname(fileURLToPath(import.meta.url)), "..");
 const TOOL = join(ROOT, "skills/sage/sage.mjs");
@@ -93,7 +103,7 @@ const UNREADABLE = "sage: the hook could not read this tool call, so it refuses 
 const CODEX_FOLDER = "sage: no agent changes files under a .codex folder, because Codex reads its project settings there. Ask the user to make this change.";
 const CODEX_SETTINGS = "sage: no agent writes Codex's config file or the sage plugin's folder from the shell, because the trust of sage's hooks is there. Ask the user to make this change.";
 const CHIEF = 'sage: sage mode is on, so the chief does not change files. Brief an implementer to make this change. The user ends sage mode with the message "sage mode off", alone.';
-const OWNER_MERGE = "sage: automatic merging is unavailable in Codex. Sage prepares the checks; the owner merges directly in GitHub";
+const OWNER_MERGE = "sage: in Codex, only sage's merge command merges, on autopilot, as the chief's instructions say. Without autopilot, the owner merges the pull request in GitHub";
 const LOGBOOK_FILE = "sage: in sage mode, no agent writes a logbook file by its name outside the project. Use the sage MCP tools for the logbook.";
 const SAGE_FOLDER = "sage: no agent runs a shell command that names the Codex sage folder, the shared root or the Codex sessions folder, and no patch changes them, because the logbook, the mode files and the user's typed messages are there. Use the sage MCP tools for the logbook.";
 const CODEX_RUN = "sage: no agent runs codex from the shell, except codex --version and codex --help, because a new session runs outside these hooks, and Codex records the prompt of a resumed, forked or queued turn as the user's typed message, also a mode phrase. Ask the user.";
@@ -304,60 +314,17 @@ const CODEX_SEGMENT = /(?:^|[\s/\\'"`=:<>])\.codex(?=$|[\s/\\'"`<>;|&)])/i;
 const text = (value) => typeof value === "string" && value.length > 0 && value.length <= 4096;
 const record = (value) => value !== null && typeof value === "object" && !Array.isArray(value);
 
-/** The bytes that typedModes reads at a time, and the bytes that JSON allows before a value on a line. */
-const PIECE = 1 << 20;
-const JSON_SPACE = new Set([9, 13, 32]);
-
-/**
- * The modes that the user's own typed messages in Codex's transcript of the thread give, replayed with the core rules.
- * Codex writes each typed message as an item_completed event with a UserMessage item and the thread's id. A fork's
- * copied items keep the parent's id, so a fork starts off, as in the mode hook. A transcript that cannot be read gives off.
- * It reads the file in pieces, so a long session never has to fit in one string (F-T473-1). A line that does not start
- * with "{" is no event, so it keeps none of its bytes; a line too long for a string cannot be read, so it gives off.
- */
-export function typedModes(transcript, session) {
-  const state = {}, off = { sage: false, autopilot: false };
-  const take = (line) => {
-    let item;
-    try { item = JSON.parse(line); } catch { return; }
-    const p = item?.payload;
-    if (item?.type !== "event_msg" || p?.type !== "item_completed" || p.thread_id !== session || p.item?.type !== "UserMessage") return;
-    const text = (Array.isArray(p.item.content) ? p.item.content : []).filter((c) => c?.type === "text").map((c) => c.text).join("");
-    switchModes({ owner: true, text, all: text }, state, { autopilotOn: () => "" });
-  };
-  let fd;
-  try { fd = openSync(transcript, "r"); } catch { return off; }
-  try {
-    const piece = Buffer.alloc(PIECE);
-    let parts = [], length = 0, kind = "blank"; // the line so far: its bytes, their count, and blank, object or other
-    const add = (bytes) => {
-      if (kind === "blank") { const i = bytes.findIndex((b) => !JSON_SPACE.has(b)); if (i >= 0) kind = bytes[i] === 123 ? "object" : "other"; }
-      if (kind === "other") return;
-      length += bytes.length;
-      if (length > constants.MAX_STRING_LENGTH) throw Error("a line too long for a string");
-      parts.push(Buffer.from(bytes));
-    };
-    const endLine = () => { if (kind === "object") take(Buffer.concat(parts, length).toString("utf8")); parts = []; length = 0; kind = "blank"; };
-    for (let size; (size = readSync(fd, piece, 0, PIECE, null)) > 0;) {
-      const bytes = piece.subarray(0, size);
-      let from = 0;
-      for (let nl; (nl = bytes.indexOf(10, from)) >= 0; from = nl + 1) { add(bytes.subarray(from, nl)); endLine(); }
-      add(bytes.subarray(from));
-    }
-    endLine();
-  } catch { return off; } finally { closeSync(fd); }
-  return { sage: state.sage === true, autopilot: false };
-}
-
 /**
  * The mode of the session's root thread: { sage, autopilot }. The mode hook keeps it in one file for each thread, with
- * the core reader: no file is no mode, and a damaged file is off. Autopilot is always effectively off.
+ * the core reader: no file is no mode, and a damaged file is off. Autopilot counts only in sage mode.
  */
-export function readMode({ session, transcript }, env = process.env) {
-  const { state } = readModeFile(readState, join(modeDirectory(env), `${stateKey({ session_id: session })}.json`));
+export function readMode({ session }, env = process.env) {
+  const { state } = readModeFile(readState, modeFile(session, env));
   const sage = state.sage === true;
-  return { sage, autopilot: false };
+  return { sage, autopilot: sage && state.autopilot === true };
 }
+/** The mode file of the session's root thread. */
+const modeFile = (session, env) => join(modeDirectory(env), `${stateKey({ session_id: session })}.json`);
 
 /** The role of one sage task name (sage_<role with _ for ->_t<n>, with _r<k> or not), or null for a name that is not one. */
 export function taskRole(name) {
@@ -693,6 +660,133 @@ export async function checkMerge({ pr, sha }, cwd, env = process.env, session) {
   }
 }
 
+/** A program that a command runs as merge.mjs: by its path, or as the script of node. */
+const MERGE_SCRIPT = /(?:^|\/)merge\.mjs$/;
+/**
+ * Whether a shell command runs sage's merge command (any skills/sage/merge.mjs, F-T663-21), or names merge.mjs in a form
+ * that the reader cannot read. A command that only names the file as data (cat, git diff) does not.
+ */
+function runsMerge(command, cwd, env) {
+  if (!/merge\.mjs/.test(command)) return false;
+  let runs;
+  try { runs = programsRun(command, cwd, env.PATH ?? ""); } catch { return true; }
+  return runs.some((p) => {
+    if (/[$`]/.test(p.word) || MERGE_SCRIPT.test(p.word) || MERGE_SCRIPT.test(p.file ?? "")) return true;
+    const script = p.args.find((word) => !word.startsWith("-"));
+    return /^(?:node|nodejs)$/i.test(programName(p.word)) && (p.args.some((word) => /[$`]/.test(word)) || MERGE_SCRIPT.test(script ?? ""));
+  });
+}
+/** The pull request and head SHA of the merge command's one exact form, or undefined. */
+function mergeForm(command) {
+  const [, pr, sha] = /^"[^"]+" "[^"]+" ([1-9]\d*) ([0-9a-f]{40})$/.exec(command) ?? [];
+  return pr && command === mergeCommand(pr, sha) ? { pr, sha } : undefined;
+}
+const MERGE_FORM = `sage: run sage's merge command in its one form, alone: ${mergeCommand("<pr>", "<head sha>")}`;
+const AGENT_MERGE = "sage: only the chief merges, not an agent. Report the pull request as ready";
+const AUTOPILOT_OFF = 'sage: autopilot is off, so the owner merges. Report the pull request as ready. The owner turns autopilot on with the message "autopilot on", alone, while sage mode is on';
+const READY = "Report the pull request as ready: the owner merges it in GitHub";
+/** The folders that Codex's sandbox lets a command write: the project and its working folder, and the temporary folders. */
+const writableRoots = (cwd, env) => [projectRoot(cwd), cwd, env.TMPDIR, "/tmp", "/private/tmp", "/var/tmp"].filter(Boolean).map((dir) => real(dir) ?? resolve(dir));
+const inside = (path, roots) => roots.some((root) => { const at = relative(root, path); return at === "" || (!at.startsWith("..") && !isAbsolute(at)); });
+/** The hook's PATH without the folders that the sandbox can write (and without relative folders). */
+const trustedPath = (roots, env) => (env.PATH ?? "").split(":").filter((dir) => isAbsolute(dir) && !inside(real(dir) ?? resolve(dir), roots)).join(":");
+/** The real file of gh on the trusted PATH, outside every folder that the sandbox can write, or undefined. */
+function trustedGh(roots, env) {
+  for (const dir of trustedPath(roots, env).split(":")) {
+    const file = real(join(dir, "gh"));
+    try { if (file && !inside(file, roots) && statSync(file).isFile()) { accessSync(file, constants.X_OK); return file; } } catch { /* not a program */ }
+  }
+  return undefined;
+}
+/**
+ * The version of the Codex that runs this hook, or null: Codex puts a codex-arg0 folder on the hook's PATH, whose
+ * apply_patch link names its own binary (the CLI's and the desktop app's alike), and that binary prints its version.
+ * It runs the link's real file: by the link's own name, the binary acts as apply_patch (R2690 proof: in real hooks,
+ * "codex-cli 0.164.0" for the CLI, and "codex-cli 0.166.0-alpha.6" for the desktop binary that resumed a 0.164.0 record).
+ */
+function runningCodex(roots, env) {
+  for (const dir of (env.PATH ?? "").split(":")) {
+    if (!basename(dir).startsWith("codex-arg0")) continue;
+    const binary = real(join(dir, "apply_patch"));
+    if (!binary || inside(binary, roots)) continue;
+    try {
+      const out = execFileSync(binary, ["--version"], { env, encoding: "utf8", timeout: 5000, stdio: ["ignore", "pipe", "ignore"] });
+      return /^codex-cli (\S+)\s*$/.exec(out)?.[1] ?? null;
+    } catch { return null; }
+  }
+  return null;
+}
+/** The repository (owner/name) that gh finds for the folder, or undefined. */
+function repositoryOf(gh, cwd, env) {
+  try {
+    const name = execFileSync(gh, ["repo", "view", "--json", "nameWithOwner", "--jq", ".nameWithOwner"], { cwd, env: { ...env, GH_PROMPT_DISABLED: "1", GH_NO_UPDATE_NOTIFIER: "1" }, encoding: "utf8", timeout: 10_000, stdio: ["ignore", "pipe", "ignore"] }).trim();
+    return /^[A-Za-z0-9][A-Za-z0-9-]*\/(?!\.\.?$)[A-Za-z0-9_.][A-Za-z0-9_.-]*$/.test(name) ? name : undefined;
+  } catch { return undefined; }
+}
+const PERMIT_AGE = 300_000;
+/** Save the call's merge permit: created once, never over another file, and old permits go. */
+function savePermit(file, permit) {
+  const dir = dirname(file);
+  privateDirectory(dir);
+  for (const name of readdirSync(dir)) {
+    try { if (Date.now() - statSync(join(dir, name)).mtimeMs > PERMIT_AGE) rmSync(join(dir, name), { force: true }); } catch { /* gone already */ }
+  }
+  const temporary = `${file}.${randomUUID()}`;
+  writeFileSync(temporary, JSON.stringify(permit), { flag: "wx", mode: 0o600 });
+  try { linkSync(temporary, file); } finally { rmSync(temporary, { force: true }); }
+}
+/** Whether an unused merge permit of the last 300 s admits this escalation: the same session, turn, exact command and folder. */
+function permitted(f) {
+  let names;
+  try { names = readdirSync(permitFolder); } catch { return false; }
+  return names.some((name) => {
+    if (!/^[0-9a-f]{64}\.json$/.test(name)) return false;
+    let permit;
+    try { permit = readState(join(permitFolder, name)); } catch { return false; }
+    return permit?.session === f.session && permit.turn === f.turn && permit.command === f.command && permit.cwd === f.cwd && Date.now() - permit.time <= PERMIT_AGE;
+  });
+}
+
+/**
+ * The gate's admission of the merge command's exact form from the root thread: undefined when it saved the call's
+ * merge permit, else the reason to refuse. ppid is the Codex process that runs the hook.
+ */
+async function admit(f, merge, { env, check, ppid }) {
+  const mode = modeFile(f.session, env);
+  const { state } = readModeFile(readState, mode);
+  if (state.sage !== true || state.autopilot !== true) return AUTOPILOT_OFF;
+  const roots = writableRoots(f.cwd, env);
+  const version = runningCodex(roots, env);
+  if (!RECORD_VERSION.test(version ?? "")) return `sage: ${version ? `this session runs Codex ${version}` : "sage cannot tell which Codex runs this session"}, and autopilot merges only in Codex 0.164 to 0.166. ${READY}`;
+  const codexRecord = readRecord(f.transcript ?? "");
+  if (codexRecord.refused) return `sage: ${codexRecord.refused}`;
+  let mark;
+  try { mark = readState(markFile(modeDirectory(env), f.session)); } catch { mark = undefined; }
+  // A mark that a failed start left (its removal failed too) names the Codex process of an earlier start (F-T663-9).
+  if (record(mark) && mark.pid !== ppid) return `sage: sage's note of this session start is from another Codex process, so autopilot merges nothing in this session for now. ${READY}, or resume the session and send "autopilot on" again`;
+  const owner = autopilotSwitch(codexRecord, mark);
+  if (owner.refused) return `sage: ${owner.refused}`;
+  if (!owner.on) return `sage: ${owner.reason}, so the owner merges. ${READY}`;
+  if (!text(f.toolUseId) || !callInRecord(codexRecord, f.toolUseId, mark.lines)) return "sage: this merge call is not in Codex's record of this session, so sage refuses it. Ask for the merge again";
+  if (inside(real(process.execPath) ?? process.execPath, roots)) return `sage: node runs from a folder that Codex's sandbox can write (${process.execPath}), so autopilot merges nothing. ${READY}`;
+  const gh = trustedGh(roots, env);
+  if (!gh) return `sage: sage found no gh outside the folders that Codex's sandbox can write, so autopilot merges nothing. ${READY}`;
+  const repo = repositoryOf(gh, f.cwd, env);
+  if (!repo) return "sage: gh could not name the GitHub repository of this folder, so sage refuses the merge. Try again, or tell the user";
+  // checkMerge, unchanged, with the trusted PATH: its gh and git run outside the sandbox too.
+  const verdict = await check(merge, f.cwd, { ...env, PATH: trustedPath(roots, env) }, f.session);
+  if (verdict?.ok !== true) return verdict?.reason ?? "sage: the merge check refuses";
+  const file = permitFile(f.toolUseId);
+  if (!file) return `sage: this copy of sage is not installed as a Codex plugin, so it has no merge permits. ${READY}`;
+  try {
+    savePermit(file, { session: f.session, repo, pr: merge.pr, sha: merge.sha, command: f.command, cwd: f.cwd, turn: f.turn, transcript: f.transcript, mark, mode, gh, time: Date.now() });
+  } catch (error) {
+    return `sage: the gate could not save the merge permit of this call (${error?.code ?? error?.message ?? error}), so it refuses the merge. Check the folder ${dirname(file)}`;
+  }
+  return undefined;
+}
+const ALLOW = { hookSpecificOutput: { hookEventName: "PermissionRequest", decision: { behavior: "allow" } } };
+
 // Codex adds ". Command: <the command>" after the reason, so a reason ends with no period of its own.
 const deny = (reason) => ({ hookSpecificOutput: { hookEventName: "PreToolUse", permissionDecision: "deny", permissionDecisionReason: reason.replace(/\.$/, "") } });
 const UNREAD_THREAD = "sage: the hook could not read Codex's record of this thread, so it refuses this call. Tell the user.";
@@ -711,7 +805,7 @@ function fieldsOf(input) {
   if (!record(tool_input) || (shell && typeof tool_input.command !== "string")) return undefined;
   // An empty agent_id is still a child: only an event without one is the root thread.
   const transcript = typeof input.transcript_path === "string" ? input.transcript_path : null;
-  return { event: input.hook_event_name, session: session_id, cwd, tool: tool_name, input: tool_input, command: tool_input.command, child: Object.hasOwn(input, "agent_id"), transcript };
+  return { event: input.hook_event_name, session: session_id, cwd, tool: tool_name, input: tool_input, command: tool_input.command, child: Object.hasOwn(input, "agent_id"), transcript, turn: input.turn_id, toolUseId: input.tool_use_id };
 }
 
 /** The project folder of a cwd: the nearest folder with a .git entry, or the cwd itself. */
@@ -736,17 +830,24 @@ const codexShellWrite = (command, cwd, env) => {
  * The gate's answer to one hook event: a hook output object, or undefined for no decision. deps replaces the mode
  * reader and the merge check, for tests.
  */
-export async function gate(input, { mode = readMode, check = checkMerge, env = process.env } = {}) {
+export async function gate(input, { mode = readMode, check = checkMerge, env = process.env, ppid = process.ppid } = {}) {
   // The manifest's send pattern has no lookahead (Codex reads it with Rust's regex), so it also matches an MCP tool such
   // as mcp__slack__send_message. The owner allows MCP tools: the gate judges only sage's own (F-T534-3).
   if (typeof input?.tool_name === "string" && /^mcp__/.test(input.tool_name) && !SAGE_TOOL.test(input.tool_name)) return undefined;
   const f = fieldsOf(input);
   if (!f) return input?.hook_event_name === "PermissionRequest" ? UNREAD_REQUEST : deny(UNREADABLE);
   const thread = threadOf(f);
-  if (f.event === "PermissionRequest") return undefined;
-  // Refuse every recognized merge before mode, role or saved-state checks. A passing
-  // merge_check prepares an owner handoff; it never grants this hook merge authority.
+  // The escalation of an admitted merge command: allowed only with its unused merge permit. Codex asks for every other.
+  if (f.event === "PermissionRequest") return f.tool === "Bash" && !thread.child && mergeForm(f.command) && permitted(f) ? ALLOW : undefined;
+  // Every merge goes through sage's merge command, before mode, role or saved-state checks: a gh merge never runs.
   if (f.tool === "Bash" && policy.mergeIn(f.command)) return deny(OWNER_MERGE);
+  if (f.tool === "Bash" && runsMerge(f.command, f.cwd, env)) {
+    const merge = mergeForm(f.command);
+    if (!merge) return deny(MERGE_FORM);
+    if (thread.child) return refuse(thread, AGENT_MERGE);
+    const why = await admit(f, merge, { env, check, ppid });
+    return why ? deny(why) : undefined;
+  }
   const sageTool = SAGE_TOOL.exec(f.tool);
   if (sageTool) {
     const caller = callerOf(thread, f.cwd), why = callerRefusal(caller, sageTool[1], f.input, env);

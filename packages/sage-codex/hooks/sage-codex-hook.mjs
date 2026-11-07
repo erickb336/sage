@@ -15,15 +15,17 @@
 //   - A subagent's event (agent_id) switches nothing and gets no role.
 //   - The hook tells the user directly (a systemMessage) only for a limit or a fault: a damaged mode file, an unknown input shape, a mode folder that it cannot use, or SAGE_HOOKS=off. For a normal switch, the
 //     note tells the chief to confirm the switch in one line of its reply.
-// Automatic merging is unavailable; the gate refuses recognized merges independently of this mode file.
+// Autopilot is recorded here, and the chief gets the merge command when it turns on. The gate (gate-hook.mjs) holds the
+// merge rule: it needs this mode file and the owner's own switch in Codex's record of the session (owner-record.mjs).
 // SAGE_HOOKS=off turns it off.
 import { readFileSync, realpathSync } from "node:fs";
 import { homedir } from "node:os";
 import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
-import { exactPhrase, MODE_DAMAGED, readModeFile, renderChiefInstructions, switchModes } from "sage-core";
+import { exactPhrase, MODE_DAMAGED, protectionNote, readModeFile, renderChiefInstructions, switchModes } from "sage-core";
 import { privateDirectory, readState, saveState, stateKey } from "./principles-hook.mjs";
 import { saveStartMark } from "./start-mark.mjs";
+import { mergeCommand } from "../skills/sage/merge.mjs";
 
 const ROOT = join(dirname(fileURLToPath(import.meta.url)), "..");
 const TOOL = join(ROOT, "skills/sage/sage.mjs");
@@ -31,7 +33,7 @@ const TOOL = join(ROOT, "skills/sage/sage.mjs");
 /** What the mode notes say about Codex, for the user (the help list). Codex has no queued messages and no board phrase in this hook. */
 const CODEX_HOST = {
   name: "Codex",
-  timing: "Send a phrase when Codex is idle. Automatic merging is unavailable in Codex. Sage prepares the checks; the owner merges directly in GitHub.",
+  timing: "Send a phrase when Codex is idle. With autopilot on, sage merges a pull request by itself after its clean reviews and checks. To stop a merge now, press Esc; the off phrase, sent with Enter, stops merges from Codex's next step.",
   board: false,
   update: null,
 };
@@ -39,7 +41,7 @@ const CODEX_HOST = {
 /** The Codex versions (major.minor, both ends included) that sage was checked with. */
 export const TESTED_CODEX = ["0.160", "0.166"];
 
-const AUTOPILOT_UNAVAILABLE = "sage: automatic merging is unavailable in Codex. Sage prepares the checks; the owner merges directly in GitHub.";
+const AUTOPILOT_ON = `sage: autopilot is on. In Codex, autopilot merges verified work with sage's merge command. After a task's clean cycles and a passing merge_check, run it from the main thread, escalated, as one command with no other words: ${mergeCommand("<n>", "<sha>")}. The hook admits it only while autopilot is on and the merge check passes, with no prompt.`;
 const UNKNOWN = `sage: the sage hook did not recognise this Codex event, so it switched no mode, and autopilot is off. Update the sage plugin, and keep Codex in the tested range (${TESTED_CODEX.join(" to ")}).`;
 const HOOK_OFF = "sage: the sage hook is off (SAGE_HOOKS=off), so this phrase switched no mode. Start Codex without SAGE_HOOKS=off to use the phrases.";
 const DAMAGED_NOTE = 'sage: the sage mode file of this session was damaged, so sage mode and autopilot are now off. This is a normal session until the user sends "sage mode" alone, also if the history shows the chief role: you may change files yourself. Tell the user this in one line of your reply.';
@@ -69,8 +71,6 @@ function known(input) {
 
 /** The answer to one event. state is the session's mode state ({ sage, autopilot, given, off }); handle changes it. */
 export function handle(input, state, env = process.env) {
-  // Saved state and replay cannot grant automatic merge authority in Codex.
-  if (state.autopilot === true) state.autopilot = false;
   if (!known(input)) {
     state.autopilot = false;
     return { systemMessage: UNKNOWN };
@@ -82,12 +82,7 @@ export function handle(input, state, env = process.env) {
     return input.source === "compact" && state.sage ? context(event, chiefText()) : undefined;
   }
   const was = { sage: Boolean(state.sage), autopilot: Boolean(state.autopilot) };
-  const phrase = exactPhrase(input.prompt);
-  const notes = phrase === "autopilot on" ? [AUTOPILOT_UNAVAILABLE]
-    : switchModes({ owner: true, text: input.prompt, all: input.prompt }, state, { host: CODEX_HOST });
-  if (phrase === "sage help") {
-    for (let i = 0; i < notes.length; i++) notes[i] = notes[i].replace('"autopilot on": turns autopilot on, while sage mode is on.', '"autopilot on": automatic merging is unavailable in Codex.');
-  }
+  const notes = switchModes({ owner: true, text: input.prompt, all: input.prompt }, state, { autopilotOn: () => AUTOPILOT_ON + protectionNote(state, input.cwd, env), host: CODEX_HOST });
   if (state.sage && !state.given) {
     state.given = true;
     notes.unshift(chiefText());
@@ -113,12 +108,9 @@ export function answer(input, env) {
 
 /** The answer of the mode rules: it reads and saves the session's mode file with the core reader. */
 function modeAnswer(input, env) {
-  const unavailable = known(input) && input.hook_event_name === "UserPromptSubmit"
-    && !("agent_id" in input) && exactPhrase(input.prompt) === "autopilot on";
-  const failureNote = (text) => unavailable ? `${text} ${AUTOPILOT_UNAVAILABLE}` : text;
   if (env.SAGE_HOOKS === "off") {
     const phrase = known(input) && input.hook_event_name === "UserPromptSubmit" && !("agent_id" in input) && exactPhrase(input.prompt);
-    return phrase ? { systemMessage: failureNote(HOOK_OFF) } : undefined;
+    return phrase ? { systemMessage: HOOK_OFF } : undefined;
   }
   // An unknown shape with a session id still saves autopilot off for that session.
   const key = input && typeof input === "object" ? stateKey(input) : undefined;
@@ -132,7 +124,7 @@ function modeAnswer(input, env) {
       // Fail closed and say so once: the clean off state replaces the damaged file, and this event switches nothing.
       saveState(file, state);
       const note = known(input) && !("agent_id" in input) ? context(input.hook_event_name, DAMAGED_NOTE) : {};
-      return { systemMessage: failureNote(MODE_DAMAGED), ...note };
+      return { systemMessage: MODE_DAMAGED, ...note };
     }
     const before = JSON.stringify(state);
     const output = handle(input, state, env);
@@ -140,7 +132,7 @@ function modeAnswer(input, env) {
     return output;
   } catch {
     // Fail closed: no switch and no role. The next prompt tries again.
-    return { systemMessage: failureNote(`sage: the sage hook could not read or save the sage mode of this session, so it switched no mode. Check the folder ${dir}.`) };
+    return { systemMessage: `sage: the sage hook could not read or save the sage mode of this session, so it switched no mode. Check the folder ${dir}.` };
   }
 }
 

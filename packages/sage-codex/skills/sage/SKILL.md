@@ -18,7 +18,7 @@ Only a direct owner message can change mode. Use `commands.mjs` beside this skil
 | --- | --- |
 | `sage mode`, `sage mode on` | The hook turns Sage on. Accept work in the next message. |
 | `sage mode off` | The hook turns Sage and autopilot off. Stop dispatch. Interrupt only owned active agents through supported tools, inspect the outcome and preserve work. Unknown status stays unresolved. |
-| `autopilot on` | Automatic merging is unavailable in Codex. The owner merges directly in GitHub. |
+| `autopilot on` | The hook turns autopilot on while Sage is on. Nothing else is needed. |
 | `autopilot off` | The hook turns autopilot off and keeps Sage’s current mode. |
 | `sage help` | Show these phrases, board/status forms, actual known mode and capability limits. Do no work. |
 
@@ -28,7 +28,7 @@ Board/status requests work without activation. Preserve `show board`, `sage boar
 
 ## Landing a PR
 
-Automatic merging is unavailable in Codex. Sage prepares the checks; the owner merges directly in GitHub. Keep both required review and QA cycles for auth, input and data risks, even with autopilot off. Hand off only after CI passes on the final head, both cycles pass and `merge_check` passes. Give the owner the PR link, exact head SHA and evidence. No phrase, saved mode or configuration flag grants merge authority.
+With autopilot on, the chief lands a verified PR with sage's merge command, from the main thread, after its clean cycles, CI on the final head and a passing `merge_check`. Run it escalated, as one command with no other words: `"<node>" "<plugin>/skills/sage/merge.mjs" <n> <sha>`, with the exact paths of the hook's note. The sage gate admits it only with sage mode and autopilot on in the mode file, the owner's own on in Codex's record of the session since its start, and a passing merge check for that head commit. Then the command checks the record and the mode file again, right before gh. With autopilot off, or when a check refuses, report the PR link, exact head SHA and evidence: the owner merges in GitHub. An agent never lands a PR, and `gh pr merge` never runs.
 
 The hook refuses recognized shell merge commands in every Sage mode. This is a bounded guard: non-Sage MCP tools and arbitrary interpreter programs are outside its merge coverage. Do not claim universal merge enforcement.
 
