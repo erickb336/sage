@@ -1908,11 +1908,11 @@ const BOARD_RUN = ({ word, args }) => (basename(word) === "cli.mjs" || args.some
 const INTERPRETERS = /^(?:node|deno|bun|python[\d.]*|perl|ruby|php|osascript)$/;
 /**
  * The paths that one word can name: the word, the value of key=value (dd if=, of=), the path of a file: URL (curl), with
- * and without its query and fragment, and, in code, each text between quotes, spaces and other marks that has a slash
- * or "board" in it. For curl (at), also the file that it reads after @ (-d @f, -F name=@f) or =< (-F name=<f).
+ * and without its query and fragment, and, in code, each text between quotes, spaces and other marks that has a
+ * slash, "board" or "config" in it. For curl (at), also the file that it reads after @ (-d @f, -F name=@f) or =< (-F name=<f).
  */
 function boardPaths(word, code, at) {
-  const paths = code ? word.split(/[\s'"`;,()<>|&=+]+/).filter((t) => /\/|board/i.test(t)) : [word];
+  const paths = code ? word.split(/[\s'"`;,()<>|&=+]+/).filter((t) => /\/|board|config/i.test(t)) : [word];
   for (const path of [...paths]) {
     const value = /^[\w.-]+=(.+)$/s.exec(path)?.[1];
     if (value) paths.push(value);
@@ -1974,9 +1974,11 @@ function boardProblem(input) {
   for (const text of runFields(terminal ? { ...ti, cwd: undefined } : ti)) {
     let read;
     try { read = boardCommands(text, cwd, uncertain); } catch {
-      // The hook cannot read the line: it refuses one that names the board or a config (fail closed).
+      // The hook cannot read the line: it reads the line as code, from an unknown folder, and refuses one with a word
+      // that can stand for the config or a folder above it (fail closed). A word such as a checkout path that holds
+      // "board" or "config" is not the config (T632).
       if (/--set-password/.test(text.replace(/['"\\]/g, ""))) return SET_PASSWORD;
-      if (/board|config/i.test(text)) return BOARD_CONFIG;
+      if (boardPaths(text, true).some((path) => { const reach = reachOf(path, undefined); return reach.config || reach.above; })) return BOARD_CONFIG;
       continue;
     }
     const { runs, redirects } = read;

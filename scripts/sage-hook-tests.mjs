@@ -3031,6 +3031,12 @@ test("T229: the board password rule refuses the ordinary shapes, and allows repo
     ["cd ~/.config && cat sage-board/board.json", CONFIG], [`cd ${home}/.config && cat sage-board/board.json`, CONFIG], [`cd ${home} && cat .config/sage-board/board.json`, CONFIG],
     [`cat ${dir}/plain-name.txt`, CONFIG], [`cat ${dir}/linked-config/sage-board/board.json`, CONFIG], ["head < ~/.config/sage-board/board.json", CONFIG],
     ["cat ~/.config/sage-board/board.json \"", CONFIG], // the hook cannot read the line: it refuses (fail closed)
+    // T632: a line that the hook cannot read is read as code from an unknown folder. A word that can stand for the config
+    // or a folder above it refuses; a checkout path that holds "board" or "config" does not.
+    ["cat board.json \"", CONFIG], ["cd ~/.config && cat sage-board/board.json \"", CONFIG], ["cp -R .config /tmp/copy \"", CONFIG],
+    [`cat ~/.config/sage-b*/board.json "`, CONFIG], [`tar -cf /tmp/x.tar ${home}/.config "`, CONFIG],
+    [`node ${dir}/board-wt/plugins/sage/skills/sage/sage.mjs task add --title "open`, OK], [`cat ${dir}/my-config/sage-board-notes/README.md "`, OK],
+    [`cd /tmp/dashboard && node ${REPO}/scripts/x.mjs "`, OK],
     // F-T229-6: replacing the config or the folder, and a recursive read from the folder or a folder above it.
     ["cp /tmp/x.json ~/.config/sage-board/board.json", CONFIG], ["printf x > ~/.config/sage-board/board.json", CONFIG], ["mv /tmp/x ~/.config/sage-board", CONFIG],
     ["grep -r hash ~/.config", CONFIG], ["grep -rn hash ~", CONFIG], ["rg hash ~/.config", CONFIG], ["rg hash", CONFIG, home], ["find ~ -name x -exec cat {} \\;", CONFIG],
