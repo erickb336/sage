@@ -2625,6 +2625,18 @@ test("the move leaves out a fork with another GitHub remote, and the fork keeps 
   assert.deepEqual(rowsIn(join(w.shared, "bindings.tsv")).map((r) => r.root), [realpathSync(w.project)]);
 });
 
+test("a GitHub remote that Git cannot read refuses the move preview, never takes the checkout as a clone (T646, F-T645-2)", (t) => {
+  const w = moveWorld(t), clone = join(w.base, "clone");
+  git(w.base, "clone", "-q", w.project, clone);
+  origin(w.project, "https://github.com/owner/sage.git");
+  w.claude("init", "--project", clone);
+  git(clone, "remote", "remove", "origin");
+  // A URL over sage's 32 MiB output cap fails only the read that prints it (ENOBUFS, not Git's "no such key"): the first
+  // commit and every other read of this checkout still work, so only the remote read can refuse.
+  writeFileSync(join(clone, ".git", "config"), `[remote "origin"]\n\turl = https://github.com/someone/${"s".repeat(32 * 1024 * 1024)}\n`, { flag: "a" });
+  assert.equal(refusalOf(() => w.claude("move", "--preview")), `sage: refused: sage cannot read the GitHub remote of ${clone} (ENOBUFS), so it cannot tell a clone of this repository from a fork. Nothing changed. Ask the owner to check that checkout's Git config.`);
+});
+
 test("a clone with the same GitHub remote, or one with no GitHub remote, still moves and is named in the gate (T646)", (t) => {
   for (const url of ["https://github.com/Owner/Sage", null]) {
     const w = moveWorld(t), clone = join(w.base, "clone");
