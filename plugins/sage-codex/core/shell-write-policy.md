@@ -19,6 +19,10 @@ Ordinary reader arguments remain data. Option values, words after `--`, and
 shell functions retain their parser context. Redirections to files count as
 writes; input-only redirections and the listed standard device outputs do not.
 
+`uniq` counts as a write only with an output operand (`uniq in out`), or
+when the hook cannot count its operands: uniq is not the command word, or an
+operand can expand to more words. `uniq in` and `uniq -c in` only read.
+
 Known output-file programs also count as writes. These include curl output and
 configuration options, Git diff/show/log output, OpenSSL output, and the ordinary
 operands of ditto, scp, wget, and sqlite3. The curl scanner preserves option

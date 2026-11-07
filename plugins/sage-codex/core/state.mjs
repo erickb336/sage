@@ -1596,9 +1596,10 @@ function finishReportedRun(input, env = process.env) {
 
 /** The tip of a branch, read in the checkout of the branch's newest writer run (branchCheckout). */
 function reviewHead(dir, project, branch, env) {
-  const clean = Object.fromEntries(Object.entries(env).filter(([key]) => !key.startsWith("GIT_")));
-  return git(["-C", branchCheckout(dir, project, branch, env), "rev-parse", "--verify", `refs/heads/${branch}^{commit}`], clean).trim();
+  return gitIn(branchCheckout(dir, project, branch, env), env)(["rev-parse", "--verify", `refs/heads/${branch}^{commit}`]).trim();
 }
+/** git in a folder, with no GIT_ variable of the caller: repository-selection and injected-config variables cannot redirect it. */
+const gitIn = (folder, env) => (args) => git(["-C", folder, ...args], Object.fromEntries(Object.entries(env).filter(([key]) => !key.startsWith("GIT_"))));
 
 /**
  * Where a branch lives: the checkout of its newest writer run, or the project of the command when that run names none
@@ -1616,10 +1617,23 @@ function branchCheckout(dir, project, branch, env) {
 }
 /** Where a branch of a project lives (branchCheckout): sage-pr reads the branch's origin there. A gone checkout refuses with goneRun. */
 const branchHome = (project, branch, env = process.env) => branchCheckout(storeDir(project, env), project, branch, env);
-/** The tip of a branch where it lives (reviewHead), or "" on any failure, so that a hook fails closed. */
+/**
+ * The tip of a branch where it lives (reviewHead), or "" on any failure, so that a hook fails closed. When the local
+ * branch is behind origin's copy (its tip is an ancestor of refs/remotes/origin/<branch>, as after gh pr update-branch
+ * and a fetch), the tip is origin's (T670). A local branch that is ahead or has diverged stays as it is: nothing replaces it.
+ */
 function branchTip(project, branch, env = process.env) {
   try {
-    return reviewHead(storeDir(project, env), project, branch, env);
+    const run = gitIn(branchCheckout(storeDir(project, env), project, branch, env), env);
+    const tip = (ref) => run(["rev-parse", "--verify", `${ref}^{commit}`]).trim();
+    const local = tip(`refs/heads/${branch}`);
+    try {
+      const origin = tip(`refs/remotes/origin/${branch}`);
+      run(["merge-base", "--is-ancestor", local, origin]); // exits 1 when local is not behind
+      return origin;
+    } catch {
+      return local;
+    }
   } catch {
     return "";
   }
