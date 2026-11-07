@@ -43,6 +43,8 @@ export const MOVES = "moves";
 const PLAN = /^[a-z0-9-]+-[0-9a-f]{6}\.json$/;
 /** The largest plan: the rows of the open tasks of two logbooks, far below the board's 16 MiB read. */
 export const PLAN_MAX = 32 * 1024 * 1024;
+/** The refusal for a folder of a provider root that sage may not search: it may hold a logbook of this project (F-T642-4, F-T645-8). */
+export const unreadableFolder = (dir, e) => `refused: cannot read the logbook folder ${dir} (${e.code ?? e.message}), so sage cannot tell whether it holds a logbook of this project. Nothing changed. Ask the owner to fix its rights.`;
 
 /**
  * The one function that picks the shared root: the launcher's fixed option, SAGE_SHARED_HOME, <SAGE_HOME>/shared, then
@@ -325,7 +327,7 @@ export function createSharedRoot({ Refusal, refuse, listed, legacyRoots, makeLog
           logbook = FOLDER.test(name) && lstatSync(dir, { throwIfNoEntry: false })?.isDirectory() && present(join(dir, "tasks.tsv"));
         } catch (e) {
           // A folder that sage may not search may hold a logbook of this project: a clear refusal, never a stack (F-T642-4).
-          refuse(`refused: cannot read the logbook folder ${visible(dir)} (${e.code ?? e.message}), so sage cannot tell whether it holds a logbook of this project. Nothing changed. Ask the owner to fix its rights.`);
+          refuse(unreadableFolder(visible(dir), e));
         }
         if (!logbook) continue;
         let told;

@@ -28,7 +28,7 @@ import { ROLES } from "./roles.mjs";
 import { AGENT_CAPS, BREAKS, FINDING_CLASSES, HIDDEN, LINE, NAME_MAX, PRIORITIES, PRIORITY_SCALE, TABLES as PLAIN_TABLES, TASK_KINDS, countOf, nameProblem, proposalOf } from "./logbook-fields.mjs";
 import { BREAKDOWN, ENDED, GATE_ID, MET, PROGRAM_ID, TASK_ID, breakdownGate, byIds, dead, droppedBy, gateLines, lostClause, programState, progressOf, progressText, shownGraph, shownWaits, unmetWaits, waitGraph, waitWords, waitsOf, waitsWithState } from "./program-rules.mjs";
 import { OBSERVATIONS_MAX_BYTES, OBSERVATION_DATA_MAX_BYTES, validateObservation, validateObservations } from "./observations.mjs";
-import { MOVES, PLAN_MAX, checkoutGone, createSharedRoot, sharedRoot } from "./shared-root.mjs";
+import { MOVES, PLAN_MAX, checkoutGone, createSharedRoot, sharedRoot, unreadableFolder } from "./shared-root.mjs";
 import { changedText, countsOf, endText, gateQuestion, gateText, localTime, mapHtml, mismatchText, previewText, providersOf, reconciliationText, startText, stepText, stoppedText, title } from "./move-text.mjs";
 import { CHIEF, chiefOnly, createChiefs, offerOf, replaceOf, replaceQuestion, writerClass } from "./chiefs.mjs";
 
@@ -2941,8 +2941,14 @@ const folders = (root) => (existsSync(root) ? readdirSync(root).map((name) => jo
 const PROJECTS = ["logbook", "at", "how"];
 /** The deliberate command that lists the logbook folders of the root again, for the owner to check. */
 const REBUILD = "sage projects rebuild --accept-listing yes";
-/** The folders of the root that hold a logbook's tasks or verdicts: what a migration or a rebuild lists. */
-const logbooks = (root) => folders(root).filter((dir) => ["tasks.tsv", "ledger.tsv"].some((f) => lstatSync(join(dir, f), { throwIfNoEntry: false }))).map((dir) => basename(dir));
+/** The folders of the root that hold a logbook's tasks or verdicts: what a migration or a rebuild lists. A folder that sage may not search refuses, with no stack. */
+const logbooks = (root) => folders(root).filter((dir) => ["tasks.tsv", "ledger.tsv"].some((f) => {
+  try {
+    return lstatSync(join(dir, f), { throwIfNoEntry: false });
+  } catch (e) {
+    refuse(unreadableFolder(visible(dir), e));
+  }
+})).map((dir) => basename(dir));
 
 /**
  * Writes the known project list. The marker projects.made goes first: once the list was made, a list that goes missing

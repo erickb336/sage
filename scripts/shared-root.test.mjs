@@ -2705,6 +2705,19 @@ test("rule 3: a logbook folder that sage cannot search starts a legacy logbook w
   }
 });
 
+test("init refuses with a clear line, never a stack, when a folder of its own provider root cannot be searched (F-T645-8)", (t) => {
+  const w = ruleThree(t, ["claude\t2", "codex\t2"]), locked = join(w.claudeRoot, "other-abcdef");
+  mkdirSync(locked, { recursive: true });
+  chmodSync(locked, 0o000);
+  try {
+    assert.equal(refusalOf(() => w.claude("init")), `sage: refused: cannot read the logbook folder ${locked} (EACCES), so sage cannot tell whether it holds a logbook of this project. Nothing changed. Ask the owner to fix its rights.`);
+  } finally {
+    chmodSync(locked, 0o755);
+  }
+  assert.equal(existsSync(join(w.claudeRoot, w.folder())), false, "no logbook");
+  assert.deepEqual(w.bound(), []);
+});
+
 test("rule 3: a linked logbook of the project in the other provider's root starts a legacy logbook, not a refusal (F-T642-5)", (t) => {
   const w = ruleThree(t, ["claude\t1", "codex\t1"]), real = join(w.base, "real-codex");
   w.codex("init");
