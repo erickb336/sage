@@ -462,7 +462,7 @@ After a restore, the old move gate moves nothing: to move again, ask the chief f
 - `plugins.tsv` shows the contract of the last command that each provider ran. A session that started before the update still runs the old code, so the gate asks you to check that every session restarted.
 - An older plugin refuses a write to an old logbook, because it does not know the `moved` column. In the new logbook it gives new numbers above the move's floors, but its merge check refuses a moved task: it does not know adoption version 2.
 - The move also takes the logbooks of each clone with the same first commit. A fork with the same first commit moves too: answer keep, and tell the chief which folder is another project.
-- The Codex journal and its open fences are the Codex part of the move: a Codex chief checks them before it opens the gate.
+- The Codex journal and its open fences are the Codex part of the move. The move finishes each saved change of the old logbooks first. A Codex chief runs no separate check of the fences before it opens the gate.
 
 ## Where sage keeps things
 

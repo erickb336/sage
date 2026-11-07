@@ -32,7 +32,7 @@ The Codex logbook is in `~/.codex/sage` (or `CODEX_HOME`), apart from Claude's. 
 
 ## What you need
 
-- Codex 0.160 to 0.166. sage was checked with the Codex CLI 0.160.0, 0.164.0 and 0.166.0 on macOS, with a test model. The desktop app carries its own Codex (0.164.0-alpha in ChatGPT 26.1021); sage should work the same way there, but it was not run in the app yet.
+- Codex 0.160 to 0.166. sage was checked with the Codex CLI 0.160.0, 0.164.0 and 0.166.0 on macOS, with a test model. The desktop app carries its own Codex, which changes with the app: sage was checked with desktop 0.166.0-alpha.6, not with other versions.
 - The Codex CLI on your PATH, in that range, also when you use only the desktop app: the install commands below are CLI commands. To get it, run `npm install -g @openai/codex@0.164.0`.
 - Node.js 20 or later, on your PATH: the sage hooks are Node scripts.
 - `gh`, logged in (`gh auth login`), and a GitHub remote for the project. sage uses them for pull requests and the merge check; without them, work stops at a verified branch.
@@ -107,6 +107,8 @@ Do this check after you install sage, after each update, and when a sage rule se
    > **Warning:** never test the gate with a real push or a merge. If the gate does not run, the command runs.
 
    Ask the chief to run `ls ~/.codex/sage` with `tools.exec_command` from a code-mode `exec` call. This command changes nothing, and the gate refuses it in every mode. When the gate runs, Codex blocks it with a line that starts with "sage: no agent runs a shell command that names the Codex sage folder". When the command lists files, the gate does not run: stop sage work, and do step 1 again.
+
+   When `SAGE_HOME` is set, the gate guards that folder in place of `~/.codex/sage`: list `$SAGE_HOME` in that case.
 4. If you use the app's browser preview, ask the chief to open a page in it. The preview uses a `js` call, and it runs, because you chose to allow `js` in sage mode. If you do not use the preview, skip this step.
 
 ## Turn on sage mode
@@ -326,6 +328,7 @@ In code mode, the model writes JavaScript for Codex's `exec` tool, and the code 
 | No one changes files under a `.codex` folder of the project | Every mode, every thread | Codex blocks the `apply_patch` edit, or the shell write that names the folder. Codex reads project settings from that folder, so you make such changes yourself. Only the path from the project folder down counts, so a project under `~/.codex/worktrees` edits as usual |
 | No shell command or patch names the Codex sage folder, the shared root or the Codex sessions folder | Every mode, every thread | Codex blocks the command or the patch, with one line. The sage folder holds the logbook and the mode files, the shared root holds the shared logbooks, and the sessions folder holds Codex's record of your typed messages; the logbook tools change the logbook. A `.sage` folder outside the project counts by name, also as a pattern. A project's own `.sage` folder stays free |
 | No one writes a logbook file by its name outside the project | Sage mode, every thread | Codex blocks the shell write or the patch, with one line. A name such as `bindings.tsv`, `tasks.tsv` or `config.json` stays free in the project and in its worktrees |
+| One shell command that writes a file and runs tests | Allowed | In the desktop app, Codex refuses a single shell command that both writes a file and runs tests (a documented limit). Agents write with the patch tool and run the tests in a separate command |
 
 The `gh` path list does not authorize a merge: the separate merge rule refuses recognized shell merges in every mode.
 
