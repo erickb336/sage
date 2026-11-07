@@ -1949,7 +1949,8 @@ test("two tasks with the same finding key keep their own findings: round keys ma
 
 test("a later logbook's own heading before its first order stays, and the end check counts it (F-T640-31)", (t) => {
   const w = moveWorld(t);
-  writeFileSync(join(w.codexDir, "standing.md"), "# Standing orders\n\nEvery brief carries these lines word for word. Add a line when you notice that you repeat an instruction.\n\n# My own title line\n\n1. Codex order one.\n");
+  // The first sentence that init writes since T669 goes too; the test above has the older one.
+  writeFileSync(join(w.codexDir, "standing.md"), "# Standing orders\n\nEvery agent reads these orders before it starts; a brief points to them. Add a line when you notice that you repeat an instruction.\n\n# My own title line\n\n1. Codex order one.\n");
   const out = w.claude("move", "--gate", w.ask().id);
   assert.match(out, /\nstanding orders     5     5        1     1   match\nstanding notes      0     0        1     1   match\n/);
   assert.match(readFileSync(join(w.shared, w.folder(), "standing.md"), "utf8"), /\n## From the Codex logbook \(moved [^)]*\)\n\n# My own title line\n\n6\. Codex order one\. \(Codex 1\)\n$/);

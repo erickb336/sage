@@ -131,7 +131,7 @@ export const TOOLS = {
     input: { task: z.union([task, z.literal("-")]).describe("the task id, or - for none"), decision: word.describe("the decision"), why: z.string().describe("the reason") },
     pos: ["task", "decision"], argv: (i) => ["log", i.task, i.decision],
   },
-  standing: { describe: "Print the standing orders as written. Every brief carries them word for word.", argv: () => ["standing"] },
+  standing: { describe: "Print the standing orders as written. Every agent reads them before it starts; a brief points to them.", argv: () => ["standing"] },
   standing_add: { describe: "Add one standing order.", input: { order: word.describe("the order") }, pos: ["order"], argv: (i) => ["standing", "add", i.order] },
   pages: {
     describe: "Make and print the folder where agents save the task's pages, or record a page there (its path and sha256) in the decision trail. "

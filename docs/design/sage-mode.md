@@ -281,7 +281,7 @@ VERIFY      exact commands · how to run the app
 BUDGET      time and turns · stop and report on expiry
 FORBIDDEN   no merge · no force-push · no edits out of scope
 REPORT      the report shape below
-STANDING    standing.md, word for word
+STANDING    a pointer: read standing.md with sage standing before you start
 ```
 
 A tiny task gets the same fields in one short paragraph. The hook refuses a spawn in sage mode when a field is missing.
