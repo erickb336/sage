@@ -53,9 +53,11 @@ restores the before tables. The Codex settle step (`task-settle.mjs`) runs befor
 decide, prepare, assign, finish and a child's terminal check. It acknowledges and
 releases a row with a receipt, and it voids a row with no receipt and no marker.
 A void row is never a decision: a retry gets a fresh one. After a move, the
-receipts stay in the old logbook, so a row of a moved task finds none in the new
-logbook. A row that has its receipt's hash committed before the move: the
-journal never voids it, so its own acknowledgement releases it.
+receipts stay in the old logbook, so the settle reads the old logbooks that the
+new logbook's `sources.tsv` names too: a change saved before the move closes as
+done, and only a change that was never saved is void. When an old logbook is
+gone, a row that has its receipt's hash committed before the move: the journal
+never voids it, so its own acknowledgement releases it.
 
 The isolated `--sage-update-task` lifecycle probe uses simulated model replies.
 It checks the native read, update, historical retry and fresh-read route. It does

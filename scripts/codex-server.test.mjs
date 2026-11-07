@@ -5075,7 +5075,7 @@ test('T63: a durable receipt recovers a failed fence acknowledgement without reo
 });
 
 /** A durable interrupted receipt with an open journal row, and a stuck marker beside it. */
-async function stuckWithOpenFinish(t) {
+async function stuckWithOpenFinish(t, { stuck = true } = {}) {
   const f = await interruptedRunFixture(t), state = f.core.readAdmission(f.options.directory);
   const binding = state.bindings[0], preparation = state.preparations[0];
   assert.throws(() => f.tool.finishInterruptedRun({ project: f.options.projectDirectory, binding, task: 'T1', run: 'R1', role: 'lead', status: 'blocked',
@@ -5084,7 +5084,7 @@ async function stuckWithOpenFinish(t) {
     end: () => { throw Error('Injected acknowledgement failure'); },
   }), /Injected acknowledgement/);
   assert.equal(f.core.readAdmission(f.options.directory).interruptedFinishes[0].receiptHash, undefined);
-  writeFileSync(join(f.logbook, 'review-pending.json'), 'stuck');
+  if (stuck) writeFileSync(join(f.logbook, 'review-pending.json'), 'stuck');
   const repair = () => f.tool.sage(['logbook', 'repair', '--accept-change-loss', 'yes', '--project', f.options.projectDirectory], f.env);
   return { f, repair, receipt: join(f.logbook, 'interrupted-runs', `${binding.assignment}.json`) };
 }
@@ -5919,48 +5919,89 @@ test('T594: a chief with another logbook root settles a committed row of a share
   assert.deepEqual([row.void, row.released], [undefined, true]);
 });
 
-test('T658: after the move, the open fences of moved tasks close with no receipt in the new logbook, and the settle writes neither logbook', async t => {
-  const f = await nativeTaskUpdateFixture(t);
-  const { settleNativeWrites } = await import(pathToFileURL(join(f.plugin, 'runtime/task-settle.mjs')));
-  const shared = process.env.SAGE_SHARED_HOME, old = f.assignmentLogbook, folder = basename(old), dir = join(shared, folder);
+/** The owner's move of the fixture's project (T658), as the state tool runs it, with the two provider roots named (Claude has no logbook and no plugin row). */
+function fixtureMove(t, f) {
+  const shared = process.env.SAGE_SHARED_HOME, old = f.assignmentLogbook, dir = join(shared, basename(old)), project = f.options.projectDirectory;
   t.after(() => { for (const file of ['bindings.tsv', 'bindings.made', 'plugins.tsv', 'projects.tsv', 'projects.made', 'moves']) rmSync(join(shared, file), { recursive: true, force: true }); rmSync(dir, { recursive: true, force: true }); });
-  for (const id of ['R1', 'R2', 'R3']) f.assignmentCli('run', 'done', id, '--status', 'blocked'); // the move needs zero running runs
-  // The Codex chief stops after the commit of a T1 update, before its release: the row has its receipt's hash.
-  const first = await taskUpdateCoordinator(f, f.request({ title: 'Before the move' }));
-  assert.throws(() => first.run({ ...first.coordination, release() { throw Error('Injected stop'); } }), { code: 'uncertain-outcome' });
-  // It stops on a T2 update after the commit, before the acknowledgement: the row has no hash, and the saved change stays.
-  const second = { request: 'a3333333-3333-4333-8333-333333333333', task: 'T2', changes: { title: 'Also before the move' },
-    version: f.assignmentTool.readTaskSnapshot({ project: f.options.projectDirectory, task: 'T2' }, f.assignmentEnv).version };
-  const other = await taskUpdateCoordinator(f, second);
-  assert.throws(() => other.run({ ...other.coordination, acknowledge() { throw Error('Injected stop'); } }));
-  const open = () => f.core.readAdmission(f.options.directory).taskUpdates.map(row => [row.update.task, Boolean(row.receiptHash), row.released ?? false, row.void ?? false]);
-  assert.deepEqual(open(), [['T1', true, false, false], ['T2', false, false, false]]);
-  // The owner's move, as the state tool runs it, with the two provider roots named (Claude has no logbook and no plugin row).
   const roots = () => [{ provider: 'claude', path: join(f.dir, 'claude-root') }, { provider: 'codex', path: f.options.logbookRoot }];
   const mover = f.core.createStateTool({ provider: 'codex', defaultRoot: () => f.options.logbookRoot, legacyRoots: roots });
+  const command = (...args) => mover.command([...args, '--project', project], f.assignmentEnv, { project, native: 'test-chief' });
   const move = (...args) => {
-    const { code, text } = mover.command([...args, '--project', f.options.projectDirectory], f.assignmentEnv, { project: f.options.projectDirectory, native: 'test-chief' });
+    const { code, text } = command(...args);
     assert.equal(code, 0, text);
     return text;
   };
-  // The preview refuses while T2's change is saved, and any write finishes it (its receipt rolls it forward). The journal does not see that write.
-  assert.match(mover.command(['move', '--preview', '--project', f.options.projectDirectory], f.assignmentEnv, {}).text, /A saved change is incomplete\. Any write in this project finishes it/);
+  const run = () => {
+    const plan = /plan ([0-9a-f]{8})\n/.exec(move('move', '--preview'))[1], gate = /^(G\d+) /.exec(move('move', '--plan', plan))[1];
+    move('gate', 'answer', gate, '--option', '1');
+    assert.match(move('move', '--gate', gate), /Reconciliation · every count matches the plan/);
+    assert.ok(existsSync(join(old, 'moved.json')), 'the move ran');
+  };
+  return { old, dir, command, move, run };
+}
+
+/**
+ * The owner's move after the Codex chief stopped three updates at three points: T1 after the commit, before its release
+ * (the row has its receipt's hash); T2 after the commit, before its acknowledgement (no hash, the change is saved); and T3
+ * after its decision, before the save (no hash, never saved). The settle has not run yet.
+ */
+async function movedUpdatesFixture(t) {
+  const f = await nativeTaskUpdateFixture(t);
+  const { settleNativeWrites } = await import(pathToFileURL(join(f.plugin, 'runtime/task-settle.mjs')));
+  f.assignmentCli('task', 'add', '--priority', 'P2', '--title', 'Third fixture task', '--size', 'small');
+  for (const id of ['R1', 'R2', 'R3']) f.assignmentCli('run', 'done', id, '--status', 'blocked'); // the move needs zero running runs
+  const stopped = async (request, stop) => {
+    const { run, coordination } = await taskUpdateCoordinator(f, request);
+    assert.throws(() => run({ ...coordination, ...stop(coordination) })); // the row's state below shows where it stopped
+  };
+  const version = task => f.assignmentTool.readTaskSnapshot({ project: f.options.projectDirectory, task }, f.assignmentEnv).version;
+  await stopped(f.request({ title: 'Before the move' }), () => ({ release() { throw Error('Injected stop'); } }));
+  await stopped({ request: 'a3333333-3333-4333-8333-333333333333', task: 'T2', changes: { title: 'Also before the move' }, version: version('T2') },
+    () => ({ acknowledge() { throw Error('Injected stop'); } }));
+  await stopped({ request: 'a6666666-6666-4666-8666-666666666666', task: 'T3', changes: { title: 'Never saved' }, version: version('T3') },
+    coordination => ({ decide(...args) { coordination.decide(...args); throw Error('Injected stop'); } }));
+  const open = () => f.core.readAdmission(f.options.directory).taskUpdates.map(row => [row.update.task, Boolean(row.receiptHash), row.released ?? false, row.void ?? false]);
+  assert.deepEqual(open(), [['T1', true, false, false], ['T2', false, false, false], ['T3', false, false, false]]);
+  const { old, dir, command, move, run } = fixtureMove(t, f);
+  // The preview refuses while a change is saved and incomplete, and any write settles it: T3's marker has no receipt, so its
+  // change goes back. T2's marker went before, at T3's own write: its receipt rolled it forward. The journal sees neither write.
+  assert.match(command('move', '--preview').text, /A saved change is incomplete\. Any write in this project finishes it/);
   move('log', '-', 'move', '--why', 'a saved change finishes before the preview');
-  const plan = /plan ([0-9a-f]{8})\n/.exec(move('move', '--preview'))[1], gate = /^(G\d+) /.exec(move('move', '--plan', plan))[1];
-  move('gate', 'answer', gate, '--option', '1');
-  assert.match(move('move', '--gate', gate), /Reconciliation · every count matches the plan/);
-  assert.ok(existsSync(join(old, 'moved.json')), 'the move ran');
-  // The move finished T2's saved change first (its receipt rolls it forward), so both titles moved.
-  assert.deepEqual(readFileSync(join(dir, 'tasks.tsv'), 'utf8').split('\n').slice(1, -1).map(line => line.split('\t')[1]), ['Before the move', 'Also before the move']);
-  const bytes = folder => tree(folder);
-  const before = { old: bytes(old), moved: bytes(dir) };
-  settleNativeWrites(f.options);
-  // T1 committed: the journal never voids a row with a receipt, so its own acknowledgement releases it. T2 has no hash: void.
-  assert.deepEqual(open(), [['T1', true, true, false], ['T2', false, false, true]]);
-  assert.deepEqual({ old: bytes(old), moved: bytes(dir) }, before, 'the settle wrote no logbook');
+  run();
+  // T1's and T2's changes were saved, so their titles moved; T3's was not.
+  assert.deepEqual(readFileSync(join(dir, 'tasks.tsv'), 'utf8').split('\n').slice(1, -1).map(line => line.split('\t')[1]), ['Before the move', 'Also before the move', 'Third fixture task']);
   assert.equal(existsSync(join(dir, 'task-updates')), false, 'no receipt in the new logbook');
+  return { f, settleNativeWrites, open, old, dir };
+}
+
+test('T658, T680: after the move, the settle reads the receipts in the old logbook: a saved change closes as done, only a change never saved is void, and it writes neither logbook', async t => {
+  const { f, settleNativeWrites, open, old, dir } = await movedUpdatesFixture(t);
+  const before = { old: tree(old), moved: tree(dir) };
+  settleNativeWrites(f.options);
+  // T1 and T2 were saved before the move: each closes as done, with the hash of its receipt in the old logbook. T3: void.
+  assert.deepEqual(open(), [['T1', true, true, false], ['T2', true, true, false], ['T3', false, false, true]]);
+  // Each row holds the hash that its receipt file in the old logbook holds.
+  for (const { update, receiptHash } of f.core.readAdmission(f.options.directory).taskUpdates.filter(row => row.update.task !== 'T3')) {
+    const owner = JSON.stringify([update.project, update.session, update.epoch]);
+    const file = join(old, 'task-updates', createHash('sha256').update(JSON.stringify([owner, update.request])).digest('hex') + '.json');
+    assert.equal(JSON.parse(readFileSync(file, 'utf8')).hash, receiptHash, update.task);
+  }
+  assert.deepEqual({ old: tree(old), moved: tree(dir) }, before, 'the settle wrote no logbook');
   settleNativeWrites(f.options); // a second settle finds no open row, and still writes nothing
-  assert.deepEqual({ old: bytes(old), moved: bytes(dir) }, before);
+  assert.deepEqual({ old: tree(old), moved: tree(dir) }, before);
+});
+
+test('T680: after the move, the settle ends an interrupted run finish whose receipt is in the old logbook, and writes neither logbook', async t => {
+  const { f } = await stuckWithOpenFinish(t, { stuck: false });
+  for (const id of ['R2', 'R3']) f.cli('run', 'done', id, '--status', 'blocked'); // the move needs zero running runs; R1 finished
+  const { old, dir, run } = fixtureMove(t, f);
+  run();
+  assert.equal(existsSync(join(dir, 'interrupted-runs')), false, 'no receipt in the new logbook');
+  const before = { old: tree(old), moved: tree(dir) }, settle = await settleOf(f);
+  settle();
+  const { receiptHash, void: voided } = finishRow(f), file = join(old, 'interrupted-runs', `${f.core.readAdmission(f.options.directory).bindings[0].assignment}.json`);
+  assert.deepEqual([receiptHash, voided], [JSON.parse(readFileSync(file, 'utf8')).hash, undefined]);
+  assert.deepEqual({ old: tree(old), moved: tree(dir) }, before, 'the settle wrote no logbook');
 });
 
 test('T578: a task update behind an unresolved one gets a step that its chief can do', async t => {
