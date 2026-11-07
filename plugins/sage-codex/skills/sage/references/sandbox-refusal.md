@@ -1,1 +1,3 @@
-**Sandbox refusals in Codex.** A sandbox refusal is not a failed check or a finding: run the same command again with escalated permissions, and wait for the owner. When the approval policy is `never` or the owner says no, name the step under NOT VERIFIED.
+**Sandbox refusals in Codex.** Follow the active approval policy. With policy `never`, never request escalated permissions. Stop a denied action; do not retry through another tool, command form or permission level.
+
+A refusal is not a failed check or a finding. Continue independent allowed work. A refused progress message does not cancel permitted edits or checks. Name the denied action and unchecked behavior under NOT VERIFIED. Use STATUS blocked only when the refusal leaves required work unfinished.

@@ -435,6 +435,82 @@ test("T91: MCP compares synthetic retained reports with status-only results and 
   assert.equal(await s.call("report_compare", args), '{"status":"damaged"}');
 });
 
+test("T108: a changed report cannot consume the save-once page; exact Markdown still backs its verdict", async t => {
+  const w = await leadWorld(t);
+  await w.lead("task_set", { task: "T1", fields: { state: "building" } });
+  await w.lead("task_set", { task: "T1", fields: { state: "reviewing", pr: "5" } });
+  const text = CLEAN.replace("EVIDENCE npm test passed", "EVIDENCE **Sample** test passed\n\n`café 🙂`\r\n");
+  const run = await reviewed(w, "code-reviewer", text);
+  const folder = await w.lead("pages", { task: "T1" });
+  const path = join(folder, `${run}-report.md`);
+  const dir = w.tool.storeDir(w.project, w.env);
+  const before = readFileSync(join(dir, "decisions.tsv"), "utf8");
+  for (const changed of [text.replace("**Sample**", "Sample"), text.replaceAll("\r\n", "\n"), `${text}\n`]) {
+    const refused = await w.lead("pages", { task: "T1", run, text: changed });
+    assert.match(refused.error, /does not match the retained report.*Nothing saved/);
+    assert.equal(existsSync(path), false, "a mismatch leaves the first save available");
+    assert.equal(readFileSync(join(dir, "decisions.tsv"), "utf8"), before, "no page decision for refused text");
+    assert.equal(refused.error.includes("café"), false, "no retained text in the refusal");
+  }
+  const saved = await w.lead("pages", { task: "T1", run, text });
+  assert.match(saved, / · sha256 [0-9a-f]{64}$/);
+  assert.equal(readFileSync(path, "utf8"), text);
+  assert.equal(await w.lead("pages", { task: "T1", run, text }), saved, "exact retry keeps the page");
+  const sha256 = saved.split(" · sha256 ")[1];
+  assert.equal(await w.call("report_compare", { task: "T1", run, sha256 }), '{"status":"match"}');
+  assert.match(await w.lead("verdict", { task: "T1", kind: "review-clean", sha: SHA, pr: 5, run }), /^T1 review-clean/);
+});
+
+test("T108: record input cannot bypass report comparison or consume its first save", async t => {
+  const w = await leadWorld(t);
+  await w.lead("task_set", { task: "T1", fields: { state: "building" } });
+  const run = (await w.lead("run_add", { task: "T1", role: "implementer", branch: "sage/t1-a" })).split(" ")[0];
+  w.tool.keepReport(w.project, { task: "T1", run, role: "implementer", sha: SHA, text: CLEAN }, w.env);
+  const folder = await w.lead("pages", { task: "T1" });
+  const page = join(folder, `${run}-report.md`);
+  const decisions = join(w.tool.storeDir(w.project, w.env), "decisions.tsv");
+  const before = readFileSync(decisions, "utf8");
+  for (const input of [
+    { record: `--run=${run}`, text: "SAMPLE altered report" },
+    { record: page, run }, { record: page, text: CLEAN }, { record: page, run, text: CLEAN },
+    { record: page, text: "" }, { record: page, run: "" },
+    { record: `--run=${run}` }, { record: "relative/report.md" }, { record: "" },
+  ]) {
+    const refused = await w.lead("pages", { task: "T1", ...input });
+    assert.equal(typeof refused.error, "string", JSON.stringify(input));
+    assert.equal(existsSync(page), false, "invalid input leaves the first save available");
+    assert.equal(readFileSync(decisions, "utf8"), before, "no decision for invalid input");
+  }
+  assert.match(await w.lead("pages", { task: "T1", run, text: CLEAN }), / · sha256 /);
+  assert.equal(readFileSync(page, "utf8"), CLEAN);
+  assert.match(await w.lead("pages", { task: "T1", record: page }), / · sha256 /);
+});
+
+test("T108: page preflight preserves admission, damaged capture and missing-capture verdict refusals", async t => {
+  const w = await leadWorld(t);
+  await w.lead("task_set", { task: "T1", fields: { state: "building" } });
+  await w.lead("task_set", { task: "T1", fields: { state: "reviewing", pr: "5" } });
+  const run = (await w.lead("run_add", { task: "T1", role: "code-reviewer" })).split(" ")[0];
+  const args = { task: "T1", run, text: CLEAN };
+  assert.match((await w.call("pages", args, { gate: false })).error, /gate is not running/);
+  assert.match((await w.call("pages", args, { agent: `/root/sage_code_reviewer_t1_${run.toLowerCase()}` })).denied, /only the chief records/);
+  assert.match((await w.lead("pages", { ...args, task: "T2" })).denied, /own task/);
+  assert.match((await w.call("pages", { ...args, task: "T2" })).error, /--run is a run of T2/);
+  const folder = await w.lead("pages", { task: "T1" });
+  const dir = w.tool.storeDir(w.project, w.env);
+  w.tool.keepReport(w.project, { task: "T1", run, role: "code-reviewer", sha: SHA, text: CLEAN }, w.env);
+  writeFileSync(join(dir, `kept/${run}.json`), "{");
+  assert.match((await w.lead("pages", args)).error, /retained report is damaged.*Nothing saved/);
+  assert.equal(existsSync(join(folder, `${run}-report.md`)), false);
+  const missing = (await w.lead("run_add", { task: "T1", role: "code-reviewer" })).split(" ")[0];
+  assert.match(await w.lead("pages", { ...args, run: missing }), / · sha256 /, "manual pages still work without capture");
+  await w.lead("run_done", { run: missing, status: "done", tokens: 1 });
+  assert.match((await w.lead("verdict", { task: "T1", kind: "review-clean", sha: SHA, pr: 5, run: missing })).error, /has no kept report/);
+  assert.throws(() => w.tool.keepReport(w.project, { task: "T1", run: missing, role: "code-reviewer", sha: SHA, text: CLEAN }, w.env), /ended as done/);
+  await w.call("run_done", { run: "R1", status: "failed" });
+  assert.match((await w.lead("pages", args)).denied, /no running lead run/);
+});
+
 test("T48: task_adopt and approved repair reach the shared rule through Codex MCP", async t => {
   const bin = mkdtempSync(join(tmpdir(), 'sage-adoption-mcp-'));
   t.after(() => rmSync(bin, { recursive: true, force: true }));

@@ -423,12 +423,13 @@ test("T553: role.mjs lead adds the Codex steps to the lead's text, and no other 
   // How a lead starts each helper: the name form, the role text from a command that it can run, and the brief.
   assert.match(r.stdout, /`task_name`: `sage_<role>_t<n>_r<k>`, with `_` for `-` in the role, for example `sage_code_reviewer_t12_r41`/);
   assert.match(r.stdout, /`message`: the whole output of step 2, a blank line, then the brief\./);
-  const [, script] = /Run `node (\S+) <role>`/.exec(r.stdout) ?? [];
+  const [, node, script] = /Run `(\S+) (\S+) <role>`/.exec(r.stdout) ?? [];
+  assert.equal(node, process.execPath, "the command uses this Node executable");
   assert.equal(script, join(ROOT, "plugins/sage-codex/skills/sage/role.mjs"), "the real path of the script");
-  assert.match(spawnSync("node", [script, "qa"], { encoding: "utf8" }).stdout, /^# QA\n/, "the command that the lead runs prints a helper's role text");
+  assert.match(spawnSync(node, [script, "qa"], { encoding: "utf8" }).stdout, /^# QA\n/, "the command that the lead runs prints a helper's role text");
   // How it waits, reads and records, and that its messages are refused.
   assert.match(r.stdout, /Call `wait_agent` again until that helper's report comes\./);
-  assert.match(r.stdout, /Save the whole report with `pages`/);
+  assert.match(r.stdout, /Save the whole report verbatim with `pages`/);
   for (const tool of ["run_add", "run_done", "brief", "finding_add", "finding_triage", "finding_close", "round", "verdict", "task_set"]) assert.ok(r.stdout.includes(`\`${tool}\``), tool);
   assert.match(r.stdout, /The gate refuses `send_message`, `followup_task` and `send_input` from a lead/);
   assert.match(r.stdout, /The `checks-pass` and `checks-fail` verdicts are the chief's/);
@@ -459,10 +460,10 @@ test("T603: the lead's text holds the pilot's rules, each role that writes git o
   assert.match(lead, /A finished or interrupted helper frees its thread\./);
   assert.match(lead, /with the sage tools\. They ask for no approval\./);
   assert.doesNotMatch(lead, /AgentLimitReached|the chief does the lead's work|Multi-agent v1|wait_agent` for the helper/);
-  const line = /\n\*\*Approvals in Codex\.\*\* In Codex's default sandbox, `\.git` is read-only and the network is off\. So each git write \(for example `git worktree add` and `git commit`\) and each network step asks the owner for approval, at least 5 clicks in each small task\. When the sandbox refuses such a step, run the same command again with escalated permissions, and wait for the owner\. The exception is `git worktree add -b <branch> <path>`: first run `git branch --list <branch>`\. If it prints the branch, the failed step left it, so run `git worktree add <path> <branch>` with escalated permissions and no `-b`\. If it prints nothing, run the same command again with escalated permissions\. A sandbox refusal is not a failed task\. When the approval policy is `never` or the owner says no, report STATUS blocked and name the step\.\n\n# The sage report\n/;
+  const line = /\n\*\*Approvals in Codex\.\*\* Read the active sandbox and approval policy\.[\s\S]*With approval policy `never`, never request escalated permissions\.[\s\S]*Continue independent allowed work\.[\s\S]*# The sage report\n/;
   for (const role of ["lead", "implementer", "designer", "arena-judge"]) assert.match(text(role), line, role);
   // A role that does not build gets the short line: a sandbox refusal never reads as a failed check or a finding.
-  const short = /\n\*\*Sandbox refusals in Codex\.\*\* A sandbox refusal is not a failed check or a finding: run the same command again with escalated permissions, and wait for the owner\. When the approval policy is `never` or the owner says no, name the step under NOT VERIFIED\.\n\n# The sage report\n/;
+  const short = /\n\*\*Sandbox refusals in Codex\.\*\* Follow the active approval policy\.[\s\S]*A refusal is not a failed check or a finding\.[\s\S]*Continue independent allowed work\.[\s\S]*# The sage report\n/;
   for (const role of ["pe", "code-reviewer", "security-reviewer", "ux-reviewer", "qa", "investigate", "evidence-review"]) {
     assert.match(text(role), short, role);
     assert.doesNotMatch(text(role), /Approvals in Codex/, role);

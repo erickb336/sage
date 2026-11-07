@@ -20,6 +20,10 @@ A role agent may also run `task T7`, `config`, and `board T7 --view task` with a
 
 ## Verify installed package files
 
+The scoped shell reads above also apply to a lead. The MCP `status` tool provides another logbook read. Use inspected absolute Node and CLI paths for supported role reads. Use `git config --get user.email` to state the Git identity read explicitly. A refusal stops that action; it does not authorize another command form.
+
+Before repository checks, prepare dependencies in the assigned worktree when the brief authorizes it, for example `npm ci --ignore-scripts`. Preserve the manifest and lockfile. Build first, then import hooks from `plugins/sage-codex/`; their core imports resolve to the bundled package. This guidance changes no hook permission.
+
 The chief or an assigned role can compare this CLI's installed package with a commit in the assigned project. Use the same literal executable and project rules above:
 
 ```sh

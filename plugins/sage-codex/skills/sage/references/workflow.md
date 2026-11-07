@@ -1,5 +1,9 @@
 # The team workflow
 
+Keep report text exact when the chief or lead saves it with `pages`. Preserve Markdown and every newline; reuse the returned digest for `report_compare`. A known mismatch refuses before the first page save. Missing capture remains a limitation and grants no verdict.
+
+Stop only the denied action after an incidental refusal. Continue independent work that the brief and active policy allow. A refused progress message is not a failed check. Follow [sandbox refusals](sandbox-refusal.md); do not retry through another route.
+
 The parent is the chief. It writes the logbook, and a lead writes only the records of its own task. The chief frames work, asks product questions and shows results. One lead coordinates each build task and its PR. Specialists implement or review. This is a procedure followed by agents; it is not strict runtime admission.
 
 1. Resolve the project and inspect current tasks, standing orders, worktrees and known active ownership. Preserve other sessions' work.
@@ -28,6 +32,49 @@ For a run created through this manual workflow, confirmed owner interruption is 
 After compaction or restart, read current task/run records, reports, branch/head and host status. A stored run or old mode note does not authenticate a live child. If continuity is uncertain, require explicit owner re-entry and resolve ownership before dispatch. Do not send new child input to manufacture a terminal result.
 
 The manual logbook does not replace protected native preparation, report, review or completion receipts. Never switch to it as a workaround for a protected API denial. Preserve the chosen Codex model. Advice is optional; this workflow changes no hooks, settings or enforcement defaults.
+
+## Edit project files with explicit targets
+
+Use the native `apply_patch` tool for a permitted project edit. Give each target a literal path inside the assigned worktree. Put program text inside the patch body. Do not wrap the patch in a shell command or an interpreter.
+
+The shell guard examines program arguments and stdin as well as redirection targets. A dollar sign, backtick or pattern can make a word's location uncertain. This can refuse a benign program string. A refusal does not prove that the intended filename is protected. The guard does not interpret arbitrary programs to prove their writes safe.
+
+Before a refusal, prefer this form for an authorized implementer:
+
+```diff
+*** Begin Patch
+*** Add File: scripts/evaluate-sample.mjs
++export const caption = `SAMPLE [${label}`;
+*** Add File: tests/sample-guard.test.js
++// SAMPLE DATA: this is a disposable example.
+*** End Patch
+```
+
+After an edit, read the target files and inspect the diff. Run only the checks authorized by the brief. The patch guard still checks paths, protected folders and the agent's role. Literal patch targets grant no permission to change settings, credentials, logbooks or another task's files.
+
+If a protected action refuses, stop and report the action and refusal. Do not retry it through a shell, interpreter, CLI or another tool. Keep private payloads local. A later authorized task can establish a permitted project edit with explicit targets; it cannot override a protected denial.
+
+Fictional gate inputs check source behavior only. They do not establish which input caused an earlier refusal, or prove installed native behavior. Retain the exact input, normalized event, working folder, writer identity and executing revision when an investigation permits it.
+
+### A managed worktree receives a protected-folder refusal
+
+Successful worktree creation and task lookup do not prove that a later patch is permitted. Stop when the native hook refuses it. Assignment and Git linkage do not override protected targets.
+
+The current source checks `.codex` segments below the detected project root, or the whole target path outside that root. Existing coverage allows ordinary files inside a detected project under `.codex/worktrees`. A linked checkout under `.codex` can still refuse when the event's working folder identifies another project root. This distinction does not establish the cause of a native refusal without its event and executing revision.
+
+The T111 evidence has two separate limits. R24 lacks the original payload and cannot establish its refusal's cause. R27 reports an actual native structured-patch refusal naming `.codex`, after managed worktree creation and task lookup succeeded. The earlier native demonstration outside `.codex` resolves neither case. Synthetic linked-worktree inputs demonstrate source behavior only.
+
+For a later task, the owner can keep the task blocked while investigating the installed behavior, or authorize a separate ordinary linked worktree. Recommend the ordinary worktree outside `.codex`, with a fresh branch and explicit owner/chief assignment. Leave the managed checkout untouched. These are proposed steps, not permission to retry an active denial:
+
+1. The owner/chief confirms the original branch's writer, status and exact head. Resolve any active or uncertain ownership first.
+2. Choose a new absolute worktree path outside `.codex`, settings, secrets and logbooks. Check its resolved parent path for symlink escapes.
+3. From the repository, run `git worktree list --porcelain` and `git branch --list <new-branch>`. Stop if the path or branch already exists.
+4. After separate authorization, run `git worktree add -b <new-branch> <absolute-new-path> <verified-head>`. Use a fresh `codex/` branch; do not force-checkout or move the managed checkout's branch.
+5. The owner/chief assigns the new path, branch, writer and allowed files in a new brief before any source edit.
+6. In that assigned checkout, verify `pwd -P`, `git status --short`, `git branch --show-current` and `git rev-parse HEAD` against the brief.
+7. Use native explicit patches only for the newly authorized scope. Stop and report any protected refusal; do not switch tools or weaken enforcement.
+
+This procedure changes no settings, credentials, logbooks or protected-path policy. It does not authorize edits to an unrelated checkout.
 
 ## Review usage without a host measurement
 
