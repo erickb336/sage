@@ -64,7 +64,7 @@ Needs you also has items that no card holds:
 - a programs table that the board cannot read;
 - a logbook that it cannot read;
 - a provider's logbook folder that it cannot read ("The Codex logbooks cannot be read");
-- an open move gate ("The move gate G104 waits for your answer"): [the move](using-sage.md#move-an-existing-project) of the project waits for your move or keep.
+- an open move gate ("The move gate G104 waits for your answer"): [the move](using-sage.md#move-an-existing-project) of the project waits for your answer to its gate.
 
 Each item says why and what to do, and counts in "needs you".
 

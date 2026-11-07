@@ -799,7 +799,7 @@ function logbookNeeds(source, project, group) {
   // An open move gate has no task, so no card shows it: it needs the owner here (F-T640-41, the owner's option a).
   const moves = project.old ? [] : (project.tables.gates ?? []).filter(gate => !gate.answer && !gate.task && /^move · plan [0-9a-f]{8}$/.test(String(gate.question ?? "").split(LINE)[0]));
   return [
-    ...moves.map(gate => ({ ...item("move", `The move gate ${gate.id} waits for your answer`, `${String(gate.question).split(LINE)[1] ?? "Move the project into one shared logbook?"} Answer move or keep in the chat: the chief puts the gate to you word for word.`), key: `${project.key}/${gate.id}` })),
+    ...moves.map(gate => ({ ...item("move", `The move gate ${gate.id} waits for your answer`, `${String(gate.question).split(LINE)[1] ?? "Move the project into one shared logbook?"} Answer the gate in the chat: the chief puts it to you word for word, with its options and its recommendation.`), key: `${project.key}/${gate.id}` })),
     ...(programs && !noTasks ? [item("programs", "The programs table cannot be read", `${reasonOf(programs)}. The board shows the tasks without their programs. Ask the chief to repair the logbook.`)] : []),
     ...(lost.length ? [item("logbook", `The ${title(source.label)} logbook cannot be read`, `${folder ?? why.map(reasonOf).join(". ")}. ${shows} Ask the chief to repair the logbook.`)] : []),
   ];

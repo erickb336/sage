@@ -2567,7 +2567,7 @@ test("an open move gate shows under Needs you on the board, and no longer after 
   const w = moveWorld(t), plan = w.planOf(w.claude("move", "--preview"));
   w.claude("move", "--plan", plan);
   const need = boardOf(w).programNeeds.find((n) => n.kind === "move");
-  assert.deepEqual([need?.title, need?.text], ["The move gate G2 waits for your answer", "Move the project project into one shared logbook? Answer move or keep in the chat: the chief puts the gate to you word for word."]);
+  assert.deepEqual([need?.title, need?.text], ["The move gate G2 waits for your answer", "Move the project project into one shared logbook? Answer the gate in the chat: the chief puts it to you word for word, with its options and its recommendation."]);
   assert.match(renderBoardText(boardOf(w)), /The move gate G2 waits for your answer/);
   w.claude("gate", "answer", "G2", "--option", "2");
   assert.equal(boardOf(w).programNeeds.some((n) => n.kind === "move"), false);
