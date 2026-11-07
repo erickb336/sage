@@ -328,8 +328,8 @@ test("T656: a task that came from a Codex chief through a takeover gate merges a
     writeFileSync(file, [top, ...lines.map((l) => (l && match(l) ? l.split("\t").with(k, at).join("\t") : l))].join("\n"));
   };
   retime("ledger", () => true, "2026-01-01T00:00:00Z");
-  retime("decisions", (l) => l.includes("of T1 with C2 (codex)?") && l.endsWith("→ replace\tthe user's answer"), "2026-01-01T00:00:01Z");
-  retime("decisions", (l) => l.includes("of T1 with C1 (claude)?") && l.endsWith("→ replace\tthe user's answer"), "2026-01-01T00:00:02Z");
+  retime("decisions", (l) => l.includes(" to C2 (codex)?") && l.endsWith("→ approve\tthe user's answer"), "2026-01-01T00:00:01Z");
+  retime("decisions", (l) => l.includes(" to C1 (claude)?") && l.endsWith("→ approve\tthe user's answer"), "2026-01-01T00:00:02Z");
   refused(w.pr("merge", "T1"), /merge check: T1 came from a chief of another provider through a takeover gate \(2026-01-01T00:00:02Z\), so the cycles before that do not merge it alone: run sage-pr import T1/);
   for (const kind of ["review-clean", "qa-pass"]) w.sage("verdict", "T1", "--sha", head, "--kind", kind, "--cycle", "2");
   const r = w.pr("merge", "T1");

@@ -4250,7 +4250,7 @@ test('T604: on a shared logbook, sage_update_task and sage_create_run give the g
     return { version, updated: (await update.call({ request: turns[0], task: 'T1', version, changes: { title: 'b' } })).error,
       created: (await create.call({ request: turns[1], task: 'T1', role: 'qa', branch: '', candidate: '' })).error };
   };
-  const owned = 'T1 belongs to chief C1 (codex), not to C2. Nothing changed. Change only your own tasks. If C1 stopped, open a replace gate for the owner to answer: call the gate_replace tool with this task and to C2.';
+  const owned = 'T1 belongs to chief C1 (codex), not to C2. Nothing changed. Change only your own tasks. To take T1, ask C1 to offer it to you, or open a takeover gate for the owner to answer: call the gate_replace tool with this task and to C2.';
   const held = await attempt();
   assert.equal(held.updated, `Sage could not update this task. [other-chief] ${owned}`);
   assert.equal(held.created, `Sage could not create this run. ${owned}`);

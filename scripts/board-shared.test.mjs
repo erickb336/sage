@@ -72,7 +72,7 @@ function world(t, { bindings } = {}) {
       run("R411", "T320", "implementer", "running", iso(-9 * MIN), { chief: "C1" }),
       run("R440", "T326", "implementer", "running", iso(-3 * DAY), { chief: "C2" }),
     ],
-    gates: [{ id: "G7", task: "T320", question: replaceQuestion({ from: "C1", to: "C2", task: "T320", title: "Split the sync step", runs: [{ id: "R410", role: "lead" }, { id: "R411", role: "implementer" }], label: id => `${id} (${id === "C1" ? "claude" : "codex"})` }), options: "replace|keep", recommendation: "replace", at: iso(-5 * MIN), kind: "replace" }],
+    gates: [{ id: "G7", task: "T320", question: replaceQuestion({ from: "C1", to: "C2", task: "T320", title: "Split the sync step", runs: [{ id: "R410", role: "lead" }, { id: "R411", role: "implementer" }], label: id => `${id} (${id === "C1" ? "claude" : "codex"})` }), options: "approve|decline", recommendation: "approve", at: iso(-5 * MIN), kind: "replace" }],
   }, COLS, { files: {
     "chiefs.tsv": "id\tprovider\tnative\tat\nC1\tclaude\tsession-a\t2026-10-01T00:00:00Z\nC2\tcodex\tsession-b\t2026-10-01T00:00:00Z\n",
     "sources.tsv": `provider\tpath\tat\nclaude\t${join(claudeRoot, FOLDER)}\t2026-10-02T00:00:00Z\ncodex\t${join(codexRoot, FOLDER)}\t2026-10-02T00:00:00Z\n`,
@@ -157,18 +157,18 @@ test("each shared card names its owning chief, an open offer, or Unclaimed; the 
   assert.match(renderBoardText(model), /⇄ Offered to Codex · C2\\\. It waits for R407 and R420 to end, then Codex · C2 accepts\\\./);
 });
 
-test("Needs you: an open Replace gate asks its question in one line, and a stale run of the owning chief says that the chief may have stopped (G103 default)", t => {
+test("Needs you: an open takeover gate asks its question in one line, and a stale run of the owning chief says that the chief may have stopped (G103 default)", t => {
   const model = modelOf(world(t).sources);
   const replace = card(model, "T320").reasons, unknown = card(model, "T319").reasons;
-  assert.deepEqual(replace.map(reason => reason.text), ["Replace the owning chief of T320, Claude · C1, with Codex · C2? R410 and R411 end as failed."]);
-  assert.deepEqual(unknown.map(reason => [reason.kind, reason.text, reason.recommendation]), [["chief-unknown", "The owning chief, Codex · C2, may have stopped: R412 shows no change for over 24 h.", "if it stopped, ask any chief to open a Replace gate."]]);
+  assert.deepEqual(replace.map(reason => reason.text), ["Hand T320 from Claude · C1 to Codex · C2? R410 and R411 end as failed."]);
+  assert.deepEqual(unknown.map(reason => [reason.kind, reason.text, reason.recommendation]), [["chief-unknown", "The owning chief, Codex · C2, may have stopped: R412 shows no change for over 24 h.", "if it stopped, ask any chief to open a takeover gate."]]);
   // A stale run of another chief is not the owning chief's: T326 belongs to C1, and its stale run to C2.
   assert.deepEqual(card(model, "T326").reasons, []);
   const lantern = model.projects.find(project => project.name === "lantern");
   assert.deepEqual(model.needsOwner.filter(item => item.group === lantern.key).map(item => item.id).sort(), ["T319", "T320"]);
   assert.equal(lantern.needsOwner, 2);
   const text = renderBoardText(model);
-  assert.match(text, /> shared\/lantern-4be1a2\/G7 · Replace the owning chief of T320, Claude · C1, with Codex · C2\? R410 and R411 end as failed\\\./);
+  assert.match(text, /> shared\/lantern-4be1a2\/G7 · Hand T320 from Claude · C1 to Codex · C2\? R410 and R411 end as failed\\\./);
   assert.match(text, /> The owning chief, Codex · C2, may have stopped\\: R412 shows no change for over 24 h\\\./);
 });
 
@@ -762,24 +762,31 @@ test("F-T625-2, F-T625-5 and F-T625-6: a checkout name loses bidi characters; a 
 });
 
 // T631: the copy, layout and hardening follow-ups of PRs 5a, 5b, 6b and T630.
-test("F-T624-5: the Replace gate's recommendation says when, as the design does: when you know that the chief stopped", t => {
+test("F-T624-5: the takeover gate's recommendation says when, as the design does: when you know that the chief stopped", t => {
   const model = modelOf(world(t).sources);
-  assert.equal(card(model, "T320").reasons[0].recommendation, "replace, when you know that Claude · C1 stopped");
-  assert.match(renderBoardText(model), /Recommended: replace, when you know that Claude · C1 stopped/);
-  assert.match(renderBoardHtml(model), /I recommend: replace, when you know that Claude · C1 stopped/);
+  assert.equal(card(model, "T320").reasons[0].recommendation, "approve, when you know that Claude · C1 stopped");
+  assert.match(renderBoardText(model), /Recommended: approve, when you know that Claude · C1 stopped/);
+  assert.match(renderBoardHtml(model), /I recommend: approve, when you know that Claude · C1 stopped/);
 });
 
 test("T656: the takeover gate's recommendation says that the owning chief offered the task, when its open offer names the gate's new chief; a task with no owning chief says so", t => {
   const w = world(t), file = join(w.shared, FOLDER, "gates.tsv"), label = id => `${id} (${id === "C1" ? "claude" : "codex"})`;
-  const gate = (id, taskId, from, to) => [id, taskId, replaceQuestion({ from, to, task: taskId, title: "x", runs: [], label }), "replace|keep", "replace", "", "", iso(-MIN), "replace"].join("\t");
+  const gate = (id, taskId, from, to, fresh = false) => [id, taskId, replaceQuestion({ from, to, task: taskId, title: "x", runs: [], label, fresh }), "approve|decline", "approve", "", "", iso(-MIN), "replace"].join("\t");
+  // A gate that an older sage left: its own question form, with replace|keep. It still reads, with its own words.
+  const old = ["G11", "T324", "Replace chief C9 of T324 with C1 (claude)? Runs that end as failed: none. Replace: C1 owns T324, each of those runs ends as failed and work that it did not report may be lost, C9 can no longer write T324, and an open offer is cleared. Then C1 goes on with T324. Keep: nothing changes, and C9 stays the owning chief. Title of T324: x", "replace|keep", "replace", "", "", iso(-MIN), "replace"].join("\t");
   // T321 has the open offer O1 from C1 to C2 (as an accept leaves it); T323 has O2 from C2 to C1, so a gate to C2 is no offer's; T322 has no chief.
-  writeFileSync(file, `${readFileSync(file, "utf8")}${[gate("G8", "T321", "C1", "C2"), gate("G9", "T323", "C2", "C2"), gate("G10", "T322", "", "C2")].join("\n")}\n`);
+  writeFileSync(file, `${readFileSync(file, "utf8")}${[gate("G8", "T321", "C1", "C2"), gate("G9", "T323", "C2", "C2"), gate("G10", "T322", "", "C1", true), old].join("\n")}\n`);
   const model = modelOf(w.sources), first = id => card(model, id).reasons.find(reason => reason.replace);
-  assert.deepEqual([first("T321").text, first("T321").recommendation], ["Replace the owning chief of T321, Claude · C1, with Codex · C2? No run ends as failed.", "replace: Claude · C1 offered T321 to Codex · C2"]);
-  assert.equal(first("T323").recommendation, "replace, when you know that Codex · C2 stopped", "an offer to another chief is not this gate's");
-  assert.deepEqual([first("T322").text, first("T322").recommendation], ["Give T322, which has no owning chief, to Codex · C2? No run ends as failed.", "replace: T322 has no owning chief"]);
-  assert.equal(card(model, "T320").reasons[0].recommendation, "replace, when you know that Claude · C1 stopped", "a gate with no offer keeps the T631 text");
-  assert.match(renderBoardText(model), /Recommended: replace\\: Claude · C1 offered T321 to Codex · C2/);
+  assert.deepEqual([first("T321").text, first("T321").recommendation], ["Hand T321 and PR 88 from Claude · C1 to Codex · C2? No run ends as failed.", "approve, because Claude · C1 offered T321 to Codex · C2"]);
+  assert.equal(first("T323").recommendation, "approve, when you know that Codex · C2 stopped", "an offer to another chief is not this gate's");
+  assert.deepEqual([first("T322").text, first("T322").recommendation], ["Hand T322 to Claude · C1? It has no owning chief. No run ends as failed. Claude · C1 runs one fresh cycle before it merges.", "approve, because T322 has no owning chief"]);
+  assert.deepEqual([first("T324").text, first("T324").recommendation], ["Hand T324 from C9 to Claude · C1? No run ends as failed.", "replace, when you know that C9 stopped"]);
+  assert.equal(card(model, "T320").reasons[0].recommendation, "approve, when you know that Claude · C1 stopped", "a gate with no offer keeps the T631 text");
+  // F-T656-13: the two recommendation forms read alike, with no second colon.
+  assert.match(renderBoardText(model), /Recommended: approve, because Claude · C1 offered T321 to Codex · C2/);
+  // F-T656-9: after the accept, the offer line says that the recipient asked, and names the gate; an offer with no gate stays as it was.
+  assert.equal(card(model, "T321").offer, "Codex · C2 asks to take this. Needs you: G8.");
+  assert.equal(card(model, "T323").offer, "Offered to Claude · C1. Ready: Claude · C1 can accept.");
 });
 
 test("T656: inferred work on an open PR reads the owning chief's provider, not the codex/ prefix of the branch, which a takeover keeps", () => {

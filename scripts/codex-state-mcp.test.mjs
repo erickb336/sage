@@ -136,14 +136,14 @@ test("the transfer commands through the server: offer, accept, cancel, release a
   assert.match((await s.call("accept", { task: "T1", offer: first, version }, as)).error, /has the open offer/);
   assert.match((await s.call("accept", { task: "T1", offer, version })).error, /names C2, not C1/);
   // T656: accept opens a takeover gate, and the owner's answer gives the task.
-  assert.match(await s.call("accept", { task: "T1", offer, version }, as), /^G1 open · Replace chief C1 \(codex\) of T1 with C2 \(codex\)\? Runs that end as failed: none\. Replace: C2 owns T1, .* Title of T1: first$/);
+  assert.match(await s.call("accept", { task: "T1", offer, version }, as), /^G1 open · Hand T1 from C1 \(codex\) to C2 \(codex\)\? Runs that end as failed: none\. Approve: C2 owns T1, .* Title of T1: first\nAsk the owner to answer G1, in either chat\. Nothing changes until then\.$/);
   assert.match((await s.call("task_set", { task: "T1", fields: { title: "x" } }, as)).error, /^sage: T1 belongs to chief C1 \(codex\), not to C2\./, "the gate alone gives nothing");
-  assert.equal(await s.call("gate_answer", { gate: "G1", option: 1 }), "G1 answered · replace · T1 chief C2");
-  assert.equal(await s.call("release", { task: "T2" }, as), "T2 released · no owning chief. Any chief can claim it.");
+  assert.equal(await s.call("gate_answer", { gate: "G1", option: 1 }), "G1 answered · approve · T1 chief C2");
+  assert.equal(await s.call("release", { task: "T2" }, as), "T2 released · no owning chief. Only C2 claims it back; another chief needs the owner's takeover gate.");
   // C1 opens the gate on C2's T1; the owner's answer comes through gate_answer, with no chief.
   assert.match(await s.call("run_add", { task: "T1", role: "qa" }, as), /^R1 running/);
-  assert.match(await s.call("gate_replace", { task: "T1", to: "C1" }), /^G2 open · Replace chief C2 \(codex\) of T1 with C1 \(codex\)\? Runs that end as failed: R1 \(qa\)\. Replace: C1 owns T1, .* Keep: nothing changes, and C2 stays the owning chief\. Title of T1: first$/);
-  assert.equal(await s.call("gate_answer", { gate: "G2", option: 1 }), "G2 answered · replace · T1 chief C1 · R1 failed");
+  assert.match(await s.call("gate_replace", { task: "T1", to: "C1" }), /^G2 open · Hand T1 from C2 \(codex\) to C1 \(codex\)\? Runs that end as failed: R1 \(qa\)\. Approve: C1 owns T1, .* Decline: nothing changes, and C2 stays the owning chief\. Title of T1: first\nAsk the owner to answer G2, in either chat\. Nothing changes until then\.$/);
+  assert.equal(await s.call("gate_answer", { gate: "G2", option: 1 }), "G2 answered · approve · T1 chief C1 · R1 failed");
   assert.match((await s.call("task_set", { task: "T1", fields: { title: "x" } }, as)).error, /^sage: T1 belongs to chief C1 \(codex\), not to C2\./);
   // T656: merge_check judges for the caller's chief, which the server passes: the chief that lost T1 gets the owner refusal.
   assert.match(await s.call("verdict", { task: "T1", kind: "checks-pass", sha: SHA }), /^T1 checks-pass/);

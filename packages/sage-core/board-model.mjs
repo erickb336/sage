@@ -320,14 +320,16 @@ function card(source, project, group, task, now, graph, landing) {
   const reasons = (project.old && ENDED.includes(task.state) ? NONE : gates).map(gate => {
     const breakdown = breakdownGate(gate, graph.programs);
     const lost = (graph.byGate.get(gate.id) ?? []).filter(program => program.state === "lost").map(program => `${lostWhy(program)}: ${LOST_FIX(program.id)}`);
-    // A Replace gate (T618) says its question in one line, from its fixed start: the chiefs, and the runs that end as failed.
-    const replace = gate.kind === "replace" && replaceOf(gate);
-    const text = replace ? `${replace.from ? `Replace the owning chief of ${task.id}, ${label(replace.from)}, with ${label(replace.to)}?` : `Give ${task.id}, which has no owning chief, to ${label(replace.to)}?`} ${replace.runs.length ? `${and(replace.runs)} ${replace.runs.length === 1 ? "ends" : "end"} as failed.` : "No run ends as failed."}` : [...gateLines(gate, graph.programs), ...lost].join(LINE);
-    // Replace takes the task from a chief that may still work, so the design's recommendation says when (F-T624-5). After
-    // an accept, the owning chief offered it to the gate's new chief, and the recommendation says that instead (T656).
+    // A takeover gate (T618, T656) says its question in one line, from its fixed start: the task and its PR, the chiefs, the
+    // runs that end as failed, and the new chief's fresh cycle.
+    const replace = gate.kind === "replace" && replaceOf(gate), options = gate.options ? gate.options.split("|").map(option => option.trim()) : [];
+    const what = `${task.id}${task.pr ? ` and PR ${task.pr}` : ""}`;
+    const text = replace ? `${replace.from ? `Hand ${what} from ${label(replace.from)} to ${label(replace.to)}?` : `Hand ${what} to ${label(replace.to)}? It has no owning chief.`} ${replace.runs.length ? `${and(replace.runs)} ${replace.runs.length === 1 ? "ends" : "end"} as failed.` : "No run ends as failed."}${replace.fresh ? ` ${label(replace.to)} runs one fresh cycle before it merges.` : ""}` : [...gateLines(gate, graph.programs), ...lost].join(LINE);
+    // A takeover may take the task from a chief that still works, so the design's recommendation says when (F-T624-5).
+    // After an accept, the owning chief offered it to the gate's new chief, and the recommendation says that instead (T656).
     const offered = replace && offerOf(task), handed = offered && offered.from === replace.from && offered.to === replace.to;
-    const recommendation = replace && gate.recommendation === "replace" ? handed ? `replace: ${label(replace.from)} offered ${task.id} to ${label(replace.to)}` : replace.from ? `replace, when you know that ${label(replace.from)} stopped` : `replace: ${task.id} has no owning chief` : gate.recommendation || null;
-    return { kind: "gate", ...(replace && { replace: true }), key: `${project.key}/${gate.id}`, text, recommendation, gateId: gate.id, options: gate.options ? gate.options.split("|").map(option => option.trim()) : [],
+    const recommendation = replace && gate.recommendation === options[0] ? `${options[0]}, ${handed ? `because ${label(replace.from)} offered ${task.id} to ${label(replace.to)}` : replace.from ? `when you know that ${label(replace.from)} stopped` : `because ${task.id} has no owning chief`}` : gate.recommendation || null;
+    return { kind: "gate", ...(replace && { replace: true }), key: `${project.key}/${gate.id}`, text, recommendation, gateId: gate.id, options,
       breakdown: breakdown ? { key: `${project.key}/${breakdown}`, id: breakdown, name: graph.programs.get(breakdown).name } : null };
   });
   if (task.state === "awaiting-you" && !gates.length && !allGates.at(-1)?.answer) reasons.push({ kind: "design", text: "The design waits for your answer." });
@@ -401,7 +403,7 @@ function card(source, project, group, task, now, graph, landing) {
     ...rows(project, "findings", task).map(row => ({ ...row, movedFrom: (moves.to.get(task.id) ?? NONE).find(({ move }) => move[3] === row.key)?.row.task ?? null })),
     ...(moves.from.get(task.id) ?? NONE).map(({ row, move }) => ({ severity: "", summary: row.decision.slice(row.decision.indexOf(":") + 1).trim(), ...found(move[2], move[3]), task: task.id, key: move[1], status: "moved", reason: "", movedTo: move[2] })),
   ];
-  return { key: `${project.key}/${task.id}`, source: source.id, sourceLabel: source.label, providerStandIn: standInOf(source, project), repository: githubRepository(pr?.data.repository) ?? githubRepository(project.repository), lastActivity, headBasis, project: project.key, group: group.key, projectName: group.name, archived: group.archived, program: task.program ? { key: `${project.key}/${task.program}`, id: task.program, name: program?.name ?? null, pilot: program?.pilot === task.id } : null, waits, waitLine: waitLine(task, waits, column), priority: PRIORITIES.includes(task.priority) ? task.priority : "", kind: TASK_KINDS.includes(task.kind) ? task.kind : "", ...Object.fromEntries(["id", "title", "size", "risk", "route", "state", "branch", "pr", "round", "keys", "hold"].map(field => [field, task[field] ?? ""])), column, prEvidence: pr, currentHead: head, modeEvidence: mode, completedAt, visible: column !== "done" || completedAt !== null && completedAt <= now && completedAt >= now - 7 * 86400000, agents, inferredWork: inferred, cycles, requiredCycles: required, reasons, runs, ledger, gates, findings, decisions: rows(project, "decisions", task).slice(-10), brief, briefFields: briefFields(brief), projectCheck, mergeCheck: merge, loop: stepLine({ task, route, cycles, required: count, head, judged, reasons, merge, gates: allGates, runs, ledger, rounds: positive(source.config?.max_rounds) ?? 3, autopilot: mode?.data.autopilot === true }), runClocks: Object.fromEntries(runs.filter(run => run.status === "running").map(run => [run.id, run.clock])), goneRun: writer?.checkoutGone ? writer.id : null, artifacts: records.filter(record => record.kind === "artifact").map(record => ({ ...record, content: project.contents?.[record.id] ?? null })), diagnostics: [...project.diagnostics], ...holderOf(project, task, runs, label), ...(wasOf(project, task) && { was: wasOf(project, task) }) };
+  return { key: `${project.key}/${task.id}`, source: source.id, sourceLabel: source.label, providerStandIn: standInOf(source, project), repository: githubRepository(pr?.data.repository) ?? githubRepository(project.repository), lastActivity, headBasis, project: project.key, group: group.key, projectName: group.name, archived: group.archived, program: task.program ? { key: `${project.key}/${task.program}`, id: task.program, name: program?.name ?? null, pilot: program?.pilot === task.id } : null, waits, waitLine: waitLine(task, waits, column), priority: PRIORITIES.includes(task.priority) ? task.priority : "", kind: TASK_KINDS.includes(task.kind) ? task.kind : "", ...Object.fromEntries(["id", "title", "size", "risk", "route", "state", "branch", "pr", "round", "keys", "hold"].map(field => [field, task[field] ?? ""])), column, prEvidence: pr, currentHead: head, modeEvidence: mode, completedAt, visible: column !== "done" || completedAt !== null && completedAt <= now && completedAt >= now - 7 * 86400000, agents, inferredWork: inferred, cycles, requiredCycles: required, reasons, runs, ledger, gates, findings, decisions: rows(project, "decisions", task).slice(-10), brief, briefFields: briefFields(brief), projectCheck, mergeCheck: merge, loop: stepLine({ task, route, cycles, required: count, head, judged, reasons, merge, gates: allGates, runs, ledger, rounds: positive(source.config?.max_rounds) ?? 3, autopilot: mode?.data.autopilot === true }), runClocks: Object.fromEntries(runs.filter(run => run.status === "running").map(run => [run.id, run.clock])), goneRun: writer?.checkoutGone ? writer.id : null, artifacts: records.filter(record => record.kind === "artifact").map(record => ({ ...record, content: project.contents?.[record.id] ?? null })), diagnostics: [...project.diagnostics], ...holderOf(project, task, runs, label, gates),...(wasOf(project, task) && { was: wasOf(project, task) }) };
 }
 
 /**
@@ -409,7 +411,7 @@ function card(source, project, group, task, now, graph, landing) {
  * so it shows as before. who is the Who filter's word: the owning chief's provider, or the old logbook's ("" for an
  * unclaimed task, which shows only under All). holder names the task on its card's top line and in the chat.
  */
-function holderOf(project, task, runs, label) {
+function holderOf(project, task, runs, label, gates) {
   if (project.old) {
     const provider = project.old.provider;
     // An open row that did not move (an unfinished move) is open, not finished (F-T624-25).
@@ -419,9 +421,11 @@ function holderOf(project, task, runs, label) {
   const chief = task.chief ? (project.chiefs ?? NONE).find(row => row.id === task.chief) ?? null : null;
   // unlisted: chiefs.tsv reads, and it has no row of this id (F-T624-4). A table that does not read has its own diagnostic.
   const owner = task.chief ? { id: task.chief, provider: chief?.provider ?? null, label: label(task.chief), ...(!chief && project.chiefs && { unlisted: true }) } : null;
-  // The open offer (T618): it waits for each running run of the task to end, then its chief accepts.
+  // The open offer (T618): it waits for each running run of the task to end, then its chief accepts. An accept opens a
+  // takeover gate for the owner, so then the line names that gate (F-T656-9).
   const offer = offerOf(task), active = runs.filter(run => run.status === "running").map(run => run.id);
-  const offerText = offer ? `Offered to ${label(offer.to)}. ${active.length ? `It waits for ${and(active)} to end, then ${label(offer.to)} accepts.` : `Ready: ${label(offer.to)} can accept.`}` : null;
+  const asked = offer && gates.find(gate => gate.kind === "replace" && ((p) => p && p.from === offer.from && p.to === offer.to)(replaceOf(gate)));
+  const offerText = !offer ? null : asked ? `${label(offer.to)} asks to take this. Needs you: ${asked.id}.` : `Offered to ${label(offer.to)}. ${active.length ? `It waits for ${and(active)} to end, then ${label(offer.to)} accepts.` : `Ready: ${label(offer.to)} can accept.`}`;
   return { shared: true, owner, offer: offerText, who: String(owner?.provider ?? "").toLowerCase(), holder: owner ? owner.label : "Unclaimed" };
 }
 
@@ -432,7 +436,7 @@ function holderOf(project, task, runs, label) {
  */
 function unknownChief(task, runs, label) {
   const run = task.chief ? runs.find(run => run.status === "running" && run.chief === task.chief && run.clock.stale) : null;
-  return run ? { kind: "chief-unknown", text: `The owning chief, ${label(task.chief)}, may have stopped: ${run.id} shows no change for over 24 h.`, recommendation: "if it stopped, ask any chief to open a Replace gate." } : null;
+  return run ? { kind: "chief-unknown", text: `The owning chief, ${label(task.chief)}, may have stopped: ${run.id} shows no change for over 24 h.`, recommendation: "if it stopped, ask any chief to open a takeover gate." } : null;
 }
 
 const title = value => String(value ?? "").charAt(0).toUpperCase() + String(value ?? "").slice(1);
