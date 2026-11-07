@@ -48,7 +48,8 @@ const day = iso => iso ? `${String(iso).slice(0, 10)} ${hhmm(iso)}` : "";
 const title = value => String(value ?? "").charAt(0).toUpperCase() + String(value ?? "").slice(1);
 const standIn = (value, note, focus = true) => `<span class="standin"${focus ? ' tabindex="0"' : ""} title="${esc(note)}" data-why="${esc(note)}">${esc(value)}<span class="vh"> (${esc(note)})</span></span>`;
 // N1: runs do not record their provider yet; the logbook's source stands in for it, marked with a dotted underline.
-const provider = (name, task, focus = true) => name ? esc(name) : standIn(title(task.providerStandIn), "Stand-in: the logbook's source. The run does not record its provider.", focus);
+const NO_CHIEF = "Stand-in: the run names no chief, so the board does not know its provider.";
+const provider = (name, task, focus = true) => name ? esc(name) : standIn(title(task.providerStandIn), task.shared ? NO_CHIEF : "Stand-in: the logbook's source. The run does not record its provider.", focus);
 function duration(seconds) {
   if (seconds === null) return "—";
   if (seconds < 60) return `${seconds} s`;
@@ -168,22 +169,26 @@ function runsTable(task) {
   const clock = run => { const value = task.runClocks?.[run.id]; return value ? `<span class="${value.stale ? "stale" : ""}">${esc(value.text)}${/^\d/.test(value.text) ? " so far" : ""}</span>` : duration(seconds(run)); };
   // A shared run that records its checkout shows the folder name under its role, never the path (T625). A folder that is
   // gone from this Mac gets "· gone": the warning colour while the task is active (a review step stops), faint once it ended.
-  const ended = ENDED.includes(task.state);
-  const goneWhy = ended ? "The folder is not on this Mac now. The task has ended, so nothing waits on it."
-    : "The folder is not on this Mac now, so sage cannot read this run's branch. The next review step of this task stops until the folder is back.";
+  // Only the folder of the branch's newest writer run stops a review (goneRun, F-T625-4): another gone folder is faint.
+  const ended = ENDED.includes(task.state), blocks = run => !ended && run.id === task.goneRun;
+  const goneWhy = run => blocks(run) ? "The folder is not on this Mac now, so sage cannot read this run's branch. The next review step of this task stops until the folder is back."
+    : ended ? "The folder is not on this Mac now. The task has ended, so nothing waits on it." : "The folder is not on this Mac now. A review reads the branch in the folder of a newer run, so nothing waits on it.";
   // The board checks at most 64 folders of a logbook: a later one says that it was not checked, not that it is there (F-T625-5).
   const unchecked = "The board checks at most 64 checkout folders of a logbook, so it did not check if this one is on this Mac.";
-  const checkout = run => !run.checkoutName ? "" : `<div class="faint ck">checkout ${esc(run.checkoutName)}${run.checkoutGone ? ` <span class="gone${ended ? "" : " gone-active"}" tabindex="0" title="${esc(goneWhy)}" data-why="${esc(goneWhy)}">· gone<span class="vh"> (${esc(goneWhy)})</span></span>` : run.checkoutGone === null ? ` <span title="${esc(unchecked)}">· not checked<span class="vh"> (${esc(unchecked)})</span></span>` : ""}</div>`;
+  const checkout = run => !run.checkoutName ? "" : `<div class="faint ck">checkout ${esc(run.checkoutName)}${run.checkoutGone ? ` <span class="gone${blocks(run) ? " gone-active" : ""}" tabindex="0" title="${esc(goneWhy(run))}" data-why="${esc(goneWhy(run))}">· gone<span class="vh"> (${esc(goneWhy(run))})</span></span>` : run.checkoutGone === null ? ` <span title="${esc(unchecked)}">· not checked<span class="vh"> (${esc(unchecked)})</span></span>` : ""}</div>`;
   // A task of a shared logbook has a Provider column (T306, F9): each run's provider, from its chief. A legacy task keeps its columns.
-  const agent = run => task.shared ? `<td>${run.provider ? `<span class="ptag ptag-${known(PROVIDERS, String(run.provider).toLowerCase())}">${esc(title(run.provider))}</span>` : standIn(title(task.providerStandIn), "Stand-in: the run names no chief, so the board does not know its provider.")}</td><td>${esc(run.role)}${checkout(run)}</td>` : `<td>${provider(run.provider, task)} · ${esc(run.role)}</td>`;
+  const agent = run => task.shared ? `<td>${run.provider ? `<span class="ptag ptag-${known(PROVIDERS, String(run.provider).toLowerCase())}">${esc(title(run.provider))}</span>` : standIn(title(task.providerStandIn), NO_CHIEF)}</td><td>${esc(run.role)}${checkout(run)}</td>` : `<td>${provider(run.provider, task)} · ${esc(run.role)}</td>`;
   const row = run => `<tr><td class="id">${esc(run.id)}</td>${agent(run)}<td><span class="st-${known(RUN_STATUSES, run.status)}">${esc(run.status)}</span></td><td>${run.status === "running" ? clock(run) : duration(seconds(run))}</td><td>${tokens(run.tokens)}</td></tr>`;
   const table = list => `<table class="runs"><thead><tr><th>Run</th>${task.shared ? "<th>Provider</th>" : ""}<th>Agent</th><th>Status</th><th>Time</th><th>Tokens</th></tr></thead><tbody>${list.map(row).join("")}</tbody></table>`;
   const earlier = task.runs.slice(0, Math.max(0, task.runs.length - RUNS_SHOWN));
   const note = goneNote(task);
-  return `${earlier.length ? `<details class="fold" data-key="runs"><summary id="sum-runs">Show ${earlier.length} earlier runs</summary>${table(earlier)}</details>` : ""}${table(task.runs.slice(-RUNS_SHOWN))}${note ? `<p class="cknote">${ICON}<span>The folder <b>${note.names.map(esc).join(", ")}</b> is not on this Mac now, so sage cannot read the branch there. The next review step of ${esc(task.id)} stops until the folder is back.</span></p>` : ""}`;
+  return `${earlier.length ? `<details class="fold" data-key="runs"><summary id="sum-runs">Show ${earlier.length} earlier runs</summary>${table(earlier)}</details>` : ""}${table(task.runs.slice(-RUNS_SHOWN))}${note ? `<p class="cknote">${ICON}<span>The folder <b>${esc(note.name)}</b> of ${esc(note.run)} is not on this Mac now, so sage cannot read the branch there. The next review step of ${esc(task.id)} stops until the folder is back.</span></p>` : ""}`;
 }
-/** The gone checkout folders of an active task (T625), for the one note after its runs; null when none or when the task ended. */
-const goneNote = task => { const names = [...new Set(task.runs.filter(run => run.checkoutGone).map(run => run.checkoutName))]; return names.length && !ENDED.includes(task.state) ? { names } : null; };
+/**
+ * The gone checkout folder that stops an active task's next review (T625): the folder of the branch's newest writer run,
+ * by its run, so a name that another run's present folder has too is clear (F-T625-9). Null when none or when the task ended.
+ */
+const goneNote = task => { const run = !ENDED.includes(task.state) && task.runs.find(item => item.id === task.goneRun); return run ? { run: run.id, name: run.checkoutName } : null; };
 
 function evidence(task) {
   const heads = [...new Set(task.ledger.map(row => row.sha))];
@@ -428,7 +433,7 @@ a.card:hover{transform:translateY(-1px);box-shadow:var(--ring),var(--lift)}.card
 .agents{display:flex;flex-wrap:wrap;gap:5px;margin:4px 0 6px}
 .agent{display:inline-flex;align-items:center;gap:5px;background:var(--run-soft);color:var(--run);border-radius:999px;padding:2px 9px;font-size:11.5px;font-weight:550}
 .agent .live{width:6px;height:6px;border-radius:50%;background:var(--run);animation:pulse 1.6s infinite}
-.agent.alt{background:var(--ok-soft);color:var(--ok)}.agent.alt .live{background:var(--ok)}.agent.stale{background:var(--warn-soft);color:var(--warn)}
+.agent.alt{background:var(--ok-soft);color:var(--ok)}.agent.alt .live{background:var(--ok)}.agent.stale{background:var(--warn-soft);color:var(--warn);display:inline-block;max-width:100%;border-radius:10px}.agent.stale>[aria-hidden]{margin-right:5px}
 .prov{font-weight:500}
 @keyframes pulse{50%{opacity:.25}}
 .chip,.trigger,select,.seg button,.boardtabs a,.card,a.prog,.opt,.linkbtn,.morebtn,.closebtn{transition:background-color var(--fast) var(--ease),border-color var(--fast) var(--ease),box-shadow var(--fast) var(--ease),transform var(--fast) var(--ease),color var(--fast) var(--ease)}
@@ -444,7 +449,7 @@ details.rest>summary{cursor:pointer;color:var(--accent);font-size:12px;font-weig
 details.rest>summary::-webkit-details-marker{display:none}
 details.rest>summary::before{content:"▸ "}details.rest[open]>summary::before{content:"▾ "}
 .standin{text-decoration:underline dotted;text-underline-offset:3px;text-decoration-thickness:1px;position:relative}
-.ck{font-size:11px;margin-top:1px;white-space:nowrap}.cknote{display:flex;gap:6px;align-items:flex-start;margin:6px 0 0;padding:6px 8px;border-radius:8px;background:var(--warn-soft);color:var(--warn);font-size:11.5px}.cknote svg{flex:none;margin-top:1px}.gone{position:relative}.gone-active{color:var(--warn);font-weight:550}
+.ck{font-size:11px;margin-top:1px;overflow-wrap:anywhere}.ck>span{white-space:nowrap}.cknote{display:flex;gap:6px;align-items:flex-start;margin:6px 0 0;padding:6px 8px;border-radius:8px;background:var(--warn-soft);color:var(--warn);font-size:11.5px}.cknote svg{flex:none;margin-top:1px}.gone{position:relative}.gone-active{color:var(--warn);font-weight:550}
 :is(.standin,.gone)[tabindex]:focus::after{content:attr(data-why);position:absolute;left:0;top:calc(100% + 4px);z-index:6;width:max-content;max-width:min(280px,80vw);white-space:normal;background:var(--panel);color:var(--text);border:1px solid var(--line);border-radius:6px;padding:5px 7px;font-size:11.5px;font-weight:400;box-shadow:var(--pop)}
 .page{display:none;max-width:1100px;margin:0 auto;padding:18px 20px 40px}.page:target,.page.open{display:block}
 .boardview,body>main.page,#pages>.page{background:var(--shell);border-radius:20px;margin:8px;box-shadow:var(--shellshadow)}body>main.page,#pages>.page{margin:8px auto}
@@ -558,7 +563,7 @@ a.prog:hover{transform:translateY(-1px);box-shadow:var(--ring),var(--lift)}a.pro
  .chip,.trigger,select,.seg button,.morebtn,.opt,.back,.boardtabs a{min-height:44px}.l2 a.t{display:inline-block;padding:13px 0;margin:-13px 0}.linkbtn{min-height:44px;display:inline-flex;align-items:center}
  .archived summary{min-height:44px;display:flex;align-items:center}.seg button{min-width:44px}
  details.fold>summary,details.rest>summary{min-height:44px;padding-top:13px;padding-bottom:13px;margin:0}
- .standin[tabindex],.ptop a[href]{display:inline-flex;align-items:center;justify-content:center;min-width:44px;min-height:44px;margin:-14px 0;vertical-align:middle;position:relative;z-index:1}table.runs .standin[tabindex]{margin:0}.ck{white-space:normal;overflow-wrap:anywhere}table.runs td{vertical-align:middle}.nowagents{row-gap:26px;margin:14px 0 22px}
+ .standin[tabindex],.ptop a[href]{display:inline-flex;align-items:center;justify-content:center;min-width:44px;min-height:44px;margin:-14px 0;vertical-align:middle;position:relative;z-index:1}table.runs .standin[tabindex]{margin:0}table.runs td{vertical-align:middle}.nowagents{row-gap:26px;margin:14px 0 22px}
  .closebtn{min-height:44px;min-width:44px;padding:0 10px;font-weight:600}.closebtn .kbd{display:none}.closebtn .tap{display:inline}.pop .foot{display:none}
 }`;
 
@@ -1091,9 +1096,9 @@ export function renderProgramsHtml(model, { programKey = null, live = false, pat
   return `<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>${program ? `${esc(program.id)} · ` : programKey ? "Program not found · " : ""}Sage programs</title><script>${THEME_HEAD}</script><style>${CSS}</style></head><body>${body}<script>${BOARD_ENHANCEMENT}${live ? liveScript(stream, ["board-content", "board-pages", "pick-list", "needs-count"]) : ""}</script></body></html>`;
 }
 
-const goneText = task => { const note = goneNote(task); return note ? `\nThe folder ${note.names.map(md).join(", ")} is not on this Mac now, so sage cannot read the branch there. The next review step of ${md(task.id)} stops until the folder is back.` : ""; };
+const goneText = task => { const note = goneNote(task); return note ? `\nThe folder ${md(note.name)} of ${md(note.run)} is not on this Mac now, so sage cannot read the branch there. The next review step of ${md(task.id)} stops until the folder is back.` : ""; };
 const columnMark = key => ({ backlog: "📋", design: "🎨", building: "🔨", review: "🔁", ready: "✅", done: "🏁" }[key]);
-const providerText = (name, task) => name ? md(name) : `${md(title(task.providerStandIn))} (logbook source)`;
+const providerText = (name, task) => name ? md(name) : `${md(title(task.providerStandIn))} (${task.shared ? "the run names no chief" : "logbook source"})`;
 /** The chat's step line: the same steps, marks and words as the page. */
 const stepText = task => task.loop.steps.map(step => `${MARK[status(step.status)]} ${md(step.label)}`).join(" › ");
 /** The chat lookup's Now and Next lines: the task page's lines (nowWaits), also for a task that waits (F-T420-1). */

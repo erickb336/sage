@@ -485,8 +485,11 @@ function swap(file, text) {
 
 /** A cell as the tables hold it: on one line, without a hidden character. */
 const cell = (v) => String(v ?? "").replace(/[\t\r\n]+/g, " ").replace(HIDDEN, "").trim();
-/** Text with each hidden character, tab and line feed shown as \xNN or \u{N}, so that a printed line never drives the terminal or hides text. */
-const visible = (s) => String(s).replace(new RegExp(`[\\t\\n]|${HIDDEN.source}`, "gu"), (c) => (c.codePointAt(0) < 0x100 ? `\\x${c.charCodeAt(0).toString(16).padStart(2, "0")}` : `\\u{${c.codePointAt(0).toString(16)}}`));
+/**
+ * Text with each hidden character, tab, line feed and line or paragraph separator shown as \xNN or \u{N}, so that a
+ * printed line never drives the terminal, breaks a line or hides text (F-T639-1). The link prompt prints paths with it.
+ */
+const visible = (s) => String(s).replace(new RegExp(`[\\t\\n\\u2028\\u2029]|${HIDDEN.source}`, "gu"), (c) => (c.codePointAt(0) < 0x100 ? `\\x${c.charCodeAt(0).toString(16).padStart(2, "0")}` : `\\u{${c.codePointAt(0).toString(16)}}`));
 
 /** What to ask the user about a file that cannot be read: never to remove the root, which holds every logbook, a saved change's marker, which the stuck line forbids, nor a file that a permission keeps shut, whose rows are there. */
 const fixIt = (at, why, root) => `Ask the user to ${["EACCES", "EPERM"].includes(why) ? "fix the permissions of " : at === root || basename(at) === PENDING ? "fix " : "fix or remove "}${visible(at)}.`;

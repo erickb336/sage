@@ -5,7 +5,7 @@ import { createHash } from "node:crypto";
 import { validateObservations } from "./observations.mjs";
 import { logbookSettings } from "./logbook-fields.mjs";
 import { PROGRAM_ID, TASK_ID, checkPrograms } from "./program-rules.mjs";
-import { BINDING_COLUMNS, bindingRow, checkoutGone, githubRemote, gone as goneRoot, ownerOf } from "./shared-root.mjs";
+import { BINDING_COLUMNS, bindingRow, checkoutGone, githubRemote, linkedRows, ownerOf, plainName } from "./shared-root.mjs";
 import { chiefsWhole } from "./chiefs.mjs";
 
 const parseJson = text => { try { return JSON.parse(text); } catch { throw new Error("invalid JSON"); } };
@@ -288,12 +288,12 @@ function bindingsOf(root, budget) {
 /**
  * A shared logbook's rows of bindings.tsv (T633), in link order, at most 64, with one lstat each and no Git command. A row
  * that has no first commit in common with the owner row is a foreign one, which the state tool refuses (disjoint): only
- * its folder name stays. The others are the logbook's checkouts.
+ * its folder name stays. The others are the logbook's checkouts, gone by the run rule (checkoutGone), so the picker's
+ * count and the runs agree (F-T630-3).
  */
-function linkedCheckouts(rows, folder, owner) {
-  const mine = rows.filter(row => row.folder === folder).sort((a, b) => a.at.localeCompare(b.at)).slice(0, 64);
-  const foreign = row => !!owner && !!row.commits && !row.commits.split(",").some(commit => owner.commits.split(",").includes(commit));
-  return { checkouts: mine.filter(row => !foreign(row)).map(row => ({ root: row.root, gone: goneRoot(row) })), foreignCheckouts: mine.filter(foreign).map(row => basename(row.root)) };
+function linkedCheckouts(rows, folder) {
+  const { linked, foreign } = linkedRows(rows, folder);
+  return { checkouts: linked.map(row => ({ root: row.root, gone: checkoutGone(row) })), foreignCheckouts: foreign.map(row => plainName(basename(row.root))) };
 }
 
 /**
@@ -376,7 +376,7 @@ export function readBoardSources(sources, { now = Date.now(), logbookKey = null,
         const owner = shared ? ownerOf(bindings.rows, entry.name) : undefined;
         const project = consistentRead(directory, base, budget, { now, bound: shared ? owner?.root ?? null : undefined, duringRead });
         if (bindings?.problem) project.diagnostics.push(bindings.problem);
-        if (shared) Object.assign(project, linkedCheckouts(bindings.rows, entry.name, owner));
+        if (shared) Object.assign(project, linkedCheckouts(bindings.rows, entry.name));
         result.projects.push(project);
         if (!shared) continue;
         // The finished tasks of the old logbooks stay there, read-only. Each shows once, in this project, with its provider,
