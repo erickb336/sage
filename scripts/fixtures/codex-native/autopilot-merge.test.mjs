@@ -1,0 +1,272 @@
+import "../../test-env.mjs"; // first: no variable of the developer's shell changes a result
+import assert from "node:assert/strict";
+import { spawnSync } from "node:child_process";
+import { chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, statSync, symlinkSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { dirname, join } from "node:path";
+import { test } from "node:test";
+import { fileURLToPath } from "node:url";
+
+// The Codex merge command of autopilot (T663), run as Codex runs a shell command: one node process with Codex's
+// CODEX_SESSION_ID, CODEX_THREAD_ID and CODEX_TOOL_CALL_ID. gh is a fake: PATH holds only the fakes folder, and node
+// runs by its absolute path, so no real gh can run. The fake is proven first, by its absolute path and by its name.
+const PLUGIN = fileURLToPath(new URL("../../../plugins/sage-codex", import.meta.url));
+const MERGE = join(PLUGIN, "skills/sage/merge.mjs");
+const RECORDS = JSON.parse(readFileSync(fileURLToPath(new URL("./owner-records.json", import.meta.url)), "utf8"));
+const SCRATCH = realpathSync(mkdtempSync(join(tmpdir(), "sage-autopilot-merge-")));
+process.on("exit", () => rmSync(SCRATCH, { recursive: true, force: true }));
+// The gate's import and calls read the home and the sage root: both are scratch for this whole file.
+process.env.HOME = SCRATCH;
+process.env.SAGE_HOME = join(SCRATCH, "sage");
+delete process.env.CODEX_HOME;
+
+const FAKES = join(SCRATCH, "fakes");
+const GH = join(FAKES, "gh");
+const GH_LOG = join(SCRATCH, "gh.log");
+const MARKER = "FAKE-gh T663";
+mkdirSync(FAKES);
+/** The variables that the fake gh logs: the four that send gh elsewhere must be gone, and the owner's gh config stays. */
+const GH_VARIABLES = ["GH_HOST", "GH_REPO", "GH_ENTERPRISE_TOKEN", "GITHUB_ENTERPRISE_TOKEN", "GH_CONFIG_DIR"];
+writeFileSync(GH, `#!${process.execPath}
+const { appendFileSync, readdirSync } = require("node:fs");
+const env = Object.fromEntries(${JSON.stringify(GH_VARIABLES)}.map((name) => [name, process.env[name] ?? null]));
+appendFileSync(${JSON.stringify(GH_LOG)}, JSON.stringify({ args: process.argv.slice(2), env, cwd: process.cwd(), files: readdirSync(".") }) + "\\n");
+console.log(${JSON.stringify(MARKER)});
+`, { mode: 0o755 });
+const ghCalls = () => (existsSync(GH_LOG) ? readFileSync(GH_LOG, "utf8").trim().split("\n").map((line) => JSON.parse(line)) : []);
+
+test("the fake gh is the one that runs: by its absolute path, and by name with PATH set to the fakes folder only", () => {
+  const direct = spawnSync(GH, ["--version"], { encoding: "utf8", env: { PATH: FAKES } });
+  assert.equal(direct.stdout, `${MARKER}\n`);
+  const byName = spawnSync(process.execPath, ["-e", 'require("node:child_process").execFileSync("gh", ["--version"], { stdio: "inherit" })'], { encoding: "utf8", env: { PATH: FAKES } });
+  assert.equal(byName.stdout, `${MARKER}\n`);
+  assert.deepEqual(ghCalls().map((call) => call.args), [["--version"], ["--version"]]);
+  rmSync(GH_LOG);
+  console.log(`fake gh proven: ${MARKER}`);
+});
+
+const { ghFolder, mergeCommand, permitFile } = await import(MERGE);
+const { gate } = await import(join(PLUGIN, "hooks/gate-hook.mjs"));
+const SESSION = "019a0000-0000-7000-8000-00000000beef";
+const SHA = "a1b2c3d4e5f60718293a4b5c6d7e8f9012345678";
+const REPO = "example-owner/example.repo";
+/** The record with the owner's mode phrase (sage mode on) in its first turn, before any message of the owner. */
+function withMode(lines) {
+  const template = RECORDS["exec-on"].find((o) => o.payload.role === "user" && o.payload.content?.[0]?.text === "autopilot on");
+  const first = lines.findIndex((o) => o.payload.type === "task_started");
+  const p = template.payload;
+  const mode = { ...template, payload: { ...p, content: [{ type: "input_text", text: "sage mode" }],
+    internal_chat_message_metadata_passthrough: { ...p.internal_chat_message_metadata_passthrough, turn_id: lines[first].payload.turn_id } } };
+  return [...lines.slice(0, first + 1), mode, ...lines.slice(first + 1)];
+}
+let homes = 0;
+/**
+ * A scratch home, the session's record (one of the proof records, after the owner's mode phrase unless mode is false)
+ * and the environment that Codex gives the command, with every variable that would send gh elsewhere.
+ */
+function session(recordName = "exec-on", { mode = true } = {}) {
+  const home = join(SCRATCH, `home-${++homes}`);
+  const project = join(home, "project");
+  mkdirSync(project, { recursive: true });
+  const transcript = join(home, "record.jsonl");
+  const lines = mode ? withMode(RECORDS[recordName]) : RECORDS[recordName];
+  writeFileSync(transcript, lines.map((line) => JSON.stringify(line)).join("\n") + "\n");
+  const env = { PATH: FAKES, HOME: home, CODEX_HOME: join(home, "codex"), SAGE_HOME: join(home, "sage"), SAGE_SHARED_HOME: process.env.SAGE_SHARED_HOME,
+    CODEX_SESSION_ID: SESSION, CODEX_THREAD_ID: SESSION, CODEX_TOOL_CALL_ID: `call_${homes}`, GH_HOST: "other.example", GH_REPO: "other/repository",
+    GH_ENTERPRISE_TOKEN: "fake-enterprise-1", GITHUB_ENTERPRISE_TOKEN: "fake-enterprise-2", GH_CONFIG_DIR: join(home, "gh-config") };
+  const turn = lines.find((line) => line.payload.type === "task_started").payload.turn_id;
+  return { env, project, transcript, turn, lines };
+}
+/** Save a merge permit for the call, as the gate will (T677). No hook of this pull request saves one. */
+function permit(s, fields = {}) {
+  const file = permitFile(s.env, s.env.CODEX_TOOL_CALL_ID);
+  mkdirSync(dirname(file), { recursive: true, mode: 0o700 });
+  const saved = { session: SESSION, repo: REPO, pr: "41", sha: SHA, command: mergeCommand("41", SHA), turn: s.turn, transcript: s.transcript,
+    mark: { session: SESSION, source: "startup", lines: 0, pid: 1 }, time: Date.now(), ...fields };
+  writeFileSync(file, typeof fields === "string" ? fields : JSON.stringify(saved), { mode: 0o600 });
+  return file;
+}
+function merge(s, args = ["41", SHA], env = {}) {
+  const r = spawnSync(process.execPath, [MERGE, ...args], { cwd: s.project, encoding: "utf8", env: { ...s.env, ...env } });
+  return { status: r.status, stdout: r.stdout, stderr: r.stderr };
+}
+const refused = (reason) => ({ status: 1, stdout: "", stderr: `sage: the merge command refuses: ${reason}.\n` });
+const AGAIN = "Ask for the merge again";
+const SWITCH_ON = 'To merge on autopilot, the owner sends "autopilot on" alone while sage mode is on, then asks for the merge again. Or the owner merges the pull request in GitHub';
+/** Each refusal runs no gh. */
+function assertRefused(result, reason, label) {
+  assert.deepEqual(result, refused(reason), label);
+  assert.deepEqual(ghCalls(), [], `${label}: no gh call`);
+}
+
+test("with a valid merge permit and the owner's on switch, it runs gh pr merge once, for the permit's repository and the reviewed head only", () => {
+  const s = session();
+  const file = permit(s);
+  assert.deepEqual(merge(s), { status: 0, stdout: `${MARKER}\n`, stderr: "" });
+  // F-T663-4: --repo from the permit, an empty private folder of sage as the working folder (not the agent's), and no
+  // variable that sends gh to another host or repository. The owner's gh config stays, for the owner's login.
+  const folder = ghFolder(s.env);
+  assert.equal(folder, join(s.env.SAGE_HOME, ".hooks", "codex", "merge-folder"));
+  assert.deepEqual(ghCalls(), [{ args: ["pr", "merge", "41", "--repo", REPO, "--squash", "--delete-branch", "--match-head-commit", SHA],
+    env: { GH_HOST: null, GH_REPO: null, GH_ENTERPRISE_TOKEN: null, GITHUB_ENTERPRISE_TOKEN: null, GH_CONFIG_DIR: s.env.GH_CONFIG_DIR }, cwd: folder, files: [] }]);
+  assert.equal(statSync(folder).mode & 0o777, 0o700, "the folder is private");
+  assert.equal(existsSync(file), false, "the permit is used up");
+  rmSync(GH_LOG);
+  assertRefused(merge(s), `this command has no merge permit, or its merge permit was used. ${AGAIN}`, "the same call again");
+});
+
+test("the arguments are exactly a pull request number and a 40-character head SHA", () => {
+  const s = session();
+  permit(s);
+  for (const args of [[], ["41"], ["41", SHA, "--admin"], ["041", SHA], ["0", SHA], ["abc", SHA], ["41", SHA.slice(1)], ["41", SHA.toUpperCase()], ["41", `${SHA} `], [SHA, "41"], ["--", "41", SHA]]) {
+    assertRefused(merge(s, args), "give exactly two arguments: the pull request number and its 40-character head SHA", JSON.stringify(args));
+  }
+});
+
+test("only the root thread merges, and only with Codex's tool call id; a refused child leaves the permit", () => {
+  const s = session();
+  const file = permit(s);
+  const chief = "only the chief merges, not a subagent. Ask the chief to run the merge";
+  for (const env of [{ CODEX_THREAD_ID: "019a0000-0000-7000-8000-0000000c41d0" }, { CODEX_THREAD_ID: "" }, { CODEX_SESSION_ID: "", CODEX_THREAD_ID: "" }]) {
+    assertRefused(merge(s, undefined, env), chief, JSON.stringify(env));
+  }
+  const { CODEX_THREAD_ID, CODEX_SESSION_ID, ...noIds } = s.env;
+  assertRefused(merge({ ...s, env: noIds }), chief, "no ids");
+  assertRefused(merge(s, undefined, { CODEX_TOOL_CALL_ID: "" }), `Codex gave this command no tool call id. ${AGAIN}`, "no call id");
+  assertRefused(merge(s, undefined, { CODEX_TOOL_CALL_ID: "call_other" }), `this command has no merge permit, or its merge permit was used. ${AGAIN}`, "another call's id");
+  assert.equal(existsSync(file), true);
+  assert.equal(merge(s).status, 0, "the root thread's own call still merges");
+  rmSync(GH_LOG);
+});
+
+test("a merge permit that is damaged, old, or for another session, pull request, SHA or command refuses", () => {
+  const cases = [
+    [{ time: Date.now() - 301_000 }, "the merge permit is not from the last 300 s"],
+    [{ time: Date.now() + 60_000 }, "the merge permit is not from the last 300 s"],
+    [{ session: "019a0000-0000-7000-8000-000000000bad" }, "the merge permit is for another session"],
+    [{ pr: "42" }, "the merge permit is for another pull request"],
+    [{ sha: "b".repeat(40) }, "the merge permit is for another head SHA"],
+    [{ command: `gh pr merge 41 --squash --delete-branch --match-head-commit ${SHA}` }, "the merge permit is for another command"],
+    [{ command: `${mergeCommand("41", SHA)} && echo` }, "the merge permit is for another command"],
+    ["{", "the merge permit is damaged"],
+    ["null", "the merge permit is damaged"],
+    [{ pr: 41 }, "the merge permit is damaged"],
+    [{ turn: undefined }, "the merge permit is damaged"],
+    [{ time: "now" }, "the merge permit is damaged"],
+    // The start mark is required (F-T663-5): a permit without it never falls back to a boundary of its own.
+    [{ mark: undefined }, "the merge permit is damaged"],
+    [{ mark: 0 }, "the merge permit is damaged"],
+    [{ mark: null }, "the merge permit is damaged"],
+    // The repository is owner/name only (F-T663-4): no host, no flag, no path.
+    ...[undefined, "", "example-owner", "github.com/example-owner/example.repo", "--admin/x", "example-owner/-x", "a/b/c", "a b/c", "../x", "x/..", "x/.", "-x/y"].map((repo) => [{ repo }, "the merge permit is damaged"]),
+  ];
+  for (const [fields, reason] of cases) {
+    const s = session();
+    const file = permit(s, fields);
+    assertRefused(merge(s), `${reason}. ${AGAIN}`, JSON.stringify(fields));
+    assert.equal(existsSync(file), false, "a refused permit is used up too");
+  }
+  const s = session();
+  const target = join(s.env.HOME, "elsewhere.json");
+  writeFileSync(target, "{}");
+  const file = permitFile(s.env, s.env.CODEX_TOOL_CALL_ID);
+  mkdirSync(dirname(file), { recursive: true, mode: 0o700 });
+  symlinkSync(target, file);
+  assertRefused(merge(s), `the merge permit is damaged. ${AGAIN}`, "a link in place of the permit");
+});
+
+test("in Codex's sandbox the permit cannot be taken: it asks the owner to approve the command outside the sandbox", () => {
+  const s = session();
+  const file = permit(s);
+  chmodSync(dirname(file), 0o500);
+  try {
+    assertRefused(merge(s), "Codex's sandbox does not let it use its merge permit (EACCES). Approve the command to run outside the sandbox", "read-only permits folder");
+  } finally { chmodSync(dirname(file), 0o700); }
+  assert.equal(existsSync(file), true, "the permit stays for the escalated run");
+});
+
+test("right before gh it reads the record again: the owner's switch must be on, and the turn not stopped with Esc", () => {
+  const NONE = `the owner has not turned autopilot on, with sage mode on, since this session started. ${SWITCH_ON}`;
+  const off = session("tui-on-then-off");
+  permit(off);
+  assertRefused(merge(off), `the owner's latest autopilot switch is off. ${SWITCH_ON}`, "on, then off");
+  // F-T663-11: the off phrase with an image switches the sage hook off (Codex gives it the text items only), so the
+  // merge command reads that off too.
+  const picture = session();
+  const on = picture.lines.find((line) => line.payload.role === "user" && line.payload.content?.[0]?.text === "autopilot on");
+  const p = on.payload;
+  const offWithImage = { ...on, payload: { ...p, content: [{ type: "input_text", text: "autopilot off" }, { type: "input_image", image_url: "data:" }],
+    internal_chat_message_metadata_passthrough: { ...p.internal_chat_message_metadata_passthrough, content_item_metadata: [{ provenance: { type: "user" } }, { provenance: { type: "user" } }] } } };
+  writeFileSync(picture.transcript, `${readFileSync(picture.transcript, "utf8")}${JSON.stringify(offWithImage)}\n`);
+  permit(picture);
+  assertRefused(merge(picture), `the owner's latest autopilot switch is off. ${SWITCH_ON}`, "on, then off with an image");
+  for (const name of ["queue-on", "hook-text-on", "goal-on", "fork"]) {
+    const s = session(name);
+    permit(s);
+    assertRefused(merge(s), NONE, name);
+  }
+  // F-T663-2: the on phrase while sage mode is off is no switch, as core told the owner.
+  const modeOff = session("exec-on", { mode: false });
+  permit(modeOff);
+  assertRefused(merge(modeOff), NONE, "the on without the mode phrase");
+  const resumed = session("exec-on-then-resume");
+  permit(resumed, { mark: { session: SESSION, source: "resume", lines: resumed.lines.findIndex((line) => line.payload.type === "task_complete") + 1, pid: 1 } });
+  assert.equal(merge(resumed).status, 0, "the owner's on after the resume");
+  rmSync(GH_LOG);
+  const marked = session();
+  permit(marked, { mark: { lines: marked.lines.length } });
+  assertRefused(merge(marked), NONE, "a mark after the on");
+  const outside = session();
+  permit(outside, { mark: { lines: outside.lines.length + 1 } });
+  // F-T663-14: each record refusal gives a plain cause and one next step; a short technical detail comes last, in brackets.
+  assertRefused(merge(outside), "sage's note of this session start does not match Codex's record of this session. Resume the session, then the owner turns autopilot on again. Or the owner merges the pull request in GitHub", "a mark past the record");
+  const missing = session();
+  permit(missing, { transcript: join(SCRATCH, "no-record.jsonl") });
+  assertRefused(merge(missing), "sage cannot read Codex's record of this session. Ask for the merge again. If it refuses again, the owner merges the pull request in GitHub (ENOENT)", "no record");
+  const version = session();
+  writeFileSync(version.transcript, readFileSync(version.transcript, "utf8").replace('"cli_version":"0.164.0"', '"cli_version":"0.167.0"'));
+  permit(version);
+  assertRefused(merge(version), "this session runs Codex 0.167.0, and sage reads the records of Codex 0.164 to 0.166 only. Use Codex 0.164 to 0.166, or the owner merges the pull request in GitHub", "a newer Codex");
+  const form = session();
+  writeFileSync(form.transcript, `${readFileSync(form.transcript, "utf8")}{not json\n`);
+  permit(form);
+  assertRefused(merge(form), `sage does not know the form of Codex's record of this session. The owner merges the pull request in GitHub (line ${form.lines.length + 1} is not JSON)`, "a record of an unknown form");
+  const esc = session("tui-on-then-esc");
+  permit(esc);
+  assertRefused(merge(esc), "the owner stopped the turn of this merge with Esc. Ask for the merge again only if the owner wants it", "turn_aborted for the permit's turn");
+  const other = session("tui-on-then-esc");
+  permit(other, { turn: "019a0000-0000-7000-8000-0000000a0a0a" });
+  assert.equal(merge(other).status, 0, "turn_aborted of another turn stops nothing");
+  rmSync(GH_LOG);
+});
+
+test("a failed gh gives its cause and a next step, and the permit is still used up", () => {
+  const s = session();
+  const file = permit(s);
+  const failing = join(SCRATCH, "failing");
+  mkdirSync(failing);
+  writeFileSync(join(failing, "gh"), `#!${process.execPath}\nprocess.exit(4);\n`, { mode: 0o755 });
+  assert.deepEqual(merge(s, undefined, { PATH: failing }), { status: 4, stdout: "",
+    stderr: "sage: gh pr merge failed (exit status 4): the head may have moved, the pull request may not be ready to merge, or gh may not be logged in. Check the pull request in GitHub, then ask for the merge again.\n" });
+  assert.equal(existsSync(file), false);
+  const none = session();
+  permit(none);
+  const empty = join(SCRATCH, "no-gh");
+  mkdirSync(empty);
+  assert.deepEqual(merge(none, undefined, { PATH: empty }), { status: 1, stdout: "",
+    stderr: `sage: gh pr merge could not start (ENOENT): gh may not be installed, or sage cannot use its folder ${ghFolder(none.env)}. Check the pull request in GitHub, then ask for the merge again.\n` });
+});
+
+test("on this head no path merges: the gate refuses every gh merge, and the merge command finds no merge permit", async () => {
+  const s = session();
+  const pre = (command) => ({ hook_event_name: "PreToolUse", session_id: SESSION, turn_id: s.turn, transcript_path: s.transcript, cwd: s.project, model: "m", permission_mode: "default", tool_name: "Bash", tool_use_id: s.env.CODEX_TOOL_CALL_ID, tool_input: { command } });
+  // The mode reader and the merge check say yes, as they will when autopilot is on and the pull request is ready.
+  const deps = { mode: () => ({ sage: true, autopilot: true }), check: async () => ({ ok: true }), env: s.env };
+  for (const command of [`gh pr merge 41 --squash --delete-branch --match-head-commit ${SHA}`, "gh pr merge 41 --squash", `cd ${s.project} && gh pr merge 41 --squash`]) {
+    const out = await gate(pre(command), deps);
+    assert.equal(out?.hookSpecificOutput?.permissionDecision, "deny", command);
+    assert.equal(out.hookSpecificOutput.permissionDecisionReason, "sage: automatic merging is unavailable in Codex. Sage prepares the checks; the owner merges directly in GitHub", command);
+    assert.equal(await gate({ ...pre(command), hook_event_name: "PermissionRequest", tool_input: { command, description: "merge" } }, deps), undefined, `${command}: no automatic approval`);
+  }
+  assertRefused(merge(s), `this command has no merge permit, or its merge permit was used. ${AGAIN}`, "the merge command without a permit");
+});
