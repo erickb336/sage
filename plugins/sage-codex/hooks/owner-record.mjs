@@ -10,16 +10,24 @@
 //   - no start mark, or a start mark whose line count does not fit the record.
 // The owner's switches replay with core's own mode rules (switchModes), so the reader agrees with core: an on counts
 // only while sage mode is on at that point, and the off form of the mode phrase ends autopilot.
-//   - The owner's message: a user message with one metadata item for each content item, each with provenance user
-//     (Codex marks hook text, goal text and its own context as harness or tool). Its text joins its text items, as
-//     Codex joins them for the sage hook. An off counts from any owner's message (the hook also switches off when the
-//     owner sends an image with the off phrase); every other switch counts only from a message of text items only.
+//   - A message's text is the text that the sage hook gets: its text items joined, without Codex's tags around an
+//     image (<image name=[Image #1] path="…"> and </image>, real records of Codex 0.164 and 0.166) and without an item
+//     of another kind than the user's text (Codex's note for an image that it could not read).
+//   - An off (the off phrase, or the off form of the mode phrase) counts from any user message, whatever its metadata,
+//     and from Codex's UserMessage event too: a missed off is a safety failure, and an extra off only makes merges wait.
+//   - Every other switch counts only from the owner's message: a user message with one metadata item for each content
+//     item, each with provenance user (Codex marks hook text, goal text and its own context as harness or tool). The
+//     mode phrase counts also with an image, as the hook counts it; the on phrase counts only alone, with no image.
 //   - The replay starts at the last session_meta line with both modes off, as a new mode file does (a fork's record
 //     starts fresh: proof case 5b). A resume writes no session_meta, so sage mode carries over a resume, as the
 //     session's mode file does.
 //   - An on counts only after the start mark (proof case 5c: a resume must not count an earlier on), and only in a turn
 //     that a person started (turn trigger user in the TUI, exec for codex exec). Input from codex queue also has
-//     provenance user, but its turn trigger is queue: there an on counts for nothing. Every other switch counts.
+//     provenance user, but its turn trigger is queue: there an on counts for nothing, also when Codex joins it to a
+//     turn that a person started (F-T663-17: merges then wait). The exec trigger is the client's word: an agent that
+//     runs codex exec on purpose could give it (F-T663-3, a documented limit of the guide).
+// A resume by a newer Codex writes no version into the record (R2690 proof: 0.166.0-alpha.6 resumed a 0.164.0 record
+// with no new session_meta), so the gate also checks the version of the Codex that runs (gate-hook.mjs).
 import { closeSync, fstatSync, openSync, readSync } from "node:fs";
 import { exactPhrase, PHRASES, switchModes } from "../core/index.mjs";
 
@@ -89,18 +97,32 @@ export function readRecord(path, { pause = sleep } = {}) {
   return { entries, lines: entries.length };
 }
 
+/** Codex's own text items around an image in a user message. */
+const IMAGE_TAG = /^(?:<image name=\[Image #\d+\](?: path=".*")?>|<\/image>)$/s;
+
 /**
- * An owner's message: { text, textOnly }, or null for any other line. Its text joins its text items, as Codex joins
- * them for the hook (UserMessageItem::message()); textOnly says whether it has no other item, such as an image.
+ * A user message: { text, owner, textOnly }, or null for any other line. text is the text that the hook gets (see the
+ * top of this file); owner says whether it is the owner's message; textOnly whether it holds only the owner's text.
+ * Codex's UserMessage event gives the hook's text too, so it counts as a user message that is not the owner's.
  */
-function ownerMessage(entry) {
+function userMessage(entry) {
   const p = entry.payload;
-  if (entry.type !== "response_item" || p.type !== "message" || p.role !== "user" || !Array.isArray(p.content) || !p.content.length) return null;
-  const meta = p.internal_chat_message_metadata_passthrough?.content_item_metadata;
-  if (!Array.isArray(meta) || meta.length !== p.content.length || !meta.every((item) => item?.provenance?.type === "user")) return null;
-  const texts = p.content.filter((item) => item?.type === "input_text" && typeof item.text === "string");
-  return { text: texts.map((item) => item.text).join(""), textOnly: texts.length === p.content.length };
+  if (entry.type === "event_msg" && p.type === "item_completed" && p.item?.type === "UserMessage" && Array.isArray(p.item.content)) {
+    return { text: p.item.content.filter((item) => item?.type === "text" && typeof item.text === "string").map((item) => item.text).join(""), owner: false };
+  }
+  if (entry.type !== "response_item" || p.type !== "message" || p.role !== "user" || !Array.isArray(p.content)) return null;
+  const { content_item_metadata: meta, content_item_kinds: kinds } = p.internal_chat_message_metadata_passthrough ?? {};
+  const text = (item) => item?.type === "input_text" && typeof item.text === "string" && !IMAGE_TAG.test(item.text);
+  return {
+    text: p.content.filter((item, i) => text(item) && [undefined, "user.text"].includes(Array.isArray(kinds) ? kinds[i] : undefined)).map((item) => item.text).join(""),
+    owner: p.content.length > 0 && Array.isArray(meta) && meta.length === p.content.length && meta.every((item) => item?.provenance?.type === "user"),
+    textOnly: p.content.every(text),
+  };
 }
+
+/** Whether Codex's record has the tool call callId (a function call of the model) at or after line from. */
+export const callInRecord = (record, callId, from) =>
+  record.entries.some((entry, i) => i >= from && entry.type === "response_item" && /call$/.test(entry.payload.type) && entry.payload.call_id === callId);
 
 /**
  * The owner's autopilot switch now, with core's mode rules: { on: true }, { on: false, reason }, or { refused } when
@@ -120,14 +142,13 @@ export function autopilotSwitch(record, mark) {
   const state = {};
   let counted = false;
   for (let i = start; i < record.entries.length; i++) {
-    const message = ownerMessage(record.entries[i]);
+    const message = userMessage(record.entries[i]);
     if (message === null) continue;
     const { text } = message;
     const change = PHRASES[exactPhrase(text)];
-    // A message with an item that is not text (an image) switches the hook too, so its off counts; any other switch needs text only.
-    if (!message.textOnly && change?.autopilot !== false) continue;
-    const turn = record.entries[i].payload.internal_chat_message_metadata_passthrough.turn_id;
-    if (change?.autopilot === true && (i < from || !PERSON.has(trigger.get(turn)))) continue;
+    if (!message.owner && change?.autopilot !== false) continue; // only an off counts from any user message
+    const turn = record.entries[i].payload.internal_chat_message_metadata_passthrough?.turn_id;
+    if (change?.autopilot === true && (!message.textOnly || i < from || !PERSON.has(trigger.get(turn)))) continue;
     switchModes({ owner: true, text, all: text }, state, { autopilotOn: () => "" });
     counted ||= state.autopilot === true;
   }
