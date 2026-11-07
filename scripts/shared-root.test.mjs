@@ -9,6 +9,7 @@ import { fileURLToPath } from "node:url";
 import { actorOptions, locate as claudeLocate, sage as claudeRun, sageRoot as claudeRootOf } from "../plugins/sage/skills/sage/sage.mjs";
 import { tool } from "../plugins/sage-codex/skills/sage/sage.mjs";
 import { buildBoardModel, createStateTool, readBoardSources, renderBoardHtml, renderBoardText, renderTaskText, sharedRoot } from "../packages/sage-core/index.mjs";
+import { githubRemote } from "../packages/sage-core/shared-root.mjs";
 
 /** A write of a shared logbook names its chief (T604): each call here acts as one chief of its provider, as the hooks and the MCP server do. */
 const acting = (run, options) => (argv, env) => run([...argv, ...options(argv[argv.indexOf("--project") + 1], argv, { native: "test-chief" }, env)], env);
@@ -248,7 +249,7 @@ for (const [name, leave] of [
   leave(w, there);
   for (const run of [claudeSage, tool.sage]) {
     // Neither folder has a GitHub remote (a moved folder's old path is gone, and a local clone's origin is a path), so the link is recommended.
-    const next = new RegExp(`: \\*\\*This folder has no logbook yet:\\*\\* ${there}\\n\\nIt has the same first commit as the project project \\(logbook ${folder}, used by ${w.project}\\)\\. sage cannot compare GitHub remotes: [^\\n]*\\n\\nNote: no sage command can change this answer later\\.\\n\\nChoose one:\\n1\\. \\*\\*Link to project\\*\\* \\(recommended\\)\\.[\\s\\S]*After the reply, run one command in ${there}: for 1, sage link --to ${folder}; for 2, sage link --separate\\.$`);
+    const next = new RegExp(`: \\*\\*This folder has no logbook yet:\\*\\* ${there}\\n\\nIt has the same first commit as the project project \\(logbook ${folder}, used by ${w.project}\\)\\. sage cannot compare GitHub remotes: [^\\n]*\\n\\nNote: no sage command can change this answer later\\.\\n\\nChoose one:\\n1\\. \\*\\*Link to project\\*\\* \\(recommended\\)\\.[\\s\\S]*For the chief: after the reply, run one command in ${there}: for 1, sage link --to ${folder}; for 2, sage link --separate\\.$`);
     assert.throws(() => run(["status", "--project", there], w.env), next, "a command names the link");
     assert.throws(() => run(["init", "--project", there], w.env), next, "init never makes the logbook that traps the link");
   }
@@ -290,12 +291,12 @@ function lanternWorld(t) {
 test("the link prompt of a new clone recommends by its GitHub remote: the same one links, another one (a fork) starts separate, none links", (t) => {
   const { w, lantern, clone, folder, prompts } = lanternWorld(t);
   const facts = `**This folder has no logbook yet:** ${clone}\n\nIt has the same first commit as the project lantern (logbook ${folder}, used by ${lantern}).`;
-  const link = `Choose one:\n1. **Link to lantern** (recommended). This folder uses the lantern logbook. Its tasks show in the one lantern project on the board, and its runs show "checkout lantern-b". No record is copied.\n2. **Start separate.** This folder gets a new, empty logbook, and the board shows it as another project. Choose this for a fork that is now its own project.\n\nReply 1 or 2.\n\nAfter the reply, run one command in ${clone}: for 1, sage link --to ${folder}; for 2, sage link --separate.`;
+  const link = `Choose one:\n1. **Link to lantern** (recommended). This folder uses the lantern logbook. Its tasks show in the one lantern project on the board, and its runs show "checkout lantern-b". No record is copied.\n2. **Start separate.** This folder gets a new, empty logbook, and the board shows it as another project. Choose this for a fork that is now its own project.\n\nReply 1 or 2.\n\nFor the chief: after the reply, run one command in ${clone}: for 1, sage link --to ${folder}; for 2, sage link --separate.`;
   git(clone, "remote", "set-url", "origin", "git@github.com:sample-owner/lantern.git");
   const same = `${facts} Its GitHub remote is also sample-owner/lantern. So it is most likely a second clone of lantern. sage does not guess, and nothing has changed.\n\n${NOTE}\n\n${link}`;
   assert.deepEqual(prompts(), [same, same], "the same remote: link (both providers)");
   git(clone, "remote", "set-url", "origin", "https://github.com/other-owner/lantern-x");
-  const fork = `${facts} But its GitHub remote is other-owner/lantern-x, not sample-owner/lantern. So it is most likely a fork. sage does not guess, and nothing has changed.\n\n${NOTE}\n\nChoose one:\n1. **Start separate** (recommended). This folder gets a new, empty logbook, and the board shows it as another project.\n2. **Link to lantern.** This folder uses the lantern logbook, and its tasks show in the lantern project. Choose this only if the fork and lantern are one project to you.\n\nReply 1 or 2.\n\nAfter the reply, run one command in ${clone}: for 1, sage link --separate; for 2, sage link --to ${folder}.`;
+  const fork = `${facts} But its GitHub remote is other-owner/lantern-x, not sample-owner/lantern. So it is most likely a fork. sage does not guess, and nothing has changed.\n\n${NOTE}\n\nChoose one:\n1. **Start separate** (recommended). This folder gets a new, empty logbook, and the board shows it as another project.\n2. **Link to lantern.** This folder uses the lantern logbook, and its tasks show in the lantern project. Choose this only if the fork and lantern are one project to you.\n\nReply 1 or 2.\n\nFor the chief: after the reply, run one command in ${clone}: for 1, sage link --separate; for 2, sage link --to ${folder}.`;
   assert.deepEqual(prompts(), [fork, fork], "another remote, a fork: separate");
   git(clone, "remote", "remove", "origin");
   const none = `${facts} sage cannot compare GitHub remotes: this folder has none that sage can read. So it is most likely a second clone of lantern, or this folder moved. sage does not guess, and nothing has changed.\n\n${NOTE}\n\n${link}`;
@@ -309,7 +310,7 @@ test("the link prompt of a new clone recommends by its GitHub remote: the same o
 test("a row whose logbook is missing: the prompt offers the restore first, then separate or another project", (t) => {
   const { w, lantern, folder, prompts } = lanternWorld(t);
   rmSync(join(w.shared, folder), { recursive: true });
-  const missing = `**This folder's logbook is missing:** ${lantern}\n\nIts row links it to the logbook ${folder}, but that folder is not in the shared root (${w.shared}) now. Nothing has changed.\n\nNote: a new link or a new logbook does not bring back the old tasks.\n\nChoose one:\n1. **Restore the folder** (recommended if it was removed by mistake). Put ${folder} back from a copy, for example Time Machine. Then ask me again.\n2. **Start separate.** This folder gets a new, empty logbook.\n3. **Link to another project.** Tell me its name.\n\nReply 1, 2 or 3.\n\nAfter the reply, run one command in ${lantern}: for 1, no command: the user puts ${folder} back in ${w.shared}; for 2, sage link --separate; for 3, sage link --to <the folder of the project that the user names>.`;
+  const missing = `**This folder's logbook is missing:** ${lantern}\n\nIts row links it to the logbook ${folder}, but that folder is not in the shared root (${w.shared}) now. Nothing has changed.\n\nNote: a new link or a new logbook does not bring back the old tasks.\n\nChoose one:\n1. **Restore the folder** (recommended if it was removed by mistake). Put ${folder} back from a copy, for example Time Machine. Then ask me again.\n2. **Start separate.** This folder gets a new, empty logbook.\n3. **Link to another project.** Tell me its name.\n\nReply 1, 2 or 3.\n\nFor the chief: after the reply, run one command in ${lantern}: for 1, no command: the user puts ${folder} back in ${w.shared}; for 2, sage link --separate; for 3, sage link --to <the folder of the project that the user names>.`;
   assert.deepEqual(prompts(lantern), [missing, missing]);
 });
 
@@ -321,14 +322,75 @@ test("two shared logbooks with one first commit: the prompt names both, and reco
   claudeSage(["link", "--separate", "--project", fork], w.env);
   const forkFolder = basename(claudeSage(["logbook", "--project", fork], w.env));
   git(w.base, "clone", "-q", lantern, third);
-  const ask = (choices, runs) => `**This folder has no logbook yet:** ${third}\n\nTwo shared logbooks have its first commit. sage does not guess, and nothing has changed.${choices[0]}\n\n${NOTE}\n\nChoose one:\n${choices.slice(1).join("\n")}\n\nReply 1, 2 or 3.\n\nAfter the reply, run one command in ${third}: ${runs}.`;
+  const ask = (choices, runs) => `**This folder has no logbook yet:** ${third}\n\nTwo shared logbooks have its first commit. sage does not guess, and nothing has changed.${choices[0]}\n\n${NOTE}\n\nChoose one:\n${choices.slice(1).join("\n")}\n\nReply 1, 2 or 3.\n\nFor the chief: after the reply, run one command in ${third}: ${runs}.`;
   git(third, "remote", "set-url", "origin", "https://github.com/sample-owner/lantern");
   const same = ask(["", `1. **Link to lantern** (recommended: the same GitHub remote, sample-owner/lantern). Logbook ${folder}, used by ${lantern}.`, `2. **Link to lantern-x.** Logbook ${forkFolder}, used by ${fork}.`, "3. **Start separate.** A new, empty logbook."], `for 1, sage link --to ${folder}; for 2, sage link --to ${forkFolder}; for 3, sage link --separate`);
   assert.deepEqual(prompts(third), [same, same]);
   git(third, "remote", "set-url", "origin", "https://github.com/third-owner/lantern-c");
   assert.equal(prompts(third)[0], ask(["", `1. **Link to lantern.** Logbook ${folder}, used by ${lantern}.`, `2. **Link to lantern-x.** Logbook ${forkFolder}, used by ${fork}.`, "3. **Start separate** (recommended: no logbook has its GitHub remote, third-owner/lantern-c). A new, empty logbook."], `for 1, sage link --to ${folder}; for 2, sage link --to ${forkFolder}; for 3, sage link --separate`), "a remote that no logbook has: separate");
   git(third, "remote", "remove", "origin");
-  assert.equal(prompts(third)[0], ask([" sage cannot recommend one: a folder has no GitHub remote that sage can read.", `1. **Link to lantern.** Logbook ${folder}, used by ${lantern}.`, `2. **Link to lantern-x.** Logbook ${forkFolder}, used by ${fork}.`, "3. **Start separate.** A new, empty logbook."], `for 1, sage link --to ${folder}; for 2, sage link --to ${forkFolder}; for 3, sage link --separate`), "no remote: no recommendation");
+  assert.equal(prompts(third)[0], ask([" sage cannot recommend one: this folder has no GitHub remote that sage can read.", `1. **Link to lantern.** Logbook ${folder}, used by ${lantern}.`, `2. **Link to lantern-x.** Logbook ${forkFolder}, used by ${fork}.`, "3. **Start separate.** A new, empty logbook."], `for 1, sage link --to ${folder}; for 2, sage link --to ${forkFolder}; for 3, sage link --separate`), "no remote: no recommendation");
+  // F-T633-6: the folder with no remote is named, here the fork's checkout.
+  git(third, "remote", "add", "origin", "https://github.com/sample-owner/lantern");
+  git(fork, "remote", "remove", "origin");
+  assert.match(prompts(third)[0], new RegExp(`\\(recommended: the same GitHub remote, sample-owner/lantern\\)`), "the same remote still links");
+  git(third, "remote", "set-url", "origin", "https://github.com/third-owner/lantern-c");
+  assert.ok(prompts(third)[0].includes(` sage cannot recommend one: ${fork} has no GitHub remote that sage can read.\n`), "the fork's folder has none");
+});
+
+// T631: the link prompt's copy and hardening follow-ups of T633 (F-T633-4 to -9, F-T638-1, F-T639-1).
+test("F-T633-4: a remote with a user or a token in its URL reads as its repository, and the prompt never prints the token", (t) => {
+  assert.equal(githubRemote("https://x-access-token:SECRET123@github.com/sample-owner/lantern.git"), "sample-owner/lantern");
+  assert.equal(githubRemote("https://someone@github.com/sample-owner/lantern"), "sample-owner/lantern");
+  assert.equal(githubRemote("https://evil.example/@github.com/sample-owner/lantern"), null, "a path is no user");
+  const { clone, prompts } = lanternWorld(t);
+  git(clone, "remote", "set-url", "origin", "https://x-access-token:SECRET123@github.com/sample-owner/lantern.git");
+  const [text] = prompts();
+  assert.match(text, /Its GitHub remote is also sample-owner\/lantern\. So it is most likely a second clone of lantern\./);
+  assert.ok(!text.includes("SECRET123") && !text.includes("x-access-token"));
+});
+
+test("F-T633-7: with the first checkout gone, a live clone keeps the logbook; a foreign row linked before it does not take it", (t) => {
+  const w = world(t);
+  w.claude("link", "--separate");
+  const folder = w.name(), [[root, , commits, at]] = w.rows(), stranger = w.repo("stranger");
+  w.bind(`${join(w.base, "gone")}\t${folder}\t${commits}\t2020-01-01T00:00:00Z`, `${stranger}\t${folder}\t${commitOf(stranger)}\t2020-02-01T00:00:00Z`, `${root}\t${folder}\t${commits}\t${at}`);
+  assert.equal(w.claude("logbook"), join(w.shared, folder));
+  assert.match(w.claude(...ADD), /T1/);
+  assert.throws(() => claudeSage(["status", "--project", stranger], w.env), new RegExp(`belongs to another project \\(${root}\\)`));
+});
+
+test("F-T633-8 and F-T638-1: a clone with the folder name of a linked checkout is told its board label, and the link says it", (t) => {
+  const { w, lantern, folder } = lanternWorld(t);
+  const clone = join(w.base, "clones", "lantern");
+  mkdirSync(dirname(clone));
+  git(w.base, "clone", "-q", lantern, clone);
+  git(clone, "remote", "set-url", "origin", "https://github.com/sample-owner/lantern.git");
+  assert.ok(refusalOf(() => claudeSage(["status", "--project", clone], w.env)).includes(`its runs show "checkout lantern #2"`));
+  assert.equal(claudeSage(["link", "--to", folder, "--project", clone], w.env), `${clone} now uses the shared logbook ${join(w.shared, folder)}. The board shows this folder as lantern #2`);
+  assert.equal(claudeSage(["link", "--to", folder, "--project", join(w.base, "lantern-b")], w.env), `${join(w.base, "lantern-b")} now uses the shared logbook ${join(w.shared, folder)}`, "a unique name gets no number");
+});
+
+test("F-T633-9: a shallow clone of a project with a shared logbook gets a prompt, not a legacy logbook", (t) => {
+  const w = world(t);
+  git(w.project, "commit", "-q", "--allow-empty", "-m", "second");
+  w.claude("link", "--separate");
+  const shallow = join(w.base, "shallow");
+  git(w.base, "clone", "-q", "--depth", "1", `file://${w.project}`, shallow);
+  const text = `**This folder has no logbook yet:** ${shallow}\n\nIt is a shallow clone, so its first commit is its newest one, and sage cannot tell whether it is a clone of a project that has a shared logbook. sage does not guess, and nothing has changed.\n\n${NOTE}\n\nChoose one:\n1. **Fetch its full history** (recommended). Run \`git fetch --unshallow\` in this folder, then ask me again.\n2. **Start separate.** This folder gets a new, empty logbook, and the board shows it as another project.\n\nReply 1 or 2.\n\nFor the chief: after the reply, run one command in ${shallow}: for 1, no command: the user runs git fetch --unshallow in it; for 2, sage link --separate.`;
+  for (const run of [claudeSage, codexSage]) assert.equal(refusalOf(() => run(["init", "--project", shallow], w.env)), text);
+  assert.ok(!existsSync(join(w.claudeRoot)) || !readdirSync(w.claudeRoot).some((name) => name.startsWith("shallow-")), "no legacy logbook");
+  git(shallow, "fetch", "-q", "--unshallow");
+  assert.match(refusalOf(() => claudeSage(["init", "--project", shallow], w.env)), /It has the same first commit as the project project/, "after the fetch, the link prompt");
+});
+
+test("F-T639-1: the link prompt prints a line or paragraph separator in a path as an escape, so the path stays on its line", (t) => {
+  const { w, lantern } = lanternWorld(t);
+  const clone = join(w.base, "lan\u2028tern\u2029x");
+  git(w.base, "clone", "-q", lantern, clone);
+  const text = refusalOf(() => claudeSage(["status", "--project", clone], w.env));
+  assert.ok(!/[\u2028\u2029]/.test(text), "no raw separator");
+  assert.ok(text.includes(`**This folder has no logbook yet:** ${join(w.base, "lan\\u{2028}tern\\u{2029}x")}\n`));
 });
 
 test("a matching row whose logbook is missing offers nothing: no link can reach it, so init starts as before", (t) => {
@@ -469,7 +531,7 @@ test("a foreign row refuses only in the foreign checkout: the owner keeps workin
   const inForeign = (...args) => claudeSage([...args, "--project", foreign], w.env);
   inForeign("link", "--to", folder); // no commits yet, so no compare
   git(foreign, "commit", "-q", "--allow-empty", "-m", "own first");
-  const conflict = `**This folder's link is wrong:** ${foreign}\n\nIts row links it to the logbook ${folder}, but that logbook belongs to another project (${w.project}): the two folders have no first commit in common. So sage does not use that logbook here, and nothing has changed. The project tasks are safe.\n\nIf this folder is a shallow clone, its first commit is its newest one. Then run \`git fetch --unshallow\` in it, and ask me again.\n\n${NOTE}\n\nChoose one:\n1. **Start separate** (recommended). This folder gets a new, empty logbook in place of the wrong link.\n2. **Link to another project.** Tell me its name. The link stops if that project does not have this folder's first commit.\n\nReply 1, or 2 and the name.\n\nAfter the reply, run one command in ${foreign}: for 1, sage link --separate; for 2, sage link --to <the folder of the project that the user names>.`;
+  const conflict = `**This folder's link is wrong:** ${foreign}\n\nIts row links it to the logbook ${folder}, but that logbook belongs to another project (${w.project}): the two folders have no first commit in common. So sage does not use that logbook here, and nothing has changed. The project tasks are safe.\n\nIf this folder is a shallow clone, its first commit is its newest one. Then run \`git fetch --unshallow\` in it, and ask me again.\n\n${NOTE}\n\nChoose one:\n1. **Start separate** (recommended). This folder gets a new, empty logbook in place of the wrong link.\n2. **Link to another project.** Tell me its name. The link stops if that project does not have this folder's first commit.\n\nReply 1, or 2 and the name.\n\nFor the chief: after the reply, run one command in ${foreign}: for 1, sage link --separate; for 2, sage link --to <the folder of the project that the user names>.`;
   for (const run of [claudeSage, codexSage]) assert.equal(refusalOf(() => run([...ADD, "--project", foreign], w.env)), conflict);
   // The owner reads, writes and merges as before, and a link there is a retry.
   assert.match(w.claude("status"), /T1/);
@@ -554,7 +616,7 @@ test("M6: a clone with a legacy logbook in the other provider's root gets no lin
   assert.throws(() => claudeSage(["link", "--to", w.name(), "--project", clone], w.env), /this project has a logbook at .*codex/);
 });
 
-test("M7: a clone whose first commit cannot be read, or a shallow one, gets past the guard: init makes a legacy logbook, and link then refuses", (t) => {
+test("M7: a clone whose first commit cannot be read gets past the guard: init makes a legacy logbook, and link then refuses", (t) => {
   const w = world(t);
   git(w.project, "commit", "-q", "--allow-empty", "-m", "second");
   w.claude("link", "--separate");
@@ -562,11 +624,13 @@ test("M7: a clone whose first commit cannot be read, or a shallow one, gets past
   git(w.base, "clone", "-q", w.project, broken);
   const config = join(broken, ".git", "config"), good = readFileSync(config, "utf8");
   writeFileSync(config, "[core\n"); // Git cannot read it, so the guard has no first commit to compare
-  git(w.base, "clone", "-q", "--depth", "1", `file://${w.project}`, shallow); // its first commit is its newest one
-  for (const clone of [broken, shallow]) assert.match(claudeSage(["init", "--project", clone], w.env), new RegExp(`^logbook ${w.claudeRoot}/`), basename(clone));
+  assert.match(claudeSage(["init", "--project", broken], w.env), new RegExp(`^logbook ${w.claudeRoot}/`));
   assert.throws(() => claudeSage(["link", "--to", w.name(), "--project", broken], w.env), /git cannot read the repository at .*broken/);
   writeFileSync(config, good); // the repair: now the legacy logbook stops the link
-  for (const clone of [broken, shallow]) assert.throws(() => claudeSage(["link", "--to", w.name(), "--project", clone], w.env), /this project has a logbook at .*A link would hide its tasks/, basename(clone));
+  assert.throws(() => claudeSage(["link", "--to", w.name(), "--project", broken], w.env), /this project has a logbook at .*A link would hide its tasks/);
+  // A shallow clone's first commit is its newest one: it no longer gets past the guard, but gets a prompt (F-T633-9, see its test).
+  git(w.base, "clone", "-q", "--depth", "1", `file://${w.project}`, shallow);
+  assert.throws(() => claudeSage(["init", "--project", shallow], w.env), /It is a shallow clone/);
 });
 
 test("a shared logbook that lost tasks.tsv reaches the repair, as a legacy logbook does, and link leaves its row", (t) => {

@@ -27,9 +27,13 @@ const SHALLOW = "A shallow clone needs its full history here: run git fetch --un
 /** The warning of a link prompt (T633 design), before its choices: a link or a new logbook stays. */
 const LASTS = "Note: no sage command can change this answer later.";
 
-/** The <owner>/<repo> of a GitHub remote's URL, or null for any other remote. The board and the link prompt read remotes with it. */
+/**
+ * The <owner>/<repo> of a GitHub remote's URL, or null for any other remote. The board and the link prompt read remotes
+ * with it. An https URL with a user or a token before the host is still that repository (F-T633-4): the result never
+ * holds the credential, only the owner and the repository.
+ */
 export const githubRemote = (url) => {
-  const match = /^(?:https:\/\/|ssh:\/\/git@|git@)github\.com[:/]([A-Za-z0-9][A-Za-z0-9-]*)\/([\w-][\w.-]*?)(?:\.git)?\/?$/.exec(url ?? "");
+  const match = /^(?:https:\/\/(?:[^\s/@]+@)?|ssh:\/\/git@|git@)github\.com[:/]([A-Za-z0-9][A-Za-z0-9-]*)\/([\w-][\w.-]*?)(?:\.git)?\/?$/.exec(url ?? "");
   return match ? `${match[1]}/${match[2]}` : null;
 };
 /** The largest table that the tool reads: a checkout row is short, so a bigger file is not a table of this tool. */
@@ -72,13 +76,44 @@ export const gone = ({ root }) => {
  * folder without .git at its path is gone too (F-T625-6). The state tool and the board read a run's checkout by it.
  */
 export const checkoutGone = ({ root }) => gone({ root: join(root, ".git") });
+/** Do two first-commit lists share a commit? An empty list shares none. */
+const disjoint = (a, b) => !!a && !!b && !a.split(",").some((commit) => b.split(",").includes(commit));
+const shares = (a, b) => !!a && !!b && !disjoint(a, b);
 /**
- * The row that a logbook belongs to: its oldest live row with first commits, or its oldest gone row when none is live.
- * A later row with none of them is the foreign one, so the owner keeps working. A row of a checkout that left stays
- * and does no harm: it can refuse a newcomer, but never the only live checkout. The board names a shared logbook's
+ * The row that a logbook belongs to, among its rows with first commits: the oldest live row with a first commit in common
+ * with its first row, else its oldest live row, else its first row. So a live clone of a gone first checkout keeps the
+ * logbook, and a foreign row that came before that clone does not take it (F-T633-7). A row of a checkout that left
+ * stays and does no harm: it can refuse a newcomer, but never the only live checkout. The board names a shared logbook's
  * checkout by this row too.
  */
-export const ownerOf = (rows, folder) => rows.filter((r) => r.folder === folder && r.commits).sort((a, b) => gone(a) - gone(b) || a.at.localeCompare(b.at))[0];
+export const ownerOf = (rows, folder) => {
+  const mine = rows.filter((r) => r.folder === folder && r.commits).sort((a, b) => a.at.localeCompare(b.at)), live = mine.filter((r) => !gone(r));
+  return live.find((r) => shares(r.commits, mine[0].commits)) ?? live[0] ?? mine[0];
+};
+/**
+ * A logbook's linked checkouts, in link order, at most 64: its rows of bindings.tsv but the foreign ones (no first commit
+ * in common with the owner row). The board names them, and the link names the new one, by the same labels (checkoutLabel).
+ */
+export const linkedRows = (rows, folder) => {
+  const owner = ownerOf(rows, folder), mine = rows.filter((r) => r.folder === folder).sort((a, b) => a.at.localeCompare(b.at)).slice(0, 64);
+  return { linked: mine.filter((r) => !owner || !r.commits || shares(r.commits, owner.commits)), foreign: mine.filter((r) => owner && r.commits && !shares(r.commits, owner.commits)) };
+};
+/** A name for a person to read: no control, format (bidi) or line separator character (F-T630-2, F-T633-10). Every board name passes it. */
+export const plainName = (name) => String(name ?? "").replace(/[\p{Cc}\p{Cf}\p{Zl}\p{Zp}]/gu, "");
+/**
+ * A linked checkout's label (T633): its folder name, and " #n" by link order when two checkouts of its logbook have that
+ * name. A gone checkout keeps its place, so a number never moves to another folder. When a folder's own name is such a
+ * label ("lantern #2" beside two "lantern" folders), the names count by their base without " #n", so each label is new
+ * (F-T633-12).
+ */
+export const checkoutLabel = (checkouts, root) => {
+  const by = (key) => (item) => {
+    const name = plainName(basename(item.root)), same = checkouts.filter((other) => key(plainName(basename(other.root))) === key(name)), n = same.findIndex((other) => other.root === item.root);
+    return same.length > 1 && n >= 0 ? `${name} #${n + 1}` : name;
+  };
+  const exact = by((name) => name), labels = checkouts.map(exact), item = { root };
+  return (new Set(labels).size === labels.length ? exact : by((name) => name.replace(/(?: #\d+)+$/, "")))(item);
+};
 
 /** The stat errors of a path that reaches no folder: it is missing, or it is no valid name (a NUL byte, a name too long). */
 const NO_FOLDER = ["ENOENT", "ENOTDIR", "ENAMETOOLONG", "ERR_INVALID_ARG_VALUE", "ERR_INVALID_ARG_TYPE"];
@@ -176,8 +211,6 @@ export function createSharedRoot({ Refusal, refuse, listed, legacyRoots, makeLog
     if (!present(made)) swap(made, `${now()}\n`);
   }
 
-  const disjoint = (a, b) => !!a && !!b && !a.split(",").some((commit) => b.split(",").includes(commit));
-  const shares = (a, b) => !!a && !!b && !disjoint(a, b);
   /** A logbook's project name: its folder without the hash. */
   const nameOf = (folder) => folder.slice(0, -7);
   /**
@@ -187,7 +220,7 @@ export function createSharedRoot({ Refusal, refuse, listed, legacyRoots, makeLog
   const prompt = (checkout, head, facts, notes, choices, reply) => [
     `**${head}:** ${visible(checkout)}`, facts, ...notes, `Choose one:\n${choices.map(({ text }, i) => `${i + 1}. ${text}`).join("\n")}`,
     reply ?? `Reply ${choices.slice(0, -1).map((_, i) => i + 1).join(", ")} or ${choices.length}.`,
-    `After the reply, run one command in ${visible(checkout)}: ${choices.map(({ run }, i) => `for ${i + 1}, ${run}`).join("; ")}.`,
+    `For the chief: after the reply, run one command in ${visible(checkout)}: ${choices.map(({ run }, i) => `for ${i + 1}, ${run}`).join("; ")}.`,
   ].join("\n\n");
   const SEPARATE = "sage link --separate", ANOTHER = "sage link --to <the folder of the project that the user names>";
   /** The logbook of a row. A row that names a missing folder, or a folder that another project owns, refuses with the link prompt. */
@@ -373,7 +406,18 @@ export function createSharedRoot({ Refusal, refuse, listed, legacyRoots, makeLog
       throw e;
     }
     const twins = rows.filter((r) => shares(r.commits, commits) && healthy(shared, rows, r));
-    if (!twins.length) return;
+    // A shallow clone's first commit is its newest one, so it matches no logbook: sage cannot tell, so it asks (F-T633-9).
+    if (!twins.length) {
+      let shallow = false;
+      try {
+        shallow = readLocalGit(checkout, ["rev-parse", "--is-shallow-repository"]).toString().trim() === "true";
+      } catch {}
+      if (shallow) refuse(prompt(checkout, "This folder has no logbook yet", "It is a shallow clone, so its first commit is its newest one, and sage cannot tell whether it is a clone of a project that has a shared logbook. sage does not guess, and nothing has changed.", [LASTS], [
+        { text: "**Fetch its full history** (recommended). Run `git fetch --unshallow` in this folder, then ask me again.", run: "no command: the user runs git fetch --unshallow in it" },
+        { text: "**Start separate.** This folder gets a new, empty logbook, and the board shows it as another project.", run: SEPARATE },
+      ]));
+      return;
+    }
     // The recommendation follows the GitHub origin: the same one links, another one (a fork) starts separate, and a
     // folder with none that sage can read links. Git reads the remotes only here, on the way to this refusal.
     const origin = (root) => {
@@ -383,7 +427,9 @@ export function createSharedRoot({ Refusal, refuse, listed, legacyRoots, makeLog
         return null;
       }
     };
-    const mine = origin(checkout), here = visible(basename(checkout));
+    const mine = origin(checkout);
+    // The label that the board would give this folder after a link to the logbook (F-T633-8): "lantern #2" beside a lantern.
+    const here = (folder) => { const linked = [...linkedRows(rows, folder).linked, { root: realOf(checkout) }]; return checkoutLabel(linked, realOf(checkout)); };
     const same = (remote) => !!mine && !!remote && mine.toLowerCase() === remote.toLowerCase(); // GitHub ignores the case
     const logbooks = [...new Set(twins.map((r) => r.folder))].map((folder) => {
       const root = ownerOf(rows, folder).root;
@@ -400,7 +446,7 @@ export function createSharedRoot({ Refusal, refuse, listed, legacyRoots, makeLog
       ]));
       const why = mine && remote ? `Its GitHub remote is also ${remote}. So it is most likely a second clone of ${name}.` : `sage cannot compare GitHub remotes: ${mine ? used : "this folder"} has none that sage can read. So it is most likely a second clone of ${name}, or this folder moved.`;
       refuse(prompt(checkout, head, `${facts} ${why} ${done}`, [LASTS], [
-        { text: `**Link to ${name}** (recommended). This folder uses the ${name} logbook. Its tasks show in the one ${name} project on the board, and its runs show "checkout ${here}". No record is copied.`, run: linkTo },
+        { text: `**Link to ${name}** (recommended). This folder uses the ${name} logbook. Its tasks show in the one ${name} project on the board, and its runs show "checkout ${here(folder)}". No record is copied.`, run: linkTo },
         { ...separate, text: `${separate.text} Choose this for a fork that is now its own project.` },
       ]));
     }
@@ -409,7 +455,10 @@ export function createSharedRoot({ Refusal, refuse, listed, legacyRoots, makeLog
     const pick = logbooks.find((b) => same(b.remote));
     const fork = !pick && mine && logbooks.every((b) => b.remote);
     const ordered = pick ? [pick, ...logbooks.filter((b) => b !== pick)] : logbooks;
-    refuse(prompt(checkout, head, `${logbooks.length === 2 ? "Two" : logbooks.length} shared logbooks have its first commit. ${done}${pick || fork ? "" : " sage cannot recommend one: a folder has no GitHub remote that sage can read."}`, [LASTS], [
+    // The folders with no GitHub remote that sage can read, by name (F-T633-6): this one, or the checkouts of the logbooks.
+    const none = mine ? logbooks.filter((b) => !b.remote).map((b) => b.used) : ["this folder"];
+    const unknown = `${none.length > 1 ? `${none.slice(0, -1).join(", ")} and ${none.at(-1)} have` : `${none[0]} has`} no GitHub remote that sage can read`;
+    refuse(prompt(checkout, head, `${logbooks.length === 2 ? "Two" : logbooks.length} shared logbooks have its first commit. ${done}${pick || fork ? "" : ` sage cannot recommend one: ${unknown}.`}`, [LASTS], [
       ...ordered.map((b) => ({ text: `${b === pick ? `**Link to ${b.name}** (recommended: the same GitHub remote, ${b.remote}).` : `**Link to ${b.name}.**`} Logbook ${b.folder}, used by ${b.used}.`, run: `sage link --to ${b.folder}` })),
       { text: `${fork ? `**Start separate** (recommended: no logbook has its GitHub remote, ${mine}).` : "**Start separate.**"} A new, empty logbook.`, run: SEPARATE },
     ]));
@@ -501,7 +550,9 @@ export function createSharedRoot({ Refusal, refuse, listed, legacyRoots, makeLog
     try { if (provider) writePlugin(shared); } catch {} // only for a later move, as in notePlugin
     writeBindings(shared, [...others, { root: key, folder, commits, at: now() }]); // last: a stop before it leaves no row to a half-made logbook
     const twin = to === undefined ? others.find((r) => shares(r.commits, commits)) : undefined;
-    return `${visible(checkout)} now uses the shared logbook ${dir}${twin ? `, apart from ${twin.folder}, which has the same first commit` : ""}`;
+    // A folder name that two checkouts of the logbook share gets a number on the board: the message says which (T633 design, state 4).
+    const label = to === undefined ? null : checkoutLabel(linkedRows(bindings(shared), folder).linked, key);
+    return `${visible(checkout)} now uses the shared logbook ${dir}${twin ? `, apart from ${twin.folder}, which has the same first commit` : ""}${label && label !== plainName(basename(key)) ? `. The board shows this folder as ${visible(label)}` : ""}`;
   }
 
   /**
