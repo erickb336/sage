@@ -52,7 +52,10 @@ journal: a marker with a receipt rolls forward, and a marker with no receipt
 restores the before tables. The Codex settle step (`task-settle.mjs`) runs before
 decide, prepare, assign, finish and a child's terminal check. It acknowledges and
 releases a row with a receipt, and it voids a row with no receipt and no marker.
-A void row is never a decision: a retry gets a fresh one.
+A void row is never a decision: a retry gets a fresh one. After a move, the
+receipts stay in the old logbook, so a row of a moved task finds none in the new
+logbook. A row that has its receipt's hash committed before the move: the
+journal never voids it, so its own acknowledgement releases it.
 
 The isolated `--sage-update-task` lifecycle probe uses simulated model replies.
 It checks the native read, update, historical retry and fresh-read route. It does

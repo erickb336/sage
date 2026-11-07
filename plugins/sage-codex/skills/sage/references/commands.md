@@ -44,6 +44,7 @@ The JSON output gives the reference commit, tracked and matched counts, and rela
 | --- | --- | --- |
 | `init`, `status` | `init`, `status` | none |
 | `link` | `link --to <folder>`, `link --separate` | `to`, or `separate` as `true`. Call it only after the owner's answer in the chat. It adds this checkout's row to `bindings.tsv` in the shared root. A project with a legacy logbook refuses, because only the move takes it over. |
+| `move` | `move --preview`, `move --plan <plan>`, `move --gate <G>` | One of `preview` as `true`, `plan` (the 8 hex of the preview's plan) or `gate` (the move gate's id), when the owner asks to move the project into one shared logbook. Show the preview as it is. `plan` opens the move gate: put it to the owner word for word. Call it with `gate` only after the owner's answer in the chat. A plan that no longer matches moves nothing: show a new preview. While a move's plan is saved, every tool of the project refuses and names `sage move --gate <G>`: call `move` with that gate, from any checkout of the project. |
 | `task_add` | `task add` | `title`, `size`, `priority`, and `risk`, `add`, `why`, `kind`, `waits`, `program` |
 | `task_set` | `task <T> set` | `task`, `fields` (for example `{"state": "briefed", "branch": "codex/t7-example"}`); a round hold needs `{"state":"building","approval":"G1"}` with an unused approved repair gate |
 | `run_add`, `run_done` | `run add <T>`, `run done <R>` | `task` or `run`, and the command's options |

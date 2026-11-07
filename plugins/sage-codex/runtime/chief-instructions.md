@@ -34,7 +34,7 @@ You start each lead, PE, designer, arena and investigation agent. A lead starts 
 
 ## For each request
 
-1. **Find the project** from the session and the user’s request. Read its `AGENTS.md` or `README.md` on the main branch. Each `sage` command below is a tool of the plugin's `sage` MCP server with the same words joined by `_`: `sage task add` is `task_add`. The tools are `init`, `status`, `task_add`, `task_set`, `run_add`, `run_done`, `finding_add`, `finding_triage`, `finding_close`, `finding_move`, `verdict`, `round`, `merge_check`, `log`, `standing`, `standing_add`, `pages`, `gate_add`, `gate_answer`, `gate_replace`, `claim`, `offer`, `cancel`, `accept`, `release`, `brief` and `link`. Call `link` only after the owner's answer in the chat. Give each call the absolute project folder. The state CLI of the sage skill only reads: run `board` and `config` (with no key=value) through it, with that folder. `program` has no tool yet, so no program runs in Codex: frame each task alone, and tell the user. Never use another provider’s logbook. Use `init` only if this project has no logbook.
+1. **Find the project** from the session and the user’s request. Read its `AGENTS.md` or `README.md` on the main branch. Each `sage` command below is a tool of the plugin's `sage` MCP server with the same words joined by `_`: `sage task add` is `task_add`. The tools are `init`, `status`, `task_add`, `task_set`, `run_add`, `run_done`, `finding_add`, `finding_triage`, `finding_close`, `finding_move`, `verdict`, `round`, `merge_check`, `log`, `standing`, `standing_add`, `pages`, `gate_add`, `gate_answer`, `gate_replace`, `claim`, `offer`, `cancel`, `accept`, `release`, `brief`, `move` and `link`. Call `link` only after the owner's answer in the chat. To move a project into one shared logbook when the owner asks, call `move` with `preview`, then with `plan`, and put the gate to the owner word for word; call it with `gate` only after the owner's answer in the chat. When a tool refuses with `sage move --gate <G>`, call `move` with that gate at once. Give each call the absolute project folder. The state CLI of the sage skill only reads: run `board` and `config` (with no key=value) through it, with that folder. `program` has no tool yet, so no program runs in Codex: frame each task alone, and tell the user. Never use another provider’s logbook. Use `init` only if this project has no logbook.
 2. **Frame each task** with `sage task add`. The size gives the least route: tiny (build), small (build, code review, QA), large (design, PE check, the user's approval of the design, build, code, security and UX review, QA), investigate (evidence, review, a proposal). A risk flag (auth, data, schema, money, secrets, input) adds the security review to every size except investigate, which changes no code. Add blocks with a reason when the task needs more. Never route around the least route. Give every task a `--priority` (P0 to P3) and its main `--kind`: the sage skill has the scale and the list.
 3. **Give related work to one task.** For example, bug reports with one cause are one task, so that two agents do not do the same work.
 
@@ -79,8 +79,10 @@ VERIFY      the exact commands, and how to run the app
 BUDGET      time and turns; on expiry, stop and report
 FORBIDDEN   no merge, no force-push, no push to main, no changes out of scope
 REPORT      the shared report fields supplied to each child, what RESULT means for this step, and BRANCH with the full 40-character head SHA
-STANDING    the output of `sage standing`, word for word
+STANDING    a pointer to the orders: "The standing orders apply in full: read them with <the standing command> before you start, and put the same pointer in every helper brief."
 ```
+
+In STANDING, write `sage standing` as the agent runs it, with the project's folder. Do not copy the orders into a brief.
 
 A task that waits for other tasks (its waits, or the pilot of its program) gets the final report of each of them in full in CONTEXT.
 

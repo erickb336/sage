@@ -5,17 +5,24 @@ import { validateLogbookLocation } from "./run-report.mjs";
 /**
  * The journal side of step 3. Any provider's writer may settle a saved change, so the journal catches up here, before
  * decide, prepare, assign and a child's terminal check. A receipt closes a row. No receipt and no saved change voids it.
+ * After a move (T658) the project's logbook is the new shared one, and the receipts stay in the old logbook: a row of a
+ * moved task finds no receipt. An acknowledged row committed before the move, and the journal never voids a row with a
+ * receipt, so its own acknowledgement releases it. Neither step writes a logbook.
  */
 export function settleNativeWrites(options) {
   validateLogbookLocation(options);
   const tool = logbookTool(() => { throw Error("No ambient logbook"); });
   tool.settleWrites({ project: options.projectDirectory }, logbookEnv(options), receipts => {
     const state = readAdmission(options.directory);
-    for (const { update, accepted, released, void: voided } of state.taskUpdates ?? []) {
+    for (const { update, accepted, released, receiptHash, void: voided } of state.taskUpdates ?? []) {
       if (update.project !== options.project || voided || released) continue;
       const owner = JSON.stringify([update.project, update.session, update.epoch]);
       const receipt = receipts.update({ owner, request: update.request, digest: update.digest });
-      if (!receipt) { voidTaskUpdate(options.directory, update); continue; }
+      if (!receipt) {
+        if (receiptHash) releaseTaskUpdate(options.directory, update, receiptHash);
+        else voidTaskUpdate(options.directory, update);
+        continue;
+      }
       if (receipt.accepted !== accepted) throw Error("Task update receipt differs from its decision");
       if (!accepted) continue; // A rejected receipt of an earlier version stays as history.
       acknowledgeTaskUpdate(options.directory, update, receipt.receiptHash);

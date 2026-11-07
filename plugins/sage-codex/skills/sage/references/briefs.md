@@ -12,7 +12,7 @@ VERIFY      exact checks, app commands and evidence to retain
 BUDGET      agreed time/turn limits; stop and report when exhausted
 FORBIDDEN   no out-of-scope edits, logbook writes, merge, force-push or publication
 REPORT      the report below; define RESULT for this assignment
-STANDING    the complete output of the CLI standing command
+STANDING    a pointer, not a copy: "The standing orders apply in full: read them with the standing tool before you start, and put the same pointer in every helper brief."
 ```
 
 Include the available skill names relevant to the assignment and their actual paths. The child reads each needed skill itself unless its content is demonstrably inherited. Do not claim a missing skill or role exists. Include this report contract in every brief; it does not require Claude's report skill.

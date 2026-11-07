@@ -34,6 +34,18 @@ export const TOOLS = {
     input: { to: optional("the folder of an existing shared logbook, <project>-<6 hex>"), separate: z.boolean().optional().describe("true to start a new shared logbook") },
     pos: ["separate"], argv: (i) => ["link", ...(i.separate ? ["--separate"] : [])],
   },
+  move: {
+    describe: "Move this project's Claude and Codex logbooks into one shared logbook, when the owner asks for it. Give one of preview, plan or gate. "
+      + "preview reads and changes nothing: show its text to the owner as it is. It refuses while a run runs: start no run, and tell the owner. "
+      + "plan, the 8 hex of the preview's plan, opens the move gate: put its text to the owner word for word. Its options are move (or \"move, and record <provider> as unused\" when that provider has no row in plugins.tsv) and keep. "
+      + "Record the owner's answer with gate_answer. Call gate, the move gate's id, only after the owner's answer in the chat: it moves, and prints the end check, the map, the backups and the restore steps. "
+      + "When the logbooks changed after the preview, the plan does not match and nothing moves: show a new preview, then open a new gate. "
+      + "While a move's plan is saved, every tool of the project refuses and names the gate: call move with that gate at once, from any checkout of the project, to finish it.",
+    input: { preview: z.literal(true).optional().describe("true: the preview"),
+      plan: z.string().regex(/^[0-9a-f]{8}$/, "the 8 hex of the preview's plan, for example 7c41e09a").optional().describe("the 8 hex of the preview's plan"),
+      gate: id("G", "the move gate's id").optional() },
+    pos: ["preview"], argv: (i) => ["move", ...(i.preview ? ["--preview"] : [])],
+  },
   status: { describe: "Print the status lines of the project's logbook: tasks, runs, gates and programs.", argv: () => ["status"] },
   task_add: {
     describe: "Frame a task and its route. The size gives the least route; a risk flag adds the security review.",
@@ -131,7 +143,7 @@ export const TOOLS = {
     input: { task: z.union([task, z.literal("-")]).describe("the task id, or - for none"), decision: word.describe("the decision"), why: z.string().describe("the reason") },
     pos: ["task", "decision"], argv: (i) => ["log", i.task, i.decision],
   },
-  standing: { describe: "Print the standing orders as written. Every brief carries them word for word.", argv: () => ["standing"] },
+  standing: { describe: "Print the standing orders as written. Every agent reads them before it starts; a brief points to them.", argv: () => ["standing"] },
   standing_add: { describe: "Add one standing order.", input: { order: word.describe("the order") }, pos: ["order"], argv: (i) => ["standing", "add", i.order] },
   pages: {
     describe: "Make and print the folder where agents save the task's pages, or record a page there (its path and sha256) in the decision trail. "

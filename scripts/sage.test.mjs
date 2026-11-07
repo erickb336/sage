@@ -2854,6 +2854,8 @@ test("F-R73-1: a logbook whose tasks, findings or ledger table is gone, or is a 
 
 test("F-R73-2: the standing orders print as written: with their tabs, a CRLF file as plain lines, and no other control character", () => {
   const s = store();
+  // init's header says that agents read the orders and a brief points to them (T669).
+  assert.match(readFileSync(join(s.dir, "standing.md"), "utf8"), /^# Standing orders\n\nEvery agent reads these orders before it starts; a brief points to them\. Add a line when you notice that you repeat an instruction\.\n\n1\. /);
   writeFileSync(join(s.dir, "standing.md"), "# Standing orders\r\n\r\n1. One\r\n2. Two:\tindented \x1b[31mred\x1b[0m\x85\r\n"); // cc73: a hand edit
   // The orders keep their tab, so this output stays out of said, whose lines QA-2 checks for control characters.
   const standing = () => spawnSync("node", [TOOL, "standing", "--project", s.project], { encoding: "utf8", env: testEnv({ SAGE_HOME: s.home }) });

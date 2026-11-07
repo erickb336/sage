@@ -923,6 +923,26 @@ test("a child runs only the read commands of the state tool from the shell, and 
   }
 });
 
+test("T658: the gate treats move as a write: only the chief calls the move tool or runs move from the shell, also its read-only preview", async (t) => {
+  // The server has the tool, and neither the gate nor the server counts it as a read.
+  const { TOOLS } = await import(new URL("../plugins/sage-codex/mcp/state-server.mjs", import.meta.url));
+  const { CHILD_READS } = await import(HOOK);
+  assert.deepEqual([Object.hasOwn(TOOLS, "move"), CHILD_READS.has("move")], [true, false]);
+  const w = world(t);
+  const shell = [`node ${TOOL} move --preview`, `node ${TOOL} move --preview --project ${w.project}`, `node ${TOOL} move --plan 7c41e09a`, `node ${TOOL} move --gate G1`];
+  const calls = [["move", { preview: true }], ["move", { plan: "7c41e09a" }], ["move", { gate: "G1" }]];
+  const LEAD_MOVE = "sage: a lead records only its own task, and move is not one of its tools. Put what the logbook needs in your report";
+  for (const mode of [{ sage: false, autopilot: false }, { sage: true, autopilot: false }]) {
+    w.mode(mode);
+    for (const path of ["/root/sage_implementer_t1_r1", "/root/sage_code_reviewer_t1_r1", "/root/worker_1"]) {
+      assert.deepEqual(shell.map((c) => denied(w.send(pre("Bash", c, w.child(path))))), shell.map(() => LOGBOOK), path);
+      assert.deepEqual(calls.map(([name, args]) => denied(w.send(mcp(name, args, w.child(path))))), calls.map(() => LOGBOOK), path);
+    }
+    assert.deepEqual(calls.map(([name, args]) => denied(w.send(mcp(name, args, w.child("/root/sage_lead_t1_r1"))))), calls.map(() => LEAD_MOVE), "a lead");
+    assert.deepEqual(calls.map(([name, args]) => denied(w.send(mcp(name, args)))), calls.map(() => undefined), "the chief calls the move tool");
+  }
+});
+
 for (const args of ["task T1", "board T1 --view task", "config"]) {
   test(`T49: a role reads ${args} for the hook's project`, (t) => {
     const w = world(t);
