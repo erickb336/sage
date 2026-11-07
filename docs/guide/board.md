@@ -72,7 +72,7 @@ Each item says why and what to do, and counts in "needs you".
 - In the chat, a program's breakdown gate is under its own heading, "Program approval", and every other item is under "Other".
 - On the board page, the items with no card are in the box "Needs you, not on a card" above the columns.
 
-A task page shows the step line, one row for each step with its detail and each review role's state, the brief, runs, verdict evidence, findings, artifacts, and latest decisions. A task of a program also shows its program, with a link and the progress, each task that it waits for with its state (met, not met or never met), and the tasks that wait for it.
+A task page shows the step line, one row for each step with its detail and each review role's state, the brief, runs, verdict evidence, findings, artifacts, and latest decisions. Under the findings, the polish list shows the task's open low findings, which never block a merge; the task's card shows their count ("polish 2"). A task of a program also shows its program, with a link and the progress, each task that it waits for with its state (met, not met or never met), and the tasks that wait for it.
 
 The offline HTML file contains the selected tasks and their full details. Text from agents is escaped in both views.
 

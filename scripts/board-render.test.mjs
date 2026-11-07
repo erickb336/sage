@@ -1127,3 +1127,23 @@ test("F-T420-1, R1551: the chat task lookup and the programs card show a stuck w
   assert.ok(text.includes("\n- PG3 Board programs · the breakdown waits for you \\(gate G12\\) · pilot T30 · T33 cannot start\n"), text);
   assert.ok(text.includes("\n- PG9 Changes · the chief revises the breakdown \\(gate G9\\) · T91 cannot start\n"), text);
 });
+
+test("T671: a card counts the task's open low findings, and its task page lists them as its polish list, apart from the findings that block", () => {
+  // SAMPLE DATA: one task with two open lows (one marked fix), an open medium and a dismissed low; one task with none.
+  const task = (id, title) => ({ id, title, size: "small", risk: "", route: "build,code-review,qa", state: "reviewing", branch: "", pr: "", round: "0", keys: "" });
+  const finding = (key, severity, summary, status = "open", triage = "") => ({ task: "T1", key, round: "0", source: "qa", severity, summary, triage, reason: status === "dismissed" ? "Sample reason" : "", status });
+  const model = buildBoardModel([{ id: "sample", label: "Sample source", diagnostics: [], projects: [{ key: "sample/project-abcdef", name: "project-abcdef", diagnostics: [], tables: {
+    tasks: [task("T1", "Sample polish"), task("T2", "Sample clean")],
+    findings: [finding("F-T1-1", "low", "Sample: a vague name"), finding("F-T1-2", "low", "Sample: a typo", "open", "fix"), finding("F-T1-3", "medium", "Sample: a lost write"), finding("F-T1-4", "low", "Sample: an old label", "dismissed", "dismiss")],
+  } }] }], { now: "2026-10-08T20:00:00Z" });
+  const html = renderBoardHtml(model);
+  const card = id => { const k = html.indexOf(`<span class="id">${id}</span>`); return html.slice(html.lastIndexOf('<a class="card', k), html.indexOf("</a>", k)); };
+  assert.match(card("T1"), /<span class="tag" title="Polish list: 2 open low findings, which never block a merge">polish 2<\/span>/);
+  assert.ok(!card("T2").includes("polish"), "a task with no open low finding shows no count");
+  const page = renderBoardHtml(model, { snapshot: false, taskKey: model.tasks.find(t => t.id === "T1").key });
+  const at = page.indexOf("<h4>Polish list"), polish = page.slice(at, page.indexOf("</ul>", at));
+  assert.match(polish, /^<h4>Polish list <span class="n">2<\/span><\/h4><p class="faint">Open low findings\. They never block a merge\.<\/p>/);
+  assert.deepEqual([...polish.matchAll(/Sample: [a-z ]+/g)].map(m => m[0]), ["Sample: a vague name", "Sample: a typo"], "the open lows, and not the medium or the dismissed low");
+  const blocking = page.slice(page.indexOf("<h3>Findings"), at);
+  assert.ok(blocking.includes("Sample: a lost write") && !blocking.includes("Sample: a typo"), "the medium stays above the polish list");
+});
