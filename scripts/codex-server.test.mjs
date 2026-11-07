@@ -5991,6 +5991,22 @@ test('T658, T680: after the move, the settle reads the receipts in the old logbo
   assert.deepEqual({ old: tree(old), moved: tree(dir) }, before);
 });
 
+test('T681: after the move and its settle, a later update of a moved task goes through', async t => {
+  const { f, open, dir } = await movedUpdatesFixture(t);
+  // The move gives the old T1 a new number in the new logbook.
+  const [task] = readFileSync(join(dir, 'tasks.tsv'), 'utf8').split('\n').map(line => line.split('\t')).find(cells => cells[1] === 'Before the move');
+  const project = f.options.projectDirectory, snapshot = () => f.assignmentTool.readTaskSnapshot({ project, task }, f.assignmentEnv);
+  // A task of a shared logbook takes a change only from its owning chief (T604): this chief claims it first.
+  const { chiefLogbook } = await import(pathToFileURL(join(f.plugin, 'runtime/logbook-owner.mjs')));
+  const context = chiefLogbook(f.native(session), f.options);
+  const chief = context.tool.chiefFor(project, context.native, f.assignmentEnv);
+  context.tool.sage(['claim', task, '--version', snapshot().version, '--chief', chief, '--project', project], f.assignmentEnv);
+  // The update settles first: a fence that still blocked would stop it there, before its decision.
+  const result = f.update({ request: 'a7777777-7777-4777-8777-777777777777', task, version: snapshot().version, changes: { title: 'After the move' } });
+  assert.deepEqual([result.decision, result.task.title, snapshot().task.title], ['task-updated', 'After the move', 'After the move']);
+  assert.deepEqual(open().map(([id, , released, voided]) => [id, released || voided]), [['T1', true], ['T2', true], ['T3', true], [task, true]]);
+});
+
 test('T680: after the move, the settle ends an interrupted run finish whose receipt is in the old logbook, and writes neither logbook', async t => {
   const { f } = await stuckWithOpenFinish(t, { stuck: false });
   for (const id of ['R2', 'R3']) f.cli('run', 'done', id, '--status', 'blocked'); // the move needs zero running runs; R1 finished
