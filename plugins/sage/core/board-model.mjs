@@ -356,7 +356,7 @@ function card(source, project, group, task, now, graph, landing) {
   // head or no merge check, the board says that it did not check, and the task is not ready. The board does not see the
   // PR's head branch on GitHub, so that part of the rule stays unchecked also when the check passes.
   const verified = ["verified", "pr-ready"].includes(task.state) && build;
-  const checked = verified && head && landing ? landing(source.id, head, task.pr) : null;
+  const checked = verified && head && landing ? landing(source.id, head, task.pr, project) : null;
   const projectCheck = checked?.scope === "project" ? checked : null;
   const checkName = projectCheck ? "The project check" : "The merge check";
   const merge = !verified ? null : !head ? { ok: false, text: `The merge check is not checked, because the board does not know ${task.pr ? `the last commit of PR ${task.pr}` : "the task's PR"}.` }

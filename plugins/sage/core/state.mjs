@@ -63,6 +63,8 @@ const VERDICT = { build: "checks-pass", "code-review": "review-clean", "security
 const FOUND = ["findings", "qa-fail"];
 const NOT_CLEAN = ["checks-fail", ...FOUND];
 const CLEAN = Object.values(VERDICT).filter((k) => k !== "checks-pass");
+/** The verdicts of a review or QA cycle, clean or not; checks-pass and checks-fail count for their own SHA only. */
+const REVIEWED = [...CLEAN, ...FOUND];
 const KINDS = [...Object.values(VERDICT), ...NOT_CLEAN];
 const CANDIDATES = ["implementer", "designer"];
 const WRITERS = [...CANDIDATES, "arena-judge"];
@@ -2937,9 +2939,9 @@ const notFull = (sha) => (/^[0-9a-f]{40}$/i.test(sha) ? "" : `${JSON.stringify(s
 /**
  * Does one task have the clean cycles its route needs on one SHA? findings and decisions are from its logbook's tables, read
  * once by the caller; rows are only that task's ledger rows for the SHA. A task without rows is in the merge check only through
- * its PR history (prHistory).
+ * its PR history (prHistory). from: the earlier head whose cycles rows carries (carryOver), if any.
  */
-function judge(dir, task, findings, decisions, id, rows, cycles, repaired, cfg, pr) {
+function judge(dir, task, findings, decisions, id, rows, cycles, repaired, cfg, pr, from) {
   if (!task) return { ok: false, reason: `${id} is in ${join(dir, "ledger.tsv")} but not in its tasks.tsv: ${repaired ? `tasks.tsv was started again without rows (see decisions.tsv), so the verdicts of ${id} are on a lost task. Push a new commit, and record its verdicts under a task that the logbook has.` : `a stray or damaged logbook. If no project uses it, ask the user to remove ${dir}.`}` };
   const who = task.state === "abandoned" ? `${task.id} (abandoned)` : task.id; // it still counts: the merge check fails closed
   if (!rows.length && !builds(task)) return { ok: false, reason: `${who} is an investigation, so it has no pull request, but it has PR ${task.pr}: clear its PR (sage task ${task.id} set pr=).` };
@@ -2955,7 +2957,7 @@ function judge(dir, task, findings, decisions, id, rows, cycles, repaired, cfg, 
   if (clean < want) {
     const missing = perCycle.filter((k) => !rows.some((r) => r.kind === k));
     const high = want > LIMIT["cycles.small"] && cycleKeys(task).find((k) => cfg[k] === want); // only config.json holds a count above the limit
-    return { ok: false, reason: `${who}: ${clean} of ${want} clean cycles on this SHA${high ? ` (${high} is ${want} in config.json; the config command takes 1 to 10)` : ""}${missing.length ? `; never recorded: ${missing.join(", ")}` : ""}. Run the next cycle of its reviews on this SHA and record each verdict.` };
+    return { ok: false, reason: `${who}: ${clean} of ${want} clean cycles on this SHA${high ? ` (${high} is ${want} in config.json; the config command takes 1 to 10)` : ""}${missing.length ? `; never recorded: ${missing.join(", ")}` : ""}. ${from ? `A review or QA verdict on this SHA replaces the carried cycles of ${from}, so this SHA then needs all ${want} clean cycles of its own: run them on this SHA, or run the missing cycles on ${from}.` : "Run the next cycle of its reviews on this SHA and record each verdict."}` };
   }
   return { ok: true, reason: `${task.id} may merge: ${clean} clean cycle${clean === 1 ? "" : "s"} on this SHA` };
 }
@@ -2964,6 +2966,84 @@ function judge(dir, task, findings, decisions, id, rows, cycles, repaired, cfg, 
 const cleanKinds = (task) => list(task.route).map((b) => VERDICT[b]).filter((k) => k && k !== "checks-pass");
 /** The cycles of a task's ledger rows on one SHA that have every clean verdict of its route (the judge's count). */
 const cleanCycles = (task, rows) => [...new Set(rows.map((r) => r.cycle))].filter((c) => cleanKinds(task).every((k) => rows.some((r) => r.cycle === c && r.kind === k))).length;
+
+/**
+ * The review and QA rows that count for head from an earlier head (T805, the owner's Q3 of T668): those of the task's
+ * reviewed head with the most clean cycles (the latest on a tie), when head is that head plus clean merges of origin/main
+ * and the pull request's own diff is the same (cleanMergesOfMain), and no commit between them has a review or QA verdict of
+ * the task, so the carry skips no findings (F-T805-9). head keeps its own checks rows, so CI must pass on head
+ * itself, and a head with a review or QA verdict of its own judges on its own rows only: the carry is all or nothing. git
+ * runs in checkout, the merged project's folder. It returns the rows to judge, and from (the earlier head) or why (it did
+ * not carry). Any git error carries nothing: the merge check fails closed.
+ */
+function carryOver(checkout, task, head, own, all) {
+  if (!task || checkout === undefined) return { rows: own };
+  const earlier = new Map();
+  for (const r of all) if (r.sha !== head && /^[0-9a-f]{40}$/.test(r.sha) && REVIEWED.includes(r.kind)) (earlier.get(r.sha) ?? earlier.set(r.sha, []).get(r.sha)).push(r);
+  const [best] = [...earlier].reverse().map(([sha, rows]) => ({ sha, rows, n: cleanCycles(task, rows) })).filter((c) => c.n).sort((a, b) => b.n - a.n);
+  if (!best) return { rows: own };
+  if (own.some((r) => REVIEWED.includes(r.kind))) return { rows: own, why: `The cycles of ${best.sha} do not carry to this SHA: it has review or QA verdicts of its own, so only its own cycles count.` };
+  let why;
+  try {
+    why = cleanMergesOfMain(checkout, best.sha, head, new Set([...earlier.keys()].filter((sha) => sha !== best.sha)));
+  } catch (e) {
+    // exit 128 is git's answer for a folder that is no clone, or a commit or ref that the clone does not have.
+    why = `git could not read it (${e?.code ?? (typeof e?.status === "number" ? `exit ${e.status}` : e?.signal ?? e?.message)})${e?.status === 128 ? ": the folder is not a git clone, or it lacks origin/main or a head (fetch origin)" : ""}`;
+  }
+  return why ? { rows: own, why: `The cycles of ${best.sha} do not carry to this SHA: ${why}.` } : { rows: [...own, ...best.rows], from: best.sha };
+}
+
+/**
+ * Why head is not from plus clean merges of main, or "". Each commit on head's first-parent line back to from must merge
+ * one commit of origin/main (the last fetched main of GitHub, which the pull request merges into) into the line, with the
+ * tree of a clean git merge-tree of its two parents: a conflict resolution or an edit in the merge refuses, and so does a
+ * commit of another kind. The merge reads its attributes (a merge=union, for example) from the merged commit of main,
+ * never from the checkout or the pull request (F-T805-4). Then the patch-id of the pull request's own diff (from the
+ * merge base with main to the head) must be the same for from and head. reviewed: the task's other heads with a review or
+ * QA verdict; none of them may be between from and head (on either side of a merge), because the carry would skip its
+ * verdict, such as a findings verdict on a middle head. A git error throws.
+ */
+function cleanMergesOfMain(project, from, head, reviewed) {
+  const out = (args, input) => readLocalGit(project, args, input).toString();
+  const yes = (args) => {
+    try {
+      return out(args), true;
+    } catch (e) {
+      if (e?.status === 1) return false;
+      throw e;
+    }
+  };
+  const main = out(["rev-parse", "--verify", "--end-of-options", "refs/remotes/origin/main^{commit}"]).trim();
+  const line = out(["rev-list", "--first-parent", "--parents", `${from}..${head}`]).trim().split("\n").filter(Boolean).map((l) => l.split(" "));
+  if (!line.length) return `${head} is not a later commit than ${from}`;
+  if (line.some(([, first], i) => first !== (line[i + 1]?.[0] ?? from))) return `${from} is not on the first-parent line of ${head} (a rebase or an amended commit)`;
+  const skipped = out(["rev-list", `${from}..${head}`]).split("\n").find((commit) => reviewed.has(commit));
+  if (skipped) return `${skipped}, between them, has a review or QA verdict of the task, which the carry would skip`;
+  for (const [commit, first, other, ...more] of line) {
+    if (!other || more.length) return `${commit} is not a merge of two parents`;
+    if (!yes(["merge-base", "--is-ancestor", other, main])) return `${commit} merges ${other}, which is not on origin/main (fetch origin if main moved)`;
+    const tree = (() => {
+      try {
+        return out([`--attr-source=${other}`, "-c", "core.attributesFile=/dev/null", "merge-tree", "--write-tree", "--no-messages", first, other]).split("\n")[0];
+      } catch (e) {
+        if (e?.status === 1) return "conflict";
+        if (e?.status === 129) return "old git"; // git's exit for an option that it does not know
+        throw e;
+      }
+    })();
+    if (tree === "conflict") return `${commit} merges ${other} with a conflict`;
+    if (tree === "old git") return "this Git has no --attr-source option, so it cannot read the merge with the attributes of main (update Git)";
+    if (tree !== out(["rev-parse", "--verify", `${commit}^{tree}`]).trim()) return `${commit} is not the clean merge of its parents (it resolves a conflict or adds an edit)`;
+  }
+  const patchId = (sha) => {
+    const base = out(["merge-base", main, sha]).trim();
+    const diff = readLocalGit(project, ["diff-tree", "-r", "-p", "--binary", "--no-color", "--no-ext-diff", "--no-textconv", base, sha]);
+    return out(["patch-id", "--stable"], diff).split(" ")[0];
+  };
+  const [before, after] = [patchId(from), patchId(head)];
+  if (!before) return `${from} has no diff of its own from origin/main`;
+  return before === after ? "" : "the pull request's own diff changed (its patch-id is not the same)";
+}
 
 /**
  * The time after which a task's owning chief needs one fresh cycle, from the task's decision rows, or "". It reads the
@@ -3103,15 +3183,17 @@ function rebuild(root) {
  * With locked, the caller already holds that project's lock, so the check finishes its saved change without taking it.
  * With session, a hook's session id in that project: a task of a shared logbook lands only by its owning chief, as its
  * later state=merged would refuse (F-T618-17). A legacy project has no chief, and a read with no session judges no chief.
+ * With readOnly, no project and checkout ({ logbook, root }: a logbook folder and its project's folder), the board's
+ * check runs the carry of earlier cycles (T805) for that logbook in that folder, as it runs for project (F-T805-1).
  */
 function mergeCheck(sha, env = process.env, options = {}) {
   return assessMerge(sha, env, options);
 }
 
-/** Display-only judgment of one logbook. This is never the chief's permission to merge. */
-function boardLandingCheck(sha, env, logbook, pr) {
+/** Display-only judgment of one logbook. This is never the chief's permission to merge. checkout: as for mergeCheck. */
+function boardLandingCheck(sha, env, logbook, pr, checkout) {
   if (!/^[a-z0-9-]+-[0-9a-f]{6}$/.test(logbook)) throw new TypeError("invalid logbook folder");
-  return assessMerge(sha, env, { pr, readOnly: true }, logbook);
+  return assessMerge(sha, env, { pr, readOnly: true, checkout }, logbook);
 }
 
 function assessMerge(sha, env, options, logbook = null) {
@@ -3119,7 +3201,7 @@ function assessMerge(sha, env, options, logbook = null) {
   return skipped.length ? { ...verdict, reason: `${verdict.reason} Skipped ${skipped.map(visible).join(", ")}: a saved change is incomplete there, and it has no row for this commit. Any write there finishes it or says what to do.` } : verdict;
 }
 
-function judgeMerge(sha, env, { cycles, pr, readOnly, head, project, locked, session, chief: merger }, logbook, skipped) {
+function judgeMerge(sha, env, { cycles, pr, readOnly, head, project, locked, session, chief: merger, checkout }, logbook, skipped) {
   let root = sageRoot(env);
   try {
     if (notFull(sha)) return { ok: false, reason: notFull(sha) };
@@ -3127,6 +3209,8 @@ function judgeMerge(sha, env, { cycles, pr, readOnly, head, project, locked, ses
     if (head === "") return { ok: false, reason: "--head is empty: give the pull request's head branch (F-T273-10)." };
     const home = project === undefined ? undefined : storeDir(project, env), mine = home && basename(home); // the merged project's logbook
     if (home) root = dirname(home); // the check reads the logbooks and the known project list of the logbook's root
+    // The folder where a logbook's carry reads git (T805): project for its own logbook, or the board's checkout for its one.
+    const gitOf = (dir) => (basename(dir) === mine ? project : readOnly && mine === undefined && checkout?.logbook === basename(dir) ? checkout.root : undefined);
     if (mine !== undefined && !readOnly && hasPendingWrite(home)) {
       if (locked) settle(home);
       else withLock(home, () => settle(home));
@@ -3156,7 +3240,7 @@ function judgeMerge(sha, env, { cycles, pr, readOnly, head, project, locked, ses
       const repaired = decisions.some((d) => d.decision.startsWith("tasks.tsv started again without rows"));
       const ofPr = pr && (mine === undefined || basename(dir) === mine) ? prHistory(pr, tasks, decisions, ledger) : new Set();
       // Each table is grouped by task once, so thousands of tasks on one SHA take linear time, not the square of it.
-      const [byId, ownOf, findingsOf, runsOf, decisionsOf] = [new Map(tasks.map((t) => [t.id, t])), group(rows), group(findings), group(runs), group(decisions)];
+      const [byId, ownOf, findingsOf, runsOf, decisionsOf, ledgerOf] = [new Map(tasks.map((t) => [t.id, t])), group(rows), group(findings), group(runs), group(decisions), group(ledger)];
       const candidates = runs.filter(isCandidate);
       // A task owns the head branch by its branch=, by its name, or by a run of it on that branch: a task that ran work
       // there and then moved to another branch still owns it (R1709-1).
@@ -3179,10 +3263,14 @@ function judgeMerge(sha, env, { cycles, pr, readOnly, head, project, locked, ses
       const graph = waitGraph(tasks, book ? rowsOf(book.programs) : [], book ? rowsOf(book.gates) : [], decisions);
       const chief = basename(dir) !== mine ? undefined : merger ?? (session !== undefined ? chiefFor(project, session, env) : undefined);
       const checked =[...new Set([...rows.map((r) => r.task), ...ofPr])].map((id) => {
-        const [own, task] = [ownOf.get(id) ?? [], byId.get(id)];
+        // The cycles of an earlier head of the task count after clean merges of main, in the merged project's git only (T805).
+        const task = byId.get(id), carry = carryOver(gitOf(dir), task, sha, ownOf.get(id) ?? [], ledgerOf.get(id) ?? []), own = carry.rows;
         // A held task never merges until the sage moves it (F-T273-12).
         const held = task?.state === "held" && { ok: false, reason: `${id} is held: only the sage moves a held task, and it does not merge until then.` };
-        const verdict = judge(dir, task, findingsOf.get(id) ?? [], decisionsOf.get(id) ?? [], id, own, task ? Math.max(cycles ?? 0, cyclesFor(task, cfg)) : cycles, repaired, cfg, pr);
+        const judged = judge(dir, task, findingsOf.get(id) ?? [], decisionsOf.get(id) ?? [], id, own, task ? Math.max(cycles ?? 0, cyclesFor(task, cfg)) : cycles, repaired, cfg, pr, carry.from);
+        // The reason says which head's cycles it used, or, on a refusal, why an earlier head's did not count.
+        const note = carry.from ? `cycles from ${carry.from} carried to ${sha}: clean merge of main, same patch-id` : carry.why;
+        const verdict = !note ? judged : judged.ok ? (carry.from ? { ...judged, reason: judged.reason.replace(/ on this SHA$/, `, ${note}`) } : judged) : { ...judged, reason: `${judged.reason} ${carry.from ? `(${note})` : note}` };
         // A review or QA run that still runs may hold a finding that no verdict shows yet (F-T289-18). It refuses a task that
         // would pass, so a refusal still names an open finding first.
         const live = (runsOf.get(id) ?? []).filter((r) => r.status === "running" && CHECKERS.includes(r.role)).map((r) => `${r.id} (${r.role})`);

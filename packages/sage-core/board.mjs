@@ -79,7 +79,8 @@ function mergeable(b, t, env) {
   const at = [b.tips.get(`refs/heads/${t.branch}`), b.tips.get(`refs/remotes/origin/${t.branch}`)].filter(Boolean);
   if (!at.length) return { ok: false, reason: `head unknown: no branch ${t.branch} in the project's folder` };
   if (at.some((sha) => sha !== head)) return { ok: false, reason: `branch ${t.branch} is not at the reviewed head ${head.slice(0, 7)}` };
-  const r = mergeCheck(head, env, { pr: t.pr, readOnly: true });
+  // The check carries earlier cycles (T805) in the project's folder, as the merge check does when the chief merges there.
+  const r = mergeCheck(head, env, { pr: t.pr, readOnly: true, checkout: { logbook: basename(b.dir), root: b.home } });
   return { ok: r.ok, reason: r.reason.split(/\.(?:\s|$)/)[0] }; // the first sentence says what is missing
 }
 
