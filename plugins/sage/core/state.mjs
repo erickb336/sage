@@ -2969,7 +2969,8 @@ const cleanCycles = (task, rows) => [...new Set(rows.map((r) => r.cycle))].filte
 /**
  * The review and QA rows that count for head from an earlier head (T805, the owner's Q3 of T668): those of the task's
  * reviewed head with the most clean cycles (the latest on a tie), when head is that head plus clean merges of origin/main
- * and the pull request's own diff is the same (cleanMergesOfMain). head keeps its own checks rows, so CI must pass on head
+ * and the pull request's own diff is the same (cleanMergesOfMain), and no commit between them has a review or QA verdict of
+ * the task, so the carry skips no findings (F-T805-9). head keeps its own checks rows, so CI must pass on head
  * itself, and a head with a review or QA verdict of its own judges on its own rows only: the carry is all or nothing. git
  * runs in checkout, the merged project's folder. It returns the rows to judge, and from (the earlier head) or why (it did
  * not carry). Any git error carries nothing: the merge check fails closed.
@@ -2983,9 +2984,10 @@ function carryOver(checkout, task, head, own, all) {
   if (own.some((r) => REVIEWED.includes(r.kind))) return { rows: own, why: `The cycles of ${best.sha} do not carry to this SHA: it has review or QA verdicts of its own, so only its own cycles count.` };
   let why;
   try {
-    why = cleanMergesOfMain(checkout, best.sha, head);
+    why = cleanMergesOfMain(checkout, best.sha, head, new Set([...earlier.keys()].filter((sha) => sha !== best.sha)));
   } catch (e) {
-    why = `git could not read it (${e?.code ?? (typeof e?.status === "number" ? `exit ${e.status}` : e?.signal ?? e?.message)})`;
+    // exit 128 is git's answer for a folder that is no clone, or a commit or ref that the clone does not have.
+    why = `git could not read it (${e?.code ?? (typeof e?.status === "number" ? `exit ${e.status}` : e?.signal ?? e?.message)})${e?.status === 128 ? ": the folder is not a git clone, or it lacks origin/main or a head (fetch origin)" : ""}`;
   }
   return why ? { rows: own, why: `The cycles of ${best.sha} do not carry to this SHA: ${why}.` } : { rows: [...own, ...best.rows], from: best.sha };
 }
@@ -2996,9 +2998,11 @@ function carryOver(checkout, task, head, own, all) {
  * tree of a clean git merge-tree of its two parents: a conflict resolution or an edit in the merge refuses, and so does a
  * commit of another kind. The merge reads its attributes (a merge=union, for example) from the merged commit of main,
  * never from the checkout or the pull request (F-T805-4). Then the patch-id of the pull request's own diff (from the
- * merge base with main to the head) must be the same for from and head. A git error throws.
+ * merge base with main to the head) must be the same for from and head. reviewed: the task's other heads with a review or
+ * QA verdict; none of them may be between from and head (on either side of a merge), because the carry would skip its
+ * verdict, such as a findings verdict on a middle head. A git error throws.
  */
-function cleanMergesOfMain(project, from, head) {
+function cleanMergesOfMain(project, from, head, reviewed) {
   const out = (args, input) => readLocalGit(project, args, input).toString();
   const yes = (args) => {
     try {
@@ -3012,6 +3016,8 @@ function cleanMergesOfMain(project, from, head) {
   const line = out(["rev-list", "--first-parent", "--parents", `${from}..${head}`]).trim().split("\n").filter(Boolean).map((l) => l.split(" "));
   if (!line.length) return `${head} is not a later commit than ${from}`;
   if (line.some(([, first], i) => first !== (line[i + 1]?.[0] ?? from))) return `${from} is not on the first-parent line of ${head} (a rebase or an amended commit)`;
+  const skipped = out(["rev-list", `${from}..${head}`]).split("\n").find((commit) => reviewed.has(commit));
+  if (skipped) return `${skipped}, between them, has a review or QA verdict of the task, which the carry would skip`;
   for (const [commit, first, other, ...more] of line) {
     if (!other || more.length) return `${commit} is not a merge of two parents`;
     if (!yes(["merge-base", "--is-ancestor", other, main])) return `${commit} merges ${other}, which is not on origin/main (fetch origin if main moved)`;

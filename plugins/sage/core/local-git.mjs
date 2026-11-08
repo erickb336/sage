@@ -25,14 +25,18 @@ function trustedGit() {
   throw Error("no trusted system Git executable is available");
 }
 
-/** Local repository reads must not inherit selectors, fetch missing objects, or run transport helpers. input, when given, is git's stdin. */
+/**
+ * Local repository reads must not inherit selectors, fetch missing objects, or run transport helpers. They read each
+ * commit's parents from the commit itself: no replace refs, no info/grafts (an empty graft file) and no commit-graph,
+ * whose parents a clone can forge (F-T805-8). input, when given, is git's stdin.
+ */
 export function readLocalGit(project, args, input) {
   const env = Object.fromEntries(Object.entries(process.env).filter(([key]) => !key.startsWith("GIT_")));
   Object.assign(env, {
-    GIT_CONFIG_NOSYSTEM: "1", GIT_CONFIG_GLOBAL: "/dev/null", GIT_NO_REPLACE_OBJECTS: "1",
+    GIT_CONFIG_NOSYSTEM: "1", GIT_CONFIG_GLOBAL: "/dev/null", GIT_NO_REPLACE_OBJECTS: "1", GIT_GRAFT_FILE: "/dev/null",
     GIT_NO_LAZY_FETCH: "1", GIT_ALLOW_PROTOCOL: "", GIT_OPTIONAL_LOCKS: "0", GIT_TERMINAL_PROMPT: "0",
   });
-  return execFileSync(trustedGit(), ["--no-replace-objects", "-c", "core.fsmonitor=false", "-c", "core.hooksPath=/dev/null",
+  return execFileSync(trustedGit(), ["--no-replace-objects", "-c", "core.commitGraph=false", "-c", "core.fsmonitor=false", "-c", "core.hooksPath=/dev/null",
     "-c", "protocol.allow=never", "-C", project, ...args],
   { env, input, timeout: 5000, maxBuffer: 32 * 1024 * 1024, stdio: [input === undefined ? "ignore" : "pipe", "pipe", "ignore"] });
 }
