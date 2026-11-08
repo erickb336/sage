@@ -361,6 +361,7 @@ A moved folder with no Git commits, or that is no Git repository, has no first c
 | Situation | Result |
 | --- | --- |
 | The task belongs to another chief | The write refuses, names the owning chief and changes nothing, on every path. To take the task, a chief opens a takeover gate for you. |
+| A push of a branch that a live task of another chief uses | The hook refuses `git push` and `sage-pr create`, also from the chief's agents, and names the owning chief and the takeover gate. A task uses its `branch=` and the branch of each of its runs. A branch that no task uses, or that only an ended task uses, takes the push. |
 | The task has no owning chief | The write refuses and prints the claim that works for that chief. A Claude chief runs `sage claim <T> --version <version> --chief C<n>`. A Codex chief calls the `claim` tool with the task and that version. |
 | A chief abandons a task that has no owning chief | Any chief may do it, with a reason, and needs no claim and no takeover gate: `sage task <T> set state=abandoned --why "<reason>" --chief C<n>`, or `task_set` with that state alone and `why` in Codex. The task keeps no chief, and the decision row keeps the reason and the chief. A change of any other field still needs the claim. |
 | The task changed before the claim, or another chief claimed it first | The claim refuses and changes nothing. |

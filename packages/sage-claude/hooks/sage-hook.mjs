@@ -1453,13 +1453,16 @@ function chiefIdProblem(input) {
 /**
  * The PR script reads no session, and writes the task's PR number in the name of the task's chief. So this hook, which
  * knows the session, refuses its create and merge for a chief that does not own the task, in the state tool's own words.
+ * create pushes the task's branch, so it takes the push rule of a shared logbook too (T822).
  */
 function chiefPrProblem(input) {
   if (input.tool_name !== "Bash") return undefined;
   const [verb, task] = chiefWriteWords(input, PR_TOOL) ?? [];
   if (!["create", "merge"].includes(verb)) return undefined;
   try {
-    return stateTool.sessionBar(realpathSync.native(resolve(input.cwd ?? process.cwd(), process.env.SAGE_PROJECT ?? ".")), task, input.session_id) || undefined;
+    const project = realpathSync.native(resolve(input.cwd ?? process.cwd(), process.env.SAGE_PROJECT ?? "."));
+    const branch = verb === "create" && stateTool.logbookView(project).task(task)?.branch;
+    return stateTool.sessionBar(project, task, input.session_id) || (branch && stateTool.branchBar(project, branch, input.session_id)) || undefined;
   } catch {
     return undefined; // a logbook that cannot be read: the script gives its own refusal
   }
@@ -2090,7 +2093,9 @@ function gitGate(event, command, state, cwd, main, tool, described = false, sess
     const { decision, reason } = moveCheck(move);
     return decide(event, decision, reason);
   }
-  const push = pushProblem(command, cwd, options, { described });
+  // With the session, a shared logbook's task branch takes a push only from its owning chief (T822).
+  const owner = session === undefined ? undefined : (dir, branch) => stateTool.branchBar(realpathSync.native(dir), branch, session);
+  const push = pushProblem(command, cwd, options, { described, owner });
   if (push) return deny(event, push);
   const merge = mergeIn(command);
   if (!merge) return undefined;

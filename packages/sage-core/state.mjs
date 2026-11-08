@@ -3195,8 +3195,7 @@ function judgeMerge(sha, env, { cycles, pr, readOnly, head, project, locked, ses
         const since = verdict.ok && task && takenAt(decisionsOf.get(id) ?? []), older = since && olderThan(since, runsOf.get(id) ?? []);
         const fresh = since && !cleanCycles(task, own.filter((r) => !older(r))) && { ok: false, reason: `${id} came from a chief of another provider through a takeover gate (${since}), so the cycles before that do not merge it alone: ${takeoverCycle ? takeoverCycle(id) : "its owning chief runs one cycle of its reviews and QA on this SHA, and records each verdict"}.` };
         // Nothing else helps a chief that does not own the task, so this refusal comes last and replaces the others.
-        // An ended task (merged, concluded or abandoned) never bars another task's merge: its chief has nothing left to do with it.
-        const notOwn = chief && task && !ENDED.includes(task.state) && ownerBar(dir, task, chief), owner = notOwn && { ok: false, reason: notOwn };
+        const notOwn = chief && task && liveBar(dir, task, chief), owner = notOwn && { ok: false, reason: notOwn };
         return { dir, id, ofPr: ofPr.has(id), owns: owns(id), back: !owns(id) && back(id), own: own.length, ...verdict, ...fresh, ...busy, ...arena, ...held, ...owner };
       });
       // A task with an unmet wait does not merge. A wait on a task of the same PR is met when that task passes in this merge
@@ -3663,10 +3662,30 @@ function ownerBar(dir, task, chief, lead = false) {
   if (!task.chief) return `${task.id} has no owning chief, so ${chief} cannot change it. ${lead ? `Nothing changed. ${report}` : `Claim it first: ${claimStep(task.id, taskVersion(task), chief)}. Nothing changed.`}`;
   return `${task.id} belongs to chief ${chiefLabel(dir, task.chief)}, not to ${chief}. Nothing changed. ${lead ? report : `Change only your own tasks. To take ${task.id}, ask ${task.chief} to offer it to you, or open a takeover gate for the owner to answer: ${replaceStep(task.id, chief)}.`}`;
 }
+/**
+ * The owner test of the merge check and of the push rule: why this chief does not land or push a task's work, or "". An
+ * ended task (merged, concluded or abandoned) bars nothing: its chief has nothing left to do with it.
+ */
+const liveBar = (dir, task, chief) => (ENDED.includes(task.state) ? "" : ownerBar(dir, task, chief));
 /** Why the chief of this session does not run a command on a task that the state tool does not write: "" for its own task, a task that the logbook lacks, or a legacy project. */
 function sessionBar(project, id, native, env = process.env) {
   const { dir, shared } = locate(project, env), task = shared && read(dir, "tasks").find((t) => t.id === id);
   return task ? ownerBar(dir, task, chiefFor(project, native, env)) : "";
+}
+/**
+ * Why the chief of this session does not push a branch (T822), or "": a live task of another chief, or of no chief, uses
+ * it, by its branch= or by a run of it on the branch, as the merge check reads a task's branch. So after a takeover the
+ * former chief and its agents push nothing to the task's branch. A branch that no task uses, and a legacy project, pass.
+ */
+function branchBar(project, branch, native, env = process.env) {
+  const view = logbookView(project, env), tasks = view.shared ? [...view.branchTasks(branch)].map(view.task).filter(Boolean) : [];
+  if (!tasks.length) return "";
+  const chief = chiefFor(project, native, env);
+  for (const task of tasks) {
+    const bar = liveBar(view.dir, task, chief);
+    if (bar) return `${branch} is a branch of ${task.id}, so only its owning chief pushes it. ${bar}`;
+  }
+  return "";
 }
 
 /** The runs of a task that a transfer waits for, and that a takeover ends: each one that has not ended, also one of an unknown status. */
@@ -4733,5 +4752,5 @@ const { bindings, fillCommits, folderOf, link, locate, movePlans, notePlugin, pl
   listed: (root) => known(root, undefined, undefined, true),
   enroll });
 const { chiefs, chiefRow, rowOf } = createChiefs({ now, provider, readRegular, refuse, rowsOf, sheetText, swap });
-return { SIZES, BLOCKS, RISKS, KINDS, STATES, DEFAULTS, PR, sageRoot, locate, chiefFor, sessionBar, actorOptions, git, projectRoot, roleReadProject, optionsOf, slug, worktreeRoot, BRANCH, ofTask, branchOfTask, branchHome, branchTip, projectName, storeDir, config, cyclesFor, modelFor, read, mergeCheck, landingBar, boardLandingCheck, logbookView, sage, readTaskSnapshot, updateRequestedTask, assertTaskUpdateOpen, settleWrites, createRequestedTask, createRequestedRun, finishReportedRun, finishInterruptedRun, acceptReportedReview, keepReport, compareRetainedReport, verdictBacking, takenRows, captureRunAssignment, captureReviewTarget, validateTerminalAssignment, withLock, board, answerPaths, command, runCli, waitingPlugins, writeIdFloors };
+return { SIZES, BLOCKS, RISKS, KINDS, STATES, DEFAULTS, PR, sageRoot, locate, chiefFor, sessionBar, branchBar, actorOptions, git, projectRoot, roleReadProject, optionsOf, slug, worktreeRoot, BRANCH, ofTask, branchOfTask, branchHome, branchTip, projectName, storeDir, config, cyclesFor, modelFor, read, mergeCheck, landingBar, boardLandingCheck, logbookView, sage, readTaskSnapshot, updateRequestedTask, assertTaskUpdateOpen, settleWrites, createRequestedTask, createRequestedRun, finishReportedRun, finishInterruptedRun, acceptReportedReview, keepReport, compareRetainedReport, verdictBacking, takenRows, captureRunAssignment, captureReviewTarget, validateTerminalAssignment, withLock, board, answerPaths, command, runCli, waitingPlugins, writeIdFloors };
 }
