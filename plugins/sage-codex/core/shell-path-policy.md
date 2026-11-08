@@ -2,8 +2,8 @@
 
 `shellWriteOutsideRoots({ command, cwd, roots })` checks path evidence for known
 shell-write forms. Only the Codex native runtime uses it. The Claude hook uses
-`logbookWrite` (`command-runs.mjs`, T815); the Codex gate keeps its own logbook
-file check until T903. The caller supplies the original command, verified execution
+`logbookWrite` (`command-runs.mjs`, T815), and so does the Codex gate, with the
+Codex sage folder and the shared root (T903). The caller supplies the original command, verified execution
 directory, and fixed protected roots. The check copies validated roots without
 using caller-supplied array methods. A true result grants no execution permission.
 

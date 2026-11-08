@@ -1,6 +1,6 @@
 // The rules that judge the programs a command line runs, as the command reader sees them, and the literal paths in their
-// words, never free text (T815). The Claude hook uses them; the Codex gate uses mergeRun and the push rules of core, and
-// takes these up in T903. None of them runs the command that it judges.
+// words, never free text (T815). The Claude hook uses them; the Codex gate uses mergeRun, the push rules of core and
+// logbookWrite (T903). None of them runs the command that it judges.
 import { lstatSync, readlinkSync, realpathSync } from "node:fs";
 import { basename, dirname, isAbsolute, join, sep } from "node:path";
 import { programsRun, shellCommands } from "./command-reader.mjs";
