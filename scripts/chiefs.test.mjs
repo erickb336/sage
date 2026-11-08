@@ -4,7 +4,7 @@ import "./test-env.mjs";
 import assert from "node:assert/strict";
 import { execFileSync, spawn, spawnSync } from "node:child_process";
 import { createHash } from "node:crypto";
-import { cpSync, existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, realpathSync, rmSync, writeFileSync } from "node:fs";
+import { cpSync, existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, realpathSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { basename, dirname, join } from "node:path";
 import { test } from "node:test";
@@ -1498,8 +1498,12 @@ function pushWorld(t) {
   const w = scratch(t), bin = join(w.base, "bin"), calls = join(w.base, "gh-calls.log"), tree = join(w.base, "tree");
   mkdirSync(bin);
   writeFileSync(join(bin, "gh"), `#!/bin/sh\necho "$@" >> "${calls}"\nif [ "$1" = api ] && [ "$6" = .default_branch ]; then echo main; exit 0; fi\nexit 1\n`, { mode: 0o755 });
-  const env = { ...w.env, PATH: [bin, ...String(process.env.PATH).split(":").filter((d) => d && !existsSync(join(d, "gh")))].join(":"), SAGE_HOOKS_STATE: join(w.base, "hooks") };
-  // The fake answers first: gh on this PATH is the fake, and it logs its call.
+  // A folder that holds the real gh can hold git too (/usr/bin on Ubuntu), so git goes into bin before those folders go.
+  const path = String(process.env.PATH).split(":").filter(Boolean);
+  symlinkSync(path.map((d) => join(d, "git")).find((f) => existsSync(f)), join(bin, "git"));
+  const env = { ...w.env, PATH: [bin, ...path.filter((d) => !existsSync(join(d, "gh")))].join(":"), SAGE_HOOKS_STATE: join(w.base, "hooks") };
+  // The fake answers first: gh on this PATH is the fake, and it logs its call. git on this PATH runs.
+  assert.equal(spawnSync("git", ["--version"], { env, encoding: "utf8" }).status, 0);
   assert.equal(spawnSync("gh", ["api", "--hostname", "github.com", "repos/acme/project", "--jq", ".default_branch"], { env, encoding: "utf8" }).stdout, "main\n");
   assert.equal(readFileSync(calls, "utf8"), "api --hostname github.com repos/acme/project --jq .default_branch\n");
   execFileSync("git", ["-C", w.project, "remote", "add", "origin", "https://github.com/acme/project.git"]);
