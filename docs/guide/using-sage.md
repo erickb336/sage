@@ -141,10 +141,11 @@ An open low finding never blocks a merge; it stays on the task's polish list. Th
 The lead ends blocked when it cannot clear a finding itself:
 
 - a low finding that needs its own follow-up task, with no round;
-- a new finding from a round's re-check;
-- a low fix that the re-check does not confirm, with no medium or high finding open.
+- a new finding from a round's re-check.
 
-Another fix that the re-check does not confirm needs no chief: the lead runs `round` from repairing. That gives the next round, a replan when the round fixed none of its keys, or the hold after the last round.
+A fix that the re-check does not confirm, also a low one, needs no chief: the lead runs `round` from repairing. That gives the next round, a replan when the round fixed none of its keys, or the hold after the last round.
+
+With autopilot on, the chief gives the next round past the hold itself, with a reason, up to 5 rounds in all; with autopilot off, or above 5, it asks you.
 
 The lead also ends blocked in any state that its file does not name. The chief then reads the logbook and decides. It makes only these two state moves there:
 

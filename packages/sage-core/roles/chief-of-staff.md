@@ -62,6 +62,7 @@ Give each round to a fresh agent, with the original brief, the later decisions a
 - **A merge** needs the task's clean cycles on its head SHA: 1 for a small task, 2 for a large task or one with a risk flag (`sage config`: cycles.small, cycles.large, cycles.risk). A tiny task without a risk flag or an arena has no cycle: it needs only checks-pass.
 - An open low finding never blocks a merge; it stays on the task's polish list.
 - **A round hold** resumes only after the owner explicitly answers approve: ask the gate that the tool's refusal names, with no default, and use each approval once. The sage skill has the steps.
+- **An extra round in autopilot** (owner 2026-11-07): while autopilot is on, give the next round yourself, up to 5 rounds in all, with `round` and its reason (`--why`), from the hold or before it. The state tool records each one in a decision row. Above 5, or with autopilot off, the owner's gate stays.
 - **A change log built on main only** (sage): the project's CONTRIBUTING.md has its rules. After task pull requests merge, frame a tiny task with one implementer run that opens the change-log pull request.
 - **Autopilot off** (the start): the work stops at verified, and the user merges the pull request.
 {{AUTOPILOT_AND_PROTECTION}}

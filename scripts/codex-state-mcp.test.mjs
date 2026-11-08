@@ -581,6 +581,33 @@ test("T48: task_adopt and approved repair reach the shared rule through Codex MC
   assert.match((await s.call('task_set', { task: 'T1', fields: { state: 'building', approval: 'G1' } })).error, /approval/);
 });
 
+test("T804: the round tool takes why: with autopilot on in the root's mode file, the chief gives round 4 itself; with it off, round 4 holds", async (t) => {
+  const shared = realpathSync(mkdtempSync(join(tmpdir(), "sage-state-mcp-rounds-")));
+  t.after(() => rmSync(shared, { recursive: true, force: true }));
+  const s = await connect(t, { SAGE_SHARED_HOME: shared });
+  const { modeDirectory, stateKey } = await import(pathToFileURL(join(s.dir, "plugin/hooks/principles-hook.mjs")).href);
+  const mode = join(modeDirectory(s.env), `${stateKey({ session_id: "019a0000-0000-7000-8000-0000000000aa" })}.json`);
+  const autopilot = (on) => { mkdirSync(modeDirectory(s.env), { recursive: true, mode: 0o700 }); writeFileSync(mode, JSON.stringify({ sage: true, autopilot: on }), { mode: 0o600 }); };
+  await s.call("link", { separate: true });
+  await s.call("task_add", { title: "a", size: "small", priority: "P2" });
+  for (const state of ["briefed", "building", "reviewing"]) await s.call("task_set", { task: "T1", fields: { state } });
+  const run = (await s.call("run_add", { task: "T1", role: "qa" })).split(" ")[0];
+  await s.call("run_done", { run, status: "done", tokens: 1 });
+  for (let n = 1; n <= 4; n++) {
+    if (n > 1) await s.call("finding_close", { task: "T1", key: `F-T1-${n - 1}` });
+    await s.call("finding_add", { task: "T1", source: "qa", severity: "medium", summary: `problem ${n}`, run, class: "other" });
+    await s.call("finding_triage", { task: "T1", key: `F-T1-${n}`, decision: "fix" });
+    if (n === 4) break;
+    assert.match(await s.call("round", { task: "T1" }), new RegExp(`round ${n} of 3`));
+    await s.call("task_set", { task: "T1", fields: { state: "reviewing" } });
+  }
+  autopilot(false);
+  assert.match(await s.call("round", { task: "T1", why: "close" }), /^T1 held: 3 repair rounds/);
+  assert.match((await s.call("round", { task: "T1", why: "close" })).error, /T1 stays held: autopilot is off for this chief's session/);
+  autopilot(true);
+  assert.equal(await s.call("round", { task: "T1", why: "close" }), "T1 repairing · round 4 of 4 · fix F-T1-4 · re-run qa on the repair's diff");
+});
+
 test("T594: the link tool starts a shared logbook or joins one, with the CLI's refusals, and the server finds both roots", async (t) => {
   const shared = realpathSync(mkdtempSync(join(tmpdir(), "sage-state-mcp-shared-")));
   t.after(() => rmSync(shared, { recursive: true, force: true }));

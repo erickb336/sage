@@ -32,7 +32,7 @@ import { MOVES, PLAN_MAX, checkoutGone, createSharedRoot, sharedRoot, unreadable
 import { changedText, countsOf, endText, gateQuestion, gateText, localTime, mapHtml, mismatchText, previewText, providersOf, reconciliationText, startText, stepText, stoppedText, title } from "./move-text.mjs";
 import { CHIEF, TAKEOVER_OPTIONS, chiefOnly, createChiefs, crossed, offerOf, replaceOf, replaceQuestion, writerClass } from "./chiefs.mjs";
 
-export function createStateTool({ defaultRoot, legacyRoots: namedRoots = () => [], provider, models = ["inherit"], modelDefaults = {}, usageInterfaces = [], claimStep = (task, version, chief) => `run sage claim ${task} --version ${version} --chief ${chief}`, replaceStep = (task, chief) => `run sage gate replace ${task} --to ${chief} --chief ${chief}`, takeoverCycle }) {
+export function createStateTool({ defaultRoot, legacyRoots: namedRoots = () => [], provider, models = ["inherit"], modelDefaults = {}, usageInterfaces = [], claimStep = (task, version, chief) => `run sage claim ${task} --version ${version} --chief ${chief}`, replaceStep = (task, chief) => `run sage gate replace ${task} --to ${chief} --chief ${chief}`, takeoverCycle, autopilot = () => false }) {
 if (typeof defaultRoot !== "function") throw new TypeError("defaultRoot must be a function");
 if (typeof namedRoots !== "function") throw new TypeError("legacyRoots must be a function");
 /**
@@ -138,6 +138,7 @@ const OPTIONS = {
   "projects rebuild": ["accept-listing"],
   "task add": ["title", "size", "risk", "add", "why", "priority", "kind", "waits", "program"],
   task: ["why"], // task <T> set state=abandoned --why <reason>
+  round: ["why"], // round <T> --why <reason>: the chief's extra round in autopilot (T804)
   "task-adopt": ["source-logbook", "source-provider", "source-task", "pr", "branch"],
   "program propose": ["name", "goal", "pilot", "tasks"],
   "run add": ["role", "branch", "candidate", "usage-interface"],
@@ -2708,6 +2709,13 @@ const programDecision = (task, was, at, why, { programs }) => {
   return { rows: [{ at, task: task.id, decision: `program ${was || "none"} → ${task.program || "none"}`, why: `${why}${after ? "; after the breakdown approval" : ""}` }], note: after };
 };
 
+/** The most repair rounds that the chief gives itself in autopilot, with a reason; above it only the owner's gate gives one (T804). */
+const ROUND_CEILING = 5;
+/** Is autopilot on for this chief's session? Only a chief of this provider, by its session, through the adapter's reader. */
+const autopilotOf = (dir, chief, env) => {
+  const row = chief === undefined ? undefined : chiefs(dir).find((r) => r.id === chief);
+  return row?.provider === provider && autopilot(row.native, env) === true;
+};
 /** The extra rounds of a task's holds by round: a whole number, and 0 for any other cell, so a hand-written cell never gives NaN (F-T286-2). */
 const extraOf = (task) => (/^\d+$/.test(task.extra ?? "") && Number.isSafeInteger(Number(task.extra)) ? Number(task.extra) : 0);
 
@@ -4302,28 +4310,41 @@ function act(cmd, pos, opt, dir, env, skip, project) {
     case "round": {
       const { tasks, task } = taskOf(dir, need(sub, "the task id"));
       // From repairing too: the next round of a fix key that a re-check did not confirm, by the same count, hold and replan (T600).
-      if (!["reviewing", "verifying", "repairing"].includes(task.state)) refuse(`${task.id} is ${task.state}. A repair starts from reviewing, verifying or repairing.`);
+      // The chief's extra round (T804) also starts from a round hold. Only the chief gives one: a lead's round has no reason.
+      const why = cell(opt.why), held = task.state === "held" && task.hold === "round";
+      if (opt.why !== undefined && opt.lead !== undefined) refuse(`only the chief gives an extra repair round, so a lead runs round ${task.id} with no --why. Nothing changed.`);
+      if (!["reviewing", "verifying", "repairing"].includes(task.state) && !(held && why)) refuse(`${task.id} is ${task.state}. A repair starts from reviewing, verifying or repairing${held ? `, or from this round hold with round ${task.id} --why "<reason>" while autopilot is on` : ""}.`);
+      // A round of low findings only is the chief's choice (T804, owner 2026-11-07): it counts like any round.
       const fix = read(dir, "findings").filter((f) => f.task === task.id && f.status === "open" && f.triage === "fix");
       const keys = fix.map((f) => f.key).sort().join(",");
       if (!keys) refuse(`${task.id} has no open findings marked fix`);
-      if (fix.every((f) => f.severity === "low")) refuse(`${task.id}: only low findings are marked fix (${keys}). A repair round needs a medium or high finding. Dismiss the low ones with a reason, or let them join the next round.`);
       const round = Number(task.round) + 1;
-      const limit = config(env, dir).max_rounds + extraOf(task); // the extra rounds of earlier holds by round (F-T284-14)
+      let limit = config(env, dir).max_rounds + extraOf(task), given; // the extra rounds of earlier holds by round (F-T284-14)
       if (round > limit) {
-        Object.assign(task, { state: "held", hold: "round" });
-        write(dir, "tasks", tasks);
-        return `${task.id} held: ${round - 1} repair rounds did not make it clean. Stop and ask the user.`;
+        // In autopilot the chief gives the next round itself, with a reason, up to ROUND_CEILING rounds in all; above that,
+        // or with autopilot off, only the owner's gate gives it (T804, owner 2026-11-07).
+        const granted = why && round <= ROUND_CEILING && autopilotOf(dir, opt.chief, env);
+        if (!granted && held) refuse(`${task.id} stays held: ${round > ROUND_CEILING ? `round ${round} is past the ${ROUND_CEILING} rounds that the chief may give` : "autopilot is off for this chief's session"}, so only the owner's gate gives round ${round}. Nothing changed.`);
+        if (!granted) {
+          Object.assign(task, { state: "held", hold: "round" });
+          write(dir, "tasks", tasks);
+          return `${task.id} held: ${round - 1} repair rounds did not make it clean. Stop and ask the user.`;
+        }
+        Object.assign(task, { extra: String(extraOf(task) + 1), hold: "" });
+        limit += 1;
+        given = { at: now(), task: task.id, decision: `round ${round} given by ${opt.chief} on autopilot`, why };
       }
+      const save = () => (write(dir, "tasks", tasks), given && write(dir, "decisions", [...read(dir, "decisions"), given]));
       // A round that fixed none of the last round's findings re-plans: also when new ones join them, and on the retry after
       // a hold, whose last round's findings are still open (F-T284-17, option a).
       const last = roundKeys(task);
       if (last.length && last.every((k) => keys.split(",").includes(k))) {
         task.state = "replan";
-        write(dir, "tasks", tasks);
+        save();
         return `${task.id} replan: round ${round - 1} did not fix ${task.keys}. Attack the premise, then brief again.`;
       }
       Object.assign(task, { state: "repairing", round, keys });
-      write(dir, "tasks", tasks);
+      save();
       const roles = [...new Set(fix.map((f) => f.source))].sort().join(","); // the repair's diff goes back to the roles that found the problems
       return `${task.id} repairing · round ${round} of ${limit} · fix ${keys} · re-run ${roles} on the repair's diff`;
     }

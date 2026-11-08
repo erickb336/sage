@@ -24,12 +24,11 @@
 // merge rule: it needs this mode file and the owner's own switch in Codex's record of the session (owner-record.mjs).
 // SAGE_HOOKS=off turns it off.
 import { readdirSync, readFileSync, realpathSync } from "node:fs";
-import { homedir } from "node:os";
-import { dirname, join, resolve } from "node:path";
+import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { exactPhrase, MODE_DAMAGED, PHRASES, protectionNote, readModeFile, renderChiefInstructions, switchModes } from "../core/index.mjs";
 import { NEW_ON, onCanCount, readRecord } from "./owner-record.mjs";
-import { privateDirectory, readState, saveState, stateKey } from "./principles-hook.mjs";
+import { modeDirectory, privateDirectory, readState, saveState, stateKey } from "./principles-hook.mjs";
 import { sessionMeta } from "./report-gate.mjs";
 import { saveStartMark } from "./start-mark.mjs";
 import { mergeCommand } from "../skills/sage/merge.mjs";
@@ -124,8 +123,7 @@ export function handle(input, state, env = process.env) {
   return notes.length ? context(event, notes.join("\n\n---\n\n")) : undefined;
 }
 
-/** The mode files: under the Codex logbook root (SAGE_HOME, or CODEX_HOME/sage), as the Codex state tool finds it. */
-export const modeDirectory = (env) => resolve(env.SAGE_HOME ?? join(env.CODEX_HOME ?? join(env.HOME ?? homedir(), ".codex"), "sage"), ".hooks", "codex");
+export { modeDirectory };
 
 /**
  * The hook's whole answer to one parsed event. A fork of the root thread also saves its start mark (start-mark.mjs): a

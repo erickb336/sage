@@ -70,9 +70,9 @@ import { chiefEditDenied, commandWrites as knownCommandWrites, createCommandPoli
 
 // Codex treats executable stdin conservatively without changing other callers' known-write classification.
 const commandWrites = (text, cwd) => knownCommandWrites(text, cwd) || shellExecutionUncertain(text, cwd);
-import { tool } from "../skills/sage/sage.mjs";
+import { modeFile, readMode, tool } from "../skills/sage/sage.mjs";
 import { verificationOptions } from "../skills/sage/verify-install.mjs";
-import { privateDirectory, readState, stateKey } from "./principles-hook.mjs";
+import { privateDirectory, readState } from "./principles-hook.mjs";
 import { patchTargets } from "../runtime/patch-targets.mjs";
 import { managedPatchPath } from "../runtime/managed-worktree.mjs";
 import { agentPathOf, sageName, sessionMeta, TASK_NAME } from "./report-gate.mjs";
@@ -305,17 +305,7 @@ const CODEX_SEGMENT = /(?:^|[\s/\\'"`=:<>])\.codex(?=$|[\s/\\'"`<>;|&)])/i;
 const text = (value) => typeof value === "string" && value.length > 0 && value.length <= 4096;
 const record = (value) => value !== null && typeof value === "object" && !Array.isArray(value);
 
-/**
- * The mode of the session's root thread: { sage, autopilot }. The mode hook keeps it in one file for each thread, with
- * the core reader: no file is no mode, and a damaged file is off. Autopilot counts only in sage mode.
- */
-export function readMode({ session }, env = process.env) {
-  const { state } = readModeFile(readState, modeFile(session, env));
-  const sage = state.sage === true;
-  return { sage, autopilot: sage && state.autopilot === true };
-}
-/** The mode file of the session's root thread. */
-const modeFile = (session, env) => join(modeDirectory(env), `${stateKey({ session_id: session })}.json`);
+export { readMode };
 
 /** The role of one sage task name (sage_<role with _ for ->_t<n>, with _r<k> or not), or null for a name that is not one. */
 export function taskRole(name) {

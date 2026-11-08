@@ -133,7 +133,8 @@ export const TOOLS = {
     describe: "Give up your task. Only you claim it back; another chief takes it through the owner's takeover gate. The task needs no open offer and no active run. Its work and reports stay.",
     input: { task }, pos: ["task"], argv: (i) => ["release", i.task],
   },
-  round: { describe: "Start a repair round on the open findings marked fix. It names the roles to run again.", input: { task }, pos: ["task"], argv: (i) => ["round", i.task] },
+  round: { describe: "Start a repair round on the open findings marked fix, also on low findings only. It names the roles to run again. Past max_rounds it holds the task; while autopilot is on, the chief gives the next round itself with why, up to 5 rounds in all, also from that hold.",
+    input: { task, why: optional("the chief's reason for an extra round past max_rounds") }, pos: ["task"], argv: (i) => ["round", i.task] },
   merge_check: {
     describe: "Check that the logbook allows the merge of this head SHA: clean cycles, no open findings, no open gates. It judges for your chief: a task of another chief refuses.",
     input: { sha, pr: count("the pull request number"), cycles: count("a higher count of clean cycles"), head: optional("the pull request's branch") },

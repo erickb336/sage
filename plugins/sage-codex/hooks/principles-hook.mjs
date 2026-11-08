@@ -34,6 +34,9 @@ export function handle(input, state) {
   return effect?.context ? { hookSpecificOutput: { hookEventName: event, additionalContext: effect.context } } : undefined;
 }
 
+/** The mode files: under the Codex logbook root (SAGE_HOME, or CODEX_HOME/sage), as the Codex state tool finds it. */
+export const modeDirectory = (env) => resolve(env.SAGE_HOME ?? join(env.CODEX_HOME ?? join(env.HOME ?? homedir(), ".codex"), "sage"), ".hooks", "codex");
+
 // Hash the full identity: a child shares its parent's session_id but gets separate advice.
 export function stateKey(input) {
   if (typeof input.session_id !== "string" || !input.session_id) return undefined;

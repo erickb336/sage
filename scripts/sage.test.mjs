@@ -237,7 +237,6 @@ test("repair rounds are bounded, and a round that fixes nothing re-plans the tas
   assert.match(s.no("round", "T1"), /no open findings marked fix/);
   finding(s, "T1", "--source", "qa", "--severity", "low", "--summary", "a typo in the error");
   s.ok("finding", "triage", "T1", "F-T1-1", "fix");
-  assert.match(s.no("round", "T1"), /only low findings are marked fix \(F-T1-1\)\. A repair round needs a medium or high finding/);
   finding(s, "T1", "--source", "qa", "--severity", "high", "--summary", "crash");
   s.ok("finding", "triage", "T1", "F-T1-2", "fix");
   assert.equal(s.ok("round", "T1"), "T1 repairing · round 1 of 3 · fix F-T1-1,F-T1-2 · re-run qa on the repair's diff", "the low finding joins the round");
@@ -5403,7 +5402,7 @@ test("F-T284-14: an approved move out of held gives the task exactly one more re
   assert.match(s.ok("round", "T1"), /^T1 held: 2 repair rounds did not make it clean/, "and then it holds again");
 });
 
-test("T600: round starts from repairing for a fix key that stays open; only low fix findings still refuse, and a task before reviewing still refuses", () => {
+test("T600: round starts from repairing for a fix key that stays open, also for a low key alone (T804), and a task before reviewing still refuses", () => {
   const s = store();
   s.ok("task", "add", "--priority", "P2", "--title", "a", "--size", "small");
   for (const state of ["briefed", "building"]) s.ok("task", "T1", "set", `state=${state}`);
@@ -5419,8 +5418,7 @@ test("T600: round starts from repairing for a fix key that stays open; only low 
   s.ok("finding", "close", "T1", medium);
   assert.match(s.ok("round", "T1"), /^T1 repairing · round 2 of 3 · fix F-T1-2,F-T1-3 /, "the open keys go on, and the round counts");
   s.ok("finding", "close", "T1", other);
-  assert.match(s.no("round", "T1"), /T1: only low findings are marked fix \(F-T1-2\)/, "a low key alone gets no round");
-  assert.equal(rows(s.dir, "tasks")[0].state, "repairing");
+  assert.match(s.ok("round", "T1"), /^T1 repairing · round 3 of 3 · fix F-T1-2 /, "a low key alone gets its round too (T804)");
 });
 
 // Repair round 2 of T284 (R925). Each test fails on d563ef4 and passes after.
