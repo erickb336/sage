@@ -135,6 +135,7 @@ const OPTIONS = {
   "gate replace": ["to"],
   "projects rebuild": ["accept-listing"],
   "task add": ["title", "size", "risk", "add", "why", "priority", "kind", "waits", "program"],
+  task: ["why"], // task <T> set state=abandoned --why <reason>
   "task-adopt": ["source-logbook", "source-provider", "source-task", "pr", "branch"],
   "program propose": ["name", "goal", "pilot", "tasks"],
   "run add": ["role", "branch", "candidate", "usage-interface"],
@@ -2810,7 +2811,7 @@ function planTaskChanges(before, id, changes, at, facts, legacyRounds = false) {
         const r = judge("", task, facts.findings, decisions, task.id, rows.filter((r) => r.sha === head), 1);
         if (!r.ok) refuse(`${task.id} is not verified on ${head.slice(0, 7)}: ${r.reason}`);
       }
-      if (["merged", "concluded", "abandoned"].includes(v)) decided.push({ at: at, task: task.id, decision: `state ${v}`, why: "task set" });
+      if (["merged", "concluded", "abandoned"].includes(v)) decided.push({ at: at, task: task.id, decision: `state ${v}`, why: (v === "abandoned" && facts.why) || "task set" });
     } else if (k === "pr") {
       decided.push(...(notHeld(task, "pr="), setPr(task, v, "task set", at)));
       if (v) apartFromPilot(task, graph, [...decisions, ...decided], facts.ledger, "pr", had); // with the PR rows of earlier keys (R1285-1)
@@ -3780,6 +3781,16 @@ function claimBar(dir, task, chief) {
 }
 
 /**
+ * Is this task set the abandon of a task with no owning chief (T893)? Any chief may abandon such a task, with a reason:
+ * it gives the task to no chief, so it is no takeover. Only the one change state=abandoned passes, and not for a lead.
+ */
+function abandonsUnclaimed(task, [, set, ...changes], opt, lead) {
+  if (task.chief || lead || set !== "set" || changes.length !== 1 || changes[0] !== "state=abandoned") return false;
+  if (!cell(opt.why)) refuse(`${task.id} has no owning chief. Any chief may abandon it, with a reason: add --why "<reason>". Nothing changed.`);
+  return true;
+}
+
+/**
  * The one guard of a shared logbook: step 5 of every writer. It gives the chief that this command acts for, or refuses.
  * The check prevents mistakes by normal agents; it does not stop an agent that gives another chief's id (F4). A lead acts
  * for the chief of its lead run, while that run runs, on the task of that run only (P4). A command with no chief only reads.
@@ -3802,7 +3813,7 @@ function guard(dir, cmd, pos, opt) {
   if (lead && (!named.length || named.some((id) => id !== lead.task))) refuse(`${name} is not a write on ${lead.task}, and a lead acts only on the task of its lead run. Report what else the logbook needs. Nothing changed.`);
   if (need.kind !== "any") for (const id of new Set(named)) {
     const task = tasks.find((t) => t.id === id), declines = need.recipient && !lead && offerOf(task ?? {})?.to === chief; // the recipient declines an offer to it
-    const bar = task && !declines && ownerBar(dir, task, chief, !!lead);
+    const bar = task && !declines && !(cmd === "task" && abandonsUnclaimed(task, pos, opt, lead)) && ownerBar(dir, task, chief, !!lead);
     if (bar) throw Object.assign(new Refusal(bar), { code: "other-chief" }); // a native writer passes these words on
   }
   return chief;
@@ -4083,9 +4094,12 @@ function act(cmd, pos, opt, dir, env, skip, project) {
       }
       const { tasks, task } = taskOf(dir, need(sub, "the task id")); // task <T> [set key=value ...]
       let note = "";
+      // --why is the reason of an abandon (T893): its decision row keeps the reason and the chief that acted.
+      if (opt.why !== undefined && (id !== "set" || !more.includes("state=abandoned") || !cell(opt.why))) refuse(`--why gives the reason of an abandon: give a reason with state=abandoned, for example sage task ${task.id} set state=abandoned --why "<reason>". Nothing changed.`);
+      const why = opt.why === undefined ? undefined : [cell(opt.why), opt.chief && `abandoned by ${opt.chief}${task.chief ? "" : ", with no owning chief"}`].filter(Boolean).join(" · ");
       if (id === "set") {
         const before = { tasks, runs: read(dir, "runs"), decisions: read(dir, "decisions") };
-        const planned = planTaskChanges(before, task.id, more, now(), { ...Object.fromEntries(["findings", "ledger", "gates", "programs"].map((t) => [t, read(dir, t)])), maxRounds: config(env, dir).max_rounds });
+        const planned = planTaskChanges(before, task.id, more, now(), { ...Object.fromEntries(["findings", "ledger", "gates", "programs"].map((t) => [t, read(dir, t)])), maxRounds: config(env, dir).max_rounds, why });
         const bar = moveBar(more, planned); // after the plan, so that a branch= in the same command counts, in either order
         if (bar) refuse(bar);
         if (JSON.stringify(planned.decisions) !== JSON.stringify(before.decisions)) write(dir, "decisions", planned.decisions);

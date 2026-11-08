@@ -518,6 +518,35 @@ for (const [name, own, other] of pairs) {
     assert.equal(w.intruder("claim", "T2", "--version", version("T2")), "T2 claimed · chief C2", "the chief of the provider that started it claims it");
   });
 
+  test(`T893 ${name}: any chief abandons a task with no owning chief, with a reason; the task keeps no chief, and any other change still needs a claim`, (t) => {
+    const w = world(t, own, other);
+    w.owner("task", "add", "--title", "stale", ...ADD);
+    w.intruder("task", "add", "--title", "owned", ...ADD);
+    const theirs = name === "Claude" ? "codex" : "claude";
+    // T1 as the move leaves a task of the other provider: no owning chief, and its adoption record (version 2).
+    setCells(w.dir, "tasks", (l) => l.startsWith("T1\t"), "chief", "");
+    setCells(w.dir, "tasks", (l) => l.startsWith("T1\t"), "adoption", JSON.stringify({ version: 2, provider: theirs, task: "T7", logbook: join(w.base, "old"), project: w.project, round: 0, digest: "0".repeat(64) }));
+    const before = w.tables();
+    const noReason = { message: `T1 has no owning chief. Any chief may abandon it, with a reason: add --why "<reason>". Nothing changed.` };
+    assert.throws(() => w.owner("task", "T1", "set", "state=abandoned"), noReason);
+    assert.throws(() => w.owner("task", "T1", "set", "state=abandoned", "--why", ""), noReason);
+    assert.throws(() => w.owner("task", "T1", "set", "state=abandoned", "--why", "  "), noReason);
+    // Any other change, also one with the abandon, still needs a claim (and this claim, the owner's takeover gate).
+    for (const changes of [["state=briefed"], ["priority=P1"], ["branch=sage/t1-a"], ["pr=5"], ["title=x"], ["state=abandoned", "priority=P1"], ["priority=P1", "state=abandoned"], ["state=abandoned", "state=abandoned"]]) {
+      assert.throws(() => w.owner("task", "T1", "set", ...changes, "--why", "stale"), /^Error: T1 has no owning chief, so C1 cannot change it\. Claim it first: /, changes.join(" "));
+    }
+    assert.throws(() => w.owner("task", "T2", "set", "state=abandoned", "--why", "stale"), /^Error: T2 belongs to chief C2 \(.*\), not to C1\. Nothing changed\. Change only your own tasks\./, "another chief's task: the takeover gate, as before");
+    assert.equal(w.tables(), before, "each refusal changes nothing");
+    assert.match(w.owner("task", "T1", "set", "state=abandoned", "--why", "stale: an old review checkout"), /^T1 abandoned /);
+    assert.equal(row(w.cells("tasks"), "T1").state, "abandoned");
+    assert.equal(row(w.cells("tasks"), "T1").chief, "", "the abandon gives the task to no chief");
+    assert.match(w.cells("decisions").trim().split("\n").at(-1), /\tT1\tstate abandoned\tstale: an old review checkout · abandoned by C1, with no owning chief$/);
+    // On an owned task, --why goes with the abandon only, and the row names the chief.
+    assert.throws(() => w.intruder("task", "T2", "set", "title=x", "--why", "a reason"), /--why gives the reason of an abandon/);
+    assert.match(w.intruder("task", "T2", "set", "state=abandoned", "--why", "not needed"), /^T2 abandoned /);
+    assert.match(w.cells("decisions").trim().split("\n").at(-1), /\tT2\tstate abandoned\tnot needed · abandoned by C2$/);
+  });
+
   test(`T656 ${name}: the takeover answer names the worktree that holds the task's branch, with one safe command that frees it`, (t) => {
     const w = transfer(t);
     const held = join(w.base, "held"), mine = join(w.base, "mine");
@@ -1054,6 +1083,7 @@ test("the Claude hook adds the session's row at its first write, names its id, a
 const QUOTED = {
   "task add": ['task add --title "two words" --size small --priority P2', "task add --title word --size small --priority P2"],
   log: ['log T1 "a decision" --why "a reason"', "log T1 decision --why reason"],
+  "task set": ['task T1 set state=abandoned --why "a reason"', "task T1 set state=abandoned --why reason"], // T893: the hook passes an abandon to the state tool
   "gate add": ['gate add T1 --question "a question?" --options "a|b" --recommend a', "gate add T1 --question question --options yes,no --recommend yes"],
   "finding add": ['finding add T1 --source sage --severity low --summary "a problem"', "finding add T1 --source sage --severity low --summary problem"],
   "standing add": ['standing add "an order"', "standing add order"],
