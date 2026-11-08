@@ -108,7 +108,7 @@ Do this check after you install sage, after each update, and when a sage rule se
 
    Ask the chief to run `ls ~/.codex/sage` with `tools.exec_command` from a code-mode `exec` call. This command changes nothing, and the gate refuses it in every mode. When the gate runs, Codex blocks it with a line that starts with "sage: no agent runs a shell command that names the Codex sage folder". When the command lists files, the gate does not run: stop sage work, and do step 1 again.
 
-   When `SAGE_HOME` is set, the gate guards that folder in place of `~/.codex/sage`: list `$SAGE_HOME` in that case.
+   When you set `CODEX_HOME` or `SAGE_HOME`, the gate guards the `sage` folder in that Codex home, or the `SAGE_HOME` folder, in place of `~/.codex/sage`. Then name that folder by its absolute path or by a path from `~`, for example `ls ~/codex-home/sage`. Do not name it by a variable such as `$SAGE_HOME`: the gate does not read variables (a documented limit), so that command lists files also when the gate runs.
 4. If you use the app's browser preview, ask the chief to open a page in it. The preview uses a `js` call, and it runs, because you chose to allow `js` in sage mode. If you do not use the preview, skip this step.
 
 ## Turn on sage mode

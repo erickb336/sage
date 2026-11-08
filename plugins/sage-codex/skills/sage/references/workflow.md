@@ -37,9 +37,9 @@ The manual logbook does not replace protected native preparation, report, review
 
 Use the native `apply_patch` tool for a permitted project edit. Give each target a literal path inside the assigned worktree. Put program text inside the patch body. Do not wrap the patch in a shell command or an interpreter.
 
-The shell guard examines program arguments and stdin as well as redirection targets. A dollar sign, backtick or pattern can make a word's location uncertain. This can refuse a benign program string. A refusal does not prove that the intended filename is protected. The guard does not interpret arbitrary programs to prove their writes safe.
+The shell guard reads the programs that a command runs and the literal paths in their words: program arguments, stdin and redirection targets. A word counts by its literal part, the text before its first `$`, backtick or pattern character. A variable, a substitution or a pattern does not make the guard refuse a word, and a path that only such a form names is a documented limit, not a permission. The guard does not run a program to find what it writes.
 
-Before a refusal, prefer this form for an authorized implementer:
+For program text, prefer this form for an authorized implementer:
 
 ```diff
 *** Begin Patch

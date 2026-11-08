@@ -516,7 +516,7 @@ test("T903: a logbook file's name outside the project passes; a shell write by a
   }
 });
 
-test("a task worktree in a sibling folder counts as the project from the main checkout; the same names in the shared root, a logbook, a forged checkout and another repository still refuse (T594)", (t) => {
+test("a task worktree in a sibling folder counts as the project from the main checkout; the shared root and a .sage folder outside the project still refuse, and a logbook file's name in Claude's logbook folder, a forged checkout or another repository passes the shell (T594, T903)", (t) => {
   const w = world(t);
   const linked = join(w.dir, "linked"), forged = join(w.dir, "forged"), other = join(w.dir, "other");
   assert.equal(spawnSync("git", ["-C", w.project, "worktree", "add", "-qb", "linked", linked]).status, 0);
