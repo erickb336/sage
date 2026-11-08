@@ -1408,8 +1408,10 @@ function chiefStateWords(input) {
   return words.length && PLAIN.test(words.join(" ")) ? words : undefined;
 }
 /**
- * The words after a sage script's path, as the shell reads them, so a quoted value is one word: the line is this hook's
- * script as one command, and a substitution in its words does not change that. Any other line gives undefined.
+ * The words after a sage script's path, as the shell reads them, so a quoted value is one word, and the script's
+ * environment: { words, env }. The line is this hook's script as one command, and a substitution in its words does not
+ * change that. Before node, it may set variables (NAME=value) and run env with -u <name> and NAME=value, the forms that
+ * the PR script's refusals name (SAGE_PROJECT=<folder>, env -u NODE_OPTIONS). Any other line gives undefined.
  */
 function chiefWriteWords(input, tool = TOOL) {
   let commands;
@@ -1419,8 +1421,16 @@ function chiefWriteWords(input, tool = TOOL) {
     return undefined;
   }
   const [one, ...more] = commands.filter((c) => !c.host);
-  const [node, path, ...rest] = one?.words ?? [];
-  return !more.length && node === "node" && /(?:^|\/)skills\/sage\/sage(?:-pr)?\.mjs$/.test(path) && canonical(resolve(input.cwd ?? process.cwd(), path)) === canonical(tool) ? rest : undefined;
+  if (!one || more.length) return undefined;
+  const env = { ...process.env }, words = [...one.words], set = (w) => (env[w.slice(0, w.indexOf("="))] = w.slice(w.indexOf("=") + 1));
+  for (let k = 0; one.syntax[k]?.assignment; k++) set(words.shift());
+  if (words[0] === "env") for (words.shift(); ; ) {
+    if (words[0] === "-u" && words[1]) delete env[words.splice(0, 2)[1]];
+    else if (/^[A-Za-z_]\w*=/.test(words[0] ?? "")) set(words.shift());
+    else break;
+  }
+  const [node, path, ...rest] = words;
+  return node === "node" && /(?:^|\/)skills\/sage\/sage(?:-pr)?\.mjs$/.test(path) && canonical(resolve(input.cwd ?? process.cwd(), path)) === canonical(tool) ? { words: rest, env } : undefined;
 }
 /**
  * The sage's review or QA verdict, early (T483). The state tool is the boundary: its verdict command refuses a review or
@@ -1437,13 +1447,13 @@ function chiefWriteWords(input, tool = TOOL) {
  */
 function chiefIdProblem(input) {
   if (input.tool_name !== "Bash") return undefined;
-  const words = chiefWriteWords(input);
+  const { words, env } = chiefWriteWords(input) ?? {};
   if (!words?.length) return undefined;
   const [cmd, ...args] = words, { pos, opt } = optionsOf(args);
   if (["read", "owner"].includes(core.writerClass(cmd, pos).kind)) return undefined;
   let id;
   try {
-    id = stateTool.chiefFor(realpathSync.native(resolve(input.cwd ?? process.cwd(), opt.project ?? process.env.SAGE_PROJECT ?? ".")), input.session_id);
+    id = stateTool.chiefFor(realpathSync.native(resolve(input.cwd ?? process.cwd(), opt.project ?? env.SAGE_PROJECT ?? ".")), input.session_id, env);
   } catch {
     return undefined;
   }
@@ -1453,28 +1463,46 @@ function chiefIdProblem(input) {
 /**
  * The PR script reads no session, and writes the task's PR number in the name of the task's chief. So this hook, which
  * knows the session, refuses its create and merge for a chief that does not own the task, in the state tool's own words.
- * create pushes the task's branch, so it takes the push rule of a shared logbook too (T822). The owner test reads only
- * the task list, so it runs first; the branch's read covers every table, and when it fails, create refuses (T901).
+ * create pushes the task's branch, so it takes the push rule of a shared logbook too (T822). It reads the logbook that
+ * the script reads (SAGE_PROJECT, else the folder, in the line's environment). A legacy logbook has no chief, and the hook
+ * reads none of its tables (as before T822). Anything else that the hook cannot read refuses create and merge (T901):
+ * the project's place, a damaged table, an event with no session id, a busy lock. So does a line that names the PR script's
+ * create or merge in a form that the hook does not read as one command of the copy that it loads, such as one after cd.
  */
 function chiefPrProblem(input) {
   if (input.tool_name !== "Bash") return undefined;
-  const [verb, task] = chiefWriteWords(input, PR_TOOL) ?? [];
+  const { words: [verb, task] = [], env } = chiefWriteWords(input, PR_TOOL) ?? {};
+  if (!env) return unreadPr(String(input.tool_input?.command ?? "")) ? `the hook checks the owning chief of a task before sage-pr create or merge, and it cannot read this line as one command of the PR script that it loads (T901). Run it as a command of its own, with nothing after it and no cd: node ${PR_TOOL} <create or merge> <T>, from the project's main checkout. Only SAGE_PROJECT=<main checkout> and env -u NODE_OPTIONS may come before node.` : undefined;
   if (!["create", "merge"].includes(verb)) return undefined;
-  let project, bar, shared;
+  const folder = resolve(input.cwd ?? process.cwd(), env.SAGE_PROJECT ?? ".");
   try {
-    project = realpathSync.native(resolve(input.cwd ?? process.cwd(), process.env.SAGE_PROJECT ?? "."));
-    bar = stateTool.sessionBar(project, task, input.session_id);
-    shared = stateTool.locate(project).shared;
-  } catch {
-    return undefined; // a task list that cannot be read: the script gives its own refusal
-  }
-  if (bar || verb !== "create" || !shared) return bar || undefined;
-  try {
-    const branch = stateTool.logbookView(project).task(task)?.branch;
-    return (branch && stateTool.branchBar(project, branch, input.session_id)) || undefined;
+    const project = realpathSync.native(folder);
+    if (!stateTool.locate(project, env).shared) return undefined;
+    const bar = stateTool.sessionBar(project, task, input.session_id, env);
+    if (bar || verb !== "create") return bar || undefined;
+    const branch = stateTool.logbookView(project, env).task(task)?.branch;
+    return (branch && stateTool.branchBar(project, branch, input.session_id, env)) || undefined;
   } catch (e) {
-    return `the hook cannot tell which chief owns the branch of ${task} (${e?.message ?? e}), so it refuses sage-pr create.`;
+    return `the hook cannot read the logbook of ${folder} to check the owning chief of ${task} (${e?.message ?? e}), so it refuses sage-pr ${verb}.`;
   }
+}
+/**
+ * Does a line run the PR script's create or merge in a form that chiefWriteWords does not read (T901)? A command whose
+ * words name sage-pr.mjs and create or merge counts, unless its program only reads files (cat, grep, git). A line that
+ * the shell reader cannot read counts when its text names them.
+ */
+function unreadPr(command) {
+  const names = (text) => /sage-pr\.mjs/i.test(text) && /\b(?:create|merge)\b/.test(text);
+  let commands;
+  try {
+    commands = core.shellCommands(command);
+  } catch {
+    return names(command);
+  }
+  return commands.some(({ words, syntax }) => {
+    const k = words.findIndex((_, i) => !syntax?.[i]?.assignment);
+    return k >= 0 && !FILE_READERS.test(basename(words[k])) && names(words.slice(k).join(" "));
+  });
 }
 function chiefVerdictProblem(input, slots) {
   if (input.tool_name !== "Bash") return undefined;
