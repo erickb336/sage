@@ -122,9 +122,10 @@ Send each phrase alone, as the whole message, in any letter case.
 | `autopilot on` / `autopilot off` | Autopilot turns on, while sage mode is on, or off. With autopilot on, autopilot merges verified work: the chief runs sage's merge command after the clean cycles and a passing merge check, with no prompt for the merge ([Autopilot in Codex](#autopilot-in-codex)). |
 | `sage help` | Every phrase, and whether sage mode and autopilot are on. |
 
-- To turn on autopilot after an install, send `sage mode`, then `autopilot on`, each alone: nothing else is needed. Send the on phrase with no image.
+- To turn on autopilot, send `sage mode`, then `autopilot on`, each alone. Send the on phrase with no image. Merges also need Codex 0.164 to 0.166, and `node` and `gh` outside the folders that Codex's sandbox can write ([Autopilot in Codex](#autopilot-in-codex)).
 - With autopilot off, the chief prepares a reviewed pull request for you to merge in GitHub. It reports the PR link, exact head commit and evidence.
-- Send a phrase when Codex is idle. To stop a merge now, press Esc (see [Stop a merge](#stop-a-merge)).
+- Send an on phrase when Codex is idle. An off phrase works at any time: sent with Enter while Codex works, it stops merges from Codex's next step. A phrase that you queue with Tab waits until the turn ends.
+- To stop a merge now, press Esc (see [Stop a merge](#stop-a-merge)).
 - Only your own typed message switches a mode: Codex gives the hook no agent text. A Codex review or approval check sends its own prompt, and that prompt switches nothing.
 - A message near a phrase switches nothing. The chief asks you for the exact phrase, unless your message was a question.
 - For a normal switch, the chief confirms the switch in one line of its reply.
@@ -147,13 +148,15 @@ With sage mode and autopilot on, the chief lands a verified pull request itself.
 - `node` and `gh` are outside the folders that Codex's sandbox can write (the project, its folder and the temporary folders).
 - The merge check passes for that head commit.
 
-Then the hook saves a one-time permit for that one call, and allows the call's network approval itself: you see no prompt for the merge. Right before `gh pr merge`, the command reads Codex's record and the mode file again. When a check refuses, the chief reports the pull request as ready, with the reason, and you merge it in GitHub.
+Then the hook saves a one-time permit for that one call. It allows the call's escalation and its network access to GitHub's API (`api.github.com`) itself, so you see no prompt for the merge. For any other host, Codex asks you.
+
+Right before `gh pr merge`, the command reads Codex's record and the mode file again. When a check refuses, the chief reports the pull request as ready, with the reason, and you merge it in GitHub.
 
 #### Stop a merge
 
 | You do | What stops |
 | --- | --- |
-| Press Esc | The merge stops at once, unless its call to GitHub has started: that merge completes. |
+| Press Esc | The merge stops at once, unless its call to GitHub has started: that merge completes. Autopilot stays on: to stop later merges, send the off phrase. |
 | Send `autopilot off` with Enter while Codex works | No merge starts from Codex's next step on. A merge that the hook admitted in this step can still complete. |
 | Queue `autopilot off` with Tab | It waits until the turn ends. To stop a merge in this turn, press Esc or send the off phrase with Enter. |
 | Send `autopilot off` or `sage mode off` when Codex is idle | No merge starts. |
@@ -162,10 +165,11 @@ The off phrase always counts, and nothing blocks it: also with an image, and als
 
 Limits of autopilot in Codex:
 
-- Codex 0.164 to 0.166 only. A resume by a newer Codex writes no version into its record, so the hook asks the Codex binary that runs for its version. With a newer Codex, merges wait for you.
-- An on phrase counts only from a turn that you start: in the terminal UI, in the app, or as the prompt of `codex exec`. An on phrase sent with `codex queue`, or joined to a queued turn, counts for nothing: send it again alone when Codex is idle.
-- Codex takes the `exec` word of a turn from its client. An agent that runs `codex exec` on purpose, outside the sage hooks, could add an on phrase there. The hook blocks Codex from the shell, and Codex's sandbox keeps the sessions folder closed; an agent must act against its brief to do it.
-- The desktop app runs all its sessions in one Codex process. When the hook at the start of a resumed session fails in the app, sage's note of the earlier start stays, and an on phrase from before that resume can count until the app restarts.
+- Codex 0.164 to 0.166 only. With another version, merges wait for you: merge the pull request in GitHub. The hook asks the Codex that runs for its version, because a resume by a newer Codex writes no version into its record.
+- Codex gives the hook the folder of the Codex that runs. If the hook cannot find it, the merge refuses with "sage cannot tell which Codex runs this session". Then merge the pull request in GitHub.
+- An on phrase counts only from a message that you type and send: in the terminal UI, in the app, or as the prompt of `codex exec`. An on phrase from `codex queue`, from a message that the app queued, from a goal or from an automation counts for nothing. Send it again alone when Codex is idle.
+- Codex records the client that starts each turn (the terminal UI, the app or `codex exec`) as the client names itself. So an agent that runs `codex exec` itself, outside the sage hooks, could send an on phrase. The hook blocks Codex from the shell and the sandbox keeps the sessions folder closed, so an agent must act against its brief to do this.
+- After you resume a session in the app, send `autopilot off` if you do not want merges from an earlier on phrase. The app runs all its sessions in one Codex process. If the sage hook fails at the resume, an on phrase from before the resume can count until the app restarts.
 - A writable root that you add in your Codex config (`sandbox_workspace_write.writable_roots`) is not checked for `node` and `gh`. Keep them out of such folders.
 
 ### The approval prompts of each task

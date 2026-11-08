@@ -33,7 +33,7 @@ const TOOL = join(ROOT, "skills/sage/sage.mjs");
 /** What the mode notes say about Codex, for the user (the help list). Codex has no queued messages and no board phrase in this hook. */
 const CODEX_HOST = {
   name: "Codex",
-  timing: "Send a phrase when Codex is idle. With autopilot on, sage merges a pull request by itself after its clean reviews and checks. To stop a merge now, press Esc; the off phrase, sent with Enter, stops merges from Codex's next step.",
+  timing: "Send an on phrase when Codex is idle. With autopilot on, sage merges a pull request by itself after its clean reviews and checks. To stop a merge now, press Esc: a merge whose call to GitHub has started still completes, and autopilot stays on. An off phrase sent with Enter stops merges from Codex's next step, but not a merge that sage already admitted. A phrase queued with Tab waits until the turn ends.",
   board: false,
   update: null,
 };
@@ -46,6 +46,8 @@ const UNKNOWN = `sage: the sage hook did not recognise this Codex event, so it s
 const HOOK_OFF = "sage: the sage hook is off (SAGE_HOOKS=off), so this phrase switched no mode. Start Codex without SAGE_HOOKS=off to use the phrases.";
 const DAMAGED_NOTE = 'sage: the sage mode file of this session was damaged, so sage mode and autopilot are now off. This is a normal session until the user sends "sage mode" alone, also if the history shows the chief role: you may change files yourself. Tell the user this in one line of your reply.';
 const FORK_NOTE = 'sage: this thread is a fork, so sage mode and autopilot are off in it, also if the history shows the chief role: this is a normal session, and you may change files yourself. If the history shows the chief role, tell the user in one line of your reply that sage mode is off in this fork, and that the message "sage mode" alone turns it on.';
+/** Codex's addition to core's off note (F-T677-7): the merge command can already run when the off comes. */
+const OFF_IN_CODEX = "sage: in Codex, a merge that sage admitted before this off can still complete. Say so in the line that confirms the switch.";
 const onOff = (value) => (value ? "on" : "off");
 
 /** The chief role: the switch line, the state tool's command, and the shared chief instructions with Codex's bindings. */
@@ -87,6 +89,7 @@ export function handle(input, state, env = process.env) {
     state.given = true;
     notes.unshift(chiefText());
   }
+  if (was.autopilot && !state.autopilot) notes.push(OFF_IN_CODEX);
   if (was.sage !== Boolean(state.sage) || was.autopilot !== Boolean(state.autopilot)) {
     notes.push(`sage: confirm the switch to the user in one line of your reply: sage mode is ${onOff(state.sage)}, and autopilot is ${onOff(state.autopilot)}.`);
   }

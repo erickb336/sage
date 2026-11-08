@@ -212,8 +212,8 @@ test("T470: the Codex guide, the README and the CHANGELOG carry the owner's copy
       "Codex's review thread runs in the chief's session and has no agent id, but its record names a review source |", // F-T470-1, a table cell
       "If an agent says that the hook could not read Codex's record of its thread, start a new session in the project folder. If it happens again, report it with your Codex version.", // F-T470-2
       "4. Send the on phrase alone (see [Turn on sage mode](#turn-on-sage-mode)). When all is well, you see no sage line", // F-T470-8
-      "Send a phrase when Codex is idle. To stop a merge now, press Esc", // F-T470-9
-      "| Press Esc | The merge stops at once, unless its call to GitHub has started: that merge completes. |", // T677
+      "Send an on phrase when Codex is idle. An off phrase works at any time", // F-T470-9, F-T677-6
+      "| Press Esc | The merge stops at once, unless its call to GitHub has started: that merge completes. Autopilot stays on: to stop later merges, send the off phrase. |", // T677, F-T677-5
       "| Send `autopilot off` with Enter while Codex works | No merge starts from Codex's next step on.", // T677
       "| Queue `autopilot off` with Tab | It waits until the turn ends.", // T677
       "The off phrase always counts, and nothing blocks it", // T677

@@ -99,13 +99,13 @@ test("T677: the autopilot phrases record autopilot with no warning line; the chi
   assert.match(contextOf(on), new RegExp(`^sage: autopilot is on\\. In Codex, autopilot merges verified work with sage's merge command\\. After a task's clean cycles and a passing merge_check, run it from the main thread, escalated, as one command with no other words: "${node}" "[^"]+/skills/sage/merge\\.mjs" <n> <sha>\\. The hook admits it only while autopilot is on and the merge check passes, with no prompt\\. sage could not check whether the default branch of this repository requires a pull request on GitHub\\. Autopilot still runs\\.\\n\\n---\\n\\nsage: confirm the switch to the user in one line of your reply: sage mode is on, and autopilot is on\\.$`));
   assert.equal(await modes(s), "sage mode on, autopilot on");
   assert.deepEqual(JSON.parse(readFileSync(modeFile(s), "utf8")).autopilot, true, "the mode file keeps autopilot on");
-  assert.deepEqual(await s.prompt("autopilot off"), { hookSpecificOutput: { hookEventName: "UserPromptSubmit", additionalContext: "sage: autopilot is off. Work stops at verified, and the user merges.\n\n---\n\nsage: confirm the switch to the user in one line of your reply: sage mode is on, and autopilot is off." } });
+  assert.deepEqual(await s.prompt("autopilot off"), { hookSpecificOutput: { hookEventName: "UserPromptSubmit", additionalContext: "sage: autopilot is off. Work stops at verified, and the user merges.\n\n---\n\nsage: in Codex, a merge that sage admitted before this off can still complete. Say so in the line that confirms the switch.\n\n---\n\nsage: confirm the switch to the user in one line of your reply: sage mode is on, and autopilot is off." } });
   assert.equal(await modes(s), "sage mode on, autopilot off");
 });
 
 test("T453: the help phrase says when to send a phrase and that autopilot merges verified work in Codex, with no board phrase or Claude command", async () => {
   const help = contextOf(await session().prompt("sage help"));
-  assert.match(help, /^Switches: send the phrase alone, as the whole message, in any letter case\. Spaces at the ends and one full stop are fine\. Any other message switches nothing\.\nSend a phrase when Codex is idle\. With autopilot on, sage merges a pull request by itself after its clean reviews and checks\. To stop a merge now, press Esc; the off phrase, sent with Enter, stops merges from Codex's next step\.\n- "sage mode": turns sage mode on\.$/m);
+  assert.match(help, /^Switches: send the phrase alone, as the whole message, in any letter case\. Spaces at the ends and one full stop are fine\. Any other message switches nothing\.\nSend an on phrase when Codex is idle\. With autopilot on, sage merges a pull request by itself after its clean reviews and checks\. To stop a merge now, press Esc: a merge whose call to GitHub has started still completes, and autopilot stays on\. An off phrase sent with Enter stops merges from Codex's next step, but not a merge that sage already admitted\. A phrase queued with Tab waits until the turn ends\.\n- "sage mode": turns sage mode on\.$/m);
   assert.match(help, /"autopilot on": turns autopilot on, while sage mode is on\./);
   assert.doesNotMatch(help, /the hook allows|exact merge command|merge_check/, "the help list is in the user's words (R1665-5)");
   assert.doesNotMatch(help, /Board:|claude plugin update|Claude|switches when its turn starts/);
@@ -256,7 +256,7 @@ test("T453: the README and the Codex guide say what the hook really does in Code
     "guide: the warning line, and that codex exec does not show it": found(guide, /gives Codex a warning line; the terminal UI and the app show it; `codex exec` does not\./),
     "guide: no claim that the hook shows one line": !found(guide, /and shows one line/),
     "guide: a damaged mode file": found(guide, /A damaged mode file turns sage mode and autopilot off/),
-    "guide: send a phrase when Codex is idle": found(guide, /Send a phrase when Codex is idle\./),
+    "guide: send a phrase when Codex is idle": found(guide, /Send an on phrase when Codex is idle\. An off phrase works at any time: sent with Enter while Codex works, it stops merges from Codex's next step\. A phrase that you queue with Tab waits until the turn ends\./),
     "guide: no exact phrase for a question": found(guide, /unless your message was a question/),
     "guide: the desktop app, not yet checked": found(guide, /desktop app.*This desktop path is not checked yet\./i),
     "guide: step 3 starts Codex with no flags and trusts the hooks": found(guide, /3\. Run `codex` in a project folder\. At the "Hooks need review" screen .*choose \*\*Trust all and continue\*\*/),

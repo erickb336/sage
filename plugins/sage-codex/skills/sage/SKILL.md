@@ -18,7 +18,7 @@ Only a direct owner message can change mode. Use `commands.mjs` beside this skil
 | --- | --- |
 | `sage mode`, `sage mode on` | The hook turns Sage on. Accept work in the next message. |
 | `sage mode off` | The hook turns Sage and autopilot off. Stop dispatch. Interrupt only owned active agents through supported tools, inspect the outcome and preserve work. Unknown status stays unresolved. |
-| `autopilot on` | The hook turns autopilot on while Sage is on. Nothing else is needed. |
+| `autopilot on` | The hook turns autopilot on while Sage is on. Merges also need Codex 0.164 to 0.166, and `node` and `gh` outside the sandbox's writable folders. |
 | `autopilot off` | The hook turns autopilot off and keeps Sage’s current mode. |
 | `sage help` | Show these phrases, board/status forms, actual known mode and capability limits. Do no work. |
 
