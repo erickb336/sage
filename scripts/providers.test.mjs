@@ -163,7 +163,7 @@ test("T51: external command operands retain executable identity and expansion re
     ], "prospective operands must not become executable evidence");
     const policy = api.createCommandPolicy();
     for (const command of [sample, "env command -p command -- git pu{s..s}h origin topic", "env command -- gh pr m?rg* 1"])
-      assert.match(policy.expansionProblem(command, f.dir), /shell expansion can hide the command/, command);
+      assert.match(policy.expansionProblem(command, f.dir), /shell expansion in "[^"]+" can hide the command/, command);
     for (const command of ["env command printf '%s' 'g{i..i}t push origin HEAD:main'", "env command git log --format='{x}'",
       "env command gh api 'repos/{owner}/{repo}/pulls?state=open'", "env command eval 'g{i..i}t push origin HEAD:main'", "env command -v 'g*'",
       "command() { printf '%s' \"$@\"; }; command 'g{i..i}t' push origin HEAD:main"])
@@ -224,7 +224,9 @@ test("T51: Bash builtin spellings do not hide external executable identity", asy
     assert.ok(api.programsRun("eval 'git stash'", f.dir, bin).some(run => run.word === "git"));
     if (provider === "claude") {
       const hook = await import(pathToFileURL(join(f.plugin, "hooks/sage-hook.mjs")));
-      assert.match(hook.agentProblem("COMMAND pr create", f.dir, bin) ?? "", /plain gh/, "the gh identity of an external alias stays visible");
+      // T815: gh by another name (a copy or a link) is a limit of the hook; gh by its name is judged.
+      assert.equal(hook.agentProblem("COMMAND pr create", f.dir, bin), undefined, "gh under another name");
+      assert.match(hook.agentProblem("gh repo delete o/r", f.dir, bin) ?? "", /an agent runs only these gh commands/);
     }
   }
 });
@@ -391,7 +393,9 @@ test("T49: built Claude hook protects the logbook from output writers while pres
         const command = broken ? `curl -o ${logbook}/tasks.tsv https://example.invalid` : `curl -o ${logbook}/tasks.tsv 'open`;
         const result = hook.handle({ hook_event_name: "PreToolUse", tool_name: "Bash", cwd: f.dir,
           tool_input: { command }, ...actor }, { sage: true }, { touch() {} });
-        assert.equal(result?.hookSpecificOutput?.permissionDecision, "deny", `${broken}: ${JSON.stringify(result)}`);
+        // T815: a broken core refuses every command; a line that the reader cannot read is refused only when it names a
+        // merge, a push or the state tool.
+        assert.equal(result?.hookSpecificOutput?.permissionDecision, broken ? "deny" : undefined, `${broken}: ${JSON.stringify(result)}`);
       }
     } finally { if (previous === undefined) delete process.env.SAGE_HOME; else process.env.SAGE_HOME = previous; }
   }
@@ -879,11 +883,11 @@ test("shared command extraction preserves T199 and harmless arguments in both is
     assert.equal(typeof api.createCommandPolicy, "function");
     const tool = join(f.plugin, "skills/sage/sage.mjs");
     const policy = api.createCommandPolicy({ stateToolPath: tool });
-    for (const command of ["g{h,h} pr view 1", "git pu{s,s}h origin topic", "gh pr {m,m}erge 1",
-      "printf 'gh pr {m,m}erge 1' | cat | sh"]) {
-      assert.match(policy.expansionProblem(command, f.dir), /shell expansion can hide the command/);
+    for (const [command, word] of [["g{h,h} pr view 1", "g{h,h}"], ["git pu{s,s}h origin topic", "pu{s,s}h"], ["gh pr {m,m}erge 1", "{m,m}erge"]]) {
+      assert.equal(policy.expansionProblem(command, f.dir), `shell expansion in "${word}" can hide the command. Use literal program and git or gh subcommand words, without {, [, * or ?.`, "F-T815-10: the refusal names its word");
     }
-    for (const command of ["echo '{sample}'", "git add '*.mjs'", "gh pr view 1", "[ -f '*.txt' ]", "[[ -f '*.txt' ]]"]) {
+    // T815: text piped into a shell is a limit of the hook.
+    for (const command of ["echo '{sample}'", "git add '*.mjs'", "gh pr view 1", "[ -f '*.txt' ]", "[[ -f '*.txt' ]]", "printf 'gh pr {m,m}erge 1' | cat | sh"]) {
       assert.equal(policy.expansionProblem(command, f.dir), undefined, command);
     }
     const rows = policy.runnable(api.shellCommands(`node '${tool}' log --why 'gh pr merge'; git push origin topic`));
@@ -899,24 +903,25 @@ test("shared merge and push extraction classifies merges in both isolated bundle
     const tool = join(f.plugin, "skills/sage/sage.mjs");
     const policy = api.createCommandPolicy({ stateToolPath: tool });
     const candidate = `gh pr merge 12 --squash --delete-branch --match-head-commit ${sha}`;
-    assert.deepEqual(policy.mergeIn(candidate), { pr: "12", sha });
+    assert.deepEqual(policy.mergeRun(candidate, f.dir), { pr: "12", sha });
     for (const text of [candidate.replace(" 12 ", " 012 "), candidate.replace(sha, "abc"), `${candidate} --admin`,
-      `sh -c '${candidate}'`, `echo '${candidate}' | sh`, `echo '${candidate}' > run; sh run`,
-      "gh api repos/o/r/pulls/12/merge", "gh pr 'merge", "$(echo gh) pr merge 12"]) {
-      assert.equal(typeof policy.mergeIn(text)?.problem, "string", text);
+      `sh -c '${candidate}'`, "gh api repos/o/r/pulls/12/merge", "gh pr 'merge"]) {
+      assert.equal(typeof policy.mergeRun(text, f.dir)?.problem, "string", text);
     }
+    // T815: text is no merge, and text piped into a shell, a file that a later command runs and a substitution in the
+    // program word are limits of the hook.
     for (const text of ["git status", "git merge topic", `echo '${candidate}'`, `echo '${candidate}' | head -1`,
-      `node '${tool}' log --why '${candidate}'`]) assert.equal(policy.mergeIn(text), undefined, text);
-    assert.match(policy.mergeIn(`node '/other/sage.mjs' log --why '${candidate}'`).problem, /cannot prove/);
+      `node '${tool}' log --why '${candidate}'`, `node '/other/sage.mjs' log --why '${candidate}'`,
+      `echo '${candidate}' | sh`, `echo '${candidate}' > run; sh run`, "$(echo gh) pr merge 12"]) assert.equal(policy.mergeRun(text, f.dir), undefined, text);
     assert.equal(api.mentionsMerge("gh api graphql -f query=mergePullRequest"), true);
     assert.equal(api.mentionsMerge("git merge topic"), false);
     assert.equal(api.PR.test("12"), true);
     assert.equal(api.PR.test("012"), false);
     if (provider === "claude") {
       const adapter = await import(pathToFileURL(join(f.plugin, "hooks/command-policy.mjs")));
-      assert.deepEqual(adapter.createCommandPolicy({ stateToolPath: tool }).mergeIn(candidate), { pr: "12", sha });
+      assert.deepEqual(adapter.createCommandPolicy({ stateToolPath: tool }).mergeRun(candidate, f.dir), { pr: "12", sha });
       const hook = await import(pathToFileURL(join(f.plugin, "hooks/sage-hook.mjs")));
-      assert.deepEqual(hook.mergeIn(candidate), { pr: "12", sha });
+      assert.deepEqual(hook.mergeRun(candidate, f.dir), { pr: "12", sha });
     }
   }
 });
@@ -927,16 +932,17 @@ test("shared merge and push extraction applies push rules and injected branch ev
     const api = await import(pathToFileURL(join(f.plugin, "core/index.mjs")));
     const tool = join(f.plugin, "skills/sage/sage.mjs");
     const policy = api.createPushPolicy({ stateToolPath: tool, readGh: fakeGh, readGit: fakeGit(dir => dir === join(f.dir, "project/nested") ? "main" : "topic") });
+    // T815: push text given to another program is no push, and text piped into a shell is a limit of the hook.
     for (const text of ["git push origin topic", "git push -u --follow-tags origin topic", "git push --delete origin topic",
-      "echo 'git push origin main'", "git status", `node '${tool}' log --why 'git push origin main'`]) {
+      "echo 'git push origin main'", "git status", `node '${tool}' log --why 'git push origin main'`,
+      "node /other/sage.mjs log --why 'git push origin main'", "echo 'git push origin main' | sh"]) {
       assert.equal(policy.pushProblem(text, f.dir), undefined, text);
     }
     for (const text of ["git push origin main", "git push origin refs/heads/master", "git push origin topic:main",
       "git push -f origin topic", "git push --force-with-lease origin topic", "git push --forc origin topic",
       "git push --mirror origin", "git push origin HEAD", "git push origin", "git push upstream topic",
       "git push origin '$BRANCH'", "sudo git push origin topic", "sh -c 'git push origin topic'",
-      "echo 'git push origin main' | sh", "git push 'origin", "gh api repos/o/r/git/refs -f ref=refs/heads/main",
-      "node /other/sage.mjs log --why 'git push origin main'"]) {
+      "eval git push origin topic", "echo $(git push origin topic)", "git push 'origin", "gh api repos/o/r/git/refs -f ref=refs/heads/main"]) {
       assert.equal(typeof policy.pushProblem(text, f.dir), "string", text);
     }
     assert.match(policy.pushProblem("cd project; git -C nested push origin topic", f.dir), /checkout is on main/);
@@ -984,17 +990,63 @@ test("T42: shared expansion rules recognize executable spelling without changing
     const api = await import(pathToFileURL(join(f.plugin, "core/index.mjs")));
     const policy = api.createCommandPolicy();
     for (const executable of ["GIT", "Git.exe", "/usr/bin/GIT", "'C:\\Tools\\Git.EXE'"]) {
-      assert.match(policy.expansionProblem(`${executable} p* origin main`, f.dir), /shell expansion can hide the command/, executable);
+      assert.match(policy.expansionProblem(`${executable} p* origin main`, f.dir), /shell expansion in "p\*" can hide the command/, executable);
       assert.equal(policy.expansionProblem(`${executable} status 'Topic*'`, f.dir), undefined, executable);
     }
     for (const executable of ["GH", "Gh.exe", "/usr/bin/GH", "'C:\\Tools\\GH.EXE'"]) {
-      assert.match(policy.expansionProblem(`${executable} pr m*`, f.dir), /shell expansion can hide the command/, executable);
-      assert.match(policy.expansionProblem(`${executable} p? merge`, f.dir), /shell expansion can hide the command/, executable);
+      assert.match(policy.expansionProblem(`${executable} pr m*`, f.dir), /shell expansion in "m\*" can hide the command/, executable);
+      assert.match(policy.expansionProblem(`${executable} p? merge`, f.dir), /shell expansion in "p\?" can hide the command/, executable);
+      assert.match(policy.expansionProblem(`${executable} pr CL*SE 1`, f.dir), /shell expansion in "CL\*SE" can hide the command/, "F-T815-10: in the command's own capitals");
       assert.equal(policy.expansionProblem(`${executable} pr view 'Topic*'`, f.dir), undefined, executable);
       assert.equal(policy.expansionProblem(`${executable} api 'repos/{owner}/{repo}/issues'`, f.dir), undefined, executable);
-      assert.match(policy.mergeIn(`${executable} pr merge 12 --squash --delete-branch --match-head-commit ${"a".repeat(40)}`)?.problem, /cannot prove/, executable);
+      assert.match(policy.mergeRun(`${executable} pr merge 12 --squash --delete-branch --match-head-commit ${"a".repeat(40)}`, f.dir)?.problem, /merge only with/, executable);
     }
-    assert.deepEqual(policy.mergeIn(`gh pr merge 12 --squash --delete-branch --match-head-commit ${"a".repeat(40)}`), { pr: "12", sha: "a".repeat(40) });
+    assert.deepEqual(policy.mergeRun(`gh pr merge 12 --squash --delete-branch --match-head-commit ${"a".repeat(40)}`, f.dir), { pr: "12", sha: "a".repeat(40) });
+  }
+});
+
+test("T815 repair: core's readers in both bundles (F-T815-4, -5, -6, -7, -9, -16, -27)", async t => {
+  for (const provider of ["claude", "codex"]) {
+    const f = isolated(t, provider);
+    const api = await import(pathToFileURL(join(f.plugin, "core/index.mjs")));
+    const home = join(f.dir, "home"), root = join(home, ".claude", "sage"), shared = join(home, ".sage"), work = join(f.dir, "work"), link = join(f.dir, "link");
+    for (const folder of [join(root, "p"), shared, work]) mkdirSync(folder, { recursive: true });
+    symlinkSync(root, link);
+    const write = (command) => api.logbookWrite(command, work, [root, shared], home);
+    // F-T815-4: a remove, a move or a recursive lock of a root or a folder above one, also by a pattern in it.
+    for (const [command, word] of [["rm -rf ~/.claude", "~/.claude"], ["mv ~/.claude ~/.claude.bak", "~/.claude"], [`rm -rf ${home}`, home], [`rm -rf ${home}/..`, `${home}/..`],
+      ["rm -rf ~/*", "~/*"], ["rm -rf /", "/"], [`find ${home} -delete`, home], [`find ${home} -name x -exec rm -rf {} +`, home],
+      [`rsync -a --delete ${work}/ ${home}/`, `${home}/`], [`chmod -R 000 ${shared}`, shared], [`sudo rm -rf ${home}`, home]]) assert.equal(write(command), word, `${provider}: ${command}`);
+    // Not a remove of a root: mv's last word is where it moves to, a copy or a plain mode change, and a remove elsewhere.
+    for (const command of ["mv a.txt ~/", "rm -rf build", "rm *.log", `cp -R ${home}/.claude /tmp/x`, `chmod 644 ${home}/.claude`, `find ${work} -name '*.o' -delete`, "ls ~"]) {
+      assert.equal(write(command), undefined, `${provider}: ${command}`);
+    }
+    // F-T815-16: pushd moves as cd does, also through a link; popd goes back.
+    for (const [command, word] of [[`pushd ${root} && echo x >> tasks.json`, "tasks.json"], [`pushd ${link} && echo x >> tasks.json`, "tasks.json"],
+      [`pushd ${root} && rm -rf p`, "p"], [`pushd ${shared} && echo x > a.json`, "a.json"], [`pushd /usr && popd && pushd ${root} && rm x`, "x"]]) assert.equal(write(command), word, `${provider}: ${command}`);
+    assert.equal(write(`pushd ${root} && popd && echo x > tasks.json`), undefined, "popd goes back to the work folder");
+    // F-T815-6: one method reader, with cobra's bundled -iX.
+    for (const [command, method] of [["gh api -iXDELETE repos/o/r/x", "DELETE"], ["gh api -iX DELETE repos/o/r/x", "DELETE"], ["gh api -iX POST repos/o/r/x", "POST"], ["gh api -i repos/o/r", "GET"], ["gh api -f a=b repos/o/r/x", "POST"],
+      // F-T815-27: the word after a value option of gh api is its value, not a method.
+      ["gh api -X PATCH repos/o/r/x -t -XGET", "PATCH"], ["gh api -X DELETE repos/o/r/x -itXGET", "DELETE"], ["gh api -X PUT repos/o/r/x -H --method=GET", "PUT"],
+      ["gh api repos/o/r/x -q -fa=b", "GET"], ["gh api -X PATCH repos/o/r/x --template=-XGET", "PATCH"], ["gh api -X PATCH repos/o/r/x --hostname -XGET", "PATCH"]]) {
+      assert.deepEqual(api.ghRuns(command, work).map((run) => run.method), [method], command);
+    }
+    const policy = api.createCommandPolicy();
+    // F-T815-7: the REST merges endpoint merges a branch into a base.
+    for (const command of ["gh api -X POST repos/o/r/merges -f base=x -f head=y", "curl -X POST https://api.github.com/repos/o/r/merges", "wget --method=POST https://api.github.com/repositories/12/merges"]) {
+      assert.match(policy.mergeRun(command, work)?.problem ?? "", /^merge only with/, command);
+    }
+    assert.equal(policy.mergeRun("gh api repos/o/r/merges-report", work), undefined, "another path");
+    // F-T815-5: an option before or between gh's command words; -R and --repo with their value, and options after them, pass.
+    for (const [command, option] of [["gh pr -b view merge 12 --squash", "-b"], ["gh pr -c view close 12", "-c"], ["gh --color always pr merge 12", "--color"]]) {
+      assert.equal(policy.expansionProblem(command, work), `gh reads "${option}" before or between its command words, and an option there can take the next word as its value, so the hook cannot tell which command gh runs. Write gh's command words first, then the options, for example gh pr view 12 --json state. Only -R <owner/repo> or --repo <owner/repo> may come before them.`, command);
+    }
+    for (const command of ["gh -R o/r pr view 1", "gh --repo o/r pr view 1", "gh --repo=o/r pr list", "gh pr view 12 --json state", "gh api --paginate repos/o/r/pulls", "gh --version", "gh pr --help", "gh status --org acme", "gh browse --branch main README.md"]) {
+      assert.equal(policy.expansionProblem(command, work), undefined, command);
+    }
+    // F-T815-9: an unread line that names a merge leads with the cause and the way forward.
+    assert.equal(policy.mergeRun("gh pr merge 1 && echo 'x", work)?.problem, "the hook cannot read this command (an open quote), so it refuses it. Close each quote, substitution and heredoc. Its text names a merge. Merge only with gh pr merge <n> --squash --delete-branch --match-head-commit <sha>, as a command of its own.");
   }
 });
 
@@ -1005,7 +1057,6 @@ test("T41: shared push policy refuses GitHub API writes to protected branches in
     const policy = api.createPushPolicy({ readGh: fakeGh, readGit: fakeGit("topic") });
     for (const command of [
       "gh api -X PATCH repos/o/r/git/refs/heads/main -f sha=abc -F force=true",
-      "gh api -X PATCH repos/o/r/git/refs/heads/main -f sha=abc\nprintf 'unfinished",
       "GH_REPO=o/contents gh api 'repos/victim/repo/{repo}/file' -X PUT -f content=abc",
       "GH_REPO=o/merges gh api 'repos/victim/repo/:repo' -f base=main -f head=topic",
       `gh api 'graphql#fragment' -f 'query=mutation { updateRef(input: {refId: "id", oid: "abc"}) { clientMutationId } }'`,
@@ -1171,7 +1222,7 @@ test("shared merge and push extraction keeps transitive module failures closed a
   const hook = await import(pathToFileURL(join(f.plugin, "hooks/sage-hook.mjs")));
   const sha = "a".repeat(40);
   const candidate = `gh pr merge 012 --squash --delete-branch --match-head-commit ${sha}`;
-  assert.deepEqual(hook.mergeIn(candidate), { pr: "012", sha }, "a broken state tool preserves the old diagnostic order");
+  assert.deepEqual(hook.mergeRun(candidate, f.dir), { pr: "012", sha }, "a broken state tool preserves the old diagnostic order");
   const output = hook.handle({ hook_event_name: "PreToolUse", tool_name: "Bash", tool_input: { command: candidate } }, { sage: true, autopilot: true }, {});
   assert.match(output.hookSpecificOutput.permissionDecisionReason, /the merge check refuses: it could not run \(fixture broken state tool\)/);
 });
@@ -2870,22 +2921,22 @@ test("shared command policy classifies merge candidates and executable text in b
     const adapter = await import(pathToFileURL(join(f.plugin, provider === "claude" ? "hooks/command-policy.mjs" : "runtime/command-policy.mjs")));
     const policy = adapter.createCommandPolicy({ stateToolPath: tool });
     const candidate = `gh pr merge 12 --squash --delete-branch --match-head-commit ${sha}`;
-    assert.deepEqual(policy.mergeIn(candidate), { pr: "12", sha });
+    assert.deepEqual(policy.mergeRun(candidate, f.dir), { pr: "12", sha });
     for (const text of [candidate.replace(" 12 ", " 012 "), candidate.replace(sha, "abc"), `${candidate} --admin`,
-      `sh -c '${candidate}'`, `echo '${candidate}' | sh`, `echo '${candidate}' > run; sh run`,
-      "gh api repos/o/r/pulls/12/merge", "gh pr 'merge", "$(echo gh) pr merge 12"]) {
-      assert.equal(typeof policy.mergeIn(text)?.problem, "string", text);
+      `sh -c '${candidate}'`, "gh api repos/o/r/pulls/12/merge", "gh pr 'merge"]) {
+      assert.equal(typeof policy.mergeRun(text, f.dir)?.problem, "string", text);
     }
-    for (const text of ["git status", "git merge topic", `echo '${candidate}'`, `echo '${candidate}' | head -1`,
-      `node '${tool}' log --why '${candidate}'`]) assert.equal(policy.mergeIn(text), undefined, text);
-    assert.ok(api.createCommandPolicy().mergeIn(`node '${tool}' log --why '${candidate}'`)?.problem);
-    assert.ok(policy.mergeIn(`node '/other/sage.mjs' log --why '${candidate}'`)?.problem);
+    // T815: the merge rule judges the programs that run, never text; whatever state tool path the policy has.
+    for (const text of ["git status", "git merge topic", `echo '${candidate}'`, `echo '${candidate}' | head -1`, `node '${tool}' log --why '${candidate}'`, `node '/other/sage.mjs' log --why '${candidate}'`]) {
+      assert.equal(policy.mergeRun(text, f.dir), undefined, text);
+      assert.equal(api.createCommandPolicy().mergeRun(text, f.dir), undefined, text);
+    }
     const rows = policy.runnable(api.shellCommands(`echo 'git push origin main'; git push origin topic`));
     assert.deepEqual(rows.map(row => row.words), [["echo"], ["git", "push", "origin", "topic"]]);
     if (provider === "claude") {
       const hook = await import(pathToFileURL(join(f.plugin, "hooks/sage-hook.mjs")));
-      assert.deepEqual(hook.mergeIn(candidate), policy.mergeIn(candidate));
-      assert.equal(hook.mergeIn(`node '${tool}' log --why '${candidate}'`), undefined);
+      assert.deepEqual(hook.mergeRun(candidate, f.dir), policy.mergeRun(candidate, f.dir));
+      assert.equal(hook.mergeRun(`node '${tool}' log --why '${candidate}'`, f.dir), undefined);
     }
   }
 });
@@ -2901,8 +2952,9 @@ test("shared command policy rejects invalid trusted paths and snapshots its bind
   const original = binding.stateToolPath;
   const policy = api.createCommandPolicy(binding);
   binding.stateToolPath = "/other/sage.mjs";
-  assert.equal(policy.mergeIn(`node '${original}' log --why 'gh pr merge'`), undefined);
-  assert.ok(policy.mergeIn(`node '${binding.stateToolPath}' log --why 'gh pr merge'`)?.problem);
+  // The policy keeps the path that it got: its runnable rows read the original tool's words as text, not the new one's.
+  assert.deepEqual(policy.runnable(api.shellCommands(`node '${original}' log --why 'gh pr merge'`)).map((row) => row.words), [["node", original]]);
+  assert.deepEqual(policy.runnable(api.shellCommands(`node '${binding.stateToolPath}' log --why 'gh pr merge'`)).map((row) => row.words), [["node", binding.stateToolPath, "log", "--why", "gh pr merge"]]);
 });
 
 test("shared command policy failures deny recognized Claude command tools before native handling", async t => {
@@ -2925,7 +2977,7 @@ test("shared command policy failures deny recognized Claude command tools before
         assert.equal(output.hookSpecificOutput.permissionDecision, "deny");
       }
     }
-    assert.ok(hook.mergeIn("gh pr merge 1")?.problem);
+    assert.ok(hook.mergeRun("gh pr merge 1", f.dir)?.problem);
   }
 });
 
@@ -2939,12 +2991,12 @@ test("shared push policy applies the same branch and force rules in both isolate
     let branch = "topic";
     const policy = adapter.createPushPolicy({ readGh: fakeGh, readGit: fakeGit(dir => { calls.push(dir); return branch; }) });
     for (const text of ["git push origin topic", "git push -u --follow-tags origin topic", "git push --delete origin topic",
-      "echo 'git push origin main'", "git status"]) assert.equal(policy.pushProblem(text, f.dir), undefined, text);
+      "echo 'git push origin main'", "git status", "echo 'git push origin main' | sh"]) assert.equal(policy.pushProblem(text, f.dir), undefined, text);
     for (const text of ["git push origin main", "git push origin refs/heads/master", "git push origin topic:main",
       "git push -f origin topic", "git push --force-with-lease origin topic", "git push --forc origin topic",
       "git push --mirror origin", "git push origin HEAD", "git push origin", "git push upstream topic",
       "git push origin '$BRANCH'", "sudo git push origin topic", "sh -c 'git push origin topic'",
-      "echo 'git push origin main' | sh", "git push 'origin", "gh api repos/o/r/git/refs -f ref=refs/heads/main"]) {
+      "git push 'origin", "gh api repos/o/r/git/refs -f ref=refs/heads/main"]) {
       const before = calls.length;
       assert.equal(typeof policy.pushProblem(text, f.dir), "string", text);
       assert.equal(calls.length, before, "invalid forms must not query a checkout");
@@ -2966,8 +3018,9 @@ test("shared push policy derives checkout paths and scopes the state-tool text e
   const policy = api.createPushPolicy({ stateToolPath: tool, readGh: fakeGh, readGit: fakeGit(dir => { calls.push(dir); return "topic"; }) });
   assert.equal(policy.pushProblem("cd project; git -C nested push origin topic", f.dir), undefined);
   assert.deepEqual(calls, [join(f.dir, "project/nested")]);
+  // T815: push text in another program's words is no push, whatever the program.
   assert.equal(policy.pushProblem(`node '${tool}' log --why 'git push origin main'`, f.dir), undefined);
-  assert.ok(policy.pushProblem("node /other/sage.mjs log --why 'git push origin main'", f.dir));
+  assert.equal(policy.pushProblem("node /other/sage.mjs log --why 'git push origin main'", f.dir), undefined);
   assert.deepEqual(calls, [join(f.dir, "project/nested")]);
 });
 
@@ -2975,8 +3028,10 @@ test("shared push policy validates and snapshots trusted branch readers and mess
   const f = isolated(t, "codex");
   const api = await import(pathToFileURL(join(f.plugin, "core/index.mjs")));
   assert.equal(typeof api.createPushPolicy, "function");
-  assert.throws(() => api.createPushPolicy(), /readGit/);
-  assert.throws(() => api.createPushPolicy({ readGit: fakeGit("topic") }), /readGh/);
+  // T815: both providers use core's readers by default; a reader that is given must be a function.
+  assert.equal(typeof api.createPushPolicy().pushProblem, "function");
+  assert.throws(() => api.createPushPolicy({ readGit: 7 }), /readGit/);
+  assert.throws(() => api.createPushPolicy({ readGit: fakeGit("topic"), readGh: "gh" }), /readGh/);
   for (const value of [null, 7, Promise.resolve("main")]) {
     assert.throws(() => api.createPushPolicy({ readGit: fakeGit("topic"), readGh: () => value }).pushProblem("git push origin topic", f.dir), /readGh/);
   }

@@ -1671,7 +1671,8 @@ test("in sage mode gh runs only the command paths that sage uses, by name, with 
   const refused = [["gh land 360", "gh land"], ["gh co 360", "gh co"], [`cd /work && gh ship 41 ${SHA}`, "gh ship"], ["env FOO=1 gh land 41", "gh land"],
     // F-T534-1, R1940-2: a two-word alias under a built-in group, and an option before the subcommand, which hides it.
     ["gh pr mrg 360", "gh pr mrg"], ["gh pr land 360 --admin", "gh pr land"], ["gh issue mrg 1", "gh issue mrg"], ["gh run x", "gh run x"], ["gh pr -R o/r mrg 41", "gh pr -R"],
-    ["gh alias set 'pr mrg' 'pr merge --admin'", OWNER_MERGE], ["gh auth token", "gh auth token"],
+    // T815: the merge rule reads gh's own words, so an alias body is the gh path rule's (gh alias), not a merge.
+    ["gh alias set 'pr mrg' 'pr merge --admin'", "gh alias"], ["gh auth token", "gh auth token"],
     ["$(which gh) land 41", LITERAL], ["G=gh; $G land 41", LITERAL], ["`which gh` land 41", LITERAL],
     // R1946-2: alias, extension and config are no path that sage uses.
     ["gh alias import aliases.yml", "gh alias"], ["gh alias list", "gh alias"], ["gh extension install o/gh-land", "gh extension"], ["gh ext create land", "gh ext"],
@@ -1679,11 +1680,15 @@ test("in sage mode gh runs only the command paths that sage uses, by name, with 
     ["GH_PAGER='sh -c x' gh pr view 41", SETUP], ["PAGER=x gh pr diff 41", SETUP], ["env BROWSER=x gh pr view --web 41", SETUP], ["export EDITOR=x; gh pr edit 41", SETUP],
     ["GH_EDITOR=x gh pr create", SETUP], ["VISUAL=x gh issue create", SETUP], ["GH_BROWSER=x gh pr view --web 1", SETUP], ["GH_CONFIG_DIR=/tmp/x gh pr view 41", SETUP], ["XDG_CONFIG_HOME=/tmp/x gh pr view 41", SETUP],
     // F-T534-1: HOME points gh at another config folder, which an agent can write.
-    ["HOME=/tmp/x gh pr view 41", SETUP], ["env HOME=/tmp/x gh pr checks 41", SETUP], ["export HOME=/tmp/x && gh pr list", SETUP]];
+    ["HOME=/tmp/x gh pr view 41", SETUP], ["env HOME=/tmp/x gh pr checks 41", SETUP], ["export HOME=/tmp/x && gh pr list", SETUP],
+    // F-T815-39: gh behind a wrapper that the reader does not know is read by core's reader, as gh by its name.
+    ["op run -- gh secret set X", "gh secret"], ["arch -arm64 gh pr mrg 360", "gh pr mrg"], ["chronic gh ext install o/gh-land", "gh ext"]];
   for (const [command, reason] of refused) assert.equal(path(denied(await g.run(pre("Bash", command)))), reason, command);
   for (const command of ["gh pr view 41", "gh pr checks 41", "gh pr create --fill", "gh pr list", "gh pr diff 41", "gh pr ready 41", "gh pr view 41 -R o/r", "gh pr", "gh pr --help",
     "gh api repos/o/r/pulls/41", "gh --version", "gh auth status", "gh issue view 2", "gh repo view", "gh run view 7 --log", "gh status", "gh version",
-    "/opt/homebrew/bin/gh pr view 41", "echo $HOME && gh pr view 41"]) {
+    "/opt/homebrew/bin/gh pr view 41", "echo $HOME && gh pr view 41", "op run -- gh pr view 41",
+    // F-T815-42: a word gh that is a file, a package or a page is not gh.
+    "brew install gh jq", "man gh pr", "npm view gh version", "cp gh backup"]) {
     assert.equal(denied(await g.run(pre("Bash", command))), undefined, command);
   }
   assert.equal(await fixed({ sage: false }).run(pre("Bash", "gh land 360")), undefined, "outside sage mode the gate does not judge gh");

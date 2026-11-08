@@ -58,7 +58,7 @@ const SHELLS = /^(?:sh|bash|zsh|dash|ksh|fish)$/;
  *     from dir. Undefined for a bare kill (the shell's builtin, unless a wrapper such as sudo or xargs runs it), for a
  *     word with a variable, ~ or a substitution, and for a program that is not found.
  *   - args: the words after the program, without their quotes and redirections.
- *   - dir: the folder it runs in, after an earlier "cd <dir>" of the same line.
+ *   - dir: the folder it runs in, after an earlier "cd <dir>", "pushd <dir>" or "popd" of the same line.
  *   - path: its effective PATH, after assignments and wrappers.
  *   - stdin: its heredoc and here-string bodies, and the words of the command piped into it.
  *   - piped: whether another command supplies its stdin through a pipe; a heredoc alone is not a pipe.
@@ -398,7 +398,7 @@ function readPrograms(command, dir, path, depth, found, uncertainDirectory = fal
   };
   const commands = shellCommands(command);
   const execute = (c, state, scope) => {
-    let { dir, path, cdpath, home, uncertainDirectory: uncertain } = state;
+    let { dir, path, cdpath, home, stack, uncertainDirectory: uncertain } = state;
     const exported = { ...state.exported };
     const functions = { ...state.functions };
     const functionChanges = { ...state.functionChanges };
@@ -434,7 +434,7 @@ function readPrograms(command, dir, path, depth, found, uncertainDirectory = fal
     let viaExec = false, bypassFunctions = false, powerShellLaunchChild = powerShellLaunchOrigin;
     let transformed = false;
     let argv = false; // argv disables assignment/keyword grammar, not same-shell builtin lookup
-    let nextDir = dir, status, negate = false, nextUncertain = uncertain;
+    let nextDir = dir, nextStack = stack, status, negate = false, nextUncertain = uncertain;
     for (let k = 0; k < words.length; k++) {
       const w = words[k];
       const name = programName(w);
@@ -507,6 +507,8 @@ function readPrograms(command, dir, path, depth, found, uncertainDirectory = fal
         } else {
           const wrapped = npm ?? interpret(dispatchSite, () => wrapperArguments(words, k + 1, wrapper, here, at));
           if (!wrapped) break;
+          // command -v and -V only look a name up: they run nothing (F-T815-17). command <program> runs it.
+          if (wrapper === "command" && words.slice(k + 1, wrapped.next).some((o) => /^-[pvV]*[vV]/.test(o))) break;
           k = wrapped.next - 1;
           here = wrapped.path;
           if (Object.hasOwn(wrapped.lookup ?? {}, "cdpath")) localCdpath = environment.cdpath = wrapped.lookup.cdpath;
@@ -537,9 +539,11 @@ function readPrograms(command, dir, path, depth, found, uncertainDirectory = fal
           exported[key] = null;
           lookupEffect(key, true, false);
         }
-      } else if (!viaExec && w === "cd") {
-        const change = cdDirectory(args, dir, localHome, localCdpath, uncertain);
-        nextDir = change.dir; status = change.ok;
+      } else if (!viaExec && /^(?:cd|pushd|popd)$/.test(w)) {
+        // The shell expands a word's ~ with its own HOME, before a HOME= of this command applies (F-T815-31).
+        const to = args.map((word, i) => tilde(word, syntax[k + 1 + i]?.quoted, home));
+        const change = w === "cd" ? cdDirectory(to, dir, localHome, localCdpath, uncertain) : stackDirectory(w, to, dir, stack, localHome, localCdpath, uncertain);
+        nextDir = change.dir; status = change.ok; nextStack = change.stack ?? stack;
         scope.directoryEffect = true;
         nextUncertain = scope.opaque || change.uncertain;
       } else if (!viaExec && (w === "export" || w === "unset")) {
@@ -602,7 +606,7 @@ function readPrograms(command, dir, path, depth, found, uncertainDirectory = fal
       for (const [name, effect] of Object.entries(changes)) {
         if (effect === null) delete updated[name]; else updated[name] = effect;
       }
-      return { dir: nextDir, path, cdpath, home, exported, functions: updated,
+      return { dir: nextDir, stack: nextStack, path, cdpath, home, exported, functions: updated,
         functionChanges: { ...functionChanges, ...changes }, uncertainDirectory: nextUncertain };
     });
     return { states, status: negate && status !== undefined ? !status : status };
@@ -639,7 +643,7 @@ function readPrograms(command, dir, path, depth, found, uncertainDirectory = fal
       return body.effects;
     } finally { functionDepth--; emitLeaves = previous; }
   };
-  const result = walkFlow(FLOWS.get(commands), [{ dir, path, ...lookup, functions: {}, functionChanges: {}, uncertainDirectory }], execute);
+  const result = walkFlow(FLOWS.get(commands), [{ dir, stack: null, path, ...lookup, functions: {}, functionChanges: {}, uncertainDirectory }], execute);
   // A confirmed function owns argument data; only its provisional external interpretation becomes obsolete.
   const obsoleteContexts = new Set(), obsoleteRedirects = new Set();
   for (const site of confirmedCalls) {
@@ -729,6 +733,9 @@ function walkFlow(flow, initial, execute, opaque = false) {
   return states;
 }
 
+/** A word that starts with an unquoted ~ or ~/, with the home folder in its place when that is a known absolute path. */
+const tilde = (word, quoted, home) => !quoted && /^~(?:\/|$)/.test(word) && typeof home === "string" && home.startsWith("/") ? home + word.slice(1) : word;
+
 function cdDirectory(args, dir, home, cdpath, uncertain) {
   let physical = false, k = 0;
   for (; /^-./.test(args[k] ?? "") && args[k] !== "--"; k++) {
@@ -756,6 +763,21 @@ function cdDirectory(args, dir, home, cdpath, uncertain) {
     }
   }
   return { dir, ok: false, uncertain };
+}
+
+/**
+ * pushd <dir> changes the folder as cd does and keeps the old folder on the line's stack; popd goes back to it
+ * (F-T815-16). Any other form (pushd alone, +N, -N, popd with a word or past the line's own pushd) leaves the folder unknown.
+ */
+function stackDirectory(name, args, dir, stack, home, cdpath, uncertain) {
+  const kept = stack ?? [], unknown = { dir, ok: undefined, uncertain: true, stack: [] };
+  if (name === "popd") {
+    const top = kept.at(-1);
+    return args.length || !top ? unknown : { dir: top.dir, ok: true, uncertain: top.uncertain, stack: kept.slice(0, -1) };
+  }
+  if (args.length !== 1 || /^[+-]/.test(args[0])) return unknown;
+  const change = cdDirectory(args, dir, home, cdpath, uncertain);
+  return { ...change, stack: change.ok === false ? kept : [...kept, { dir, uncertain: uncertain || change.ok === undefined }] };
 }
 
 /** The text that a shell, eval or PowerShell runs as commands: -c text, eval's words, or stdin when there is no script. */

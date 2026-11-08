@@ -1269,12 +1269,6 @@ function backingProblem(dir, task, kind, opt) {
   return `${run.id}'s report has ${needed.length} medium or high finding${needed.length === 1 ? "" : "s"} (${said}), and ${task.id} holds ${tally} of ${run.id}, but each one needs a row at its severity or above: ${found ? `${record}, then record ${kind}.` : `so it backs ${problemKind}. For ${cleanKind}, ${record}, then dismiss it with a reason, move it or close it.`}`;
 }
 
-/** The verdict command's backing rule, read only, for a hook's early refusal: the reason, or undefined (also with no such task). */
-function verdictBacking(project, id, kind, opt = {}, env = process.env) {
-  const dir = storeDir(project, env), task = read(dir, "tasks").find((t) => t.id === id);
-  return task && backingProblem(dir, task, kind, opt);
-}
-
 function acceptReportedReview(input, env = process.env, native) {
   const fields = ["project", "task", "run", "role", "assignment", "reportHash", "text", "review"];
   const deny = () => refuse("The review does not match its completed run, report, or current commit.");
@@ -4842,5 +4836,5 @@ const { bindings, fillCommits, folderOf, link, locate, movePlans, notePlugin, pl
   listed: (root) => known(root, undefined, undefined, true),
   enroll });
 const { chiefs, chiefRow, rowOf } = createChiefs({ now, provider, readRegular, refuse, rowsOf, sheetText, swap });
-return { SIZES, BLOCKS, RISKS, KINDS, STATES, DEFAULTS, PR, sageRoot, locate, chiefFor, sessionBar, branchBar, actorOptions, git, projectRoot, roleReadProject, optionsOf, slug, worktreeRoot, BRANCH, ofTask, branchOfTask, branchHome, branchTip, projectName, storeDir, config, cyclesFor, modelFor, read, mergeCheck, landingBar, boardLandingCheck, logbookView, sage, readTaskSnapshot, updateRequestedTask, assertTaskUpdateOpen, settleWrites, createRequestedTask, createRequestedRun, finishReportedRun, finishInterruptedRun, acceptReportedReview, keepReport, compareRetainedReport, verdictBacking, takenRows, captureRunAssignment, captureReviewTarget, validateTerminalAssignment, withLock, board, answerPaths, command, runCli, waitingPlugins, writeIdFloors };
+return { SIZES, BLOCKS, RISKS, KINDS, STATES, DEFAULTS, PR, sageRoot, locate, chiefFor, sessionBar, branchBar, actorOptions, git, projectRoot, roleReadProject, optionsOf, slug, worktreeRoot, BRANCH, ofTask, branchOfTask, branchHome, branchTip, projectName, storeDir, config, cyclesFor, modelFor, read, mergeCheck, landingBar, boardLandingCheck, logbookView, sage, readTaskSnapshot, updateRequestedTask, assertTaskUpdateOpen, settleWrites, createRequestedTask, createRequestedRun, finishReportedRun, finishInterruptedRun, acceptReportedReview, keepReport, compareRetainedReport, takenRows, captureRunAssignment, captureReviewTarget, validateTerminalAssignment, withLock, board, answerPaths, command, runCli, waitingPlugins, writeIdFloors };
 }

@@ -66,7 +66,7 @@ import { accessSync, constants, existsSync, linkSync, mkdirSync, readdirSync, re
 import { homedir } from "node:os";
 import { basename, dirname, isAbsolute, join, relative, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
-import { chiefEditDenied, commandWrites as knownCommandWrites, createCommandPolicy, createPushPolicy, gitInternalPath, LOGBOOK_FILES, partNames, PR, programName, programsRun, pullRequestHead, readModeFile, roleEditDenied, sharedRoot, shellCommands, shellWriteEvidence, shellExecutionUncertain, TEAM } from "../core/index.mjs";
+import { chiefEditDenied, commandWrites as knownCommandWrites, createCommandPolicy, createPushPolicy, gitInternalPath, gitOrGh, LOGBOOK_FILES, partNames, PR, programName, programsRun, pullRequestHead, readModeFile, roleEditDenied, sharedRoot, shellCommands, shellWriteEvidence, shellExecutionUncertain, TEAM } from "../core/index.mjs";
 
 // Codex treats executable stdin conservatively without changing other callers' known-write classification.
 const commandWrites = (text, cwd) => knownCommandWrites(text, cwd) || shellExecutionUncertain(text, cwd);
@@ -85,19 +85,8 @@ const ROOT = join(dirname(fileURLToPath(import.meta.url)), "..");
 const TOOL = join(ROOT, "skills/sage/sage.mjs");
 const SERVER = join(ROOT, "mcp/state-server.mjs");
 const policy = createCommandPolicy({ stateToolPath: TOOL, prPattern: PR });
-/** git's output for args in the checkout at dir, or undefined when git fails (the Claude hook's reader). */
-const readGit = (dir, args) => {
-  try {
-    return execFileSync("git", ["-C", dir, ...args], { encoding: "utf8", timeout: 5000, stdio: ["ignore", "pipe", "ignore"], env: { ...process.env, GIT_DIR: undefined, GIT_WORK_TREE: undefined } });
-  } catch { return undefined; }
-};
-/** gh's output for args (a GET of GitHub's API), or undefined when gh fails. GH_HOST and GH_REPO never change its target. */
-const readGh = (args) => {
-  try {
-    return execFileSync("gh", args, { encoding: "utf8", timeout: 10000, stdio: ["ignore", "pipe", "ignore"], env: { ...process.env, GH_HOST: undefined, GH_REPO: undefined } });
-  } catch { return undefined; }
-};
-const pushes = createPushPolicy({ stateToolPath: TOOL, readGit, readGh });
+/** The push rules read git and gh with core's readers, the same as the Claude hook's. */
+const pushes = createPushPolicy({ stateToolPath: TOOL });
 const GIT_FOLDER = "sage: in sage mode no thread changes files under a .git folder, where git keeps its hooks and settings. Ask the user";
 
 const UNREADABLE = "sage: the hook could not read this tool call, so it refuses it. Codex may have changed its hook input: update the sage plugin, or tell the user.";
@@ -187,7 +176,8 @@ function ghProblem(command, cwd, env) {
   let runs;
   try { runs = programsRun(command, cwd, env.PATH ?? ""); } catch { return undefined; }
   if (/\bgh\b/.test(command) && runs.some((p) => /[$`…]/.test(p.word))) return GH_LITERAL;
-  const gh = runs.filter((p) => programName(p.word) === "gh");
+  // gh behind a wrapper that the reader does not know (op run -- gh repo sync) counts too, by core's reader (F-T815-39).
+  const gh = runs.map((p) => gitOrGh(p, "gh")).filter(Boolean);
   if (!gh.length) return undefined;
   if (GH_SETTINGS.test(command)) return GH_SETUP;
   for (const { args: [group, sub] } of gh) {
@@ -865,7 +855,7 @@ export async function gate(input, { mode = readMode, check = checkMerge, env = p
   // The escalation of an admitted merge command: allowed only with its unused merge permit. Codex asks for every other.
   if (f.event === "PermissionRequest") return f.tool === "Bash" && !thread.child && mergeForm(f.command) && allowedDescription(f.input.description) && permitted(f) ? ALLOW : undefined;
   // Every merge goes through sage's merge command, before mode, role or saved-state checks: a gh merge never runs.
-  if (f.tool === "Bash" && policy.mergeIn(f.command)) return deny(OWNER_MERGE);
+  if (f.tool === "Bash" && policy.mergeRun(f.command, f.cwd)) return deny(OWNER_MERGE);
   if (f.tool === "Bash" && runsMerge(f.command, f.cwd, env)) {
     const merge = mergeForm(f.command);
     if (!merge) return deny(MERGE_FORM);

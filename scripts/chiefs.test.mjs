@@ -1692,8 +1692,14 @@ test("T901: a line that runs sage-pr create or merge in a form that the hook can
     assert.equal(run(`node ${PR_TOOL} ${verb} T1; echo done`), plain);
     assert.equal(run(`bash -c "node ${PR_TOOL} ${verb} T1"`), plain);
   }
+  assert.equal(run(`node -e "import('${PR_TOOL}')"`), plain, "node's code: the hook cannot see the script's words");
   assert.equal(run(`grep -n merge ${PR_TOOL}`), undefined, "a read of the script runs nothing");
+  // F-T901-7: text that names the script and a verb runs nothing, so the owner check has nothing to judge (T815).
+  assert.equal(run(`echo "next: node ${PR_TOOL} merge T1"`), undefined, "an echo");
+  assert.equal(run(`git -C ${w.project} log --grep "sage-pr.mjs create" -1`), undefined, "a search of the history");
   assert.equal(run(`cd ${w.project} && node ${PR_TOOL} view T1`), undefined, "view changes nothing");
+  assert.equal(run(`cd ${w.project} && node ${PR_TOOL} merge T1 $(`), plain, "a line that the reader cannot read and whose text names the script and merge");
+  assert.equal(run(`cd ${w.project} && node ${PR_TOOL} view T1 $(`), undefined, "a line that the reader cannot read, with no create or merge");
 });
 
 for (const [name, tool] of [["Claude", claude], ["Codex", codex]]) {
