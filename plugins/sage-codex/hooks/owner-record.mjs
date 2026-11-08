@@ -32,10 +32,17 @@
 //     give it (F-T663-3, a documented limit of the guide).
 //   - An on counts only from the message that starts its turn, as in Claude, where a message sent while Claude works
 //     never turns autopilot on: the turn's first user message that is not Codex's own context (provenance harness,
-//     such as the environment context). A message that joins a running turn (turn/steer, the app's Enter while Codex
-//     works, or turn/start while a turn runs, as the app's queue run now) gets that turn's id and no trigger of its own
-//     (F-T677-13, F-T677-15; R2721's record of the desktop binary 0.167.0-alpha.3.2). A message with no turn id starts
-//     no turn.
+//     such as the environment context), or its first message of another agent. A message that joins a running turn
+//     (turn/steer, the app's Enter while Codex works, or turn/start while a turn runs, as the app's queue run now) gets
+//     that turn's id and no trigger of its own (F-T677-13, F-T677-15; R2721's record of the desktop binary
+//     0.167.0-alpha.3.2). A subagent's report can start a main-thread turn with the trigger of the turn before it (a
+//     wake: Codex keeps the earlier turn's settings), so an on that joins that turn counts for nothing (F-T677-31). A
+//     message with no turn id starts no turn.
+//   - The on that counts must also be the on that turned autopilot on in the mode file: the mode hook saves the turn of
+//     each on that it accepts (onTurn), and the latest on that counts here must be in that turn (owner decision
+//     2026-11-08, F-T677-33). An off from another thread (a fork, a subagent's thread, a side conversation) reaches only
+//     the mode files, not this record. So after it, only a new on that starts its own turn turns autopilot on again: an
+//     on that joins a running turn, waits in a queue or comes with an image does not count here.
 // A resume by a newer Codex writes no version into the record (R2690 proof: 0.166.0-alpha.6 resumed a 0.164.0 record
 // with no new session_meta), so the gate also checks the version of the Codex that runs (gate-hook.mjs).
 import { closeSync, fstatSync, openSync, readSync } from "node:fs";
@@ -52,12 +59,13 @@ export const RECORD_VERSION = /^0\.16[4-7]\.(?:0|[1-9]\d*)(?:-[a-z]+(?:\.(?:0|[1
 export const RECORD_RANGE = "0.164 to 0.167";
 /**
  * The top-level line types of Codex 0.164.0 records. Any other type refuses. A multi-agent v2 message between threads
- * (a subagent's task or its report) comes with an inter_agent_communication_metadata line whose payload is only
- * { trigger_turn: boolean } (F-T677-30, real records of 0.164.0 and 0.167.0-alpha.3.2); any other payload refuses. It
- * is no user message, so it never counts as the owner's.
+ * (a subagent's report) comes with an inter_agent_communication_metadata line whose payload is only
+ * { trigger_turn: false } (F-T677-30, real records of 0.164.0 and 0.167.0-alpha.3.2); any other payload refuses. It
+ * is no user message, so it never counts as the owner's. Codex sends a subagent's report with trigger_turn false
+ * (completion.rs); true comes only from a message to the main thread, which the gate blocks (F-T677-31).
  */
 const TYPES = new Set(["session_meta", "response_item", "event_msg", "turn_context", "compacted", "world_state", "token_usage_record", "inter_agent_communication_metadata"]);
-const interAgent = (p) => Object.keys(p).join() === "trigger_turn" && typeof p.trigger_turn === "boolean";
+const interAgent = (p) => Object.keys(p).join() === "trigger_turn" && p.trigger_turn === false;
 /** The turn triggers of a turn that a person started: the TUI, codex exec, and the desktop app's composer. */
 const PERSON = new Set(["user", "exec", "composer"]);
 const RETRIES = 3;
@@ -70,6 +78,8 @@ const IN_GITHUB = "The owner merges the pull request in GitHub";
 const UNREAD = (detail) => refusal("sage cannot read Codex's record of this session", "Ask for the merge again. If it refuses again, the owner merges the pull request in GitHub", detail);
 const FORM = (detail) => refusal("sage does not know the form of Codex's record of this session", IN_GITHUB, detail);
 const RESUME = "Resume the session, then the owner turns autopilot on again. Or the owner merges the pull request in GitHub";
+/** When the owner's "autopilot on" counts, for the texts of the mode hook and the gate. */
+export const NEW_ON = "as a new message while Codex is idle (press Esc first if Codex is busy)";
 
 /** The bytes of the file, or { refused }. */
 function readBytes(path) {
@@ -111,7 +121,7 @@ export function readRecord(path, { pause = sleep } = {}) {
     if (!isObject(entry) || !TYPES.has(entry.type) || !isObject(entry.payload)) return FORM(`line ${i + 1} has an unknown type`);
     if (entry.type === "inter_agent_communication_metadata" && !interAgent(entry.payload)) return FORM(`line ${i + 1} has an unknown payload`);
     if (entry.type === "session_meta" && !RECORD_VERSION.test(String(entry.payload.cli_version))) {
-      return refusal(`this session runs Codex ${entry.payload.cli_version}, and sage reads the records of Codex ${RECORD_RANGE} only`, `Use Codex ${RECORD_RANGE}, or the owner merges the pull request in GitHub`);
+      return refusal(`this session runs Codex ${entry.payload.cli_version}, and sage reads the records of Codex ${RECORD_RANGE} only`, "A newer Codex waits until sage adds it. Until then, the owner merges the pull request in GitHub");
     }
     entries.push(entry);
   }
@@ -147,28 +157,48 @@ export const callInRecord = (record, callId, from) =>
   record.entries.some((entry, i) => i >= from && entry.type === "response_item" && /call$/.test(entry.payload.type) && entry.payload.call_id === callId);
 
 /**
- * The owner's autopilot switch now, with core's mode rules: { on: true }, { on: false, reason }, or { refused } when
- * the reader cannot prove it. mark is the session's start mark as start-mark.mjs saves it ({ lines, ... }). It is
- * required: a missing mark refuses, because without it an on from before a resume would count (proof case 5c).
+ * The record's turns: trigger (each turn's id: the trigger of its task_started line), opener (each turn's id: the line
+ * of the message that started it: a user message that is not Codex's own context, or another agent's message), and
+ * start (the line after the last session_meta line).
  */
-export function autopilotSwitch(record, mark) {
-  if (!isObject(mark)) return refusal("sage saved no note when this session started, so it cannot tell which of the owner's switches are from this start", RESUME);
-  const from = mark.lines;
-  if (!Number.isInteger(from) || from < 0 || from > record.lines) return refusal("sage's note of this session start does not match Codex's record of this session", RESUME);
-  const trigger = new Map();
-  const opener = new Map(); // each turn's id: the line of the user message that started it
+function turnsOf(record) {
+  const trigger = new Map(), opener = new Map();
   let start = 0;
   record.entries.forEach((entry, i) => {
     const p = entry.payload;
     if (entry.type === "session_meta") start = i + 1;
     if (entry.type === "event_msg" && p.type === "task_started") trigger.set(p.turn_id, p.turn_attribution?.turn_trigger);
-    if (entry.type !== "response_item" || p.type !== "message" || p.role !== "user") return;
+    const user = p.type === "message" && p.role === "user";
+    if (entry.type !== "response_item" || !(user || p.type === "agent_message")) return;
     const { turn_id: turn, content_item_metadata: meta } = p.internal_chat_message_metadata_passthrough ?? {};
-    const context = Array.isArray(meta) && meta.length > 0 && meta.every((item) => item?.provenance?.type === "harness");
+    const context = user && Array.isArray(meta) && meta.length > 0 && meta.every((item) => item?.provenance?.type === "harness");
     if (typeof turn === "string" && !context && !opener.has(turn)) opener.set(turn, i);
   });
+  return { trigger, opener, start };
+}
+
+/**
+ * Whether an on that the owner sends now in the turn can count, for the mode hook, which runs before Codex records the
+ * message: no message has started the turn yet, and its task_started line, if Codex wrote it, names a person's trigger.
+ */
+export function onCanCount(record, turn) {
+  const { trigger, opener } = turnsOf(record);
+  return !opener.has(turn) && (!trigger.has(turn) || PERSON.has(trigger.get(turn)));
+}
+
+/**
+ * The owner's autopilot switch now, with core's mode rules: { on: true }, { on: false, reason }, or { refused } when
+ * the reader cannot prove it. mark is the session's start mark as start-mark.mjs saves it ({ lines, ... }). It is
+ * required: a missing mark refuses, because without it an on from before a resume would count (proof case 5c).
+ * onTurn is the turn of the on that the mode file saved: autopilot is on only when the latest on that counts is in it.
+ */
+export function autopilotSwitch(record, mark, onTurn) {
+  if (!isObject(mark)) return refusal("sage saved no note when this session started, so it cannot tell which of the owner's switches are from this start", RESUME);
+  const from = mark.lines;
+  if (!Number.isInteger(from) || from < 0 || from > record.lines) return refusal("sage's note of this session start does not match Codex's record of this session", RESUME);
+  const { trigger, opener, start } = turnsOf(record);
   const state = {};
-  let counted = false;
+  let counted = false, countedTurn;
   for (let i = start; i < record.entries.length; i++) {
     const message = userMessage(record.entries[i]);
     if (message === null) continue;
@@ -179,8 +209,10 @@ export function autopilotSwitch(record, mark) {
     if (change?.autopilot === true && (!message.textOnly || i < from || !PERSON.has(trigger.get(turn)) || opener.get(turn) !== i)) continue;
     switchModes({ owner: true, text, all: text }, state, { autopilotOn: () => "" });
     counted ||= state.autopilot === true;
+    if (change?.autopilot === true && state.autopilot === true) countedTurn = turn;
   }
-  if (state.autopilot === true) return { on: true };
+  if (state.autopilot === true && countedTurn === onTurn) return { on: true };
+  if (state.autopilot === true) return { on: false, reason: `the owner's latest "autopilot on" did not count, because only an on that is the whole message and starts a new turn counts` };
   return { on: false, reason: counted ? "the owner's latest autopilot switch is off" : "the owner has not turned autopilot on, with sage mode on, since this session started" };
 }
 

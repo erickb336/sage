@@ -50,7 +50,8 @@
 //     thread. A recognized gh merge, and a run of merge.mjs in any other form, is refused in every mode and thread.
 //     The gate admits the exact form only when, in this order: the mode file has sage mode and autopilot on; the Codex
 //     that runs is 0.164 to 0.167 (its own --version: a resume writes no version into the record); the owner record
-//     reader reads Codex's record and finds autopilot on after the session's start mark, and that mark is of the Codex
+//     reader reads Codex's record and finds autopilot on after the session's start mark, from the on whose turn the
+//     mode file saved (F-T677-33), and that mark is of the Codex
 //     process that runs now (its pid, F-T663-22); the call itself is in the record after the mark; node and gh are
 //     outside every folder that Codex's sandbox can write; the repository is known; and checkMerge passes. Then it
 //     saves the call's one-time merge permit. PermissionRequest allows the escalation of that call only with a matching
@@ -76,7 +77,7 @@ import { patchTargets } from "../runtime/patch-targets.mjs";
 import { managedPatchPath } from "../runtime/managed-worktree.mjs";
 import { agentPathOf, sageName, sessionMeta, TASK_NAME } from "./report-gate.mjs";
 import { modeDirectory } from "./sage-codex-hook.mjs";
-import { autopilotSwitch, callInRecord, readRecord, RECORD_RANGE, RECORD_VERSION } from "./owner-record.mjs";
+import { autopilotSwitch, callInRecord, NEW_ON, readRecord, RECORD_RANGE, RECORD_VERSION } from "./owner-record.mjs";
 import { markFile } from "./start-mark.mjs";
 import { mergeCommand, permitFile, permitFolder } from "../skills/sage/merge.mjs";
 
@@ -683,7 +684,7 @@ function mergeForm(command) {
 }
 const MERGE_FORM = `sage: run sage's merge command in its one form, alone: ${mergeCommand("<pr>", "<head sha>")}`;
 const AGENT_MERGE = "sage: only the chief merges, not an agent. Report the pull request as ready";
-const AUTOPILOT_OFF = 'sage: autopilot is off, so the owner merges. Report the pull request as ready. The owner turns autopilot on with the message "autopilot on", alone, while sage mode is on';
+const AUTOPILOT_OFF = `sage: autopilot is off, so the owner merges. Report the pull request as ready. To turn autopilot on while sage mode is on, the owner sends "autopilot on" alone, ${NEW_ON}`;
 const READY = "Report the pull request as ready: the owner merges it in GitHub";
 /** The folders that Codex's sandbox lets a command write: the project and its working folder, and the temporary folders. */
 const writableRoots = (cwd, env, temporary) => [projectRoot(cwd), cwd, env.TMPDIR, ...temporary].filter(Boolean).map((dir) => real(dir) ?? resolve(dir));
@@ -770,17 +771,17 @@ async function admit(f, merge, { env, check, ppid, temporary }) {
   if (state.sage !== true || state.autopilot !== true) return AUTOPILOT_OFF;
   const roots = writableRoots(f.cwd, env, temporary);
   const version = runningCodex(roots, env);
-  if (version === undefined) return `sage: sage cannot tell which Codex runs this session, because the hook's PATH has no codex-arg0 folder of Codex. A login profile, such as ~/.zprofile, that sets PATH without its earlier value drops that folder. ${READY}`;
-  if (!RECORD_VERSION.test(version ?? "")) return `sage: ${version ? `this session runs Codex ${version}` : "sage cannot tell which Codex runs this session"}, and autopilot merges only in Codex ${RECORD_RANGE}. ${READY}`;
+  if (version === undefined) return `sage: sage cannot tell which Codex runs this session, because Codex's own folder is not on the hook's PATH. A login profile, such as ~/.zprofile, that sets PATH without its earlier value drops it: keep the earlier value there (export PATH="<folder>:$PATH"), then ask for the merge again. ${READY}`;
+  if (!RECORD_VERSION.test(version ?? "")) return `sage: ${version ? `this session runs Codex ${version}` : "sage cannot tell which Codex runs this session"}, and autopilot merges only in Codex ${RECORD_RANGE}${version ? ": a newer Codex waits until sage adds it" : ""}. ${READY}`;
   const codexRecord = readRecord(f.transcript ?? "");
   if (codexRecord.refused) return `sage: ${codexRecord.refused}`;
   let mark;
   try { mark = readState(markFile(modeDirectory(env), f.session)); } catch { mark = undefined; }
   // A mark that a failed start left (its removal failed too) names the Codex process of an earlier start (F-T663-9).
   if (record(mark) && mark.pid !== ppid) return `sage: sage's note of this session start is from another Codex process, so autopilot merges nothing in this session for now. ${READY}, or resume the session and send "autopilot on" again`;
-  const owner = autopilotSwitch(codexRecord, mark);
+  const owner = autopilotSwitch(codexRecord, mark, state.onTurn);
   if (owner.refused) return `sage: ${owner.refused}`;
-  if (!owner.on) return `sage: ${owner.reason}, so the owner merges. ${READY}`;
+  if (!owner.on) return `sage: ${owner.reason}, so the owner merges. ${READY}. To turn autopilot on, the owner sends "autopilot on" alone, ${NEW_ON}`;
   if (!text(f.toolUseId) || !callInRecord(codexRecord, f.toolUseId, mark.lines)) return "sage: this merge call is not in Codex's record of this session, so sage refuses it. Ask for the merge again";
   if (inside(real(process.execPath) ?? process.execPath, roots)) return `sage: node runs from a folder that Codex's sandbox can write (${process.execPath}), so autopilot merges nothing. ${READY}`;
   const gh = trustedGh(roots, env);
@@ -805,10 +806,11 @@ const ALLOW = { hookSpecificOutput: { hookEventName: "PermissionRequest", decisi
 /**
  * Whether the approval's description lets the gate allow it. Codex asks for the network access of a running command as
  * Bash with that command and the description "network-access <protocol>://<host>:<port>" (Codex 0.164 approvals.rs:
- * 202-209, network_approval.rs:610-612); for an escalation the description is the model's own reason. Of the network,
- * the gate allows only GitHub's API, which gh needs (F-T677-3). Codex asks the owner for every other host.
+ * 202-209, network_approval.rs:610-612); for an escalation the description is the model's own reason. The gate allows
+ * no network access: when gh asks for it, the merge command has already used its permit (F-T677-34), so Codex asks the
+ * owner, also for GitHub's API.
  */
-const allowedDescription = (description) => description === undefined || (typeof description === "string" && (!description.startsWith("network-access ") || description === "network-access https://api.github.com:443"));
+const allowedDescription = (description) => description === undefined || (typeof description === "string" && !description.startsWith("network-access "));
 
 // Codex adds ". Command: <the command>" after the reason, so a reason ends with no period of its own.
 const deny = (reason) => ({ hookSpecificOutput: { hookEventName: "PreToolUse", permissionDecision: "deny", permissionDecisionReason: reason.replace(/\.$/, "") } });
