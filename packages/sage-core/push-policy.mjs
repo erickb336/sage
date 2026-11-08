@@ -1,7 +1,7 @@
 import { execFileSync } from "node:child_process";
 import { resolve } from "node:path";
 import { programsRun, shellCommands } from "./command-reader.mjs";
-import { createCommandPolicy, externalCommandOperands, GH_API_VALUE, ghApiMethod, GIT_VALUE, gitSubcommand, programName, unreadable } from "./command-policy.mjs";
+import { createCommandPolicy, externalCommandOperands, GH_API_VALUE, ghApiMethod, GIT_VALUE, gitSubcommand, programAmong, programName, unreadable } from "./command-policy.mjs";
 import { commandWrites } from "./shell-write-policy.mjs";
 
 /** The owner/name of a GitHub repository URL as git writes it (https, ssh or scp form), or undefined for any other URL. */
@@ -64,7 +64,7 @@ export function createPushPolicy({ stateToolPath, readGit: gitReader = readGit, 
     try {
       commands = shellCommands(command);
     } catch (e) {
-      return pushText(bare(command)) ? refuse(unreadable(e, "a push")) : undefined;
+      return unreadableSend(e, command, cwd);
     }
     defaults.clear(); // read GitHub's default branch once for each command, never from an earlier command
     const state = gitStateChange(command, commands, cwd);
@@ -129,7 +129,26 @@ export function createPushPolicy({ stateToolPath, readGit: gitReader = readGit, 
         .some(({ word, args }) => apiWritesMain([word, ...args], cwd))) return refuse(mainReason);
     } catch (error) {
       if (error.code === "SAGE_POWERSHELL_LAUNCH") return refuse(error.message);
-      return pushText(bare(command)) ? refuse("the hook cannot establish the push command") : undefined;
+      return unreadableSend(error, command, cwd, commands);
+    }
+    return undefined;
+  }
+  /**
+   * Why a line that the reader cannot read is refused (error e), or undefined (F-T815-31): its text names a push, or a gh
+   * or git run in its words, as the shell reader splits them (else its text split at spaces and shell operators), sends
+   * commits or moves a branch another way: a gh api write of main or the default branch, gh repo sync, gh repo edit
+   * --default-branch, or a git subcommand that the hook does not know.
+   */
+  function unreadableSend(e, command, cwd, commands) {
+    if (pushText(bare(command))) return refuse(unreadable(e, "a push"));
+    const lines = commands ? runnable(commands).map(({ words }) => words) : bare(command).split(/[;&|()`\n]+/).map((part) => part.split(/\s+/).filter(Boolean));
+    for (const words of lines) {
+      const run = words.length && programAmong({ word: words[0], args: words.slice(1) }, (name) => /^(?:git|gh)$/.test(name));
+      // A variable as git's subcommand (git "$@" in a function) names no subcommand: a variable is a limit of the hook.
+      if (!run || (programName(run.word) === "git" && /[$`]/.test(gitSubcommand(run.args, 0)))) continue;
+      const send = sendsOtherwise(run.word, run.args);
+      if (send) return send.alone ? `${unreadable(e, "a git or gh command")} ${send.why}` : refuse(`${unreadable(e, "a git or gh command")} ${send}`);
+      if (apiWritesMain([run.word, ...run.args], cwd)) return refuse(`${unreadable(e, "a GitHub API write")} ${mainReason}`);
     }
     return undefined;
   }

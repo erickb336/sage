@@ -7,7 +7,7 @@ import { programsRun, shellCommands } from "./command-reader.mjs";
 import { commandWrites, readerDispatch, uniqWrites } from "./shell-write-policy.mjs";
 import { outputDispatchWrites } from "./output-writes.mjs";
 import { programName } from "./program-name.mjs";
-import { ghApiMethod, ghWords, gitSubcommand } from "./command-policy.mjs";
+import { ghApiMethod, ghWords, gitSubcommand, programAmong } from "./command-policy.mjs";
 
 const fold = (text) => text.normalize("NFKC").toLowerCase();
 
@@ -189,8 +189,10 @@ const TOOL_FILE = /(?:^|[/\\])(sage(?:-pr)?)\.mjs$/i;
 export function stateToolRun(command, cwd) {
   const { programs } = programsRun(command, cwd, undefined, { contextEvidence: true });
   const found = [];
-  for (const { run, wrapper, shellFunction } of programs) {
-    if (wrapper || shellFunction) continue;
+  for (const entry of programs) {
+    if (entry.wrapper || entry.shellFunction) continue;
+    // node behind a wrapper that the reader does not know (arch -arm64 node <sage.mjs>) runs the script too (F-T815-30).
+    const run = programAmong(entry.run, (name) => /^(?:node|nodejs)$/.test(name)) ?? entry.run;
     let script = run.word, args = run.args;
     if (/^(?:node|nodejs)$/.test(programName(run.word))) {
       let k = 0;
@@ -221,7 +223,11 @@ export function stateToolRun(command, cwd) {
  */
 export function ghRuns(command, cwd, path, options = {}) {
   const { programs } = programsRun(command, cwd, path, { ...options, contextEvidence: true });
-  return programs.filter(({ run, wrapper, shellFunction }) => !wrapper && !shellFunction && programName(run.word) === "gh").map(({ run }) => {
+  // gh behind a wrapper that the reader does not know (op run -- gh pr close 1) counts too (F-T815-30), when a gh command
+  // name follows it: a gh file that cp or ln names before a path is no run.
+  return programs.filter(({ wrapper, shellFunction }) => !wrapper && !shellFunction)
+    .map(({ run }) => [run, programAmong(run, (name) => name === "gh")])
+    .filter(([run, gh]) => gh && (gh === run || /^[a-z][\w-]*$/.test(ghWords(gh.args)[0] ?? ""))).map(([, run]) => {
     const [group, sub] = ghWords(run.args);
     return { group, sub, method: group === "api" ? ghApiMethod(run.args) : undefined, args: run.args };
   });

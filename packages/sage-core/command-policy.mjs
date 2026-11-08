@@ -78,7 +78,23 @@ export const unreadable = (error, what) => {
  * A merge path of the REST API (a pull request's pulls/<n>/merge, or a repository's merges, which merges a branch into a
  * base), or a GraphQL mutation that merges, in a word of a request.
  */
-const apiMerges = (words) => words.some((w) => /(?:^|\/)pulls\/[^/\s?#]+\/merge(?![\w-])|(?:^|\/)(?:repos\/[^/\s?#]+\/[^/\s?#]+|repositories\/\d+)\/merges(?![\w-])/i.test(w) || /\b(?:mergePullRequest|enablePullRequestAutoMerge|mergeBranch)\b/.test(w));
+const apiMerges = (words) => words.some((w) => /(?:^|\/)pulls\/+[^/\s?#]+\/+merge(?![\w-])|(?:^|\/)(?:repos\/+[^/\s?#]+\/+[^/\s?#]+|repositories\/+\d+)\/+merges(?![\w-])/i.test(w) || /\b(?:mergePullRequest|enablePullRequestAutoMerge|mergeBranch)\b/.test(w));
+/** Programs that only print, list or search their words, or run git's own commands: a program name among their words is text. */
+const TEXT = /^(?:echo|printf|cat|grep|rg|git|ls|which)$/;
+/**
+ * The program among the words of a run that the reader gives (F-T815-30): the run's own word when names(its base name)
+ * is true, else the first later word that names takes and that a word other than an option follows, with the words after
+ * it. A wrapper that the reader does not know (arch -arm64, op run --, script -q /dev/null, direnv exec .) runs the
+ * program in its words, so the rules read that program as they read a known wrapper's. It returns the run with that
+ * program's word and arguments, or undefined when there is none.
+ */
+export function programAmong(run, names) {
+  const { word, args } = run;
+  if (names(programName(word))) return run;
+  if (TEXT.test(programName(word))) return undefined;
+  const k = args.findIndex((w, i) => names(programName(w)) && args.slice(i + 1).some((a) => !a.startsWith("-")));
+  return k < 0 ? undefined : { ...run, word: args[k], args: args.slice(k + 1) };
+}
 /** Does a gh run merge: gh pr merge, or gh api with a merge path or a merge mutation in its words or its input? */
 const ghMerges = (args, stdin = []) => {
   const [group, sub] = ghWords(args);
@@ -155,7 +171,8 @@ export function createCommandPolicy({ stateToolPath, prPattern = PR } = {}) {
    * merges. Else { pr, sha } when the whole command is the one merge form, which the merge check then decides, or
    * { problem }. A program merges when it is gh pr merge (after gh's own options), or gh api, curl or wget with a pull
    * request's merge path (pulls/<n>/merge) or a GraphQL merge mutation in its words or its input, at any depth that the
-   * command reader sees (env, command, sh -c, eval, $( ), xargs, find -exec). A line that the reader cannot read is
+   * command reader sees (env, command, sh -c, eval, $( ), xargs, find -exec), also behind a wrapper that the reader does
+   * not know (programAmong: arch -arm64 gh pr merge 12). A line that the reader cannot read is
    * refused only when its text names a merge. A gh alias or extension, and a variable or a script that merges, are
    * limits of the hook (docs/design/rules-in-code.md).
    */
@@ -170,8 +187,9 @@ export function createCommandPolicy({ stateToolPath, prPattern = PR } = {}) {
     }
     for (const { run, wrapper, shellFunction } of programs) {
       if (wrapper || shellFunction) continue;
-      const name = programName(run.word);
-      const merges = name === "gh" ? ghMerges(run.args, run.stdin) : /^(?:curl|wget)$/.test(name) && apiMerges([...run.args, ...run.stdin]);
+      const found = programAmong(run, (name) => /^(?:gh|curl|wget)$/.test(name));
+      if (!found) continue;
+      const merges = programName(found.word) === "gh" ? ghMerges(found.args, found.stdin) : apiMerges([...found.args, ...found.stdin]);
       if (merges) return { problem: CANNOT };
     }
     return undefined;

@@ -2917,7 +2917,7 @@ const MAIN_DENIES = [
 /**
  * T815: the forms of MAIN_DENIES that pass now. Each is a documented limit of the hook (a variable or a substitution in
  * the program word, text piped into a shell, a file that a later command runs, code of another language, a gh alias,
- * another host), or runs no merge and no push (a search's text, a script's arguments, sh -c gh that runs only gh).
+ * another host), or runs no merge and no push (a search's text).
  */
 const MAIN_LIMITS = new Set([
   "$'\\x67h' pr merge 41 --admin", `$(echo gh) pr merge 41 --squash --match-head-commit ${SHA}`, "$(printf 'g%s' h) pr merge 41 --admin",
@@ -2929,10 +2929,11 @@ const MAIN_LIMITS = new Set([
   `node -e "require('child_process').execSync('gh pr merge 41 --squash --delete-branch --match-head-commit ${SHA}')"`, "osascript -e 'do shell script \"gh pr merge 41\"'",
   "parallel ::: 'gh pr merge 41'", "php -r 'system(\"gh pr merge 41\");'", "printf -v G gh; $G pr merge 41",
   "python3 - <<'EOF'\nimport subprocess\nsubprocess.run([\"gh\", \"pr\", \"merge\", \"41\"])\nEOF", "sh <(echo 'gh pr merge 41')", "ssh host 'gh pr merge 41'",
-  "{ echo 'gh pr merge 41'; } | sh", "sh -c gh pr merge 1 --admin", "bash ./x.sh gh pr merge 1 --admin", "bash -c 'echo $0' gh pr merge 1 --admin",
+  "{ echo 'gh pr merge 41'; } | sh",
   "bash x.sh <<EOF\ngit push origin main\nEOF", "bash x.sh <<EOF\ngh pr merge 1 --admin\nEOF",
-  "bash -c gh pr merge 1 --admin x", "echo gh pr merge 1 --admin | sh", "$(echo gh pr merge 1 --admin)",
-  "P=gh pr merge 1 --admin; $P", "find . -exec sudo gh pr merge 1 --admin {} ;",
+  "echo gh pr merge 1 --admin | sh", "$(echo gh pr merge 1 --admin)", "P=gh pr merge 1 --admin; $P",
+  // F-T815-30: gh pr merge in the words of a run counts as a merge (sh -c gh pr merge 1, a script's arguments,
+  // find -exec sudo gh pr merge), so those forms are refused again.
   // F-T815-17: command -v only looks the names up; it runs no merge.
   "command -v gh pr merge 1 --admin",
 ]);

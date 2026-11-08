@@ -116,6 +116,9 @@ const WHY = {
  * providers need another command for one case (the other chief's branch).
  */
 const T = TREE, L = LOGBOOK;
+/** Wrapper programs that the command reader does not know: each runs the program in its words. No row runs them. */
+const WRAPPERS = ["arch -arm64", "script -q /dev/null", "op run --", "direnv exec .", "unbuffer", `flock ${BASE}/lock`, "mise exec --"];
+mkdirSync(join(env.HOME, "x")); // cd ~/x: a folder of the scratch home
 const REFUSED = [
   // Every merge form: by gh's own words, after gh's options, at any depth that the reader sees, and through the API.
   ["merge", "gh pr merge 12"],
@@ -145,6 +148,12 @@ const REFUSED = [
   // The REST merges endpoint merges a branch into a base (F-T815-7).
   ["merge", "gh api -X POST repos/acme/project/merges -f base=sage/t9-free -f head=sage/t1-a"],
   ["merge", `curl -X POST -d '{"base":"sage/t9-free","head":"sage/t1-a"}' https://api.github.com/repos/acme/project/merges`],
+  // GitHub reads a doubled slash as one (F-T815-33).
+  ["merge", "gh api -X PUT repos/acme/project/pulls/12//merge"],
+  ["merge", "curl -X POST https://api.github.com/repos//acme/project//merges -d x"],
+  // A wrapper that the reader does not know runs the program in its words (F-T815-30).
+  ...WRAPPERS.flatMap((wrapper) => [`${wrapper} gh pr merge 12 --squash`, `${wrapper} gh api -X PUT repos/acme/project/pulls/12/merge`,
+    `${wrapper} curl -X PUT -H 'Authorization: token x' https://api.github.com/repos/acme/project/pulls/12/merge`].map((command) => ["merge", command])),
   // An option before or between gh's command words can take the next word as its value: gh pr -b view merge 12 runs
   // gh pr merge (F-T815-5).
   ["gh", "gh pr -b view merge 12 --squash"],
@@ -178,6 +187,19 @@ const REFUSED = [
   ["push", `gh api -X PATCH repos/acme/project/git/refs/heads/main -H --method=GET -f sha=${SHA}`],
   ["push", `git -C ${T} subtree push --prefix=docs origin sage/t1-a`],
   ["push", `git -C ${T} frobnicate origin`],
+  // The reader resolves a literal cd ~ and cd ~/<path>; on a line that it cannot read (cd -, an unknown wrapper option),
+  // the words still show a GitHub write of main, a branch move or an unknown git subcommand (F-T815-31).
+  ["push", `cd ~ && gh api -X PATCH repos/acme/project/git/refs/heads/main -f sha=${SHA}`],
+  ["push", "cd ~/x && gh api -X PUT repos/acme/project/contents/README.md -f message=m -f content=eA== -f branch=main"],
+  ["push", "cd ~ && gh repo sync"],
+  ["push", "cd ~ && gh repo edit acme/project --default-branch sage/t1-a"],
+  ["push", `cd ~ && git -C ${T} frobnicate origin`],
+  ["push", `cd - && gh api -X PATCH repos/acme/project/git/refs/heads/main -f sha=${SHA}`],
+  ["push", "cd - && gh repo sync"],
+  ["push", "cd - && gh repo edit acme/project --default-branch sage/t1-a"],
+  ["push", `cd - && git -C ${T} frobnicate origin`],
+  ["push", `timeout --foo 60 gh api -X PATCH repos/acme/project/git/refs/heads/main -f sha=${SHA}`],
+  ["push", "timeout --foo 60 gh api -X PUT repos/acme/project/contents/README.md -f message=m -f content=eA== -f branch=main"],
   // Logbook writes by a literal path: as written, through a link, after a cd and from ~.
   ["logbook", `rm ${L}/tasks.tsv`],
   ["logbook", `echo x > ${L}/tasks.tsv`],
@@ -207,10 +229,14 @@ const REFUSED = [
   ["stash", `git -C ${T} stash`, AGENT],
   // An agent's gh api runs only with GET: -XGET after -t is the template, so gh sends DELETE (F-T815-27).
   ["agent gh", "gh api -X DELETE repos/acme/project/git/refs/heads/x -t -XGET", AGENT],
+  ["agent gh", "op run -- gh pr close 1", AGENT],
+  ["agent gh", "arch -arm64 gh issue close 1", AGENT],
   // The state tool and the PR script: an agent runs only the tool's read commands.
   ["state", `node ${TOOL} task add --title x --size small --priority P2`, AGENT],
   ["state", `node ${PR_TOOL} create T1`, AGENT],
   ["state", `node -e 'import("${TOOL}")'`, AGENT],
+  ["state", `arch -arm64 node ${TOOL} task add --title x --size small --priority P2`, AGENT],
+  ["state", `op run -- node ${PR_TOOL} create T1`, AGENT],
 ];
 const PASSED = [
   [`echo '${FORM}'`],
@@ -231,6 +257,16 @@ const PASSED = [
   ["command -V ps", AGENT],
   ["gh -R acme/project pr view 12", CLAUDE],
   ["rm -rf build && chmod 644 ~/x.txt", CLAUDE],
+  // A wrapper's own work, a cd to the home folder and merge text pass (F-T815-30, F-T815-31).
+  ["op run -- npm test"],
+  ["arch -arm64 node scripts/build.mjs"],
+  ["cd ~/x && git status"],
+  ["cd ~ && gh pr view 1"],
+  ["echo 'gh pr merge 12'"],
+  ["which gh", AGENT],
+  ["ls -la /opt/homebrew/bin/gh", AGENT],
+  [`cp ${BASE}/gh ${BASE}/fake-gh`, AGENT],
+  [`arch -arm64 node ${TOOL} status`, AGENT],
 ];
 
 /** Runs a table's rows as each of their roles; returns the rows whose answer is not the expected one, and the counts. */

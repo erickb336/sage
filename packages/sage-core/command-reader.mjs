@@ -540,7 +540,9 @@ function readPrograms(command, dir, path, depth, found, uncertainDirectory = fal
           lookupEffect(key, true, false);
         }
       } else if (!viaExec && /^(?:cd|pushd|popd)$/.test(w)) {
-        const change = w === "cd" ? cdDirectory(args, dir, localHome, localCdpath, uncertain) : stackDirectory(w, args, dir, stack, localHome, localCdpath, uncertain);
+        // The shell expands a word's ~ with its own HOME, before a HOME= of this command applies (F-T815-31).
+        const to = args.map((word, i) => tilde(word, syntax[k + 1 + i]?.quoted, home));
+        const change = w === "cd" ? cdDirectory(to, dir, localHome, localCdpath, uncertain) : stackDirectory(w, to, dir, stack, localHome, localCdpath, uncertain);
         nextDir = change.dir; status = change.ok; nextStack = change.stack ?? stack;
         scope.directoryEffect = true;
         nextUncertain = scope.opaque || change.uncertain;
@@ -730,6 +732,9 @@ function walkFlow(flow, initial, execute, opaque = false) {
     functions: unique(states.map(state => state.functionChanges)) };
   return states;
 }
+
+/** A word that starts with an unquoted ~ or ~/, with the home folder in its place when that is a known absolute path. */
+const tilde = (word, quoted, home) => !quoted && /^~(?:\/|$)/.test(word) && typeof home === "string" && home.startsWith("/") ? home + word.slice(1) : word;
 
 function cdDirectory(args, dir, home, cdpath, uncertain) {
   let physical = false, k = 0;
