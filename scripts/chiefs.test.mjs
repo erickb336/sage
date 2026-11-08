@@ -1622,3 +1622,34 @@ for (const other of [codex, claude]) {
     assert.equal(create("create T1"), undefined, "an ended task bars nothing");
   });
 }
+
+test("T901: with a damaged findings.tsv in a shared logbook, sage-pr create of another chief's task refuses with the owner test, and the owning chief's create refuses too (fail closed)", (t) => {
+  const w = pushWorld(t);
+  w.sage(claude, "link", "--separate");
+  const mine = claude.chiefFor(w.project, SESSION.get(claude), w.env), theirs = codex.chiefFor(w.project, SESSION.get(codex), w.env);
+  w.sage(codex, "task", "add", "--title", "a", ...ADD, "--chief", theirs);
+  w.sage(codex, "task", "T1", "set", "branch=sage/t1-a", "--chief", theirs);
+  w.sage(claude, "task", "add", "--title", "b", ...ADD, "--chief", mine);
+  w.sage(claude, "task", "T2", "set", "branch=sage/t2-b", "--chief", mine);
+  const findings = join(claude.storeDir(w.project, w.env), "findings.tsv");
+  writeFileSync(findings, ""); // a > redirect: the integrity check fails on this table, not on tasks.tsv
+  const create = (line) => w.push(claude, `node ${PR_TOOL} ${line}`);
+  assert.equal(create("create T1"), `sage: T1 belongs to chief ${theirs} (codex), not to ${mine}. Nothing changed. Change only your own tasks. To take T1, ask ${theirs} to offer it to you, or open a takeover gate for the owner to answer: run sage gate replace T1 --to ${mine} --chief ${mine}.`);
+  assert.equal(create("create T2"), `sage: the hook cannot tell which chief owns the branch of T2 (${findings} is empty (0 bytes), but every table of a logbook has at least its header line, so its rows are lost. Ask the user to restore it from a copy. If the user accepts the loss, run: sage logbook repair --accept-loss findings --project <the project>. If no project uses ${dirname(findings)}, ask the user to remove it.), so it refuses sage-pr create.`);
+  assert.equal(create("merge T2"), undefined, "merge pushes nothing, so the owner test alone decides it");
+});
+
+for (const [name, tool] of [["Claude", claude], ["Codex", codex]]) {
+  test(`T901: a legacy ${name} logbook with a damaged table: a plain push and sage-pr create pass as before, because no shared-push read runs`, (t) => {
+    const w = pushWorld(t);
+    w.sage(tool, "init");
+    w.sage(tool, "task", "add", "--title", "a", ...ADD);
+    w.sage(tool, "task", "T1", "set", "branch=sage/t1-a");
+    writeFileSync(join(tool.storeDir(w.project, w.env), "findings.tsv"), "");
+    for (const hook of [claude, codex]) for (const agent of [false, true]) {
+      assert.equal(w.push(hook, `git -C ${w.tree} push -u origin sage/t1-a`, agent), undefined, `${providerOf(hook)}${agent ? "'s agent" : ""}: a legacy logbook`);
+      assert.match(w.push(hook, `git -C ${w.tree} push --force origin sage/t1-a`, agent) ?? "passed", /^sage: sage mode never force-pushes/, "the hook judges this push");
+    }
+    if (tool === claude) assert.equal(w.push(claude, `node ${PR_TOOL} create T1`), undefined, "sage-pr create: the script gives its own refusal");
+  });
+}

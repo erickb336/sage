@@ -1453,18 +1453,27 @@ function chiefIdProblem(input) {
 /**
  * The PR script reads no session, and writes the task's PR number in the name of the task's chief. So this hook, which
  * knows the session, refuses its create and merge for a chief that does not own the task, in the state tool's own words.
- * create pushes the task's branch, so it takes the push rule of a shared logbook too (T822).
+ * create pushes the task's branch, so it takes the push rule of a shared logbook too (T822). The owner test reads only
+ * the task list, so it runs first; the branch's read covers every table, and when it fails, create refuses (T901).
  */
 function chiefPrProblem(input) {
   if (input.tool_name !== "Bash") return undefined;
   const [verb, task] = chiefWriteWords(input, PR_TOOL) ?? [];
   if (!["create", "merge"].includes(verb)) return undefined;
+  let project, bar, shared;
   try {
-    const project = realpathSync.native(resolve(input.cwd ?? process.cwd(), process.env.SAGE_PROJECT ?? "."));
-    const branch = verb === "create" && stateTool.logbookView(project).task(task)?.branch;
-    return stateTool.sessionBar(project, task, input.session_id) || (branch && stateTool.branchBar(project, branch, input.session_id)) || undefined;
+    project = realpathSync.native(resolve(input.cwd ?? process.cwd(), process.env.SAGE_PROJECT ?? "."));
+    bar = stateTool.sessionBar(project, task, input.session_id);
+    shared = stateTool.locate(project).shared;
   } catch {
-    return undefined; // a logbook that cannot be read: the script gives its own refusal
+    return undefined; // a task list that cannot be read: the script gives its own refusal
+  }
+  if (bar || verb !== "create" || !shared) return bar || undefined;
+  try {
+    const branch = stateTool.logbookView(project).task(task)?.branch;
+    return (branch && stateTool.branchBar(project, branch, input.session_id)) || undefined;
+  } catch (e) {
+    return `the hook cannot tell which chief owns the branch of ${task} (${e?.message ?? e}), so it refuses sage-pr create.`;
   }
 }
 function chiefVerdictProblem(input, slots) {
