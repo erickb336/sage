@@ -169,3 +169,7 @@ After the owner chooses approve, record that answer with `gate_answer`, then cal
 The limit is `max_rounds + extra`. One approval permits the next round above the greater of spent rounds and that limit. This example permits round five; round six holds again. The task keeps its cumulative rounds, PR, branch, earlier allowances and review minimum.
 
 Missing, declined, wrong-task, stale, malformed or used approvals refuse before any changes. A repeated CLI or `task_set` call after success refuses and adds nothing. An exact native task-update retry returns its saved result. After an uncertain result, read the task before a new request. The allowance and used gate IDs share one task-row write.
+
+### An extra round in autopilot
+
+While autopilot is on for your session, you give the next round past `max_rounds` yourself, up to 5 rounds in all, with the reason: the `round` tool with `task: T1` and `why`, the reason (CLI: `round T1 --why "<reason>"`). It works from the round hold or before it, and writes a decision row with the reason. Without `--why`, with autopilot off, or for round 6 and later, the round hold and the owner's gate above stay. Only the chief gives such a round: a lead's `round` takes no `why`.

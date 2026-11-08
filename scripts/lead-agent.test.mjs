@@ -428,30 +428,17 @@ test("T301 F-T301-59: while a medium fix key of the round is still open, the unc
     leadRepeatFix("F-T1-3"), leadRepeatFix("F-T1-4"), leadRound()], p);
   assert.match(printed, /^T1 replan: round 1 did not fix F-T1-1,F-T1-2\./, "the round fixed none of its keys: a replan, as without the low key");
   assert.equal(findingOf(p, "F-T1-2").at(-1), "open", "the low key waits with the medium one");
-  assert.match(BLOCKED_STEP, /While a medium or high finding of the task is open and triaged fix[^\n]*it joins the next round with that finding: keep it open\./, "step 6 keeps the low key while a medium or high finding is open");
+  assert.match(BLOCKED_STEP, /\*\*An unconfirmed low fix\*\*[^\n]*never moves: the lead runs `sage round` for it like any unconfirmed fix/, "step 6 keeps the low key for the next round");
 });
 
-test("T301 F-T301-35, F-T301-68: a low fix that the re-check did not confirm, with no medium or high finding open, goes to a follow-up task that the sage frames; the sage dismisses the key with its reason, triages its low repeat fix and moves it, and the fresh lead reaches verifying", () => {
+test("T804 (was F-T301-35): a low fix that the re-check did not confirm, with no medium or high finding open, gets the next round from the lead; the sage frames no follow-up for it", () => {
   const p = project();
-  const { moves } = play([...REPAIR(true), "< R6 FINDINGS: - K3 low a.mjs:2 the log line still has no label",
+  const { printed } = play([...REPAIR(true), "< R6 FINDINGS: - K3 low a.mjs:2 the log line still has no label",
     "$ sage finding add T1 --source code-reviewer --severity low --summary=log-line-still-has-no-label --run R6 --class copy", "→ F-T1-3 open · low · T1", "$ sage run done R6 --status done --tokens 1",
-    "$ sage finding close T1 F-T1-1",
-    "< lead-T1 blocked: - F-T1-3 low a.mjs:2 the log line still has no label, repeat of F-T1-2",
-    "! sage run done R1 --status blocked --tokens 1", repeatFix("F-T1-3"),
-    sageSays("sage task <T> set state=reviewing"), sageSays("sage task add", { "<title>": "label the log line", "<size>": "small" }, "unconfirmed low fix"), "→ T2",
-    sageSays("sage finding triage <T> <K> dismiss", { "<K>": "F-T1-2", "<n>": "2" }, "unconfirmed low fix"),
-    sageSays("sage finding move <T> <K> --to", { "<K>": "F-T1-3", "<title>": "label the log line again" }, "unconfirmed low fix"), "→ F-T1-3 moved to T3 as F-T3-1",
-    "! sage run add T1 --role lead", "→ R7 running · lead on T1", "! start lead-T1",
-    ...FRESH, "$ git rev-parse sage/t1-example", "$ sage run add T1 --role code-reviewer", "→ R8 running · code-reviewer on T1", "$ sage run add T1 --role qa", "→ R9 running · qa on T1",
-    "> R8 sage:code-reviewer", "> R9 sage:qa", "< R8 CLEAN: none", "< R9 PASS: none", "$ sage run done R8 --status done --tokens 1", "$ sage verdict T1 --sha <sha> --kind review-clean --cycle 1 --pr 12 --run R8",
-    "$ sage run done R9 --status done --tokens 1", "$ sage verdict T1 --sha <sha> --kind qa-pass --cycle 1 --pr 12 --run R9",
-    "$ gh pr checks 12", "→ build pass", "$ sage task T1 set state=verifying"], p);
-  assert.match(p.chief("task", "T1"), /^T1 verifying /, "the fresh lead reaches verifying");
-  assert.deepEqual(moves, ["repairing>reviewing"], "the sage's one state move");
-  assert.deepEqual(findingOf(p, "F-T1-2").slice(-3), ["dismiss", "unconfirmed low fix, carried by follow-up T2", "dismissed"], "the key is carried by the follow-up");
-  assert.deepEqual(findingOf(p, "F-T3-1").slice(-2), ["", "open"], "the low repeat is never dismissed with the key: it is open on its own follow-up task");
-  assert.doesNotMatch(BLOCKED_STEP, /same dismissal/, "step 6 gives a repeat no dismissal (F-T301-68, F-T301-70)");
-  assert.match(p.chief("task", "T2"), /^T2 framed /, "the follow-up task is framed");
+    "$ sage finding close T1 F-T1-1", leadRepeatFix("F-T1-3"), leadRound()], p);
+  assert.match(printed, /^T1 repairing · round 2 of 3 · fix F-T1-2,F-T1-3 · re-run code-reviewer/, "a round of low fix keys starts");
+  assert.deepEqual(findingOf(p, "F-T1-2").slice(-3), ["fix", "", "open"], "the low key is not dismissed");
+  assert.doesNotMatch(BLOCKED_STEP, /carried by follow-up/, "step 6 has no follow-up path for an unconfirmed low fix");
 });
 
 test("T301 F-T301-65: in replan, a lead's report cannot steer the sage into moving a fix key: the move waits for the user's answer to the gate of step 6", () => {

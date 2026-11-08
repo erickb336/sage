@@ -13,7 +13,7 @@ import { shellCommands } from "../plugins/sage/core/command-reader.mjs";
 import { landingRule } from "../plugins/sage/core/board-view.mjs";
 import * as claude from "../plugins/sage/skills/sage/sage.mjs";
 import { tool as codex } from "../plugins/sage-codex/skills/sage/sage.mjs";
-import { stateKey } from "../plugins/sage-codex/hooks/principles-hook.mjs";
+import { modeDirectory, stateKey } from "../plugins/sage-codex/hooks/principles-hook.mjs";
 import { backed, reportFor } from "./verdict-backing.mjs";
 
 const at = (path) => fileURLToPath(new URL(path, import.meta.url));
@@ -1717,5 +1717,92 @@ for (const [name, tool] of [["Claude", claude], ["Codex", codex]]) {
       assert.equal(w.push(claude, `node ${PR_TOOL} ${verb} T1`), undefined, `sage-pr ${verb}: the hook reads no table of a legacy logbook`);
       assert.equal(w.push(claude, `SAGE_PROJECT=${w.project} node ${PR_TOOL} ${verb} T1`, false, { cwd: w.base }), undefined, `SAGE_PROJECT=<project> sage-pr ${verb}`);
     }
+  });
+}
+
+// T804 (owner 2026-11-07, T668 Q2 and Q5): in autopilot the chief gives extra repair rounds itself, each with a reason in a
+// decision row, up to 5 rounds in all; with autopilot off, or past 5, the round hold and the owner's gate stay. A round of
+// low fix findings only starts like any round. Autopilot is read from the session of the chief, as the merge rule reads it.
+/** Turns autopilot on or off for the session of C1 (session-a), in the file where the provider's hook keeps it. */
+function autopilot(w, name, on) {
+  const [dir, file] = name === "Claude" ? [join(w.env.CLAUDE_CONFIG_DIR, "sage", ".hooks"), "session-a.json"] : [modeDirectory(w.env), `${stateKey({ session_id: "session-a" })}.json`];
+  mkdirSync(dir, { recursive: true, mode: 0o700 });
+  writeFileSync(join(dir, file), JSON.stringify({ sage: true, autopilot: on }), { mode: 0o600 });
+}
+/** T1 at reviewing after `rounds` rounds, each on a new medium finding; then a new medium finding triaged fix for the next one. */
+function spent(w, rounds) {
+  w.owner("task", "add", "--title", "a", ...ADD);
+  for (const state of ["briefed", "building", "reviewing"]) w.owner("task", "T1", "set", `state=${state}`);
+  w.owner("run", "add", "T1", "--role", "qa");
+  w.owner("run", "done", "R1", "--status", "done", "--tokens", "1");
+  for (let n = 1; n <= rounds + 1; n++) {
+    if (n > 1) w.owner("finding", "close", "T1", `F-T1-${n - 1}`);
+    w.owner("finding", "add", "T1", ...QA);
+    w.owner("finding", "triage", "T1", `F-T1-${n}`, "fix");
+    if (n <= rounds) assert.match(w.owner("round", "T1"), new RegExp(`^T1 repairing · round ${n} of 3 `));
+    if (n <= rounds) w.owner("task", "T1", "set", "state=reviewing");
+  }
+}
+/** The next round's finding: the last round's key closed, and a new medium finding triaged fix. */
+function nextFix(w, n) {
+  w.owner("task", "T1", "set", "state=reviewing");
+  w.owner("finding", "close", "T1", `F-T1-${n - 1}`);
+  w.owner("finding", "add", "T1", ...QA);
+  w.owner("finding", "triage", "T1", `F-T1-${n}`, "fix");
+}
+const decisions = (w) => w.cells("decisions").trim().split("\n").slice(1).map((l) => l.split("\t").slice(1).join("\t"));
+
+for (const [name, own, other] of pairs) {
+  test(`T804 ${name}: with autopilot on, the chief gives rounds 4 and 5 with a reason, each in a decision row, and round 6 holds`, (t) => {
+    const w = world(t, own, other);
+    autopilot(w, name, true);
+    spent(w, 3);
+    assert.equal(w.owner("round", "T1"), "T1 held: 3 repair rounds did not make it clean. Stop and ask the user.", "an extra round needs a reason");
+    assert.equal(w.owner("round", "T1", "--why", "the fix is close: one test left"), "T1 repairing · round 4 of 4 · fix F-T1-4 · re-run qa on the repair's diff", "from the round hold");
+    assert.equal(row(w.cells("tasks"), "T1").hold, "");
+    assert.deepEqual(decisions(w).slice(-1), ["T1\tround 4 given by C1 on autopilot\tthe fix is close: one test left"]);
+    nextFix(w, 5);
+    assert.equal(w.owner("round", "T1", "--why", "a new edge case"), "T1 repairing · round 5 of 5 · fix F-T1-5 · re-run qa on the repair's diff", "from reviewing");
+    assert.deepEqual(decisions(w).slice(-1), ["T1\tround 5 given by C1 on autopilot\ta new edge case"]);
+    nextFix(w, 6);
+    assert.equal(w.owner("round", "T1", "--why", "one more"), "T1 held: 5 repair rounds did not make it clean. Stop and ask the user.");
+    assert.throws(() => w.owner("round", "T1", "--why", "one more"), { message: "T1 stays held: round 6 is past the 5 rounds that the chief may give, so only the owner's gate gives round 6. Nothing changed." });
+    assert.equal(row(w.cells("tasks"), "T1").extra, "2");
+    assert.equal(decisions(w).filter((d) => / on autopilot\t/.test(d)).length, 2, "no row for round 6");
+  });
+
+  test(`T804 ${name}: with autopilot off, round 4 holds as before, also with a reason, and a reason from the hold changes nothing`, (t) => {
+    const w = world(t, own, other);
+    autopilot(w, name, false);
+    spent(w, 3);
+    assert.equal(w.owner("round", "T1", "--why", "the fix is close"), "T1 held: 3 repair rounds did not make it clean. Stop and ask the user.");
+    const before = w.tables();
+    assert.throws(() => w.owner("round", "T1", "--why", "the fix is close"), { message: "T1 stays held: autopilot is off for this chief's session, so only the owner's gate gives round 4. Nothing changed." });
+    assert.throws(() => w.owner("round", "T1"), /T1 is held\. A repair starts from reviewing, verifying or repairing, or from this round hold with round T1 --why "<reason>" while autopilot is on\./);
+    assert.equal(w.tables(), before);
+    assert.equal(row(w.cells("tasks"), "T1").state, "held");
+  });
+
+  test(`T804 ${name}: autopilot on in another chief's session gives this chief no extra round, and a lead never gives one`, (t) => {
+    const w = world(t, own, other);
+    const [dir, file] = name === "Claude" ? [modeDirectory(w.env), `${stateKey({ session_id: "session-b" })}.json`] : [join(w.env.CLAUDE_CONFIG_DIR, "sage", ".hooks"), "session-b.json"];
+    mkdirSync(dir, { recursive: true, mode: 0o700 });
+    writeFileSync(join(dir, file), JSON.stringify({ sage: true, autopilot: true }), { mode: 0o600 });
+    spent(w, 3);
+    autopilot(w, name, false);
+    w.owner("run", "add", "T1", "--role", "lead");
+    assert.throws(() => w.lead("R2", "round", "T1", "--why", "r"), { message: "only the chief gives an extra repair round, so a lead runs round T1 with no --why. Nothing changed." });
+    assert.match(w.owner("round", "T1", "--why", "r"), /^T1 held: 3 repair rounds/, "C2's autopilot is not C1's");
+  });
+
+  test(`T804 ${name}: a round of low fix findings only starts, and counts like any round`, (t) => {
+    const w = world(t, own, other);
+    w.owner("task", "add", "--title", "a", ...ADD);
+    for (const state of ["briefed", "building", "reviewing"]) w.owner("task", "T1", "set", `state=${state}`);
+    w.owner("run", "add", "T1", "--role", "qa");
+    w.owner("finding", "add", "T1", "--source", "qa", "--severity", "low", "--summary", "a typo", "--run", "R1", "--class", "other");
+    w.owner("finding", "triage", "T1", "F-T1-1", "fix");
+    assert.equal(w.owner("round", "T1"), "T1 repairing · round 1 of 3 · fix F-T1-1 · re-run qa on the repair's diff");
+    assert.equal(row(w.cells("tasks"), "T1").round, "1");
   });
 }
