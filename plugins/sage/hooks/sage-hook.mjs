@@ -27,8 +27,9 @@
 //     the commands of LEAD_WRITES on its own task, from Bash, as one plain command, with no --project and no
 //     SAGE_PROJECT (leadProblem, T273). An agent never runs the PR script, never a command outside the sandbox, never
 //     writes under the sage root with a file tool (canonical paths), and never runs a shell write whose literal path is
-//     in the sage root or the shared root (core's logbookWrite, T815). A forgery by a pattern, a variable or code is a
-//     limit of the hook: the sandbox (T80) is the full guard for shell writes.
+//     in the sage root or the shared root, or that removes or moves a folder that holds one (core's logbookWrite,
+//     T815). A forgery by a variable, code or a pattern after its literal part is a limit of the hook: the sandbox
+//     (T80) is the full guard for shell writes.
 //   - Only sage.mjs changes the logbook (chiefProblem): the chief's own file tools and shell writes never change it.
 //   - An agent (a sage agent, or any subagent in sage mode; never the chief) never runs git stash, and never runs a
 //     program that lists or signals processes unless that program is a fake in the temp folder (agentProblem).
@@ -535,6 +536,14 @@ function githubGet(path, deadline) {
  * characters, separators other than the plain space (such as U+2028), and quote characters (also the fullwidth U+FF02).
  */
 const quoted = (name) => `"${[...String(name).replace(/(?! )[\p{Cc}\p{Cf}\p{Z}"'`‘-‟＂]/gu, "")].slice(0, 60).join("")}"`;
+/**
+ * A word of a command line for a refusal, cleaned as quoted does: up to 160 characters whole, and a longer word as its
+ * first 60 and its last 90 characters with "…" between, so that the root part that caused the refusal stays visible (F-T815-14).
+ */
+const quotedWord = (word) => {
+  const text = [...String(word).replace(/(?! )[\p{Cc}\p{Cf}\p{Z}"'`‘-‟＂]/gu, "")];
+  return `"${text.length <= 160 ? text.join("") : `${text.slice(0, 60).join("")}…${text.slice(-90).join("")}`}"`;
+};
 
 /** The body of a 200 answer as JSON, or {} for another status. It throws a fixed reason, never the body's text. */
 function json({ status, body }) {
@@ -638,7 +647,7 @@ function moveCheck({ owner, repo, branch }) {
  * command (SHELL_TOOLS), not only Bash, and judges the programs that a command line runs (core's stateToolRun, T815).
  */
 const READS = { status: () => true, "merge-check": () => true, logbook: (pos) => pos[0] !== "repair", standing: (pos) => pos[0] !== "add", config: (pos) => !pos.length };
-const READ_FORM = "node <path to skills/sage/sage.mjs> <status, merge-check, logbook, standing or config> [--project <path>], with config with no key=value";
+const READ_FORM = "node <path to skills/sage/sage.mjs> <status, merge-check, logbook, standing or config> [--project <path>] (config without a key=value)";
 const PLAIN = /^[\w./=:@,+-]+(?:[ \t]+[\w./=:@,+-]+)*$/;
 /** All the text of a tool call's input, one string per field. */
 const fields = (v) => (typeof v === "string" ? [v] : v && typeof v === "object" ? Object.values(v).flatMap(fields) : []);
@@ -720,7 +729,7 @@ function chiefProblem(input) {
     if (/^too many links in /.test(e?.message ?? "")) return undefined;
     throw e;
   }
-  return word === undefined ? undefined : `the chief never writes, moves or removes a logbook file from the shell (${quoted(word)} is in the sage root or the shared root).`;
+  return word === undefined ? undefined : `the chief never writes, moves or removes a logbook file from the shell (${quotedWord(word)} is in the sage root or the shared root, or holds one).`;
 }
 /** The word with which a command tool's input writes into the sage root or the shared root, or undefined. */
 const shellWrite = (ti, cwd) => runFields(ti).map((text) => core.logbookWrite(text, cwd, rootsOf(false))).find((word) => word !== undefined);
@@ -1284,7 +1293,7 @@ function agentCheck(input, file, slots) {
     try {
       runs = core.stateToolRun(text, cwd);
     } catch (e) {
-      if (/sage(?:-pr)?\.mjs/i.test(bare(text))) return `the hook cannot read this command (${e?.message ?? e}), and it names the state tool or the PR script, so it refuses it. ${READ_WAY}`;
+      if (/sage(?:-pr)?\.mjs/i.test(bare(text))) return `${core.unreadable(e, "the state tool or the PR script")} ${READ_WAY}`;
       continue;
     }
     for (const run of runs) {
@@ -1303,7 +1312,7 @@ function agentCheck(input, file, slots) {
     }
   }
   const word = texts.map((t) => core.logbookWrite(t, cwd, roots)).find((w) => w !== undefined);
-  return word === undefined ? undefined : `an agent never writes, moves or removes a logbook file from the shell: ${quoted(word)} is in the sage root or the shared root.`;
+  return word === undefined ? undefined : `an agent never writes, moves or removes a logbook file from the shell: ${quotedWord(word)} is in the sage root or the shared root, or holds one.`;
 }
 /**
  * The board password rule (T229): the board password is the owner's alone. No session and no agent, in any mode:
@@ -1411,8 +1420,8 @@ function boardCommands(text, cwd, uncertain) {
     let dir = cwd;
     for (const { words, bodies, redirects: own = [], host } of commands) {
       const at = host ? undefined : dir;
-      if (/^(?:cd|pushd)$/.test(words[0] ?? "") && !host) {
-        const to = words.length === 2 && !/[$`*?[{]|^~[^/]/.test(words[1]) ? words[1].replace(/^~(?=\/|$)/, home) : undefined;
+      if (/^(?:cd|pushd|popd)$/.test(words[0] ?? "") && !host) { // popd and any other form leave the folder unknown
+        const to = words[0] !== "popd" && words.length === 2 && !/[$`*?[{]|^~[^/]/.test(words[1]) ? words[1].replace(/^~(?=\/|$)/, home) : undefined;
         dir = to === undefined ? undefined : isAbsolute(to) ? to : dir && from(dir, to);
       }
       runs.push({ word: words[0] ?? "", args: words.slice(1), stdin: bodies, dir: at });
@@ -1604,10 +1613,11 @@ export function agentProblem(command, cwd, path = process.env.PATH ?? "", option
     runs = programsRun(command, cwd, path, options);
   } catch (e) {
     if (e.code === "SAGE_POWERSHELL_LAUNCH") return e.message;
-    // A line that the hook cannot read is refused only when its text names gh, a stash or a process program.
-    const text = bare(command);
-    const why = /\bgh(?:\.exe)?\b/i.test(text) ? NO_GH : gitThen(text, "stash") ? NO_STASH : PROCESS_TEXT.test(text) ? NO_PROCESS(PROCESS_TEXT.exec(text)[0].replace(/^\W/, "")) : undefined;
-    return why && `${why} (The hook cannot read this command: ${e.message}.)`;
+    // A line that the hook cannot read is refused only when its text names gh, a stash or a process program: the cause
+    // and the way forward first, then the rule (F-T815-9).
+    const text = bare(command), program = PROCESS_TEXT.exec(text)?.[0].replace(/^\W/, "");
+    const [what, why] = /\bgh(?:\.exe)?\b/i.test(text) ? ["gh", NO_GH] : gitThen(text, "stash") ? ["git stash", NO_STASH] : program ? [`a process program (${quoted(program)})`, NO_PROCESS(program)] : [];
+    return why && `${core.unreadable(e, what)} ${why[0].toUpperCase()}${why.slice(1)}`;
   }
   const gh = core.ghRuns(command, cwd, path, options).find((run) => !core.agentGh(run));
   if (gh) return `${NO_GH} ${quoted(["gh", gh.group, gh.group === "api" ? gh.method : gh.sub].filter(Boolean).join(" "))} is not one of them.`;

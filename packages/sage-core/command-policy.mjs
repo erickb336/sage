@@ -27,8 +27,50 @@ export const gitSubcommand = (words, k) => {
 const GH_VALUE = /^(?:-R|--repo)$/;
 /** gh's command words: its words without options and their values, so "gh -R o/r pr view 1" gives pr, view, 1. */
 export const ghWords = (args) => args.filter((a, k) => !a.startsWith("-") && !GH_VALUE.test(args[k - 1] ?? ""));
-/** A pull request's merge path of the REST API, or a GraphQL mutation that merges, in a word of a request. */
-const apiMerges = (words) => words.some((w) => /(?:^|\/)pulls\/[^/\s?#]+\/merge(?![\w-])/i.test(w) || /\b(?:mergePullRequest|enablePullRequestAutoMerge|mergeBranch)\b/.test(w));
+/**
+ * The option that stands before gh's first command word, or between its first two (other than -R or --repo and its
+ * value), or undefined (F-T815-5). gh lets an option take the next word as its value, so "gh pr -b view merge 12" runs
+ * gh pr merge: the hook cannot tell gh's command words then. A command with no subcommand (GH_LEAF; after api comes an
+ * endpoint) counts only the options before it.
+ */
+export function ghOptionBefore(args) {
+  let words = 0;
+  for (let k = 0; k < args.length && words < 2; k++) {
+    if (GH_VALUE.test(args[k])) k++;
+    else if (/^-R.|^--repo=/.test(args[k])) continue;
+    else if (args[k].startsWith("-")) return args.slice(k + 1).some((a) => !a.startsWith("-")) ? args[k] : undefined;
+    else if (++words === 1 && GH_LEAF.test(args[k])) return undefined;
+  }
+  return undefined;
+}
+/** gh's commands that take no subcommand: their next word is an argument, not a command word. */
+const GH_LEAF = /^(?:api|browse|status|version|completion|help)$/;
+/** gh api's request method: its -X or --method, also in a cobra bundle (-iX DELETE, -iXDELETE), else POST with a field or an input, else GET. */
+export function ghApiMethod(args) {
+  let method, payload = false;
+  for (let k = 0; k < args.length; k++) {
+    const a = args[k].replace(/^-[ih]+(?=[^-])/, "-"); // cobra bundles flags: -iX DELETE is -i -X DELETE
+    if (a === "-X" || a === "--method") method = args[++k];
+    else if (/^-X./.test(a)) method = a.slice(2).replace(/^=/, "");
+    else if (a.startsWith("--method=")) method = a.slice(9);
+    else if (/^(?:-[fF]|--field|--raw-field|--input)(?:$|=)|^-[fF]./.test(a)) payload = true;
+  }
+  return String(method ?? (payload ? "POST" : "GET")).toUpperCase();
+}
+/**
+ * The refusal of a line that the reader cannot read and whose text names what a rule guards (T815): the cause and the
+ * way forward first, in the same words for every rule, then what the text names. The rule's own text follows it.
+ */
+export const unreadable = (error, what) => {
+  const cause = String(error?.message ?? error);
+  const way = /nested more than/.test(cause) ? "Run the inner command as a command of its own." : "Close each quote, substitution and heredoc.";
+  return `the hook cannot read this command (${cause}), so it refuses it. ${way} Its text names ${what}.`;
+};
+/**
+ * A merge path of the REST API (a pull request's pulls/<n>/merge, or a repository's merges, which merges a branch into a
+ * base), or a GraphQL mutation that merges, in a word of a request.
+ */
+const apiMerges = (words) => words.some((w) => /(?:^|\/)pulls\/[^/\s?#]+\/merge(?![\w-])|(?:^|\/)(?:repos\/[^/\s?#]+\/[^/\s?#]+|repositories\/\d+)\/merges(?![\w-])/i.test(w) || /\b(?:mergePullRequest|enablePullRequestAutoMerge|mergeBranch)\b/.test(w));
 /** Does a gh run merge: gh pr merge, or gh api with a merge path or a merge mutation in its words or its input? */
 const ghMerges = (args, stdin = []) => {
   const [group, sub] = ghWords(args);
@@ -61,11 +103,16 @@ export function createCommandPolicy({ stateToolPath, prPattern = PR } = {}) {
   if (stateToolPath !== undefined && (typeof stateToolPath !== "string" || !isAbsolute(stateToolPath) || /[\x00-\x1f\x7f]/.test(stateToolPath))) {
     throw new TypeError("stateToolPath must be an absolute path without control characters");
   }
-  /** Expansion in a command word can hide git, gh, push or merge. Arguments keep their ordinary braces and globs. */
+  /**
+   * Expansion in a command word can hide git, gh, push or merge, and so can an option before or between gh's command
+   * words (ghOptionBefore). Arguments keep their ordinary braces and globs.
+   */
   function expansionProblem(command, cwd, options = {}) {
     const expansion = /[{[*?]/;
     const expands = (word) => !/^(?:[{}]|\[\[?)$/.test(word) && expansion.test(word); // literal groups and test commands
-    const reason = "shell expansion can hide the command. Use literal program and git or gh subcommand words, without {, [, * or ?.";
+    // The word as the command wrote it, in its own capitals, without control characters or quotes (F-T815-10).
+    const shown = (word) => `"${String(word).replace(/[\x00-\x1f\x7f"]/g, "")}"`;
+    const reason = (word) => `shell expansion in ${shown(word)} can hide the command. Use literal program and git or gh subcommand words, without {, [, * or ?.`;
     let runs;
     try {
       runs = programsRun(command, cwd, undefined, options);
@@ -76,15 +123,17 @@ export function createCommandPolicy({ stateToolPath, prPattern = PR } = {}) {
       return e.code === "SAGE_POWERSHELL_LAUNCH" ? e.message : undefined;
     }
     for (const { word, args } of runs) {
-      if (expands(word)) return reason;
+      if (expands(word)) return reason(word);
       const name = programName(word);
-      if (name === "git" && expansion.test(gitSubcommand(args, 0))) return reason;
+      if (name === "git" && expansion.test(gitSubcommand(args, 0))) return reason(gitSubcommand(args, 0));
       if (name !== "gh") continue;
+      const option = ghOptionBefore(args);
+      if (option) return `gh reads ${shown(option)} before or between its command words, and an option there can take the next word as its value, so the hook cannot tell which command gh runs. Write gh's command words first, then the options, for example gh pr view 12 --json state. Only -R <owner/repo> or --repo <owner/repo> may come before them.`;
       let k = 0;
       for (let n = 0; n < 2; n++) {
         while (args[k]?.startsWith("-")) k += /^(?:-R|--repo)$/.test(args[k]) ? 2 : 1;
         const sub = args[k++] ?? "";
-        if (expansion.test(sub)) return reason;
+        if (expansion.test(sub)) return reason(sub);
         if (n === 0 && sub !== "pr") break; // api's next word is an endpoint, not a subcommand
       }
     }
@@ -109,7 +158,7 @@ export function createCommandPolicy({ stateToolPath, prPattern = PR } = {}) {
     try {
       ({ programs } = programsRun(command, cwd, undefined, { contextEvidence: true }));
     } catch (e) {
-      return mentionsMerge(bare(command)) ? { problem: `${CANNOT} (The hook cannot read the command: ${e.message}.)` } : undefined;
+      return mentionsMerge(bare(command)) ? { problem: `${unreadable(e, "a merge")} Merge only with ${MERGE_FORM}, as a command of its own.` } : undefined;
     }
     for (const { run, wrapper, shellFunction } of programs) {
       if (wrapper || shellFunction) continue;

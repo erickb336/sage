@@ -6,7 +6,7 @@ export { readLocalGit } from "./local-git.mjs";
 export { checkoutContains, resolveCheckoutPath, verifiedCheckout } from "./checkout-path.mjs";
 export { applyPrinciples, MOMENTS, fingerprint } from "./principles.mjs";
 export { shellCommands, programsRun, commandText } from "./command-reader.mjs";
-export { createCommandPolicy, mentionsMerge, gitSubcommand, programName } from "./command-policy.mjs";
+export { createCommandPolicy, mentionsMerge, gitSubcommand, programName, unreadable } from "./command-policy.mjs";
 export { createPushPolicy, gitHubRepository, gitInternalPath } from "./push-policy.mjs";
 export { logbookWrite, stateToolRun, ghRuns, AGENT_GH, agentGh } from "./command-runs.mjs";
 export { PR, pullRequestHead } from "./pull-request.mjs";

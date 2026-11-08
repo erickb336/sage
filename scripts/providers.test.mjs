@@ -163,7 +163,7 @@ test("T51: external command operands retain executable identity and expansion re
     ], "prospective operands must not become executable evidence");
     const policy = api.createCommandPolicy();
     for (const command of [sample, "env command -p command -- git pu{s..s}h origin topic", "env command -- gh pr m?rg* 1"])
-      assert.match(policy.expansionProblem(command, f.dir), /shell expansion can hide the command/, command);
+      assert.match(policy.expansionProblem(command, f.dir), /shell expansion in "[^"]+" can hide the command/, command);
     for (const command of ["env command printf '%s' 'g{i..i}t push origin HEAD:main'", "env command git log --format='{x}'",
       "env command gh api 'repos/{owner}/{repo}/pulls?state=open'", "env command eval 'g{i..i}t push origin HEAD:main'", "env command -v 'g*'",
       "command() { printf '%s' \"$@\"; }; command 'g{i..i}t' push origin HEAD:main"])
@@ -883,8 +883,8 @@ test("shared command extraction preserves T199 and harmless arguments in both is
     assert.equal(typeof api.createCommandPolicy, "function");
     const tool = join(f.plugin, "skills/sage/sage.mjs");
     const policy = api.createCommandPolicy({ stateToolPath: tool });
-    for (const command of ["g{h,h} pr view 1", "git pu{s,s}h origin topic", "gh pr {m,m}erge 1"]) {
-      assert.match(policy.expansionProblem(command, f.dir), /shell expansion can hide the command/);
+    for (const [command, word] of [["g{h,h} pr view 1", "g{h,h}"], ["git pu{s,s}h origin topic", "pu{s,s}h"], ["gh pr {m,m}erge 1", "{m,m}erge"]]) {
+      assert.equal(policy.expansionProblem(command, f.dir), `shell expansion in "${word}" can hide the command. Use literal program and git or gh subcommand words, without {, [, * or ?.`, "F-T815-10: the refusal names its word");
     }
     // T815: text piped into a shell is a limit of the hook.
     for (const command of ["echo '{sample}'", "git add '*.mjs'", "gh pr view 1", "[ -f '*.txt' ]", "[[ -f '*.txt' ]]", "printf 'gh pr {m,m}erge 1' | cat | sh"]) {
@@ -990,17 +990,60 @@ test("T42: shared expansion rules recognize executable spelling without changing
     const api = await import(pathToFileURL(join(f.plugin, "core/index.mjs")));
     const policy = api.createCommandPolicy();
     for (const executable of ["GIT", "Git.exe", "/usr/bin/GIT", "'C:\\Tools\\Git.EXE'"]) {
-      assert.match(policy.expansionProblem(`${executable} p* origin main`, f.dir), /shell expansion can hide the command/, executable);
+      assert.match(policy.expansionProblem(`${executable} p* origin main`, f.dir), /shell expansion in "p\*" can hide the command/, executable);
       assert.equal(policy.expansionProblem(`${executable} status 'Topic*'`, f.dir), undefined, executable);
     }
     for (const executable of ["GH", "Gh.exe", "/usr/bin/GH", "'C:\\Tools\\GH.EXE'"]) {
-      assert.match(policy.expansionProblem(`${executable} pr m*`, f.dir), /shell expansion can hide the command/, executable);
-      assert.match(policy.expansionProblem(`${executable} p? merge`, f.dir), /shell expansion can hide the command/, executable);
+      assert.match(policy.expansionProblem(`${executable} pr m*`, f.dir), /shell expansion in "m\*" can hide the command/, executable);
+      assert.match(policy.expansionProblem(`${executable} p? merge`, f.dir), /shell expansion in "p\?" can hide the command/, executable);
+      assert.match(policy.expansionProblem(`${executable} pr CL*SE 1`, f.dir), /shell expansion in "CL\*SE" can hide the command/, "F-T815-10: in the command's own capitals");
       assert.equal(policy.expansionProblem(`${executable} pr view 'Topic*'`, f.dir), undefined, executable);
       assert.equal(policy.expansionProblem(`${executable} api 'repos/{owner}/{repo}/issues'`, f.dir), undefined, executable);
       assert.match(policy.mergeRun(`${executable} pr merge 12 --squash --delete-branch --match-head-commit ${"a".repeat(40)}`, f.dir)?.problem, /merge only with/, executable);
     }
     assert.deepEqual(policy.mergeRun(`gh pr merge 12 --squash --delete-branch --match-head-commit ${"a".repeat(40)}`, f.dir), { pr: "12", sha: "a".repeat(40) });
+  }
+});
+
+test("T815 repair: core's readers in both bundles (F-T815-4, -5, -6, -7, -9, -16)", async t => {
+  for (const provider of ["claude", "codex"]) {
+    const f = isolated(t, provider);
+    const api = await import(pathToFileURL(join(f.plugin, "core/index.mjs")));
+    const home = join(f.dir, "home"), root = join(home, ".claude", "sage"), shared = join(home, ".sage"), work = join(f.dir, "work"), link = join(f.dir, "link");
+    for (const folder of [join(root, "p"), shared, work]) mkdirSync(folder, { recursive: true });
+    symlinkSync(root, link);
+    const write = (command) => api.logbookWrite(command, work, [root, shared], home);
+    // F-T815-4: a remove, a move or a recursive lock of a root or a folder above one, also by a pattern in it.
+    for (const [command, word] of [["rm -rf ~/.claude", "~/.claude"], ["mv ~/.claude ~/.claude.bak", "~/.claude"], [`rm -rf ${home}`, home], [`rm -rf ${home}/..`, `${home}/..`],
+      ["rm -rf ~/*", "~/*"], ["rm -rf /", "/"], [`find ${home} -delete`, home], [`find ${home} -name x -exec rm -rf {} +`, home],
+      [`rsync -a --delete ${work}/ ${home}/`, `${home}/`], [`chmod -R 000 ${shared}`, shared], [`sudo rm -rf ${home}`, home]]) assert.equal(write(command), word, `${provider}: ${command}`);
+    // Not a remove of a root: mv's last word is where it moves to, a copy or a plain mode change, and a remove elsewhere.
+    for (const command of ["mv a.txt ~/", "rm -rf build", "rm *.log", `cp -R ${home}/.claude /tmp/x`, `chmod 644 ${home}/.claude`, `find ${work} -name '*.o' -delete`, "ls ~"]) {
+      assert.equal(write(command), undefined, `${provider}: ${command}`);
+    }
+    // F-T815-16: pushd moves as cd does, also through a link; popd goes back.
+    for (const [command, word] of [[`pushd ${root} && echo x >> tasks.json`, "tasks.json"], [`pushd ${link} && echo x >> tasks.json`, "tasks.json"],
+      [`pushd ${root} && rm -rf p`, "p"], [`pushd ${shared} && echo x > a.json`, "a.json"], [`pushd /usr && popd && pushd ${root} && rm x`, "x"]]) assert.equal(write(command), word, `${provider}: ${command}`);
+    assert.equal(write(`pushd ${root} && popd && echo x > tasks.json`), undefined, "popd goes back to the work folder");
+    // F-T815-6: one method reader, with cobra's bundled -iX.
+    for (const [command, method] of [["gh api -iXDELETE repos/o/r/x", "DELETE"], ["gh api -iX DELETE repos/o/r/x", "DELETE"], ["gh api -iX POST repos/o/r/x", "POST"], ["gh api -i repos/o/r", "GET"], ["gh api -f a=b repos/o/r/x", "POST"]]) {
+      assert.deepEqual(api.ghRuns(command, work).map((run) => run.method), [method], command);
+    }
+    const policy = api.createCommandPolicy();
+    // F-T815-7: the REST merges endpoint merges a branch into a base.
+    for (const command of ["gh api -X POST repos/o/r/merges -f base=x -f head=y", "curl -X POST https://api.github.com/repos/o/r/merges", "wget --method=POST https://api.github.com/repositories/12/merges"]) {
+      assert.match(policy.mergeRun(command, work)?.problem ?? "", /^merge only with/, command);
+    }
+    assert.equal(policy.mergeRun("gh api repos/o/r/merges-report", work), undefined, "another path");
+    // F-T815-5: an option before or between gh's command words; -R and --repo with their value, and options after them, pass.
+    for (const [command, option] of [["gh pr -b view merge 12 --squash", "-b"], ["gh pr -c view close 12", "-c"], ["gh --color always pr merge 12", "--color"]]) {
+      assert.equal(policy.expansionProblem(command, work), `gh reads "${option}" before or between its command words, and an option there can take the next word as its value, so the hook cannot tell which command gh runs. Write gh's command words first, then the options, for example gh pr view 12 --json state. Only -R <owner/repo> or --repo <owner/repo> may come before them.`, command);
+    }
+    for (const command of ["gh -R o/r pr view 1", "gh --repo o/r pr view 1", "gh --repo=o/r pr list", "gh pr view 12 --json state", "gh api --paginate repos/o/r/pulls", "gh --version", "gh pr --help", "gh status --org acme", "gh browse --branch main README.md"]) {
+      assert.equal(policy.expansionProblem(command, work), undefined, command);
+    }
+    // F-T815-9: an unread line that names a merge leads with the cause and the way forward.
+    assert.equal(policy.mergeRun("gh pr merge 1 && echo 'x", work)?.problem, "the hook cannot read this command (an open quote), so it refuses it. Close each quote, substitution and heredoc. Its text names a merge. Merge only with gh pr merge <n> --squash --delete-branch --match-head-commit <sha>, as a command of its own.");
   }
 });
 

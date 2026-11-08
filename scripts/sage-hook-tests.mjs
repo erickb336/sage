@@ -607,11 +607,11 @@ for (const toolName of ["Bash", "Monitor"]) for (const agent of [false, true]) {
     ];
     const wrong = attacks.flatMap((command) => {
       const reason = denied(send(command)) ?? "allowed";
-      return /shell expansion can hide the command/.test(reason) ? [] : [`${command} -> ${reason}`];
+      return /shell expansion in "[^"]+" can hide the command/.test(reason) ? [] : [`${command} -> ${reason}`];
     });
     // T815: text piped into a shell is a limit of the hook (C10's piped-text rule is gone).
     for (const command of ["echo 'git pu{s..s}h --force origin claude/t1' | bash", "printf '%s\\n' 'g{i..i}t push origin HEAD:main' | bash", "echo 'git pu{s..s}h --force origin claude/t1' | head | bash"]) {
-      assert.doesNotMatch(denied(send(command)) ?? "", /shell expansion can hide the command/, command);
+      assert.doesNotMatch(denied(send(command)) ?? "", /shell expansion in "[^"]+" can hide the command/, command);
     }
     for (const command of [
       "git log --format='%h {x}'",
@@ -1124,7 +1124,7 @@ test("a git upload of main gets the old refusal and names the gh api form (T24)"
 test("a push command that the hook cannot read is refused with what to do (F-R90-4)", () => {
   const s = session();
   s.send(prompt("sage mode"));
-  assert.match(denied(s.send(bash("git push origin 'feat"))) ?? "", /^sage: the hook cannot read this command \(an open quote\), so it refuses it\. Close each quote, substitution and heredoc\. Push only with git \[-C <dir>\] push/);
+  assert.match(denied(s.send(bash("git push origin 'feat"))) ?? "", /^sage: the hook cannot read this command \(an open quote\), so it refuses it\. Close each quote, substitution and heredoc\. Its text names a push\. Push only with git \[-C <dir>\] push/);
   assert.equal(s.send(bash("echo 'it")), undefined, "a command with no push is not the push rule's");
 });
 
@@ -1558,8 +1558,6 @@ test("a merge passes only as the one merge form; any other command that names a 
     `git ls-files | xargs sh -c '${M}'`,
     `bash -c "${MERGE}"`,
     `sh <<'EOF'\n${MERGE}\nEOF`,
-    // A command that the hook cannot read, and names a merge.
-    `echo "${MERGE}`,
     // The GitHub API, with a number in the path, and GraphQL.
     `gh api -X PUT repos/o/r/pulls/41/merge -f sha=${SHA}`,
     "gh api --method=PUT /repos/o/r/pulls/41/merge",
@@ -1568,6 +1566,8 @@ test("a merge passes only as the one merge form; any other command that names a 
     `gh api graphql -f query='mutation { mergePullRequest(input: {pullRequestId: "x"}) { clientMutationId } }'`,
   ];
   for (const s of [off, on]) for (const command of refused) assert.match(denied(s.send(bash(command))) ?? "", CANNOT, command);
+  // A command that the hook cannot read, and names a merge: the cause and the way forward first (F-T815-9).
+  for (const s of [off, on]) assert.equal(denied(s.send(bash(`echo "${MERGE}`))), "sage: the hook cannot read this command (an open quote), so it refuses it. Close each quote, substitution and heredoc. Its text names a merge. Merge only with gh pr merge <n> --squash --delete-branch --match-head-commit <sha>, as a command of its own.");
   // Refused by another rule: a git alias (an unknown git subcommand), and an API write whose path a variable or a
   // substitution gives, or that merges main (the push rule runs first).
   for (const s of [off, on]) for (const command of [`git -c alias.m='!${M} --squash' m`, "gh api -X POST repos/o/r/merges -f base=main -f head=t4",
@@ -2551,12 +2551,16 @@ test("R466-FAILCLOSED: a line the reader cannot read, or text nested past 3 leve
   s.send(prompt("sage mode"));
   const unreadable = ["(case x in a) %", "( %", "case x in a) %", "x=$(case x in a) %)", "(case x in a) % )", "case x in (% x) :;; esac"];
   for (const command of unreadable) {
-    assert.match(denied(s.send(bash(command.replace("%", "git push origin main")))) ?? "", /cannot read this command/, command);
-    assert.match(denied(s.send(bash(command.replace("%", "gh pr merge 1")))) ?? "", /cannot read the command/, command);
-    assert.match((await refusal(command.replace("%", "ps"))) ?? "", /standing order 14.*cannot read this command/, command);
+    // F-T815-9: the cause and the way forward first, in the same words for every rule, then what the text names.
+    const lead = /^(?:sage: )?the hook cannot read this command \([^)]+\), so it refuses it\. Close each quote, substitution and heredoc\. Its text names /;
+    assert.match(denied(s.send(bash(command.replace("%", "git push origin main")))) ?? "", new RegExp(`${lead.source}a push\\. Push only with`), command);
+    assert.match(denied(s.send(bash(command.replace("%", "gh pr merge 1")))) ?? "", new RegExp(`${lead.source}a merge\\. Merge only with gh pr merge <n>`), command);
+    assert.match((await refusal(command.replace("%", "ps"))) ?? "", new RegExp(`${lead.source}a process program \\("ps"\\)\\. An agent never reads or signals the real process list \\(standing order 14\\)`), command);
+    assert.match((await refusal(command.replace("%", "gh pr view 1"))) ?? "", new RegExp(`${lead.source}gh\\. An agent runs only these gh commands`), command);
+    assert.match((await refusal(command.replace("%", "git stash"))) ?? "", new RegExp(`${lead.source}git stash\\. An agent never runs git stash`), command);
     assert.equal(await refusal(command.replace("%", "ls")), undefined, `names nothing that a rule guards: ${command}`);
   }
-  assert.match((await refusal("bash -c \"bash -c \\\"bash -c 'bash -c ps'\\\"\"")) ?? "", /standing order 14.*nested more than 3 levels/);
+  assert.match((await refusal("bash -c \"bash -c \\\"bash -c 'bash -c ps'\\\"\"")) ?? "", /^the hook cannot read this command \(commands nested more than 3 levels deep\), so it refuses it\. Run the inner command as a command of its own\. Its text names a process program \("ps"\)\. An agent never reads or signals the real process list \(standing order 14\)/);
   assert.doesNotMatch((await refusal("bash -c \"bash -c \\\"bash -c 'ps'\\\"\"")) ?? "", /cannot read/, "3 levels are read");
   assert.match((await refusal("bash -c \"bash -c \\\"bash -c 'ps'\\\"\"")) ?? "", /standing order 14/, "3 levels are read");
   assert.equal(await refusal("bash -c \"bash -c \\\"bash -c 'bash -c ls'\\\"\""), undefined);
@@ -2929,6 +2933,8 @@ const MAIN_LIMITS = new Set([
   "bash x.sh <<EOF\ngit push origin main\nEOF", "bash x.sh <<EOF\ngh pr merge 1 --admin\nEOF",
   "bash -c gh pr merge 1 --admin x", "echo gh pr merge 1 --admin | sh", "$(echo gh pr merge 1 --admin)",
   "P=gh pr merge 1 --admin; $P", "find . -exec sudo gh pr merge 1 --admin {} ;",
+  // F-T815-17: command -v only looks the names up; it runs no merge.
+  "command -v gh pr merge 1 --admin",
 ]);
 
 test("R466-REGRESSION, T815: every command that main's reader denies for the main session is still denied, but the documented limits", async () => {
@@ -2989,6 +2995,9 @@ test("T229: the board password rule refuses the ordinary shapes, and allows repo
     ["cat $HOME/.config/sage-board/board.json", OK], ["cat ${HOME}/.config/sage-board/board.json", OK],
     ["cat ~/.config/sage-board/.board-0123456789ab.json", CONFIG], ["cat board.json", CONFIG, folder], ["cat ./x/../board.json", CONFIG, folder], ["cat ../sage-board/board.json", CONFIG, folder],
     ["cd ~/.config && cat sage-board/board.json", CONFIG], [`cd ${home}/.config && cat sage-board/board.json`, CONFIG], [`cd ${home} && cat .config/sage-board/board.json`, CONFIG],
+    // F-T815-16: pushd moves as cd does, and popd goes back (by the reader, and by its fallback after pushd ~).
+    ["pushd ~/.config && cat sage-board/board.json", CONFIG], [`pushd ${home}/.config && cat sage-board/board.json`, CONFIG],
+    [`pushd ${home}/.config && popd && cat sage-board/board.json`, OK], ["pushd ~/.config && popd && cat sage-board/board.json", OK],
     [`cat ${dir}/plain-name.txt`, CONFIG], [`cat ${dir}/linked-config/sage-board/board.json`, CONFIG], ["head < ~/.config/sage-board/board.json", CONFIG],
     // T815: a line that the hook cannot read is refused only when it names a merge, a push, the state tool or the option.
     ["cat ~/.config/sage-board/board.json \"", OK], ["cat board.json \"", OK], ["cd ~/.config && cat sage-board/board.json \"", OK], ["cp -R .config /tmp/copy \"", OK],
@@ -3475,7 +3484,9 @@ test("R5-DOLLARQUOTE, T815: a test log with echo exit=$? passes; a pattern that 
   assert.equal(denied(s.send(bash(`npm test > ${scratch}/test.log 2>&1; echo exit=$?`, FEATURE, AGENT))), undefined, "$? is no path");
   const root = s.vars.SAGE_HOME;
   assert.match(denied(s.send(bash(`rm -rf ${root}/p/*.tsv`, FEATURE, AGENT))) ?? "", LOGBOOK_SHELL, "the literal part before the pattern");
-  assert.equal(denied(s.send(bash(`rm -rf ${root.slice(0, -2)}$''*`, FEATURE, AGENT))), undefined, "a pattern that only a shell expands to the root");
+  assert.equal(denied(s.send(bash(`cp /dev/null ${root.slice(0, -2)}$''*`, FEATURE, AGENT))), undefined, "a pattern that only a shell expands to the root");
+  // F-T815-4: a remove takes the root with a folder above it, so a pattern in that folder counts.
+  assert.match(denied(s.send(bash(`rm -rf ${root.slice(0, -2)}$''*`, FEATURE, AGENT))) ?? "", LOGBOOK_SHELL, "a remove of a pattern in the folder above the root");
 });
 
 test("Q2-WORD, T815: a refusal names the word that writes into the sage root", () => {
@@ -3487,6 +3498,31 @@ test("Q2-WORD, T815: a refusal names the word that writes into the sage root", (
     assert.ok(answer.includes(`"${root.slice(0, 40)}`), `${command}: ${answer}`);
   }
   assert.match(denied(s.send(bash(`rm -rf ${root}/p`))) ?? "", /is in the sage root or the shared root/, "chief");
+});
+
+test("F-T815-14: a long word keeps its start and its end, so the root part shows; the read form has no garbled suffix", () => {
+  const s = session();
+  s.send(prompt("sage mode"));
+  const root = s.vars.SAGE_HOME, word = `${root}/p/${"x".repeat(150)}.tsv`;
+  for (const extra of [AGENT, {}]) {
+    const answer = denied(s.send(bash(`echo x > ${word}`, FEATURE, extra))) ?? "";
+    const shown = /"([^"]+)" is in the sage root/.exec(answer)?.[1] ?? "";
+    assert.equal(shown, `${word.slice(0, 60)}…${word.slice(-90)}`, answer);
+    assert.ok(shown.includes(root.slice(0, 40)), "the start of the root shows");
+  }
+  const agent = denied(s.send(bash(`echo x > ${root}/p/a.tsv`, FEATURE, AGENT))) ?? "";
+  assert.match(agent, /\[--project <path>\] \(config without a key=value\)\./);
+  assert.doesNotMatch(agent, /with config with no/);
+});
+
+test("F-T815-17, F-T815-6: command -v and -V run nothing; gh api with a bundled -iX reads its method", async () => {
+  for (const command of ["command -v gh", "command -V ps", "command -v ps && echo found", "command -pv kill"]) assert.equal(await refusal(command), undefined, command);
+  assert.match((await refusal("command ps aux")) ?? "", /standing order 14/, "command <program> runs it");
+  assert.match((await refusal("command gh pr close 1")) ?? "", /"gh pr close" is not one of them/);
+  for (const [command, method] of [["gh api -iXDELETE repos/o/r/git/refs/heads/x", "DELETE"], ["gh api -iX DELETE repos/o/r/git/refs/heads/x", "DELETE"], ["gh api -iX POST repos/o/r/issues", "POST"]]) {
+    assert.match((await refusal(command)) ?? "", new RegExp(`"gh api ${method}" is not one of them`), command);
+  }
+  assert.equal(await refusal("gh api -i repos/o/r/pulls"), undefined, "a GET with -i passes");
 });
 
 /**

@@ -102,6 +102,7 @@ const BOTH = Object.keys(ROLES), CLAUDE = ["claude chief", "claude agent"], AGEN
 const WHY = {
   merge: /merge|reaches main/i, // a mergeBranch into main meets the push rule first, which runs before the merge rule
   push: /Push only with|force-push|reaches main|default branch|gh repo sync|git command that the hook knows|subtree push|owning chief|core\.hooksPath/,
+  gh: /before or between its command words/,
   logbook: /logbook file from the shell/,
   board: /board password rule/,
   process: /process list/,
@@ -140,6 +141,14 @@ const REFUSED = [
   ["merge", `gh api graphql -f query='mutation { mergeBranch(input: {repositoryId: "R1", base: "main", head: "sage/t1-a"}) { clientMutationId } }'`],
   ["merge", "curl -X PUT -H 'Authorization: token x' https://api.github.com/repos/acme/project/pulls/12/merge"],
   ["merge", "wget --method=PUT https://api.github.com/repos/acme/project/pulls/12/merge"],
+  // The REST merges endpoint merges a branch into a base (F-T815-7).
+  ["merge", "gh api -X POST repos/acme/project/merges -f base=sage/t9-free -f head=sage/t1-a"],
+  ["merge", `curl -X POST -d '{"base":"sage/t9-free","head":"sage/t1-a"}' https://api.github.com/repos/acme/project/merges`],
+  // An option before or between gh's command words can take the next word as its value: gh pr -b view merge 12 runs
+  // gh pr merge (F-T815-5).
+  ["gh", "gh pr -b view merge 12 --squash"],
+  ["gh", "gh pr -c view close 12"],
+  ["gh", `gh --color always pr merge 12 --squash --delete-branch --match-head-commit ${SHA}`],
   // Every push form that is not the one push form.
   ["push", `git -C ${T} push --force origin sage/t1-a`],
   ["push", `git -C ${T} push origin +sage/t1-a`],
@@ -170,6 +179,19 @@ const REFUSED = [
   ["logbook", `cp /dev/null ${LINK}/tasks.tsv`],
   ["logbook", `cd ${L} && rm tasks.tsv`],
   ["logbook", `rm ~/../shared/${L.slice(env.SAGE_SHARED_HOME.length + 1)}/tasks.tsv`],
+  // After a literal pushd, also through a link to the logbook (F-T815-16).
+  ["logbook", `pushd ${L} && echo x >> tasks.tsv`],
+  ["logbook", `pushd ${LINK} && rm tasks.tsv`],
+  ["logbook", `pushd ${env.SAGE_SHARED_HOME} && echo x > a.json`],
+  ["logbook", `pushd /usr && popd && pushd ${L} && rm -rf runs.tsv`],
+  // A remove or a move of a folder that holds a root (F-T815-4): the home folder, a folder above it, a pattern in it.
+  ["logbook", `rm -rf ${env.SAGE_SHARED_HOME}`],
+  ["logbook", `mv ${env.SAGE_SHARED_HOME} ${env.SAGE_SHARED_HOME}.bak`],
+  // The Codex gate refuses a write to its roots only, and takes these up in T903.
+  ["logbook", "rm -rf ~/..", CLAUDE],
+  ["logbook", "rm -rf ~/../*", CLAUDE],
+  ["logbook", `find ${BASE} -delete`, CLAUDE],
+  ["logbook", `chmod -R 000 ${env.SAGE_SHARED_HOME}`],
   // The board, process and stash rules: the Claude hook's (the Codex gate has none of them yet, T903).
   ["board", "cat ~/.config/sage-board/board.json", CLAUDE],
   ["board", "node /opt/sage/board/cli.mjs board --set-password", CLAUDE],
@@ -197,6 +219,11 @@ const PASSED = [
   [`node ${TOOL} standing && echo done`, AGENT],
   [`grep -n verdict ${TOOL}`, AGENT],
   ["python3 -c 'print(1)' > out.txt", AGENT],
+  // command -v and -V only look a name up (F-T815-17): the fake-proof step of standing order 57.
+  ["command -v gh", AGENT],
+  ["command -V ps", AGENT],
+  ["gh -R acme/project pr view 12", CLAUDE],
+  ["rm -rf build && chmod 644 ~/x.txt", CLAUDE],
 ];
 
 /** Runs a table's rows as each of their roles; returns the rows whose answer is not the expected one, and the counts. */

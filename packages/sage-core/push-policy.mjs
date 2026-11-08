@@ -1,7 +1,7 @@
 import { execFileSync } from "node:child_process";
 import { resolve } from "node:path";
 import { programsRun, shellCommands } from "./command-reader.mjs";
-import { createCommandPolicy, externalCommandOperands, GIT_VALUE, gitSubcommand, programName } from "./command-policy.mjs";
+import { createCommandPolicy, externalCommandOperands, ghApiMethod, GIT_VALUE, gitSubcommand, programName, unreadable } from "./command-policy.mjs";
 import { commandWrites } from "./shell-write-policy.mjs";
 
 /** The owner/name of a GitHub repository URL as git writes it (https, ssh or scp form), or undefined for any other URL. */
@@ -64,7 +64,7 @@ export function createPushPolicy({ stateToolPath, readGit: gitReader = readGit, 
     try {
       commands = shellCommands(command);
     } catch (e) {
-      return pushText(bare(command)) ? refuse(`the hook cannot read this command (${e.message}), so it refuses it. Close each quote, substitution and heredoc.`) : undefined;
+      return pushText(bare(command)) ? refuse(unreadable(e, "a push")) : undefined;
     }
     defaults.clear(); // read GitHub's default branch once for each command, never from an earlier command
     const state = gitStateChange(command, commands, cwd);
@@ -378,7 +378,7 @@ export function createPushPolicy({ stateToolPath, readGit: gitReader = readGit, 
   /** Read request options, not display options or unrelated text, as branch evidence. Never open a supplied body file. */
   function apiWritesMain(words, dir) {
     if (programName(words[0] ?? "") !== "gh") return false;
-    let method;
+    const method = ghApiMethod(words.slice(1)); // one method reader for every gh api rule (F-T815-6)
     let endpoint;
     let api = false;
     let opaque = false;
@@ -392,9 +392,8 @@ export function createPushPolicy({ stateToolPath, readGit: gitReader = readGit, 
         k--;
         continue;
       }
-      if (word === "-X" || word === "--method") method = args[++k];
-      else if (word.startsWith("--method=")) method = word.slice(9);
-      else if (/^-X./.test(word)) method = word.slice(2).replace(/^=/, "");
+      if (word === "-X" || word === "--method") k++;
+      else if (word.startsWith("--method=") || /^-X./.test(word)) continue;
       else if (/^(?:-[fF]|--(?:raw-)?field)$/.test(word)) fields.push({ value: args[++k] ?? "", typed: word === "-F" || word === "--field" });
       else if (/^(?:-[fF].|--(?:raw-)?field=)/.test(word)) fields.push({
         value: word.replace(/^(?:-[fF]=?|--(?:raw-)?field=)/, ""), typed: /^-F|^--field=/.test(word),
@@ -408,7 +407,7 @@ export function createPushPolicy({ stateToolPath, readGit: gitReader = readGit, 
       }
     }
     if (!api) return false;
-    const writes = (method ?? (fields.length || opaque ? "POST" : "GET")).toUpperCase() !== "GET";
+    const writes = method !== "GET";
     // Only the two repository-name parts may contain known templates. Check before URL normalization.
     const literalEndpoint = (endpoint ?? "").replace(
       /^((?:https?:\/\/[^/?#{}]+\/)?\/?(?:api\/v3\/)?repos\/)([^/]+)\/([^/?#]+)/,
@@ -431,7 +430,6 @@ export function createPushPolicy({ stateToolPath, readGit: gitReader = readGit, 
     // GitHub reads repos/o/r//contents and repos/o/r/ as repos/o/r/contents and repos/o/r, so the routes do too (R2003-1).
     try { path = decodeURIComponent(path).replace(/\/{2,}/g, "/").replace(/^\/|\/$/g, ""); } catch { return true; }
     path = path.replace(/^api\/v3\//, "").replace(/^api\/graphql$/, "graphql");
-    const hasBodyFields = fields.length > 0;
     for (const [key, value] of new URLSearchParams(search)) fields.push({ value: `${key}=${value}`, typed: false });
     const values = fields.map(({ value, typed }) => {
       const split = value.indexOf("=");
@@ -475,7 +473,7 @@ export function createPushPolicy({ stateToolPath, readGit: gitReader = readGit, 
         (/\\/.test(query) || values.some(field => protectedName(field.value) ||
           (field.key !== "query" && /[$`\\]/.test(field.value))));
     }
-    if ((method ?? (hasBodyFields || opaque ? "POST" : "GET")).toUpperCase() === "GET") return false;
+    if (!writes) return false;
     // Without quote provenance a question mark can be a shell glob, not an API query separator.
     if (endpoint?.includes("?")) return true;
     // Owner and repository templates each name one path part. Branch templates can insert a whole route.
