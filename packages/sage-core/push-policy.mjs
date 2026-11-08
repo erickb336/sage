@@ -1,3 +1,4 @@
+import { execFileSync } from "node:child_process";
 import { resolve } from "node:path";
 import { programsRun, shellCommands } from "./command-reader.mjs";
 import { createCommandPolicy, externalCommandOperands, GIT_VALUE, gitSubcommand, programName } from "./command-policy.mjs";
@@ -16,17 +17,34 @@ export const gitInternalPath = (path) => typeof path === "string" && /(?:^|[\\/]
 /** A .git folder or a path under one, also the bare word .git. */
 const gitFile = (path) => gitInternalPath(path) || /^\.git$/i.test(path ?? "");
 
-/** Shared push rules (T536). The provider supplies two readers, which return a program's output, or undefined when it
- * fails: readGit(dir, args) runs git in dir, and readGh(args) runs gh (with GH_HOST and GH_REPO cleared). The rules read
- * the checkout's branch, git's settings, refs/remotes/<remote>/HEAD and, from GitHub, the repository's default branch.
- * This module never executes a command or offers a first-upload exception. An unread branch keeps the push; unread
- * settings, or a default branch that GitHub does not give, refuse it.
+/** git's output for args in the checkout at dir, or undefined when git fails. GIT_DIR and GIT_WORK_TREE never change the checkout. */
+export function readGit(dir, args) {
+  try {
+    return execFileSync("git", ["-C", dir, ...args], { encoding: "utf8", timeout: 5000, stdio: ["ignore", "pipe", "ignore"], env: { ...process.env, GIT_DIR: undefined, GIT_WORK_TREE: undefined } });
+  } catch {
+    return undefined;
+  }
+}
+/** gh's output for args (a GET of GitHub's API), or undefined when gh fails. GH_HOST and GH_REPO never change its target. */
+export function readGh(args) {
+  try {
+    return execFileSync("gh", args, { encoding: "utf8", timeout: 10000, stdio: ["ignore", "pipe", "ignore"], env: { ...process.env, GH_HOST: undefined, GH_REPO: undefined } });
+  } catch {
+    return undefined;
+  }
+}
+
+/** Shared push rules (T536). Two readers return a program's output, or undefined when it fails: readGit(dir, args) runs
+ * git in dir, and readGh(args) runs gh (with GH_HOST and GH_REPO cleared). Both providers use the defaults above; a test
+ * may give its own. The rules read the checkout's branch, git's settings, refs/remotes/<remote>/HEAD and, from GitHub,
+ * the repository's default branch. The rules themselves never run the command that they judge, and offer no first-upload
+ * exception. An unread branch keeps the push; unread settings, or a default branch that GitHub does not give, refuse it.
  */
-export function createPushPolicy({ stateToolPath, readGit, readGh, mainReason = "work reaches main only through a pull request. Push the task's branch and open a pull request.", moveNote = "" } = {}) {
-  if (typeof readGit !== "function") throw new TypeError("readGit must be a function");
-  if (typeof readGh !== "function") throw new TypeError("readGh must be a function");
+export function createPushPolicy({ stateToolPath, readGit: gitReader = readGit, readGh: ghReader = readGh, mainReason = "work reaches main only through a pull request. Push the task's branch and open a pull request.", moveNote = "" } = {}) {
+  if (typeof gitReader !== "function") throw new TypeError("readGit must be a function");
+  if (typeof ghReader !== "function") throw new TypeError("readGh must be a function");
   if (typeof mainReason !== "string" || !mainReason.trim() || mainReason.length > 2048 || /[\x00-\x1f\x7f]/.test(mainReason)) throw new TypeError("mainReason must be a bounded message without control characters");
-  const { runnable, mergeIn } = createCommandPolicy({ stateToolPath });
+  const { runnable } = createCommandPolicy({ stateToolPath });
   const PUSH_FORM = 'git [-C <dir>] push [-u] [--follow-tags] [-o <option>] <remote> <branch>, with the name of a remote of the checkout and the literal name of the task\'s branch: not the default branch, main or master, HEAD, @, a pattern, a variable, or a refspec with ":" or "+". Beside the push, a command line may only run cd <dir> (no option, no || or &), pwd, git add, commit, status, log, diff, show, fetch or rev-parse, gh, echo, printf, true, cat, head, tail, grep or wc; it sets no variable, no upstream (no --set-upstream, no fetch -u) and writes no file (no tee, no >). To delete a branch: git push --delete <remote> <branch>';
   /** The word git, and then a later word: one linear scan from the first git (T34, T100-N5). */
   const gitThen = (text, word) => new RegExp(`\\b${word}\\b`, "i").test(/\bgit\b([\s\S]*)/i.exec(text)?.[1] ?? "");
@@ -34,22 +52,22 @@ export function createPushPolicy({ stateToolPath, readGit, readGh, mainReason = 
   /** A command line without quotes, backslashes and line joins: the text that the rules test when the reader cannot read the line (fail closed). */
   const bare = (text) => text.replace(/\\\n/g, "").replace(/['"\\]/g, "");
   const refuse = (why) => `${why} Push only with ${PUSH_FORM}.`;
-  const unreadableGitHub = (command) => /\bgh(?:\.exe)?\b/i.test(bare(command))
-    ? mergeIn(command)?.problem ?? refuse("the hook cannot establish the GitHub API command's destination.") : undefined;
+  const NESTED = "another program runs this git push (a shell's -c text, eval, xargs, find -exec, a substitution or a function), so the hook does not read it as a command of its own.";
   /**
-   * described: the text is only a tool call's description, which runs nothing, so the git settings rule skips it (R1949-1).
-   * owner(dir, branch): why the session's chief does not push that branch of the checkout at dir, or "" (T822). A push in
-   * the push form that it bars is refused with its words alone; a throw refuses the push too.
+   * Why a command line's push, or another way to send commits, is refused, or undefined. The caller gives only the text
+   * of a field that runs, never a description (T386). owner(dir, branch): why the session's chief does not push that
+   * branch of the checkout at dir, or "" (T822). A push in the push form that it bars is refused with its words alone; a
+   * throw refuses the push too.
    */
-  function pushProblem(command, cwd, options = {}, { described = false, owner } = {}) {
+  function pushProblem(command, cwd, options = {}, { owner } = {}) {
     let commands;
     try {
       commands = shellCommands(command);
     } catch (e) {
-      return pushText(bare(command)) ? refuse(`the hook cannot read this command (${e.message}), so it refuses it. Close each quote, substitution and heredoc.`) : unreadableGitHub(command);
+      return pushText(bare(command)) ? refuse(`the hook cannot read this command (${e.message}), so it refuses it. Close each quote, substitution and heredoc.`) : undefined;
     }
     defaults.clear(); // read GitHub's default branch once for each command, never from an earlier command
-    const state = described ? undefined : gitStateChange(command, commands, cwd);
+    const state = gitStateChange(command, commands, cwd);
     if (state) return state;
     let dir = cwd;
     /** A cd that the hook can follow: exactly "cd <dir>", run in the line's own shell, on a line with no || or & (R2003-1). */
@@ -79,30 +97,39 @@ export function createPushPolicy({ stateToolPath, readGit, readGh, mainReason = 
       }
       return undefined;
     };
-    for (const { cmd, words, bodies } of runnable(commands)) {
+    // The pushes that the line runs as commands of their own, judged here in the push form, by their words.
+    const own = [];
+    for (const { cmd, words } of runnable(commands)) {
       if (plainCd(cmd)) dir = resolve(dir, cmd.words[1]);
       const git = words.findIndex((w, k) => programName(w) === "git" && /^push$/i.test(gitSubcommand(words, k + 1)));
-      const why = git >= 0 ? pushWhy(words, git, dir) : [...words, ...bodies].some((w) => /\s/.test(w) && pushText(w)) ? "this command gives push text to another program (a shell, eval or a script), so the hook cannot read the push." : undefined;
+      const why = git >= 0 ? pushWhy(words, git, dir) : undefined;
       if (why) return why.alone ?? refuse(why);
+      if (git >= 0 && !cmd.host) own.push(words.join("\0"));
     }
     try {
-      // Preserve the raw push path above. Only launcher descendants add new push evidence here;
-      // checking every git twice would read branches twice with different cd-failure semantics.
+      // Every git push that the reader finds, at any depth (F1, T815): one that is not a command of its own is refused. A
+      // PowerShell launch keeps its own check: the launched push is judged in the push form.
       const runs = programsRun(command, cwd, undefined, options);
       for (const run of runs) {
-        if (run.powerShellLaunch && programName(run.word) === "git" && /^push$/i.test(gitSubcommand(run.args, 0))) {
-          const why = pushWhy([run.word, ...run.args], 0, run.dir);
-          if (why) return why.alone ?? refuse(why);
+        if (programName(run.word) === "git" && /^push$/i.test(gitSubcommand(run.args, 0))) {
+          if (run.powerShellLaunch) {
+            const why = pushWhy([run.word, ...run.args], 0, run.dir);
+            if (why) return why.alone ?? refuse(why);
+          } else {
+            const k = own.indexOf([run.word, ...run.args].join("\0"));
+            if (k < 0) return refuse(NESTED);
+            own.splice(k, 1);
+          }
         }
-        const send = sendsOtherwise(run.word, run.args, described);
-        if (send) return mergeIn(command)?.problem ?? (send.alone ? send.why : refuse(send));
-        if (apiWritesMain([run.word, ...run.args], run.dir ?? cwd)) return mergeIn(command)?.problem ?? refuse(mainReason);
+        const send = sendsOtherwise(run.word, run.args);
+        if (send) return send.alone ? send.why : refuse(send);
+        if (apiWritesMain([run.word, ...run.args], run.dir ?? cwd)) return refuse(mainReason);
       }
       if (runs.some(run => run.word === "command") && [...externalCommandOperands(command, cwd, options)]
-        .some(({ word, args }) => apiWritesMain([word, ...args], cwd))) return mergeIn(command)?.problem ?? refuse(mainReason);
+        .some(({ word, args }) => apiWritesMain([word, ...args], cwd))) return refuse(mainReason);
     } catch (error) {
       if (error.code === "SAGE_POWERSHELL_LAUNCH") return refuse(error.message);
-      return pushText(bare(command)) ? refuse("the hook cannot establish the push command") : unreadableGitHub(command);
+      return pushText(bare(command)) ? refuse("the hook cannot establish the push command") : undefined;
     }
     return undefined;
   }
@@ -210,13 +237,12 @@ export function createPushPolicy({ stateToolPath, readGit, readGh, mainReason = 
     show-ref sparse-checkout stash status submodule subtree switch symbolic-ref tag update-index update-ref var verify-commit
     verify-tag version whatchanged worktree write-tree backfill fast-import filter-branch index-pack multi-pack-index replay
     repo request-pull stripspace verify-pack`.split(/\s+/));
-  /** Why a git or gh run sends commits or moves the default branch another way than the push form, or undefined.
-   * described: the text is only a description, whose words ("git checks …") run nothing, so no subcommand is unknown. */
-  function sendsOtherwise(word, args, described) {
+  /** Why a git or gh run sends commits or moves the default branch another way than the push form, or undefined. */
+  function sendsOtherwise(word, args) {
     const name = programName(word);
     if (name === "git") {
       const sub = gitSubcommand(args, 0).toLowerCase();
-      if (!sub || described) return undefined;
+      if (!sub) return undefined;
       // Not a push, so this refusal gives no push form (R1949-2).
       if (!KNOWN_GIT.has(sub)) return { alone: true, why: `"git ${sub}" is not a git command that the hook knows, and a git alias or a git-${sub} program can send commits to a remote, so sage mode refuses it. Use a git built-in, or ask the user to run it.` };
       if (sub === "subtree" && args.some((a) => /^push$/i.test(a))) return "git subtree push sends commits outside the push form.";
@@ -230,7 +256,7 @@ export function createPushPolicy({ stateToolPath, readGit, readGh, mainReason = 
   }
   /** git's output, or undefined when git fails. Any other value is a broken reader. */
   function gitOut(dir, args) {
-    const out = readGit(dir, args);
+    const out = gitReader(dir, args);
     if (out !== undefined && typeof out !== "string") throw new TypeError("readGit must return git's output or undefined");
     return out;
   }
@@ -238,7 +264,7 @@ export function createPushPolicy({ stateToolPath, readGit, readGh, mainReason = 
   const defaults = new Map();
   function gitHubDefault(path) {
     if (!defaults.has(path)) {
-      const out = readGh(["api", "--hostname", "github.com", path, "--jq", ".default_branch"]);
+      const out = ghReader(["api", "--hostname", "github.com", path, "--jq", ".default_branch"]);
       if (out !== undefined && typeof out !== "string") throw new TypeError("readGh must return gh's output or undefined");
       const name = out?.trim();
       defaults.set(path, name && !/[\s\x00-\x1f\x7f]/.test(name) ? name : undefined);

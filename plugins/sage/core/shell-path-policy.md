@@ -1,7 +1,8 @@
 # Shared shell-path checks
 
 `shellWriteOutsideRoots({ command, cwd, roots })` checks path evidence for known
-shell-write forms. The caller supplies the original command, verified execution
+shell-write forms. Only the Codex native runtime uses it; the hooks use
+`logbookWrite` (`command-runs.mjs`, T815). The caller supplies the original command, verified execution
 directory, and fixed protected roots. The check copies validated roots without
 using caller-supplied array methods. A true result grants no execution permission.
 

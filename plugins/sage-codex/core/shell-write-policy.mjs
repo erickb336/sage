@@ -62,7 +62,7 @@ function readerRuns(name, args) {
   return false;
 }
 /** Function arguments are data; only an actual reader dispatch owns its options. */
-const readerDispatch = entry => !entry.wrapper && !entry.shellFunction && !entry.resolvedDeclaration &&
+export const readerDispatch = entry => !entry.wrapper && !entry.shellFunction && !entry.resolvedDeclaration &&
   readerRuns(programName(entry.run.word), entry.run.args);
 /** Keep operator and target separate: quoted filename prefixes are not shell operators. */
 function toFile({ operator: op, target: to }) {
@@ -75,7 +75,7 @@ function toFile({ operator: op, target: to }) {
  * backtick or a pattern), or when it has two operands. -f, -s and -w take the next word; after the first operand every
  * word is an operand, as BSD uniq reads them; an unknown option that takes a value makes its value an operand (fail closed).
  */
-function uniqWrites(words, base) {
+export function uniqWrites(words, base) {
   const at = base.indexOf("uniq");
   if (at < 0) return false;
   if (at !== words.findIndex((w) => !FLOW_WORD.test(w) && !/^\w+=/.test(w)) || base.indexOf("uniq", at + 1) >= 0) return true;
@@ -142,15 +142,10 @@ const REDEFINES = /^(?:export|unset|readonly|declare|typeset|local|set|shopt|set
 /** The git subcommands that only read. git's own option forms (git -C, git -c) are not plain, so they stay judged. */
 const GIT_READS = /^(?:log|show|status|diff|rev-parse)$/;
 const shellQuoted = (word) => (/^[\w./=:@%+,-]+$/.test(word) ? word : `'${word.replace(/'/g, "'\\''")}'`);
-const redirectParts = (redirect) => {
-  const [, operator, target] = /^(&>>?|>>|>\||>&|<>|<&|>|<)([^]*)$/.exec(redirect);
-  return { operator, target };
-};
 /** A plain reader: one of READERS or a reading git subcommand, by its bare name, whose own words have no write form. cd and pushd are in READERS, and they change the folder. */
 const plainReader = ({ words }, cwd) =>
   (words[0] === "git" ? GIT_READS.test(words[1] ?? "") : READERS.test(words[0] ?? "") && !/^(?:cd|pushd)$/.test(words[0])) &&
   !commandWrites(words.map(shellQuoted).join(" "), cwd);
-const shown = (commands) => commands.map(c => [...c.words, ...c.redirects, ...c.bodies].join(" ")).join(" | ");
 
 /**
  * Proven non-executing readers, with read references separate from write targets. Literal stdin and echo/printf data
@@ -175,44 +170,4 @@ export function shellWriteEvidence(text, cwd, path) {
     reads.push(...evidence.redirects.filter(r => !toFile(r)).map(r => ({ word: r.target, dir: r.dir ?? cwd })));
     return { reads, writes: writes.map(r => ({ word: r.target, dir: r.dir ?? cwd })) };
   } catch { return undefined; }
-}
-/**
- * The text of a POSIX shell command line that the rule for a logbook write judges (T621), one item for each pipeline, so
- * that a read beside a write gives no evidence against it. A pipeline's last commands are dropped when they are plain
- * readers, because they feed nothing: their words are data (.items[], 5[0-9]). Any other command stays, also one that the
- * hook does not know, and so does a reader that feeds it. { text } is the whole pipeline. { targets } is set when readers
- * were dropped: the commands that stay, and the targets of the dropped readers' redirections.
- *
- * Undefined means "judge the whole text": an unreadable line, a substitution, a subshell, a group or control flow, a part
- * that uses $ or a backtick (a part can read what an earlier part made, such as $_), a part that can change what a
- * reader's name runs (REDEFINES, or an assignment with no command), zsh's clobber forms (>! reads as a target that starts
- * with !), a part that names a file that a dropped reader wrote, or a line with no part left.
- */
-export function writeParts(text, cwd) {
-  try {
-    const commands = shellCommands(text);
-    if (commands.some(c => c.host || c.grouped || FLOW_WORD.test(c.words[0] ?? "") || REDEFINES.test(c.words[0] ?? "") || c.syntax.every(s => s.assignment) || c.redirects.some(r => redirectParts(r).target.startsWith("!")) || [...c.words, ...c.redirects, ...c.bodies].some(word => /[$`]/.test(word)))) return undefined;
-    const lines = [];
-    let open = [];
-    for (const command of commands) {
-      open.push(command);
-      if (!command.piped) { lines.push(open); open = []; }
-    }
-    if (open.length) lines.push(open); // a line that ends in |
-    const parts = [], written = [], rest = [];
-    for (const line of lines) {
-      const kept = line.slice(0, line.findLastIndex(c => !plainReader(c, cwd)) + 1), readers = line.slice(kept.length);
-      const targets = readers.flatMap(c => c.redirects.map(redirectParts)).filter(toFile).map(({ target }) => target);
-      if (!kept.length && !targets.length) continue;
-      written.push(...targets);
-      rest.push(shown(kept));
-      parts.push(readers.length ? { text: shown(line), targets: [shown(kept), ...targets].join(" ") } : { text: shown(line) });
-    }
-    // A part that names a file that a dropped reader wrote can run that reader's words: echo 'rm f' > a.sh; sh a.sh.
-    const named = new Set(rest.join(" ").split(/[^\w.-]+/));
-    if (written.some(file => named.has(file.split("/").at(-1)))) return undefined;
-    return parts.length ? parts : undefined;
-  } catch {
-    return undefined;
-  }
 }

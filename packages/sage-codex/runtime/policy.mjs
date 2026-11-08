@@ -133,7 +133,7 @@ export function createNativePolicy(options, evaluateTool) {
         return { decision: "deny", reason: "A child cannot request broader sandbox permissions. Ask the chief to run this command." };
       }
       // Autopilot is unavailable in this runtime. A supplied evaluator cannot authorize a merge.
-      if (command && (before.sage || trackedChild) && mergePolicy.mergeIn(command.cmd)) {
+      if (command && (before.sage || trackedChild) && mergePolicy.mergeRun(command.cmd, typeof command.workdir === "string" ? command.workdir : undefined)) {
         return { decision: "deny", reason: "This Sage runtime cannot merge pull requests. Leave the reviewed pull request for the owner." };
       }
       // This text classification does not establish the effective execution context.

@@ -1671,7 +1671,8 @@ test("in sage mode gh runs only the command paths that sage uses, by name, with 
   const refused = [["gh land 360", "gh land"], ["gh co 360", "gh co"], [`cd /work && gh ship 41 ${SHA}`, "gh ship"], ["env FOO=1 gh land 41", "gh land"],
     // F-T534-1, R1940-2: a two-word alias under a built-in group, and an option before the subcommand, which hides it.
     ["gh pr mrg 360", "gh pr mrg"], ["gh pr land 360 --admin", "gh pr land"], ["gh issue mrg 1", "gh issue mrg"], ["gh run x", "gh run x"], ["gh pr -R o/r mrg 41", "gh pr -R"],
-    ["gh alias set 'pr mrg' 'pr merge --admin'", OWNER_MERGE], ["gh auth token", "gh auth token"],
+    // T815: the merge rule reads gh's own words, so an alias body is the gh path rule's (gh alias), not a merge.
+    ["gh alias set 'pr mrg' 'pr merge --admin'", "gh alias"], ["gh auth token", "gh auth token"],
     ["$(which gh) land 41", LITERAL], ["G=gh; $G land 41", LITERAL], ["`which gh` land 41", LITERAL],
     // R1946-2: alias, extension and config are no path that sage uses.
     ["gh alias import aliases.yml", "gh alias"], ["gh alias list", "gh alias"], ["gh extension install o/gh-land", "gh extension"], ["gh ext create land", "gh ext"],
