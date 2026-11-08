@@ -5,7 +5,8 @@
 // A refusal is a plain cause and one next step, then a short technical detail in brackets:
 //   - no record path, a read error, or a record over 64 MiB;
 //   - a last line that is still partial after 3 re-reads (Codex writes the record in the background);
-//   - a line that is not JSON, or not an object with a known top-level type and an object payload;
+//   - a line that is not JSON, or not an object with a known top-level type and an object payload, or an
+//     inter_agent_communication_metadata line whose payload is not only { trigger_turn: boolean };
 //   - no session_meta line, or a session_meta whose cli_version is not 0.164 to 0.167 in the strict form;
 //   - no start mark, or a start mark whose line count does not fit the record.
 // The owner's switches replay with core's own mode rules (switchModes), so the reader agrees with core: an on counts
@@ -49,8 +50,14 @@ export const RECORD_LIMIT = 64 * 1024 * 1024;
 export const RECORD_VERSION = /^0\.16[4-7]\.(?:0|[1-9]\d*)(?:-[a-z]+(?:\.(?:0|[1-9]\d*))+)?$/;
 /** The same range, for the owner. */
 export const RECORD_RANGE = "0.164 to 0.167";
-/** The top-level line types of Codex 0.164.0 records. Any other type refuses. */
-const TYPES = new Set(["session_meta", "response_item", "event_msg", "turn_context", "compacted", "world_state", "token_usage_record"]);
+/**
+ * The top-level line types of Codex 0.164.0 records. Any other type refuses. A multi-agent v2 message between threads
+ * (a subagent's task or its report) comes with an inter_agent_communication_metadata line whose payload is only
+ * { trigger_turn: boolean } (F-T677-30, real records of 0.164.0 and 0.167.0-alpha.3.2); any other payload refuses. It
+ * is no user message, so it never counts as the owner's.
+ */
+const TYPES = new Set(["session_meta", "response_item", "event_msg", "turn_context", "compacted", "world_state", "token_usage_record", "inter_agent_communication_metadata"]);
+const interAgent = (p) => Object.keys(p).join() === "trigger_turn" && typeof p.trigger_turn === "boolean";
 /** The turn triggers of a turn that a person started: the TUI, codex exec, and the desktop app's composer. */
 const PERSON = new Set(["user", "exec", "composer"]);
 const RETRIES = 3;
@@ -102,6 +109,7 @@ export function readRecord(path, { pause = sleep } = {}) {
     let entry;
     try { entry = JSON.parse(line); } catch { return FORM(`line ${i + 1} is not JSON`); }
     if (!isObject(entry) || !TYPES.has(entry.type) || !isObject(entry.payload)) return FORM(`line ${i + 1} has an unknown type`);
+    if (entry.type === "inter_agent_communication_metadata" && !interAgent(entry.payload)) return FORM(`line ${i + 1} has an unknown payload`);
     if (entry.type === "session_meta" && !RECORD_VERSION.test(String(entry.payload.cli_version))) {
       return refusal(`this session runs Codex ${entry.payload.cli_version}, and sage reads the records of Codex ${RECORD_RANGE} only`, `Use Codex ${RECORD_RANGE}, or the owner merges the pull request in GitHub`);
     }
