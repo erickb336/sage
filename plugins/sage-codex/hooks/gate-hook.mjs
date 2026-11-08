@@ -958,7 +958,8 @@ export async function gate(input, { mode = readMode, check = checkMerge, env = p
   if (writeEvidence ? namesReference(writeEvidence.writes, namesLogbookFile) : commandWrites(f.command, f.cwd) && namesLogbookFile(f.command, env, f.cwd)) return deny(LOGBOOK_FILE);
   const gh = ghProblem(f.command, f.cwd, env);
   if (gh) return deny(gh);
-  const push = pushes.pushProblem(f.command, f.cwd);
+  // A shared logbook's task branch takes a push only from its owning chief, the chief of the root thread's session (T822).
+  const push = pushes.pushProblem(f.command, f.cwd, {}, { owner: (dir, branch) => tool.branchBar(real(dir) ?? dir, branch, f.session, env) });
   if (push) return deny(`sage: ${push}`);
   return undefined;
 }

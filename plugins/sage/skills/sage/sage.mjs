@@ -27,5 +27,5 @@ const tool = createStateTool({
   // The owner's Q2 of T656: a task that Claude takes from another provider's chief merges after one Claude cycle of its own, on a review copy.
   takeoverCycle: (task) => `run sage-pr import ${task}, run one cycle of its reviews and QA on that review copy, record each verdict, then merge with sage-pr merge ${task}`,
 });
-export const { SIZES, BLOCKS, RISKS, KINDS, STATES, DEFAULTS, PR, sageRoot, locate, chiefFor, sessionBar, actorOptions, git, projectRoot, optionsOf, slug, worktreeRoot, BRANCH, ofTask, branchOfTask, branchHome, branchTip, projectName, storeDir, config, cyclesFor, modelFor, read, mergeCheck, landingBar, logbookView, sage, withLock, board, answerPaths, keepReport, verdictBacking, takenRows } = tool;
+export const { SIZES, BLOCKS, RISKS, KINDS, STATES, DEFAULTS, PR, sageRoot, locate, chiefFor, sessionBar, branchBar, actorOptions, git, projectRoot, optionsOf, slug, worktreeRoot, BRANCH, ofTask, branchOfTask, branchHome, branchTip, projectName, storeDir, config, cyclesFor, modelFor, read, mergeCheck, landingBar, logbookView, sage, withLock, board, answerPaths, keepReport, verdictBacking, takenRows } = tool;
 if (process.argv[1] === fileURLToPath(import.meta.url)) tool.runCli();

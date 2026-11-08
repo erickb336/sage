@@ -36,8 +36,12 @@ export function createPushPolicy({ stateToolPath, readGit, readGh, mainReason = 
   const refuse = (why) => `${why} Push only with ${PUSH_FORM}.`;
   const unreadableGitHub = (command) => /\bgh(?:\.exe)?\b/i.test(bare(command))
     ? mergeIn(command)?.problem ?? refuse("the hook cannot establish the GitHub API command's destination.") : undefined;
-  /** described: the text is only a tool call's description, which runs nothing, so the git settings rule skips it (R1949-1). */
-  function pushProblem(command, cwd, options = {}, { described = false } = {}) {
+  /**
+   * described: the text is only a tool call's description, which runs nothing, so the git settings rule skips it (R1949-1).
+   * owner(dir, branch): why the session's chief does not push that branch of the checkout at dir, or "" (T822). A push in
+   * the push form that it bars is refused with its words alone; a throw refuses the push too.
+   */
+  function pushProblem(command, cwd, options = {}, { described = false, owner } = {}) {
     let commands;
     try {
       commands = shellCommands(command);
@@ -54,16 +58,32 @@ export function createPushPolicy({ stateToolPath, readGit, readGh, mainReason = 
     /** The first command beside the push that the line may not run, or undefined. Read only for a line with a push. */
     const beside = () => commands.length < 2 ? undefined : commands.find((c) => c.words[0] === "cd" ? !plainCd(c) : !besidePush(c.words))?.words
       ?? (commandWrites(command, cwd) ? ["a file write"] : undefined);
+    /** Why the push at words[git] does not run: a reason that the push form follows, or { alone } for the owner's bar. */
     const pushWhy = (words, git, dir) => {
-      const why = pushForm(words, git, dir);
-      const other = why ? undefined : beside();
-      return why ?? (other && besideReason(other));
+      const form = pushForm(words, git, dir);
+      if (typeof form === "string") return form;
+      const other = beside();
+      return other ? besideReason(other) : ownerWhy(form);
+    };
+    /** The owner's bar of the first branch that the push sends (or deletes) from the checkout at dir. */
+    const ownerWhy = ({ dir, branches }) => {
+      if (!owner) return undefined;
+      for (const name of branches) {
+        let bar;
+        try {
+          bar = owner(dir, name);
+        } catch (e) {
+          bar = `the hook cannot read the logbook to tell which chief owns ${name} (${e?.message ?? e}), so it refuses the push.`;
+        }
+        if (bar) return { alone: bar };
+      }
+      return undefined;
     };
     for (const { cmd, words, bodies } of runnable(commands)) {
       if (plainCd(cmd)) dir = resolve(dir, cmd.words[1]);
       const git = words.findIndex((w, k) => programName(w) === "git" && /^push$/i.test(gitSubcommand(words, k + 1)));
       const why = git >= 0 ? pushWhy(words, git, dir) : [...words, ...bodies].some((w) => /\s/.test(w) && pushText(w)) ? "this command gives push text to another program (a shell, eval or a script), so the hook cannot read the push." : undefined;
-      if (why) return refuse(why);
+      if (why) return why.alone ?? refuse(why);
     }
     try {
       // Preserve the raw push path above. Only launcher descendants add new push evidence here;
@@ -72,7 +92,7 @@ export function createPushPolicy({ stateToolPath, readGit, readGh, mainReason = 
       for (const run of runs) {
         if (run.powerShellLaunch && programName(run.word) === "git" && /^push$/i.test(gitSubcommand(run.args, 0))) {
           const why = pushWhy([run.word, ...run.args], 0, run.dir);
-          if (why) return refuse(why);
+          if (why) return why.alone ?? refuse(why);
         }
         const send = sendsOtherwise(run.word, run.args, described);
         if (send) return mergeIn(command)?.problem ?? (send.alone ? send.why : refuse(send));
@@ -265,7 +285,7 @@ export function createPushPolicy({ stateToolPath, readGit, readGh, mainReason = 
     return name.length > 3 && names.some((n) => n.startsWith(name));
   };
   const FORCE = "sage mode never force-pushes. Push a new commit instead.";
-  /** Why the git push at words[git] is not the push form, or undefined. dir is where the command runs. */
+  /** Why the git push at words[git] is not the push form, or else the checkout (dir) and the branches that it sends. dir is where the command runs. */
   function pushForm(words, git, dir) {
     let force = false;
     let main = false;
@@ -322,10 +342,11 @@ export function createPushPolicy({ stateToolPath, readGit, readGh, mainReason = 
     // With push.default upstream (or tracking), git sends a named branch to its upstream, and a command in the same line
     // (fetch --set-upstream) can set that upstream after the hook read it. So no push runs while it is set (R1950-1).
     if (!remove && upstream) return "git's setting push.default is upstream, so git can send the branch to its upstream, such as main. The hook refuses every push while it is set: ask the user to change it (git config --unset push.default).";
-    if (remove) return undefined;
+    const sent = { dir, branches: branches.map((name) => name.replace(/^(?:refs\/)?(?:heads\/)?/i, "")) };
+    if (remove) return sent;
     const branch = gitOut(dir, ["rev-parse", "--abbrev-ref", "HEAD"])?.trim();
     if (branch !== undefined && (!branch || /[\x00-\x20\x7f]/.test(branch))) throw new TypeError("readGit must return a branch name for rev-parse");
-    return branch && (MAIN_REF.test(branch) || branch.toLowerCase() === head) ? `this checkout is on ${branch}. Push from the task's worktree, on the task's branch.` : undefined;
+    return branch && (MAIN_REF.test(branch) || branch.toLowerCase() === head) ? `this checkout is on ${branch}. Push from the task's worktree, on the task's branch.` : sent;
   }
 
   /** Read request options, not display options or unrelated text, as branch evidence. Never open a supplied body file. */

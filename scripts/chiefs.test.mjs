@@ -13,6 +13,7 @@ import { shellCommands } from "../plugins/sage/core/command-reader.mjs";
 import { landingRule } from "../plugins/sage/core/board-view.mjs";
 import * as claude from "../plugins/sage/skills/sage/sage.mjs";
 import { tool as codex } from "../plugins/sage-codex/skills/sage/sage.mjs";
+import { stateKey } from "../plugins/sage-codex/hooks/principles-hook.mjs";
 import { backed, reportFor } from "./verdict-backing.mjs";
 
 const at = (path) => fileURLToPath(new URL(path, import.meta.url));
@@ -1484,3 +1485,102 @@ test("F-T656-20: the last takeover answer decides the fresh cycle: back to a Cod
   answer("G4", "2026-01-01T00:00:04Z"); // Claude C2 to Claude C3: no new rule, so G3's stays
   assert.throws(() => check(claude, "C3"), /^Error: T1 came from a chief of another provider through a takeover gate \(2026-01-01T00:00:03Z\)/);
 });
+
+/** The session id of each provider's chief in the push tests (T822). */
+const SESSION = new Map([[claude, "claude-session"], [codex, "codex-session"]]);
+/**
+ * Both providers' hooks over one project, as processes, for the push rule of a shared logbook (T822). The project has a
+ * GitHub remote and a worktree on sage/t1-a. No push runs: a hook only judges the command. gh is a fake, first on PATH,
+ * and every folder that holds a real gh is off PATH; it logs each call and answers only GitHub's default branch, which
+ * the push form reads. Each chief's session is in sage mode: Claude's by its typed phrase, Codex's by its mode file.
+ */
+function pushWorld(t) {
+  const w = scratch(t), bin = join(w.base, "bin"), calls = join(w.base, "gh-calls.log"), tree = join(w.base, "tree");
+  mkdirSync(bin);
+  writeFileSync(join(bin, "gh"), `#!/bin/sh\necho "$@" >> "${calls}"\nif [ "$1" = api ] && [ "$6" = .default_branch ]; then echo main; exit 0; fi\nexit 1\n`, { mode: 0o755 });
+  const env = { ...w.env, PATH: [bin, ...String(process.env.PATH).split(":").filter((d) => d && !existsSync(join(d, "gh")))].join(":"), SAGE_HOOKS_STATE: join(w.base, "hooks") };
+  // The fake answers first: gh on this PATH is the fake, and it logs its call.
+  assert.equal(spawnSync("gh", ["api", "--hostname", "github.com", "repos/acme/project", "--jq", ".default_branch"], { env, encoding: "utf8" }).stdout, "main\n");
+  assert.equal(readFileSync(calls, "utf8"), "api --hostname github.com repos/acme/project --jq .default_branch\n");
+  execFileSync("git", ["-C", w.project, "remote", "add", "origin", "https://github.com/acme/project.git"]);
+  execFileSync("git", ["-C", w.project, "worktree", "add", "-q", "-b", "sage/t1-a", tree]);
+  for (const name of ["sage/t1-r", "sage/t9-free"]) execFileSync("git", ["-C", w.project, "branch", name]);
+  const answer = (r) => {
+    assert.equal(r.status, 0, r.stderr);
+    const out = r.stdout ? JSON.parse(r.stdout) : undefined;
+    return out?.hookSpecificOutput?.permissionDecision === "deny" ? out.hookSpecificOutput.permissionDecisionReason : undefined;
+  };
+  const hook = (tool, event) => answer(spawnSync(process.execPath, tool === claude ? LAUNCHER : [at("../plugins/sage-codex/hooks/gate-hook.mjs")],
+    { input: JSON.stringify({ session_id: SESSION.get(tool), cwd: w.project, ...event }), env, encoding: "utf8", timeout: 60_000 }));
+  hook(claude, { hook_event_name: "UserPromptSubmit", prompt: "sage mode" });
+  const modes = join(env.CODEX_HOME, "sage", ".hooks", "codex");
+  mkdirSync(modes, { recursive: true, mode: 0o700 });
+  writeFileSync(join(modes, `${stateKey({ session_id: SESSION.get(codex) })}.json`), JSON.stringify({ sage: true, autopilot: false }), { mode: 0o600 });
+  /** The refusal of a push by a provider's chief, or by its agent (a Claude implementer, a Codex child thread); undefined when it passes. */
+  const push = (tool, command, agent = false) => hook(tool, { hook_event_name: "PreToolUse", tool_name: "Bash", tool_use_id: "call_1", tool_input: { command },
+    ...(agent ? { agent_id: "agent-1", ...(tool === claude ? { agent_type: "sage:implementer" } : {}) } : {}) });
+  const sage = (tool, ...args) => tool.sage([...args, "--project", w.project], w.env);
+  return { ...w, env, tree, calls, push, sage };
+}
+/** The push rule's refusal in the pushing provider's words: the task, its owning chief and the takeover gate for the pusher. */
+const pushBar = (tool, branch, owner, provider, me) => `sage: ${branch} is a branch of T1, so only its owning chief pushes it. T1 belongs to chief ${owner} (${provider}), not to ${me}. Nothing changed. Change only your own tasks. To take T1, ask ${owner} to offer it to you, or open a takeover gate for the owner to answer: ${tool === claude ? `run sage gate replace T1 --to ${me} --chief ${me}.` : `call the gate_replace tool with this task and to ${me}`}`;
+const providerOf = (tool) => (tool === claude ? "claude" : "codex");
+
+for (const [name, own, other] of pairs) {
+  test(`T822: after a takeover from a ${name} chief, the former chief and its agent push nothing to the task's branch, and the owning chief does; a branch with no task, an ended task and a legacy logbook pass`, (t) => {
+    const w = pushWorld(t);
+    w.sage(own, "link", "--separate");
+    const before = own.chiefFor(w.project, SESSION.get(own), w.env), after = other.chiefFor(w.project, SESSION.get(other), w.env);
+    assert.deepEqual([before, after], ["C1", "C2"]);
+    w.sage(own, "task", "add", "--title", "a", ...ADD, "--chief", before);
+    w.sage(own, "task", "T1", "set", "branch=sage/t1-a", "--chief", before);
+    const sent = `git -C ${w.tree} push -u origin sage/t1-a`;
+    assert.equal(w.push(own, sent), undefined, "the owning chief pushes its task's branch");
+    assert.equal(w.push(own, sent, true), undefined, "and so does its agent");
+    assert.equal(w.push(other, sent), pushBar(other, "sage/t1-a", before, providerOf(own), after), "a chief that never owned it");
+    w.sage(other, "gate", "replace", "T1", "--to", after, "--chief", after);
+    w.sage(other, "gate", "answer", "G1", "--option", "1");
+    const lost = pushBar(own, "sage/t1-a", after, providerOf(other), before);
+    for (const agent of [false, true]) {
+      assert.equal(w.push(own, sent, agent), lost, `the former chief${agent ? "'s agent" : ""}`);
+      assert.equal(w.push(own, `git -C ${w.tree} push --delete origin sage/t1-a`, agent), lost, "a delete of the branch is a push too");
+      assert.equal(w.push(other, sent, agent), undefined, `the owning chief${agent ? "'s agent" : ""}`);
+      for (const tool of [own, other]) assert.equal(w.push(tool, `git -C ${w.tree} push origin sage/t9-free`, agent), undefined, "a branch that no task uses");
+    }
+    // A task uses the branch of each of its runs too, as the merge check reads it.
+    w.sage(other, "run", "add", "T1", "--role", "qa", "--branch", "sage/t1-r", "--chief", after);
+    assert.equal(w.push(own, `git -C ${w.tree} push origin sage/t1-r`), pushBar(own, "sage/t1-r", after, providerOf(other), before));
+    assert.equal(w.push(other, `git -C ${w.tree} push origin sage/t1-r`), undefined);
+    // An ended task bars nothing, as in the merge check.
+    w.sage(other, "task", "T1", "set", "state=abandoned", "--chief", after);
+    assert.equal(w.push(own, sent), undefined, "the task has ended");
+    assert.match(readFileSync(w.calls, "utf8"), /(?:^|\n)api --hostname github\.com repos\/acme\/project --jq \.default_branch\n[\s\S]*api --hostname/, "the hooks read the default branch from the fake gh");
+    // A legacy logbook has no chief, so its push rule is as before.
+    const legacy = pushWorld(t);
+    legacy.sage(own, "init");
+    legacy.sage(own, "task", "add", "--title", "a", ...ADD);
+    legacy.sage(own, "task", "T1", "set", "branch=sage/t1-a");
+    for (const tool of [own, other]) for (const agent of [false, true]) {
+      assert.equal(legacy.push(tool, `git -C ${legacy.tree} push -u origin sage/t1-a`, agent), undefined, "a legacy logbook");
+      assert.match(legacy.push(tool, `git -C ${legacy.tree} push --force origin sage/t1-a`, agent) ?? "passed", /^sage: sage mode never force-pushes/, "the hook judges this push");
+    }
+  });
+}
+
+for (const other of [codex, claude]) {
+  test(`T822: sage-pr create, which pushes the task's branch, refuses while a live task of another ${providerOf(other)} chief uses that branch`, (t) => {
+    const w = pushWorld(t);
+    w.sage(claude, "link", "--separate");
+    const mine = claude.chiefFor(w.project, SESSION.get(claude), w.env), theirs = other.chiefFor(w.project, other === claude ? "claude-other" : SESSION.get(other), w.env);
+    w.sage(claude, "task", "add", "--title", "a", ...ADD, "--chief", mine);
+    w.sage(claude, "task", "T1", "set", "branch=sage/t1-a", "--chief", mine);
+    const create = (line) => w.push(claude, `node ${PR_TOOL} ${line}`);
+    assert.equal(create("create T1"), undefined, "the owning chief, on a branch that only its task uses");
+    w.sage(other, "task", "add", "--title", "b", ...ADD, "--chief", theirs);
+    w.sage(other, "run", "add", "T2", "--role", "qa", "--branch", "sage/t1-a", "--chief", theirs);
+    assert.equal(create("create T1"), `sage: sage/t1-a is a branch of T2, so only its owning chief pushes it. T2 belongs to chief ${theirs} (${providerOf(other)}), not to ${mine}. Nothing changed. Change only your own tasks. To take T2, ask ${theirs} to offer it to you, or open a takeover gate for the owner to answer: run sage gate replace T2 --to ${mine} --chief ${mine}.`);
+    assert.equal(create("merge T1"), undefined, "merge pushes nothing, so only its own task's owner counts");
+    w.sage(other, "task", "T2", "set", "state=abandoned", "--chief", theirs);
+    assert.equal(create("create T1"), undefined, "an ended task bars nothing");
+  });
+}
