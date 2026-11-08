@@ -108,7 +108,7 @@ test("admission: with the mode file on, the owner's on, the call in the record a
   assert.equal(permits().length, 1);
   const permit = JSON.parse(readFileSync(join(permitFolder, permits()[0]), "utf8"));
   assert.deepEqual({ ...permit, time: typeof permit.time }, { session: SESSION, repo: "example-owner/example.repo", pr: "41", sha: SHA, command: COMMAND, cwd: w.project, turn: TURN,
-    transcript: w.transcript, mark: { session: SESSION, source: "startup", lines: 0, pid: PPID }, mode: w.modeFile, gh: join(FAKES, "gh"), time: "number" });
+    transcript: w.transcript, mark: { session: SESSION, source: "startup", lines: 0, pid: PPID }, mode: w.modeFile, gh: join(FAKES, "gh"), path: `${ARG0}:${FAKES}`, time: "number" });
   assert.deepEqual(ghCalls(), [["repo", "view", "--json", "nameWithOwner", "--jq", ".nameWithOwner"]], "the gate sets the repository from gh in the call's folder");
   rmSync(GH_LOG);
   // R2611: the escalation is allowed only for the same session, turn, exact command and working folder, from the root thread.
@@ -226,6 +226,103 @@ test("R2611: node and gh never come from a folder that Codex's sandbox can write
   const node = world();
   assert.match(denied(await node.run(node.input(), { env: { ...node.env, TMPDIR: dirname(process.execPath) } })) ?? "", /^sage: node runs from a folder that Codex's sandbox can write/);
   assert.deepEqual(permits(), []);
+});
+
+test("F-T677-2: a gh link in a folder outside the sandbox's folders, whose real file is inside them, is not gh", async () => {
+  clearPermits();
+  const w = world();
+  mkdirSync(join(w.project, "bin"));
+  cpSync(join(FAKES, "gh"), join(w.project, "bin", "gh"));
+  chmodSync(join(w.project, "bin", "gh"), 0o755);
+  const outside = join(w.home, "outside-bin");
+  mkdirSync(outside);
+  symlinkSync(join(w.project, "bin", "gh"), join(outside, "gh"));
+  assert.equal(denied(await w.run(w.input(), { env: { ...w.env, PATH: `${ARG0}:${outside}` } })), `sage: sage found no gh outside the folders that Codex's sandbox can write, so autopilot merges nothing. ${READY}`);
+  assert.deepEqual([w.checks, permits(), ghCalls()], [[], [], []], "no merge check, no permit, and no gh ran");
+});
+
+/**
+ * A logging gh for the PATH and launcher tests: it logs its called name (argv0), its arguments and its PATH, and names
+ * the repository. kind "script" is a node script; kind "launcher" is node itself linked as gh, with a preload that acts
+ * as a shared launcher (snap, mise): it runs gh only when it is called by the name gh, and else refuses.
+ */
+function loggingGh(kind) {
+  const dir = join(SCRATCH, `${kind}-gh-${++worlds}`);
+  const log = join(dir, "calls.log");
+  mkdirSync(dir);
+  const body = `const { basename } = require("node:path");
+const args = ${kind === "launcher" ? "[basename(process.argv[1] ?? \"\"), ...process.argv.slice(2)]" : "process.argv.slice(2)"};
+if (["repo", "pr"].includes(args[0])) {
+  if (basename(process.argv0) !== "gh" && ${kind === "launcher"}) { console.error("launcher: no tool named " + basename(process.argv0)); process.exit(1); }
+  require("node:fs").appendFileSync(${JSON.stringify(log)}, JSON.stringify({ args, PATH: process.env.PATH }) + "\\n");
+  console.log(args[0] === "repo" ? "example-owner/example.repo" : "FAKE-gh T677 " + ${JSON.stringify(kind)});
+  process.exit(0);
+}
+`;
+  const env = {};
+  if (kind === "launcher") {
+    symlinkSync(process.execPath, join(dir, "gh"));
+    writeFileSync(join(dir, "launcher.cjs"), body);
+    env.NODE_OPTIONS = `--require=${join(dir, "launcher.cjs")}`;
+  } else writeFileSync(join(dir, "gh"), `#!${process.execPath}\n${body}`, { mode: 0o755 });
+  const calls = () => (existsSync(log) ? readFileSync(log, "utf8").trim().split("\n").map((line) => JSON.parse(line)) : []);
+  return { dir, env, calls };
+}
+/** Run the merge command of the world's admitted call, with this environment. */
+const runMerge = (w, env) => spawnSync(process.execPath, [MERGE, "41", SHA], { cwd: w.project, encoding: "utf8", env: { HOME: w.home, CODEX_SESSION_ID: SESSION, CODEX_THREAD_ID: SESSION, CODEX_TOOL_CALL_ID: CALL, ...env } });
+
+test("F-T677-1: gh runs with the name gh, so a shared launcher that picks its tool by name (snap, mise) runs gh", async () => {
+  clearPermits();
+  const w = world();
+  const gh = loggingGh("launcher");
+  assert.equal(spawnSync(join(gh.dir, "gh"), ["pr", "x"], { encoding: "utf8", env: { ...gh.env, PATH: gh.dir } }).stdout, "FAKE-gh T677 launcher\n", "the launcher runs gh by the link's name");
+  assert.match(spawnSync(realpathSync(join(gh.dir, "gh")), ["pr", "x"], { encoding: "utf8", env: gh.env }).stderr, /^launcher: no tool named node/, "by its real file's name it refuses");
+  rmSync(join(gh.dir, "calls.log"));
+  const env = { ...w.env, ...gh.env, PATH: `${ARG0}:${gh.dir}` };
+  assert.equal(denied(await w.run(w.input(), { env })), undefined, "the gate admits the call");
+  assert.equal(JSON.parse(readFileSync(join(permitFolder, permits()[0]), "utf8")).gh, realpathSync(process.execPath), "the permit names the real file, which no link change can swap");
+  const r = runMerge(w, { ...gh.env, PATH: gh.dir });
+  assert.deepEqual({ status: r.status, stdout: r.stdout, stderr: r.stderr }, { status: 0, stdout: "FAKE-gh T677 launcher\n", stderr: "" });
+  assert.deepEqual(gh.calls().map((call) => call.args), [["repo", "view", "--json", "nameWithOwner", "--jq", ".nameWithOwner"], ["pr", "merge", "41", "--repo", "example-owner/example.repo", "--squash", "--delete-branch", "--match-head-commit", SHA]]);
+  assert.deepEqual(ghCalls(), []);
+});
+
+test("F-T677-4: the trusted PATH drops missing folders, and every gh child (repo view, the merge) gets the trusted PATH", async () => {
+  clearPermits();
+  const w = world();
+  const gh = loggingGh("script");
+  // TMPDIR given in a form that is not its real form (here a link, as /var is on macOS), and a PATH folder under it
+  // that does not exist yet: the sandbox could make it later. A missing folder elsewhere goes too.
+  mkdirSync(join(w.home, "tmp-real"));
+  symlinkSync(join(w.home, "tmp-real"), join(w.home, "tmp-link"));
+  mkdirSync(join(w.project, "bin"));
+  writeFileSync(join(w.project, "bin", "git"), "#!/bin/sh\nexit 0\n", { mode: 0o755 });
+  const env = { ...w.env, TMPDIR: join(w.home, "tmp-link"), PATH: [ARG0, join(w.home, "tmp-link", "later"), join(w.home, "missing-bin"), join(w.project, "bin"), gh.dir].join(":") };
+  assert.equal(denied(await w.run(w.input(), { env })), undefined);
+  const trusted = `${ARG0}:${gh.dir}`;
+  assert.deepEqual(w.paths, [trusted], "the merge check's PATH");
+  assert.equal(JSON.parse(readFileSync(join(permitFolder, permits()[0]), "utf8")).path, trusted, "the permit's PATH");
+  const r = runMerge(w, { PATH: `${join(w.project, "bin")}:${gh.dir}` });
+  assert.equal(r.status, 0, r.stderr);
+  assert.deepEqual(gh.calls().map((call) => [call.args[0], call.PATH]), [["repo", trusted], ["pr", trusted]], "gh and the git that it starts never come from the project's folder");
+  assert.deepEqual(ghCalls(), []);
+});
+
+test("F-T677-3: of the network approvals of the admitted call, the gate allows only GitHub's API host", async () => {
+  clearPermits();
+  const w = world();
+  assert.equal(await w.run(w.input()), undefined);
+  rmSync(GH_LOG);
+  const ask = (description) => w.ask(COMMAND, { tool_input: description === undefined ? { command: COMMAND } : { command: COMMAND, description } });
+  // Codex 0.164 gives a network approval as Bash with the call's command and "network-access <protocol>://<host>:<port>".
+  assert.deepEqual(await w.run(ask("network-access https://api.github.com:443")), ALLOW, "GitHub's API, which gh needs");
+  for (const description of ["network-access https://example.com:443", "network-access http://api.github.com:80", "network-access https://api.github.com.example.com:443",
+    "network-access socks5-tcp://api.github.com:443", "network-access https://api.github.com:443 ", 7, null]) {
+    assert.equal(await w.run(ask(description)), undefined, String(description));
+  }
+  // The escalation itself: no description, or the model's own reason.
+  assert.deepEqual(await w.run(ask(undefined)), ALLOW, "no description");
+  assert.deepEqual(await w.run(ask("merge the verified pull request")), ALLOW, "a reason of the model");
 });
 
 test("a failing merge check refuses with its own reason, and saves no permit", async () => {

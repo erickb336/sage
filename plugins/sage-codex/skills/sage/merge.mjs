@@ -17,15 +17,17 @@
 //      both must still show autopilot on, and the permit's turn must have no turn_aborted event. Esc does not stop a
 //      command that already runs (T662 proof, case 1c), so this check is the last stop before the merge.
 //   5. gh pr merge --repo <the permit's repository> --match-head-commit, run by the gh file that the gate found outside
-//      every folder that Codex's sandbox can write, with no shell, in an empty private folder of sage outside every
-//      worktree, and without the variables that send gh to another host or repository. So the merge goes to the
+//      every folder that Codex's sandbox can write, with the name gh (a launcher such as snap or mise picks its tool by
+//      that name) and the PATH that the gate kept (only folders outside the sandbox's, for the git that gh starts), with
+//      no shell, in an empty private folder of sage outside every worktree, and without the variables that send gh to
+//      another host or repository. So the merge goes to the
 //      reviewed head of that repository only, and gh runs no git command in a checkout (with --repo, gh deletes only
 //      the remote branch). GH_CONFIG_DIR stays: gh keeps the owner's login there when it is set, and the agent cannot
 //      set it, because the permit admits only the exact command.
 import { execFileSync } from "node:child_process";
 import { createHash } from "node:crypto";
 import { realpathSync, renameSync, rmSync } from "node:fs";
-import { basename, isAbsolute, join } from "node:path";
+import { isAbsolute, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { readModeFile } from "../../core/index.mjs";
 import { autopilotSwitch, readRecord, turnAborted } from "../../hooks/owner-record.mjs";
@@ -43,10 +45,11 @@ const REDIRECTS = ["GH_HOST", "GH_REPO", "GH_ENTERPRISE_TOKEN", "GITHUB_ENTERPRI
 /**
  * A merge permit, as the gate saves it: the session, repository (owner/name), pull request, head SHA, exact command
  * and working folder that it admits, the turn of the call, the record, the session's start mark and mode file, the gh
- * file to run, and the time of the gate's admission.
+ * file to run (its real file, whose name can be a launcher's), the PATH for gh, and the time of the gate's admission.
  */
 const PERMIT_FIELDS = [["session", text], ["repo", (v) => REPOSITORY.test(v)], ["pr", text], ["sha", text], ["command", text], ["cwd", text], ["turn", text],
-  ["transcript", text], ["mark", (v) => v !== null && typeof v === "object"], ["mode", text], ["gh", (v) => text(v) && isAbsolute(v) && basename(v) === "gh"], ["time", Number.isFinite]];
+  ["transcript", text], ["mark", (v) => v !== null && typeof v === "object"], ["mode", text], ["gh", (v) => text(v) && isAbsolute(v)],
+  ["path", (v) => text(v) && v.split(":").every(isAbsolute)], ["time", Number.isFinite]];
 
 const AGAIN = "Ask for the merge again";
 const SWITCH_ON = 'To merge on autopilot, the owner sends "autopilot on" alone while sage mode is on, then asks for the merge again. Or the owner merges the pull request in GitHub';
@@ -105,22 +108,22 @@ function check(args, env, now) {
   const { state } = readModeFile(readState, permit.mode);
   if (state.sage !== true || state.autopilot !== true) return { why: `autopilot is off in sage's mode file of this session. ${SWITCH_ON}` };
   if (turnAborted(record, permit.turn)) return { why: "the owner stopped the turn of this merge with Esc. Ask for the merge again only if the owner wants it" };
-  return { repo: permit.repo, gh: permit.gh };
+  return { repo: permit.repo, gh: permit.gh, path: permit.path };
 }
 
 if (process.argv[1] && realpathSync(process.argv[1]) === SCRIPT) {
   const args = process.argv.slice(2);
-  const { why, repo, gh } = check(args, process.env, Date.now());
+  const { why, repo, gh, path } = check(args, process.env, Date.now());
   if (why) {
     process.stderr.write(`sage: the merge command refuses: ${why}.\n`);
     process.exit(1);
   }
-  const env = { ...process.env };
+  const env = { ...process.env, PATH: path };
   for (const name of REDIRECTS) delete env[name];
   try {
     const cwd = ghFolder();
     privateDirectory(cwd);
-    execFileSync(gh, ["pr", "merge", args[0], "--repo", repo, "--squash", "--delete-branch", "--match-head-commit", args[1]], { cwd, env, stdio: "inherit" });
+    execFileSync(gh, ["pr", "merge", args[0], "--repo", repo, "--squash", "--delete-branch", "--match-head-commit", args[1]], { argv0: "gh", cwd, env, stdio: "inherit" });
   } catch (error) {
     const cause = typeof error.status === "number"
       ? `gh pr merge failed (exit status ${error.status}): the head may have moved, the pull request may not be ready to merge, or gh may not be logged in`

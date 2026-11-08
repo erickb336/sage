@@ -31,8 +31,13 @@ const GH = join(FAKES, "gh");
 const GH_LOG = join(SCRATCH, "gh.log");
 const MARKER = "FAKE-gh T663";
 mkdirSync(FAKES);
-/** The variables that the fake gh logs: the four that send gh elsewhere must be gone, and the owner's gh config stays. */
-const GH_VARIABLES = ["GH_HOST", "GH_REPO", "GH_ENTERPRISE_TOKEN", "GITHUB_ENTERPRISE_TOKEN", "GH_CONFIG_DIR"];
+/**
+ * The variables that the fake gh logs: the four that send gh elsewhere must be gone, the owner's gh config stays, and
+ * PATH is the permit's (F-T677-4).
+ */
+const GH_VARIABLES = ["GH_HOST", "GH_REPO", "GH_ENTERPRISE_TOKEN", "GITHUB_ENTERPRISE_TOKEN", "GH_CONFIG_DIR", "PATH"];
+/** The PATH that the gate kept, as the permit names it: here another one than the caller's, which is FAKES. */
+const TRUSTED_PATH = `${FAKES}:/fixture-trusted/bin`;
 writeFileSync(GH, `#!${process.execPath}
 const { appendFileSync, readdirSync } = require("node:fs");
 const env = Object.fromEntries(${JSON.stringify(GH_VARIABLES)}.map((name) => [name, process.env[name] ?? null]));
@@ -90,7 +95,7 @@ function permit(s, fields = {}) {
   const file = permitFile(s.env.CODEX_TOOL_CALL_ID);
   mkdirSync(dirname(file), { recursive: true, mode: 0o700 });
   const saved = { session: SESSION, repo: REPO, pr: "41", sha: SHA, command: mergeCommand("41", SHA), cwd: s.project, turn: s.turn, transcript: s.transcript,
-    mark: { session: SESSION, source: "startup", lines: 0, pid: 1 }, mode: s.mode, gh: GH, time: Date.now(), ...fields };
+    mark: { session: SESSION, source: "startup", lines: 0, pid: 1 }, mode: s.mode, gh: GH, path: TRUSTED_PATH, time: Date.now(), ...fields };
   writeFileSync(file, typeof fields === "string" ? fields : JSON.stringify(saved), { mode: 0o600 });
   return file;
 }
@@ -117,7 +122,7 @@ test("with a valid merge permit and the owner's on switch, it runs gh pr merge o
   const folder = ghFolder();
   assert.equal(folder, join(INSTALL_HOME, "sage", ".hooks", "codex", "merge-folder"));
   assert.deepEqual(ghCalls(), [{ args: ["pr", "merge", "41", "--repo", REPO, "--squash", "--delete-branch", "--match-head-commit", SHA],
-    env: { GH_HOST: null, GH_REPO: null, GH_ENTERPRISE_TOKEN: null, GITHUB_ENTERPRISE_TOKEN: null, GH_CONFIG_DIR: s.env.GH_CONFIG_DIR }, cwd: folder, files: [] }]);
+    env: { GH_HOST: null, GH_REPO: null, GH_ENTERPRISE_TOKEN: null, GITHUB_ENTERPRISE_TOKEN: null, GH_CONFIG_DIR: s.env.GH_CONFIG_DIR, PATH: TRUSTED_PATH }, cwd: folder, files: [] }]);
   assert.equal(statSync(folder).mode & 0o777, 0o700, "the folder is private");
   assert.equal(existsSync(file), false, "the permit is used up");
   assert.equal(existsSync(file.replace(/\.json$/, ".used.json")), false, "and no used permit stays");
@@ -201,10 +206,12 @@ test("a merge permit that is damaged, old, or for another session, pull request,
     [{ mark: undefined }, "the merge permit is damaged"],
     [{ mark: 0 }, "the merge permit is damaged"],
     [{ mark: null }, "the merge permit is damaged"],
-    // T677: the permit names the working folder, the mode file and the gh file (absolute, named gh) that the gate checked.
+    // T677: the permit names the working folder, the mode file, the gh file (absolute: its real file, which can be a
+    // launcher of another name, F-T677-1) and the PATH (absolute folders, F-T677-4) that the gate checked.
     [{ cwd: undefined }, "the merge permit is damaged"],
     [{ mode: undefined }, "the merge permit is damaged"],
-    ...["gh", "bin/gh", "/usr/bin/curl", "/tmp/gh/x", ""].map((gh) => [{ gh }, "the merge permit is damaged"]),
+    ...[undefined, "gh", "bin/gh", ""].map((gh) => [{ gh }, "the merge permit is damaged"]),
+    ...[undefined, "", "bin", `${FAKES}:bin`, `${FAKES}::/usr/bin`, ["/usr/bin"]].map((path) => [{ path }, "the merge permit is damaged"]),
     // The repository is owner/name only (F-T663-4): no host, no flag, no path.
     ...[undefined, "", "example-owner", "github.com/example-owner/example.repo", "--admin/x", "example-owner/-x", "a/b/c", "a b/c", "../x", "x/..", "x/.", "-x/y"].map((repo) => [{ repo }, "the merge permit is damaged"]),
   ];

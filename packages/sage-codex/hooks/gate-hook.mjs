@@ -690,9 +690,16 @@ const writableRoots = (cwd, env, temporary) => [projectRoot(cwd), cwd, env.TMPDI
 /** The temporary folders that Codex's sandbox can write on every machine, beside TMPDIR. */
 export const TEMPORARY = ["/tmp", "/private/tmp", "/var/tmp"];
 const inside = (path, roots) => roots.some((root) => { const at = relative(root, path); return at === "" || (!at.startsWith("..") && !isAbsolute(at)); });
-/** The hook's PATH without the folders that the sandbox can write (and without relative folders). */
-const trustedPath = (roots, env) => (env.PATH ?? "").split(":").filter((dir) => isAbsolute(dir) && !inside(real(dir) ?? resolve(dir), roots)).join(":");
-/** The real file of gh on the trusted PATH, outside every folder that the sandbox can write, or undefined. */
+/**
+ * The hook's PATH without the folders that the sandbox can write, and without relative or missing folders: the sandbox
+ * could make a missing folder later, also under a temporary folder in a form that is not its real form (F-T677-4).
+ */
+const trustedPath = (roots, env) => (env.PATH ?? "").split(":").filter((dir) => { const at = isAbsolute(dir) && real(dir); return at && !inside(at, roots); }).join(":");
+/**
+ * The real file of gh on the trusted PATH, outside every folder that the sandbox can write, or undefined. sage runs that
+ * file with the name gh (argv0), as a shell does, so a shared launcher that picks its tool by name (snap, mise) runs gh
+ * (F-T677-1); a link that the sandbox can change is never run.
+ */
 function trustedGh(roots, env) {
   for (const dir of trustedPath(roots, env).split(":")) {
     const file = real(join(dir, "gh"));
@@ -718,10 +725,10 @@ function runningCodex(roots, env) {
   }
   return null;
 }
-/** The repository (owner/name) that gh finds for the folder, or undefined. */
+/** The repository (owner/name) that gh finds for the folder, or undefined. gh and the git that it starts come from the trusted PATH. */
 function repositoryOf(gh, cwd, env) {
   try {
-    const name = execFileSync(gh, ["repo", "view", "--json", "nameWithOwner", "--jq", ".nameWithOwner"], { cwd, env: { ...env, GH_PROMPT_DISABLED: "1", GH_NO_UPDATE_NOTIFIER: "1" }, encoding: "utf8", timeout: 10_000, stdio: ["ignore", "pipe", "ignore"] }).trim();
+    const name = execFileSync(gh, ["repo", "view", "--json", "nameWithOwner", "--jq", ".nameWithOwner"], { argv0: "gh", cwd, env: { ...env, GH_PROMPT_DISABLED: "1", GH_NO_UPDATE_NOTIFIER: "1" }, encoding: "utf8", timeout: 10_000, stdio: ["ignore", "pipe", "ignore"] }).trim();
     return /^[A-Za-z0-9][A-Za-z0-9-]*\/(?!\.\.?$)[A-Za-z0-9_.][A-Za-z0-9_.-]*$/.test(name) ? name : undefined;
   } catch { return undefined; }
 }
@@ -773,21 +780,30 @@ async function admit(f, merge, { env, check, ppid, temporary }) {
   if (inside(real(process.execPath) ?? process.execPath, roots)) return `sage: node runs from a folder that Codex's sandbox can write (${process.execPath}), so autopilot merges nothing. ${READY}`;
   const gh = trustedGh(roots, env);
   if (!gh) return `sage: sage found no gh outside the folders that Codex's sandbox can write, so autopilot merges nothing. ${READY}`;
-  const repo = repositoryOf(gh, f.cwd, env);
+  // Every gh child (here, in checkMerge, unchanged, and in the merge command) runs with the trusted PATH, so the git
+  // that gh starts runs outside the sandbox's folders too (F-T677-4).
+  const path = trustedPath(roots, env);
+  const repo = repositoryOf(gh, f.cwd, { ...env, PATH: path });
   if (!repo) return "sage: gh could not name the GitHub repository of this folder, so sage refuses the merge. Try again, or tell the user";
-  // checkMerge, unchanged, with the trusted PATH: its gh and git run outside the sandbox too.
-  const verdict = await check(merge, f.cwd, { ...env, PATH: trustedPath(roots, env) }, f.session);
+  const verdict = await check(merge, f.cwd, { ...env, PATH: path }, f.session);
   if (verdict?.ok !== true) return verdict?.reason ?? "sage: the merge check refuses";
   const file = permitFile(f.toolUseId);
   if (!file) return `sage: this copy of sage is not installed as a Codex plugin, so it has no merge permits. ${READY}`;
   try {
-    savePermit(file, { session: f.session, repo, pr: merge.pr, sha: merge.sha, command: f.command, cwd: f.cwd, turn: f.turn, transcript: f.transcript, mark, mode, gh, time: Date.now() });
+    savePermit(file, { session: f.session, repo, pr: merge.pr, sha: merge.sha, command: f.command, cwd: f.cwd, turn: f.turn, transcript: f.transcript, mark, mode, gh, path, time: Date.now() });
   } catch (error) {
     return `sage: the gate could not save the merge permit of this call (${error?.code ?? error?.message ?? error}), so it refuses the merge. Check the folder ${dirname(file)}`;
   }
   return undefined;
 }
 const ALLOW = { hookSpecificOutput: { hookEventName: "PermissionRequest", decision: { behavior: "allow" } } };
+/**
+ * Whether the approval's description lets the gate allow it. Codex asks for the network access of a running command as
+ * Bash with that command and the description "network-access <protocol>://<host>:<port>" (Codex 0.164 approvals.rs:
+ * 202-209, network_approval.rs:610-612); for an escalation the description is the model's own reason. Of the network,
+ * the gate allows only GitHub's API, which gh needs (F-T677-3). Codex asks the owner for every other host.
+ */
+const allowedDescription = (description) => description === undefined || (typeof description === "string" && (!description.startsWith("network-access ") || description === "network-access https://api.github.com:443"));
 
 // Codex adds ". Command: <the command>" after the reason, so a reason ends with no period of its own.
 const deny = (reason) => ({ hookSpecificOutput: { hookEventName: "PreToolUse", permissionDecision: "deny", permissionDecisionReason: reason.replace(/\.$/, "") } });
@@ -840,7 +856,7 @@ export async function gate(input, { mode = readMode, check = checkMerge, env = p
   if (!f) return input?.hook_event_name === "PermissionRequest" ? UNREAD_REQUEST : deny(UNREADABLE);
   const thread = threadOf(f);
   // The escalation of an admitted merge command: allowed only with its unused merge permit. Codex asks for every other.
-  if (f.event === "PermissionRequest") return f.tool === "Bash" && !thread.child && mergeForm(f.command) && permitted(f) ? ALLOW : undefined;
+  if (f.event === "PermissionRequest") return f.tool === "Bash" && !thread.child && mergeForm(f.command) && allowedDescription(f.input.description) && permitted(f) ? ALLOW : undefined;
   // Every merge goes through sage's merge command, before mode, role or saved-state checks: a gh merge never runs.
   if (f.tool === "Bash" && policy.mergeIn(f.command)) return deny(OWNER_MERGE);
   if (f.tool === "Bash" && runsMerge(f.command, f.cwd, env)) {
