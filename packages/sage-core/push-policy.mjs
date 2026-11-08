@@ -73,7 +73,7 @@ export function createPushPolicy({ stateToolPath, readGit, readGh, mainReason = 
         try {
           bar = owner(dir, name);
         } catch (e) {
-          bar = `the hook cannot read the logbook to tell which chief owns ${name} (${e?.message ?? e}), so it refuses the push.`;
+          bar = `the hook cannot tell which chief owns ${name} (${e?.message ?? e}), so it refuses the push.`;
         }
         if (bar) return { alone: bar };
       }

@@ -1517,10 +1517,10 @@ function pushWorld(t) {
   mkdirSync(modes, { recursive: true, mode: 0o700 });
   writeFileSync(join(modes, `${stateKey({ session_id: SESSION.get(codex) })}.json`), JSON.stringify({ sage: true, autopilot: false }), { mode: 0o600 });
   /** The refusal of a push by a provider's chief, or by its agent (a Claude implementer, a Codex child thread); undefined when it passes. */
-  const push = (tool, command, agent = false) => hook(tool, { hook_event_name: "PreToolUse", tool_name: "Bash", tool_use_id: "call_1", tool_input: { command },
-    ...(agent ? { agent_id: "agent-1", ...(tool === claude ? { agent_type: "sage:implementer" } : {}) } : {}) });
+  const push = (tool, command, agent = false, more = {}) => hook(tool, { hook_event_name: "PreToolUse", tool_name: "Bash", tool_use_id: "call_1", tool_input: { command },
+    ...(agent ? { agent_id: "agent-1", ...(tool === claude ? { agent_type: "sage:implementer" } : {}) } : {}), ...more });
   const sage = (tool, ...args) => tool.sage([...args, "--project", w.project], w.env);
-  return { ...w, env, tree, calls, push, sage };
+  return { ...w, env, tree, calls, hook, push, sage };
 }
 /** The push rule's refusal in the pushing provider's words: the task, its owning chief and the takeover gate for the pusher. */
 const pushBar = (tool, branch, owner, provider, me) => `sage: ${branch} is a branch of T1, so only its owning chief pushes it. T1 belongs to chief ${owner} (${provider}), not to ${me}. Nothing changed. Change only your own tasks. To take T1, ask ${owner} to offer it to you, or open a takeover gate for the owner to answer: ${tool === claude ? `run sage gate replace T1 --to ${me} --chief ${me}.` : `call the gate_replace tool with this task and to ${me}`}`;
@@ -1547,6 +1547,10 @@ for (const [name, own, other] of pairs) {
       assert.equal(w.push(other, sent, agent), undefined, `the owning chief${agent ? "'s agent" : ""}`);
       for (const tool of [own, other]) assert.equal(w.push(tool, `git -C ${w.tree} push origin sage/t9-free`, agent), undefined, "a branch that no task uses");
     }
+    // A Claude event with no session id names no chief, so a task's branch refuses (fail closed), as the merge does (F-T618-27).
+    w.hook(claude, { hook_event_name: "UserPromptSubmit", prompt: "sage mode", session_id: undefined });
+    assert.match(w.push(claude, sent, false, { session_id: undefined }) ?? "passed", /^sage: the hook cannot tell which chief owns sage\/t1-a \(sage has no session identity for this chief/);
+    assert.equal(w.push(claude, `git -C ${w.tree} push origin sage/t9-free`, false, { session_id: undefined }), undefined, "a branch that no task uses needs no chief");
     // A task uses the branch of each of its runs too, as the merge check reads it.
     w.sage(other, "run", "add", "T1", "--role", "qa", "--branch", "sage/t1-r", "--chief", after);
     assert.equal(w.push(own, `git -C ${w.tree} push origin sage/t1-r`), pushBar(own, "sage/t1-r", after, providerOf(other), before));
