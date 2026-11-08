@@ -1588,16 +1588,19 @@ test("T165-S3-FORGEDREVIEW: the agent's clone shows harmless text at the SHA, th
 
 test("T165-S4-BUNDLEDOS: a bundle fetch, archive or diff that takes too long stops with exit 2 and frees the lock", () => {
   const w = world();
-  // Every timed git call of the script has this limit, also the fast ones, which run through the fake git (a node start)
-  // in well under 1 s on a busy machine. 5 s leaves them a wide margin; only the call that never ends reaches it.
-  w.env.SAGE_PR_TIMEOUT = "5";
+  // Each case times only its slow call, at 1 s (SAGE_TEST_TIMED, under node --test only). With one short limit for every
+  // timed call, a fast call that a busy machine made slow stopped first, with its own message (T897). The slow call sleeps
+  // 120 s, so only the script's stop ends it, however slow the machine is. The other calls keep the script's own limit.
+  assert.ok(w.env.NODE_TEST_CONTEXT, "run under node --test, which SAGE_TEST_TIMED needs");
   const head = w.commit("b.txt", { imported: false });
   for (const [when, verb] of [[["fetch", "task.bundle"], "import"], [["archive"], "import"], [["diff", "--no-ext-diff"], "import"], [["fetch", "task.bundle"], "create"]]) {
     if (verb === "create") (w.imports(), w.sage("verdict", "T1", "--sha", head, "--kind", "checks-pass"));
     gitRule(w, { when, sleep: 2 * timeout, status: 0 });
+    Object.assign(w.env, { SAGE_PR_TIMEOUT: "1", SAGE_TEST_TIMED: when[0] });
     const r = w.pr(verb, "T1"); // the fake sleeps past the test's timeout: exit 2 shows that the script stopped it
+    delete w.env.SAGE_PR_TIMEOUT, delete w.env.SAGE_TEST_TIMED;
     assert.equal(r.status, 2, `${when}: ${r.stderr}`);
-    assert.equal(r.stderr, `sage-pr: failed: git ${when[0]} took over 5 s and was stopped: run it again. If it stops again, the bundle holds too much data: ask the user\n`);
+    assert.equal(r.stderr, `sage-pr: failed: git ${when[0]} took over 1 s and was stopped: run it again. If it stops again, the bundle holds too much data: ask the user\n`);
     if (verb === "import") assert.equal(existsSync(w.review(head).diff), false, "no review copy from a stopped import");
     assert.deepEqual(readdirSync(w.logbook).filter((n) => n.startsWith(".sage-pr-") || n === ".lock"), [], "no work folder, and the lock is free");
     rmSync(w.at("bin", "git-rule.json"));

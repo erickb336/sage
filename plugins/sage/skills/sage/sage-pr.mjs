@@ -68,7 +68,8 @@ const SECRETS = ["GH_TOKEN", "GITHUB_TOKEN", "GH_ENTERPRISE_TOKEN", "GITHUB_ENTE
  * - SSH_AUTH_SOCK: the ssh agent, for an ssh origin.
  * - SAGE_* and CLAUDE_CONFIG_DIR: the state tool's own variables (the logbook, the worktree root); git and gh ignore them.
  * - NODE_TEST_CONTEXT and TMPDIR: in a node test run, the logbook lock takes its liveness probe from SAGE_TEST_PIDS for a
- *   logbook in the temp folder, so that a held lock in a test never probes a real pid. git and gh get the script's own
+ *   logbook in the temp folder, so that a held lock in a test never probes a real pid, and SAGE_TEST_TIMED names the one
+ *   command that a test times (runFile). git and gh get the script's own
  *   folder as TMPDIR.
  */
 const KEEP = /^(?:PATH|HOME|LANG|LC_[A-Z]+|GH_TOKEN|GITHUB_TOKEN|GH_CONFIG_DIR|SSH_AUTH_SOCK|SAGE_[A-Z_]+|CLAUDE_CONFIG_DIR|NODE_TEST_CONTEXT|TMPDIR)$/;
@@ -190,11 +191,12 @@ const limitOf = (env) => (/^[1-9][0-9]{0,3}$/.test(env.SAGE_PR_TIMEOUT ?? "") ? 
  * result, but never print: git's own message holds the argument list, and so the origin URL.
  */
 function runFile(program, args, env, timed) {
-  const limit = timed ? limitOf(env) : 0;
+  const command = args.find((a, i) => !a.startsWith("-") && !["-C", "-c"].includes(args[i - 1])) ?? args[0];
+  // Only under node --test: SAGE_TEST_TIMED names the one command that a test times, so no other call races its short limit (T897).
+  const limit = timed && !(env.NODE_TEST_CONTEXT && env.SAGE_TEST_TIMED && env.SAGE_TEST_TIMED !== command) ? limitOf(env) : 0;
   try {
     return execFileSync(program, args, { encoding: "utf8", env, stdio: ["ignore", "pipe", "pipe"], timeout: limit * 1000, killSignal: "SIGKILL" }).trim();
   } catch (e) {
-    const command = args.find((a, i) => !a.startsWith("-") && !["-C", "-c"].includes(args[i - 1])) ?? args[0];
     if (e.code === "ETIMEDOUT") throw new Error(`${program} ${command} took over ${limit} s and was stopped: run it again. If it stops again, the bundle holds too much data: ask the user`);
     throw Object.assign(new Error(`${program} ${command} failed with exit ${e.status ?? e.code}: run sage-pr again`), { status: e.status, stderr: String(e.stderr ?? "") });
   }
