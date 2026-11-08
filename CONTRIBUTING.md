@@ -55,7 +55,7 @@ To override a pstack principle, add `principles/<name>.md` with `source: pstack 
    npm run check
    ```
 
-6. Run the tests. CI runs the check and the tests on each pull request.
+6. Run the tests. CI runs the check and the tests on each pull request. It runs `npm test` in 4 parts at the same time; to run one part, set `TEST_SHARD`, for example `TEST_SHARD=2/4 npm test`.
 
    ```sh
    npm test
@@ -68,7 +68,7 @@ To override a pstack principle, add `principles/<name>.md` with `source: pstack 
    npm run test:browser
    ```
 
-   To run one file: `node --test scripts/board-picker.test.mjs`. CI installs the same browser and runs `npm run test:browser` after `npm test`.
+   To run one file: `node --test scripts/board-picker.test.mjs`. CI installs the same browser and runs `npm run test:browser` after `npm run check`.
 
 ## The README and the docs
 
