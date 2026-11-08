@@ -7,7 +7,7 @@ import { programsRun, shellCommands } from "./command-reader.mjs";
 import { commandWrites, readerDispatch, uniqWrites } from "./shell-write-policy.mjs";
 import { outputDispatchWrites } from "./output-writes.mjs";
 import { programName } from "./program-name.mjs";
-import { ghApiMethod, ghWords, gitSubcommand, programAmong } from "./command-policy.mjs";
+import { ghApiMethod, ghWords, gitOrGh, gitSubcommand, programAmong } from "./command-policy.mjs";
 
 const fold = (text) => text.normalize("NFKC").toLowerCase();
 
@@ -224,10 +224,9 @@ export function stateToolRun(command, cwd) {
 export function ghRuns(command, cwd, path, options = {}) {
   const { programs } = programsRun(command, cwd, path, { ...options, contextEvidence: true });
   // gh behind a wrapper that the reader does not know (op run -- gh pr close 1) counts too (F-T815-30), when a gh command
-  // name follows it: a gh file that cp or ln names before a path is no run.
+  // follows it (gitOrGh): in brew install gh jq or man gh pr, gh is a word, not the program (F-T815-42).
   return programs.filter(({ wrapper, shellFunction }) => !wrapper && !shellFunction)
-    .map(({ run }) => [run, programAmong(run, (name) => name === "gh")])
-    .filter(([run, gh]) => gh && (gh === run || /^[a-z][\w-]*$/.test(ghWords(gh.args)[0] ?? ""))).map(([, run]) => {
+    .map(({ run }) => gitOrGh(run, "gh")).filter(Boolean).map((run) => {
     const [group, sub] = ghWords(run.args);
     return { group, sub, method: group === "api" ? ghApiMethod(run.args) : undefined, args: run.args };
   });

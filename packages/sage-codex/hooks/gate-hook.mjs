@@ -66,7 +66,7 @@ import { accessSync, constants, existsSync, linkSync, mkdirSync, readdirSync, re
 import { homedir } from "node:os";
 import { basename, dirname, isAbsolute, join, relative, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
-import { chiefEditDenied, commandWrites as knownCommandWrites, createCommandPolicy, createPushPolicy, gitInternalPath, LOGBOOK_FILES, partNames, PR, programName, programsRun, pullRequestHead, readModeFile, roleEditDenied, sharedRoot, shellCommands, shellWriteEvidence, shellExecutionUncertain, TEAM } from "sage-core";
+import { chiefEditDenied, commandWrites as knownCommandWrites, createCommandPolicy, createPushPolicy, gitInternalPath, gitOrGh, LOGBOOK_FILES, partNames, PR, programName, programsRun, pullRequestHead, readModeFile, roleEditDenied, sharedRoot, shellCommands, shellWriteEvidence, shellExecutionUncertain, TEAM } from "sage-core";
 
 // Codex treats executable stdin conservatively without changing other callers' known-write classification.
 const commandWrites = (text, cwd) => knownCommandWrites(text, cwd) || shellExecutionUncertain(text, cwd);
@@ -176,7 +176,8 @@ function ghProblem(command, cwd, env) {
   let runs;
   try { runs = programsRun(command, cwd, env.PATH ?? ""); } catch { return undefined; }
   if (/\bgh\b/.test(command) && runs.some((p) => /[$`…]/.test(p.word))) return GH_LITERAL;
-  const gh = runs.filter((p) => programName(p.word) === "gh");
+  // gh behind a wrapper that the reader does not know (op run -- gh repo sync) counts too, by core's reader (F-T815-39).
+  const gh = runs.map((p) => gitOrGh(p, "gh")).filter(Boolean);
   if (!gh.length) return undefined;
   if (GH_SETTINGS.test(command)) return GH_SETUP;
   for (const { args: [group, sub] } of gh) {

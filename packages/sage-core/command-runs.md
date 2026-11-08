@@ -23,6 +23,8 @@ command that it judges.
   one of them. A program that only reads the file is no run.
 - `ghRuns(command, cwd, path, options)` gives each gh run's command words and,
   for `gh api`, its method (core's `ghApiMethod`, which the push rules use too).
+  It finds gh behind an unknown wrapper with `gitOrGh`, the reader that the push
+  rules and the Codex gate use too.
   `AGENT_GH` and `agentGh` are the gh commands that an agent runs.
 
 The merge rule is `mergeRun`, a method of `createCommandPolicy`, because it

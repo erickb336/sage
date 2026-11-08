@@ -838,6 +838,11 @@ test("T536: no push reaches the default branch through a remote with another nam
   // R1971-2: git's own output option under .git.
   refused("git checkout-index --prefix=.git/hooks/ -a", /^sage: this command writes a file under a \.git folder/);
   refused("gh repo sync", /^sage: gh repo sync writes a branch on GitHub/);
+  // F-T815-39: git or gh behind a wrapper that the reader does not know, on a line that it can read; a file named git passes.
+  refused("op run -- gh repo sync", /^sage: gh repo sync writes a branch on GitHub/);
+  refused("cd ~ && op run -- gh repo sync", /^sage: gh repo sync writes a branch on GitHub/);
+  refused(`arch -arm64 git -C ${dir} frobnicate github`, /^sage: "git frobnicate" is not a git command that the hook knows/);
+  passes("cp /usr/bin/git /tmp/git-copy");
   // R1936 F7: GitHub names the default branch, trunk here; a planted local ref that disagrees refuses, and so does a failed read.
   const trunk = session({ FAKE_DEFAULT_BRANCH: "trunk" });
   trunk.send(prompt("sage mode"));
@@ -3803,6 +3808,12 @@ test("T197, T815: an agent runs the gh commands of core's list and gh api with G
   ]) assert.match(denied(f.send(command)) ?? "", /an agent runs only these gh commands|reaches main only through a pull request/, command);
   assert.equal(f.send("gh auth status", false), undefined, "the chief keeps its own gh");
   for (const command of [`${f.hard} auth status`, `${f.linked} auth status`, `cp ${f.gh} /tmp/x`, "alias m='gh pr view'"]) assert.equal(f.send(command), undefined, `${command} (a limit of the hook)`);
+  // F-T815-42: a word gh that is a file, a package or a page is not the program that runs; gh behind a wrapper is.
+  for (const command of ["brew install gh jq", "find . -name gh -type f", "du -sh gh node_modules", "cp gh backup", "man gh pr", "tree gh src",
+    "rm -rf gh build", "tar -czf out.tgz gh docs", "npm view gh version", "op run -- gh pr view 41"]) assert.equal(f.send(command), undefined, command);
+  for (const command of ["op run -- gh auth status", "chronic gh repo delete o/r", "ionice -c3 gh issue create --title x"]) {
+    assert.match(denied(f.send(command)) ?? "", /an agent runs only these gh commands/, command);
+  }
 });
 
 test("T197: PowerShell literal Windows gh paths are refused", () => {

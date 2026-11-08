@@ -79,22 +79,33 @@ export const unreadable = (error, what) => {
  * base), or a GraphQL mutation that merges, in a word of a request.
  */
 const apiMerges = (words) => words.some((w) => /(?:^|\/)pulls\/+[^/\s?#]+\/+merge(?![\w-])|(?:^|\/)(?:repos\/+[^/\s?#]+\/+[^/\s?#]+|repositories\/+\d+)\/+merges(?![\w-])/i.test(w) || /\b(?:mergePullRequest|enablePullRequestAutoMerge|mergeBranch)\b/.test(w));
-/** Programs that only print, list or search their words, or run git's own commands: a program name among their words is text. */
-const TEXT = /^(?:echo|printf|cat|grep|rg|git|ls|which)$/;
+/** Programs that only print, list or search their words, or run git's or gh's own commands: a program name among their words is text. */
+const TEXT = /^(?:echo|printf|cat|grep|rg|git|gh|ls|which)$/;
 /**
  * The program among the words of a run that the reader gives (F-T815-30): the run's own word when names(its base name)
- * is true, else the first later word that names takes and that a word other than an option follows, with the words after
- * it. A wrapper that the reader does not know (arch -arm64, op run --, script -q /dev/null, direnv exec .) runs the
- * program in its words, so the rules read that program as they read a known wrapper's. It returns the run with that
- * program's word and arguments, or undefined when there is none.
+ * is true, else the first later word that names takes and whose later words command takes (by default: a word other
+ * than an option follows), with the words after it. A wrapper that the reader does not know (arch -arm64, op run --,
+ * script -q /dev/null, direnv exec .) runs the program in its words, so the rules read that program as they read a known
+ * wrapper's. It returns the run with that program's word and arguments, or undefined when there is none.
  */
-export function programAmong(run, names) {
+export function programAmong(run, names, command = (rest) => rest.some((a) => !a.startsWith("-"))) {
   const { word, args } = run;
   if (names(programName(word))) return run;
   if (TEXT.test(programName(word))) return undefined;
-  const k = args.findIndex((w, i) => names(programName(w)) && args.slice(i + 1).some((a) => !a.startsWith("-")));
+  const k = args.findIndex((w, i) => names(programName(w)) && command(args.slice(i + 1)));
   return k < 0 ? undefined : { ...run, word: args[k], args: args.slice(k + 1) };
 }
+/** gh's own command groups (gh 2.x help) and their built-in aliases (co, cs, at, ext, extensions): an extension or a user's alias is a limit. */
+const GH_GROUPS = /^(?:agent-task|alias|api|at|attestation|auth|browse|cache|co|codespace|completion|config|copilot|cs|ext|extensions?|gist|gpg-key|issue|label|org|pr|preview|project|release|repo|ruleset|run|search|secret|ssh-key|status|variable|workflow)$/;
+/**
+ * The git or gh run of a run (F-T815-39, F-T815-42): the run itself when git or gh is its program, else the git or gh that
+ * a wrapper the reader does not know runs (programAmong), when the words after it are a command of that program: for gh
+ * a command group of gh and a word after it (gh repo sync, gh api <path>), for git a subcommand name (git -C x frobnicate).
+ * So in brew install gh jq, man gh pr, cp gh backup or cp /usr/bin/git fakes/git the word is a file, not a program.
+ */
+export const gitOrGh = (run, name) => programAmong(run, (n) => n === name, name === "gh"
+  ? (rest) => { const [group, next] = ghWords(rest); return GH_GROUPS.test(group ?? "") && next !== undefined; }
+  : (rest) => /^[a-z][\w-]*$/i.test(gitSubcommand(rest, 0)));
 /** Does a gh run merge: gh pr merge, or gh api with a merge path or a merge mutation in its words or its input? */
 const ghMerges = (args, stdin = []) => {
   const [group, sub] = ghWords(args);

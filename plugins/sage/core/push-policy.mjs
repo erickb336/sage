@@ -1,7 +1,7 @@
 import { execFileSync } from "node:child_process";
 import { resolve } from "node:path";
 import { programsRun, shellCommands } from "./command-reader.mjs";
-import { createCommandPolicy, externalCommandOperands, GH_API_VALUE, ghApiMethod, GIT_VALUE, gitSubcommand, programAmong, programName, unreadable } from "./command-policy.mjs";
+import { createCommandPolicy, externalCommandOperands, GH_API_VALUE, ghApiMethod, GIT_VALUE, gitOrGh, gitSubcommand, programName, unreadable } from "./command-policy.mjs";
 import { commandWrites } from "./shell-write-policy.mjs";
 
 /** The owner/name of a GitHub repository URL as git writes it (https, ssh or scp form), or undefined for any other URL. */
@@ -121,9 +121,19 @@ export function createPushPolicy({ stateToolPath, readGit: gitReader = readGit, 
             own.splice(k, 1);
           }
         }
-        const send = sendsOtherwise(run.word, run.args);
-        if (send) return send.alone ? send.why : refuse(send);
-        if (apiWritesMain([run.word, ...run.args], run.dir ?? cwd)) return refuse(mainReason);
+        const why = sendWhy(run, cwd);
+        if (why) return why;
+      }
+      // git or gh behind a wrapper that the reader does not know (arch -arm64 gh repo sync) counts too, as in the merge
+      // rule: not in a shell function's call, whose words are its arguments (F-T815-39).
+      for (const { run: entry, wrapper, shellFunction } of programsRun(command, cwd, undefined, { ...options, contextEvidence: true }).programs) {
+        if (wrapper || shellFunction) continue;
+        for (const run of [gitOrGh(entry, "git"), gitOrGh(entry, "gh")]) {
+          if (!run || run === entry) continue;
+          if (programName(run.word) === "git" && /^push$/i.test(gitSubcommand(run.args, 0))) return refuse(NESTED);
+          const why = sendWhy(run, cwd);
+          if (why) return why;
+        }
       }
       if (runs.some(run => run.word === "command") && [...externalCommandOperands(command, cwd, options)]
         .some(({ word, args }) => apiWritesMain([word, ...args], cwd))) return refuse(mainReason);
@@ -132,6 +142,12 @@ export function createPushPolicy({ stateToolPath, readGit: gitReader = readGit, 
       return unreadableSend(error, command, cwd, commands);
     }
     return undefined;
+  }
+  /** Why a git or gh run sends commits or writes main another way than the push form (in the push form's words), or undefined. */
+  function sendWhy(run, cwd) {
+    const send = sendsOtherwise(run.word, run.args);
+    if (send) return send.alone ? send.why : refuse(send);
+    return apiWritesMain([run.word, ...run.args], run.dir ?? cwd) ? refuse(mainReason) : undefined;
   }
   /**
    * Why a line that the reader cannot read is refused (error e), or undefined (F-T815-31): its text names a push, or a gh
@@ -142,8 +158,7 @@ export function createPushPolicy({ stateToolPath, readGit: gitReader = readGit, 
   function unreadableSend(e, command, cwd, commands) {
     if (pushText(bare(command))) return refuse(unreadable(e, "a push"));
     const lines = commands ? runnable(commands).map(({ words }) => words) : bare(command).split(/[;&|()`\n]+/).map((part) => part.split(/\s+/).filter(Boolean));
-    for (const words of lines) {
-      const run = words.length && programAmong({ word: words[0], args: words.slice(1) }, (name) => /^(?:git|gh)$/.test(name));
+    for (const run of lines.filter((words) => words.length).flatMap(([word, ...args]) => [gitOrGh({ word, args }, "git"), gitOrGh({ word, args }, "gh")])) {
       // A variable as git's subcommand (git "$@" in a function) names no subcommand: a variable is a limit of the hook.
       if (!run || (programName(run.word) === "git" && /[$`]/.test(gitSubcommand(run.args, 0)))) continue;
       const send = sendsOtherwise(run.word, run.args);

@@ -117,7 +117,7 @@ const WHY = {
  */
 const T = TREE, L = LOGBOOK;
 /** Wrapper programs that the command reader does not know: each runs the program in its words. No row runs them. */
-const WRAPPERS = ["arch -arm64", "script -q /dev/null", "op run --", "direnv exec .", "unbuffer", `flock ${BASE}/lock`, "mise exec --"];
+const WRAPPERS = ["arch -arm64", "script -q /dev/null", "op run --", "direnv exec .", "unbuffer", `flock ${BASE}/lock`, "mise exec --", "chronic", "ionice -c3"];
 mkdirSync(join(env.HOME, "x")); // cd ~/x: a folder of the scratch home
 const REFUSED = [
   // Every merge form: by gh's own words, after gh's options, at any depth that the reader sees, and through the API.
@@ -200,6 +200,11 @@ const REFUSED = [
   ["push", `cd - && git -C ${T} frobnicate origin`],
   ["push", `timeout --foo 60 gh api -X PATCH repos/acme/project/git/refs/heads/main -f sha=${SHA}`],
   ["push", "timeout --foo 60 gh api -X PUT repos/acme/project/contents/README.md -f message=m -f content=eA== -f branch=main"],
+  // A wrapper that the reader does not know runs git or gh, also on a line that the reader can read (F-T815-39).
+  ["push", "cd ~ && op run -- gh repo sync"],
+  ["push", `cd ~ && arch -arm64 gh api -X PATCH repos/acme/project/git/refs/heads/main -f sha=${SHA}`],
+  ...WRAPPERS.flatMap((wrapper) => [`${wrapper} gh api -X PATCH repos/acme/project/git/refs/heads/main -f sha=${SHA}`, `${wrapper} gh repo sync`,
+    `${wrapper} gh repo edit acme/project --default-branch sage/t1-a`, `${wrapper} git -C ${T} frobnicate origin`].map((command) => ["push", command])),
   // Logbook writes by a literal path: as written, through a link, after a cd and from ~.
   ["logbook", `rm ${L}/tasks.tsv`],
   ["logbook", `echo x > ${L}/tasks.tsv`],
@@ -267,6 +272,18 @@ const PASSED = [
   ["ls -la /opt/homebrew/bin/gh", AGENT],
   [`cp ${BASE}/gh ${BASE}/fake-gh`, AGENT],
   [`arch -arm64 node ${TOOL} status`, AGENT],
+  // A word gh or git that is a file, a package or a page, not the program that runs, passes (F-T815-42).
+  ["brew install gh jq"],
+  ["find . -name gh -type f"],
+  ["du -sh gh node_modules"],
+  ["cp gh backup"],
+  ["man gh pr"],
+  ["tree gh src"],
+  ["rm -rf gh build"],
+  ["tar -czf out.tgz gh docs"],
+  ["npm view gh version"],
+  [`cp /usr/bin/git ${BASE}/git-copy`],
+  ["gh search repos git cli", ["claude chief", "codex chief"]],
 ];
 
 /** Runs a table's rows as each of their roles; returns the rows whose answer is not the expected one, and the counts. */
