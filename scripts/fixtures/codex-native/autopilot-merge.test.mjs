@@ -87,9 +87,10 @@ function session(recordName = "exec-on", { mode = true } = {}) {
     CODEX_SESSION_ID: SESSION, CODEX_THREAD_ID: SESSION, CODEX_TOOL_CALL_ID: `call_${homes}`, GH_HOST: "other.example", GH_REPO: "other/repository",
     GH_ENTERPRISE_TOKEN: "fake-enterprise-1", GITHUB_ENTERPRISE_TOKEN: "fake-enterprise-2", GH_CONFIG_DIR: join(home, "gh-config") };
   const turn = RECORDS[recordName].find((line) => line.payload.type === "task_started").payload.turn_id; // the proof record's turn, not the mode phrase's
-  // The session's mode file, as the mode hook saves it: sage mode and autopilot on.
+  // The session's mode file, as the mode hook saves it: sage mode and autopilot on, from the record's last on phrase.
+  const onTurn = lines.findLast((line) => line.payload.role === "user" && line.payload.content?.at(-1)?.text === "autopilot on")?.payload.internal_chat_message_metadata_passthrough.turn_id;
   const modeFile = join(home, "mode.json");
-  writeFileSync(modeFile, JSON.stringify({ sage: true, autopilot: true, given: true }), { mode: 0o600 });
+  writeFileSync(modeFile, JSON.stringify({ sage: true, autopilot: true, given: true, onTurn }), { mode: 0o600 });
   return { env, project, transcript, turn, lines, mode: modeFile };
 }
 /** Save a merge permit for the call, as the gate saves it (gate-hook.mjs). */
@@ -287,7 +288,7 @@ test("right before gh it reads the record again: the owner's switch must be on, 
   const version = session();
   writeFileSync(version.transcript, readFileSync(version.transcript, "utf8").replace('"cli_version":"0.164.0"', '"cli_version":"0.168.0"'));
   permit(version);
-  assertRefused(merge(version), "this session runs Codex 0.168.0, and sage reads the records of Codex 0.164 to 0.167 only. Use Codex 0.164 to 0.167, or the owner merges the pull request in GitHub", "a newer Codex");
+  assertRefused(merge(version), "this session runs Codex 0.168.0, and sage reads the records of Codex 0.164 to 0.167 only. A newer Codex waits until sage adds it. Until then, the owner merges the pull request in GitHub", "a newer Codex");
   const form = session();
   writeFileSync(form.transcript, `${readFileSync(form.transcript, "utf8")}{not json\n`);
   permit(form);
@@ -313,6 +314,20 @@ test("F-T677-13, F-T677-15: right before gh, an on that joins a running turn cou
   permit(started);
   assert.deepEqual(merge(started), { status: 0, stdout: `${MARKER}\n`, stderr: "" }, "the same on, starting its turn");
   rmSync(GH_LOG);
+});
+
+test("F-T677-33: right before gh, the record's latest on must be the on whose turn the mode file saved", () => {
+  // An off from a fork turned the mode file off after the gate's admission; then an on that joined a running turn turned
+  // it on again with that turn. The record still counts only the earlier on, so the merge stops.
+  const s = session();
+  writeFileSync(s.mode, JSON.stringify({ sage: true, autopilot: true, given: true, onTurn: "019a0000-0000-7000-8000-00000000a0a1" }));
+  permit(s);
+  assertRefused(merge(s), `the owner's latest "autopilot on" did not count, because only an on that is the whole message and starts a new turn counts. ${SWITCH_ON}`, "the mode file's on is another turn's");
+  const old = session();
+  writeFileSync(old.mode, JSON.stringify({ sage: true, autopilot: true, given: true }));
+  permit(old);
+  assert.equal(merge(old).status, 1, "a mode file with no on turn (saved before this rule)");
+  assert.deepEqual(ghCalls(), []);
 });
 
 test("a failed gh gives its cause and a next step, and the permit is still used up", () => {

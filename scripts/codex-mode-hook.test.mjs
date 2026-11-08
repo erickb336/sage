@@ -50,6 +50,7 @@ function session(env, meta = {}) {
   const send = (fields) => run(JSON.stringify({ ...base, ...fields }), env);
   return {
     id,
+    transcript,
     send,
     prompt: (prompt, extra = {}) => send({ hook_event_name: "UserPromptSubmit", turn_id: `turn-${sessions}`, prompt, ...extra }),
     start: (source) => send({ hook_event_name: "SessionStart", source }),
@@ -139,8 +140,10 @@ test("T453: a fork starts with sage mode off, and the chief gets one note to tel
   assert.match(contextOf(await s.prompt("sage mode")), ROLE, "the on phrase gives the fork the role");
 });
 
-/** The line in the thread of an off phrase that is not a main thread's (F-T677-29). */
-const OFF_LINE = (thread, mode = "") => `sage: you sent the off phrase in ${thread}, so autopilot is now off in every Codex session${mode}. To turn it on again, send "autopilot on" in the main thread of a session.`;
+/** The line in the thread of an off phrase that is not a main thread's (F-T677-29), or whose record sage cannot read (F-T677-32). */
+const AGAIN = 'To turn it on again, send "autopilot on" alone in the main thread of a session, as a new message while Codex is idle (press Esc first if Codex is busy).';
+const OFF_LINE = (thread, mode = "") => `sage: you sent the off phrase in ${thread}, so autopilot is now off in every Codex session${mode}. ${AGAIN}`;
+const UNREAD_LINE = `sage: sage cannot read Codex's record of this thread, so it does not know if this is a main thread or a side conversation. So it turned autopilot off in every Codex session. ${AGAIN}`;
 
 test("T453, F-T677-24: a subagent's on phrase switches nothing and gets no role; its off phrase switches the main session, with one line in its thread", async () => {
   const s = session();
@@ -168,7 +171,7 @@ test("F-T677-24: an off phrase in a fork, or in a side conversation with no reco
   for (const s of [main, other]) await s.prompt("autopilot on");
   const side = session(undefined, null);
   for (const m of S_ON) assert.equal((await side.prompt(m))?.systemMessage, undefined, "an on in a side conversation switches nothing outside it");
-  assert.equal((await side.prompt("autopilot off")).systemMessage, OFF_LINE("a thread with no record that sage can read (a side conversation has none)"));
+  assert.equal((await side.prompt("autopilot off")).systemMessage, UNREAD_LINE);
   assert.deepEqual([await modes(main), await modes(other)], ["sage mode on, autopilot off", "sage mode on, autopilot off"]);
 });
 
@@ -188,6 +191,50 @@ test("F-T677-29: an off phrase in a fork of a fork, or in a subagent's thread of
   for (const m of S_ON) assert.equal(await fork.prompt(m, forkChild), undefined, "an on in a subagent's thread of a fork switches nothing");
   await forkOfFork.prompt("autopilot on");
   assert.equal(await modes(main), "sage mode on, autopilot off", "an on in a fork or its subagent's thread never reaches the first session");
+});
+
+/** Lines of Codex's record (the fields that the record reader reads, in the shapes of Codex 0.164.0). */
+const turnStart = (turn, trigger) => ({ type: "event_msg", payload: { type: "task_started", turn_id: turn, turn_attribution: { turn_id: turn, turn_trigger: trigger } } });
+const userLine = (turn, text) => ({ type: "response_item", payload: { type: "message", role: "user", content: [{ type: "input_text", text }],
+  internal_chat_message_metadata_passthrough: { turn_id: turn, content_item_kinds: ["user.text"], content_item_metadata: [{ provenance: { type: "user" } }] } } });
+const record = (s, ...lines) => writeFileSync(s.transcript, `${readFileSync(s.transcript, "utf8")}${lines.map((line) => JSON.stringify(line)).join("\n")}\n`);
+const JOINED = (still) => `sage: this "autopilot on" did not count, because it did not start a new turn: it came while Codex worked, or from a queue. ${still
+  ? "Autopilot is still on, from the user's earlier on phrase."
+  : 'Autopilot is still off. Tell the user in one line of your reply that the on did not count, and to send "autopilot on" alone, as a new message while Codex is idle (press Esc first if Codex is busy).'}`;
+
+test("F-T677-18, F-T677-25, F-T677-33: an on that joins a running turn, or a queued turn, switches nothing, and the note says why; an on that starts its turn saves that turn", async () => {
+  const s = session();
+  await s.prompt("sage mode");
+  // Turn T: the user's "WAIT" started it; the on is sent while Codex works on it (Enter), so Codex gives it turn T.
+  record(s, turnStart("T", "user"), userLine("T", "WAIT"));
+  assert.deepEqual(await s.prompt("autopilot on", { turn_id: "T" }), { hookSpecificOutput: { hookEventName: "UserPromptSubmit", additionalContext: JOINED(false) } });
+  assert.equal(await modes(s), "sage mode on, autopilot off");
+  // A turn that the desktop app's queue started: the turn has no message yet, but no person started it.
+  record(s, turnStart("Q", "composer_queue"));
+  assert.equal(contextOf(await s.prompt("autopilot on", { turn_id: "Q" })), JOINED(false), "a queued turn");
+  assert.equal(await modes(s), "sage mode on, autopilot off");
+  // Turn U: Codex has started it for the user's message, and has not recorded the message yet. The on counts.
+  record(s, turnStart("U", "user"));
+  assert.match(contextOf(await s.prompt("autopilot on", { turn_id: "U" })), /^sage: autopilot is on\./);
+  assert.deepEqual(JSON.parse(readFileSync(modeFile(s), "utf8")), { sage: true, given: true, autopilot: true, onTurn: "U" });
+  record(s, userLine("U", "autopilot on"), turnStart("V", "user"), userLine("V", "WAIT"));
+  // With autopilot on, an on that joins a turn keeps the earlier on: autopilot stays on, from turn U.
+  assert.equal(contextOf(await s.prompt("autopilot on", { turn_id: "V" })), JOINED(true));
+  assert.equal(JSON.parse(readFileSync(modeFile(s), "utf8")).onTurn, "U");
+  // A record that the hook cannot read: it cannot tell, so the on switches, and the gate decides from the record.
+  const side = session(undefined, null);
+  await side.prompt("sage mode");
+  assert.match(contextOf(await side.prompt("autopilot on")), /^sage: autopilot is on\./);
+});
+
+test("F-T677-32: an off in a main thread whose record sage cannot read gets a line that fits a main thread", async () => {
+  const s = session();
+  for (const m of S_ON) await s.prompt(m);
+  // Codex writes a new thread's record in the background: at the first prompts, the file can be missing.
+  rmSync(s.transcript);
+  assert.deepEqual(await s.prompt("autopilot off"), { hookSpecificOutput: { hookEventName: "UserPromptSubmit",
+    additionalContext: "sage: autopilot is off. Work stops at verified, and the user merges.\n\n---\n\nsage: in Codex, a merge that sage admitted before this off can still complete. Say so in the line that confirms the switch.\n\n---\n\nsage: confirm the switch to the user in one line of your reply: sage mode is on, and autopilot is off." },
+    systemMessage: UNREAD_LINE });
 });
 
 const UNKNOWN = { systemMessage: "sage: the sage hook did not recognise this Codex event, so it switched no mode, and autopilot is off. Update the sage plugin, and keep Codex in the tested range (0.164 to 0.167)." };

@@ -14,7 +14,8 @@
 //      <marketplace>/<plugin>/<version>), never from the caller's SAGE_HOME, CODEX_HOME or HOME: a caller cannot point
 //      the command at a permit that it wrote (F-T663-21). A copy of the plugin outside such an install has no permits.
 //   4. Right before gh, it reads the record from the permit's start mark (owner-record.mjs) and the session's mode file:
-//      both must still show autopilot on, and the permit's turn must have no turn_aborted event. Esc does not stop a
+//      both must still show autopilot on, from the same on (its turn, F-T677-33), and the permit's turn must have no
+//      turn_aborted event. Esc does not stop a
 //      command that already runs (T662 proof, case 1c), so this check is the last stop before the merge.
 //   5. gh pr merge --repo <the permit's repository> --match-head-commit, run by the gh file that the gate found outside
 //      every folder that Codex's sandbox can write, with the name gh (a launcher such as snap or mise picks its tool by
@@ -101,12 +102,12 @@ function check(args, env, now) {
   // The reader's refusals give their own cause and next step.
   const record = readRecord(permit.transcript);
   if (record.refused) return { why: record.refused };
-  const owner = autopilotSwitch(record, permit.mark);
-  if (owner.refused) return { why: owner.refused };
-  if (!owner.on) return { why: `${owner.reason}. ${SWITCH_ON}` };
   // The mode hook's own off: it saves every off that it sees, also after a damaged mode file (F-T663-24).
   const { state } = readModeFile(readState, permit.mode);
   if (state.sage !== true || state.autopilot !== true) return { why: `autopilot is off in sage's mode file of this session. ${SWITCH_ON}` };
+  const owner = autopilotSwitch(record, permit.mark, state.onTurn);
+  if (owner.refused) return { why: owner.refused };
+  if (!owner.on) return { why: `${owner.reason}. ${SWITCH_ON}` };
   if (turnAborted(record, permit.turn)) return { why: "the owner stopped the turn of this merge with Esc. Ask for the merge again only if the owner wants it" };
   return { repo: permit.repo, gh: permit.gh, path: permit.path };
 }
