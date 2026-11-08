@@ -390,7 +390,7 @@ test("T280: a verified PR is ready to merge only when the merge check passes on 
   const clean = { ledger: ["checks-pass", "review-clean", "qa-pass"].map(kind => ({ task: "T1", pr: "41", sha: head, kind, cycle: "1", at: now })) };
   const mode = [observation("mode", { autopilot: false })];
   const calls = [], ready = oneTask(task("T1", "verified", { pr: "41" }), clean, mode, {}, (...args) => (calls.push(args), { ok: true, reason: "" }));
-  assert.deepEqual(calls, [["one", head, "41"]], "the merge check gets the source, the full head and the PR");
+  assert.deepEqual(calls.map(([source, sha, pr, book]) => [source, sha, pr, book.key]), [["one", head, "41", "one/sample-abcdef"]], "the merge check gets the source, the full head, the PR and the card's logbook");
   assert.deepEqual([ready.column, ready.mergeCheck.ok, ready.reasons.map(r => r.kind), ready.loop.steps.at(-1).detail],
     ["ready", true, ["merge"], "The merge check passes on aaaaaaa. The board does not check the PR's head branch. Autopilot is off, so the merge waits for you."]);
   const refuses = oneTask(task("T1", "pr-ready", { pr: "41" }), clean, mode, {}, () => ({ ok: false, reason: "T1 has open findings: F-T1-1. Fix them." }));
