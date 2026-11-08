@@ -12,8 +12,8 @@
 //   - SessionStart with source fork: a fork has a new session id, and Codex does not give the hook the parent's id.
 //     So a fork starts with sage mode off, and the hook tells the chief so, because its history can show the role.
 //     It also saves the fork's start mark (start-mark.mjs). A compaction saves none: it is no new start.
-//   - A subagent's event (agent_id) switches nothing in its own thread and gets no role. An off phrase from another
-//     thread than the session's main thread also stops the merges of the session that it belongs to (offBeyondThread).
+//   - A subagent's event (agent_id) switches nothing in its own thread and gets no role. An off phrase from any
+//     thread that is not a session's main thread stops the merges of every session (offBeyondThread).
 //   - The hook tells the user directly (a systemMessage) only for a limit or a fault: a damaged mode file, an unknown input shape, a mode folder that it cannot use, or SAGE_HOOKS=off; and for an off phrase from another thread. For a normal switch, the
 //     note tells the chief to confirm the switch in one line of its reply.
 // Autopilot is recorded here, and the chief gets the merge command when it turns on. The gate (gate-hook.mjs) holds the
@@ -123,42 +123,36 @@ function switchOff(file, text) {
 }
 
 /**
- * An off phrase from another thread than its session's main thread (F-T677-24). The gate and the merge command need
- * the main thread's mode file on, so the off goes there. A missed off is a safety failure, and an extra off only makes
- * merges wait. It returns the line for the user in that thread, or undefined for the main thread.
- *   - A subagent's thread (agent_id): its session id is the main thread's id (Codex's source, "session_id is equal to
- *     the root thread's ID", and the records of Codex 0.164.0 and 0.167.0-alpha.3.2). The phrase switches the main
- *     thread's mode file, also sage mode for the mode's off phrase.
- *   - A fork (its record names forked_from_id): autopilot turns off also in the session that it came from.
- *   - A thread whose record the hook cannot read: a side conversation (/side) is a fork with no record, so it cannot
- *     name the session that it came from. Autopilot turns off in every mode file of the folder.
+ * An off phrase from a thread that is not a session's main thread (F-T677-24, F-T677-29). The gate and the merge
+ * command need the main thread's mode file on, and such a thread cannot always name that main thread: a fork's record
+ * names only the thread that it came from, which can be a fork too, and a subagent of a fork has the fork's session id.
+ * A missed off is a safety failure, and an extra off only makes merges wait. So the off turns autopilot off in every
+ * mode file of the folder. It returns the line for the user in that thread, or undefined for a main thread: no agent_id,
+ * and a record whose session_meta names no forked_from_id.
+ *   - A subagent's thread (agent_id): its session id is its root thread's id (Codex's source, "session_id is equal to
+ *     the root thread's ID", and the records of Codex 0.164.0 and 0.167.0-alpha.3.2). The mode's off phrase also turns
+ *     sage mode off in that session's mode file.
+ *   - A fork (its record names forked_from_id), and a thread whose record the hook cannot read: a side conversation
+ *     (/side) is a fork with no record.
  * An on phrase never crosses: it counts only in the main thread (handle).
  */
 function offBeyondThread(input, dir) {
-  if (input.hook_event_name !== "UserPromptSubmit" || PHRASES[exactPhrase(input.prompt)]?.autopilot !== false) return undefined;
-  const fileOf = (session) => join(dir, `${stateKey({ session_id: session })}.json`);
-  const both = PHRASES[exactPhrase(input.prompt)].sage === false;
-  let where = "the main session";
+  const change = input.hook_event_name === "UserPromptSubmit" ? PHRASES[exactPhrase(input.prompt)] : undefined;
+  if (change?.autopilot !== false) return undefined;
+  const subagent = "agent_id" in input;
+  let meta;
+  if (!subagent) try { meta = sessionMeta(input.transcript_path); } catch { /* no record: not a main thread */ }
+  if (meta && typeof meta.forked_from_id !== "string") return undefined;
+  const thread = subagent ? "a subagent's thread" : meta ? "a fork" : "a thread with no record that sage can read (a side conversation has none)";
+  const mode = subagent && change.sage === false;
   try {
     privateDirectory(dir);
-    if ("agent_id" in input) {
-      switchOff(fileOf(input.session_id), input.prompt);
-      return `sage: you sent the off phrase in a subagent's thread, so ${both ? "sage mode and autopilot are" : "autopilot is"} now off in the main session.`;
-    }
-    let meta;
-    try { meta = sessionMeta(input.transcript_path); } catch { /* no record: below */ }
-    if (meta && typeof meta.forked_from_id !== "string") return undefined;
-    if (meta) {
-      where = "the session that this fork came from";
-      switchOff(fileOf(meta.forked_from_id), AUTOPILOT_OFF_PHRASE);
-      return `sage: this thread is a fork, so autopilot is now off also in ${where}.`;
-    }
-    where = "every Codex session";
+    if (mode) switchOff(join(dir, `${stateKey({ session_id: input.session_id })}.json`), input.prompt);
     for (const name of readdirSync(dir)) if (/^[0-9a-f]{64}\.json$/.test(name)) switchOff(join(dir, name), AUTOPILOT_OFF_PHRASE);
-    return 'sage: Codex keeps no record of this thread that sage can read (a side conversation has none), so sage cannot tell which session it came from. Autopilot is now off in every Codex session: to turn it on again, send "autopilot on" in the main thread of a session.';
   } catch (error) {
-    return `sage: the hook could not turn autopilot off in ${where} (${error?.code ?? error?.message ?? error}). Send the off phrase in the main thread, or press Esc there.`;
+    return `sage: the hook could not turn autopilot off in every Codex session (${error?.code ?? error?.message ?? error}). Send the off phrase in the main thread of the session, or press Esc there.`;
   }
+  return `sage: you sent the off phrase in ${thread}, so autopilot is now off in every Codex session${mode ? ", and sage mode is off in this thread's session" : ""}. To turn it on again, send "autopilot on" in the main thread of a session.`;
 }
 
 /** The answer of the mode rules for the event's own thread, and the line of an off for another thread (offBeyondThread). */

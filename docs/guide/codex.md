@@ -163,7 +163,7 @@ Right before `gh pr merge`, the command reads Codex's record and the mode file a
 
 The off phrase always counts, and nothing blocks it: also with an image, and also when the sage hook cannot save it, because the hook and the merge command read it from Codex's own record.
 
-The off phrase works from any thread, also a subagent's thread or a side conversation (`/side`): there it turns autopilot off in the main session, and sage tells you so in that thread. A side conversation has no record that names its main session, so there sage turns autopilot off in every Codex session.
+The off phrase works from any thread, also a subagent's thread, a fork or a side conversation (`/side`): there it turns autopilot off in every Codex session, and sage tells you so in that thread. Such a thread cannot always name its main session (a fork of a fork names only the fork), so sage turns off every session. To turn autopilot on again, send `autopilot on` in the main thread of a session.
 
 Limits of autopilot in Codex:
 

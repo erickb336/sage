@@ -139,6 +139,9 @@ test("T453: a fork starts with sage mode off, and the chief gets one note to tel
   assert.match(contextOf(await s.prompt("sage mode")), ROLE, "the on phrase gives the fork the role");
 });
 
+/** The line in the thread of an off phrase that is not a main thread's (F-T677-29). */
+const OFF_LINE = (thread, mode = "") => `sage: you sent the off phrase in ${thread}, so autopilot is now off in every Codex session${mode}. To turn it on again, send "autopilot on" in the main thread of a session.`;
+
 test("T453, F-T677-24: a subagent's on phrase switches nothing and gets no role; its off phrase switches the main session, with one line in its thread", async () => {
   const s = session();
   const child = { agent_id: "agent-1", agent_type: "default" };
@@ -148,25 +151,43 @@ test("T453, F-T677-24: a subagent's on phrase switches nothing and gets no role;
   assert.equal(await s.prompt("autopilot on", child), undefined);
   assert.equal(await modes(s), "sage mode on, autopilot off", "an on from a subagent's thread counts for nothing");
   await s.prompt("autopilot on");
-  assert.deepEqual(await s.prompt("autopilot off", child), { systemMessage: "sage: you sent the off phrase in a subagent's thread, so autopilot is now off in the main session." });
+  assert.deepEqual(await s.prompt("autopilot off", child), { systemMessage: OFF_LINE("a subagent's thread") });
   assert.equal(await modes(s), "sage mode on, autopilot off");
   await s.prompt("autopilot on");
-  assert.deepEqual(await s.prompt("sage mode off", child), { systemMessage: "sage: you sent the off phrase in a subagent's thread, so sage mode and autopilot are now off in the main session." });
+  assert.deepEqual(await s.prompt("sage mode off", child), { systemMessage: OFF_LINE("a subagent's thread", ", and sage mode is off in this thread's session") });
   assert.equal(await modes(s), "sage mode off, autopilot off");
   assert.match(contextOf(await s.prompt("sage mode")), ROLE, "the main thread gets the role again at its next on");
 });
 
-test("F-T677-24: an off phrase in a fork turns autopilot off also in the session it came from; in a side conversation, with no record, in every session", async () => {
+test("F-T677-24: an off phrase in a fork, or in a side conversation with no record, turns autopilot off in every session", async () => {
   const main = session(), other = session();
   for (const s of [main, other]) for (const m of S_ON) await s.prompt(m);
   const fork = session(undefined, { forked_from_id: main.id });
-  assert.deepEqual(await fork.prompt("sage mode off"), { systemMessage: "sage: this thread is a fork, so autopilot is now off also in the session that this fork came from." });
-  assert.deepEqual([await modes(main), await modes(other)], ["sage mode on, autopilot off", "sage mode on, autopilot on"], "only autopilot crosses, and only to the parent");
-  await main.prompt("autopilot on");
+  assert.deepEqual(await fork.prompt("sage mode off"), { systemMessage: OFF_LINE("a fork") });
+  assert.deepEqual([await modes(main), await modes(other)], ["sage mode on, autopilot off", "sage mode on, autopilot off"], "only autopilot crosses");
+  for (const s of [main, other]) await s.prompt("autopilot on");
   const side = session(undefined, null);
   for (const m of S_ON) assert.equal((await side.prompt(m))?.systemMessage, undefined, "an on in a side conversation switches nothing outside it");
-  assert.match((await side.prompt("autopilot off")).systemMessage, /^sage: Codex keeps no record of this thread that sage can read \(a side conversation has none\), so sage cannot tell which session it came from\. Autopilot is now off in every Codex session/);
+  assert.equal((await side.prompt("autopilot off")).systemMessage, OFF_LINE("a thread with no record that sage can read (a side conversation has none)"));
   assert.deepEqual([await modes(main), await modes(other)], ["sage mode on, autopilot off", "sage mode on, autopilot off"]);
+});
+
+test("F-T677-29: an off phrase in a fork of a fork, or in a subagent's thread of a fork, turns autopilot off in the first session; an on there counts for nothing", async () => {
+  const main = session(), fork = session(undefined, { forked_from_id: main.id }), forkOfFork = session(undefined, { forked_from_id: fork.id });
+  const forkChild = { agent_id: "agent-2", agent_type: "default" }; // a subagent of the fork: Codex gives it the fork's session id
+  for (const [name, off, line, forkModes] of [
+    ["a fork of a fork", () => forkOfFork.prompt("autopilot off"), OFF_LINE("a fork"), "sage mode on, autopilot off"],
+    ["a subagent's thread of a fork", () => fork.prompt("autopilot off", forkChild), OFF_LINE("a subagent's thread"), "sage mode on, autopilot off"],
+    ["the mode's off phrase in a subagent's thread of a fork", () => fork.prompt("sage mode off", forkChild), OFF_LINE("a subagent's thread", ", and sage mode is off in this thread's session"), "sage mode off, autopilot off"],
+  ]) {
+    for (const s of [main, fork, forkOfFork]) for (const m of S_ON) await s.prompt(m);
+    const out = await off();
+    assert.deepEqual([await modes(main), await modes(fork), await modes(forkOfFork)], ["sage mode on, autopilot off", forkModes, "sage mode on, autopilot off"], name);
+    assert.equal(out.systemMessage, line, `${name}: one line in that thread`);
+  }
+  for (const m of S_ON) assert.equal(await fork.prompt(m, forkChild), undefined, "an on in a subagent's thread of a fork switches nothing");
+  await forkOfFork.prompt("autopilot on");
+  assert.equal(await modes(main), "sage mode on, autopilot off", "an on in a fork or its subagent's thread never reaches the first session");
 });
 
 const UNKNOWN = { systemMessage: "sage: the sage hook did not recognise this Codex event, so it switched no mode, and autopilot is off. Update the sage plugin, and keep Codex in the tested range (0.164 to 0.167)." };

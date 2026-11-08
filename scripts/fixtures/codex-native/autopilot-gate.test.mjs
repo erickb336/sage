@@ -396,43 +396,59 @@ test("the off path never blocks and is never missed: an off after the admission 
   assert.deepEqual(ghCalls(), []);
 });
 
-test("F-T677-24: an off from a subagent's thread, a fork or a side conversation stops the main session's merges; an on from there counts for nothing", async () => {
+test("F-T677-24, F-T677-29: an off from a subagent's thread, a fork, a fork of a fork, a fork's subagent or a side conversation stops the main session's merges; an on from there counts for nothing", async () => {
   const OFF = 'sage: autopilot is off, so the owner merges. Report the pull request as ready. The owner turns autopilot on with the message "autopilot on", alone, while sage mode is on';
-  // The threads, as Codex 0.164.0 gives them to the hook: a subagent's prompt has the main thread's session id and an
-  // agent_id; a fork has its own session id and a record that names forked_from_id; a side conversation (/side) is a
-  // fork with no record.
+  // The threads, as Codex 0.164.0 gives them to the hook: a subagent's prompt has its root thread's session id and an
+  // agent_id; a fork has its own session id and a record that names the thread it came from (forked_from_id), which
+  // can be a fork too; a subagent of a fork has the fork's session id; a side conversation (/side) is a fork with no
+  // record.
+  const FORK = "019a0000-0000-7000-8000-00000000f0f1", FORK2 = "019a0000-0000-7000-8000-00000000f0f2", CHILD = "019a0000-0000-7000-8000-0000000000c1";
+  const child = (root) => ({ session: root, agent: CHILD, meta: { id: CHILD, session_id: root, source: { subagent: { thread_spawn: { parent_thread_id: root, depth: 1, agent_path: "/root/sage_lead_t1" } } } } });
+  const THREADS = {
+    "subagent": child(SESSION),
+    "fork": { session: FORK, meta: { id: FORK, session_id: FORK, forked_from_id: SESSION, source: "cli" } },
+    "fork of a fork": { session: FORK2, meta: { id: FORK2, session_id: FORK2, forked_from_id: FORK, source: "cli" } },
+    "fork's subagent": child(FORK),
+    "side": { session: "019a0000-0000-7000-8000-00000000051d" },
+  };
   const prompt = (w, prompt, thread) => {
-    const fields = { hook_event_name: "UserPromptSubmit", turn_id: "t-other", cwd: w.project, model: "m", permission_mode: "default", prompt };
-    if (thread === "side") return answer({ ...fields, session_id: "019a0000-0000-7000-8000-00000000051d", transcript_path: null }, w.env);
-    const id = thread === "subagent" ? "019a0000-0000-7000-8000-0000000000c1" : "019a0000-0000-7000-8000-00000000f0f1";
-    const meta = thread === "subagent" ? { id, session_id: SESSION, source: { subagent: { thread_spawn: { parent_thread_id: SESSION, depth: 1, agent_path: "/root/sage_lead_t1" } } } } : { id, session_id: id, forked_from_id: SESSION, source: "cli" };
-    const transcript = join(w.home, `rollout-2026-11-07T09-10-00-${id}.jsonl`);
-    writeFileSync(transcript, `${JSON.stringify({ type: "session_meta", payload: { ...meta, cli_version: "0.164.0" } })}\n`);
-    return answer({ ...fields, session_id: thread === "subagent" ? SESSION : id, transcript_path: transcript, ...(thread === "subagent" ? { agent_id: id, agent_type: "default" } : {}) }, w.env);
+    const { session, agent, meta } = THREADS[thread];
+    let transcript = null;
+    if (meta) {
+      transcript = join(w.home, `rollout-2026-11-07T09-10-00-${meta.id}.jsonl`);
+      writeFileSync(transcript, `${JSON.stringify({ type: "session_meta", payload: { ...meta, cli_version: "0.164.0" } })}\n`);
+    }
+    return answer({ hook_event_name: "UserPromptSubmit", turn_id: "t-other", cwd: w.project, model: "m", permission_mode: "default", prompt, session_id: session, transcript_path: transcript, ...(agent ? { agent_id: agent, agent_type: "default" } : {}) }, w.env);
   };
   const merge = (w) => spawnSync(process.execPath, [MERGE, "41", SHA], { cwd: w.project, encoding: "utf8", env: { PATH: FAKES, HOME: w.home, CODEX_SESSION_ID: SESSION, CODEX_THREAD_ID: SESSION, CODEX_TOOL_CALL_ID: CALL } });
-  for (const [thread, phrase, line] of [
-    ["subagent", "autopilot off", "sage: you sent the off phrase in a subagent's thread, so autopilot is now off in the main session."],
-    ["subagent", "sage mode off", "sage: you sent the off phrase in a subagent's thread, so sage mode and autopilot are now off in the main session."],
-    ["fork", "autopilot off", "sage: this thread is a fork, so autopilot is now off also in the session that this fork came from."],
-    ["side", "autopilot off", 'sage: Codex keeps no record of this thread that sage can read (a side conversation has none), so sage cannot tell which session it came from. Autopilot is now off in every Codex session: to turn it on again, send "autopilot on" in the main thread of a session.'],
-  ]) {
+  const line = (thread, mode = "") => `sage: you sent the off phrase in ${thread}, so autopilot is now off in every Codex session${mode}. To turn it on again, send "autopilot on" in the main thread of a session.`;
+  const cases = [
+    ["subagent", "autopilot off", line("a subagent's thread")],
+    ["subagent", "sage mode off", line("a subagent's thread", ", and sage mode is off in this thread's session")],
+    ["fork", "autopilot off", line("a fork")],
+    ["fork of a fork", "autopilot off", line("a fork")],
+    ["fork's subagent", "autopilot off", line("a subagent's thread")],
+    ["fork's subagent", "sage mode off", line("a subagent's thread", ", and sage mode is off in this thread's session")],
+    ["side", "autopilot off", line("a thread with no record that sage can read (a side conversation has none)")],
+  ];
+  const lines = [];
+  for (const [thread, phrase] of cases) {
     const name = `${phrase} from a ${thread}`;
     clearPermits();
     const w = world();
     assert.equal(await w.run(w.input()), undefined, `${name}: the gate admits the merge before the off`);
     rmSync(GH_LOG);
-    const out = prompt(w, phrase, thread);
+    lines.push(prompt(w, phrase, thread)?.systemMessage);
     const r = merge(w);
     assert.deepEqual({ status: r.status, gh: ghCalls() }, { status: 1, gh: [] }, `${name}: the admitted merge stops, with no gh`);
     assert.match(r.stderr, /autopilot is off in sage's mode file of this session/, name);
     assert.equal(denied(await w.run(w.input())), OFF, `${name}: the gate refuses the next merge`);
-    assert.equal(out?.systemMessage, line, `${name}: one line in the thread where the owner sent it`);
   }
-  // An on from a subagent's thread or a side conversation changes nothing in the main session.
+  assert.deepEqual(lines, cases.map(([, , said]) => said), "one line in the thread where the owner sent it");
+  // An on from a subagent's thread, a fork's subagent or a side conversation changes nothing in the main session.
   clearPermits();
   const w = world({ mode: { sage: true, autopilot: false, given: true } });
-  for (const thread of ["subagent", "side"]) for (const phrase of ["sage mode", "autopilot on"]) assert.equal(prompt(w, phrase, thread)?.systemMessage, undefined, `${phrase} from a ${thread}`);
+  for (const thread of ["subagent", "fork's subagent", "side"]) for (const phrase of ["sage mode", "autopilot on"]) assert.equal(prompt(w, phrase, thread)?.systemMessage, undefined, `${phrase} from a ${thread}`);
   assert.deepEqual(JSON.parse(readFileSync(w.modeFile, "utf8")), { sage: true, autopilot: false, given: true });
   assert.equal(denied(await w.run(w.input())), OFF);
   assert.deepEqual([w.checks, permits(), ghCalls().filter((call) => call.includes("merge"))], [[], [], []]);
