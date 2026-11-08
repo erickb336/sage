@@ -32,9 +32,10 @@ function run(stdin, env = {}) {
   });
 }
 
-let sessions = 0;
+let sessions = 0, turns = 0;
 /**
- * A Codex session: prompt() and start() send the documented UserPromptSubmit and SessionStart inputs. Its main thread
+ * A Codex session: prompt() and start() send the documented UserPromptSubmit and SessionStart inputs. Each prompt starts
+ * a new turn, as a message sent while Codex is idle does, unless extra names its turn_id. Its main thread
  * has Codex's record, whose first line is session_meta, as in Codex 0.164.0: meta adds to it (forked_from_id for a
  * fork), and meta null gives no record (a side conversation, an ephemeral fork).
  */
@@ -52,7 +53,7 @@ function session(env, meta = {}) {
     id,
     transcript,
     send,
-    prompt: (prompt, extra = {}) => send({ hook_event_name: "UserPromptSubmit", turn_id: `turn-${sessions}`, prompt, ...extra }),
+    prompt: (prompt, extra = {}) => send({ hook_event_name: "UserPromptSubmit", turn_id: `turn-${++turns}`, prompt, ...extra }),
     start: (source) => send({ hook_event_name: "SessionStart", source }),
   };
 }
@@ -198,7 +199,7 @@ const turnStart = (turn, trigger) => ({ type: "event_msg", payload: { type: "tas
 const userLine = (turn, text) => ({ type: "response_item", payload: { type: "message", role: "user", content: [{ type: "input_text", text }],
   internal_chat_message_metadata_passthrough: { turn_id: turn, content_item_kinds: ["user.text"], content_item_metadata: [{ provenance: { type: "user" } }] } } });
 const record = (s, ...lines) => writeFileSync(s.transcript, `${readFileSync(s.transcript, "utf8")}${lines.map((line) => JSON.stringify(line)).join("\n")}\n`);
-const JOINED = (still) => `sage: this "autopilot on" did not count, because it did not start a new turn: it came while Codex worked, or from a queue. ${still
+const JOINED = (still, why = "it did not start a new turn: it came while Codex worked, or from a queue") => `sage: this "autopilot on" did not count, because ${why}. ${still
   ? "Autopilot is still on, from the user's earlier on phrase."
   : 'Autopilot is still off. Tell the user in one line of your reply that the on did not count, and to send "autopilot on" alone, as a new message while Codex is idle (press Esc first if Codex is busy).'}`;
 
@@ -221,10 +222,53 @@ test("F-T677-18, F-T677-25, F-T677-33: an on that joins a running turn, or a que
   // With autopilot on, an on that joins a turn keeps the earlier on: autopilot stays on, from turn U.
   assert.equal(contextOf(await s.prompt("autopilot on", { turn_id: "V" })), JOINED(true));
   assert.equal(JSON.parse(readFileSync(modeFile(s), "utf8")).onTurn, "U");
-  // A record that the hook cannot read: it cannot tell, so the on switches, and the gate decides from the record.
+});
+
+const UNREAD_ON = "sage could not read Codex's record of this session to see that it started a new turn";
+
+test("F-T896-1: when the hook cannot read Codex's record, an on switches nothing and saves no turn, after an off from another thread too", async () => {
+  // No record (no transcript_path), with sage mode on and autopilot off: the on does not count.
   const side = session(undefined, null);
   await side.prompt("sage mode");
-  assert.match(contextOf(await side.prompt("autopilot on")), /^sage: autopilot is on\./);
+  assert.deepEqual(await side.prompt("autopilot on"), { hookSpecificOutput: { hookEventName: "UserPromptSubmit", additionalContext: JOINED(false, UNREAD_ON) } });
+  assert.deepEqual(JSON.parse(readFileSync(modeFile(side), "utf8")), { sage: true, given: true });
+  // A main thread: the owner's on starts turn A and counts. Then an off from a fork turns autopilot off in its mode file.
+  const s = session();
+  await s.prompt("sage mode");
+  record(s, turnStart("A", "user"));
+  assert.match(contextOf(await s.prompt("autopilot on", { turn_id: "A" })), /^sage: autopilot is on\./);
+  record(s, userLine("A", "autopilot on"));
+  await session(undefined, { forked_from_id: s.id }).prompt("autopilot off");
+  const off = { sage: true, given: true, autopilot: false, onTurn: "A" };
+  assert.deepEqual(JSON.parse(readFileSync(modeFile(s), "utf8")), off);
+  // The owner's next on joins turn B while Codex writes the record's last line: after 3 re-reads, the hook cannot read it.
+  writeFileSync(s.transcript, `${readFileSync(s.transcript, "utf8")}${JSON.stringify(turnStart("B", "user"))}\n{"type":"response_item","payl`);
+  assert.equal(contextOf(await s.prompt("autopilot on", { turn_id: "B" })), JOINED(false, UNREAD_ON), "a partial last line");
+  assert.deepEqual(JSON.parse(readFileSync(modeFile(s), "utf8")), off, "autopilot stays off, and the saved turn stays A");
+  // With autopilot on, the on keeps the earlier on: autopilot stays on, from turn A.
+  rmSync(s.transcript);
+  const on = { ...off, autopilot: true };
+  writeFileSync(modeFile(s), JSON.stringify(on));
+  assert.equal(contextOf(await s.prompt("autopilot on", { turn_id: "C" })), JOINED(true, UNREAD_ON), "no record file");
+  assert.deepEqual(JSON.parse(readFileSync(modeFile(s), "utf8")), on);
+});
+
+test("F-T896-1: a turn that already holds the saved on refuses a second on, also before Codex records the first one", async () => {
+  const s = session();
+  await s.prompt("sage mode");
+  // Turn W: Codex has started it for the owner's on, and has not recorded the message yet. The on counts.
+  record(s, turnStart("W", "user"));
+  assert.match(contextOf(await s.prompt("autopilot on", { turn_id: "W" })), /^sage: autopilot is on\./);
+  // An off from a fork reaches the mode file. A second on joins turn W, and Codex's record still does not show the first.
+  await session(undefined, { forked_from_id: s.id }).prompt("autopilot off");
+  const off = { sage: true, given: true, autopilot: false, onTurn: "W" };
+  assert.deepEqual(JSON.parse(readFileSync(modeFile(s), "utf8")), off);
+  assert.equal(contextOf(await s.prompt("autopilot on", { turn_id: "W" })), JOINED(false));
+  assert.deepEqual(JSON.parse(readFileSync(modeFile(s), "utf8")), off, "the second on switches nothing and saves nothing new");
+  // A new on that starts its own turn counts again.
+  record(s, turnStart("X", "user"));
+  assert.match(contextOf(await s.prompt("autopilot on", { turn_id: "X" })), /^sage: autopilot is on\./);
+  assert.equal(JSON.parse(readFileSync(modeFile(s), "utf8")).onTurn, "X");
 });
 
 test("F-T677-32: an off in a main thread whose record sage cannot read gets a line that fits a main thread", async () => {

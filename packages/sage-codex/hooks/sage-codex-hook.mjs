@@ -15,7 +15,8 @@
 //   - A subagent's event (agent_id) switches nothing in its own thread and gets no role. An off phrase from any
 //     thread that is not a session's main thread stops the merges of every session (offBeyondThread).
 //   - An on phrase that joins a running turn, or a turn that no person started, switches nothing, and the chief gets a
-//     note that says why (F-T677-18). For each on that it accepts, the hook saves its turn (onTurn): the gate admits a
+//     note that says why (F-T677-18). So does an on when the hook cannot read Codex's record, or in a turn that already
+//     holds the saved on (F-T896-1). For each on that it accepts, the hook saves its turn (onTurn): the gate admits a
 //     merge only when the latest on that counts in Codex's record is in that turn (F-T677-33).
 //   - The hook tells the user directly (a systemMessage) only for a limit or a fault: a damaged mode file, an unknown input shape, a mode folder that it cannot use, or SAGE_HOOKS=off; and for an off phrase from another thread. For a normal switch, the
 //     note tells the chief to confirm the switch in one line of its reply.
@@ -56,17 +57,21 @@ const FORK_NOTE = 'sage: this thread is a fork, so sage mode and autopilot are o
 const OFF_IN_CODEX = "sage: in Codex, a merge that sage admitted before this off can still complete. Say so in the line that confirms the switch.";
 const onOff = (value) => (value ? "on" : "off");
 /** The note for an on that cannot count (F-T677-18, F-T677-25): the gate needs an on that starts its own turn. */
-const joinedOn = (still) => `sage: this "autopilot on" did not count, because it did not start a new turn: it came while Codex worked, or from a queue. ${still
+const joinedOn = (still, why) => `sage: this "autopilot on" did not count, because ${why}. ${still
   ? "Autopilot is still on, from the user's earlier on phrase."
   : `Autopilot is still off. Tell the user in one line of your reply that the on did not count, and to send "autopilot on" alone, ${NEW_ON}.`}`;
+const JOINED = "it did not start a new turn: it came while Codex worked, or from a queue";
 /**
- * Whether the prompt joins a turn that a message already started, or a turn that no person started (F-T677-18). The
- * hook runs before Codex records the prompt, so Codex's record shows the turn without it. When the record cannot be
- * read, the hook cannot tell: the gate still counts only an on that starts its turn.
+ * Why the on joins a turn and cannot count, or undefined when it starts its own turn (F-T677-18). The hook runs before
+ * Codex records the prompt, so Codex's record shows the turn without it. A turn that a message or the saved on already
+ * started joins, and so does a turn that no person started. When the record cannot be read, the hook cannot tell, so
+ * the on joins too (F-T896-1): after an off from another thread, only an on that starts its own turn turns merges on.
  */
-function joins(input) {
+function joins(input, state) {
+  if (state.onTurn === input.turn_id) return JOINED;
   const record = readRecord(input.transcript_path);
-  return !record.refused && !onCanCount(record, input.turn_id);
+  if (record.refused) return "sage could not read Codex's record of this session to see that it started a new turn";
+  return onCanCount(record, input.turn_id) ? undefined : JOINED;
 }
 
 /** The chief role: the switch line, the state tool's command, and the shared chief instructions with Codex's bindings. */
@@ -103,7 +108,8 @@ export function handle(input, state, env = process.env) {
     return input.source === "compact" && state.sage ? context(event, chiefText()) : undefined;
   }
   const on = PHRASES[exactPhrase(input.prompt)]?.autopilot === true;
-  if (on && state.sage && joins(input)) return context(event, joinedOn(state.autopilot));
+  const why = on && state.sage ? joins(input, state) : undefined;
+  if (why) return context(event, joinedOn(state.autopilot, why));
   const was = { sage: Boolean(state.sage), autopilot: Boolean(state.autopilot) };
   const notes = switchModes({ owner: true, text: input.prompt, all: input.prompt }, state, { autopilotOn: () => AUTOPILOT_ON + protectionNote(state, input.cwd, env), host: CODEX_HOST });
   if (on && state.autopilot) state.onTurn = input.turn_id; // the gate needs the latest on of Codex's record in this turn

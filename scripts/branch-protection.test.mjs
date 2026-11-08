@@ -53,9 +53,14 @@ function session(host, mode) {
   writeFileSync(log, "");
   const env = { PATH: `${BIN}:${dirname(process.execPath)}:/usr/bin:/bin`, HOME: join(dir, "home"), SAGE_HOME: join(dir, "sage"), SAGE_HOOKS_STATE: join(dir, "state"), CODEX_HOME: join(dir, "codex"), FAKE_GH_MODE: mode, FAKE_GH_LOG: log };
   const script = host === "claude" ? CLAUDE_HOOK : CODEX_HOOK;
-  const base = host === "claude" ? { session_id: id, cwd: dir } : { session_id: `019a0000-0000-7000-8000-${String(sessions).padStart(12, "0")}`, cwd: dir, transcript_path: null, model: "fixture", permission_mode: "default", turn_id: "t" };
+  // A Codex session has Codex's record (an on counts only when the hook can read it, F-T896-1), and each prompt starts a new turn.
+  const codexId = `019a0000-0000-7000-8000-${String(sessions).padStart(12, "0")}`;
+  const transcript = join(dir, `rollout-${codexId}.jsonl`);
+  if (host === "codex") writeFileSync(transcript, `${JSON.stringify({ type: "session_meta", payload: { id: codexId, session_id: codexId, cli_version: "0.164.0", source: "cli" } })}\n`);
+  const base = host === "claude" ? { session_id: id, cwd: dir } : { session_id: codexId, cwd: dir, transcript_path: transcript, model: "fixture", permission_mode: "default" };
+  let turns = 0;
   const send = (fields) => {
-    const r = spawnSync(process.execPath, [script], { input: JSON.stringify({ ...base, ...fields }), encoding: "utf8", env, timeout: 30_000, killSignal: "SIGKILL" });
+    const r = spawnSync(process.execPath, [script], { input: JSON.stringify({ ...base, ...(host === "codex" ? { turn_id: `t${++turns}` } : {}), ...fields }), encoding: "utf8", env, timeout: 30_000, killSignal: "SIGKILL" });
     assert.equal(r.status, 0, r.stderr);
     return r.stdout ? JSON.parse(r.stdout) : undefined;
   };
