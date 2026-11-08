@@ -272,6 +272,7 @@ The plugin starts a local MCP server, `sage`, in the desktop app and in the CLI.
 - A role agent may call `status`, `standing`, `merge_check`, and `pages` without `record`.
 - In a [shared logbook](using-sage.md#shared-logbooks), the server finds the chief from the session, and a tool takes no chief field. A lead acts for the chief of its lead run.
 - A write on a task of another chief refuses and names the owning chief, as in Claude. The native tools `sage_update_task` and `sage_create_run` give the same words. A task with no owning chief refuses and prints its version: call `claim` with the task and that version.
+- To abandon a task with no owning chief, any chief needs no claim: call `task_set` with `fields` `{"state": "abandoned"}` alone and `why`, the reason. The task keeps no chief.
 - A review or QA `verdict` on a task with a build needs `run`: a done run of the task whose child had the run in its task name (`sage_qa_t12_r40`) and ended with its full report. At that stop, the report check keeps the report in the logbook, and `verdict` refuses a verdict that no kept report backs. A report that `pages` saved backs no verdict, because the chief gives its text.
 - Codex starts the server outside the shell sandbox. Under `workspace-write`, the logbook is not a writable folder of an agent's shell, so only the server writes it.
 - Under full access (`danger-full-access`), an agent's shell can write any file, also the logbook, the mode files and Codex's record of your messages. So sage mode gives no guarantee there.

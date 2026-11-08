@@ -110,6 +110,26 @@ test("a shared logbook through the server: the root's session is one chief, a le
   assert.match((await s.call("task_add", { title: "third", size: "small", priority: "P2" })).error, /^sage: .*chiefs\.tsv is damaged, so sage cannot tell which chief owns a task/, "F-T604-18: the tool gives the real cause");
 });
 
+test("T893: a Codex chief abandons, through task_set with why, a task with no owning chief that came in the move from the Claude logbook; any other change still needs the claim", async (t) => {
+  const shared = realpathSync(mkdtempSync(join(tmpdir(), "sage-state-mcp-abandon-")));
+  t.after(() => rmSync(shared, { recursive: true, force: true }));
+  const s = await connect(t, { SAGE_SHARED_HOME: shared });
+  await s.call("link", { separate: true });
+  await s.call("task_add", { title: "stale", size: "small", priority: "P2" });
+  const { tool } = await import(pathToFileURL(join(s.dir, "plugin/skills/sage/sage.mjs")).href);
+  const file = join(tool.storeDir(s.project, s.env), "tasks.tsv");
+  const cells = () => { const [head, line] = readFileSync(file, "utf8").split("\n"); return { cols: head.split("\t"), row: line.split("\t") }; };
+  // T1 as the move leaves a Claude task: no owning chief, and its adoption record (version 2).
+  const { cols, row } = cells(), adoption = { version: 2, provider: "claude", task: "T7", logbook: join(s.dir, "old"), project: s.project, round: 0, digest: "0".repeat(64) };
+  writeFileSync(file, `${cols.join("\t")}\n${row.with(cols.indexOf("chief"), "").with(cols.indexOf("adoption"), JSON.stringify(adoption)).join("\t")}\n`);
+  assert.equal((await s.call("task_set", { task: "T1", fields: { state: "abandoned" } })).error, `sage: T1 has no owning chief. Any chief may abandon it, with a reason: add --why "<reason>". Nothing changed.`);
+  assert.match((await s.call("task_set", { task: "T1", fields: { state: "abandoned", priority: "P1" }, why: "stale" })).error, /^sage: T1 has no owning chief, so C1 cannot change it\. Claim it first: call the claim tool/);
+  assert.match(await s.call("task_set", { task: "T1", fields: { state: "abandoned" }, why: "stale: Codex native runtime work" }), /^T1 abandoned /);
+  const after = cells();
+  assert.deepEqual([after.row[after.cols.indexOf("state")], after.row[after.cols.indexOf("chief")]], ["abandoned", ""], "the abandon gives the task to no chief");
+  assert.match(readFileSync(join(tool.storeDir(s.project, s.env), "decisions.tsv"), "utf8").trim().split("\n").at(-1), /\tT1\tstate abandoned\tstale: Codex native runtime work · abandoned by C1, with no owning chief$/);
+});
+
 test("the transfer commands through the server: offer, accept, cancel, release and a Replace by the owner's answer, with the rules of the state tool (T618)", async (t) => {
   const shared = realpathSync(mkdtempSync(join(tmpdir(), "sage-state-mcp-transfer-")));
   t.after(() => rmSync(shared, { recursive: true, force: true }));
