@@ -3675,10 +3675,12 @@ function sessionBar(project, id, native, env = process.env) {
 /**
  * Why the chief of this session does not push a branch (T822), or "": a live task of another chief, or of no chief, uses
  * it, by its branch= or by a run of it on the branch, as the merge check reads a task's branch. So after a takeover the
- * former chief and its agents push nothing to the task's branch. A branch that no task uses, and a legacy project, pass.
+ * former chief and its agents push nothing to the task's branch. A branch that no task uses, and a legacy project, pass:
+ * a legacy project's logbook is not read, so a damaged table there refuses no push (T901).
  */
 function branchBar(project, branch, native, env = process.env) {
-  const view = logbookView(project, env), tasks = view.shared ? [...view.branchTasks(branch)].map(view.task).filter(Boolean) : [];
+  if (!locate(project, env).shared) return "";
+  const view = logbookView(project, env), tasks = [...view.branchTasks(branch)].map(view.task).filter(Boolean);
   if (!tasks.length) return "";
   const chief = chiefFor(project, native, env);
   for (const task of tasks) {
