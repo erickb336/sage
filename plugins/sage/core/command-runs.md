@@ -3,8 +3,8 @@
 `command-runs.mjs` holds the shared rules that judge the programs that a command
 line runs, as the command reader (`programsRun`) sees them, and the literal paths
 in their words, never free text (T815). The Claude hook uses them. The Codex
-gate uses only `mergeRun` and the push readers until T903. None of them runs the
-command that it judges.
+gate uses `mergeRun`, the push readers and `logbookWrite`, with its own roots
+(T903). None of them runs the command that it judges.
 
 - `logbookWrite(command, cwd, roots, home)` gives the word with which a command
   line writes into one of `roots` (the sage root and the shared root), or

@@ -433,9 +433,10 @@ test("no thread names the Codex sage folder in a shell command (T460)", (t) => {
   const w = world(t);
   const home = w.env.HOME;
   const env = { ...w.env, SAGE_HOME: undefined, CODEX_HOME: join(home, ".codex") };
-  const named = ["cat ~/.codex/sage/.hooks/codex/x.json", `echo '{}' > "${home}/.codex/sage/.hooks/codex/x.json"`, "ls $HOME/.codex/sage", "rm -rf ${CODEX_HOME}/sage",
-    "cp f $SAGE_HOME/x", "echo > .hooks/codex/a.json", `ls ${home.toUpperCase()}/.CODEX/SAGE`];
-  const clean = ["ls ~/.codex/sagebook", `node ${home}/.codex/plugins/cache/sage/sage/0.1.0/skills/sage/sage.mjs status --project /p`, "echo sage mode", "git log"];
+  const named = ["cat ~/.codex/sage/.hooks/codex/x.json", `echo '{}' > "${home}/.codex/sage/.hooks/codex/x.json"`, "echo > .hooks/codex/a.json", `ls ${home.toUpperCase()}/.CODEX/SAGE`];
+  // T903: a variable in a path is a documented limit, as in the Claude hook (T815); the sandbox keeps the folder closed.
+  const clean = ["ls ~/.codex/sagebook", `node ${home}/.codex/plugins/cache/sage/sage/0.1.0/skills/sage/sage.mjs status --project /p`, "echo sage mode", "git log",
+    "ls $HOME/.codex/sage", "rm -rf ${CODEX_HOME}/sage", "cp f $SAGE_HOME/x"];
   assert.deepEqual(named.filter((c) => !namesSageFolder(c, env)), [], "each form is found");
   assert.deepEqual(clean.filter((c) => namesSageFolder(c, env)), [], "no false match");
   for (const mode of [{ sage: false, autopilot: false }, { sage: true, autopilot: true }]) {
@@ -450,8 +451,9 @@ test("no thread names the shared root in a shell command: its default, SAGE_SHAR
   const w = world(t);
   const home = w.env.HOME;
   const byDefault = { ...w.env, SAGE_HOME: undefined, SAGE_SHARED_HOME: undefined };
-  const named = ["cat ~/.sage/bindings.tsv", `echo x >> "${home}/.sage/plugins.tsv"`, "ls $HOME/.sage", "rm -rf $SAGE_SHARED_HOME/x", "cp f ${SAGE_SHARED_HOME}/x"];
-  const clean = ["ls ~/.sagebook", "echo sage mode", "git log"];
+  const named = ["cat ~/.sage/bindings.tsv", `echo x >> "${home}/.sage/plugins.tsv"`];
+  // T903: a variable in a path is a documented limit, as in the Claude hook (T815).
+  const clean = ["ls ~/.sagebook", "echo sage mode", "git log", "ls $HOME/.sage", "rm -rf $SAGE_SHARED_HOME/x", "cp f ${SAGE_SHARED_HOME}/x"];
   assert.deepEqual(named.filter((c) => !namesSageFolder(c, byDefault)), [], "each form is found");
   assert.deepEqual(clean.filter((c) => namesSageFolder(c, byDefault)), [], "no false match");
   assert.equal(namesSageFolder("cat /shared/root/bindings.tsv", { ...byDefault, SAGE_SHARED_HOME: "/shared/root" }), true, "a set folder");
@@ -466,8 +468,9 @@ test("the .sage folder outside the project counts by name, in the shell and in a
   const cwd = join(w.project, "src");
   mkdirSync(cwd);
   const byDefault = { ...w.env, SAGE_HOME: undefined, SAGE_SHARED_HOME: undefined };
-  const named = ["cd ~ && rm -rf .sage", "cd ~ && cat .sage/bindings.tsv", "cat ~/.sa*/bindings.tsv", "cat $HOME/./.sage/z", "ls ~/.SAGE", "cat ../../../.sage/z", `cat ${w.env.HOME}/other/.sage/x`];
-  const clean = ["cat .sage/notes.md", "cat ../.sage/notes.md", `cat ${w.project}/.sage/notes.md`, "ls ~/.sagebook", "echo .sage"];
+  const named = ["cd ~ && rm -rf .sage", "cd ~ && cat .sage/bindings.tsv", "cat ~/.sa*/bindings.tsv", "ls ~/.SAGE", "cat ../../../.sage/z", `cat ${w.env.HOME}/other/.sage/x`];
+  // T903: a word with a variable has no known place, so it no longer counts as a path out of the project.
+  const clean = ["cat .sage/notes.md", "cat ../.sage/notes.md", `cat ${w.project}/.sage/notes.md`, "ls ~/.sagebook", "echo .sage", "cat $HOME/./.sage/z"];
   assert.deepEqual(named.filter((c) => !namesSageFolder(c, byDefault, cwd)), []);
   assert.deepEqual(clean.filter((c) => namesSageFolder(c, byDefault, cwd)), []);
   const edit = (path, extra) => pre("apply_patch", patch(`*** Add File: ${path}`, "+x"), extra);
@@ -482,28 +485,38 @@ test("the .sage folder outside the project counts by name, in the shell and in a
   }
 });
 
-test("in sage mode no thread writes a logbook file by its name outside the project; in the project and out of sage mode the name stays free (T594)", (t) => {
+test("T903: a logbook file's name outside the project passes; a shell write by a literal path into the Codex sage folder or the shared root refuses, also through a link and in any mode (core's logbookWrite)", (t) => {
   const w = world(t);
-  mkdirSync(join(w.project, "src"));
   const implementer = w.child("/root/sage_implementer_t1_r1");
   const bash = (command, extra = implementer) => pre("Bash", command, extra);
-  const refused = /^sage: in sage mode, no agent writes a logbook file by its name outside the project/;
+  // T903 cut the name rule of T594, as T815 cut the Claude hook's: a name such as tasks.tsv is no logbook path.
   w.mode({ sage: true, autopilot: false });
-  for (const name of ["bindings.tsv", "bindings.made", "plugins.tsv", "projects.tsv", "projects.made", "moved.json", "tasks.tsv", "config.json"]) {
-    assert.match(denied(w.send(bash(`cd .. && rm ${name}`))) ?? "", refused, name);
-    assert.match(denied(w.send(bash(`rm ../${name}`, {}))) ?? "", refused, `the chief: ${name}`);
-    assert.match(denied(w.send(pre("apply_patch", patch(`*** Add File: ../${name}`, "+x"), implementer))) ?? "", refused, `a patch: ${name}`);
+  for (const name of ["bindings.tsv", "tasks.tsv", "config.json"]) {
+    assert.equal(denied(w.send(bash(`cd .. && rm ${name}`))), undefined, name);
+    assert.equal(denied(w.send(bash(`rm ../${name}`, {}))), undefined, `the chief: ${name}`);
   }
-  assert.match(denied(w.send(bash("cd $SOMEWHERE && rm tasks.tsv"))) ?? "", refused, "no known place");
-  for (const command of ["rm config.json", "rm src/config.json", "cd src && rm config.json", "cat ../bindings.tsv", "rm /tmp/build/out.txt", "rm -rf ../dist/*"]) {
-    assert.equal(denied(w.send(bash(command))), undefined, command);
+  assert.equal(denied(w.send(bash("cd $SOMEWHERE && rm tasks.tsv"))), undefined, "no known place: a documented limit");
+  // The roots: the Codex sage folder (SAGE_HOME here) and a shared root of its own, each also through a link.
+  w.env.SAGE_SHARED_HOME = join(w.dir, "shared");
+  mkdirSync(join(w.env.SAGE_SHARED_HOME, "p-abc"), { recursive: true });
+  mkdirSync(join(w.env.SAGE_HOME, "p-abc"), { recursive: true });
+  symlinkSync(w.env.SAGE_SHARED_HOME, join(w.dir, "to-shared"));
+  symlinkSync(w.env.SAGE_HOME, join(w.dir, "to-sage"));
+  const refused = (word) => `sage: no agent writes, moves or removes a logbook file from the shell: ${JSON.stringify(word)} is in the Codex sage folder or the shared root, or holds one. Use the sage MCP tools for the logbook`;
+  const writes = [[`echo x > ${w.dir}/to-shared/p-abc/tasks.tsv`, `${w.dir}/to-shared/p-abc/tasks.tsv`], [`cd ${w.dir}/to-sage && rm -f p-abc/runs.tsv`, "p-abc/runs.tsv"],
+    [`cp /dev/null ${w.dir}/to-sage/p-abc/ledger.tsv`, `${w.dir}/to-sage/p-abc/ledger.tsv`], [`rm -rf ${w.dir}`, w.dir], [`find ${w.dir} -delete`, w.dir], ["rm -rf ~/..", "~/.."]];
+  for (const mode of [{ sage: false, autopilot: false }, { sage: true, autopilot: false }]) {
+    w.mode(mode);
+    for (const [who, extra] of [["the chief", {}], ["an implementer", implementer]]) {
+      for (const [command, word] of writes) assert.equal(denied(w.send(bash(command, extra))), refused(word), `${who} ${JSON.stringify(mode)}: ${command}`);
+      for (const command of [`cat ${w.dir}/to-shared/p-abc/tasks.tsv`, `ls ${w.dir}/to-sage`, `rm -rf ${w.project}/build`, "echo x > ../notes.txt"]) {
+        assert.equal(denied(w.send(bash(command, extra))), undefined, `${who}: ${command}`);
+      }
+    }
   }
-  assert.equal(w.send(pre("apply_patch", patch("*** Update File: src/config.json", "@@", "-a", "+b"), implementer)), undefined, "a patch in the project");
-  w.mode({ sage: false, autopilot: false });
-  assert.equal(denied(w.send(bash("cd .. && rm bindings.tsv"))), undefined, "out of sage mode");
 });
 
-test("a task worktree in a sibling folder counts as the project from the main checkout; the same names in the shared root, a logbook, a forged checkout and another repository still refuse (T594)", (t) => {
+test("a task worktree in a sibling folder counts as the project from the main checkout; the shared root and a .sage folder outside the project still refuse, and a logbook file's name in Claude's logbook folder, a forged checkout or another repository passes the shell (T594, T903)", (t) => {
   const w = world(t);
   const linked = join(w.dir, "linked"), forged = join(w.dir, "forged"), other = join(w.dir, "other");
   assert.equal(spawnSync("git", ["-C", w.project, "worktree", "add", "-qb", "linked", linked]).status, 0);
@@ -514,17 +527,21 @@ test("a task worktree in a sibling folder counts as the project from the main ch
   const logbook = join(w.env.HOME, ".claude", "sage", "p-abc123");
   const implementer = w.child("/root/sage_implementer_t1_r1");
   const writes = [(path) => pre("apply_patch", patch(`*** Add File: ${path}`, "+x"), implementer), (path) => pre("Bash", `echo x > '${path}'`, implementer)];
-  const logbookFile = /^sage: in sage mode, no agent writes a logbook file by its name outside the project/;
   const sageFolder = /names the Codex sage folder, the shared root or the Codex sessions folder/;
   w.mode({ sage: true, autopilot: false });
   for (const write of writes) {
     for (const name of ["config.json", "status.md", "src/config.json", ".sage/x"]) assert.equal(w.send(write(join(linked, name))), undefined, `the worktree: ${name}`);
     for (const name of ["config.json", "status.md", ".sage/x"]) assert.match(denied(w.send(write(join(w.env.SAGE_SHARED_HOME, name)))) ?? "", sageFolder, `the shared root: ${name}`);
     assert.match(denied(w.send(write(join(logbook, ".sage/x")))) ?? "", sageFolder, "a .sage folder in a logbook");
+    // T903: the name rule is gone, so a logbook file's name in another folder is no logbook path. A patch to Claude's
+    // logbook folder still meets the patch's checkout rule.
     for (const dir of [logbook, forged, other]) {
-      for (const name of ["config.json", "status.md"]) assert.match(denied(w.send(write(join(dir, name)))) ?? "", logbookFile, join(dir, name));
+      for (const name of ["config.json", "status.md"]) {
+        const why = denied(w.send(write(join(dir, name))));
+        if (dir === logbook && write === writes[0]) assert.match(why ?? "", /^sage: this patch reaches protected storage/, join(dir, name));
+        else assert.equal(why, undefined, join(dir, name));
+      }
     }
-    assert.match(denied(w.send(write(`${linked}/../forged/config.json`))) ?? "", logbookFile, "out of the worktree by ..");
     assert.match(denied(w.send(write(join(forged, ".sage/x")))) ?? "", sageFolder, "a forged checkout's .sage folder");
   }
   assert.equal(denied(w.send(pre("Bash", `cd '${linked}' && echo x > config.json`, implementer))), undefined, "a cd into the worktree");
@@ -1265,12 +1282,13 @@ test("the sage folder rule also covers the Codex sessions folder, where the type
   const w = world(t);
   const home = w.env.HOME;
   const env = { ...w.env, SAGE_HOME: undefined, CODEX_HOME: join(home, ".codex") };
-  const named = ["cat ~/.codex/sessions/2026/10/25/rollout-x.jsonl", `echo '{}' >> ${home}/.codex/sessions/2026/10/25/rollout-x.jsonl`, "ls $CODEX_HOME/sessions", "ls ${CODEX_HOME}/sessions/2026", "grep -r autopilot $HOME/.codex/sessions"];
-  const clean = ["ls ~/.codex/sessionsx", "ls ~/.codex/worktrees", "echo sessions", "cat notes/sessions/a.md"];
+  const named = ["cat ~/.codex/sessions/2026/10/25/rollout-x.jsonl", `echo '{}' >> ${home}/.codex/sessions/2026/10/25/rollout-x.jsonl`, "grep -r autopilot ~/.codex/sessions"];
+  // T903: a variable in a path is a documented limit (T815); the sandbox keeps the sessions folder closed.
+  const clean = ["ls ~/.codex/sessionsx", "ls ~/.codex/worktrees", "echo sessions", "cat notes/sessions/a.md", "ls $CODEX_HOME/sessions", "ls ${CODEX_HOME}/sessions/2026", "grep -r autopilot $HOME/.codex/sessions"];
   assert.deepEqual(named.filter((c) => !namesSageFolder(c, env)), []);
   assert.deepEqual(clean.filter((c) => namesSageFolder(c, env)), []);
   w.mode({ sage: false, autopilot: false });
-  assert.match(denied(w.send(pre("Bash", "ls $CODEX_HOME/sessions", CHILD))) ?? "", /^sage: no agent runs a shell command that names the Codex sage folder, the shared root or the Codex sessions folder/);
+  assert.match(denied(w.send(pre("Bash", `ls ${w.env.CODEX_HOME}/sessions`, CHILD))) ?? "", /^sage: no agent runs a shell command that names the Codex sage folder, the shared root or the Codex sessions folder/);
 });
 
 test("a project under the desktop app's ~/.codex/worktrees edits as usual, with sage mode off and on; its own .codex folder stays closed (R1666-1)", (t) => {
@@ -1308,23 +1326,25 @@ test("T111: linked worktree membership does not override protected codex ancestr
   t.diagnostic("SAMPLE ONLY: real scratch Git linkage; synthetic hook input from the main checkout. No target patch executed; not a native R27 reproduction.");
 });
 
-test("T111: literal project patch targets accept fictional program text without relaxing shell uncertainty", async (t) => {
+test("T111: literal project patch targets accept fictional program text; T903: so does the same write from the shell", async (t) => {
   const g = fixed(), child = sageChild(t, "/root/sage_implementer_t111_r1");
   const source = 'export const caption = `SAMPLE [${label}`;';
   const command = `node -e 'require("node:fs").writeFileSync("scripts/evaluate-sample.mjs", ${JSON.stringify(source)})'`;
-  assert.match(denied(await g.run(pre("Bash", command, child))), /writes a logbook file by its name outside the project/);
+  // T903: the logbook name rule refused this project write for its variable text; that rule is gone.
+  assert.equal(denied(await g.run(pre("Bash", command, child))), undefined);
   const edit = patch("*** Add File: scripts/evaluate-sample.mjs", `+${source}`,
     "*** Add File: tests/sample-guard.test.js", '+// SAMPLE DATA: ../tasks.tsv and .codex/auth.json are text, not targets.');
   assert.equal(await g.run(pre("apply_patch", edit, child)), undefined);
   t.diagnostic(`SAMPLE ONLY, not executed: ${command}`);
-  t.diagnostic("Synthetic gate: shell refused; explicit two-file project patch passed");
+  t.diagnostic("Synthetic gate: shell write and explicit two-file project patch passed");
 });
 
 test("T111: structured project edits preserve protected targets and read-only roles", async (t) => {
   const g = fixed(), child = sageChild(t, "/root/sage_implementer_t111_r1");
   for (const [path, reason] of [
-    ["../tasks.tsv", /logbook file by its name outside the project/],
-    ["../config.json", /logbook file by its name outside the project/],
+    // T903: the logbook name rule is gone; a patch out of a project that is no verified checkout meets the checkout rule.
+    ["../tasks.tsv", /^sage: this patch reaches protected storage or has unverified checkout paths$/],
+    ["../config.json", /^sage: this patch reaches protected storage or has unverified checkout paths$/],
     [".codex/config.toml", /files under a \.codex folder/],
     [".codex/auth.json", /files under a \.codex folder/],
     [".git/config", /files under a \.git folder/],
@@ -1338,16 +1358,16 @@ test("T111: structured project edits preserve protected targets and read-only ro
   t.diagnostic("Synthetic gate: outside logbook, settings, credential path, git metadata and three read-only roles refused");
 });
 
-test("T111: shell patterns and ambiguous executable commands keep their refusals", async (t) => {
+test("T111: an ambiguous executable command keeps its refusal; T903: shell patterns and variables in a write target pass", async (t) => {
   const g = fixed(), child = sageChild(t, "/root/sage_implementer_t111_r1");
+  // T903: the uncertain-target and logbook name rules are gone: a pattern or a variable in a write target is a documented
+  // limit (T815), and a logbook file's name outside the project is no logbook path.
   for (const command of ["echo SAMPLE > ../task?.tsv", "echo SAMPLE > ../[tasks.tsv", "echo SAMPLE > $UNKNOWN/tasks.tsv",
     'node -e \'require("node:fs").writeFileSync(process.argv[1], "SAMPLE")\' ../tasks.tsv']) {
-    // A glob target is refused as uncertain before the logbook-name check; either refusal keeps the command out.
-    assert.match(denied(await g.run(pre("Bash", command, child))) ?? "",
-      /writes a logbook file by its name outside the project|shell write target or its folder is uncertain/, command);
+    assert.equal(denied(await g.run(pre("Bash", command, child))), undefined, command);
   }
   assert.equal(denied(await g.run(pre("Bash", "$EDITOR codex/sample.txt", child))), UNREAD_CODEX);
-  t.diagnostic("Synthetic gate: patterns, unknown location, interpreter write and ambiguous executable refused; none executed");
+  t.diagnostic("Synthetic gate: patterns, unknown location and interpreter write passed; ambiguous executable refused; none executed");
 });
 
 /** A sage child's event fields: its agent_id and Codex's record of it, with its agent path. */
@@ -1371,9 +1391,8 @@ test("T114: source redirects do not inherit protected reader inputs or literal b
     "cat .codex/AGENTS.md; echo x > .codex/config.toml",
     "cat < .codex/AGENTS.md > src/a.mjs 2> .codex/errors.txt",
     "cat <> .codex/config.toml", "cat > '.codex/file with spaces'",
-    "cat > .git/hooks/pre-commit", "cat ../tasks.tsv > ../runs.tsv",
+    "cat > .git/hooks/pre-commit",
     "cat ~/.codex/sessions/private.jsonl > src/a.mjs",
-    "cat > $DEST", "cat > unknown*", "cat > $(printf x)",
     "cat <<'SOURCE' | sh\necho x > .codex/config.toml\nSOURCE",
     "cat <<'SOURCE' | node --input-type=module\nwrite('.codex/config.toml')\nSOURCE",
     "cat <<'SOURCE' | python -u\nwrite('.codex/config.toml')\nSOURCE",
@@ -1386,6 +1405,10 @@ test("T114: source redirects do not inherit protected reader inputs or literal b
     "cat() { sh; }; cat <<'SOURCE'\necho x > .codex/config.toml\nSOURCE",
     "node -e 'const x = `.codex/config.toml`' > src/a.mjs",
   ]) assert.equal(typeof denied(await g.run(pre("Bash", command, child))), "string", command);
+  // T903: a logbook file's name outside the project, and a variable or a pattern in a write target, are no refusal.
+  for (const command of ["cat ../tasks.tsv > ../runs.tsv", "cat > $DEST", "cat > unknown*", "cat > $(printf x)"]) {
+    assert.equal(denied(await g.run(pre("Bash", command, child))), undefined, command);
+  }
   assert.equal(denied(await g.run(pre("Bash", "cat .codex/AGENTS.md; echo x > src/a.mjs",
     sageChild(t, "/root/sage_code_reviewer_t1_r2")))), RO("code-reviewer"));
 });
@@ -1408,8 +1431,8 @@ test("F-T114-3: Codex keeps executable stdin checks for protected writes and rea
 test("F-T114-2: expanding input redirects retain protected read checks", async t => {
   const g = fixed(), child = sageChild(t, "/root/sage_implementer_t1_r1");
   // These strings go only to the gate. No shell executes them or reads a session file.
-  for (const target of ["~/.codex/sessions/private.jsonl", "$HOME/.codex/sessions/private.jsonl",
-    "~/.codex/sage/private.json", "$HOME/.codex/sage/private.json"]) {
+  // T903: $HOME is a variable, a documented limit (T815): only the literal ~ form counts.
+  for (const target of ["~/.codex/sessions/private.jsonl", "~/.codex/sage/private.json"]) {
     await t.test(target, async () => {
       for (const suffix of ["", " > src/a.mjs", " | head -n 1 > src/a.mjs"]) {
         const command = `cat < ${target}${suffix}`;
@@ -1446,10 +1469,11 @@ test("T114: directory context locates targets but grants no protected-path autho
       `cd '${other}/src' && cat ../.codex/AGENTS.md > 'a file.mjs'`,
       `cat <<'SOURCE' > '${other}/src/a.mjs'\n$CODEX_HOME/plugins [ \`literal\`\nSOURCE`,
       "cat .codex/AGENTS.md > 'src/<quoted filename'",
+      // T903: a logbook file's name outside the project is no logbook path.
+      `cd '${w.dir}' && echo x > runs.tsv`,
     ]) assert.equal(await run(command, cwd), undefined, command);
     for (const command of [
       `cd '${other}' && echo x > .codex/config.toml`,
-      `cd '${w.dir}' && echo x > runs.tsv`,
       `echo x > '${w.env.CODEX_HOME}/config.toml'`,
       `echo x > '${w.env.SAGE_HOME}/forged.json'`,
       `echo x > '${other}/.git'`,
@@ -1610,22 +1634,28 @@ test("T552: the proof of a lead's call carries its role, task, run and project, 
 test("no thread writes Codex's config file or the sage plugin's folder from the shell, in any mode; reads run (R1916-3)", async () => {
   const SETTINGS = "sage: no agent writes Codex's config file or the sage plugin's folder from the shell, because the trust of sage's hooks is there. Ask the user to make this change";
   const plugin = fileURLToPath(new URL("../plugins/sage-codex", import.meta.url));
-  const writes = [`echo x >> "$CODEX_HOME/config.toml"`, "sed -i '' s/a/b/ ${CODEX_HOME}/config.toml", `cp a.json ${plugin}/hooks/hooks.json`, `rm -rf ${plugin}`, "rm -rf $CODEX_HOME/plugins/cache/sage"];
+  const writes = [`cp a.json ${plugin}/hooks/hooks.json`, `rm -rf ${plugin}`];
   for (const mode of [{ sage: false }, { sage: true }]) {
     const g = fixed(mode);
     for (const command of writes) assert.equal(denied(await g.run(pre("Bash", command))), SETTINGS, command);
+    // T903: a variable in a path is a documented limit (T815); the sandbox keeps the Codex home read-only.
+    for (const command of [`echo x >> "$CODEX_HOME/config.toml"`, "rm -rf $CODEX_HOME/plugins/cache/sage"]) assert.equal(await g.run(pre("Bash", command)), undefined, command);
     for (const command of [`cat "$CODEX_HOME/config.toml"`, `ls ${plugin}/hooks`, "echo x > config.toml"]) assert.equal(await g.run(pre("Bash", command)), undefined, command);
   }
   // A Codex home that is not named .codex: its config file still counts by its path.
   const env = { ...process.env, CODEX_HOME: "/opt/codex-home" };
-  assert.equal(denied(await gate(pre("Bash", "echo x > /opt/codex-home/config.toml"), { mode: () => ({ sage: false }), env })), SETTINGS);
+  for (const command of ["echo x > /opt/codex-home/config.toml", "sed -i '' s/a/b/ /opt/codex-home/config.toml", "cd /opt && echo x >> codex-home/config.toml"]) {
+    assert.equal(denied(await gate(pre("Bash", command), { mode: () => ({ sage: false }), env })), SETTINGS, command);
+  }
 });
 
-test("the sage folder and a .codex folder are found also behind quotes, ~ and a variable, and from the folder a command runs in (R1669-4, R1669-6)", async (t) => {
+test("the sage folder and a .codex folder are found also behind quotes and ~, and from the folder a command runs in (R1669-4, R1669-6)", async (t) => {
   const home = "/Users/someone";
   const env = { ...process.env, HOME: home, SAGE_HOME: undefined, CODEX_HOME: `${home}/.codex` };
-  const named = [`echo x > "$HOME"/.co""dex/sa""ge/m.json`, `cat ~/".codex/sage/x"`, `cat "\${CODEX_HOME}"/sage/x`, `ls "${home}/.codex"/sessions`];
+  const named = [`echo x > ~/.co""dex/sa""ge/m.json`, `cat ~/".codex/sage/x"`, `ls "${home}/.codex"/sessions`];
   assert.deepEqual(named.filter((c) => !namesSageFolder(c, env, CWD)), []);
+  // T903: a variable in a path is a documented limit (T815).
+  assert.deepEqual([`echo x > "$HOME"/.co""dex/sa""ge/m.json`, `cat "\${CODEX_HOME}"/sage/x`].filter((c) => namesSageFolder(c, env, CWD)), []);
   assert.equal(namesSageFolder("cat sage/.hooks/x.json", env, `${home}/.codex`), true, "from the Codex home");
   assert.deepEqual(["cat sage/notes.md", "ls sessions", "echo sage mode", `cat "${home}/.codex/config.toml"`].filter((c) => namesSageFolder(c, env, CWD)), []);
   const g = fixed({ sage: false });
@@ -1661,32 +1691,30 @@ test("no thread sends input to the main thread, in any spelling that Codex reads
   }
 });
 
-test("in sage mode gh runs only the command paths that sage uses, by name, with no setting that changes what it runs (T534, R1940-2, R1946-2, R1947-1, F-T534-1)", async () => {
+test("in sage mode gh runs only the command paths that sage uses, by name (T534, R1940-2, R1946-2, R1947-1, F-T534-1, T903)", async () => {
   const g = fixed({ sage: true, autopilot: true });
   /** The gh path that the refusal names, or the whole reason when it is another refusal. */
   const path = (reason) => reason?.match(/^sage: in sage mode, gh runs only the commands that sage uses \(.*\), because "(gh [^"]+)" can be an alias or an extension that runs any gh command, also a merge\. Write one of these, or ask the user$/)?.[1] ?? reason;
-  const LITERAL = "sage: in sage mode, run gh by its name or by a path that ends in /gh, not from a variable or a substitution, so that the gate can read the command";
-  const SETUP = "sage: in sage mode, no setting before gh changes what it runs or reads: its pager, editor or browser, HOME or its config folder. Ask the user";
   assert.equal(denied(await g.run(pre("Bash", "gh pr mrg 360"))), "sage: in sage mode, gh runs only the commands that sage uses (pr checkout|checks|close|comment|create|diff|edit|list|merge|ready|reopen|review|status|view, issue close|comment|create|edit|list|reopen|status|view, repo clone|list|view, run list|rerun|view|watch, workflow list|view, release list|view, search code|commits|issues|prs|repos, auth status, label list, api, status, version), because \"gh pr mrg\" can be an alias or an extension that runs any gh command, also a merge. Write one of these, or ask the user", "a two-word alias under a group (F-T534-1)");
   const refused = [["gh land 360", "gh land"], ["gh co 360", "gh co"], [`cd /work && gh ship 41 ${SHA}`, "gh ship"], ["env FOO=1 gh land 41", "gh land"],
     // F-T534-1, R1940-2: a two-word alias under a built-in group, and an option before the subcommand, which hides it.
     ["gh pr mrg 360", "gh pr mrg"], ["gh pr land 360 --admin", "gh pr land"], ["gh issue mrg 1", "gh issue mrg"], ["gh run x", "gh run x"], ["gh pr -R o/r mrg 41", "gh pr -R"],
     // T815: the merge rule reads gh's own words, so an alias body is the gh path rule's (gh alias), not a merge.
     ["gh alias set 'pr mrg' 'pr merge --admin'", "gh alias"], ["gh auth token", "gh auth token"],
-    ["$(which gh) land 41", LITERAL], ["G=gh; $G land 41", LITERAL], ["`which gh` land 41", LITERAL],
     // R1946-2: alias, extension and config are no path that sage uses.
     ["gh alias import aliases.yml", "gh alias"], ["gh alias list", "gh alias"], ["gh extension install o/gh-land", "gh extension"], ["gh ext create land", "gh ext"],
     ["gh extensions exec land 41", "gh extensions"], ["gh extension list", "gh extension"], ["gh config set pager 'sh -c x'", "gh config"], ["gh config set -h github.com editor vim", "gh config"],
-    ["GH_PAGER='sh -c x' gh pr view 41", SETUP], ["PAGER=x gh pr diff 41", SETUP], ["env BROWSER=x gh pr view --web 41", SETUP], ["export EDITOR=x; gh pr edit 41", SETUP],
-    ["GH_EDITOR=x gh pr create", SETUP], ["VISUAL=x gh issue create", SETUP], ["GH_BROWSER=x gh pr view --web 1", SETUP], ["GH_CONFIG_DIR=/tmp/x gh pr view 41", SETUP], ["XDG_CONFIG_HOME=/tmp/x gh pr view 41", SETUP],
-    // F-T534-1: HOME points gh at another config folder, which an agent can write.
-    ["HOME=/tmp/x gh pr view 41", SETUP], ["env HOME=/tmp/x gh pr checks 41", SETUP], ["export HOME=/tmp/x && gh pr list", SETUP],
     // F-T815-39: gh behind a wrapper that the reader does not know is read by core's reader, as gh by its name.
     ["op run -- gh secret set X", "gh secret"], ["arch -arm64 gh pr mrg 360", "gh pr mrg"], ["chronic gh ext install o/gh-land", "gh ext"]];
   for (const [command, reason] of refused) assert.equal(path(denied(await g.run(pre("Bash", command)))), reason, command);
   for (const command of ["gh pr view 41", "gh pr checks 41", "gh pr create --fill", "gh pr list", "gh pr diff 41", "gh pr ready 41", "gh pr view 41 -R o/r", "gh pr", "gh pr --help",
     "gh api repos/o/r/pulls/41", "gh --version", "gh auth status", "gh issue view 2", "gh repo view", "gh run view 7 --log", "gh status", "gh version",
     "/opt/homebrew/bin/gh pr view 41", "echo $HOME && gh pr view 41", "op run -- gh pr view 41",
+    // T903: gh from a variable or a substitution, and gh's settings (pager, editor, browser, HOME, config folder), are
+    // documented limits, as in the Claude hook (T815); the gh path rule still reads gh's own words.
+    "$(which gh) land 41", "G=gh; $G land 41", "`which gh` land 41", "GH_PAGER='sh -c x' gh pr view 41", "PAGER=x gh pr diff 41", "env BROWSER=x gh pr view --web 41",
+    "export EDITOR=x; gh pr edit 41", "GH_EDITOR=x gh pr create", "VISUAL=x gh issue create", "GH_BROWSER=x gh pr view --web 1", "GH_CONFIG_DIR=/tmp/x gh pr view 41",
+    "XDG_CONFIG_HOME=/tmp/x gh pr view 41", "HOME=/tmp/x gh pr view 41", "env HOME=/tmp/x gh pr checks 41", "export HOME=/tmp/x && gh pr list", "gh pr create --body 'HOME=/x and PAGER=y'",
     // F-T815-42: a word gh that is a file, a package or a page is not gh.
     "brew install gh jq", "man gh pr", "npm view gh version", "cp gh backup"]) {
     assert.equal(denied(await g.run(pre("Bash", command))), undefined, command);

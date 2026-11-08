@@ -77,6 +77,9 @@ for (const [tool, chief, title, branch] of [[claude, C1, "a", "sage/t1-a"], [cod
 const LOGBOOK = claude.storeDir(PROJECT, env);
 const LINK = join(BASE, "link");
 symlinkSync(LOGBOOK, LINK);
+// The Codex sage folder, with no SAGE_HOME: CODEX_HOME/sage, and a link to it.
+const CODEX_SAGE = join(env.CODEX_HOME, "sage"), CODEX_LINK = join(BASE, "codex-link");
+symlinkSync(CODEX_SAGE, CODEX_LINK);
 
 /** A hook's answer: the reason of its refusal, or undefined when it passes. */
 function answer(r) {
@@ -101,7 +104,7 @@ const BOTH = Object.keys(ROLES), CLAUDE = ["claude chief", "claude agent"], AGEN
 /** The words of each family's refusal in the Claude hook, so that no row passes for another rule's reason. */
 const WHY = {
   merge: /merge|reaches main/i, // a mergeBranch into main meets the push rule first, which runs before the merge rule
-  push: /Push only with|force-push|reaches main|default branch|gh repo sync|git command that the hook knows|subtree push|owning chief|core\.hooksPath/,
+  push: /Push only with|force-push|reaches main|default branch|gh repo sync|git command that the hook knows|subtree push|owning chief|core\.hooksPath|under a \.git folder/,
   gh: /before or between its command words/,
   logbook: /logbook file from the shell/,
   board: /board password rule/,
@@ -110,6 +113,8 @@ const WHY = {
   "agent gh": /an agent runs only these gh commands/,
   state: /state tool|PR script|writes the logbook/,
 };
+/** The words of a refusal in the Codex gate, where they name the family's own rule (T903); other families take any refusal. */
+const CODEX_WHY = { logbook: /^sage: no agent writes, moves or removes a logbook file from the shell|^sage: no agent runs a shell command that names the Codex sage folder, the shared root/ };
 
 /**
  * The table: [family, command, roles, extra env]. A command is a string for every role, or { claude, codex } when the two
@@ -173,6 +178,11 @@ const REFUSED = [
   ["push", `git -C ${OTHER} push origin sage/t1-a`],
   ["push", `git -c push.default=upstream -C ${T} push origin sage/t1-a`],
   ["push", `git -C ${T} -c core.hooksPath=/x commit -m x`],
+  // A write under .git, where git keeps its hooks: also from ~ and with a pattern, which the Codex gate no longer refuses
+  // as an uncertain target (T903).
+  ["push", `echo x > ${PROJECT}/.git/hooks/pre-push`],
+  ["push", "echo x > ~/../project/.git/hooks/pre-comm?t"],
+  ["push", `cp hook ${PROJECT}/.git/hooks/*`],
   ["push", `bash -c 'git -C ${T} push origin sage/t1-a'`],
   ["push", `eval git -C ${T} push origin sage/t1-a`],
   ["push", `echo $(git -C ${T} push origin sage/t1-a)`],
@@ -219,12 +229,21 @@ const REFUSED = [
   // A remove or a move of a folder that holds a root (F-T815-4): the home folder, a folder above it, a pattern in it.
   ["logbook", `rm -rf ${env.SAGE_SHARED_HOME}`],
   ["logbook", `mv ${env.SAGE_SHARED_HOME} ${env.SAGE_SHARED_HOME}.bak`],
-  // The Codex gate refuses a write to its roots only, and takes these up in T903.
-  ["logbook", "rm -rf ~/..", CLAUDE],
-  ["logbook", "rm -rf ~/../*", CLAUDE],
-  ["logbook", `find ${BASE} -delete`, CLAUDE],
+  // The Codex gate reads them with core's logbookWrite too (T903).
+  ["logbook", "rm -rf ~/.."],
+  ["logbook", "rm -rf ~/../*"],
+  ["logbook", `find ${BASE} -delete`],
   ["logbook", `chmod -R 000 ${env.SAGE_SHARED_HOME}`],
-  // The board, process and stash rules: the Claude hook's (the Codex gate has none of them yet, T903).
+  ["logbook", `rsync -a --delete /var/empty/ ${env.SAGE_SHARED_HOME}/`],
+  ["logbook", `cd ${LINK} && echo x >> runs.tsv`],
+  ["logbook", `tee -a ${LINK}/findings.tsv`],
+  // The Codex sage folder (the logbook and the mode files) is a root of the Codex gate only: a forged mode file, by a
+  // literal path, also through a link (T903).
+  ["logbook", `echo '{"sage":true,"autopilot":true}' > ${CODEX_SAGE}/.hooks/codex/x.json`, ["codex chief"]],
+  ["logbook", `cp /dev/null ${CODEX_LINK}/.hooks/codex/x.json`, ["codex chief"]],
+  ["logbook", `cd ${CODEX_LINK} && rm -rf .hooks`, ["codex chief"]],
+  ["logbook", `mv ${env.CODEX_HOME} ${BASE}/codex-old`, ["codex chief"]],
+  // The board, process and stash rules: the Claude hook's (the Codex gate has none of them).
   ["board", "cat ~/.config/sage-board/board.json", CLAUDE],
   ["board", "node /opt/sage/board/cli.mjs board --set-password", CLAUDE],
   ["board", "grep -r token ~/.config", CLAUDE],
@@ -251,7 +270,6 @@ const PASSED = [
   [{ claude: `git -C ${T} push -u origin sage/t1-a`, codex: `git -C ${T} push origin sage/t2-b` }],
   ["grep -rn 'gh pr merge' docs"],
   ["gh run list --limit 5"],
-  [`cat ${L}/tasks.tsv`, CLAUDE],
   ["rg -n -- --set-password docs", CLAUDE],
   [`node ${TOOL} status | head -5`, AGENT],
   [`node ${TOOL} standing && echo done`, AGENT],
@@ -284,6 +302,12 @@ const PASSED = [
   ["npm view gh version"],
   [`cp /usr/bin/git ${BASE}/git-copy`],
   ["gh search repos git cli", ["claude chief", "codex chief"]],
+  // A logbook file's name outside a root and a variable in a write target pass in both hooks (T903). A read of a root
+  // passes the Claude hook; the Codex gate refuses any command that names its roots.
+  [`echo x > ${BASE}/tasks.tsv`],
+  ["rm -f ../runs.tsv"],
+  ["echo x > $DEST/tasks.tsv"],
+  [`cat ${L}/tasks.tsv`, CLAUDE],
 ];
 
 /** Runs a table's rows as each of their roles; returns the rows whose answer is not the expected one, and the counts. */
@@ -294,7 +318,7 @@ function play(rows, refuse) {
     for (const role of roles) {
       const text = typeof command === "string" ? command : command[role.split(" ")[0]];
       const why = ROLES[role](text, extra);
-      const ok = refuse ? why !== undefined && (role === "codex chief" || WHY[family].test(why)) : why === undefined;
+      const ok = refuse ? why !== undefined && (role === "codex chief" ? CODEX_WHY[family] ?? /./ : WHY[family]).test(why) : why === undefined;
       if (ok) counts[role]++;
       else wrong.push(`${role} · ${refuse ? `${family} ` : ""}${text} → ${why ?? "passed"}`);
     }

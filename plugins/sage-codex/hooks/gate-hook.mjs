@@ -25,11 +25,15 @@
 //     and followup_task): its message to the root thread would start a root turn as if the user typed it. No thread,
 //     in any mode, also the root, sends to the root thread: Codex records it as the user's typed message (R1940-1).
 //   - gh in sage mode: only the gh command paths that sage uses (a group and its subcommand, such as pr view), by name,
-//     and no setting before gh that changes what it runs or reads (its pager, editor, browser, HOME or config folder),
-//     because an alias, an extension or such a program can run any gh command, also a merge (R1940-2, R1948, F-T534-1).
+//     because an alias or an extension can run any gh command, also a merge (R1940-2, R1948, F-T534-1).
 //   - Multi-agent v1's send_input: none in sage mode (sage sends with v2).
 //   - The sage folder: no thread, in any mode, runs a shell command that names the Codex sage folder (the logbook and the
-//     mode files) or the Codex sessions folder, so an agent cannot forge a mode file or a typed message.
+//     mode files) or the Codex sessions folder by a literal path, so an agent cannot forge a mode file or a typed message.
+//   - Logbook writes from the shell: no thread, in any mode, runs a shell write whose literal path is in the Codex sage
+//     folder or the shared root, also through a link, or that removes or moves a folder that holds one (core's
+//     logbookWrite, T903).
+//   - As in the Claude hook (T815), the rules judge the programs that a line runs and the literal paths in their words: a
+//     variable, a substitution or a pattern in a path, and gh's settings, are documented limits; the sandbox is the guard.
 //   - Codex from the shell: no thread, in any mode, runs codex except codex --version, -V, --help or -h. A new session
 //     (codex exec) runs outside the hooks of this session, and a resumed session, a fork or a queued message (codex
 //     queue) gives Codex a prompt that it records as the user's typed message, also "autopilot on" (R1981-1). Codex is
@@ -66,7 +70,7 @@ import { accessSync, constants, existsSync, linkSync, mkdirSync, readdirSync, re
 import { homedir } from "node:os";
 import { basename, dirname, isAbsolute, join, relative, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
-import { chiefEditDenied, commandWrites as knownCommandWrites, createCommandPolicy, createPushPolicy, gitInternalPath, gitOrGh, LOGBOOK_FILES, partNames, PR, programName, programsRun, pullRequestHead, readModeFile, roleEditDenied, sharedRoot, shellCommands, shellWriteEvidence, shellExecutionUncertain, TEAM } from "../core/index.mjs";
+import { chiefEditDenied, commandWrites as knownCommandWrites, createCommandPolicy, createPushPolicy, gitInternalPath, gitOrGh, logbookWrite, partNames, PR, programName, programsRun, pullRequestHead, readModeFile, roleEditDenied, sharedRoot, shellCommands, shellWriteEvidence, shellExecutionUncertain, TEAM } from "../core/index.mjs";
 
 // Codex treats executable stdin conservatively without changing other callers' known-write classification.
 const commandWrites = (text, cwd) => knownCommandWrites(text, cwd) || shellExecutionUncertain(text, cwd);
@@ -94,7 +98,7 @@ const CODEX_FOLDER = "sage: no agent changes files under a .codex folder, becaus
 const CODEX_SETTINGS = "sage: no agent writes Codex's config file or the sage plugin's folder from the shell, because the trust of sage's hooks is there. Ask the user to make this change.";
 const CHIEF = 'sage: sage mode is on, so the chief does not change files. Brief an implementer to make this change. The user ends sage mode with the message "sage mode off", alone.';
 const OWNER_MERGE = "sage: in Codex, only sage's merge command merges, on autopilot, as the chief's instructions say. Without autopilot, the owner merges the pull request in GitHub";
-const LOGBOOK_FILE = "sage: in sage mode, no agent writes a logbook file by its name outside the project. Use the sage MCP tools for the logbook.";
+const LOGBOOK_WRITE = (word) => `sage: no agent writes, moves or removes a logbook file from the shell: ${JSON.stringify(word)} is in the Codex sage folder or the shared root, or holds one. Use the sage MCP tools for the logbook.`;
 const SAGE_FOLDER = "sage: no agent runs a shell command that names the Codex sage folder, the shared root or the Codex sessions folder, and no patch changes them, because the logbook, the mode files and the user's typed messages are there. Use the sage MCP tools for the logbook.";
 const CODEX_RUN = "sage: no agent runs codex from the shell, except codex --version and codex --help, because a new session runs outside these hooks, and Codex records the prompt of a resumed, forked or queued turn as the user's typed message, also a mode phrase. Ask the user.";
 const READ_ONLY = (role) => `sage: in sage mode, the ${role} agent changes no files. Report the finding instead.`;
@@ -113,8 +117,6 @@ const CHILD_SEND = "sage: agents send no input to another thread, because a mess
 const LEAD_SEND = "sage: a lead sends no message to an agent, because each agent works only from its checked brief. To steer your team, start a new agent on a new run, with a new brief.";
 const ROOT_SEND = "sage: no thread sends input to the session's main thread, because Codex counts that message as the user's own typed message, also a mode phrase. Put it in your reply or your report.";
 const V1_REFUSED = "sage: in sage mode, no thread uses multi-agent v1's send_input, because Codex can deliver it to the main thread as the user's typed message. sage sends with multi-agent v2.";
-const GH_LITERAL = "sage: in sage mode, run gh by its name or by a path that ends in /gh, not from a variable or a substitution, so that the gate can read the command.";
-const GH_SETUP = "sage: in sage mode, no setting before gh changes what it runs or reads: its pager, editor or browser, HOME or its config folder. Ask the user.";
 const GH_PATH = (path) => `sage: in sage mode, gh runs only the commands that sage uses (${GH_LIST}), because "gh ${path}" can be an alias or an extension that runs any gh command, also a merge. Write one of these, or ask the user.`;
 
 /** The sage MCP tools that only read the logbook: a child may call these, and pages without record, run or text. */
@@ -164,22 +166,18 @@ const GH_PATHS = {
 };
 const GH_LIST = Object.entries(GH_PATHS).map(([group, subs]) => (subs ? `${group} ${subs.join("|")}` : group)).join(", ");
 const GH_HELP = /^(?:--version|--help|-h)$/;
-/** The settings that make gh run another program or read another config (its pager, editor, browser, aliases, F-T534-1 HOME). */
-const GH_SETTINGS = /(?:^|[^\w])(?:GH_PAGER|PAGER|BROWSER|GH_BROWSER|EDITOR|GH_EDITOR|VISUAL|GH_CONFIG_DIR|XDG_CONFIG_HOME|HOME)\s*=/;
 /**
- * Why a shell command's gh run is refused in sage mode, or undefined (R1940-2, R1946-2, R1947-1, F-T534-1): gh from a
- * variable or a substitution, a setting before gh that changes what it runs or reads, or a word path that is not in
- * GH_PATHS. The path is gh's first two words, with no option before or between them. A command that the reader cannot
- * read is left to the merge rule.
+ * Why a shell command's gh run is refused in sage mode, or undefined (R1940-2, R1946-2, R1947-1, F-T534-1): a word path
+ * that is not in GH_PATHS. The path is gh's first two words, with no option before or between them. A command that the
+ * reader cannot read is left to the merge rule. gh from a variable or a substitution, and a setting that makes gh run
+ * another program (its pager, editor or browser) or read another config, are documented limits (T903).
  */
 function ghProblem(command, cwd, env) {
   let runs;
   try { runs = programsRun(command, cwd, env.PATH ?? ""); } catch { return undefined; }
-  if (/\bgh\b/.test(command) && runs.some((p) => /[$`…]/.test(p.word))) return GH_LITERAL;
   // gh behind a wrapper that the reader does not know (op run -- gh repo sync) counts too, by core's reader (F-T815-39).
   const gh = runs.map((p) => gitOrGh(p, "gh")).filter(Boolean);
   if (!gh.length) return undefined;
-  if (GH_SETTINGS.test(command)) return GH_SETUP;
   for (const { args: [group, sub] } of gh) {
     if (group === undefined || GH_HELP.test(group)) continue;
     const subs = Object.hasOwn(GH_PATHS, group) ? GH_PATHS[group] : undefined;
@@ -409,32 +407,38 @@ function wordsOf(command, cwd, env) {
 }
 
 const codexHome = (env) => resolve(env.CODEX_HOME ?? join(homedir(), ".codex"));
+/** The Codex sage folder: the logbook and the mode files (SAGE_HOME, or CODEX_HOME/sage). */
+const sageRoot = (env) => dirname(dirname(modeDirectory(env)));
 /**
- * Whether a shell command names the Codex sage folder (also from ~ or $HOME, $SAGE_HOME or $CODEX_HOME/sage), the
- * shared root (also from $SAGE_SHARED_HOME) or the Codex sessions folder: in its text, or in a word as the shell reads
- * it (without quotes, R1669-4), also as a path from the folder the word runs in. A .sage folder outside the project
- * counts too, by name, also as a pattern: a project's own .sage folder stays free.
+ * Whether a shell command names the Codex sage folder (also from ~), the shared root or the Codex sessions folder by a
+ * literal path: in its text, or in a word as the shell reads it (without quotes, R1669-4), also as a path from the
+ * folder the word runs in. A .sage folder outside the project counts too, by name, also as a pattern: a project's own
+ * .sage folder stays free. A variable in a path ($HOME, $SAGE_HOME, $CODEX_HOME) is a documented limit (T903).
  */
 export const namesSageFolder = (command, env = process.env, cwd = "/") => names(command, env, cwd,
-  [dirname(dirname(modeDirectory(env))), sharedRoot(env), join(codexHome(env), "sessions")], ["\\$\\{?SAGE_HOME\\b", "\\$\\{?SAGE_SHARED_HOME\\b", "\\$\\{?CODEX_HOME\\}?/(?:sage|sessions)(?![\\w.-])", "\\.hooks/codex"])
+  [sageRoot(env), sharedRoot(env), join(codexHome(env), "sessions")], ["\\.hooks/codex"])
   || leavingPaths(command, env, cwd).some((path) => partsOf(path).some((part) => part.startsWith(".") && partNames(part, ".sage")));
-/** Whether a shell command or a patch names a logbook file outside the project: the Claude hook's list. A project's own config.json stays free. */
-const namesLogbookFile = (command, env, cwd) => leavingPaths(command, env, cwd).some((path) => partsOf(path).some((part) => /[a-z]/.test(part) && LOGBOOK_FILES.some((name) => partNames(part, name))));
+/**
+ * The word with which a shell command writes into the Codex sage folder or the shared root, or removes or moves a folder
+ * that holds one (core's logbookWrite, as in the Claude hook), or undefined. A path with a loop of links reaches no file,
+ * so it passes.
+ */
+const logbookWord = (command, env, cwd) => {
+  try { return logbookWrite(command, cwd, [sageRoot(env), sharedRoot(env)], env.HOME || homedir()); } catch { return undefined; }
+};
 const partsOf = (path) => path.toLowerCase().split("/");
 /** A patch's path as a shell command, so that the shell rules read it as one word from the patch's folder. */
 const asWord = (path) => `: '${path.replaceAll("'", "'\\''")}'`;
 /**
- * The words of a command that may lead out of the project, as paths. A word with a variable has no known place, and
- * neither has any word of a line that the reader cannot read (it stops at "cd ~"), so each of those counts. A checkout
- * of the same repository, such as a task worktree in a sibling folder, is the project.
+ * The words of a command that lead out of the project, as paths, with ~ as the home folder. Each word of a line that the
+ * reader cannot read counts. A checkout of the same repository, such as a task worktree in a sibling folder, is the project.
  */
 function leavingPaths(command, env, cwd) {
   const home = env.HOME || homedir(), root = projectRoot(cwd), read = wordsOf(command, cwd, env);
-  const start = (word) => word.replace(/^(?:~|\$HOME|\$\{HOME\})(?=\/|$)/, home);
+  const start = (word) => word.replace(/^~(?=\/|$)/, home);
   if (!read.length) return command.split(/[\s;&|()<>`'"=]+/).filter(Boolean).map(start);
   return read.flatMap(({ word, dir }) => {
     const path = start(word);
-    if (/[$`]/.test(path)) return [path];
     const place = relative(root, resolve(dir, path));
     return (place === ".." || place.startsWith("../") || isAbsolute(place)) && !sameRepository(resolve(dir, path), cwd) ? [resolve(dir, path)] : [];
   });
@@ -446,17 +450,16 @@ function sameRepository(path, cwd) {
 }
 /**
  * Whether a shell command names Codex's config file, which keeps the trust records of the hooks, or the folder of this
- * installed plugin, whose hooks are the gate (R1916-2): the same forms as the sage folder.
+ * installed plugin, whose hooks are the gate (R1916-2): the same literal forms as the sage folder.
  */
-export const namesCodexSettings = (command, env = process.env, cwd = "/") => names(command, env, cwd,
-  [join(codexHome(env), "config.toml"), ROOT], ["\\$\\{?CODEX_HOME\\}?/(?:config\\.toml|plugins)(?![\\w.-])"]);
+export const namesCodexSettings = (command, env = process.env, cwd = "/") => names(command, env, cwd, [join(codexHome(env), "config.toml"), ROOT], []);
 
 /** Whether a shell command names one of these paths, or matches one of these patterns, as namesSageFolder says. */
 function names(command, env, cwd, dirs, patterns) {
   const forms = new Set(dirs);
   for (const dir of dirs) try { forms.add(realpathSync.native(dir)); } catch { /* not made yet */ }
   const home = env.HOME || homedir();
-  for (const form of [...forms]) if (form.startsWith(`${home}/`)) for (const start of ["~", "$HOME", "${HOME}"]) forms.add(start + form.slice(home.length));
+  for (const form of [...forms]) if (form.startsWith(`${home}/`)) forms.add(`~${form.slice(home.length)}`);
   const paths = [...forms].map((form) => `(?<![\\w.~/$-])${escape(form)}(?=$|[/\\s'"\`;|&)<>:])`);
   const named = new RegExp([...paths, ...patterns].join("|"), "i");
   const path = (word, dir) => resolve(dir, word.replace(/^~(?=\/|$)/, home));
@@ -894,13 +897,11 @@ export async function gate(input, { mode = readMode, check = checkMerge, env = p
       if (managedPatchPath(path, { cwd: f.cwd, env, pluginRoot: ROOT })) continue;
       if (codexPath(projectRoot(f.cwd), resolve(f.cwd, path))) return deny(CODEX_FOLDER);
       if (namesSageFolder(asWord(path), env, f.cwd)) return deny(SAGE_FOLDER);
-      if (mode(f, env).sage && namesLogbookFile(asWord(path), env, f.cwd)) return deny(LOGBOOK_FILE);
       if (mode(f, env).sage && gitInternalPath(resolve(f.cwd, path))) return deny(GIT_FOLDER);
       return deny("sage: this patch reaches protected storage or has unverified checkout paths");
     }
     if (paths.some((path) => namesSageFolder(asWord(path), env, f.cwd))) return deny(SAGE_FOLDER);
     const { sage } = mode(f, env);
-    if (sage && paths.some((path) => namesLogbookFile(asWord(path), env, f.cwd))) return deny(LOGBOOK_FILE);
     // git's own files: a git hook or a setting there can push outside the push rule (T536).
     if (sage && paths.some((path) => gitInternalPath(resolve(f.cwd, path)))) return deny(GIT_FOLDER);
     if (!thread.child) return chiefEditDenied({ sage, chief: true }) ? deny(CHIEF) : undefined;
@@ -911,6 +912,8 @@ export async function gate(input, { mode = readMode, check = checkMerge, env = p
   const writeEvidence = parsedWrites?.uncertain ? undefined : parsedWrites;
   const namesReference = (references, test) => references.some(({ word, dir }) => test(asWord(resolve(dir, word)), env, f.cwd));
   if (writeEvidence ? namesReference([...writeEvidence.reads, ...writeEvidence.writes], namesSageFolder) : namesSageFolder(f.command, env, f.cwd)) return deny(SAGE_FOLDER);
+  const logbook = logbookWord(f.command, env, f.cwd);
+  if (logbook !== undefined) return deny(LOGBOOK_WRITE(logbook));
   const runs = codexRuns(f.command, f.cwd, env);
   // A command that the reader cannot read and that names codex: refused when it may resume, fork or queue a turn, and
   // for a role agent in sage mode. Any other thread runs it, for example "$EDITOR codex/a.txt".
@@ -930,14 +933,12 @@ export async function gate(input, { mode = readMode, check = checkMerge, env = p
     if (why) return refuse(thread, why);
   }
   if (writeEvidence ? namesReference(writeEvidence.writes, namesCodexSettings) : commandWrites(f.command, f.cwd) && namesCodexSettings(f.command, env, f.cwd)) return deny(CODEX_SETTINGS);
-  if (parsedWrites?.uncertain) return deny("sage: the shell write target or its folder is uncertain. Use a literal target in the assigned project");
   const now = mode(f, env);
   if (!now.sage) return undefined; // the merge refusal above applies in every mode
   if (writeEvidence?.writes.some(({ word, dir }) => gitInternalPath(resolve(dir, word))) ||
     (shellExecutionUncertain(f.command, f.cwd) && (gitInternalPath(f.cwd) ||
       shellCommands(f.command).some(c => c.words.some(gitInternalPath)))))
     return deny("sage: this command writes a file under a .git folder, where git keeps its hooks and settings, so sage mode refuses it. Ask the user");
-  if (writeEvidence ? namesReference(writeEvidence.writes, namesLogbookFile) : commandWrites(f.command, f.cwd) && namesLogbookFile(f.command, env, f.cwd)) return deny(LOGBOOK_FILE);
   const gh = ghProblem(f.command, f.cwd, env);
   if (gh) return deny(gh);
   // A shared logbook's task branch takes a push only from its owning chief, the chief of the root thread's session (T822).
