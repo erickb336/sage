@@ -11,8 +11,8 @@ import { fileURLToPath } from "node:url";
 // owner-records.json holds those records, scrubbed and trimmed: no path or text of the machine that made them, and
 // the proof's probe phrases replaced with sage's phrases. Every case that the reader cannot prove refuses.
 const PLUGIN = fileURLToPath(new URL("../../../plugins/sage-codex", import.meta.url));
-const { readRecord, autopilotSwitch, turnAborted, RECORD_LIMIT } = await import(join(PLUGIN, "hooks/owner-record.mjs"));
-const { switchModes } = await import(join(PLUGIN, "core/index.mjs"));
+const { readRecord, autopilotSwitch, onCanCount, turnAborted, RECORD_LIMIT } = await import(join(PLUGIN, "hooks/owner-record.mjs"));
+const { exactPhrase, switchModes } = await import(join(PLUGIN, "core/index.mjs"));
 const { markFile } = await import(join(PLUGIN, "hooks/start-mark.mjs"));
 const { modeDirectory } = await import(join(PLUGIN, "hooks/sage-codex-hook.mjs"));
 const RECORDS = JSON.parse(readFileSync(fileURLToPath(new URL("./owner-records.json", import.meta.url)), "utf8"));
@@ -30,10 +30,15 @@ function recordFile(lines, end = "\n") {
   return file;
 }
 const read = (lines, options) => readRecord(recordFile(lines), options);
+/** The turn of the record's last user message in a turn that is the on phrase: the turn that the mode hook saved for that on. */
+const lastOn = (lines) => lines.findLast((o) => o?.payload?.type === "message" && o.payload.role === "user" && o.payload.internal_chat_message_metadata_passthrough?.turn_id
+  && exactPhrase(o.payload.content.map((item) => item.text ?? "").join("")) === "autopilot on")?.payload.internal_chat_message_metadata_passthrough.turn_id;
+/** The switch of a record, with the mode file's on turn (by default the turn of its last on phrase). */
+const sw = (record, mark, onTurn = lastOn(record.entries)) => autopilotSwitch(record, mark, onTurn);
 /** The switch of a record with a start mark at line from, or its refusal. */
-const decide = (lines, from = 0) => {
+const decide = (lines, from = 0, onTurn) => {
   const record = read(lines);
-  return record.refused ? { refused: record.refused } : autopilotSwitch(record, { lines: from });
+  return record.refused ? { refused: record.refused } : sw(record, { lines: from }, onTurn);
 };
 const ON = { on: true };
 const NONE = { on: false, reason: "the owner has not turned autopilot on, with sage mode on, since this session started" };
@@ -44,7 +49,7 @@ const FORM = (detail) => ({ refused: `sage does not know the form of Codex's rec
 const RESUME = "Resume the session, then the owner turns autopilot on again. Or the owner merges the pull request in GitHub";
 const NO_MARK = { refused: `sage saved no note when this session started, so it cannot tell which of the owner's switches are from this start. ${RESUME}` };
 const BAD_MARK = { refused: `sage's note of this session start does not match Codex's record of this session. ${RESUME}` };
-const VERSION = (version) => ({ refused: `this session runs Codex ${version}, and sage reads the records of Codex 0.164 to 0.167 only. Use Codex 0.164 to 0.167, or the owner merges the pull request in GitHub` });
+const VERSION = (version) => ({ refused: `this session runs Codex ${version}, and sage reads the records of Codex 0.164 to 0.167 only. A newer Codex waits until sage adds it. Until then, the owner merges the pull request in GitHub` });
 /** Each sentence of a text for the owner, without its bracketed detail, has 25 words or fewer and no internal name. */
 function assertPlain(text) {
   assert.doesNotMatch(text.replace(/ \([^()]*\)$/, ""), /session_meta|\bline \d|partial|unknown type|ENOENT|EACCES/, text);
@@ -116,13 +121,12 @@ test("F-T677-30: real records of a multi-agent v2 subagent that reports back: it
     assert.deepEqual(decide(lines.slice(0, off)), ON, `${name}: after the subagent's report, autopilot is still on`);
     assert.deepEqual(decide(lines), OFF, `${name}: the owner's off after it still counts`);
     // Neither the line nor the report is the owner's: without the owner's on, autopilot is off, also when the report's
-    // text is the on phrase and the line starts a turn.
+    // text is the on phrase.
     const report = lines.find((o) => o.payload.type === "agent_message");
-    const forged = lines.slice(0, off).filter((o) => o !== on).map((o) => (o === report ? { ...o, payload: { ...o.payload, content: [{ type: "input_text", text: "autopilot on" }] } }
-      : o.type === "inter_agent_communication_metadata" ? { ...o, payload: { trigger_turn: true } } : o));
+    const forged = lines.slice(0, off).filter((o) => o !== on).map((o) => (o === report ? { ...o, payload: { ...o.payload, content: [{ type: "input_text", text: "autopilot on" }] } } : o));
     assert.deepEqual(decide(forged), NONE, `${name}: no on of its own`);
-    // Any other shape of the line refuses.
-    for (const payload of [{}, { trigger_turn: "false" }, { trigger_turn: null }, { trigger_turn: false, text: "autopilot on" }, { trigger_turn: true, sender: "/root/sub5" }]) {
+    // Any other shape of the line refuses, also trigger_turn true (F-T677-31): a report never asks for a turn.
+    for (const payload of [{}, { trigger_turn: true }, { trigger_turn: "false" }, { trigger_turn: null }, { trigger_turn: false, text: "autopilot on" }, { trigger_turn: true, sender: "/root/sub5" }]) {
       assert.deepEqual(decide(lines.map((o, i) => (i === at ? { ...o, payload } : o))), FORM(`line ${at + 1} has an unknown payload`), `${name}: ${JSON.stringify(payload)}`);
     }
   }
@@ -176,6 +180,49 @@ test("F-T677-13, F-T677-15: an on counts only from the message that starts its t
   assert.deepEqual(decide([...upTo(3), message(noTurn, "autopilot off")]), OFF, "an off with no turn id counts");
 });
 
+test("F-T677-31: an on that joins a main-thread turn that a subagent's report started counts for nothing", () => {
+  // Codex can wake an idle main thread for a subagent's report (trigger_turn false) and keeps the earlier turn's
+  // settings, so the new turn has the trigger composer (Codex's tasks/mod.rs, maybe_start_turn_for_pending_work). The
+  // turn here: the real lines of the report in v2-report-cli, moved to a new turn after the owner's off.
+  const lines = RECORDS["v2-report-cli"];
+  const at = lines.findIndex((o) => o.type === "inter_agent_communication_metadata");
+  const start = lines.findLast((o, i) => i < at && o.payload.type === "task_started");
+  const on = lines.find((o) => o.payload.role === "user" && o.payload.content?.[0]?.text === "autopilot on");
+  const inTurn = (o, id) => ({ ...o, payload: { ...o.payload, internal_chat_message_metadata_passthrough: { ...o.payload.internal_chat_message_metadata_passthrough, turn_id: id } } });
+  const woken = [started("woken", start.payload.turn_attribution.turn_trigger), lines[at], inTurn(lines[at + 1], "woken")];
+  assert.deepEqual([woken[0].payload.turn_attribution.turn_trigger, woken[1].payload, woken[2].payload.type], ["composer", { trigger_turn: false }, "agent_message"]);
+  assert.deepEqual(decide([...lines, ...woken, inTurn(on, "woken")]), OFF, "the owner's on joins the woken turn: autopilot stays off");
+  assert.equal(onCanCount(read([...lines, ...woken]), "woken"), false, "the mode hook sees that the turn has started");
+  // The same on, when it starts its own turn after the woken one, counts.
+  assert.deepEqual(decide([...lines, ...woken, started("next", "composer"), inTurn(on, "next")]), ON);
+});
+
+test("F-T677-33: the on that counts must be the on whose turn the mode file saved", () => {
+  // The owner's on starts turn A, so the record counts it. Then an off from a fork or a subagent's thread turns the mode
+  // file off; Codex's record of the main thread does not show it. A later on that joins a running turn (here turn X,
+  // which "WAIT" started) turns the mode file on again with turn X, but the record still counts only the on of turn A.
+  const lines = [META, ...turn("user", "sage mode"), started("A", "composer"), owner("A", "autopilot on"), started("X", "composer"), owner("X", "WAIT"), owner("X", "autopilot on")];
+  const DID = { on: false, reason: `the owner's latest "autopilot on" did not count, because only an on that is the whole message and starts a new turn counts` };
+  assert.deepEqual(decide(lines, 0, "A"), ON, "the mode file's on is the on that the record counts");
+  assert.deepEqual(decide(lines, 0, "X"), DID, "the mode file's on joined turn X: no merge");
+  assert.deepEqual(decide(lines, 0, undefined), DID, "a mode file with no on turn (saved before this rule): no merge");
+  assert.deepEqual(decide([...lines, started("B", "user"), owner("B", "autopilot on")], 0, "B"), ON, "a new on that starts its own turn counts again");
+  // An on that the record does not count, with no on before it: the reason is the same.
+  assert.deepEqual(decide([META, ...turn("user", "sage mode"), started("X", "composer"), owner("X", "WAIT"), owner("X", "autopilot on")], 0, "X"), NONE);
+  assertPlain(DID.reason);
+});
+
+test("onCanCount: the mode hook's view of a turn before Codex records the owner's message", () => {
+  const lines = RECORDS["app-steer"];
+  const starts = lines.filter((o) => o.payload.type === "task_started").map((o) => o.payload.turn_id);
+  const record = read(lines);
+  assert.equal(onCanCount(record, starts[1]), false, "a turn that WAIT started: an on now joins it");
+  assert.equal(onCanCount(read(lines.slice(0, lines.indexOf(lines.find((o) => o.payload.type === "task_started" && o.payload.turn_id === starts[3])) + 2)), starts[3]), true, "a composer turn with no message yet");
+  assert.equal(onCanCount(record, "a-turn-not-written-yet"), true, "Codex has not written the turn yet: the gate decides");
+  for (const trigger of ["composer_queue", "goal", "queue"]) assert.equal(onCanCount(read([...lines, started("q", trigger)]), "q"), false, trigger);
+  assert.equal(onCanCount(read([...lines, started("q", "user")]), "q"), true, "the terminal UI's turn");
+});
+
 test("the switches agree with core's mode rules: an on counts only while sage mode is on (F-T663-2)", () => {
   assert.deepEqual(decide([META, ...turn("user", "autopilot on", "sage mode")]), NONE, "probe A: the on while sage mode is off, then only the mode phrase");
   assert.deepEqual(decide([META, ...turn("user", "autopilot on")]), NONE, "the on alone: sage mode is off");
@@ -197,7 +244,7 @@ test("the switches agree with core's mode rules: an on counts only while sage mo
     const lines = [META, ...turn("user", ...sequence)];
     const core = {};
     for (const text of sequence) switchModes({ owner: true, text, all: text }, core, { autopilotOn: () => "" });
-    const result = autopilotSwitch({ entries: lines, lines: lines.length }, { lines: 0 });
+    const result = sw({ entries: lines, lines: lines.length }, { lines: 0 });
     assert.equal(result.on, core.autopilot === true, JSON.stringify(sequence));
     if (result.on) on++;
   }
@@ -226,9 +273,9 @@ test("the boundary is the later of the last session_meta line and the start mark
   for (const from of [6, -1, 1.5, "1", null]) assert.deepEqual(decide(before, from), BAD_MARK, String(from));
   // No start mark refuses: no default line (such as 0) stands for a missing mark, so an on from before a resume never counts.
   const record = read(before);
-  for (const mark of [undefined, null, 0, 3, "3", []]) assert.deepEqual(autopilotSwitch(record, mark), NO_MARK, JSON.stringify(mark));
+  for (const mark of [undefined, null, 0, 3, "3", []]) assert.deepEqual(sw(record,mark), NO_MARK, JSON.stringify(mark));
   for (const { refused } of [NO_MARK, BAD_MARK]) assertPlain(refused);
-  assert.deepEqual(autopilotSwitch(record, { session: "s", source: "resume", lines: 3, pid: 7 }), ON, "the mark as start-mark.mjs saves it");
+  assert.deepEqual(sw(record,{ session: "s", source: "resume", lines: 3, pid: 7 }), ON, "the mark as start-mark.mjs saves it");
 });
 
 test("switches: exact phrases only; off from any owner message, on only in a turn of trigger user, exec or composer", () => {
@@ -395,7 +442,7 @@ test("a partial last line is re-read up to 3 times, then refuses", () => {
   const record = readRecord(file, { pause: () => { if (++pause === 2) appendFileSync(file, `${lines.at(-1).slice(20)}\n`); } });
   assert.equal(pause, 2);
   assert.equal(record.lines, lines.length);
-  assert.deepEqual(autopilotSwitch(record, { lines: 0 }), ON);
+  assert.deepEqual(sw(record,{ lines: 0 }), ON);
 });
 
 test("a record over 64 MiB refuses before it is read", () => {
@@ -495,8 +542,8 @@ test("a start whose record is another thread's saves no mark and keeps the root 
       assert.deepEqual(limits(output), [], `${name}, ${source}: no limit line`);
       // The reader with the kept mark: the on of the earlier start does not count. With the child's line count it would.
       const record = readRecord(h.transcript);
-      assert.deepEqual(autopilotSwitch(record, markOf(h)), NONE, `${name}, ${source}`);
-      assert.deepEqual(autopilotSwitch(record, { lines: 1 }), ON, "a mark at the child's line count lets the earlier on count");
+      assert.deepEqual(sw(record,markOf(h)), NONE, `${name}, ${source}`);
+      assert.deepEqual(sw(record,{ lines: 1 }), ON, "a mark at the child's line count lets the earlier on count");
     }
   }
 });
@@ -530,7 +577,7 @@ test("F-T663-19, F-T663-25: another thread's start before its record exists, or 
         assert.deepEqual(limits(start(h, HOOK_OF[source], source, { transcript_path: path })), [], `${source}, ${name}: no limit line`);
         assert.deepEqual(markOf(h), root, `${source}, ${name}: the root thread's mark stays (start ${i + 1})`);
       }
-      assert.deepEqual(autopilotSwitch(readRecord(h.transcript), markOf(h)), NONE, `${source}, ${name}: the on from before the resume does not count`);
+      assert.deepEqual(sw(readRecord(h.transcript), markOf(h)), NONE, `${source}, ${name}: the on from before the resume does not count`);
     }
   }
   // And after a resume whose record could not be read: no mark, and another thread's start saves none (R2682 variant 2).

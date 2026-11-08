@@ -122,9 +122,11 @@ Send each phrase alone, as the whole message, in any letter case.
 | `autopilot on` / `autopilot off` | Autopilot turns on, while sage mode is on, or off. With autopilot on, autopilot merges verified work: the chief runs sage's merge command after the clean cycles and a passing merge check, with no prompt for the merge ([Autopilot in Codex](#autopilot-in-codex)). |
 | `sage help` | Every phrase, and whether sage mode and autopilot are on. |
 
-- To turn on autopilot, send `sage mode`, then `autopilot on`, each alone. Send the on phrase with no image. Merges also need Codex 0.164 to 0.167, and `node` and `gh` outside the folders that Codex's sandbox can write ([Autopilot in Codex](#autopilot-in-codex)).
+- To turn on autopilot, send `sage mode`, then `autopilot on`, each alone. Merges also need Codex 0.164 to 0.167, and `node` and `gh` outside the folders that Codex's sandbox can write ([Autopilot in Codex](#autopilot-in-codex)).
+- Send the on phrase with no image. A phrase counts only as the whole message, and an image is part of the message. Codex gives the hook only the text, so the chief can confirm the switch, but sage's merge rule reads the whole message in Codex's record: with an image, the on counts for nothing, and merges wait for you.
 - With autopilot off, the chief prepares a reviewed pull request for you to merge in GitHub. It reports the PR link, exact head commit and evidence.
 - Send an on phrase when Codex is idle. An off phrase works at any time: sent with Enter while Codex works, it stops merges from Codex's next step. A phrase that you queue with Tab waits until the turn ends.
+- An on phrase sent with Enter while Codex works joins the running turn, and counts for nothing: the chief tells you so. Press Esc first, then send it. In the terminal UI, an on phrase that you queue with Tab counts: it starts the next turn when the current turn ends.
 - To stop a merge now, press Esc (see [Stop a merge](#stop-a-merge)).
 - Only your own typed message switches a mode: Codex gives the hook no agent text. A Codex review or approval check sends its own prompt, and that prompt switches nothing.
 - A message near a phrase switches nothing. The chief asks you for the exact phrase, unless your message was a question.
@@ -144,11 +146,14 @@ With sage mode and autopilot on, the chief lands a verified pull request itself.
 - Sage mode and autopilot are on in the mode file of the session.
 - The Codex that runs is 0.164 to 0.167.
 - Codex's own record of the session has your on phrase since this start of the session. After a restart, a resume or a fork, send it again.
+- That on phrase is the one that turned autopilot on in the mode file: the latest on phrase that started its own turn.
 - The call comes from the main thread, in the one exact form of the command, and it is in Codex's record.
 - `node` and `gh` are outside the folders that Codex's sandbox can write (the project, its folder and the temporary folders).
 - The merge check passes for that head commit.
 
-Then the hook saves a one-time permit for that one call. It allows the call's escalation and its network access to GitHub's API (`api.github.com`) itself, so you see no prompt for the merge. For any other host, Codex asks you.
+Then the hook saves a one-time permit for that one call, and allows the call's escalation itself, with no prompt.
+
+When Codex's network access is off, Codex can still show one network prompt for GitHub's API (`api.github.com`) while the merge runs: approve it, and the merge continues. The hook cannot allow it, because the merge command has used its permit by then.
 
 Right before `gh pr merge`, the command reads Codex's record and the mode file again. When a check refuses, the chief reports the pull request as ready, with the reason, and you merge it in GitHub.
 
@@ -163,15 +168,17 @@ Right before `gh pr merge`, the command reads Codex's record and the mode file a
 
 The off phrase always counts, and nothing blocks it: also with an image, and also when the sage hook cannot save it, because the hook and the merge command read it from Codex's own record.
 
-The off phrase works from any thread, also a subagent's thread, a fork or a side conversation (`/side`): there it turns autopilot off in every Codex session, and sage tells you so in that thread. Such a thread cannot always name its main session (a fork of a fork names only the fork), so sage turns off every session. To turn autopilot on again, send `autopilot on` in the main thread of a session.
+The off phrase works from any thread, also a subagent's thread, a fork or a side conversation (`/side`): there it turns autopilot off in every Codex session, and sage tells you so in that thread. Such a thread cannot always name its main session (a fork of a fork names only the fork), so sage turns off every session.
+
+To turn autopilot on again, send `autopilot on` in the main thread of a session, as a new message while Codex is idle. An on phrase that joins a running turn there does not turn it on again, also when an earlier on phrase is in that thread.
 
 Limits of autopilot in Codex:
 
 - Codex 0.164 to 0.167 only. With another version, merges wait for you: merge the pull request in GitHub. The hook asks the Codex that runs for its version, because a resume by a newer Codex writes no version into its record.
-- After a Codex update (the desktop app updates its own Codex), merges wait until sage adds that version.
-- Codex gives the hook the folder of the Codex that runs. If the hook cannot find it, the merge refuses with "sage cannot tell which Codex runs this session": merge the pull request in GitHub.
-- Codex runs the hook in a login shell. So a login profile (such as `~/.zprofile`) that sets `PATH` without its earlier value drops that folder: add to `PATH` there (`export PATH="<folder>:$PATH"`).
-- An on phrase counts only from a message that you type and send to start a turn: in the terminal UI, in the app, or as the prompt of `codex exec`. As in Claude Code, an on phrase that you send while Codex works joins the running turn and counts for nothing.
+- After a Codex update (the desktop app updates its own Codex), merges wait until sage adds that version. The refusal says so.
+- Codex puts a folder of its own on the hook's `PATH`, and the hook finds the Codex that runs there. If the hook cannot find it, the merge refuses with "sage cannot tell which Codex runs this session": merge the pull request in GitHub.
+- Codex runs the hook in a login shell. So a login profile (such as `~/.zprofile`) that sets `PATH` without its earlier value drops that folder: keep the earlier value there (`export PATH="<folder>:$PATH"`), then ask for the merge again.
+- An on phrase counts only from a message that you type and send to start a turn: in the terminal UI, in the app, or as the prompt of `codex exec`. As in Claude Code, an on phrase that you send while Codex works joins the running turn and counts for nothing. So does an on phrase that joins a turn that a subagent's report started.
 - An on phrase from `codex queue`, from a message that the app queued, from a goal or from an automation also counts for nothing. Send it again alone when Codex is idle.
 - Codex records the client that starts each turn (the terminal UI, the app or `codex exec`) as the client names itself. So an agent that runs `codex exec` itself, outside the sage hooks, could send an on phrase. The hook blocks Codex from the shell and the sandbox keeps the sessions folder closed, so an agent must act against its brief to do this.
 - After you resume a session in the app, send `autopilot off` if you do not want merges from an earlier on phrase. The app runs all its sessions in one Codex process. If the sage hook fails at the resume, an on phrase from before the resume can count until the app restarts.
@@ -198,7 +205,7 @@ These commands need permission outside that sandbox. The sage hook allows no oth
 - After a refusal of `git worktree add -b`, the agent first checks for a branch that the failed step left. When it finds that branch, it runs the command with no `-b`.
 - With `approval_policy = "never"`, Codex refuses each escalation, so a build cannot commit. Use an approval policy that asks.
 - The sage logbook tools ask nothing, also for a lead.
-- With sage mode and autopilot on, the merge needs no prompt: the sage hook allows the admitted merge command's approval itself.
+- With sage mode and autopilot on, the merge needs no prompt for its escalation: the sage hook allows the admitted merge command's approval itself. With network access off, approve the one network prompt for `api.github.com` that can come while the merge runs.
 - With autopilot off, the hook refuses the merge command, and you merge the pull request yourself in GitHub.
 - The hook refuses `gh pr merge` in every mode, including sage mode off.
 - The model writes the reason line of each prompt, so its words can be different. The table uses the words of a check with the Codex CLI 0.164.0 and a test model.
@@ -351,7 +358,7 @@ In code mode, the model writes JavaScript for Codex's `exec` tool, and the code 
 
 | Rule | When | What you see |
 | --- | --- | --- |
-| A merge runs only through sage's merge command, in its one exact form, from the main thread, with autopilot on and a passing merge check for that head commit ([Autopilot in Codex](#autopilot-in-codex)) | Every mode, every thread | Codex blocks `gh pr merge` and any other form of the merge command, and the chief gets one line with the reason. An admitted merge runs with no approval prompt: the hook allows its network approval itself. With autopilot off, the chief prepares the PR link, exact head and evidence for you to merge in GitHub |
+| A merge runs only through sage's merge command, in its one exact form, from the main thread, with autopilot on and a passing merge check for that head commit ([Autopilot in Codex](#autopilot-in-codex)) | Every mode, every thread | Codex blocks `gh pr merge` and any other form of the merge command, and the chief gets one line with the reason. An admitted merge runs with no approval prompt for its escalation; Codex can still ask once for network access to `api.github.com`. With autopilot off, the chief prepares the PR link, exact head and evidence for you to merge in GitHub |
 | A push takes the one push form of Claude Code: `git push [-u] <remote> <branch>`, to a remote of the checkout with any name, with the literal name of the task's branch, never a force-push. It never sends to the default branch (main, master, or the branch that GitHub names; when that read fails, it refuses), and a setting that sends the branch elsewhere (`remote.<remote>.push`, `remote.<remote>.mirror`, `url.<base>.insteadOf`, or `push.default` upstream) refuses it. Beside the push, a line may only run `cd <dir>` (no option, and no `||` or `&` in the line), `pwd`, `git add`, `commit`, `status`, `log`, `diff`, `show`, `fetch` or `rev-parse`, `gh`, `echo`, `printf`, `true`, `cat`, `head`, `tail`, `grep` or `wc`, with no variable or upstream set and no file written (`tee`, `>`, `--set-upstream` and fetch's `-u` are refused). Also refused: `git subtree push`, a git subcommand that is not a known built-in (`send-pack`, an alias), a setting of `core.hooksPath` or `core.fsmonitor` (by `git config`, `git -c`, `--config-env`, `GIT_CONFIG_KEY_<n>` or `GIT_CONFIG_PARAMETERS`), a write under `.git`, `gh repo sync` and a change of the default branch | sage mode, every thread | Codex blocks any other push, with one line that gives the reason and the form |
 | The chief changes no files | sage mode, the main thread | Codex blocks the chief's `apply_patch` edit. The chief briefs an implementer, and agents edit as before |
 | A reviewer or QA changes no files | sage mode, a role agent whose task name names that role, and every agent under it; also Codex's own review thread and approval check | Codex blocks its `apply_patch` edit and its shell commands that write a file (also Codex's own `apply_patch` program), with one line: the agent reports a finding instead. It still reads files and runs the checks. The same rule holds the PE and the lead: a lead starts an implementer of its task to make a change |

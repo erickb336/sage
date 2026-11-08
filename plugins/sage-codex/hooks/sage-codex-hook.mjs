@@ -14,6 +14,9 @@
 //     It also saves the fork's start mark (start-mark.mjs). A compaction saves none: it is no new start.
 //   - A subagent's event (agent_id) switches nothing in its own thread and gets no role. An off phrase from any
 //     thread that is not a session's main thread stops the merges of every session (offBeyondThread).
+//   - An on phrase that joins a running turn, or a turn that no person started, switches nothing, and the chief gets a
+//     note that says why (F-T677-18). For each on that it accepts, the hook saves its turn (onTurn): the gate admits a
+//     merge only when the latest on that counts in Codex's record is in that turn (F-T677-33).
 //   - The hook tells the user directly (a systemMessage) only for a limit or a fault: a damaged mode file, an unknown input shape, a mode folder that it cannot use, or SAGE_HOOKS=off; and for an off phrase from another thread. For a normal switch, the
 //     note tells the chief to confirm the switch in one line of its reply.
 // Autopilot is recorded here, and the chief gets the merge command when it turns on. The gate (gate-hook.mjs) holds the
@@ -24,6 +27,7 @@ import { homedir } from "node:os";
 import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { exactPhrase, MODE_DAMAGED, PHRASES, protectionNote, readModeFile, renderChiefInstructions, switchModes } from "../core/index.mjs";
+import { NEW_ON, onCanCount, readRecord } from "./owner-record.mjs";
 import { privateDirectory, readState, saveState, stateKey } from "./principles-hook.mjs";
 import { sessionMeta } from "./report-gate.mjs";
 import { saveStartMark } from "./start-mark.mjs";
@@ -51,6 +55,19 @@ const FORK_NOTE = 'sage: this thread is a fork, so sage mode and autopilot are o
 /** Codex's addition to core's off note (F-T677-7): the merge command can already run when the off comes. */
 const OFF_IN_CODEX = "sage: in Codex, a merge that sage admitted before this off can still complete. Say so in the line that confirms the switch.";
 const onOff = (value) => (value ? "on" : "off");
+/** The note for an on that cannot count (F-T677-18, F-T677-25): the gate needs an on that starts its own turn. */
+const joinedOn = (still) => `sage: this "autopilot on" did not count, because it did not start a new turn: it came while Codex worked, or from a queue. ${still
+  ? "Autopilot is still on, from the user's earlier on phrase."
+  : `Autopilot is still off. Tell the user in one line of your reply that the on did not count, and to send "autopilot on" alone, ${NEW_ON}.`}`;
+/**
+ * Whether the prompt joins a turn that a message already started, or a turn that no person started (F-T677-18). The
+ * hook runs before Codex records the prompt, so Codex's record shows the turn without it. When the record cannot be
+ * read, the hook cannot tell: the gate still counts only an on that starts its turn.
+ */
+function joins(input) {
+  const record = readRecord(input.transcript_path);
+  return !record.refused && !onCanCount(record, input.turn_id);
+}
 
 /** The chief role: the switch line, the state tool's command, and the shared chief instructions with Codex's bindings. */
 export function chiefText() {
@@ -85,8 +102,11 @@ export function handle(input, state, env = process.env) {
     if (input.source === "fork") return context(event, FORK_NOTE);
     return input.source === "compact" && state.sage ? context(event, chiefText()) : undefined;
   }
+  const on = PHRASES[exactPhrase(input.prompt)]?.autopilot === true;
+  if (on && state.sage && joins(input)) return context(event, joinedOn(state.autopilot));
   const was = { sage: Boolean(state.sage), autopilot: Boolean(state.autopilot) };
   const notes = switchModes({ owner: true, text: input.prompt, all: input.prompt }, state, { autopilotOn: () => AUTOPILOT_ON + protectionNote(state, input.cwd, env), host: CODEX_HOST });
+  if (on && state.autopilot) state.onTurn = input.turn_id; // the gate needs the latest on of Codex's record in this turn
   if (state.sage && !state.given) {
     state.given = true;
     notes.unshift(chiefText());
@@ -143,7 +163,6 @@ function offBeyondThread(input, dir) {
   let meta;
   if (!subagent) try { meta = sessionMeta(input.transcript_path); } catch { /* no record: not a main thread */ }
   if (meta && typeof meta.forked_from_id !== "string") return undefined;
-  const thread = subagent ? "a subagent's thread" : meta ? "a fork" : "a thread with no record that sage can read (a side conversation has none)";
   const mode = subagent && change.sage === false;
   try {
     privateDirectory(dir);
@@ -152,7 +171,10 @@ function offBeyondThread(input, dir) {
   } catch (error) {
     return `sage: the hook could not turn autopilot off in every Codex session (${error?.code ?? error?.message ?? error}). Send the off phrase in the main thread of the session, or press Esc there.`;
   }
-  return `sage: you sent the off phrase in ${thread}, so autopilot is now off in every Codex session${mode ? ", and sage mode is off in this thread's session" : ""}. To turn it on again, send "autopilot on" in the main thread of a session.`;
+  // F-T677-32: a main thread whose record Codex has not written yet, or cannot be read, comes here too.
+  const said = subagent || meta ? `you sent the off phrase in ${subagent ? "a subagent's thread" : "a fork"}, so autopilot is now off in every Codex session${mode ? ", and sage mode is off in this thread's session" : ""}`
+    : "sage cannot read Codex's record of this thread, so it does not know if this is a main thread or a side conversation. So it turned autopilot off in every Codex session";
+  return `sage: ${said}. To turn it on again, send "autopilot on" alone in the main thread of a session, ${NEW_ON}.`;
 }
 
 /** The answer of the mode rules for the event's own thread, and the line of an off for another thread (offBeyondThread). */

@@ -72,8 +72,11 @@ function withMode(lines) {
   return [...lines.slice(0, first), start, mode, ...lines.slice(first)];
 }
 let worlds = 0;
-/** A scratch world: the hook's environment, the record, the mode file with sage mode and autopilot on, and the start mark. */
-function world({ lines = withMode(RECORDS["exec-on"]), mode = { sage: true, autopilot: true, given: true }, mark = { lines: 0, pid: PPID } } = {}) {
+/**
+ * A scratch world: the hook's environment, the record, the mode file with sage mode and autopilot on (from the on of
+ * the turn TURN, as the mode hook saves it), and the start mark.
+ */
+function world({ lines = withMode(RECORDS["exec-on"]), mode = { sage: true, autopilot: true, given: true, onTurn: TURN }, mark = { lines: 0, pid: PPID } } = {}) {
   const home = join(SCRATCH, `world-${++worlds}`);
   const project = join(home, "project");
   mkdirSync(project, { recursive: true });
@@ -101,6 +104,8 @@ const permits = () => (permitFolder && existsSync(permitFolder) ? readdirSync(pe
 const clearPermits = () => permitFolder && rmSync(permitFolder, { recursive: true, force: true });
 const ALLOW = { hookSpecificOutput: { hookEventName: "PermissionRequest", decision: { behavior: "allow" } } };
 const READY = "Report the pull request as ready: the owner merges it in GitHub";
+/** The gate's refusal when the mode file has autopilot off. */
+const OFF = 'sage: autopilot is off, so the owner merges. Report the pull request as ready. To turn autopilot on while sage mode is on, the owner sends "autopilot on" alone, as a new message while Codex is idle (press Esc first if Codex is busy)';
 
 test("admission: with the mode file on, the owner's on, the call in the record and a passing merge check, the gate saves one permit, the escalation is allowed, and the merge command merges", async () => {
   clearPermits();
@@ -129,7 +134,6 @@ test("admission: with the mode file on, the owner's on, the call in the record a
 });
 
 test("R2611: the gate requires sage mode and autopilot on in the session's mode file", async () => {
-  const OFF = 'sage: autopilot is off, so the owner merges. Report the pull request as ready. The owner turns autopilot on with the message "autopilot on", alone, while sage mode is on';
   for (const [name, mode] of [["autopilot off", { sage: true, autopilot: false }], ["sage mode off", { sage: false, autopilot: true }], ["a damaged mode file", "{not json"], ["no mode file", null]]) {
     clearPermits();
     const w = world({ mode });
@@ -163,7 +167,8 @@ test("F-T663-1: the gate checks the version of the Codex that runs, also when th
       clearPermits();
       writeFileSync(VERSION, `${version}\n`);
       const w = world();
-      assert.equal(denied(await w.run(w.input())), `sage: this session runs Codex ${version}, and autopilot merges only in Codex 0.164 to 0.167. ${READY}`, version);
+      // F-T677-26: the refusal says that merges wait until sage adds that version.
+      assert.equal(denied(await w.run(w.input())), `sage: this session runs Codex ${version}, and autopilot merges only in Codex 0.164 to 0.167: a newer Codex waits until sage adds it. ${READY}`, version);
       assert.deepEqual(permits(), []);
     }
     for (const version of ["0.166.0-alpha.6", "0.167.0"]) {
@@ -179,7 +184,8 @@ test("F-T663-1: the gate checks the version of the Codex that runs, also when th
     const app = RECORDS["app-steer"];
     const offTurn = app.findLast((o) => o.payload.type === "task_started"); // the last turn: the off phrase joins it
     const call = RECORDS["exec-on"].find((o) => o.payload.type === "function_call");
-    const desktop = world({ lines: [{ ...app[0], payload: { ...app[0].payload, id: SESSION } }, ...app.slice(1, app.indexOf(offTurn)), call] });
+    const onTurn = app.slice(0, app.indexOf(offTurn)).findLast((o) => o.payload.role === "user" && o.payload.content?.[0]?.text === "autopilot on").payload.internal_chat_message_metadata_passthrough.turn_id;
+    const desktop = world({ lines: [{ ...app[0], payload: { ...app[0].payload, id: SESSION } }, ...app.slice(1, app.indexOf(offTurn)), call], mode: { sage: true, autopilot: true, given: true, onTurn } });
     assert.equal(app[0].payload.cli_version, "0.167.0-alpha.3.2");
     assert.equal(await desktop.run(desktop.input()), undefined, "the desktop app's Codex 0.167.0-alpha.3.2");
     rmSync(GH_LOG);
@@ -188,10 +194,12 @@ test("F-T663-1: the gate checks the version of the Codex that runs, also when th
   }
 });
 
-test("F-T677-17: when the hook's PATH has no codex-arg0 folder, the refusal names the cause: a login profile that sets PATH", async () => {
+test("F-T677-17, F-T677-27: when the hook's PATH has no codex-arg0 folder, the refusal names the cause in plain words, and the fix", async () => {
   clearPermits();
   const none = world();
-  assert.equal(denied(await none.run(none.input(), { env: { ...none.env, PATH: FAKES } })), `sage: sage cannot tell which Codex runs this session, because the hook's PATH has no codex-arg0 folder of Codex. A login profile, such as ~/.zprofile, that sets PATH without its earlier value drops that folder. ${READY}`, "no codex-arg0 folder");
+  const said = denied(await none.run(none.input(), { env: { ...none.env, PATH: FAKES } }));
+  assert.equal(said, `sage: sage cannot tell which Codex runs this session, because Codex's own folder is not on the hook's PATH. A login profile, such as ~/.zprofile, that sets PATH without its earlier value drops it: keep the earlier value there (export PATH="<folder>:$PATH"), then ask for the merge again. ${READY}`, "no codex-arg0 folder");
+  assert.doesNotMatch(said, /arg0/, "no internal name");
   assert.deepEqual(permits(), []);
 });
 
@@ -329,15 +337,16 @@ test("F-T677-4: the trusted PATH drops missing folders, and every gh child (repo
   assert.deepEqual(ghCalls(), []);
 });
 
-test("F-T677-3: of the network approvals of the admitted call, the gate allows only GitHub's API host", async () => {
+test("F-T677-3, F-T677-34: the gate allows no network approval of the admitted call, also for GitHub's API: Codex asks the owner", async () => {
+  // When gh asks for the network, the merge command has already used the permit, so an allow there could never apply
+  // (F-T677-34). The gate allows only the escalation, while the permit is unused.
   clearPermits();
   const w = world();
   assert.equal(await w.run(w.input()), undefined);
   rmSync(GH_LOG);
   const ask = (description) => w.ask(COMMAND, { tool_input: description === undefined ? { command: COMMAND } : { command: COMMAND, description } });
   // Codex 0.164 gives a network approval as Bash with the call's command and "network-access <protocol>://<host>:<port>".
-  assert.deepEqual(await w.run(ask("network-access https://api.github.com:443")), ALLOW, "GitHub's API, which gh needs");
-  for (const description of ["network-access https://example.com:443", "network-access http://api.github.com:80", "network-access https://api.github.com.example.com:443",
+  for (const description of ["network-access https://api.github.com:443", "network-access https://example.com:443", "network-access http://api.github.com:80", "network-access https://api.github.com.example.com:443",
     "network-access socks5-tcp://api.github.com:443", "network-access https://api.github.com:443 ", 7, null]) {
     assert.equal(await w.run(ask(description)), undefined, String(description));
   }
@@ -397,7 +406,6 @@ test("the off path never blocks and is never missed: an off after the admission 
 });
 
 test("F-T677-24, F-T677-29: an off from a subagent's thread, a fork, a fork of a fork, a fork's subagent or a side conversation stops the main session's merges; an on from there counts for nothing", async () => {
-  const OFF = 'sage: autopilot is off, so the owner merges. Report the pull request as ready. The owner turns autopilot on with the message "autopilot on", alone, while sage mode is on';
   // The threads, as Codex 0.164.0 gives them to the hook: a subagent's prompt has its root thread's session id and an
   // agent_id; a fork has its own session id and a record that names the thread it came from (forked_from_id), which
   // can be a fork too; a subagent of a fork has the fork's session id; a side conversation (/side) is a fork with no
@@ -421,7 +429,9 @@ test("F-T677-24, F-T677-29: an off from a subagent's thread, a fork, a fork of a
     return answer({ hook_event_name: "UserPromptSubmit", turn_id: "t-other", cwd: w.project, model: "m", permission_mode: "default", prompt, session_id: session, transcript_path: transcript, ...(agent ? { agent_id: agent, agent_type: "default" } : {}) }, w.env);
   };
   const merge = (w) => spawnSync(process.execPath, [MERGE, "41", SHA], { cwd: w.project, encoding: "utf8", env: { PATH: FAKES, HOME: w.home, CODEX_SESSION_ID: SESSION, CODEX_THREAD_ID: SESSION, CODEX_TOOL_CALL_ID: CALL } });
-  const line = (thread, mode = "") => `sage: you sent the off phrase in ${thread}, so autopilot is now off in every Codex session${mode}. To turn it on again, send "autopilot on" in the main thread of a session.`;
+  const AGAIN = 'To turn it on again, send "autopilot on" alone in the main thread of a session, as a new message while Codex is idle (press Esc first if Codex is busy).';
+  const line = (thread, mode = "") => thread ? `sage: you sent the off phrase in ${thread}, so autopilot is now off in every Codex session${mode}. ${AGAIN}`
+    : `sage: sage cannot read Codex's record of this thread, so it does not know if this is a main thread or a side conversation. So it turned autopilot off in every Codex session. ${AGAIN}`;
   const cases = [
     ["subagent", "autopilot off", line("a subagent's thread")],
     ["subagent", "sage mode off", line("a subagent's thread", ", and sage mode is off in this thread's session")],
@@ -429,7 +439,7 @@ test("F-T677-24, F-T677-29: an off from a subagent's thread, a fork, a fork of a
     ["fork of a fork", "autopilot off", line("a fork")],
     ["fork's subagent", "autopilot off", line("a subagent's thread")],
     ["fork's subagent", "sage mode off", line("a subagent's thread", ", and sage mode is off in this thread's session")],
-    ["side", "autopilot off", line("a thread with no record that sage can read (a side conversation has none)")],
+    ["side", "autopilot off", line()],
   ];
   const lines = [];
   for (const [thread, phrase] of cases) {
@@ -453,6 +463,54 @@ test("F-T677-24, F-T677-29: an off from a subagent's thread, a fork, a fork of a
   assert.equal(denied(await w.run(w.input())), OFF);
   assert.deepEqual([w.checks, permits(), ghCalls().filter((call) => call.includes("merge"))], [[], [], []]);
   rmSync(GH_LOG, { force: true }); // the side's own on asks gh for the branch protection (protectionNote)
+});
+
+test("F-T677-33, F-T677-18: after an off from a fork, an on that joins the main thread's running turn merges nothing; only a new on that starts its own turn turns merges on again", async () => {
+  // Owner decision 2026-11-08 (option A). The main thread's record keeps the owner's on of the turn TURN, and the off
+  // from the fork reaches only the mode files. The real lines of exec-on give the shapes of the new lines.
+  const exec = RECORDS["exec-on"];
+  const startOf = (turn) => { const s = exec.find((o) => o.payload.type === "task_started"); return { ...s, payload: { ...s.payload, turn_id: turn, turn_attribution: { ...s.payload.turn_attribution, turn_id: turn } } }; };
+  const message = (turn, text) => { const m = exec.find((o) => o.payload.role === "user" && o.payload.content?.[0]?.text === "autopilot on"); return { ...m, payload: { ...m.payload, content: [{ type: "input_text", text }], internal_chat_message_metadata_passthrough: { ...m.payload.internal_chat_message_metadata_passthrough, turn_id: turn } } }; };
+  const callOf = (id) => { const c = exec.find((o) => o.payload.type === "function_call"); return { ...c, payload: { ...c.payload, call_id: id } }; };
+  const FORK = "019a0000-0000-7000-8000-00000000f0f3";
+  const prompt = (w, session, turn, text, transcript) => answer({ hook_event_name: "UserPromptSubmit", session_id: session, turn_id: turn, transcript_path: transcript, cwd: w.project, model: "m", permission_mode: "default", prompt: text }, w.env);
+  const offFromFork = (w) => {
+    const record = join(w.home, `rollout-2026-11-07T09-20-00-${FORK}.jsonl`);
+    writeFileSync(record, `${JSON.stringify({ type: "session_meta", payload: { id: FORK, session_id: FORK, forked_from_id: SESSION, cli_version: "0.164.0", source: "cli" } })}\n`);
+    prompt(w, FORK, "t-fork", "autopilot off", record);
+    assert.equal(JSON.parse(readFileSync(w.modeFile, "utf8")).autopilot, false, "the off from the fork reaches the main thread's mode file");
+  };
+  const append = (w, lines) => writeFileSync(w.transcript, `${readFileSync(w.transcript, "utf8")}${lines.map((line) => JSON.stringify(line)).join("\n")}\n`);
+  const JOINED = 'sage: this "autopilot on" did not count, because it did not start a new turn: it came while Codex worked, or from a queue. Autopilot is still off. Tell the user in one line of your reply that the on did not count, and to send "autopilot on" alone, as a new message while Codex is idle (press Esc first if Codex is busy).';
+  const DID = `sage: the owner's latest "autopilot on" did not count, because only an on that is the whole message and starts a new turn counts, so the owner merges. ${READY}. To turn autopilot on, the owner sends "autopilot on" alone, as a new message while Codex is idle (press Esc first if Codex is busy)`;
+  for (const [name, early, said, refusal] of [
+    ["the hook sees the turn that WAIT started", false, JOINED, OFF],
+    ["the hook runs before Codex writes the turn's first message", true, undefined, DID],
+  ]) {
+    clearPermits();
+    const w = world();
+    assert.equal(await w.run(w.input()), undefined, `${name}: the gate admits a merge before the off`);
+    clearPermits();
+    rmSync(GH_LOG);
+    offFromFork(w);
+    // Turn X: "WAIT" starts it, and the owner's on joins it (Enter while Codex works). Then the chief asks for a merge.
+    if (!early) append(w, [startOf("X"), message("X", "WAIT")]);
+    const out = prompt(w, SESSION, "X", "autopilot on", w.transcript);
+    if (early) append(w, [startOf("X"), message("X", "WAIT")]);
+    append(w, [message("X", "autopilot on"), callOf("call-x")]);
+    assert.equal(denied(await w.run(w.input(COMMAND, { tool_use_id: "call-x", turn_id: "X" }))), refusal, `${name}: the gate refuses the merge`);
+    assert.deepEqual([w.checks.length, permits()], [1, []], `${name}: no merge check after the off, and no permit`);
+    assert.equal(out?.hookSpecificOutput?.additionalContext.startsWith('sage: this "autopilot on" did not count') ? out.hookSpecificOutput.additionalContext : undefined, said, `${name}: the chief's note`);
+    // Turn Y: the owner's on starts it, as a new message while Codex is idle. Merges run again.
+    append(w, [startOf("Y")]);
+    // (In the second case the mode file is already on, from the on of turn X, so the hook only saves the new turn.)
+    const again = prompt(w, SESSION, "Y", "autopilot on", w.transcript)?.hookSpecificOutput?.additionalContext;
+    if (!early) assert.match(again ?? "", /^sage: autopilot is on\./, `${name}: the new on switches`);
+    assert.deepEqual(JSON.parse(readFileSync(w.modeFile, "utf8")), { sage: true, autopilot: true, given: true, onTurn: "Y" }, `${name}: the mode file saves the new on's turn`);
+    append(w, [message("Y", "autopilot on"), callOf("call-y")]);
+    assert.equal(await w.run(w.input(COMMAND, { tool_use_id: "call-y", turn_id: "Y" })), undefined, `${name}: the gate admits the next merge`);
+    rmSync(GH_LOG, { force: true });
+  }
 });
 
 test("PermissionRequest: an old permit, or a permit of another call, allows nothing", async () => {
