@@ -76,7 +76,7 @@ Use the Codex CLI 0.160 to 0.166, and a multi-agent v2 model; the desktop app sh
    codex plugin add sage@sage
    ```
 2. Run `codex` in a project folder, choose **Trust all and continue** at the "Hooks need review" screen, and send `sage mode` alone ([sage in Codex](docs/guide/codex.md)). The chief starts one lead for each task, and the lead starts the implementer, the reviewers and QA. Each report goes in the task's pages folder.
-3. Codex asks you at least 5 times in each small task (the worktree, the add, the commit, the push and the pull request): read the choices, then approve ([The approval prompts of each task](docs/guide/codex.md#the-approval-prompts-of-each-task)). To let sage merge verified work itself, send `autopilot on` alone after `sage mode`. It needs Codex 0.164 to 0.166, and `node` and `gh` outside the sandbox's writable folders; Esc stops a merge ([Autopilot in Codex](docs/guide/codex.md#autopilot-in-codex)).
+3. Codex asks you at least 5 times in each small task (the worktree, the add, the commit, the push and the pull request): read the choices, then approve ([The approval prompts of each task](docs/guide/codex.md#the-approval-prompts-of-each-task)). To let sage merge verified work itself, send `autopilot on` alone after `sage mode`. It needs Codex 0.164 to 0.167, and `node` and `gh` outside the sandbox's writable folders; Esc stops a merge ([Autopilot in Codex](docs/guide/codex.md#autopilot-in-codex)).
 
 ## The board
 

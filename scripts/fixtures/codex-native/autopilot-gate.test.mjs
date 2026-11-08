@@ -62,12 +62,14 @@ const TURN = RECORDS["exec-on"].find((o) => o.payload.type === "task_started").p
 const SHA = "a1b2c3d4e5f60718293a4b5c6d7e8f9012345678";
 const COMMAND = mergeCommand("41", SHA);
 const PPID = 4242;
-/** The record with the owner's mode phrase (sage mode on) in its first turn, before the on phrase and the call. */
+/** The record with the owner's mode phrase (sage mode on) in a turn of its own, before the turn of the on phrase and the call. */
 function withMode(lines) {
   const template = lines.find((o) => o.payload.role === "user" && o.payload.content?.[0]?.text === "autopilot on");
   const first = lines.findIndex((o) => o.payload.type === "task_started");
-  const mode = { ...template, payload: { ...template.payload, content: [{ type: "input_text", text: "sage mode" }] } };
-  return [...lines.slice(0, first + 1), mode, ...lines.slice(first + 1)];
+  const turn = "mode-turn";
+  const start = { ...lines[first], payload: { ...lines[first].payload, turn_id: turn, turn_attribution: { ...lines[first].payload.turn_attribution, turn_id: turn } } };
+  const mode = { ...template, payload: { ...template.payload, content: [{ type: "input_text", text: "sage mode" }], internal_chat_message_metadata_passthrough: { ...template.payload.internal_chat_message_metadata_passthrough, turn_id: turn } } };
+  return [...lines.slice(0, first), start, mode, ...lines.slice(first)];
 }
 let worlds = 0;
 /** A scratch world: the hook's environment, the record, the mode file with sage mode and autopilot on, and the start mark. */
@@ -155,22 +157,41 @@ test("F-T663-21: the gate treats every run of merge.mjs as a merge: only the exa
 
 test("F-T663-1: the gate checks the version of the Codex that runs, also when the record is from an older Codex (a resume by a newer one)", async () => {
   // R2690's proof: Codex 0.166.0-alpha.6 resumed a record of 0.164.0 and wrote no session_meta and no version into it.
-  for (const [version, reason] of [["0.167.0", "sage: this session runs Codex 0.167.0"], ["0.170.2", "sage: this session runs Codex 0.170.2"], ["1.0.0", "sage: this session runs Codex 1.0.0"]]) {
+  // F-T677-16: 0.167 reads; any later version, which sage has not checked, refuses.
+  try {
+    for (const version of ["0.168.0", "0.168.0-alpha.1", "0.170.2", "1.0.0"]) {
+      clearPermits();
+      writeFileSync(VERSION, `${version}\n`);
+      const w = world();
+      assert.equal(denied(await w.run(w.input())), `sage: this session runs Codex ${version}, and autopilot merges only in Codex 0.164 to 0.167. ${READY}`, version);
+      assert.deepEqual(permits(), []);
+    }
+    for (const version of ["0.166.0-alpha.6", "0.167.0"]) {
+      writeFileSync(VERSION, `${version}\n`);
+      clearPermits();
+      const desktop = world();
+      assert.equal(await desktop.run(desktop.input()), undefined, version);
+      rmSync(GH_LOG);
+    }
+    // The desktop app's Codex today, with its own record (R2721, scrubbed): the on phrase starts a turn, then the call.
+    writeFileSync(VERSION, "0.167.0-alpha.3.2\n");
     clearPermits();
-    writeFileSync(VERSION, `${version}\n`);
-    const w = world();
-    assert.equal(denied(await w.run(w.input())), `${reason}, and autopilot merges only in Codex 0.164 to 0.166. ${READY}`, version);
-    assert.deepEqual(permits(), []);
+    const app = RECORDS["app-steer"];
+    const offTurn = app.findLast((o) => o.payload.type === "task_started"); // the last turn: the off phrase joins it
+    const call = RECORDS["exec-on"].find((o) => o.payload.type === "function_call");
+    const desktop = world({ lines: [{ ...app[0], payload: { ...app[0].payload, id: SESSION } }, ...app.slice(1, app.indexOf(offTurn)), call] });
+    assert.equal(app[0].payload.cli_version, "0.167.0-alpha.3.2");
+    assert.equal(await desktop.run(desktop.input()), undefined, "the desktop app's Codex 0.167.0-alpha.3.2");
+    rmSync(GH_LOG);
+  } finally {
+    writeFileSync(VERSION, "0.164.0\n");
   }
-  writeFileSync(VERSION, "0.166.0-alpha.6\n");
-  clearPermits();
-  const desktop = world();
-  assert.equal(await desktop.run(desktop.input()), undefined, "the desktop app's Codex");
-  rmSync(GH_LOG);
-  writeFileSync(VERSION, "0.164.0\n");
+});
+
+test("F-T677-17: when the hook's PATH has no codex-arg0 folder, the refusal names the cause: a login profile that sets PATH", async () => {
   clearPermits();
   const none = world();
-  assert.equal(denied(await none.run(none.input(), { env: { ...none.env, PATH: FAKES } })), `sage: sage cannot tell which Codex runs this session, and autopilot merges only in Codex 0.164 to 0.166. ${READY}`, "no codex-arg0 folder");
+  assert.equal(denied(await none.run(none.input(), { env: { ...none.env, PATH: FAKES } })), `sage: sage cannot tell which Codex runs this session, because the hook's PATH has no codex-arg0 folder of Codex. A login profile, such as ~/.zprofile, that sets PATH without its earlier value drops that folder. ${READY}`, "no codex-arg0 folder");
   assert.deepEqual(permits(), []);
 });
 
@@ -220,7 +241,7 @@ test("R2611: node and gh never come from a folder that Codex's sandbox can write
   rmSync(GH_LOG);
   // A fixed temporary folder of the sandbox (here the folder that holds the fakes): gh and the Codex binary there do not count.
   const temporary = world();
-  assert.equal(denied(await temporary.run(temporary.input(), { temporary: [SCRATCH] })), `sage: sage cannot tell which Codex runs this session, and autopilot merges only in Codex 0.164 to 0.166. ${READY}`);
+  assert.equal(denied(await temporary.run(temporary.input(), { temporary: [SCRATCH] })), `sage: sage cannot tell which Codex runs this session, and autopilot merges only in Codex 0.164 to 0.167. ${READY}`);
   assert.deepEqual(permits(), []);
   // node: the gate's own node, which must be outside those folders too (here the temporary folder names node's folder).
   const node = world();

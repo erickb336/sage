@@ -23,7 +23,7 @@ The design of the two provider plugins is in [Separate provider packages](../des
 | The report check | Yes | Yes, for a role agent whose task name starts with `sage_`: a report without every field gets one more turn, then the agent stops with one plain line. A review or QA agent's report goes through the same reader as in Claude Code: a report that the reader cannot read gets one more turn too |
 | sage mode: the push rule in code | Yes | Yes: the same push form as in Claude Code ([The rules in Codex](#the-rules-in-codex)) |
 | sage mode: agent caps in code | Yes | No |
-| Autopilot | Yes | Yes, in Codex 0.164 to 0.166: autopilot merges verified work with sage's merge command, with no prompt for the merge ([Autopilot in Codex](#autopilot-in-codex)). The hook refuses `gh pr merge` in every mode |
+| Autopilot | Yes | Yes, in Codex 0.164 to 0.167: autopilot merges verified work with sage's merge command, with no prompt for the merge ([Autopilot in Codex](#autopilot-in-codex)). The hook refuses `gh pr merge` in every mode |
 | The merge rule, the no-edit rules and the `.codex` rule | Yes | Yes, in the plugin's hooks ([The rules in Codex](#the-rules-in-codex)) |
 | The mode phrases (`sage mode`, `sage mode off`, `autopilot on`, `autopilot off`, `sage help`) | Yes | Yes |
 | The board phrases (`show board`, `show status`) | Yes | No: use the manual skill commands |
@@ -122,7 +122,7 @@ Send each phrase alone, as the whole message, in any letter case.
 | `autopilot on` / `autopilot off` | Autopilot turns on, while sage mode is on, or off. With autopilot on, autopilot merges verified work: the chief runs sage's merge command after the clean cycles and a passing merge check, with no prompt for the merge ([Autopilot in Codex](#autopilot-in-codex)). |
 | `sage help` | Every phrase, and whether sage mode and autopilot are on. |
 
-- To turn on autopilot, send `sage mode`, then `autopilot on`, each alone. Send the on phrase with no image. Merges also need Codex 0.164 to 0.166, and `node` and `gh` outside the folders that Codex's sandbox can write ([Autopilot in Codex](#autopilot-in-codex)).
+- To turn on autopilot, send `sage mode`, then `autopilot on`, each alone. Send the on phrase with no image. Merges also need Codex 0.164 to 0.167, and `node` and `gh` outside the folders that Codex's sandbox can write ([Autopilot in Codex](#autopilot-in-codex)).
 - With autopilot off, the chief prepares a reviewed pull request for you to merge in GitHub. It reports the PR link, exact head commit and evidence.
 - Send an on phrase when Codex is idle. An off phrase works at any time: sent with Enter while Codex works, it stops merges from Codex's next step. A phrase that you queue with Tab waits until the turn ends.
 - To stop a merge now, press Esc (see [Stop a merge](#stop-a-merge)).
@@ -142,7 +142,7 @@ The hooks run only after you trust them (step 3). In `codex exec`, Codex skips h
 With sage mode and autopilot on, the chief lands a verified pull request itself. After the task's clean cycles, CI on the final head and a passing `merge_check`, the chief runs sage's merge command (`skills/sage/merge.mjs` of the plugin). The sage hook admits it only when all of these hold:
 
 - Sage mode and autopilot are on in the mode file of the session.
-- The Codex that runs is 0.164 to 0.166.
+- The Codex that runs is 0.164 to 0.167.
 - Codex's own record of the session has your on phrase since this start of the session. After a restart, a resume or a fork, send it again.
 - The call comes from the main thread, in the one exact form of the command, and it is in Codex's record.
 - `node` and `gh` are outside the folders that Codex's sandbox can write (the project, its folder and the temporary folders).
@@ -165,9 +165,12 @@ The off phrase always counts, and nothing blocks it: also with an image, and als
 
 Limits of autopilot in Codex:
 
-- Codex 0.164 to 0.166 only. With another version, merges wait for you: merge the pull request in GitHub. The hook asks the Codex that runs for its version, because a resume by a newer Codex writes no version into its record.
-- Codex gives the hook the folder of the Codex that runs. If the hook cannot find it, the merge refuses with "sage cannot tell which Codex runs this session". Then merge the pull request in GitHub.
-- An on phrase counts only from a message that you type and send: in the terminal UI, in the app, or as the prompt of `codex exec`. An on phrase from `codex queue`, from a message that the app queued, from a goal or from an automation counts for nothing. Send it again alone when Codex is idle.
+- Codex 0.164 to 0.167 only. With another version, merges wait for you: merge the pull request in GitHub. The hook asks the Codex that runs for its version, because a resume by a newer Codex writes no version into its record.
+- After a Codex update (the desktop app updates its own Codex), merges wait until sage adds that version.
+- Codex gives the hook the folder of the Codex that runs. If the hook cannot find it, the merge refuses with "sage cannot tell which Codex runs this session": merge the pull request in GitHub.
+- Codex runs the hook in a login shell. So a login profile (such as `~/.zprofile`) that sets `PATH` without its earlier value drops that folder: add to `PATH` there (`export PATH="<folder>:$PATH"`).
+- An on phrase counts only from a message that you type and send to start a turn: in the terminal UI, in the app, or as the prompt of `codex exec`. As in Claude Code, an on phrase that you send while Codex works joins the running turn and counts for nothing.
+- An on phrase from `codex queue`, from a message that the app queued, from a goal or from an automation also counts for nothing. Send it again alone when Codex is idle.
 - Codex records the client that starts each turn (the terminal UI, the app or `codex exec`) as the client names itself. So an agent that runs `codex exec` itself, outside the sage hooks, could send an on phrase. The hook blocks Codex from the shell and the sandbox keeps the sessions folder closed, so an agent must act against its brief to do this.
 - After you resume a session in the app, send `autopilot off` if you do not want merges from an earlier on phrase. The app runs all its sessions in one Codex process. If the sage hook fails at the resume, an on phrase from before the resume can count until the app restarts.
 - A writable root that you add in your Codex config (`sandbox_workspace_write.writable_roots`) is not checked for `node` and `gh`. Keep them out of such folders.

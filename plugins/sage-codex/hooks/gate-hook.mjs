@@ -49,7 +49,7 @@
 //   - A merge (T677): only sage's merge command (skills/sage/merge.mjs) merges, in its one exact form, from the root
 //     thread. A recognized gh merge, and a run of merge.mjs in any other form, is refused in every mode and thread.
 //     The gate admits the exact form only when, in this order: the mode file has sage mode and autopilot on; the Codex
-//     that runs is 0.164 to 0.166 (its own --version: a resume writes no version into the record); the owner record
+//     that runs is 0.164 to 0.167 (its own --version: a resume writes no version into the record); the owner record
 //     reader reads Codex's record and finds autopilot on after the session's start mark, and that mark is of the Codex
 //     process that runs now (its pid, F-T663-22); the call itself is in the record after the mark; node and gh are
 //     outside every folder that Codex's sandbox can write; the repository is known; and checkMerge passes. Then it
@@ -76,7 +76,7 @@ import { patchTargets } from "../runtime/patch-targets.mjs";
 import { managedPatchPath } from "../runtime/managed-worktree.mjs";
 import { agentPathOf, sageName, sessionMeta, TASK_NAME } from "./report-gate.mjs";
 import { modeDirectory } from "./sage-codex-hook.mjs";
-import { autopilotSwitch, callInRecord, readRecord, RECORD_VERSION } from "./owner-record.mjs";
+import { autopilotSwitch, callInRecord, readRecord, RECORD_RANGE, RECORD_VERSION } from "./owner-record.mjs";
 import { markFile } from "./start-mark.mjs";
 import { mergeCommand, permitFile, permitFolder } from "../skills/sage/merge.mjs";
 
@@ -708,14 +708,18 @@ function trustedGh(roots, env) {
   return undefined;
 }
 /**
- * The version of the Codex that runs this hook, or null: Codex puts a codex-arg0 folder on the hook's PATH, whose
- * apply_patch link names its own binary (the CLI's and the desktop app's alike), and that binary prints its version.
- * It runs the link's real file: by the link's own name, the binary acts as apply_patch (R2690 proof: in real hooks,
- * "codex-cli 0.164.0" for the CLI, and "codex-cli 0.166.0-alpha.6" for the desktop binary that resumed a 0.164.0 record).
+ * The version of the Codex that runs this hook, null when no codex-arg0 folder gives one, or undefined when the hook's
+ * PATH has no codex-arg0 folder. Codex puts that folder on the hook's PATH, and its apply_patch link names Codex's own
+ * binary (the CLI's and the desktop app's alike), which prints its version. It runs the link's real file: by the link's
+ * own name, the binary acts as apply_patch (R2690 proof: in real hooks, "codex-cli 0.164.0" for the CLI, and
+ * "codex-cli 0.166.0-alpha.6" for the desktop binary that resumed a 0.164.0 record). Codex runs the hook in a login
+ * shell, so a login profile that sets PATH drops the folder (R2719). No other source of the version is sound
+ * (F-T677-17): a resume by a newer Codex writes no version into the record, and Codex sets no variable with it.
  */
 function runningCodex(roots, env) {
-  for (const dir of (env.PATH ?? "").split(":")) {
-    if (!basename(dir).startsWith("codex-arg0")) continue;
+  const dirs = (env.PATH ?? "").split(":").filter((dir) => basename(dir).startsWith("codex-arg0"));
+  if (dirs.length === 0) return undefined;
+  for (const dir of dirs) {
     const binary = real(join(dir, "apply_patch"));
     if (!binary || inside(binary, roots)) continue;
     try {
@@ -766,7 +770,8 @@ async function admit(f, merge, { env, check, ppid, temporary }) {
   if (state.sage !== true || state.autopilot !== true) return AUTOPILOT_OFF;
   const roots = writableRoots(f.cwd, env, temporary);
   const version = runningCodex(roots, env);
-  if (!RECORD_VERSION.test(version ?? "")) return `sage: ${version ? `this session runs Codex ${version}` : "sage cannot tell which Codex runs this session"}, and autopilot merges only in Codex 0.164 to 0.166. ${READY}`;
+  if (version === undefined) return `sage: sage cannot tell which Codex runs this session, because the hook's PATH has no codex-arg0 folder of Codex. A login profile, such as ~/.zprofile, that sets PATH without its earlier value drops that folder. ${READY}`;
+  if (!RECORD_VERSION.test(version ?? "")) return `sage: ${version ? `this session runs Codex ${version}` : "sage cannot tell which Codex runs this session"}, and autopilot merges only in Codex ${RECORD_RANGE}. ${READY}`;
   const codexRecord = readRecord(f.transcript ?? "");
   if (codexRecord.refused) return `sage: ${codexRecord.refused}`;
   let mark;

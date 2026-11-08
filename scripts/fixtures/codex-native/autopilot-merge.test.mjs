@@ -60,14 +60,16 @@ const { ghFolder, mergeCommand, permitFile } = await import(MERGE);
 const SESSION = "019a0000-0000-7000-8000-00000000beef";
 const SHA = "a1b2c3d4e5f60718293a4b5c6d7e8f9012345678";
 const REPO = "example-owner/example.repo";
-/** The record with the owner's mode phrase (sage mode on) in its first turn, before any message of the owner. */
+/** The record with the owner's mode phrase (sage mode on) in a turn of its own, before its first turn. */
 function withMode(lines) {
   const template = RECORDS["exec-on"].find((o) => o.payload.role === "user" && o.payload.content?.[0]?.text === "autopilot on");
   const first = lines.findIndex((o) => o.payload.type === "task_started");
   const p = template.payload;
+  const turn = "mode-turn";
+  const start = { ...lines[first], payload: { ...lines[first].payload, turn_id: turn, turn_attribution: { ...lines[first].payload.turn_attribution, turn_id: turn } } };
   const mode = { ...template, payload: { ...p, content: [{ type: "input_text", text: "sage mode" }],
-    internal_chat_message_metadata_passthrough: { ...p.internal_chat_message_metadata_passthrough, turn_id: lines[first].payload.turn_id } } };
-  return [...lines.slice(0, first + 1), mode, ...lines.slice(first + 1)];
+    internal_chat_message_metadata_passthrough: { ...p.internal_chat_message_metadata_passthrough, turn_id: turn } } };
+  return [...lines.slice(0, first), start, mode, ...lines.slice(first)];
 }
 let homes = 0;
 /**
@@ -84,7 +86,7 @@ function session(recordName = "exec-on", { mode = true } = {}) {
   const env = { PATH: FAKES, HOME: home, CODEX_HOME: join(home, "codex"), SAGE_HOME: join(home, "sage"), SAGE_SHARED_HOME: process.env.SAGE_SHARED_HOME,
     CODEX_SESSION_ID: SESSION, CODEX_THREAD_ID: SESSION, CODEX_TOOL_CALL_ID: `call_${homes}`, GH_HOST: "other.example", GH_REPO: "other/repository",
     GH_ENTERPRISE_TOKEN: "fake-enterprise-1", GITHUB_ENTERPRISE_TOKEN: "fake-enterprise-2", GH_CONFIG_DIR: join(home, "gh-config") };
-  const turn = lines.find((line) => line.payload.type === "task_started").payload.turn_id;
+  const turn = RECORDS[recordName].find((line) => line.payload.type === "task_started").payload.turn_id; // the proof record's turn, not the mode phrase's
   // The session's mode file, as the mode hook saves it: sage mode and autopilot on.
   const modeFile = join(home, "mode.json");
   writeFileSync(modeFile, JSON.stringify({ sage: true, autopilot: true, given: true }), { mode: 0o600 });
@@ -283,9 +285,9 @@ test("right before gh it reads the record again: the owner's switch must be on, 
   permit(missing, { transcript: join(SCRATCH, "no-record.jsonl") });
   assertRefused(merge(missing), "sage cannot read Codex's record of this session. Ask for the merge again. If it refuses again, the owner merges the pull request in GitHub (ENOENT)", "no record");
   const version = session();
-  writeFileSync(version.transcript, readFileSync(version.transcript, "utf8").replace('"cli_version":"0.164.0"', '"cli_version":"0.167.0"'));
+  writeFileSync(version.transcript, readFileSync(version.transcript, "utf8").replace('"cli_version":"0.164.0"', '"cli_version":"0.168.0"'));
   permit(version);
-  assertRefused(merge(version), "this session runs Codex 0.167.0, and sage reads the records of Codex 0.164 to 0.166 only. Use Codex 0.164 to 0.166, or the owner merges the pull request in GitHub", "a newer Codex");
+  assertRefused(merge(version), "this session runs Codex 0.168.0, and sage reads the records of Codex 0.164 to 0.167 only. Use Codex 0.164 to 0.167, or the owner merges the pull request in GitHub", "a newer Codex");
   const form = session();
   writeFileSync(form.transcript, `${readFileSync(form.transcript, "utf8")}{not json\n`);
   permit(form);
@@ -296,6 +298,20 @@ test("right before gh it reads the record again: the owner's switch must be on, 
   const other = session("tui-on-then-esc");
   permit(other, { turn: "019a0000-0000-7000-8000-0000000a0a0a" });
   assert.equal(merge(other).status, 0, "turn_aborted of another turn stops nothing");
+  rmSync(GH_LOG);
+});
+
+test("F-T677-13, F-T677-15: right before gh, an on that joins a running turn counts for nothing; one that starts its turn counts", () => {
+  // The owner's first message of the turn, then the on phrase in the same turn (sent while Codex works).
+  const joined = session();
+  const at = joined.lines.findIndex((o) => o.payload.role === "user" && o.payload.content?.[0]?.text === "autopilot on");
+  const first = { ...joined.lines[at], payload: { ...joined.lines[at].payload, content: [{ type: "input_text", text: "merge pull request 41" }] } };
+  writeFileSync(joined.transcript, [...joined.lines.slice(0, at), first, ...joined.lines.slice(at)].map((line) => JSON.stringify(line)).join("\n") + "\n");
+  permit(joined);
+  assertRefused(merge(joined), `the owner has not turned autopilot on, with sage mode on, since this session started. ${SWITCH_ON}`, "an on that joins a running turn");
+  const started = session();
+  permit(started);
+  assert.deepEqual(merge(started), { status: 0, stdout: `${MARKER}\n`, stderr: "" }, "the same on, starting its turn");
   rmSync(GH_LOG);
 });
 

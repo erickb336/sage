@@ -6,7 +6,7 @@
 //   - no record path, a read error, or a record over 64 MiB;
 //   - a last line that is still partial after 3 re-reads (Codex writes the record in the background);
 //   - a line that is not JSON, or not an object with a known top-level type and an object payload;
-//   - no session_meta line, or a session_meta whose cli_version is not 0.164 to 0.166 in the strict form;
+//   - no session_meta line, or a session_meta whose cli_version is not 0.164 to 0.167 in the strict form;
 //   - no start mark, or a start mark whose line count does not fit the record.
 // The owner's switches replay with core's own mode rules (switchModes), so the reader agrees with core: an on counts
 // only while sage mode is on at that point, and the off form of the mode phrase ends autopilot.
@@ -27,9 +27,14 @@
 //     composer_queue_run_now, an automation automation_cron_* or automation_heartbeat_*, and Codex's own turns name
 //     theirs, such as queue, goal, guardian_review or memory_consolidation). A client that sends no trigger gets none,
 //     and its on counts for nothing. Input from codex queue also has provenance user, but its turn trigger is queue:
-//     there an on counts for nothing, also when Codex joins it to a turn that a person started (F-T663-17: merges then
-//     wait). The trigger is the client's word: an agent that runs codex exec on purpose could give it (F-T663-3, a
-//     documented limit of the guide).
+//     there an on counts for nothing. The trigger is the client's word: an agent that runs codex exec on purpose could
+//     give it (F-T663-3, a documented limit of the guide).
+//   - An on counts only from the message that starts its turn, as in Claude, where a message sent while Claude works
+//     never turns autopilot on: the turn's first user message that is not Codex's own context (provenance harness,
+//     such as the environment context). A message that joins a running turn (turn/steer, the app's Enter while Codex
+//     works, or turn/start while a turn runs, as the app's queue run now) gets that turn's id and no trigger of its own
+//     (F-T677-13, F-T677-15; R2721's record of the desktop binary 0.167.0-alpha.3.2). A message with no turn id starts
+//     no turn.
 // A resume by a newer Codex writes no version into the record (R2690 proof: 0.166.0-alpha.6 resumed a 0.164.0 record
 // with no new session_meta), so the gate also checks the version of the Codex that runs (gate-hook.mjs).
 import { closeSync, fstatSync, openSync, readSync } from "node:fs";
@@ -37,8 +42,13 @@ import { exactPhrase, PHRASES, switchModes } from "../core/index.mjs";
 
 /** The largest record that the reader reads (the proof read 50 MB in 116 to 145 ms). */
 export const RECORD_LIMIT = 64 * 1024 * 1024;
-/** The Codex versions whose record format the reader knows: 0.164 to 0.166, with an optional pre-release (0.166.0-alpha.6). */
-export const RECORD_VERSION = /^0\.16[4-6]\.(?:0|[1-9]\d*)(?:-[a-z]+\.(?:0|[1-9]\d*))?$/;
+/**
+ * The Codex versions whose record format the reader knows: 0.164 to 0.167, with an optional pre-release of one or more
+ * numbers (0.166.0-alpha.6, the desktop app's 0.167.0-alpha.3.2). A later version waits until sage adds it (F-T677-16).
+ */
+export const RECORD_VERSION = /^0\.16[4-7]\.(?:0|[1-9]\d*)(?:-[a-z]+(?:\.(?:0|[1-9]\d*))+)?$/;
+/** The same range, for the owner. */
+export const RECORD_RANGE = "0.164 to 0.167";
 /** The top-level line types of Codex 0.164.0 records. Any other type refuses. */
 const TYPES = new Set(["session_meta", "response_item", "event_msg", "turn_context", "compacted", "world_state", "token_usage_record"]);
 /** The turn triggers of a turn that a person started: the TUI, codex exec, and the desktop app's composer. */
@@ -93,7 +103,7 @@ export function readRecord(path, { pause = sleep } = {}) {
     try { entry = JSON.parse(line); } catch { return FORM(`line ${i + 1} is not JSON`); }
     if (!isObject(entry) || !TYPES.has(entry.type) || !isObject(entry.payload)) return FORM(`line ${i + 1} has an unknown type`);
     if (entry.type === "session_meta" && !RECORD_VERSION.test(String(entry.payload.cli_version))) {
-      return refusal(`this session runs Codex ${entry.payload.cli_version}, and sage reads the records of Codex 0.164 to 0.166 only`, "Use Codex 0.164 to 0.166, or the owner merges the pull request in GitHub");
+      return refusal(`this session runs Codex ${entry.payload.cli_version}, and sage reads the records of Codex ${RECORD_RANGE} only`, `Use Codex ${RECORD_RANGE}, or the owner merges the pull request in GitHub`);
     }
     entries.push(entry);
   }
@@ -138,10 +148,16 @@ export function autopilotSwitch(record, mark) {
   const from = mark.lines;
   if (!Number.isInteger(from) || from < 0 || from > record.lines) return refusal("sage's note of this session start does not match Codex's record of this session", RESUME);
   const trigger = new Map();
+  const opener = new Map(); // each turn's id: the line of the user message that started it
   let start = 0;
   record.entries.forEach((entry, i) => {
+    const p = entry.payload;
     if (entry.type === "session_meta") start = i + 1;
-    if (entry.type === "event_msg" && entry.payload.type === "task_started") trigger.set(entry.payload.turn_id, entry.payload.turn_attribution?.turn_trigger);
+    if (entry.type === "event_msg" && p.type === "task_started") trigger.set(p.turn_id, p.turn_attribution?.turn_trigger);
+    if (entry.type !== "response_item" || p.type !== "message" || p.role !== "user") return;
+    const { turn_id: turn, content_item_metadata: meta } = p.internal_chat_message_metadata_passthrough ?? {};
+    const context = Array.isArray(meta) && meta.length > 0 && meta.every((item) => item?.provenance?.type === "harness");
+    if (typeof turn === "string" && !context && !opener.has(turn)) opener.set(turn, i);
   });
   const state = {};
   let counted = false;
@@ -152,7 +168,7 @@ export function autopilotSwitch(record, mark) {
     const change = PHRASES[exactPhrase(text)];
     if (!message.owner && change?.autopilot !== false) continue; // only an off counts from any user message
     const turn = record.entries[i].payload.internal_chat_message_metadata_passthrough?.turn_id;
-    if (change?.autopilot === true && (!message.textOnly || i < from || !PERSON.has(trigger.get(turn)))) continue;
+    if (change?.autopilot === true && (!message.textOnly || i < from || !PERSON.has(trigger.get(turn)) || opener.get(turn) !== i)) continue;
     switchModes({ owner: true, text, all: text }, state, { autopilotOn: () => "" });
     counted ||= state.autopilot === true;
   }
