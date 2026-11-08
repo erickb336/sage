@@ -1,4 +1,4 @@
-import { basename, resolve, sep } from "node:path";
+import { basename, isAbsolute, resolve, sep } from "node:path";
 import { readBoardSources } from "./board-reader.mjs";
 import { buildBoardModel, projectName } from "./board-model.mjs";
 import { renderBoardHtml, renderBoardText, renderTaskText, renderBoardStatus } from "./board-render.mjs";
@@ -7,15 +7,17 @@ import { createStateTool } from "./state.mjs";
 /**
  * T280: the landing rule of each board source, for buildBoardModel: (source id, head SHA, PR) to { ok, reason }. It is
  * the state tool's own merge check, read-only, on that source's root, so the board never has a second copy of the rule.
- * The root's path leaves the reason: a remote board page shows it.
+ * The root's path leaves the reason: a remote board page shows it. book: the card's logbook, whose checkout is where the
+ * check carries earlier cycles (T805), as the merge check does in the merged project's folder (F-T805-1).
  */
 export function landingRule(sources, logbookKey = null) {
   const { mergeCheck, boardLandingCheck } = createStateTool({ defaultRoot: () => { throw new Error("the board names each root"); } });
   const roots = new Map(sources.map(source => [source.id, source.path]));
-  return (id, sha, pr) => {
+  return (id, sha, pr, book) => {
+    const checkout = isAbsolute(book?.checkout ?? "") && { logbook: book.key.slice(id.length + 1), root: book.checkout };
     const root = roots.get(id), result = logbookKey === null
-      ? mergeCheck(sha, { SAGE_HOME: root }, { pr, readOnly: true })
-      : boardLandingCheck(sha, { SAGE_HOME: root }, logbookKey.slice(id.length + 1), pr);
+      ? mergeCheck(sha, { SAGE_HOME: root }, { pr, readOnly: true, checkout })
+      : boardLandingCheck(sha, { SAGE_HOME: root }, logbookKey.slice(id.length + 1), pr, checkout);
     return { ok: result.ok, scope: logbookKey === null ? "all" : "project", reason: result.reason.split(`${root}${sep}`).join("") };
   };
 }
