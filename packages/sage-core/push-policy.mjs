@@ -1,7 +1,7 @@
 import { execFileSync } from "node:child_process";
 import { resolve } from "node:path";
 import { programsRun, shellCommands } from "./command-reader.mjs";
-import { createCommandPolicy, externalCommandOperands, ghApiMethod, GIT_VALUE, gitSubcommand, programName, unreadable } from "./command-policy.mjs";
+import { createCommandPolicy, externalCommandOperands, GH_API_VALUE, ghApiMethod, GIT_VALUE, gitSubcommand, programName, unreadable } from "./command-policy.mjs";
 import { commandWrites } from "./shell-write-policy.mjs";
 
 /** The owner/name of a GitHub repository URL as git writes it (https, ssh or scp form), or undefined for any other URL. */
@@ -400,7 +400,7 @@ export function createPushPolicy({ stateToolPath, readGit: gitReader = readGit, 
       });
       else if (word === "--input") { opaque = true; k++; }
       else if (word.startsWith("--input=")) opaque = true;
-      else if (/^(?:--hostname|--cache|--header|-H|--jq|-q|--preview|-p|--template|-t)$/.test(word)) k++;
+      else if (GH_API_VALUE.test(word)) k++;
       else if (!word.startsWith("-")) {
         if (!api) { if (word !== "api") return false; api = true; }
         else endpoint ??= word;

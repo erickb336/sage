@@ -107,6 +107,7 @@ const WHY = {
   board: /board password rule/,
   process: /process list/,
   stash: /git stash/,
+  "agent gh": /an agent runs only these gh commands/,
   state: /state tool|PR script|writes the logbook/,
 };
 
@@ -171,6 +172,10 @@ const REFUSED = [
   ["push", "gh repo sync"],
   ["push", "gh repo edit acme/project --default-branch sage/t1-a"],
   ["push", `gh api -X PATCH repos/acme/project/git/refs/heads/main -f sha=${SHA}`],
+  // A value option of gh api takes the next word as its value, so -XGET there is no method: gh sends PATCH (F-T815-27).
+  ["push", `gh api -X PATCH repos/acme/project/git/refs/heads/main -t -XGET -f sha=${SHA}`],
+  ["push", `gh api -X PATCH repos/acme/project/git/refs/heads/main -p -XGET -f sha=${SHA}`],
+  ["push", `gh api -X PATCH repos/acme/project/git/refs/heads/main -H --method=GET -f sha=${SHA}`],
   ["push", `git -C ${T} subtree push --prefix=docs origin sage/t1-a`],
   ["push", `git -C ${T} frobnicate origin`],
   // Logbook writes by a literal path: as written, through a link, after a cd and from ~.
@@ -200,6 +205,8 @@ const REFUSED = [
   ["process", "kill 1", AGENT],
   ["process", "pgrep node", AGENT],
   ["stash", `git -C ${T} stash`, AGENT],
+  // An agent's gh api runs only with GET: -XGET after -t is the template, so gh sends DELETE (F-T815-27).
+  ["agent gh", "gh api -X DELETE repos/acme/project/git/refs/heads/x -t -XGET", AGENT],
   // The state tool and the PR script: an agent runs only the tool's read commands.
   ["state", `node ${TOOL} task add --title x --size small --priority P2`, AGENT],
   ["state", `node ${PR_TOOL} create T1`, AGENT],

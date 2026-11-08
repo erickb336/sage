@@ -45,6 +45,11 @@ export function ghOptionBefore(args) {
 }
 /** gh's commands that take no subcommand: their next word is an argument, not a command word. */
 const GH_LEAF = /^(?:api|browse|status|version|completion|help)$/;
+/**
+ * gh api's options other than -X and --method that take the next word as their value (gh api --help), so that the word
+ * after them is never read as an option: in gh api -X PATCH <path> -t -XGET, gh sends PATCH (F-T815-27).
+ */
+export const GH_API_VALUE = /^(?:-[HqtpfF]|--(?:header|jq|template|preview|raw-field|field|hostname|cache|input))$/;
 /** gh api's request method: its -X or --method, also in a cobra bundle (-iX DELETE, -iXDELETE), else POST with a field or an input, else GET. */
 export function ghApiMethod(args) {
   let method, payload = false;
@@ -53,7 +58,10 @@ export function ghApiMethod(args) {
     if (a === "-X" || a === "--method") method = args[++k];
     else if (/^-X./.test(a)) method = a.slice(2).replace(/^=/, "");
     else if (a.startsWith("--method=")) method = a.slice(9);
-    else if (/^(?:-[fF]|--field|--raw-field|--input)(?:$|=)|^-[fF]./.test(a)) payload = true;
+    else {
+      if (/^(?:-[fF]|--field|--raw-field|--input)(?:$|=)|^-[fF]./.test(a)) payload = true;
+      if (GH_API_VALUE.test(a)) k++;
+    }
   }
   return String(method ?? (payload ? "POST" : "GET")).toUpperCase();
 }

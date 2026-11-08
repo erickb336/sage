@@ -1005,7 +1005,7 @@ test("T42: shared expansion rules recognize executable spelling without changing
   }
 });
 
-test("T815 repair: core's readers in both bundles (F-T815-4, -5, -6, -7, -9, -16)", async t => {
+test("T815 repair: core's readers in both bundles (F-T815-4, -5, -6, -7, -9, -16, -27)", async t => {
   for (const provider of ["claude", "codex"]) {
     const f = isolated(t, provider);
     const api = await import(pathToFileURL(join(f.plugin, "core/index.mjs")));
@@ -1026,7 +1026,10 @@ test("T815 repair: core's readers in both bundles (F-T815-4, -5, -6, -7, -9, -16
       [`pushd ${root} && rm -rf p`, "p"], [`pushd ${shared} && echo x > a.json`, "a.json"], [`pushd /usr && popd && pushd ${root} && rm x`, "x"]]) assert.equal(write(command), word, `${provider}: ${command}`);
     assert.equal(write(`pushd ${root} && popd && echo x > tasks.json`), undefined, "popd goes back to the work folder");
     // F-T815-6: one method reader, with cobra's bundled -iX.
-    for (const [command, method] of [["gh api -iXDELETE repos/o/r/x", "DELETE"], ["gh api -iX DELETE repos/o/r/x", "DELETE"], ["gh api -iX POST repos/o/r/x", "POST"], ["gh api -i repos/o/r", "GET"], ["gh api -f a=b repos/o/r/x", "POST"]]) {
+    for (const [command, method] of [["gh api -iXDELETE repos/o/r/x", "DELETE"], ["gh api -iX DELETE repos/o/r/x", "DELETE"], ["gh api -iX POST repos/o/r/x", "POST"], ["gh api -i repos/o/r", "GET"], ["gh api -f a=b repos/o/r/x", "POST"],
+      // F-T815-27: the word after a value option of gh api is its value, not a method.
+      ["gh api -X PATCH repos/o/r/x -t -XGET", "PATCH"], ["gh api -X DELETE repos/o/r/x -itXGET", "DELETE"], ["gh api -X PUT repos/o/r/x -H --method=GET", "PUT"],
+      ["gh api repos/o/r/x -q -fa=b", "GET"], ["gh api -X PATCH repos/o/r/x --template=-XGET", "PATCH"], ["gh api -X PATCH repos/o/r/x --hostname -XGET", "PATCH"]]) {
       assert.deepEqual(api.ghRuns(command, work).map((run) => run.method), [method], command);
     }
     const policy = api.createCommandPolicy();
