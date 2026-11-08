@@ -94,7 +94,9 @@ export function saveState(file, state) {
   }
 }
 
-if (process.argv[1] && realpathSync(process.argv[1]) === fileURLToPath(import.meta.url) && process.env.AGENT_KIT_HOOKS !== "off") {
+// An import (the Codex state tool reads modeDirectory here) never throws: argv[1] may be no file, as under node -e.
+const entry = (() => { try { return process.argv[1] && realpathSync(process.argv[1]); } catch { return undefined; } })();
+if (entry === fileURLToPath(import.meta.url) && process.env.AGENT_KIT_HOOKS !== "off") {
   try {
     const input = JSON.parse(readFileSync(0, "utf8"));
     const key = stateKey(input);
