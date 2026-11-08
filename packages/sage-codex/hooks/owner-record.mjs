@@ -22,10 +22,14 @@
 //     starts fresh: proof case 5b). A resume writes no session_meta, so sage mode carries over a resume, as the
 //     session's mode file does.
 //   - An on counts only after the start mark (proof case 5c: a resume must not count an earlier on), and only in a turn
-//     that a person started (turn trigger user in the TUI, exec for codex exec). Input from codex queue also has
-//     provenance user, but its turn trigger is queue: there an on counts for nothing, also when Codex joins it to a
-//     turn that a person started (F-T663-17: merges then wait). The exec trigger is the client's word: an agent that
-//     runs codex exec on purpose could give it (F-T663-3, a documented limit of the guide).
+//     that a person started: turn trigger user in the TUI, exec for codex exec, and composer for a message typed in the
+//     desktop app (F-T677-12: its send path sets turnTrigger ?? "composer"; a queued message is composer_queue or
+//     composer_queue_run_now, an automation automation_cron_* or automation_heartbeat_*, and Codex's own turns name
+//     theirs, such as queue, goal, guardian_review or memory_consolidation). A client that sends no trigger gets none,
+//     and its on counts for nothing. Input from codex queue also has provenance user, but its turn trigger is queue:
+//     there an on counts for nothing, also when Codex joins it to a turn that a person started (F-T663-17: merges then
+//     wait). The trigger is the client's word: an agent that runs codex exec on purpose could give it (F-T663-3, a
+//     documented limit of the guide).
 // A resume by a newer Codex writes no version into the record (R2690 proof: 0.166.0-alpha.6 resumed a 0.164.0 record
 // with no new session_meta), so the gate also checks the version of the Codex that runs (gate-hook.mjs).
 import { closeSync, fstatSync, openSync, readSync } from "node:fs";
@@ -37,8 +41,8 @@ export const RECORD_LIMIT = 64 * 1024 * 1024;
 export const RECORD_VERSION = /^0\.16[4-6]\.(?:0|[1-9]\d*)(?:-[a-z]+\.(?:0|[1-9]\d*))?$/;
 /** The top-level line types of Codex 0.164.0 records. Any other type refuses. */
 const TYPES = new Set(["session_meta", "response_item", "event_msg", "turn_context", "compacted", "world_state", "token_usage_record"]);
-/** The turn triggers of a turn that a person started. */
-const PERSON = new Set(["user", "exec"]);
+/** The turn triggers of a turn that a person started: the TUI, codex exec, and the desktop app's composer. */
+const PERSON = new Set(["user", "exec", "composer"]);
 const RETRIES = 3;
 const sleep = (ms) => Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, ms);
 const isObject = (value) => value !== null && typeof value === "object" && !Array.isArray(value);

@@ -80,6 +80,25 @@ test("real records of the proof: on counts only from the owner, in a turn that a
   assert.deepEqual(decide(withMode(RECORDS.fork)), NONE, "a fork record starts fresh: the parent's on is not in it");
 });
 
+test("F-T677-12: a real record of the desktop app's Codex: the owner's on, typed in the app's composer, counts", () => {
+  // R2714 made this record with the desktop app's own Codex binary (0.166.0-alpha.6) over app-server stdio, with turns
+  // started as the app starts a typed message: its send path sets turnTrigger ?? "composer" (the app's program code).
+  // The turns: the mode phrase, the on phrase, then a step that runs sage's merge command (which the gate admitted).
+  const lines = RECORDS["app-composer-on"];
+  assert.equal(lines[0].payload.cli_version, "0.166.0-alpha.6");
+  assert.deepEqual(lines.filter((o) => o.payload.type === "task_started").map((o) => o.payload.turn_attribution.turn_trigger), ["composer", "composer", "composer"]);
+  assert.deepEqual(decide(lines), ON, "the mode phrase, then the on phrase, each typed in the app");
+  assert.deepEqual(decide(lines, 9), ON, "with the start mark of that run");
+  // Every other turn trigger of the on's turn counts for nothing: the app's queue, its other automatic turns, Codex's own
+  // turns, and a client that sends none. Only the on's turn changes; the mode phrase stays in a composer turn.
+  const onTurn = lines.find((o) => o.payload.role === "user" && o.payload.content?.[0]?.text === "autopilot on").payload.internal_chat_message_metadata_passthrough.turn_id;
+  const withTrigger = (trigger) => lines.map((o) => (o.payload.type === "task_started" && o.payload.turn_id === onTurn ? started(onTurn, trigger) : o));
+  for (const trigger of ["composer_queue", "composer_queue_run_now", "page_composer", "edit_user_message", "automation_cron_scheduled", "automation_heartbeat_scheduled", "app_tool_send_message", "queue", "goal", "Composer", null, undefined]) {
+    assert.deepEqual(decide(withTrigger(trigger)), NONE, String(trigger));
+  }
+  assert.deepEqual(decide(withTrigger("user")), ON, "the TUI's trigger");
+});
+
 test("the switches agree with core's mode rules: an on counts only while sage mode is on (F-T663-2)", () => {
   const turn = (trigger, ...texts) => [started(`turn-${trigger}`, trigger), ...texts.map((text) => owner(`turn-${trigger}`, text))];
   assert.deepEqual(decide([META, ...turn("user", "autopilot on", "sage mode")]), NONE, "probe A: the on while sage mode is off, then only the mode phrase");
@@ -136,7 +155,7 @@ test("the boundary is the later of the last session_meta line and the start mark
   assert.deepEqual(autopilotSwitch(record, { session: "s", source: "resume", lines: 3, pid: 7 }), ON, "the mark as start-mark.mjs saves it");
 });
 
-test("switches: exact phrases only; off from any owner message, on only in a turn of trigger user or exec", () => {
+test("switches: exact phrases only; off from any owner message, on only in a turn of trigger user, exec or composer", () => {
   const turn = (trigger, ...texts) => [started(`turn-${trigger}`, trigger), ...texts.map((text) => owner(`turn-${trigger}`, text))];
   const mode = turn("user", "sage mode");
   assert.deepEqual(decide([META, ...mode, ...turn("exec", "autopilot on")]), ON);
