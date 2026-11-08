@@ -11,9 +11,11 @@ import { join } from "node:path";
 import { after, test } from "node:test";
 import { fileURLToPath } from "node:url";
 import { NEAR_NOTE, PHRASE_CASES, S_ON, SUBSESSION_PROMPTS } from "./fixtures/mode-cases.mjs";
-import { chiefInstructionParts } from "../plugins/sage-codex/runtime/chief-output.mjs";
+import { renderChiefInstructions } from "../plugins/sage-codex/core/index.mjs";
 
 const HOOK = fileURLToPath(new URL("../plugins/sage-codex/hooks/sage-codex-hook.mjs", import.meta.url));
+/** The shared chief text, as the core renders it with the Codex bindings. */
+const CHIEF = renderChiefInstructions(JSON.parse(readFileSync(new URL("../plugins/sage-codex/chief-bindings.json", import.meta.url), "utf8")));
 const scratch = realpathSync(mkdtempSync(join(tmpdir(), "sage-codex-mode-")));
 after(() => rmSync(scratch, { recursive: true, force: true }));
 const CODEX_HOME = join(scratch, "codex");
@@ -479,7 +481,7 @@ test("T603: the Codex pages hold no v1 path for a task, and the guide gives the 
   const guide = read("../docs/guide/codex.md"), readme = read("../README.md");
   for (const [name, text] of Object.entries({ guide, readme,
     roles: read("../plugins/sage-codex/skills/sage/references/roles.md"), workflow: read("../plugins/sage-codex/skills/sage/references/workflow.md"),
-    steps: read("../plugins/sage-codex/skills/sage/references/lead-steps.md"), chief: read("../plugins/sage-codex/runtime/chief-instructions.md") })) {
+    steps: read("../plugins/sage-codex/skills/sage/references/lead-steps.md"), chief: CHIEF.replace(/\s+/g, " ") })) {
     assert.doesNotMatch(text, /AgentLimitReached|does the lead's work|do the lead's work|On multi-agent v1|Multi-agent v1\.|only in the `multi_agent_v1`|4 times/, name);
   }
   assert.match(guide, /sage on Codex needs a multi-agent v2 model for the chief and each child\./);
@@ -503,8 +505,6 @@ test("T603: the Codex pages hold no v1 path for a task, and the guide gives the 
   assert.match(readme, /at least 5 times in each small task/);
 });
 
-/** The shared chief text as the build writes it, after the Codex preface; the Markdown file adds its own final newline. */
-const CHIEF = readFileSync(new URL("../plugins/sage-codex/runtime/chief-instructions.md", import.meta.url), "utf8").split("\n---\n\n")[1].slice(0, -1);
 // Codex 0.164.0 counts hook context as ceil(bytes / 4) tokens and cuts it above the hook's limit: 6000 tokens in
 // hooks.json, 2500 for an mcp_tool hook (codex-rs utils/string/src/truncate.rs, hooks/src/output_spill.rs).
 test("T494: the chief role reaches the chief whole, with 2000 bytes left under the real Codex limit, on activation and after compaction", async () => {
@@ -515,17 +515,4 @@ test("T494: the chief role reaches the chief whole, with 2000 bytes left under t
     assert.ok(role.endsWith(CHIEF) || role.includes(`${CHIEF}\n\n---\n\n`), "the whole chief text");
     assert.ok(Buffer.byteLength(role) + 2000 <= 6000 * 4, `${Buffer.byteLength(role)} bytes, ${6000 * 4 - Buffer.byteLength(role)} left of 24000`);
   }
-});
-
-test("T494: the native chief parts join to the whole chief text, each part at most 10000 bytes, and a text too long refuses with its size", () => {
-  const strip = (part) => part.replace(/^Sage chief instructions: part [12] of 2\n\n/, "");
-  const text = CHIEF;
-  const parts = chiefInstructionParts();
-  assert.equal(parts.length, 2);
-  assert.equal(parts.map(strip).join(""), text);
-  assert.ok(parts.every((part) => Buffer.byteLength(part) <= 10_000), parts.map((part) => Buffer.byteLength(part)).join(", "));
-  assert.ok(Buffer.byteLength(parts[1]) + 2000 <= 10_000, `${10_000 - Buffer.byteLength(parts[1])} bytes left in part 2`);
-  assert.throws(() => chiefInstructionParts(text + "An extra rule.\n".repeat(400)), {
-    message: `Sage chief instructions are ${Buffer.byteLength(text) + 6000} bytes and do not fit in 2 native hook parts of 10000 bytes: shorten the chief text` });
-  assert.throws(() => chiefInstructionParts("x".repeat(10_000)), /do not fit in 2 native hook parts/, "one line longer than a part");
 });

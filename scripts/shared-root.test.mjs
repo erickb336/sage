@@ -114,56 +114,6 @@ test("a run with SAGE_HOME removed and HOME in scratch writes under that HOME, a
   }
 });
 
-test("a production-shaped Codex env keeps the shared root out of the Codex root, and the launcher's option wins", async (t) => {
-  const { logbookEnv } = await import("../plugins/sage-codex/runtime/logbook-env.mjs");
-  const saved = { HOME: process.env.HOME, SAGE_SHARED_HOME: process.env.SAGE_SHARED_HOME, SAGE_HOME: process.env.SAGE_HOME };
-  t.after(() => { for (const [key, value] of Object.entries(saved)) if (value === undefined) delete process.env[key]; else process.env[key] = value; });
-  delete process.env.SAGE_SHARED_HOME; delete process.env.SAGE_HOME;
-  process.env.HOME = "/h";
-  const logbookRoot = "/h/.codex/sage";
-  const env = logbookEnv({ logbookRoot });
-  assert.equal(env.SAGE_HOME, logbookRoot);
-  assert.equal(sharedRoot(env), "/h/.sage");
-  assert.equal(sharedRoot(logbookEnv({ logbookRoot, sharedRoot: "/fixed" })), "/fixed");
-});
-
-test("each Codex place that sets the logbook gets its env from the one helper", () => {
-  const folder = join(REPO, "packages/sage-codex/runtime");
-  const named = readdirSync(folder).filter((file) => file.endsWith(".mjs") && !file.endsWith(".test.mjs") && file !== "logbook-env.mjs" && /SAGE_HOME:\s*options\.logbookRoot/.test(readFileSync(join(folder, file), "utf8")));
-  assert.deepEqual(named, []);
-  const users = readdirSync(folder).filter((file) => file.endsWith(".mjs") && /logbookEnv\(options\)/.test(readFileSync(join(folder, file), "utf8"))).sort();
-  assert.deepEqual(users, ["interrupted-run.mjs", "logbook-owner.mjs", "preparation.mjs", "run-assignment.mjs", "run-report.mjs", "task-authority.mjs", "task-settle.mjs"]);
-});
-
-test("the launcher's shared root sits outside every location, also through a link, and it is the root that the hooks read from the environment", async (t) => {
-  const base = realpathSync(mkdtempSync(join(tmpdir(), "sage-shared-config-")));
-  const saved = process.env.SAGE_SHARED_HOME;
-  t.after(() => { process.env.SAGE_SHARED_HOME = saved; rmSync(base, { recursive: true, force: true }); });
-  const { validateLogbookLocation } = await import("../plugins/sage-codex/runtime/run-report.mjs");
-  const [logbookRoot, projectDirectory, directory, observationsRoot] = ["logbook", "project", "journal", "observations"].map((name) => join(base, name));
-  for (const path of [logbookRoot, projectDirectory, directory, observationsRoot]) mkdirSync(path);
-  const options = { logbookRoot, projectDirectory, directory, observationsRoot, sessionsDir: join(base, "sessions") };
-  const check = (root) => { process.env.SAGE_SHARED_HOME = root; validateLogbookLocation({ ...options, sharedRoot: root }); };
-  assert.doesNotThrow(() => check(join(base, "shared")));
-  for (const inside of [join(logbookRoot, "shared"), base, join(projectDirectory, "shared"), join(directory, "shared"), join(observationsRoot, "shared"), join(base, "sessions", "shared")]) {
-    assert.throws(() => check(inside), /Sage could not finish/, inside);
-  }
-  // The value from the environment passes the same check, with no launcher option.
-  process.env.SAGE_SHARED_HOME = join(projectDirectory, "shared");
-  assert.throws(() => validateLogbookLocation(options), /Sage could not finish/);
-  process.env.SAGE_SHARED_HOME = "relative/shared";
-  assert.throws(() => validateLogbookLocation(options), /Sage could not finish/);
-  // A link compares by its target, also a folder that does not exist yet behind it.
-  symlinkSync(logbookRoot, join(base, "alias"));
-  assert.throws(() => check(join(base, "alias")), /Sage could not finish/);
-  assert.throws(() => check(join(base, "alias", "shared")), /Sage could not finish/);
-  symlinkSync(join(base, "nowhere"), join(base, "dangling"));
-  assert.throws(() => check(join(base, "dangling")), /Sage could not finish/);
-  // A fixed root that the environment does not give is a root that no hook protects.
-  process.env.SAGE_SHARED_HOME = join(base, "shared");
-  assert.throws(() => validateLogbookLocation({ ...options, sharedRoot: join(base, "other") }), /Sage could not finish/);
-});
-
 test("a relative SAGE_SHARED_HOME refuses: another folder would find another root, no row and the legacy logbook", (t) => {
   const w = world(t);
   w.claude("link", "--separate");

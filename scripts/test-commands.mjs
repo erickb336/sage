@@ -1,5 +1,5 @@
 // Every test file runs in CI: the "test" or "test:browser" command of package.json names it, by its path or by a
-// glob such as packages/sage-codex/runtime/*.test.mjs (R1534-3, T350).
+// glob (R1534-3, T350).
 import { readFileSync, readdirSync } from "node:fs";
 import { join } from "node:path";
 

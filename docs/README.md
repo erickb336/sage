@@ -27,4 +27,3 @@ This is the index of sage's documentation, by reader. Start with the [README](..
 - [The sage mode design](design/sage-mode.md): the first design of sage mode, with its decisions.
 - [Rules held in code](design/rules-in-code.md): every rule that the hook and the state tool hold, and why.
 - [Separate provider packages](design/provider-packages.md): the Claude Code and Codex plugins, and their shared core.
-- Codex probe notes: internal evidence for two Codex runtime probes, [an active child restart](verification/codex-active-child-restart.md) and [a nested report](verification/codex-nested-report.md).
