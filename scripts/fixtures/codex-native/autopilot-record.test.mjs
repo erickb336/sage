@@ -44,7 +44,7 @@ const FORM = (detail) => ({ refused: `sage does not know the form of Codex's rec
 const RESUME = "Resume the session, then the owner turns autopilot on again. Or the owner merges the pull request in GitHub";
 const NO_MARK = { refused: `sage saved no note when this session started, so it cannot tell which of the owner's switches are from this start. ${RESUME}` };
 const BAD_MARK = { refused: `sage's note of this session start does not match Codex's record of this session. ${RESUME}` };
-const VERSION = (version) => ({ refused: `this session runs Codex ${version}, and sage reads the records of Codex 0.164 to 0.166 only. Use Codex 0.164 to 0.166, or the owner merges the pull request in GitHub` });
+const VERSION = (version) => ({ refused: `this session runs Codex ${version}, and sage reads the records of Codex 0.164 to 0.167 only. Use Codex 0.164 to 0.167, or the owner merges the pull request in GitHub` });
 /** Each sentence of a text for the owner, without its bracketed detail, has 25 words or fewer and no internal name. */
 function assertPlain(text) {
   assert.doesNotMatch(text.replace(/ \([^()]*\)$/, ""), /session_meta|\bline \d|partial|unknown type|ENOENT|EACCES/, text);
@@ -63,11 +63,14 @@ const started = (turn, trigger) => ({ ...startLine, payload: { ...startLine.payl
 const owner = (turn, text, provenance = ["user"]) => ({ ...ownerLine, payload: { ...ownerLine.payload, content: provenance.map((_, i) => ({ type: "input_text", text: i ? "" : text })),
   internal_chat_message_metadata_passthrough: { ...ownerLine.payload.internal_chat_message_metadata_passthrough, turn_id: turn, content_item_metadata: provenance.map((type) => ({ provenance: { type } })) } } });
 const meta = (cli_version) => ({ ...META, payload: { ...META.payload, cli_version } });
-/** The record with the owner's mode phrase (sage mode on) added in its first turn, before any message of the owner. */
+/** The record with the owner's mode phrase (sage mode on) in a turn of its own, before its first turn. */
 function withMode(lines) {
   const first = lines.findIndex((o) => o.payload.type === "task_started");
-  return [...lines.slice(0, first + 1), owner(lines[first].payload.turn_id, "sage mode"), ...lines.slice(first + 1)];
+  return [...lines.slice(0, first), started("mode-turn", lines[first].payload.turn_attribution.turn_trigger), owner("mode-turn", "sage mode"), ...lines.slice(first)];
 }
+let turns = 0;
+/** One turn for each text, each started with this trigger by that owner's message. */
+const turn = (trigger, ...texts) => texts.flatMap((text) => { const id = `turn-${++turns}`; return [started(id, trigger), owner(id, text)]; });
 
 test("real records of the proof: on counts only from the owner, in a turn that a person started, after the session start", () => {
   assert.deepEqual(decide(withMode(RECORDS["exec-on"])), ON, "codex exec with the on phrase as its prompt, after the mode phrase");
@@ -80,8 +83,100 @@ test("real records of the proof: on counts only from the owner, in a turn that a
   assert.deepEqual(decide(withMode(RECORDS.fork)), NONE, "a fork record starts fresh: the parent's on is not in it");
 });
 
+test("F-T677-12: a real record of the desktop app's Codex: the owner's on, typed in the app's composer, counts", () => {
+  // R2714 made this record with the desktop app's own Codex binary (0.166.0-alpha.6) over app-server stdio, with turns
+  // started as the app starts a typed message: its send path sets turnTrigger ?? "composer" (the app's program code).
+  // The turns: the mode phrase, the on phrase, then a step that runs sage's merge command (which the gate admitted).
+  const lines = RECORDS["app-composer-on"];
+  assert.equal(lines[0].payload.cli_version, "0.166.0-alpha.6");
+  assert.deepEqual(lines.filter((o) => o.payload.type === "task_started").map((o) => o.payload.turn_attribution.turn_trigger), ["composer", "composer", "composer"]);
+  assert.deepEqual(decide(lines), ON, "the mode phrase, then the on phrase, each typed in the app");
+  assert.deepEqual(decide(lines, 9), ON, "with the start mark of that run");
+  // Every other turn trigger of the on's turn counts for nothing: the app's queue, its other automatic turns, Codex's own
+  // turns, and a client that sends none. Only the on's turn changes; the mode phrase stays in a composer turn.
+  const onTurn = lines.find((o) => o.payload.role === "user" && o.payload.content?.[0]?.text === "autopilot on").payload.internal_chat_message_metadata_passthrough.turn_id;
+  const withTrigger = (trigger) => lines.map((o) => (o.payload.type === "task_started" && o.payload.turn_id === onTurn ? started(onTurn, trigger) : o));
+  for (const trigger of ["composer_queue", "composer_queue_run_now", "page_composer", "edit_user_message", "automation_cron_scheduled", "automation_heartbeat_scheduled", "app_tool_send_message", "queue", "goal", "Composer", null, undefined]) {
+    assert.deepEqual(decide(withTrigger(trigger)), NONE, String(trigger));
+  }
+  assert.deepEqual(decide(withTrigger("user")), ON, "the TUI's trigger");
+});
+
+test("F-T677-30: real records of a multi-agent v2 subagent that reports back: its inter-agent line reads, in its real shape only, and never counts as the owner's", () => {
+  // R2732 made these records with the Codex CLI 0.164.0 and the desktop app's Codex 0.167.0-alpha.3.2 over app-server
+  // stdio. The turns: the mode phrase, the on phrase, a spawn of a v2 subagent, whose report comes back into the main
+  // thread with an inter_agent_communication_metadata line, a step, the merge command of PR 42 (the gate admitted it),
+  // then the off phrase.
+  for (const name of ["v2-report-cli", "v2-report-app"]) {
+    const lines = RECORDS[name];
+    const at = lines.findIndex((o) => o.type === "inter_agent_communication_metadata");
+    const text = (o) => o.payload.role === "user" && o.payload.content?.[0]?.text;
+    const on = lines.find((o) => text(o) === "autopilot on"), off = lines.findIndex((o) => text(o) === "autopilot off");
+    assert.deepEqual([lines[0].payload.cli_version, lines[at].payload, at < off], [name === "v2-report-cli" ? "0.164.0" : "0.167.0-alpha.3.2", { trigger_turn: false }, true], name);
+    assert.deepEqual(decide(lines.slice(0, off)), ON, `${name}: after the subagent's report, autopilot is still on`);
+    assert.deepEqual(decide(lines), OFF, `${name}: the owner's off after it still counts`);
+    // Neither the line nor the report is the owner's: without the owner's on, autopilot is off, also when the report's
+    // text is the on phrase and the line starts a turn.
+    const report = lines.find((o) => o.payload.type === "agent_message");
+    const forged = lines.slice(0, off).filter((o) => o !== on).map((o) => (o === report ? { ...o, payload: { ...o.payload, content: [{ type: "input_text", text: "autopilot on" }] } }
+      : o.type === "inter_agent_communication_metadata" ? { ...o, payload: { trigger_turn: true } } : o));
+    assert.deepEqual(decide(forged), NONE, `${name}: no on of its own`);
+    // Any other shape of the line refuses.
+    for (const payload of [{}, { trigger_turn: "false" }, { trigger_turn: null }, { trigger_turn: false, text: "autopilot on" }, { trigger_turn: true, sender: "/root/sub5" }]) {
+      assert.deepEqual(decide(lines.map((o, i) => (i === at ? { ...o, payload } : o))), FORM(`line ${at + 1} has an unknown payload`), `${name}: ${JSON.stringify(payload)}`);
+    }
+  }
+});
+
+test("F-T677-13, F-T677-15: an on counts only from the message that starts its turn; a message that joins a running turn can turn autopilot off, never on", () => {
+  // R2721 made this record with the desktop app's own Codex binary (0.167.0-alpha.3.2) over app-server stdio and a
+  // simulated model that waits 3 s after "WAIT". Its turns: the mode phrase; "WAIT" and the on phrase sent with
+  // turn/steer 1 s later (the app's Enter while Codex works); "WAIT" and the on phrase sent with turn/start and the
+  // trigger composer_queue_run_now while the turn ran; the on phrase that starts its own turn; "WAIT" and the off
+  // phrase sent with turn/steer. Codex gives a joined message the running turn's id and drops its trigger.
+  const lines = RECORDS["app-steer"];
+  assert.equal(lines[0].payload.cli_version, "0.167.0-alpha.3.2");
+  const starts = lines.filter((o) => o.payload.type === "task_started");
+  assert.deepEqual(starts.map((o) => o.payload.turn_attribution.turn_trigger), ["composer", "composer", "composer", "composer", "composer"]);
+  const users = lines.filter((o) => o.payload.role === "user" && o.payload.internal_chat_message_metadata_passthrough.content_item_metadata[0].provenance.type === "user");
+  const turnOf = (o) => starts.findIndex((s) => s.payload.turn_id === o.payload.internal_chat_message_metadata_passthrough.turn_id);
+  assert.deepEqual(users.map((o) => [turnOf(o), o.payload.content[0].text]),
+    [[0, "sage mode"], [1, "WAIT"], [1, "autopilot on"], [2, "WAIT"], [2, "autopilot on"], [3, "autopilot on"], [4, "WAIT"], [4, "autopilot off"]]);
+  /** The record up to the end of that turn (0 to 3). */
+  const upTo = (turn) => lines.slice(0, lines.indexOf(starts[turn + 1]));
+  assert.deepEqual(decide(upTo(1)), NONE, "an on that joins a running composer turn (turn/steer) counts for nothing");
+  assert.deepEqual(decide(upTo(2)), NONE, "an on sent with the queue's run-now trigger while a turn runs joins that turn: it counts for nothing");
+  assert.deepEqual(decide(upTo(3)), ON, "an on that starts a composer turn counts");
+  assert.deepEqual(decide(lines), OFF, "an off that joins a running turn counts");
+  // The same turns in the terminal UI (trigger user): Enter while Codex works joins the turn in the same way.
+  const tui = lines.map((o) => (o.payload.type === "task_started" ? started(o.payload.turn_id, "user") : o));
+  assert.deepEqual([decide(tui.slice(0, upTo(1).length)), decide(tui.slice(0, upTo(2).length)), decide(tui.slice(0, upTo(3).length)), decide(tui)], [NONE, NONE, ON, OFF], "trigger user");
+  // A real CLI 0.164.0 record: the on starts a TUI turn, then the off typed with Enter joins it.
+  const cli = withMode(RECORDS["tui-on-then-off"]);
+  const offAt = cli.findIndex((o) => o.payload.role === "user" && o.payload.content?.[0]?.text === "autopilot off");
+  assert.deepEqual([decide(cli.slice(0, offAt)), decide(cli)], [ON, OFF], "an on that starts a CLI user turn counts; the joined off counts");
+  // A queued on that runs as its own turn counts for nothing, as before (F-T677-12).
+  const onTurn = starts[3].payload.turn_id;
+  for (const trigger of ["composer_queue", "composer_queue_run_now"]) {
+    assert.deepEqual(decide(upTo(3).map((o) => (o === starts[3] ? started(onTurn, trigger) : o))), NONE, trigger);
+  }
+  // A shape that the reader does not know fails closed for an on and open for an off.
+  const on = users.find((o) => turnOf(o) === 3);
+  const at = lines.indexOf(on);
+  const before = (line) => [...lines.slice(0, at), line, ...lines.slice(at, upTo(3).length)];
+  const pass = on.payload.internal_chat_message_metadata_passthrough;
+  const message = (passthrough, text = "hello") => ({ ...on, payload: { ...on.payload, content: [{ type: "input_text", text }], internal_chat_message_metadata_passthrough: passthrough } });
+  assert.deepEqual(decide(before(message({ ...pass, content_item_metadata: [{ provenance: { type: "harness", hook: false } }] }))), ON, "Codex's own context before the on, as at a session's first turn");
+  assert.deepEqual(decide(before(message({ turn_id: pass.turn_id }))), NONE, "a message of the turn with no metadata before the on");
+  assert.deepEqual(decide(before(message({ ...pass, content_item_metadata: [{ provenance: { type: "user" } }, { provenance: { type: "harness" } }] }))), NONE, "a message of mixed provenance before the on");
+  assert.deepEqual(decide(before(message({ ...pass, content_item_metadata: [] }))), NONE, "a message with no metadata item before the on");
+  assert.deepEqual(decide(before(message({ ...pass, content_item_metadata: [{ provenance: { type: "tool" } }] }))), NONE, "a tool's message before the on");
+  const noTurn = (({ turn_id, ...rest }) => rest)(pass);
+  assert.deepEqual(decide([...lines.slice(0, at), message(noTurn, "autopilot on"), ...lines.slice(at + 1, upTo(3).length)]), NONE, "an on with no turn id");
+  assert.deepEqual(decide([...upTo(3), message(noTurn, "autopilot off")]), OFF, "an off with no turn id counts");
+});
+
 test("the switches agree with core's mode rules: an on counts only while sage mode is on (F-T663-2)", () => {
-  const turn = (trigger, ...texts) => [started(`turn-${trigger}`, trigger), ...texts.map((text) => owner(`turn-${trigger}`, text))];
   assert.deepEqual(decide([META, ...turn("user", "autopilot on", "sage mode")]), NONE, "probe A: the on while sage mode is off, then only the mode phrase");
   assert.deepEqual(decide([META, ...turn("user", "autopilot on")]), NONE, "the on alone: sage mode is off");
   assert.deepEqual(decide([META, ...turn("user", "sage mode", "autopilot on")]), ON, "the mode phrase, then the on");
@@ -92,14 +187,14 @@ test("the switches agree with core's mode rules: an on counts only while sage mo
   // A later session_meta (a startup or a fork) starts with both modes off, as a new mode file does.
   assert.deepEqual(decide([META, ...turn("user", "sage mode"), META, ...turn("exec", "autopilot on")]), NONE, "sage mode does not carry into a new session_meta");
 
-  // Every sequence of up to 4 owner switches, in turns that a person started, gives what core's switchModes gives.
+  // Every sequence of up to 4 owner switches, each starting a turn that a person started, gives what core's switchModes gives.
   const phrases = ["sage mode", "sage mode on", "sage mode off", "autopilot on", "autopilot off", "sage help"];
   const sequences = [[]];
   for (let length = 1; length <= 4; length++) for (const s of sequences.filter((q) => q.length === length - 1)) for (const p of phrases) sequences.push([...s, p]);
   assert.equal(sequences.length, 1 + 6 + 36 + 216 + 1296);
   let on = 0;
   for (const sequence of sequences) {
-    const lines = [META, started("t", "user"), ...sequence.map((text) => owner("t", text))];
+    const lines = [META, ...turn("user", ...sequence)];
     const core = {};
     for (const text of sequence) switchModes({ owner: true, text, all: text }, core, { autopilotOn: () => "" });
     const result = autopilotSwitch({ entries: lines, lines: lines.length }, { lines: 0 });
@@ -123,12 +218,12 @@ test("a resume writes no session_meta, so only the start mark keeps the earlier 
 });
 
 test("the boundary is the later of the last session_meta line and the start mark; the mark is required (F-T663-5)", () => {
-  const before = [META, started(TURN, "user"), owner(TURN, "sage mode"), owner(TURN, "autopilot on")];
+  const before = [META, started("mode-turn", "user"), owner("mode-turn", "sage mode"), started(TURN, "user"), owner(TURN, "autopilot on")];
   assert.deepEqual(decide([...before, META]), NONE, "a later session_meta line starts again");
   assert.deepEqual(decide([...before, META], 1), NONE, "an earlier mark does not move the boundary back");
-  assert.deepEqual(decide(before, 3), ON);
-  assert.deepEqual(decide(before, 4), NONE);
-  for (const from of [5, -1, 1.5, "1", null]) assert.deepEqual(decide(before, from), BAD_MARK, String(from));
+  assert.deepEqual(decide(before, 4), ON);
+  assert.deepEqual(decide(before, 5), NONE);
+  for (const from of [6, -1, 1.5, "1", null]) assert.deepEqual(decide(before, from), BAD_MARK, String(from));
   // No start mark refuses: no default line (such as 0) stands for a missing mark, so an on from before a resume never counts.
   const record = read(before);
   for (const mark of [undefined, null, 0, 3, "3", []]) assert.deepEqual(autopilotSwitch(record, mark), NO_MARK, JSON.stringify(mark));
@@ -136,8 +231,7 @@ test("the boundary is the later of the last session_meta line and the start mark
   assert.deepEqual(autopilotSwitch(record, { session: "s", source: "resume", lines: 3, pid: 7 }), ON, "the mark as start-mark.mjs saves it");
 });
 
-test("switches: exact phrases only; off from any owner message, on only in a turn of trigger user or exec", () => {
-  const turn = (trigger, ...texts) => [started(`turn-${trigger}`, trigger), ...texts.map((text) => owner(`turn-${trigger}`, text))];
+test("switches: exact phrases only; off from any owner message, on only in a turn of trigger user, exec or composer", () => {
   const mode = turn("user", "sage mode");
   assert.deepEqual(decide([META, ...mode, ...turn("exec", "autopilot on")]), ON);
   assert.deepEqual(decide([META, ...mode, ...turn("exec", "  Autopilot ON. ")]), ON, "core's exact phrase: letter case, spaces at the ends, one full stop");
@@ -155,22 +249,23 @@ test("switches: exact phrases only; off from any owner message, on only in a tur
 
 test("only the owner's message counts: one metadata item with provenance user for each content item; an on needs text only, an off does not", () => {
   const user = started(TURN, "user");
-  const mode = owner(TURN, "sage mode");
-  assert.deepEqual(decide([META, user, mode, owner(TURN, "autopilot on")]), ON, "the owner's own message");
-  assert.deepEqual(decide([META, user, mode, owner(TURN, "autopilot on", ["user", "harness"])]), NONE, "mixed provenance");
-  assert.deepEqual(decide([META, user, mode, owner(TURN, "autopilot on", ["harness"])]), NONE);
-  assert.deepEqual(decide([META, user, mode, owner(TURN, "autopilot on", [])]), NONE, "no provenance");
+  /** The mode phrase in a turn of its own, then the start of the turn TURN. */
+  const MODE = [META, started("mode-turn", "user"), owner("mode-turn", "sage mode"), user];
+  assert.deepEqual(decide([...MODE, owner(TURN, "autopilot on")]), ON, "the owner's own message");
+  assert.deepEqual(decide([...MODE,owner(TURN, "autopilot on", ["user", "harness"])]), NONE, "mixed provenance");
+  assert.deepEqual(decide([...MODE,owner(TURN, "autopilot on", ["harness"])]), NONE);
+  assert.deepEqual(decide([...MODE,owner(TURN, "autopilot on", [])]), NONE, "no provenance");
   // Probe C: two content items and one metadata item. The second item has no provenance, so the message is no owner's.
   const short = owner(TURN, "autopilot", ["user", "user"]);
   short.payload = { ...short.payload, content: [{ type: "input_text", text: "autopilot" }, { type: "input_text", text: " on" }],
     internal_chat_message_metadata_passthrough: { ...short.payload.internal_chat_message_metadata_passthrough, content_item_metadata: [{ provenance: { type: "user" } }] } };
-  assert.deepEqual(decide([META, user, mode, short]), NONE, "probe C: two content items with one metadata item");
+  assert.deepEqual(decide([...MODE,short]), NONE, "probe C: two content items with one metadata item");
   const long = owner(TURN, "autopilot on");
   long.payload = { ...long.payload, internal_chat_message_metadata_passthrough: { ...long.payload.internal_chat_message_metadata_passthrough, content_item_metadata: [{ provenance: { type: "user" } }, { provenance: { type: "user" } }] } };
-  assert.deepEqual(decide([META, user, mode, long]), NONE, "one content item with two metadata items");
+  assert.deepEqual(decide([...MODE,long]), NONE, "one content item with two metadata items");
   const image = owner(TURN, "autopilot on");
   image.payload = { ...image.payload, content: [...image.payload.content, { type: "input_image", image_url: "data:" }], internal_chat_message_metadata_passthrough: { ...image.payload.internal_chat_message_metadata_passthrough, content_item_metadata: [{ provenance: { type: "user" } }, { provenance: { type: "user" } }] } };
-  assert.deepEqual(decide([META, user, mode, image]), NONE, "an image beside the phrase");
+  assert.deepEqual(decide([...MODE,image]), NONE, "an image beside the phrase");
   // F-T663-11: Codex gives the sage hook only the text items of a message (0.160 UserMessageItem::message() joins them),
   // so an off phrase with an image switches the hook off. The reader counts that off too; an on still needs text only.
   /** An owner's message of these items, each with this provenance. */
@@ -183,21 +278,79 @@ test("only the owner's message counts: one metadata item with provenance user fo
   const picture = { type: "input_image", image_url: "data:" };
   const on = owner(TURN, "autopilot on");
   for (const off of ["autopilot off", "sage mode off", " Autopilot OFF. "]) {
-    assert.deepEqual(decide([META, user, mode, on, items([{ type: "input_text", text: off }, picture])]), OFF, `${off} with an image after it`);
-    assert.deepEqual(decide([META, user, mode, on, items([picture, { type: "input_text", text: off }])]), OFF, `${off} with an image before it`);
+    assert.deepEqual(decide([...MODE,on, items([{ type: "input_text", text: off }, picture])]), OFF, `${off} with an image after it`);
+    assert.deepEqual(decide([...MODE,on, items([picture, { type: "input_text", text: off }])]), OFF, `${off} with an image before it`);
   }
-  assert.deepEqual(decide([META, user, mode, on, items([{ type: "input_text", text: "autopilot" }, picture, { type: "input_text", text: " off" }])]), OFF, "text items joined, as Codex joins them");
-  assert.deepEqual(decide([META, user, mode, on, items([{ type: "input_text", text: "autopilot off" }, picture], "harness")]), ON, "an off that is not the owner's");
-  assert.deepEqual(decide([META, user, mode, on, items([picture])]), ON, "an image alone");
-  assert.deepEqual(decide([META, user, items([{ type: "input_text", text: "sage mode" }, picture]), on]), NONE, "the mode phrase with an image turns no mode on");
-  assert.deepEqual(decide([META, user, mode, items([{ type: "input_text", text: "autopilot on" }, picture])]), NONE, "the on phrase with an image counts for nothing");
+  assert.deepEqual(decide([...MODE,on, items([{ type: "input_text", text: "autopilot" }, picture, { type: "input_text", text: " off" }])]), OFF, "text items joined, as Codex joins them");
+  // F-T663-27: an off counts from any user message, also one that is not provably the owner's: an extra off only makes merges wait.
+  assert.deepEqual(decide([...MODE,on, items([{ type: "input_text", text: "autopilot off" }, picture], "harness")]), OFF, "an off with another provenance");
+  assert.deepEqual(decide([...MODE,on, items([picture])]), ON, "an image alone");
+  const onTurn = [started("on-turn", "user"), owner("on-turn", "autopilot on")];
+  assert.deepEqual(decide([META, user, items([{ type: "input_text", text: "sage mode" }, picture]), ...onTurn]), ON, "the mode phrase with an image turns sage mode on, as in the hook (F-T663-23)");
+  assert.deepEqual(decide([META, user, items([{ type: "input_text", text: "sage mode" }, picture], "harness"), ...onTurn]), NONE, "but only the owner's");
+  assert.deepEqual(decide([...MODE,items([{ type: "input_text", text: "autopilot on" }, picture])]), NONE, "the on phrase with an image counts for nothing");
   const developer = owner(TURN, "autopilot on");
   developer.payload = { ...developer.payload, role: "developer" };
-  assert.deepEqual(decide([META, user, mode, developer]), NONE);
+  assert.deepEqual(decide([...MODE,developer]), NONE);
   // The UserMessage event that Codex also writes (the legacy replay read it) is no owner message here.
   const event = RECORDS["exec-on"].find((o) => o.payload.type === "item_completed" && o.payload.item?.type === "UserMessage");
   assert.equal(event.payload.item.content[0].text, "autopilot on");
-  assert.deepEqual(decide([META, user, mode, event]), NONE);
+  assert.deepEqual(decide([...MODE,event]), NONE);
+});
+
+test("F-T663-11, F-T663-18: a real Codex 0.164.0 record: the off phrase sent with a local image, inside Codex's image tags, turns autopilot off", () => {
+  // R2690 made this record with the Codex CLI 0.164.0 in a scratch home: codex exec with the mode phrase, a resume with
+  // the on phrase, and a resume with the off phrase and --image. Codex wraps the image in two text items of its own.
+  const lines = RECORDS["image-off"];
+  const off = lines.filter((o) => o.payload.role === "user").at(-1).payload;
+  assert.deepEqual(off.content.map((c) => c.text ?? c.type), ['<image name=[Image #1] path="/fixture/proj/dot.png">', "input_image", "</image>", "autopilot off"]);
+  assert.deepEqual(off.internal_chat_message_metadata_passthrough.content_item_kinds, ["user.text", "user.image", "user.text", "user.text"]);
+  assert.deepEqual(decide(lines.slice(0, lines.indexOf(lines.find((o) => o.payload === off)))), ON, "before the off: the mode phrase, then the on");
+  assert.deepEqual(decide(lines), OFF, "the off with the image");
+  // Codex's note for an image that it could not read is no text of the owner's (a harness item of its own kind).
+  const note = { ...lines.find((o) => o.payload === off), payload: { ...off, content: [off.content[0], { type: "input_text", text: "image content omitted because it could not be processed" }, off.content[2], off.content[3]],
+    internal_chat_message_metadata_passthrough: { ...off.internal_chat_message_metadata_passthrough, content_item_kinds: ["user.text", "images.preparation_error", "user.text", "user.text"],
+      content_item_metadata: [{ provenance: { type: "user" } }, { provenance: { type: "harness", hook: false } }, { provenance: { type: "user" } }, { provenance: { type: "user" } }] } } };
+  // Without the off's UserMessage event, which would count the off by itself.
+  const offEvent = (o) => o.payload.item?.type === "UserMessage" && o.payload.item.content.some((c) => c.text === "autopilot off");
+  assert.deepEqual(decide([...lines.filter((o) => o.payload !== off && !offEvent(o)), note]), OFF, "an image that Codex could not read");
+  assert.deepEqual(decide(lines.filter((o) => !offEvent(o))), OFF, "the off message alone, without its event");
+});
+
+test("F-T663-23: a real Codex 0.164.0 record: the mode phrase sent with a local image turns sage mode on, as the mode hook does", () => {
+  const lines = RECORDS["image-mode"];
+  assert.deepEqual(lines.filter((o) => o.payload.role === "user").slice(1).map((o) => o.payload.content.map((c) => c.text ?? c.type).at(-1)), ["sage mode", "autopilot on"]);
+  assert.deepEqual(decide(lines), ON);
+  // The on phrase still counts only alone: with an image it counts for nothing.
+  const on = lines.filter((o) => o.payload.role === "user").at(-1);
+  const image = RECORDS["image-off"].filter((o) => o.payload.role === "user").at(-1).payload;
+  const onWithImage = { ...on, payload: { ...on.payload, content: [...image.content.slice(0, 3), { type: "input_text", text: "autopilot on" }],
+    internal_chat_message_metadata_passthrough: { ...on.payload.internal_chat_message_metadata_passthrough, content_item_kinds: image.internal_chat_message_metadata_passthrough.content_item_kinds,
+      content_item_metadata: image.internal_chat_message_metadata_passthrough.content_item_metadata } } };
+  assert.deepEqual(decide(lines.map((o) => (o === on ? onWithImage : o))), NONE);
+});
+
+test("F-T663-27: an off counts from any user message, with missing, short or long metadata, and from Codex's UserMessage event", () => {
+  const user = started(TURN, "user");
+  const base = [META, started("mode-turn", "user"), owner("mode-turn", "sage mode"), user, owner(TURN, "autopilot on")];
+  const off = owner(TURN, "autopilot off");
+  const pass = off.payload.internal_chat_message_metadata_passthrough;
+  const shapes = {
+    "no metadata": { ...off.payload, internal_chat_message_metadata_passthrough: { turn_id: TURN } },
+    "no passthrough": (({ internal_chat_message_metadata_passthrough, ...rest }) => rest)(off.payload),
+    "two metadata items for one content item": { ...off.payload, internal_chat_message_metadata_passthrough: { ...pass, content_item_metadata: [{ provenance: { type: "user" } }, { provenance: { type: "user" } }] } },
+    "no metadata item": { ...off.payload, internal_chat_message_metadata_passthrough: { ...pass, content_item_metadata: [] } },
+    "a tool provenance": { ...off.payload, internal_chat_message_metadata_passthrough: { ...pass, content_item_metadata: [{ provenance: { type: "tool" } }] } },
+  };
+  for (const [name, payload] of Object.entries(shapes)) {
+    assert.deepEqual(decide([...base, { ...off, payload }]), OFF, name);
+    assert.deepEqual(decide([...base, { ...off, payload: { ...payload, content: [{ type: "input_text", text: "sage mode off" }] } }]), OFF, `${name}: the mode phrase's off form`);
+    assert.deepEqual(decide([...base, { ...off, payload: { ...payload, content: [{ type: "input_text", text: "autopilot on" }] } }]), ON, `${name}: no on of its own`);
+  }
+  const event = RECORDS["exec-on"].find((o) => o.payload.type === "item_completed" && o.payload.item?.type === "UserMessage");
+  const offEvent = { ...event, payload: { ...event.payload, item: { ...event.payload.item, content: [{ type: "local_image", path: "/fixture/a.png" }, { type: "text", text: "autopilot off" }] } } };
+  assert.deepEqual(decide([...base, offEvent]), OFF, "the UserMessage event of the off, with its image");
+  assert.deepEqual(decide([META, user, owner(TURN, "sage mode"), { ...event, payload: { ...event.payload, item: { ...event.payload.item, content: [{ type: "text", text: "autopilot on" }] } } }]), NONE, "an on from the event counts for nothing");
 });
 
 test("the record format fails closed: each unknown or broken record refuses", () => {
@@ -218,10 +371,11 @@ test("the record format fails closed: each unknown or broken record refuses", ()
   for (const { refused } of [FORM("line 6 is not JSON"), unread("ENOENT"), noRecord]) assertPlain(refused);
 });
 
-test("Codex versions: 0.164 to 0.166 in the strict form read; any other version refuses", () => {
+test("Codex versions: 0.164 to 0.167 in the strict form read; any other version refuses (F-T677-16)", () => {
   const record = withMode(RECORDS["exec-on"]);
-  for (const version of ["0.164.0", "0.165.3", "0.166.0", "0.166.0-alpha.6", "0.166.12"]) assert.deepEqual(decide([meta(version), ...record.slice(1)]), ON, version);
-  for (const version of ["0.163.9", "0.167.0", "0.170.0", "1.164.0", "0.164", "0.164.0.1", "0.164.01", "v0.164.0", " 0.164.0", "0.164.0-alpha", "0.164.0+build", "0.164.0-alpha.6\n", undefined, 164]) {
+  for (const version of ["0.164.0", "0.165.3", "0.166.0", "0.166.0-alpha.6", "0.166.12", "0.167.0", "0.167.0-alpha.3.2", "0.167.2-beta.1"]) assert.deepEqual(decide([meta(version), ...record.slice(1)]), ON, version);
+  for (const version of ["0.163.9", "0.168.0", "0.168.0-alpha.1", "0.170.0", "1.0.0", "1.164.0", "1.167.0", "0.164", "0.164.0.1", "0.164.01", "v0.164.0", " 0.164.0", "0.164.0-alpha",
+    "0.167.0-alpha.", "0.167.0-alpha..3", "0.167.0-alpha.3.", "0.167.0-alpha.03", "0.167.0-3.2", "0.164.0+build", "0.164.0-alpha.6\n", undefined, 164]) {
     assert.deepEqual(decide([meta(version), ...record.slice(1)]), VERSION(version), String(version));
   }
   assertPlain(VERSION("0.170.0").refused);
@@ -266,15 +420,20 @@ test("turnAborted finds Codex's turn_aborted event of that turn only (Esc)", () 
 const SESSION = "019a0000-0000-7000-8000-00000000c0de";
 /** The record of the session's root thread: a proof record whose session_meta names the session, with sage mode and an on. */
 const ROOT_RECORD = withMode([{ ...META, payload: { ...META.payload, id: SESSION } }, ...RECORDS["exec-on"].slice(1)]);
-/** A scratch home for the hooks, with the root thread's record. */
+/** A scratch home for the hooks, with the root thread's record, named as Codex names it: rollout-<time>-<thread id>.jsonl. */
 function hookHome() {
   const home = realpathSync(mkdtempSync(join(SCRATCH, "home-")));
   const env = { PATH: process.env.PATH, HOME: home, CODEX_HOME: join(home, "codex"), SAGE_HOME: join(home, "sage"), SAGE_SHARED_HOME: process.env.SAGE_SHARED_HOME };
-  return { env, transcript: recordFile(ROOT_RECORD), dir: modeDirectory(env) };
+  const transcript = join(home, `rollout-2026-11-07T09-00-00-${SESSION}.jsonl`);
+  writeFileSync(transcript, ROOT_RECORD.map((line) => JSON.stringify(line)).join("\n") + "\n");
+  return { env, transcript, dir: modeDirectory(env) };
 }
-/** The limit line when the hook cannot count the record (F-T663-12), and when it cannot write a folder (F-T663-13, F-T663-16). */
-const RECORD_LINE = (detail) => `sage: the sage hook could not read Codex's record of this session, so autopilot merges nothing until the session starts again. Start or resume the session again${detail ? ` (${detail})` : ""}.`;
-const FOLDER_LINE = (folder, code) => `sage: the sage hook could not save its note of this session start, so autopilot merges nothing until the session starts again. Check that sage can write to the folder ${folder} (${code}), then start or resume the session again.`;
+/**
+ * The limit line when the hook cannot count the record (F-T663-12), and when it cannot write a folder (F-T663-13,
+ * F-T663-16). F-T663-26: now that autopilot can be on, the line says that merges wait in this session, and both steps.
+ */
+const RECORD_LINE = (detail) => `sage: the sage hook could not read Codex's record of this session, so autopilot merges nothing in this session for now. Start or resume the session again${detail ? ` (${detail})` : ""}, then send "autopilot on" again.`;
+const FOLDER_LINE = (folder, code) => `sage: the sage hook could not save its note of this session start, so autopilot merges nothing in this session for now. Check that sage can write to the folder ${folder} (${code}), then start or resume the session again, then send "autopilot on" again.`;
 const limits = (output) => (output?.systemMessage ?? "").split("\n").filter((line) => /note of this session start|record of this session/.test(line));
 /** Run one built hook on a SessionStart event of the session; its output object, or undefined. */
 function start(h, script, source, extra = {}) {
@@ -342,9 +501,9 @@ test("a start whose record is another thread's saves no mark and keeps the root 
   }
 });
 
-test("a start of a new record before Codex writes it marks line 0, only for a session with no mark; a partial last line counts", () => {
+test("a start of the root thread's new record before Codex writes it marks line 0; a partial last line counts", () => {
   // Startup, clear and fork start a new record (a new thread id), which can be empty when the hook runs. The reader
-  // starts at its session_meta anyway, so line 0 lets no earlier on count.
+  // starts at its session_meta anyway, so line 0 lets no earlier on count. The record's file name holds the session id.
   for (const source of ["startup", "clear", "fork"]) {
     const h = hookHome();
     rmSync(h.transcript);
@@ -354,30 +513,49 @@ test("a start of a new record before Codex writes it marks line 0, only for a se
     start(h, HOOK_OF[source], source);
     assert.equal(markOf(h).lines, 2, `${source}: a partial last line counts as a line`);
   }
-  // A session that has a mark already has a record: a start that cannot show it is the root thread's (a thread whose
-  // record Codex has not written, F-T663-10) saves no line 0 over it. It removes the mark, so the reader refuses.
+});
+
+test("F-T663-19, F-T663-25: another thread's start before its record exists, or with no record, changes no mark, also after a resume", () => {
+  // The attack of F-T663-25 (R2682): the owner turns autopilot on, then resumes, so the mark is at the resume. Starts of
+  // another thread whose record Codex has not written (its file name holds its own thread id), or with no record path,
+  // then come. If one saved line 0, the on from before the resume would count again; if one removed the mark, each
+  // Codex review would turn autopilot off (F-T663-19). Now the root thread's mark stays, and the earlier on stays out.
   for (const source of ["startup", "clear", "fork"]) {
-    const h = hookHome();
-    start(h, HOOK_OF.startup, "startup");
-    assert.equal(markOf(h).lines, ROOT_RECORD.length);
-    const output = start(h, HOOK_OF[source], source, { transcript_path: join(SCRATCH, "not-written-yet.jsonl") });
-    assert.deepEqual(limits(output), [RECORD_LINE()], source);
-    assert.equal(markOf(h), undefined, source);
+    for (const [name, path] of [["a record not written yet", join(SCRATCH, "rollout-2026-11-07T09-00-01-019a0000-0000-7000-8000-0000000c41d0.jsonl")], ["no record path", undefined], ["an empty path", ""]]) {
+      const h = hookHome();
+      start(h, HOOK_OF.resume, "resume");
+      const root = markOf(h);
+      assert.equal(root.lines, ROOT_RECORD.length);
+      for (let i = 0; i < 2; i++) {
+        assert.deepEqual(limits(start(h, HOOK_OF[source], source, { transcript_path: path })), [], `${source}, ${name}: no limit line`);
+        assert.deepEqual(markOf(h), root, `${source}, ${name}: the root thread's mark stays (start ${i + 1})`);
+      }
+      assert.deepEqual(autopilotSwitch(readRecord(h.transcript), markOf(h)), NONE, `${source}, ${name}: the on from before the resume does not count`);
+    }
   }
+  // And after a resume whose record could not be read: no mark, and another thread's start saves none (R2682 variant 2).
+  const h = hookHome();
+  start(h, HOOK_OF.resume, "resume");
+  chmodSync(h.transcript, 0o000);
+  try { assert.deepEqual(limits(start(h, HOOK_OF.resume, "resume")), [RECORD_LINE("EACCES")]); } finally { chmodSync(h.transcript, 0o600); }
+  assert.equal(markOf(h), undefined);
+  start(h, HOOK_OF.startup, "startup", { transcript_path: join(SCRATCH, "rollout-2026-11-07T09-00-02-019a0000-0000-7000-8000-0000000c41d1.jsonl") });
+  start(h, HOOK_OF.clear, "clear", { transcript_path: undefined });
+  assert.equal(markOf(h), undefined, "no mark: the reader refuses until the session starts again");
 });
 
 test("a resume whose record cannot be counted saves no mark, removes the earlier one, and gives a limit line (F-T663-12)", () => {
   // A resume continues a record that holds the earlier starts: line 0 would let an on from before the resume count.
-  for (const [name, path] of [["a record that is not found", join(SCRATCH, "missing.jsonl")], ["no record path", undefined], ["an empty path", ""]]) {
+  for (const [name, path, code] of [["a record that is not found", join(SCRATCH, "missing.jsonl"), "ENOENT"], ["no record path", undefined], ["an empty path", ""]]) {
     const h = hookHome();
     start(h, HOOK_OF.startup, "startup");
     assert.ok(markOf(h), name);
     const output = start(h, HOOK_OF.resume, "resume", { transcript_path: path });
-    assert.deepEqual(limits(output), [RECORD_LINE()], name);
+    assert.deepEqual(limits(output), [RECORD_LINE(code)], name);
     assert.equal(output.hookSpecificOutput.hookEventName, "SessionStart", `${name}: the event's own answer stays`);
     assert.equal(markOf(h), undefined, `${name}: no mark, so the reader refuses`);
     const fresh = hookHome();
-    assert.deepEqual(limits(start(fresh, HOOK_OF.resume, "resume", { transcript_path: path })), [RECORD_LINE()], `${name}, no earlier mark`);
+    assert.deepEqual(limits(start(fresh, HOOK_OF.resume, "resume", { transcript_path: path })), [RECORD_LINE(code)], `${name}, no earlier mark`);
     assert.equal(markOf(fresh), undefined, name);
   }
 });
@@ -408,5 +586,17 @@ test("a failed mark save gives the user a plain limit line with its next step, n
       assert.ok(limits(start(blocked, HOOK_OF[source], source)).includes(FOLDER_LINE(blocked.dir, "EACCES")), source);
       assert.equal(markOf(blocked), undefined);
     } finally { chmodSync(dirname(blocked.dir), 0o700); }
+  }
+});
+
+test("F-T663-20: when the mode folder cannot change and has no marks folder, the line names the mode folder, which is there", () => {
+  for (const source of ["startup", "fork"]) {
+    const h = hookHome();
+    mkdirSync(h.dir, { recursive: true, mode: 0o700 });
+    chmodSync(h.dir, 0o500);
+    try {
+      assert.deepEqual(limits(start(h, HOOK_OF[source], source)).filter((line) => line.includes("note of this session start")), [FOLDER_LINE(h.dir, "EACCES")], source);
+    } finally { chmodSync(h.dir, 0o700); }
+    assert.equal(existsSync(join(h.dir, "marks")), false);
   }
 });

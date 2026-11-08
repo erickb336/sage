@@ -1,6 +1,7 @@
 #!/usr/bin/env node
 // Codex SessionStart hook: one short sage status at the start of a session, for the owner (systemMessage) and the
-// model (additionalContext). Startup and resume reset legacy autopilot before status. Startup, resume and clear save the
+// model (additionalContext). Startup and resume turn autopilot off in the mode file before status, as a new start does
+// in Claude; the owner record reader needs a new on after the start mark anyway. Startup, resume and clear save the
 // session's start mark (start-mark.mjs); a failed save is a limit line and never blocks. One script for each event, after
 // oh-my-codex (MIT, github.com/Yeachan-Heo/oh-my-codex).
 import { readFileSync, realpathSync } from "node:fs";
@@ -14,7 +15,7 @@ import { modeDirectory, TESTED_CODEX } from "./sage-codex-hook.mjs";
 import { saveStartMark } from "./start-mark.mjs";
 
 const ON_PHRASE = Object.keys(PHRASES).find((phrase) => PHRASES[phrase].sage === true);
-const RESET_UNAVAILABLE = "sage: autopilot reset is unavailable. The hook could not confirm the saved mode. Automatic merging remains unavailable in Codex.";
+const RESET_UNAVAILABLE = 'sage: the hook could not turn autopilot off in the saved mode of this session. Autopilot still merges nothing until the owner sends "autopilot on" again in this session.';
 
 const readJson = (path) => JSON.parse(readFileSync(path, "utf8"));
 const minor = (version) => /^(\d+)\.(\d+)/.exec(version)?.slice(1).map(Number);
@@ -58,7 +59,7 @@ function sageOn(input, env) {
   try { return readModeFile(readState, join(modeDirectory(env), `${stateKey(input)}.json`)).state.sage === true; } catch { return false; }
 }
 
-/** Reset legacy state before status. Merge refusal does not depend on this write. */
+/** Turn autopilot off before status. The gate does not depend on this write: the start mark ends every earlier on. */
 function resetAutopilot(input, env) {
   if (input.source !== "startup" && input.source !== "resume") return undefined;
   if (typeof input.session_id !== "string" || !input.session_id || "agent_id" in input) return RESET_UNAVAILABLE;
@@ -97,7 +98,7 @@ export function sessionStatus(input, { pluginRoot, codexHome, env = process.env 
   const status = [
     `sage ${plugin} is installed. Codex ${version ?? "version unknown"}. sage hooks: ${trusted} of ${keys.length} have a trust record (Codex checks each hash).`,
     sageOn(input, env) ? "sage mode is on in this session." : `To start sage mode, the user sends this message alone: ${ON_PHRASE}`,
-    "Automatic merging is unavailable in Codex. Sage prepares the checks; the owner merges directly in GitHub.",
+    'Autopilot is off at each start of a session. To turn it on, the user sends "autopilot on" alone, while sage mode is on.',
     ...limits,
   ].join("\n");
   return { ...(limits.length ? { systemMessage: limits.join("\n") } : {}), hookSpecificOutput: { hookEventName: "SessionStart", additionalContext: status } };

@@ -97,8 +97,8 @@ Give each round to a fresh agent, with the original brief, the later decisions a
 - **A round hold** resumes only after the owner explicitly answers approve: ask the gate that the tool's refusal names, with no default, and use each approval once. The sage skill has the steps.
 - **A change log built on main only** (sage): the project's CONTRIBUTING.md has its rules. After task pull requests merge, frame a tiny task with one implementer run that opens the change-log pull request.
 - **Autopilot off** (the start): the work stops at verified, and the user merges the pull request.
-- **Automatic merging is unavailable in Codex.** No phrase, saved mode or configuration flag enables it. Sage prepares the checks; the owner merges directly in GitHub. Never push to main, force-push, or change branch protection on another provider's approval.
-- Keep both required review and QA cycles for auth, input and data risks, even with autopilot off. Hand off only after CI passes on the final head, both cycles pass and `merge_check` passes. Give the owner the PR link, exact head SHA and evidence. A passing check grants no merge authority.
+- **Autopilot off:** the user merges. Report the PR link, exact head SHA and evidence. Never push to main, force-push, or change branch protection on another provider's approval.
+- **Autopilot on** ("autopilot on" alone): the task's lead runs the task's count of clean cycles. After CI passes on the final head, record checks-pass, move the task to verified, and run `merge_check`. Then run sage's merge command from the main thread, escalated, as one command with no other words: `"<node>" "<plugin>/skills/sage/merge.mjs" <n> <sha>`, with the exact paths of the hook's note. The plugin's hook admits only this exact command, while autopilot is on and the merge check passes: no prompt. Never merge with `gh pr merge`: the hook refuses it. When the hook or the command refuses, report the PR as ready with the reason; the owner merges.
 - Always ask the user first, also on autopilot: a deploy, deleting data, a force-push, closing a pull request that is not ours.
 
 ## The arena

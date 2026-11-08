@@ -33,10 +33,20 @@ function run(stdin, env = {}) {
 }
 
 let sessions = 0;
-/** A Codex session: prompt() and start() send the documented UserPromptSubmit and SessionStart inputs. */
-function session(env) {
+/**
+ * A Codex session: prompt() and start() send the documented UserPromptSubmit and SessionStart inputs. Its main thread
+ * has Codex's record, whose first line is session_meta, as in Codex 0.164.0: meta adds to it (forked_from_id for a
+ * fork), and meta null gives no record (a side conversation, an ephemeral fork).
+ */
+function session(env, meta = {}) {
   const id = `019a${String(++sessions).padStart(4, "0")}-0000-7000-8000-000000000000`;
-  const base = { session_id: id, transcript_path: null, cwd: scratch, model: "fixture", permission_mode: "default" };
+  let transcript = null;
+  if (meta !== null) {
+    mkdirSync(join(scratch, "records"), { recursive: true });
+    transcript = join(scratch, "records", `rollout-2026-11-07T00-00-00-${id}.jsonl`);
+    writeFileSync(transcript, JSON.stringify({ type: "session_meta", payload: { id, session_id: id, cli_version: "0.164.0", source: "cli", ...meta } }) + "\n");
+  }
+  const base = { session_id: id, transcript_path: transcript, cwd: scratch, model: "fixture", permission_mode: "default" };
   const send = (fields) => run(JSON.stringify({ ...base, ...fields }), env);
   return {
     id,
@@ -60,18 +70,6 @@ async function modes(s) {
 }
 const ROLE = /^sage: sage mode is on\. You are the user's chief of staff until the user sends the message "sage mode off", alone\.\n\nThe state tool, for reads only: node "[^"]+\/skills\/sage\/sage\.mjs" <command> --project <path>\. Write the logbook only with the sage MCP tools\.\n/;
 
-test("T115: exact autopilot on is unavailable, including repeats and saved true", async () => {
-  const s = session();
-  for (const sage of [false, true]) {
-    mkdirSync(MODE_DIR, { recursive: true, mode: 0o700 });
-    writeFileSync(modeFile(s), JSON.stringify({ sage, autopilot: true, given: true }), { mode: 0o600 });
-    for (const phrase of ["autopilot on", " AUTOPILOT ON. ", "autopilot on"]) {
-      assert.match(contextOf(await s.prompt(phrase)), /automatic merging is unavailable/);
-      assert.deepEqual(JSON.parse(readFileSync(modeFile(s), "utf8")), { sage, autopilot: false, given: true });
-    }
-  }
-});
-
 test("T453: the Claude hook's phrase table gives the same modes and near-miss notes in Codex", async () => {
   const got = await Promise.all(PHRASE_CASES.map(async ([why, before, message]) => {
     const s = session();
@@ -79,7 +77,7 @@ test("T453: the Claude hook's phrase table gives the same modes and near-miss no
     const note = contextOf(await s.prompt(message)) ?? "";
     return [why, await modes(s), NEAR_NOTE.exec(note)?.[1] ?? null];
   }));
-  assert.deepEqual(got, PHRASE_CASES.map(([why, , , after, near]) => [why, after.replace("autopilot on", "autopilot off"), near]));
+  assert.deepEqual(got, PHRASE_CASES.map(([why, , , after, near]) => [why, after, near]));
 });
 
 test("T453: the on phrase gives the chief role once; the off phrase ends it; a compaction gives it again only in sage mode", async () => {
@@ -100,21 +98,25 @@ test("T453: the on phrase gives the chief role once; the off phrase ends it; a c
   assert.match(contextOf(await s.prompt("SAGE MODE ON.")), ROLE, "the on phrase gives the role again");
 });
 
-test("T115: autopilot stays unavailable while ordinary Sage modes work", async () => {
+test("T677: the autopilot phrases record autopilot with no warning line; the chief gets the merge command, and confirms the switch", async () => {
   const s = session();
-  assert.match(contextOf(await s.prompt("autopilot on")), /automatic merging is unavailable/);
+  assert.deepEqual(await s.prompt("autopilot on"), { hookSpecificOutput: { hookEventName: "UserPromptSubmit", additionalContext: 'sage: autopilot did not switch on, because it turns on only while sage mode is on. Ask the user to send "sage mode" first, then "autopilot on", each as a message alone.' } });
   await s.prompt("sage mode");
-  assert.match(contextOf(await s.prompt("autopilot on")), /automatic merging is unavailable/);
-  assert.equal(await modes(s), "sage mode on, autopilot off");
-  assert.equal(await s.prompt("autopilot off"), undefined);
+  const on = await s.prompt("autopilot on");
+  assert.equal(on.systemMessage, undefined, "no warning line for a normal switch");
+  // T547: this test has no gh on PATH, so the protection read fails and the note says so (the cases with a fake gh are in branch-protection.test.mjs).
+  const node = process.execPath.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+  assert.match(contextOf(on), new RegExp(`^sage: autopilot is on\\. In Codex, autopilot merges verified work with sage's merge command\\. After a task's clean cycles and a passing merge_check, run it from the main thread, escalated, as one command with no other words: "${node}" "[^"]+/skills/sage/merge\\.mjs" <n> <sha>\\. The hook admits it only while autopilot is on and the merge check passes, with no prompt\\. sage could not check whether the default branch of this repository requires a pull request on GitHub\\. Autopilot still runs\\.\\n\\n---\\n\\nsage: confirm the switch to the user in one line of your reply: sage mode is on, and autopilot is on\\.$`));
+  assert.equal(await modes(s), "sage mode on, autopilot on");
+  assert.deepEqual(JSON.parse(readFileSync(modeFile(s), "utf8")).autopilot, true, "the mode file keeps autopilot on");
+  assert.deepEqual(await s.prompt("autopilot off"), { hookSpecificOutput: { hookEventName: "UserPromptSubmit", additionalContext: "sage: autopilot is off. Work stops at verified, and the user merges.\n\n---\n\nsage: in Codex, a merge that sage admitted before this off can still complete. Say so in the line that confirms the switch.\n\n---\n\nsage: confirm the switch to the user in one line of your reply: sage mode is on, and autopilot is off." } });
   assert.equal(await modes(s), "sage mode on, autopilot off");
 });
 
 test("T453: the help phrase says when to send a phrase and that autopilot merges verified work in Codex, with no board phrase or Claude command", async () => {
   const help = contextOf(await session().prompt("sage help"));
-  assert.match(help, /Automatic merging is unavailable in Codex\. Sage prepares the checks; the owner merges directly in GitHub\./);
-  assert.match(help, /"autopilot on": automatic merging is unavailable in Codex\./);
-  assert.doesNotMatch(help, /turns autopilot on/);
+  assert.match(help, /^Switches: send the phrase alone, as the whole message, in any letter case\. Spaces at the ends and one full stop are fine\. Any other message switches nothing\.\nSend an on phrase when Codex is idle\. With autopilot on, sage merges a pull request by itself after its clean reviews and checks\. To stop a merge now, press Esc: a merge whose call to GitHub has started still completes, and autopilot stays on\. An off phrase sent with Enter stops merges from Codex's next step, but not a merge that sage already admitted\. A phrase queued with Tab waits until the turn ends\.\n- "sage mode": turns sage mode on\.$/m);
+  assert.match(help, /"autopilot on": turns autopilot on, while sage mode is on\./);
   assert.doesNotMatch(help, /the hook allows|exact merge command|merge_check/, "the help list is in the user's words (R1665-5)");
   assert.doesNotMatch(help, /Board:|claude plugin update|Claude|switches when its turn starts/);
 });
@@ -127,7 +129,7 @@ test("T453: a review or guardian subsession's prompt, with the root session id a
     const output = contextOf(await s.prompt(prompt)) ?? "";
     got.push([why, await modes(s), /chief of staff|confirm the switch/.test(output)]);
   }
-  assert.deepEqual(got, SUBSESSION_PROMPTS.map(([why]) => [why, "sage mode on, autopilot off", false]));
+  assert.deepEqual(got, SUBSESSION_PROMPTS.map(([why]) => [why, "sage mode on, autopilot on", false]));
 });
 
 test("T453: a fork starts with sage mode off, and the chief gets one note to tell the user if its history shows the role", async () => {
@@ -137,16 +139,58 @@ test("T453: a fork starts with sage mode off, and the chief gets one note to tel
   assert.match(contextOf(await s.prompt("sage mode")), ROLE, "the on phrase gives the fork the role");
 });
 
-test("T453: a subagent's prompt switches nothing and gets no role, also with the parent's session id", async () => {
+/** The line in the thread of an off phrase that is not a main thread's (F-T677-29). */
+const OFF_LINE = (thread, mode = "") => `sage: you sent the off phrase in ${thread}, so autopilot is now off in every Codex session${mode}. To turn it on again, send "autopilot on" in the main thread of a session.`;
+
+test("T453, F-T677-24: a subagent's on phrase switches nothing and gets no role; its off phrase switches the main session, with one line in its thread", async () => {
   const s = session();
-  assert.equal(await s.prompt("sage mode", { agent_id: "agent-1", agent_type: "default" }), undefined);
+  const child = { agent_id: "agent-1", agent_type: "default" };
+  assert.equal(await s.prompt("sage mode", child), undefined);
   assert.equal(await modes(s), "sage mode off, autopilot off");
   await s.prompt("sage mode");
-  assert.equal(await s.prompt("sage mode off", { agent_id: "agent-1" }), undefined);
+  assert.equal(await s.prompt("autopilot on", child), undefined);
+  assert.equal(await modes(s), "sage mode on, autopilot off", "an on from a subagent's thread counts for nothing");
+  await s.prompt("autopilot on");
+  assert.deepEqual(await s.prompt("autopilot off", child), { systemMessage: OFF_LINE("a subagent's thread") });
   assert.equal(await modes(s), "sage mode on, autopilot off");
+  await s.prompt("autopilot on");
+  assert.deepEqual(await s.prompt("sage mode off", child), { systemMessage: OFF_LINE("a subagent's thread", ", and sage mode is off in this thread's session") });
+  assert.equal(await modes(s), "sage mode off, autopilot off");
+  assert.match(contextOf(await s.prompt("sage mode")), ROLE, "the main thread gets the role again at its next on");
 });
 
-const UNKNOWN = { systemMessage: "sage: the sage hook did not recognise this Codex event, so it switched no mode, and autopilot is off. Update the sage plugin, and keep Codex in the tested range (0.160 to 0.166)." };
+test("F-T677-24: an off phrase in a fork, or in a side conversation with no record, turns autopilot off in every session", async () => {
+  const main = session(), other = session();
+  for (const s of [main, other]) for (const m of S_ON) await s.prompt(m);
+  const fork = session(undefined, { forked_from_id: main.id });
+  assert.deepEqual(await fork.prompt("sage mode off"), { systemMessage: OFF_LINE("a fork") });
+  assert.deepEqual([await modes(main), await modes(other)], ["sage mode on, autopilot off", "sage mode on, autopilot off"], "only autopilot crosses");
+  for (const s of [main, other]) await s.prompt("autopilot on");
+  const side = session(undefined, null);
+  for (const m of S_ON) assert.equal((await side.prompt(m))?.systemMessage, undefined, "an on in a side conversation switches nothing outside it");
+  assert.equal((await side.prompt("autopilot off")).systemMessage, OFF_LINE("a thread with no record that sage can read (a side conversation has none)"));
+  assert.deepEqual([await modes(main), await modes(other)], ["sage mode on, autopilot off", "sage mode on, autopilot off"]);
+});
+
+test("F-T677-29: an off phrase in a fork of a fork, or in a subagent's thread of a fork, turns autopilot off in the first session; an on there counts for nothing", async () => {
+  const main = session(), fork = session(undefined, { forked_from_id: main.id }), forkOfFork = session(undefined, { forked_from_id: fork.id });
+  const forkChild = { agent_id: "agent-2", agent_type: "default" }; // a subagent of the fork: Codex gives it the fork's session id
+  for (const [name, off, line, forkModes] of [
+    ["a fork of a fork", () => forkOfFork.prompt("autopilot off"), OFF_LINE("a fork"), "sage mode on, autopilot off"],
+    ["a subagent's thread of a fork", () => fork.prompt("autopilot off", forkChild), OFF_LINE("a subagent's thread"), "sage mode on, autopilot off"],
+    ["the mode's off phrase in a subagent's thread of a fork", () => fork.prompt("sage mode off", forkChild), OFF_LINE("a subagent's thread", ", and sage mode is off in this thread's session"), "sage mode off, autopilot off"],
+  ]) {
+    for (const s of [main, fork, forkOfFork]) for (const m of S_ON) await s.prompt(m);
+    const out = await off();
+    assert.deepEqual([await modes(main), await modes(fork), await modes(forkOfFork)], ["sage mode on, autopilot off", forkModes, "sage mode on, autopilot off"], name);
+    assert.equal(out.systemMessage, line, `${name}: one line in that thread`);
+  }
+  for (const m of S_ON) assert.equal(await fork.prompt(m, forkChild), undefined, "an on in a subagent's thread of a fork switches nothing");
+  await forkOfFork.prompt("autopilot on");
+  assert.equal(await modes(main), "sage mode on, autopilot off", "an on in a fork or its subagent's thread never reaches the first session");
+});
+
+const UNKNOWN = { systemMessage: "sage: the sage hook did not recognise this Codex event, so it switched no mode, and autopilot is off. Update the sage plugin, and keep Codex in the tested range (0.164 to 0.167)." };
 
 test("T453: an unknown input shape switches nothing, turns autopilot off, and shows one plain line", async () => {
   const s = session();
@@ -172,7 +216,7 @@ test("T453: a damaged mode file turns sage mode and autopilot off, tells the use
     writeFileSync(file, damage);
     got.push([damage, await s.prompt("autopilot on"), JSON.parse(readFileSync(file, "utf8")), await s.start("compact"), await modes(s)]);
   }
-  const once = { systemMessage: `${DAMAGED} sage: automatic merging is unavailable in Codex. Sage prepares the checks; the owner merges directly in GitHub.`, hookSpecificOutput: { hookEventName: "UserPromptSubmit", additionalContext: DAMAGED_NOTE } };
+  const once = { systemMessage: DAMAGED, hookSpecificOutput: { hookEventName: "UserPromptSubmit", additionalContext: DAMAGED_NOTE } };
   assert.deepEqual(got, ["{not json", "[]", "null", '{"sage":"yes","autopilot":true}'].map((damage) => [damage, once, { sage: false, autopilot: false }, undefined, "sage mode off, autopilot off"]));
 });
 
@@ -264,7 +308,7 @@ test("T453: the README and the Codex guide say what the hook really does in Code
     "guide: the warning line, and that codex exec does not show it": found(guide, /gives Codex a warning line; the terminal UI and the app show it; `codex exec` does not\./),
     "guide: no claim that the hook shows one line": !found(guide, /and shows one line/),
     "guide: a damaged mode file": found(guide, /A damaged mode file turns sage mode and autopilot off/),
-    "guide: send a phrase when Codex is idle": found(guide, /Send a phrase when Codex is idle\./),
+    "guide: send a phrase when Codex is idle": found(guide, /Send an on phrase when Codex is idle\. An off phrase works at any time: sent with Enter while Codex works, it stops merges from Codex's next step\. A phrase that you queue with Tab waits until the turn ends\./),
     "guide: no exact phrase for a question": found(guide, /unless your message was a question/),
     "guide: the desktop app, not yet checked": found(guide, /desktop app.*This desktop path is not checked yet\./i),
     "guide: step 3 starts Codex with no flags and trusts the hooks": found(guide, /3\. Run `codex` in a project folder\. At the "Hooks need review" screen .*choose \*\*Trust all and continue\*\*/),
@@ -279,7 +323,7 @@ test("T462: the guide, the README and the CHANGELOG say what is checked in Codex
   assert.deepEqual({
     "guide: the Codex CLI on PATH, also for a desktop app user": /The Codex CLI on your PATH, in that range, also when you use only the desktop app: .*`npm install -g @openai\/codex@0\.164\.0`/.test(guide),
     "guide: the app's own plugin list is not checked": /An install from the app's own plugin list is not checked yet\./.test(guide),
-    "guide: checked on 0.164.0": /checked with the Codex CLI 0\.160\.0, 0\.164\.0 and 0\.166\.0/.test(guide),
+    "guide: checked on 0.164.0": /Codex 0\.164 to 0\.167\. sage was checked with the Codex CLI 0\.164\.0 and 0\.166\.0/.test(guide),
     "CHANGELOG: the desktop app should work the same way, not checked yet": /The Codex desktop app should work the same way, but it is not checked yet\./.test(entry) && !/in the CLI and the desktop app/.test(entry),
     "README: no claim that the desktop app is checked": !/the CLI or the desktop app: run/.test(readme),
     "guide: the reviewer writes that the hook does not block": /A write through `git apply`, `git commit`, a script file that `node` or `python` runs, or `make` is not blocked\./.test(guide),
@@ -348,11 +392,11 @@ test("T603: the Codex pages hold no v1 path for a task, and the guide gives the 
     assert.doesNotMatch(text, /AgentLimitReached|does the lead's work|do the lead's work|On multi-agent v1|Multi-agent v1\.|only in the `multi_agent_v1`|4 times/, name);
   }
   assert.match(guide, /sage on Codex needs a multi-agent v2 model for the chief and each child\./);
-  assert.match(guide, /Codex can ask for permission during ordinary Sage work before the owner merges\./);
+  assert.match(guide, /Codex can ask for permission during ordinary Sage work before a merge\./);
   assert.match(guide, /The following count describes the default `workspace-write` sandbox used in the pilot\./);
   assert.match(guide, /The count of 5 is for the first five rows, in one small task with separate commands\./);
   assert.match(guide, /A model that joins `git add` and `git commit` in one command gets one prompt for both\./);
-  assert.match(guide, /The sage hook never grants automatic approval through `PermissionRequest`\./);
+  assert.match(guide, /The sage hook allows no other approval through `PermissionRequest`: only the merge command that it admitted\./);
   assert.match(guide, /\| Read the pull request and its checks \(`gh pr view`, `gh pr checks`\) \| The chief's check of a ready task, before the merge \| It needs the network \|/);
   assert.match(guide, /- A multi-agent v2 model for the chief and each child\. In Codex 0\.164\.0's bundled catalog, the `gpt-6-sol` models are v2, and `gpt-5\.6-luna` is not/);
   const needs = guide.slice(guide.indexOf("## What you need"), guide.indexOf("## Install"));
