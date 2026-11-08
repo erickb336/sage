@@ -33,10 +33,20 @@ function run(stdin, env = {}) {
 }
 
 let sessions = 0;
-/** A Codex session: prompt() and start() send the documented UserPromptSubmit and SessionStart inputs. */
-function session(env) {
+/**
+ * A Codex session: prompt() and start() send the documented UserPromptSubmit and SessionStart inputs. Its main thread
+ * has Codex's record, whose first line is session_meta, as in Codex 0.164.0: meta adds to it (forked_from_id for a
+ * fork), and meta null gives no record (a side conversation, an ephemeral fork).
+ */
+function session(env, meta = {}) {
   const id = `019a${String(++sessions).padStart(4, "0")}-0000-7000-8000-000000000000`;
-  const base = { session_id: id, transcript_path: null, cwd: scratch, model: "fixture", permission_mode: "default" };
+  let transcript = null;
+  if (meta !== null) {
+    mkdirSync(join(scratch, "records"), { recursive: true });
+    transcript = join(scratch, "records", `rollout-2026-11-07T00-00-00-${id}.jsonl`);
+    writeFileSync(transcript, JSON.stringify({ type: "session_meta", payload: { id, session_id: id, cli_version: "0.164.0", source: "cli", ...meta } }) + "\n");
+  }
+  const base = { session_id: id, transcript_path: transcript, cwd: scratch, model: "fixture", permission_mode: "default" };
   const send = (fields) => run(JSON.stringify({ ...base, ...fields }), env);
   return {
     id,
@@ -129,16 +139,37 @@ test("T453: a fork starts with sage mode off, and the chief gets one note to tel
   assert.match(contextOf(await s.prompt("sage mode")), ROLE, "the on phrase gives the fork the role");
 });
 
-test("T453: a subagent's prompt switches nothing and gets no role, also with the parent's session id", async () => {
+test("T453, F-T677-24: a subagent's on phrase switches nothing and gets no role; its off phrase switches the main session, with one line in its thread", async () => {
   const s = session();
-  assert.equal(await s.prompt("sage mode", { agent_id: "agent-1", agent_type: "default" }), undefined);
+  const child = { agent_id: "agent-1", agent_type: "default" };
+  assert.equal(await s.prompt("sage mode", child), undefined);
   assert.equal(await modes(s), "sage mode off, autopilot off");
   await s.prompt("sage mode");
-  assert.equal(await s.prompt("sage mode off", { agent_id: "agent-1" }), undefined);
+  assert.equal(await s.prompt("autopilot on", child), undefined);
+  assert.equal(await modes(s), "sage mode on, autopilot off", "an on from a subagent's thread counts for nothing");
+  await s.prompt("autopilot on");
+  assert.deepEqual(await s.prompt("autopilot off", child), { systemMessage: "sage: you sent the off phrase in a subagent's thread, so autopilot is now off in the main session." });
   assert.equal(await modes(s), "sage mode on, autopilot off");
+  await s.prompt("autopilot on");
+  assert.deepEqual(await s.prompt("sage mode off", child), { systemMessage: "sage: you sent the off phrase in a subagent's thread, so sage mode and autopilot are now off in the main session." });
+  assert.equal(await modes(s), "sage mode off, autopilot off");
+  assert.match(contextOf(await s.prompt("sage mode")), ROLE, "the main thread gets the role again at its next on");
 });
 
-const UNKNOWN = { systemMessage: "sage: the sage hook did not recognise this Codex event, so it switched no mode, and autopilot is off. Update the sage plugin, and keep Codex in the tested range (0.160 to 0.166)." };
+test("F-T677-24: an off phrase in a fork turns autopilot off also in the session it came from; in a side conversation, with no record, in every session", async () => {
+  const main = session(), other = session();
+  for (const s of [main, other]) for (const m of S_ON) await s.prompt(m);
+  const fork = session(undefined, { forked_from_id: main.id });
+  assert.deepEqual(await fork.prompt("sage mode off"), { systemMessage: "sage: this thread is a fork, so autopilot is now off also in the session that this fork came from." });
+  assert.deepEqual([await modes(main), await modes(other)], ["sage mode on, autopilot off", "sage mode on, autopilot on"], "only autopilot crosses, and only to the parent");
+  await main.prompt("autopilot on");
+  const side = session(undefined, null);
+  for (const m of S_ON) assert.equal((await side.prompt(m))?.systemMessage, undefined, "an on in a side conversation switches nothing outside it");
+  assert.match((await side.prompt("autopilot off")).systemMessage, /^sage: Codex keeps no record of this thread that sage can read \(a side conversation has none\), so sage cannot tell which session it came from\. Autopilot is now off in every Codex session/);
+  assert.deepEqual([await modes(main), await modes(other)], ["sage mode on, autopilot off", "sage mode on, autopilot off"]);
+});
+
+const UNKNOWN = { systemMessage: "sage: the sage hook did not recognise this Codex event, so it switched no mode, and autopilot is off. Update the sage plugin, and keep Codex in the tested range (0.164 to 0.167)." };
 
 test("T453: an unknown input shape switches nothing, turns autopilot off, and shows one plain line", async () => {
   const s = session();
@@ -271,7 +302,7 @@ test("T462: the guide, the README and the CHANGELOG say what is checked in Codex
   assert.deepEqual({
     "guide: the Codex CLI on PATH, also for a desktop app user": /The Codex CLI on your PATH, in that range, also when you use only the desktop app: .*`npm install -g @openai\/codex@0\.164\.0`/.test(guide),
     "guide: the app's own plugin list is not checked": /An install from the app's own plugin list is not checked yet\./.test(guide),
-    "guide: checked on 0.164.0": /checked with the Codex CLI 0\.160\.0, 0\.164\.0 and 0\.166\.0/.test(guide),
+    "guide: checked on 0.164.0": /Codex 0\.164 to 0\.167\. sage was checked with the Codex CLI 0\.164\.0 and 0\.166\.0/.test(guide),
     "CHANGELOG: the desktop app should work the same way, not checked yet": /The Codex desktop app should work the same way, but it is not checked yet\./.test(entry) && !/in the CLI and the desktop app/.test(entry),
     "README: no claim that the desktop app is checked": !/the CLI or the desktop app: run/.test(readme),
     "guide: the reviewer writes that the hook does not block": /A write through `git apply`, `git commit`, a script file that `node` or `python` runs, or `make` is not blocked\./.test(guide),

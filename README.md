@@ -66,7 +66,7 @@ claude plugin update sage@sage
 
 ### In Codex
 
-Use the Codex CLI 0.160 to 0.166, and a multi-agent v2 model; the desktop app should work the same way, but it is not checked yet, and it needs the CLI for these commands. You also need Node.js 20 or later, `gh` logged in, and a GitHub remote for the project (see [What you need](docs/guide/codex.md#what-you-need)).
+Use the Codex CLI 0.164 to 0.167, and a multi-agent v2 model; the desktop app should work the same way, but it is not checked yet, and it needs the CLI for these commands. You also need Node.js 20 or later, `gh` logged in, and a GitHub remote for the project (see [What you need](docs/guide/codex.md#what-you-need)).
 
 1. Add the sage marketplace and install sage, in a terminal:
    ```sh

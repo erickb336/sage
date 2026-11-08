@@ -32,7 +32,7 @@ The Codex logbook is in `~/.codex/sage` (or `CODEX_HOME`), apart from Claude's. 
 
 ## What you need
 
-- Codex 0.160 to 0.166. sage was checked with the Codex CLI 0.160.0, 0.164.0 and 0.166.0 on macOS, with a test model. The desktop app carries its own Codex, which changes with the app: sage was checked with desktop 0.166.0-alpha.6, not with other versions.
+- Codex 0.164 to 0.167. sage was checked with the Codex CLI 0.164.0 and 0.166.0 on macOS, with a test model. The desktop app carries its own Codex, which changes with the app: sage was checked with the Codex of desktop 0.166.0-alpha.6 and 0.167.0-alpha.3.2, not with other versions.
 - The Codex CLI on your PATH, in that range, also when you use only the desktop app: the install commands below are CLI commands. To get it, run `npm install -g @openai/codex@0.164.0`.
 - Node.js 20 or later, on your PATH: the sage hooks are Node scripts.
 - `gh`, logged in (`gh auth login`), and a GitHub remote for the project. sage uses them for pull requests and the merge check; without them, work stops at a verified branch.
@@ -70,7 +70,7 @@ The Codex logbook is in `~/.codex/sage` (or `CODEX_HOME`), apart from Claude's. 
    The other limit is a Codex version outside the tested range, for example:
 
    ```text
-   sage: this is Codex 0.167.0, and sage is tested only with Codex 0.160 to 0.166. Some sage rules may not run.
+   sage: this is Codex 0.168.0, and sage is tested only with Codex 0.164 to 0.167. Some sage rules may not run.
    ```
 
    Codex starts a session at your first message, so a warning comes then. The status counts the trust records in your Codex config; Codex itself checks the hash of each hook and of the plugin's files, and it runs a hook only when both match.
@@ -162,6 +162,8 @@ Right before `gh pr merge`, the command reads Codex's record and the mode file a
 | Send `autopilot off` or `sage mode off` when Codex is idle | No merge starts. |
 
 The off phrase always counts, and nothing blocks it: also with an image, and also when the sage hook cannot save it, because the hook and the merge command read it from Codex's own record.
+
+The off phrase works from any thread, also a subagent's thread or a side conversation (`/side`): there it turns autopilot off in the main session, and sage tells you so in that thread. A side conversation has no record that names its main session, so there sage turns autopilot off in every Codex session.
 
 Limits of autopilot in Codex:
 
