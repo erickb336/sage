@@ -119,7 +119,7 @@ You talk only to the chief. The chief frames each task and asks you the product 
 - **The chief** changes no files. It runs the design and the PE check (principal engineer), keeps the logbook, and merges when autopilot is on.
 - **One lead for each pull request** runs the build, the reviews, QA and the repairs, with up to 9 helpers at once, and reports to the chief once. In Claude Code, a project runs at most 10 agents at once by default (`max_agents`), so one lead and its 9 helpers fit, and all projects 20 (`cap_total`). A project runs at most 5 leads by default (`max_leads`).
 - **One writer for each branch.** Only one agent writes on a branch at a time: the designer, the implementer or the arena judge, each in its own git worktree. Reviewers start fresh.
-- **Each task** has a priority, P0 to P3, and the least route for its size; a risk flag adds the security review. A **cycle** is one full set of fresh reviews and QA on one commit; a new commit starts again from cycle 1.
+- **Each task** has a priority, P0 to P3, and the least route for its size; a risk flag adds the security review. A **cycle** is one full set of fresh reviews and QA on one commit; a new commit starts again from cycle 1, except a clean merge of main that keeps the pull request's own change the same and passes CI.
 
 <a href="docs/assets/routes-light.svg">
 <picture>

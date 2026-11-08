@@ -100,7 +100,7 @@ Give each round to a fresh agent, with the original brief, the later decisions a
 
 ## Cycles and merges
 
-- A cycle is one full set of fresh reviews and QA on one head SHA. A new commit starts again from cycle 1.
+- A cycle is one full set of fresh reviews and QA on one head SHA. A new commit starts again from cycle 1, except a clean merge of main (also GitHub's update branch): when the pull request's own diff is the same and checks-pass is on the new head, the merge check counts the earlier head's clean cycles. The sage skill has the rule.
 - **Verified** needs one clean cycle: `sage task <T> set state=verified` checks it. A `findings`, `qa-fail` or `checks-fail` verdict moves a verified or pr-ready task back to reviewing and records the reason in the decision trail. Do not run more cycles unless autopilot is on.
 - **A merge** needs the task's clean cycles on its head SHA: 1 for a small task, 2 for a large task or one with a risk flag (`sage config`: cycles.small, cycles.large, cycles.risk). A tiny task without a risk flag or an arena has no cycle: it needs only checks-pass.
 - An open low finding never blocks a merge; it stays on the task's polish list.

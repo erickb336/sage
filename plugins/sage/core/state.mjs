@@ -63,6 +63,8 @@ const VERDICT = { build: "checks-pass", "code-review": "review-clean", "security
 const FOUND = ["findings", "qa-fail"];
 const NOT_CLEAN = ["checks-fail", ...FOUND];
 const CLEAN = Object.values(VERDICT).filter((k) => k !== "checks-pass");
+/** The verdicts of a review or QA cycle, clean or not; checks-pass and checks-fail count for their own SHA only. */
+const REVIEWED = [...CLEAN, ...FOUND];
 const KINDS = [...Object.values(VERDICT), ...NOT_CLEAN];
 const CANDIDATES = ["implementer", "designer"];
 const WRITERS = [...CANDIDATES, "arena-judge"];
@@ -2965,6 +2967,73 @@ const cleanKinds = (task) => list(task.route).map((b) => VERDICT[b]).filter((k) 
 const cleanCycles = (task, rows) => [...new Set(rows.map((r) => r.cycle))].filter((c) => cleanKinds(task).every((k) => rows.some((r) => r.cycle === c && r.kind === k))).length;
 
 /**
+ * The review and QA rows that count for head from an earlier head (T805, the owner's Q3 of T668): those of the task's
+ * reviewed head with the most clean cycles (the latest on a tie), when head is that head plus clean merges of origin/main
+ * and the pull request's own diff is the same (cleanMergesOfMain). head keeps its own checks rows, so CI must pass on head
+ * itself, and a head with a review or QA verdict of its own judges on its own rows only. It returns the rows to judge, and
+ * from (the earlier head) or why (it did not carry). Any git error carries nothing: the merge check fails closed.
+ */
+function carryOver(project, task, head, own, all) {
+  if (!task || project === undefined || own.some((r) => REVIEWED.includes(r.kind))) return { rows: own };
+  const earlier = new Map();
+  for (const r of all) if (r.sha !== head && /^[0-9a-f]{40}$/.test(r.sha) && REVIEWED.includes(r.kind)) (earlier.get(r.sha) ?? earlier.set(r.sha, []).get(r.sha)).push(r);
+  const [best] = [...earlier].reverse().map(([sha, rows]) => ({ sha, rows, n: cleanCycles(task, rows) })).filter((c) => c.n).sort((a, b) => b.n - a.n);
+  if (!best) return { rows: own };
+  let why;
+  try {
+    why = cleanMergesOfMain(project, best.sha, head);
+  } catch (e) {
+    why = `git could not read it (${e?.code ?? (typeof e?.status === "number" ? `exit ${e.status}` : e?.signal ?? e?.message)})`;
+  }
+  return why ? { rows: own, why: `The cycles of ${best.sha} do not carry to this SHA: ${why}.` } : { rows: [...own, ...best.rows], from: best.sha };
+}
+
+/**
+ * Why head is not from plus clean merges of main, or "". Each commit on head's first-parent line back to from must merge
+ * one commit of origin/main (the last fetched main of GitHub, which the pull request merges into) into the line, with the
+ * tree of a clean git merge-tree of its two parents: a conflict resolution or an edit in the merge refuses, and so does a
+ * commit of another kind. Then the patch-id of the pull request's own diff (from the merge base with main to the head)
+ * must be the same for from and head. A git error throws.
+ */
+function cleanMergesOfMain(project, from, head) {
+  const out = (args, input) => readLocalGit(project, args, input).toString();
+  const yes = (args) => {
+    try {
+      return out(args), true;
+    } catch (e) {
+      if (e?.status === 1) return false;
+      throw e;
+    }
+  };
+  const main = out(["rev-parse", "--verify", "--end-of-options", "refs/remotes/origin/main^{commit}"]).trim();
+  const line = out(["rev-list", "--first-parent", "--parents", `${from}..${head}`]).trim().split("\n").filter(Boolean).map((l) => l.split(" "));
+  if (!line.length) return `${head} is not a later commit than ${from}`;
+  if (line.some(([, first], i) => first !== (line[i + 1]?.[0] ?? from))) return `${from} is not on the first-parent line of ${head} (a rebase or an amended commit)`;
+  for (const [commit, first, other, ...more] of line) {
+    if (!other || more.length) return `${commit} is not a merge of two parents`;
+    if (!yes(["merge-base", "--is-ancestor", other, main])) return `${commit} merges ${other}, which is not on origin/main (fetch origin if main moved)`;
+    const tree = (() => {
+      try {
+        return out(["merge-tree", "--write-tree", "--no-messages", first, other]).split("\n")[0];
+      } catch (e) {
+        if (e?.status === 1) return "conflict";
+        throw e;
+      }
+    })();
+    if (tree === "conflict") return `${commit} merges ${other} with a conflict`;
+    if (tree !== out(["rev-parse", "--verify", `${commit}^{tree}`]).trim()) return `${commit} is not the clean merge of its parents (it resolves a conflict or adds an edit)`;
+  }
+  const patchId = (sha) => {
+    const base = out(["merge-base", main, sha]).trim();
+    const diff = readLocalGit(project, ["diff-tree", "-r", "-p", "--binary", "--no-color", "--no-ext-diff", "--no-textconv", base, sha]);
+    return out(["patch-id", "--stable"], diff).split(" ")[0];
+  };
+  const [before, after] = [patchId(from), patchId(head)];
+  if (!before) return `${from} has no diff of its own from origin/main`;
+  return before === after ? "" : "the pull request's own diff changed (its patch-id is not the same)";
+}
+
+/**
  * The time after which a task's owning chief needs one fresh cycle, from the task's decision rows, or "". It reads the
  * owner's takeover answers from the last one back (F-T656-20). An answer that needs a fresh cycle gives its time: a gate
  * whose question says so (any reader, the board too), or, for the provider whose merge path needs it (takeoverCycle), a
@@ -3155,7 +3224,7 @@ function judgeMerge(sha, env, { cycles, pr, readOnly, head, project, locked, ses
       const repaired = decisions.some((d) => d.decision.startsWith("tasks.tsv started again without rows"));
       const ofPr = pr && (mine === undefined || basename(dir) === mine) ? prHistory(pr, tasks, decisions, ledger) : new Set();
       // Each table is grouped by task once, so thousands of tasks on one SHA take linear time, not the square of it.
-      const [byId, ownOf, findingsOf, runsOf, decisionsOf] = [new Map(tasks.map((t) => [t.id, t])), group(rows), group(findings), group(runs), group(decisions)];
+      const [byId, ownOf, findingsOf, runsOf, decisionsOf, ledgerOf] = [new Map(tasks.map((t) => [t.id, t])), group(rows), group(findings), group(runs), group(decisions), group(ledger)];
       const candidates = runs.filter(isCandidate);
       // A task owns the head branch by its branch=, by its name, or by a run of it on that branch: a task that ran work
       // there and then moved to another branch still owns it (R1709-1).
@@ -3178,10 +3247,14 @@ function judgeMerge(sha, env, { cycles, pr, readOnly, head, project, locked, ses
       const graph = waitGraph(tasks, book ? rowsOf(book.programs) : [], book ? rowsOf(book.gates) : [], decisions);
       const chief = basename(dir) !== mine ? undefined : merger ?? (session !== undefined ? chiefFor(project, session, env) : undefined);
       const checked =[...new Set([...rows.map((r) => r.task), ...ofPr])].map((id) => {
-        const [own, task] = [ownOf.get(id) ?? [], byId.get(id)];
+        // The cycles of an earlier head of the task count after clean merges of main, in the merged project's git only (T805).
+        const task = byId.get(id), carry = carryOver(basename(dir) === mine ? project : undefined, task, sha, ownOf.get(id) ?? [], ledgerOf.get(id) ?? []), own = carry.rows;
         // A held task never merges until the sage moves it (F-T273-12).
         const held = task?.state === "held" && { ok: false, reason: `${id} is held: only the sage moves a held task, and it does not merge until then.` };
-        const verdict = judge(dir, task, findingsOf.get(id) ?? [], decisionsOf.get(id) ?? [], id, own, task ? Math.max(cycles ?? 0, cyclesFor(task, cfg)) : cycles, repaired, cfg, pr);
+        const judged = judge(dir, task, findingsOf.get(id) ?? [], decisionsOf.get(id) ?? [], id, own, task ? Math.max(cycles ?? 0, cyclesFor(task, cfg)) : cycles, repaired, cfg, pr);
+        // The reason says which head's cycles it used, or why an earlier head's did not count.
+        const note = carry.from ? `cycles from ${carry.from} carried to ${sha}: clean merge of main, same patch-id` : carry.why;
+        const verdict = !note ? judged : { ...judged, reason: judged.ok ? judged.reason.replace(/ on this SHA$/, `, ${note}`) : `${judged.reason} ${carry.from ? `(${note})` : note}` };
         // A review or QA run that still runs may hold a finding that no verdict shows yet (F-T289-18). It refuses a task that
         // would pass, so a refusal still names an open finding first.
         const live = (runsOf.get(id) ?? []).filter((r) => r.status === "running" && CHECKERS.includes(r.role)).map((r) => `${r.id} (${r.role})`);
