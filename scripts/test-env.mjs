@@ -2,7 +2,7 @@
 // the fakes do, so that a test gives the same result on every machine: in a sage session (SAGE_PROJECT, SAGE_HOOKS), in a
 // git hook (GIT_DIR, GIT_WORK_TREE), with a GitHub token or host (GITHUB_TOKEN, GH_HOST), or with another Claude config.
 // Two stay, SAGE_HOME and GH_CONFIG_DIR: a test that forgot its own must not fall back to the real ~/.claude or gh login.
-const LEAKS = /^(?:SAGE_(?!HOME$)|GIT_|GH_(?!CONFIG_DIR$)|GITHUB_|CLAUDE_|AGENT_KIT_|FAKE_GH_|PSTACK_)/;
+const LEAKS = /^(?:SAGE_(?!HOME$)|GIT_|GH_(?!CONFIG_DIR$)|GITHUB_|CLAUDE_|AGENT_KIT_|FAKE_GH_)/;
 for (const name of Object.keys(process.env)) if (LEAKS.test(name)) delete process.env[name];
 // A test that sets only CODEX_HOME or CLAUDE_CONFIG_DIR must not reach the real ~/.sage: this process and its children get
 // a shared root of their own, which goes at exit. A test of the root's order deletes the variable from its own env.

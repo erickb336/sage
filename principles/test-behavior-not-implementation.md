@@ -3,7 +3,6 @@ id: test-behavior-not-implementation
 name: Test behaviour, not implementation
 applyWhen: writing, changing or keeping a test.
 source: pstack principle-test-behavior-not-implementation, MIT, Copyright (c) 2026 Lauren Tan, github.com/cursor/plugins at 6b03002, adapted
-upstream: f7223698623b6a26
 ---
 
 A test checks what the code's users observe: return values, errors, readable state, and outside effects such as a request sent or a row written. Internal helpers and call order are not behaviour.

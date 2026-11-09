@@ -3,7 +3,6 @@ id: type-system-discipline
 name: Type system discipline
 applyWhen: you design types, review a function signature or write code in a statically typed language.
 source: pstack principle-type-system-discipline, MIT, Copyright (c) 2026 Lauren Tan, github.com/cursor/plugins at 6b03002, adapted
-upstream: 5cdaf79785e3c12b
 ---
 
 Make the compiler reject impossible states, mixed-up primitives and unhandled variants. Define errors and special cases out of existence instead of adding more handlers.

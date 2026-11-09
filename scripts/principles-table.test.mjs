@@ -10,16 +10,14 @@ import { test } from "node:test";
 import { ROOT } from "./build.mjs";
 import { principleRows } from "./principles-table.mjs";
 
-test("each principle gets its attribution: pstack, adapted; pstack; or sage's own", () => {
-  const rows = principleRows(
-    [
-      { id: "fix-root-causes", applyWhen: "debugging a failure.", source: "pstack principle-fix-root-causes, MIT, Copyright (c) 2026 Lauren Tan, adapted" },
-      { id: "contextualize", applyWhen: "writing for a reader.", source: "this kit's own" },
-    ],
-    [{ id: "build-the-lever", description: "Apply to any non-trivial work: edits, checks. Build the tool that does it." }],
-  );
+test("each principle gets its attribution from its source: pstack, adapted; or sage's own", () => {
+  const rows = principleRows([
+    { id: "fix-root-causes", applyWhen: "debugging a failure.", source: "pstack principle-fix-root-causes, MIT, Copyright (c) 2026 Lauren Tan, adapted" },
+    { id: "contextualize", applyWhen: "writing for a reader.", source: "this kit's own" },
+    { id: "build-the-lever", applyWhen: "the work is not trivial: edits, checks.", source: "pstack principle-build-the-lever, MIT, Copyright (c) 2026 Lauren Tan, adapted" },
+  ]);
   assert.deepEqual(rows, [
-    { id: "build-the-lever", applyWhen: "any non-trivial work: edits, checks", text: "pstack" },
+    { id: "build-the-lever", applyWhen: "the work is not trivial: edits, checks", text: "pstack, adapted" },
     { id: "contextualize", applyWhen: "writing for a reader", text: "sage's own" },
     { id: "fix-root-causes", applyWhen: "debugging a failure", text: "pstack, adapted" },
   ]);
@@ -47,22 +45,6 @@ test("npm run check fails when a principle's applyWhen changes and the principle
   assert.match(c.read("docs/guide/principles.md"), /\n\| fix-root-causes<br>\*pstack, adapted\* \| a test fails for a reason nobody knows \|\n/);
   const after = c.run("check");
   assert.equal(after.status, 0, after.stderr);
-});
-
-test("a sync: a new pstack principle gets its row from the build, and a changed pstack text of an adapted one is flagged", (t) => {
-  const c = copy(t);
-  c.write("upstream/pstack/skills/principle-name-the-thing/SKILL.md", '---\nname: principle-name-the-thing\ndescription: "Apply when a value has no name. Give it one."\n---\n\n# Name the thing\n\nGive each value a name.\n');
-  c.write("upstream/pstack/skills/principle-fix-root-causes/SKILL.md", `${c.read("upstream/pstack/skills/principle-fix-root-causes/SKILL.md")}\nA new pstack line.\n`);
-  assert.doesNotMatch(c.read("docs/guide/principles.md"), /name-the-thing/);
-  assert.equal(c.run("check").status, 1);
-  assert.equal(c.run("build").status, 0);
-  const readme = c.read("docs/guide/principles.md");
-  assert.match(readme, /\n\| name-the-thing<br>\*pstack\* \| a value has no name \|\n/);
-  assert.match(readme, /There are 26 principles: 25 are pstack's, by Lauren Tan \(MIT\), and 1 is sage's own\./);
-  assert.match(readme, /<summary><strong>All 26 principles<\/strong><\/summary>/);
-  const after = c.run("check");
-  assert.equal(after.status, 0, after.stderr); // a changed pstack text is a warning: the sync's pull request waits for a person
-  assert.match(after.stderr, /! principles\/fix-root-causes\.md: pstack changed skills\/principle-fix-root-causes\/SKILL\.md since this override's review/);
 });
 
 test("npm run check fails when the principles page's table is edited by hand", (t) => {

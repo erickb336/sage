@@ -2,9 +2,9 @@
 
 A principle is a short rule for one kind of moment, for example "test behaviour, not implementation" when you change a test. sage gives every Claude Code session its principles, also outside sage mode.
 
-<!-- The principles table comes from principles/ and upstream/pstack/: edit them there, then run npm run build. -->
+<!-- The principles table comes from principles/: edit them there, then run npm run build. -->
 
-There are 25 principles: 24 are pstack's, by Lauren Tan (MIT), and 1 is sage's own. Where sage has an adapted version of a pstack principle, sage uses it.
+There are 25 principles: 24 come from pstack, by Lauren Tan (MIT), and 1 is sage's own. sage keeps its own text of each one and does not follow later pstack changes.
 
 <details>
 <summary><strong>All 25 principles</strong></summary>
@@ -37,10 +37,9 @@ There are 25 principles: 24 are pstack's, by Lauren Tan (MIT), and 1 is sage's o
 | test-behavior-not-implementation<br>*pstack, adapted* | writing, changing or keeping a test |
 | type-system-discipline<br>*pstack, adapted* | you design types, review a function signature or write code in a statically typed language |
 
-Every principle except sage's own is pstack's, by Lauren Tan (MIT). Under each name, one of three notes says where its text comes from:
+Under each name, a note says where its text comes from:
 
-- "pstack" is pstack's text as it is, from `upstream/pstack/`.
-- "pstack, adapted" means that sage changed the wording: it is shorter, and it follows sage's writing standard. Its `upstream:` fingerprint records which pstack text it was checked against.
+- "pstack, adapted" is sage's text of a pstack principle: it is shorter, and it follows sage's writing standard. Its `source` line names the pstack commit that it comes from.
 - "sage's own" has no pstack source.
 
 </details>

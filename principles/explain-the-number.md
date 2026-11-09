@@ -3,7 +3,6 @@ id: explain-the-number
 name: Explain the number
 applyWhen: you plan a measurement, or you trust, report or act on a number that you measured: a speedup, a regression, a throughput, a latency or an eval result.
 source: pstack principle-explain-the-number, MIT, Copyright (c) 2026 Lauren Tan, github.com/cursor/plugins at 6b03002, adapted
-upstream: 3c84fbf9a7d9842a
 ---
 
 Before you trust a measured number, find its limiter and rule out that it measured other work.

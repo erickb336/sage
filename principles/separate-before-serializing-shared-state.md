@@ -3,7 +3,6 @@ id: separate-before-serializing-shared-state
 name: Separate before serializing shared state
 applyWhen: concurrent actors might write to the same file, branch, key or state object.
 source: pstack principle-separate-before-serializing-shared-state, MIT, Copyright (c) 2026 Lauren Tan, github.com/cursor/plugins at 6b03002, adapted
-upstream: 05294b40448e927c
 ---
 
 When concurrent actors might share state that changes, first ask whether they need the same object. If not, remove the sharing. When the sharing is real, enforce one writer at a time by structure: lock files, sequential phases or exclusive ownership. Instructions and conventions are not concurrency control.

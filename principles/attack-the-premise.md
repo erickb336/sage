@@ -3,7 +3,6 @@ id: attack-the-premise
 name: Attack the premise
 applyWhen: two or more fixes that share one premise have failed the same check or review.
 source: pstack principle-attack-the-premise, MIT, Copyright (c) 2026 Lauren Tan, github.com/cursor/plugins at 6b03002, adapted
-upstream: 6a932884daad4aa1
 ---
 
 When two or more fixes that share one premise have failed the same check or review, suspect the premise, not the fixes. Each failed fix is evidence against the belief that it assumed.

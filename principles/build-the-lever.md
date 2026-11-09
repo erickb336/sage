@@ -3,7 +3,6 @@ id: build-the-lever
 name: Build the lever
 applyWhen: the work is not trivial: edits, migrations, analyses or checks.
 source: pstack principle-build-the-lever, MIT, Copyright (c) 2026 Lauren Tan, github.com/cursor/plugins at 6b03002, adapted
-upstream: 3434b0ad0c640c6f
 ---
 
 When the work is not trivial, build a tool that does it or proves it: a script, codemod, generator or skill.

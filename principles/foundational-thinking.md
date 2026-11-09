@@ -3,7 +3,6 @@ id: foundational-thinking
 name: Foundational thinking
 applyWhen: before writing logic, when choosing core types and data structures or ordering scaffold against features.
 source: pstack principle-foundational-thinking, MIT, Copyright (c) 2026 Lauren Tan, github.com/cursor/plugins at 6b03002, adapted
-upstream: 864b827e8199d946
 ---
 
 Structural decisions protect your options later. Code-level decisions protect simplicity.

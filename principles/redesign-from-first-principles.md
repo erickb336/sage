@@ -3,7 +3,6 @@ id: redesign-from-first-principles
 name: Redesign from first principles
 applyWhen: you add a new requirement to an existing design.
 source: pstack principle-redesign-from-first-principles, MIT, Copyright (c) 2026 Lauren Tan, github.com/cursor/plugins at 6b03002, adapted
-upstream: 170e0a658783e43f
 ---
 
 When you add a change, do not bolt it onto the existing design. Redesign as if the requirement had been a basic assumption from the start.

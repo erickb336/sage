@@ -3,7 +3,6 @@ id: outcome-oriented-execution
 name: Outcome-oriented execution
 applyWhen: a planned rewrite or migration has explicit phase boundaries.
 source: pstack principle-outcome-oriented-execution, MIT, Copyright (c) 2026 Lauren Tan, github.com/cursor/plugins at 6b03002, adapted
-upstream: 10eb91633aa57035
 ---
 
 Aim for the end state that you intend and can verify, not for smooth intermediate states.

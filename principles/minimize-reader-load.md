@@ -3,7 +3,6 @@ id: minimize-reader-load
 name: Minimise reader load
 applyWhen: reviewing or shaping code that is hard to follow.
 source: pstack principle-minimize-reader-load, MIT, Copyright (c) 2026 Lauren Tan, github.com/cursor/plugins at 6b03002, adapted
-upstream: 1ea2b7fef2391cae
 ---
 
 Maintainability is the work a reader must do to understand the code. Track two things:
