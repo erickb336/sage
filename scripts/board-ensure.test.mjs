@@ -3,7 +3,7 @@
 import "./test-env.mjs";
 import test from "node:test";
 import assert from "node:assert/strict";
-import { spawn } from "node:child_process";
+import { spawn, spawnSync } from "node:child_process";
 import { cpSync, existsSync, linkSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, realpathSync, rmSync, statSync, utimesSync, writeFileSync } from "node:fs";
 import { createServer as createHttpServer, request } from "node:http";
 import { createServer } from "node:net";
@@ -560,6 +560,20 @@ test("T216: --set-password refuses an empty, short or mismatched entry and leave
   await assert.rejects(runBoardCli(["board", "--set-password", "--config", config], { output: () => {}, input: typed(SAMPLE, SAMPLE), prompt }), { message: "board --set-password needs a terminal: open Terminal on this Mac and run the command there yourself. It does not read a password from a pipe, a file or an agent." });
   assert.deepEqual(asked, [], "it asks nothing");
   assert.equal(readFileSync(config, "utf8"), before);
+});
+
+// T921: Codex runs a command in a sandbox with no network (Seatbelt on macOS), where a connection to 127.0.0.1 fails with
+// EPERM. This profile denies the network in the same way; the probe fails before any start, so no server runs.
+test("T921: in a sandbox with no network, as in Codex, ensure says that the sandbox blocks the port, and starts nothing", { skip: process.platform !== "darwin" && "macOS sandbox-exec only" }, async (t) => {
+  const { dir, env, config } = scratch(t);
+  const port = await freePort();
+  const run = spawnSync("/usr/bin/sandbox-exec", ["-p", "(version 1)(allow default)(deny network*)", process.execPath, fileURLToPath(new URL("../plugins/sage-codex/board/cli.mjs", import.meta.url)), "board", "--ensure", "--port", String(port)], { env, encoding: "utf8" });
+  assert.equal(run.stderr, `sage board: this command cannot reach 127.0.0.1:${port}: a sandbox blocks the local network here (EPERM). In Codex, run it escalated (outside the sandbox), or in Terminal on the Mac.\n`);
+  assert.equal(run.status, 1);
+  assert.equal(run.stdout, "");
+  assert.equal(readBoardConfig(config).port, port, "setup made the config before the probe");
+  assert.equal(existsSync(join(dir, "home", ".config", "sage-board", "board.log")), false, "no server started");
+  assert.equal(existsSync(join(dir, "home", ".config", "sage-board", "board.pid")), false);
 });
 
 test("T216: the plugin carries the board command that the hook's note names, and it runs outside the checkout layout", async (t) => {
