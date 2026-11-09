@@ -925,7 +925,8 @@ test("T506: the chief saves a report with pages, and each run_done example ends 
   for (const field of ["usage", "usage-source", "usage-evidence", "report"]) {
     assert.match(runDone.inputSchema.properties[field].description, /needed with usage unavailable|it needs status done/, field);
   }
-  const chief = readFileSync(join(ROOT, "plugins/sage-codex/runtime/chief-instructions.md"), "utf8").replace(/\s+/g, " ");
+  const { renderChiefInstructions } = await import(pathToFileURL(join(ROOT, "plugins/sage-codex/core/index.mjs")));
+  const chief = renderChiefInstructions(JSON.parse(readFileSync(join(ROOT, "plugins/sage-codex/chief-bindings.json"), "utf8"))).replace(/\s+/g, " ");
   const examples = { description: runDone.description.match(/for example (\{.*\})\.$/)?.[1], dispatch: chief.match(/`run_done`, no `tokens`, for example `(\{.*?\})`/)?.[1] };
   const usageInterface = JSON.parse(`{${chief.match(/`run_add` `("usage-interface": "[a-z-]+")`/)?.[1]}}`)["usage-interface"];
   assert.equal(usageInterface, "collaboration-tools");

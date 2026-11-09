@@ -4,7 +4,7 @@ import { spawn } from "node:child_process";
 import { readFileSync, readdirSync } from "node:fs";
 import { join } from "node:path";
 import { ROOT } from "./build.mjs";
-import { waitNative } from "./fixtures/codex-native/wait-native.mjs";
+import { waitNative } from "./wait-child.mjs";
 
 // Codex names each event of hooks.json in camel case, one entry for each handler.
 const hookEvents = Object.entries(JSON.parse(readFileSync(join(ROOT, "plugins/sage-codex/hooks/hooks.json"), "utf8")).hooks)

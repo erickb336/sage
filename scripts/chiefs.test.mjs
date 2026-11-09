@@ -857,8 +857,6 @@ for (const [name, own, other] of pairs) {
 test("a native writer of a shared logbook names the session's chief, a retry keeps it, and another chief's task refuses", async (t) => {
   const w = world(t, codex, claude);
   const task = { project: w.project, owner: "o", request: "00000000-0000-4000-8000-000000000604", title: "a", size: "small", risk: [], add: [], why: "" };
-  const { logbookTool } = await import("../plugins/sage-codex/runtime/logbook-env.mjs");
-  assert.equal(logbookTool(() => w.base).chiefFor(w.project, "session-a", w.env), "C1", "the runtime's own tool writes and reads the same row");
   assert.equal(codex.createRequestedTask(task, w.env, "session-a").task.chief, "C1");
   assert.equal(codex.createRequestedTask(task, w.env, "session-a").decision, "already-created");
   assert.throws(() => codex.createRequestedTask({ ...task, request: "00000000-0000-4000-8000-000000000605" }, w.env), /no session identity/);

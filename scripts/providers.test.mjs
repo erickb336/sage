@@ -2020,112 +2020,6 @@ test("prepared admission gives one preparation and one dispatch to concurrent ca
   assert.equal(f.api.readAdmission(f.journal).reservations.length, 1);
 });
 
-const filePolicyApi = () => import("../plugins/sage-codex/runtime/file-policy.mjs");
-
-test("the Codex direct edit gate denies the active chief but leaves child and inactive checks available", async () => {
-  const { directEditDecision } = await filePolicyApi();
-  const patch = { tool_name: "apply_patch", tool_input: { input: "*** Begin Patch\n*** Add File: sample.txt\n+sample\n*** End Patch" } };
-  assert.equal(directEditDecision(patch, { sage: true, chief: true }).decision, "deny");
-  assert.deepEqual(directEditDecision(patch, { sage: true, chief: false }), { decision: "pass" });
-  assert.deepEqual(directEditDecision(patch, { sage: false, chief: true }), { decision: "pass" });
-  assert.deepEqual(directEditDecision({ tool_name: "collaborationlist_agents" }, { sage: true, chief: true }), { decision: "pass" });
-});
-
-test("the Codex direct edit gate refuses unverified mode or chief context", async () => {
-  const { directEditDecision } = await filePolicyApi();
-  for (const context of [undefined, null, {}, { sage: true }, { chief: true }, { sage: "on", chief: true }]) {
-    assert.throws(() => directEditDecision({ tool_name: "apply_patch" }, context));
-  }
-});
-
-
-async function nativeModeFixture(t) {
-  const { dir, plugin } = isolated(t, "codex");
-  const api = await import(pathToFileURL(join(plugin, "runtime/mode.mjs")).href);
-  const core = await import(pathToFileURL(join(plugin, "core/index.mjs")).href);
-  const directory = join(dir, "admission"), projectDirectory = join(dir, "workspace"), sessionsDir = join(dir, "sessions");
-  mkdirSync(projectDirectory); mkdirSync(sessionsDir);
-  core.configureAdmission(directory, { total: 3, projects: [{ project: "one", limit: 3 }, { project: "two", limit: 3 }] });
-  const session = "11111111-1111-4111-8111-111111111111";
-  const transcript = join(sessionsDir, "root.jsonl");
-  writeFileSync(transcript, JSON.stringify({ type: "session_meta", payload: { id: session, session_id: session, cli_version: "0.160.0" } }) + "\n");
-  const input = { hook_event_name: "UserPromptSubmit", session_id: session, turn_id: modeTurn, cwd: projectDirectory,
-    transcript_path: transcript, model: "fixture", permission_mode: "default", prompt: "sage mode" };
-  return { api, core, input, context: { version: "0.160.0", actor: session },
-    options: { directory, project: "one", projectDirectory, sessionsDir } };
-}
-
-test("Codex mode adapter persists verified phrases and keeps autopilot disabled", async (t) => {
-  const { api, core, input, context, options } = await nativeModeFixture(t);
-  assert.equal(api.updateOwnerMode({ ...input, prompt: "What does sage mode do?" }, context, options).sage, false);
-  assert.equal(core.readAdmission(options.directory).sessions.length, 0);
-  // A near miss switches nothing and names the exact phrases (T240).
-  const near = api.updateOwnerMode({ ...input, prompt: "sage mode, autopilot on" }, context, options);
-  assert.deepEqual([near.sage, near.phrase, near.near], [false, null, { phrases: ["sage mode", "autopilot on"], strong: true }]);
-  const active = api.updateOwnerMode({ ...input, prompt: "Autopilot On." }, context, options);
-  assert.deepEqual([active.sage, active.autopilot, active.phrase], [false, false, "autopilot on"]);
-  const on = api.updateOwnerMode({ ...input, prompt: "Sage Mode." }, context, options);
-  assert.deepEqual([on.sage, on.autopilot, on.phrase], [true, false, "sage mode"]);
-  assert.equal(api.updateOwnerMode({ ...input, turn_id: modeNextTurn, prompt: "continue" }, context, options).sage, true);
-  assert.equal(api.updateOwnerMode({ ...input, turn_id: "44444444-4444-4444-8444-444444444444", prompt: "sage mode off" }, context, options).sage, false);
-  assert.equal(api.readMode(options.directory, options.project, input.session_id).sage, false);
-  assert.equal(core.readAdmission(options.directory).modes.length, 2);
-});
-
-test("Codex mode adapter never replays old activation or mode prompts over off", async (t) => {
-  const { api, input, context, options } = await nativeModeFixture(t);
-  api.updateOwnerMode(input, context, options);
-  const on = { ...input, turn_id: modeNextTurn };
-  api.updateOwnerMode(on, context, options);
-  api.updateOwnerMode({ ...input, turn_id: "44444444-4444-4444-8444-444444444444", prompt: "sage mode off" }, context, options);
-  assert.equal(api.updateOwnerMode(input, context, options).sage, false);
-  assert.equal(api.updateOwnerMode(on, context, options).sage, false);
-  assert.throws(() => api.updateOwnerMode({ ...input, prompt: "sage mode off" }, context, options), /different mode request/);
-  assert.throws(() => api.updateOwnerMode({ ...on, prompt: "sage mode off" }, context, options), /different mode request/);
-  assert.equal(api.readMode(options.directory, options.project, input.session_id).modes.length, 3);
-});
-
-test("Codex mode adapter requires exact project and native owner identity before writes", async (t) => {
-  const { api, core, input, context, options } = await nativeModeFixture(t);
-  for (const native of [null, { ...context, actor: modeTurn }, { ...context, version: "0.160.1" }]) {
-    assert.equal(api.updateOwnerMode(input, native, options), null);
-  }
-  assert.equal(api.updateOwnerMode({ ...input, cwd: options.sessionsDir }, context, options), null);
-  assert.equal(api.updateOwnerMode({ ...input, agent_id: input.session_id }, context, options), null);
-  assert.equal(core.readAdmission(options.directory).sessions.length, 0);
-  api.updateOwnerMode(input, context, options);
-  assert.equal(core.readAdmission(options.directory).sessions[0].session, `codex:${input.session_id}`);
-  assert.equal(api.readMode(options.directory, "two", input.session_id).sage, false);
-  assert.throws(() => api.readMode(options.directory, "absent", input.session_id), /not configured/);
-});
-
-test("Codex mode adapter refuses damaged storage and foreign metadata", async (t) => {
-  const { api, core, input, context, options } = await nativeModeFixture(t);
-  writeFileSync(input.transcript_path, JSON.stringify({ type: "session_meta", payload: { id: modeNextTurn, session_id: modeNextTurn, cli_version: "0.160.0" } }) + "\n");
-  assert.equal(api.updateOwnerMode(input, context, options), null);
-  assert.equal(core.readAdmission(options.directory).sessions.length, 0);
-  assert.throws(() => api.updateOwnerMode({ ...input, transcript_path: join(options.projectDirectory, "outside.jsonl") }, context, options));
-  writeFileSync(join(options.directory, "00000000.json"), "broken");
-  assert.throws(() => api.readMode(options.directory, options.project, input.session_id));
-});
-
-
-test("Codex mode adapter records an initial off so its retry cannot replace later on", async (t) => {
-  const { api, core, input, context, options } = await nativeModeFixture(t);
-  const off = { ...input, prompt: "sage mode off" };
-  assert.equal(api.updateOwnerMode(off, context, options).sage, false);
-  assert.equal(core.readAdmission(options.directory).modes.length, 1);
-  const owner = core.readAdmission(options.directory).sessions[0];
-  const initial = { project: owner.project, session: owner.session, activation: owner.activation };
-  assert.throws(() => core.activateAdmission(options.directory, initial), /different initial mode/);
-  assert.throws(() => core.activateAdmission(options.directory, initial, { sage: "off" }), /invalid initial mode/);
-  assert.equal(api.updateOwnerMode({ ...input, turn_id: modeNextTurn }, context, options).sage, true);
-  assert.equal(api.updateOwnerMode(off, context, options).sage, true);
-  assert.equal(core.readAdmission(options.directory).modes.length, 2);
-  assert.throws(() => api.updateOwnerMode(input, context, options), /different mode request/);
-});
-
-
 test("Codex bundles the MCP SDK with native identity and hidden tool metadata intact", async (t) => {
   const { dir, plugin } = isolated(t, "codex");
   assert.ok(existsSync(join(plugin, "runtime/mcp-sdk.mjs")));
@@ -2201,121 +2095,6 @@ test("Codex includes each bundled MCP dependency license", (t) => {
 });
 
 
-async function nativeBindingFixture(t) {
-  const f = await roleAdmissionFixture(t);
-  const api = await import(new URL("../runtime/child-binding.mjs", f.url));
-  const events = await import(new URL("../runtime/events.mjs", f.url));
-  const observationsDirectory = join(f.journal, "..", "observations");
-  const root = "11111111-1111-4111-8111-111111111111";
-  const lead = "22222222-2222-4222-8222-222222222222";
-  const child = "33333333-3333-4333-8333-333333333333";
-  const owner = f.api.activateAdmission(f.journal, { project: f.scope.project, session: `codex:${root}`, activation: f.activation });
-  const scope = { project: owner.project, session: owner.session, epoch: owner.epoch };
-  const reserve = (index, role, issuerRole, issuer = root, name = `agent_${index}`, confirm = true, brief) => {
-    const args = f.args(index, issuer, scope); args[3].name = name; args[3].tool = "collaborationspawn_agent";
-    if (issuerRole === "lead") args[2].task = "T1";
-    const assignment = (brief === undefined ? f.api.reserveRoleAdmission(...args, { issuerRole, role })
-      : f.api.reserveBriefAdmission(...args, { issuerRole, role }, brief)).assignment;
-    const base = { schema: 1, runtime: "0.160.0", session: root, actor: issuer, call: assignment.call, turn: f.activation };
-    events.publish(observationsDirectory, { ...base, kind: "spawn-request", name });
-    if (confirm) events.publish(observationsDirectory, { ...base, kind: "spawn-result", path: issuer === root ? `/root/${name}` : `/root/agent_1/${name}` });
-    return assignment;
-  };
-  const identity = (id = lead, parent = root, path = "/root/agent_1") => ({ session: root, child: id, parent, path, turn: f.activation });
-  const observeStart = value => events.publish(observationsDirectory, { schema: 1, runtime: "0.160.0", kind: "child-start", ...value });
-  observeStart(identity());
-  const bind = value => api.bindNativeChild({ directory: f.journal, project: scope.project, observationsDirectory }, value);
-  return { ...f, root, lead, child, scope, reserve, identity, bind, observeStart, events, observationsDirectory };
-}
-
-test("native child binding connects a lead and its specialist to exact reserved roles", async t => {
-  const f = await nativeBindingFixture(t);
-  const lead = f.reserve(1, "lead", "chief-of-staff");
-  assert.equal(f.bind(f.identity()).assignment.id, lead.id);
-  const child = f.reserve(2, "qa", "lead", f.lead);
-  const native = f.identity(f.child, f.lead, "/root/agent_1/agent_2");
-  f.observeStart(native);
-  const result = f.bind(native);
-  assert.equal(result.role, "qa"); assert.equal(result.assignment.id, child.id);
-  assert.equal(result.binding.issuer, f.lead);
-  assert.equal(f.bind(native).decision, "already-bound");
-  assert.equal(f.api.readAdmission(f.journal).bindings.length, 2);
-});
-
-test("native child binding rejects unadmitted children and inconsistent parent paths or roles", async t => {
-  const f = await nativeBindingFixture(t);
-  assert.throws(() => f.bind(f.identity()));
-  f.reserve(1, "lead", "chief-of-staff");
-  for (const change of [{ path: "/root/other" }, { parent: f.child }, { child: f.root },
-    { turn: "invalid" }, { role: "lead" }, { session: f.child }]) {
-    assert.throws(() => f.bind({ ...f.identity(), ...change }));
-  }
-  f.bind(f.identity());
-  // A trusted caller still cannot bind an inconsistent recorded issuer role.
-  f.reserve(2, "qa", "chief-of-staff", f.lead);
-  f.observeStart(f.identity(f.child, f.lead, "/root/agent_1/agent_2"));
-  assert.throws(() => f.bind(f.identity(f.child, f.lead, "/root/agent_1/agent_2")));
-  f.reserve(3, "qa", "lead", f.lead);
-  assert.throws(() => f.bind(f.identity(f.child, f.lead, "/root/agent_3")));
-  assert.equal(f.api.readAdmission(f.journal).bindings.length, 1);
-});
-
-test("native child binding refuses a reservation for another dispatch tool", async t => {
-  const f = await nativeBindingFixture(t);
-  const args = f.args(1, f.root, f.scope); args[3].name = "agent_1"; args[3].tool = "collaborationfollowup_task";
-  f.api.reserveRoleAdmission(...args, { issuerRole: "chief-of-staff", role: "lead" });
-  const base = { schema: 1, runtime: "0.160.0", session: f.root, actor: f.root, call: "spawn-1", turn: f.activation };
-  f.events.publish(f.observationsDirectory, { ...base, kind: "spawn-request", name: "agent_1" });
-  f.events.publish(f.observationsDirectory, { ...base, kind: "spawn-result", path: "/root/agent_1" });
-  assert.throws(() => f.bind(f.identity()));
-  assert.deepEqual(f.api.readAdmission(f.journal).bindings, []);
-});
-
-
-test("native child binding refuses a failed reservation later matched by an unadmitted spawn", async t => {
-  const f = await nativeBindingFixture(t);
-  f.reserve(1, "lead", "chief-of-staff", f.root, "agent_1", false);
-  assert.throws(() => f.bind(f.identity()), /could not bind/);
-  const base = { schema: 1, runtime: "0.160.0", session: f.root, actor: f.root, call: "unadmitted", turn: f.activation };
-  f.events.publish(f.observationsDirectory, { ...base, kind: "spawn-request", name: "agent_1" });
-  f.events.publish(f.observationsDirectory, { ...base, kind: "spawn-result", path: "/root/agent_1" });
-  assert.throws(() => f.bind(f.identity()), /could not bind/);
-  assert.deepEqual(f.api.readAdmission(f.journal).bindings, []);
-});
-
-test("native child binding refuses conflicting path reuse and a result from another parent turn", async t => {
-  const f = await nativeBindingFixture(t);
-  f.reserve(1, "lead", "chief-of-staff");
-  f.observeStart(f.identity(f.child));
-  assert.throws(() => f.bind(f.identity()), /could not bind/);
-  assert.deepEqual(f.api.readAdmission(f.journal).bindings, []);
-  const other = await nativeBindingFixture(t);
-  other.reserve(1, "lead", "chief-of-staff", other.root, "agent_1", false);
-  other.events.publish(other.observationsDirectory, { schema: 1, runtime: "0.160.0", session: other.root,
-    actor: other.root, call: "spawn-1", turn: "99999999-9999-4999-8999-999999999999", kind: "spawn-result", path: "/root/agent_1" });
-  assert.throws(() => other.bind(other.identity()), /could not bind/);
-  assert.deepEqual(other.api.readAdmission(other.journal).bindings, []);
-});
-
-test("native child binding refuses a reused name before the later spawn result arrives", async t => {
-  const f = await nativeBindingFixture(t); f.reserve(1, "lead", "chief-of-staff");
-  f.events.publish(f.observationsDirectory, { schema: 1, runtime: "0.160.0", session: f.root, actor: f.root,
-    call: "later-call", turn: f.activation, kind: "spawn-request", name: "agent_1" });
-  assert.throws(() => f.bind(f.identity()), /could not bind/);
-  assert.deepEqual(f.api.readAdmission(f.journal).bindings, []);
-});
-
-
-test("brief admission returns the saved instructions with the verified native binding", async t => {
-  const f = await nativeBindingFixture(t); const brief = completeBrief("Deliver these saved instructions.");
-  f.reserve(1, "lead", "chief-of-staff", f.root, "agent_1", true, brief);
-  const result = f.bind(f.identity());
-  assert.equal(result.role, "lead"); assert.deepEqual(result.brief, brief);
-  assert(f.api.renderBrief(result.brief).includes("GOAL\nDeliver these saved instructions."));
-  assert.deepEqual(f.bind(f.identity()).brief, brief);
-});
-
-
 async function roleInstructionsFixture(t, provider = "codex") {
   const f = isolated(t, provider);
   const api = await import(pathToFileURL(join(f.plugin, "core/index.mjs")));
@@ -2379,45 +2158,6 @@ test("shared role report keeps every field and separates the provider's gate sta
   assert.throws(() => f.api.renderReportInstructions({}), /exact provider bindings/);
 });
 
-test("shared role delivery joins verified lead and QA instructions with their own saved briefs", async t => {
-  const instructions = await roleInstructionsFixture(t);
-  const f = await nativeBindingFixture(t);
-  const { boundChildInstructions } = await import(new URL("../runtime/instructions.mjs", f.url));
-  const options = { directory: f.journal, project: f.scope.project, observationsDirectory: f.observationsDirectory };
-  const lead = f.reserve(1, "lead", "chief-of-staff", f.root, "agent_1", true, completeBrief("Lead the task."));
-  const first = boundChildInstructions(options, f.identity());
-  assert.equal(first.decision, "deliver");
-  assert(first.brief.includes(`Role: lead\nAssignment: ${lead.id}\nTask: T1\nRun: R1`));
-  assert(first.brief.includes(f.api.renderRoleInstructions("lead", instructions.bindings.lead)));
-  assert(first.brief.includes(f.api.renderBrief(completeBrief("Lead the task."))));
-  const qa = f.reserve(2, "qa", "lead", f.lead, "agent_2", true, completeBrief("Check the task."));
-  const identity = f.identity(f.child, f.lead, "/root/agent_1/agent_2"); f.observeStart(identity);
-  const second = boundChildInstructions(options, identity);
-  assert(second.brief.includes(`Role: qa\nAssignment: ${qa.id}\nTask: T1\nRun: R2`));
-  assert(second.brief.includes(f.api.renderRoleInstructions("qa", instructions.bindings.qa)));
-  assert(second.brief.includes("NOT VERIFIED"));
-  assert(second.brief.includes(f.api.renderBrief(completeBrief("Check the task."))));
-  assert.doesNotMatch(second.brief, /Lead the task/);
-  assert.deepEqual(boundChildInstructions(options, identity), second);
-  assert.throws(() => boundChildInstructions(options, { ...identity, path: "/root/other" }));
-});
-
-test("shared role delivery refuses absent saved briefs and missing instruction assets", async t => {
-  const instructions = await roleInstructionsFixture(t);
-  const f = await nativeBindingFixture(t);
-  const { boundChildInstructions } = await import(new URL("../runtime/instructions.mjs", f.url));
-  const options = { directory: f.journal, project: f.scope.project, observationsDirectory: f.observationsDirectory };
-  f.reserve(1, "lead", "chief-of-staff");
-  assert.throws(() => boundChildInstructions(options, f.identity()), /no saved task brief/);
-  const other = await nativeBindingFixture(t);
-  const api = await import(new URL("../runtime/instructions.mjs", other.url));
-  other.reserve(1, "lead", "chief-of-staff", other.root, "agent_1", true, completeBrief("Preserve this task."));
-  rmSync(new URL("./roles/lead.md", other.url));
-  assert.throws(() => api.boundChildInstructions({ directory: other.journal, project: other.scope.project,
-    observationsDirectory: other.observationsDirectory }, other.identity()));
-  assert.equal(other.api.readAdmission(other.journal).reservations.length, 1, "an instruction error does not release capacity");
-});
-
 test("shared chief instructions preserve the packaged agent and every brief field", async t => {
   const f = isolated(t, "claude");
   const api = await import(pathToFileURL(join(f.plugin, "core/index.mjs")));
@@ -2458,11 +2198,6 @@ test("shared chief Codex instructions keep unsupported routes inactive, and merg
   assert.equal(typeof api.renderChiefInstructions, "function");
   const bindings = JSON.parse(readFileSync(join(f.plugin, "chief-bindings.json"), "utf8"));
   const text = api.renderChiefInstructions(bindings);
-  const prepared = readFileSync(join(f.plugin, "runtime/chief-instructions.md"), "utf8");
-  assert(prepared.endsWith(text + "\n"));
-  assert.match(prepared, /prepared native adapter renders these shared rules on verified owner\s+activation and restores them after supported native compaction/);
-  assert.match(prepared, /installed manual preview does not load this automatic chief role/);
-  assert.match(prepared, /Full automatic Sage remains disabled/);
   assert.match(text, /sage on Codex needs a multi-agent v2 model for the chief and each child/);
   assert.match(text, /a tiny task goes through a lead to an implementer/);
   assert.match(text, /call `spawn_agent` in the `collaboration` namespace/);
@@ -2626,7 +2361,7 @@ test("shared command policy classifies merge candidates and executable text in b
     const api = await import(pathToFileURL(join(f.plugin, "core/index.mjs")));
     assert.equal(typeof api.createCommandPolicy, "function");
     const tool = join(f.plugin, "skills/sage/sage.mjs");
-    const adapter = await import(pathToFileURL(join(f.plugin, provider === "claude" ? "hooks/command-policy.mjs" : "runtime/command-policy.mjs")));
+    const adapter = await import(pathToFileURL(join(f.plugin, provider === "claude" ? "hooks/command-policy.mjs" : "core/index.mjs")));
     const policy = adapter.createCommandPolicy({ stateToolPath: tool });
     const candidate = `gh pr merge 12 --squash --delete-branch --match-head-commit ${sha}`;
     assert.deepEqual(policy.mergeRun(candidate, f.dir), { pr: "12", sha });
@@ -2669,7 +2404,7 @@ test("shared push policy applies the same branch and force rules in both isolate
     const f = isolated(t, provider);
     const api = await import(pathToFileURL(join(f.plugin, "core/index.mjs")));
     assert.equal(typeof api.createPushPolicy, "function");
-    const adapter = await import(pathToFileURL(join(f.plugin, provider === "claude" ? "hooks/command-policy.mjs" : "runtime/command-policy.mjs")));
+    const adapter = await import(pathToFileURL(join(f.plugin, provider === "claude" ? "hooks/command-policy.mjs" : "core/index.mjs")));
     const calls = [];
     let branch = "topic";
     const policy = adapter.createPushPolicy({ readGh: fakeGh, readGit: fakeGit(dir => { calls.push(dir); return branch; }) });
@@ -3019,31 +2754,8 @@ test("Codex direct patch targets refuse unsupported records and invalid targets"
     assert.throws(() => patchTargets(patch), /Codex patch targets are unavailable/);
 });
 
-test("native probe removes its profile after version failure and a stalled version process", t => {
-  const dir = mkdtempSync(join(realpathSync(tmpdir()), "sage-probe-cleanup-"));
-  t.after(() => rmSync(dir, { recursive: true, force: true }));
-  for (const stalled of [false, true]) {
-    const temporary = join(dir, stalled ? "stalled" : "failed"); mkdirSync(temporary);
-    const fake = join(dir, stalled ? "stalled-codex" : "failed-codex");
-    // The fixture stays alive until its output transport closes, then exits without a signal.
-    writeFileSync(fake, stalled
-      ? "#!/usr/bin/env node\nprocess.stdin.resume(); const timer = setInterval(() => process.stdout.write('fixture\\n'), 25); process.stdout.on('error', () => { clearInterval(timer); process.exit(0); });\n"
-      : "#!/usr/bin/env node\nprocess.exit(0);\n", { mode: 0o700 });
-    const result = spawnSync(process.execPath, [join(ROOT, "scripts/probe-codex-lifecycle.mjs")], {
-      env: { ...process.env, TMPDIR: temporary, SAGE_CODEX_BIN: fake, ...(stalled ? { SAGE_PROBE_TEST_DEADLINE_MS: "1" } : {}) },
-      encoding: "utf8",
-    });
-    assert.equal(result.status, 1, result.stderr);
-    const rows = result.stdout.trim().split("\n").map(line => JSON.parse(line));
-    assert.equal(rows.find(row => row.type === "result").reason, stalled ? "native_deadline" : "version_check_failed");
-    assert.equal(rows.at(-1).temporaryRootRemoved, true);
-    assert.deepEqual(readdirSync(temporary), [], "the actual temporary profile is gone");
-  }
-});
-
-
 test("native deadline waits for child closure when the timeout callback throws", async t => {
-  const { waitNative } = await import("./fixtures/codex-native/wait-native.mjs");
+  const { waitNative } = await import("./wait-child.mjs");
   const { EventEmitter } = await import("node:events");
   const { PassThrough } = await import("node:stream");
   const child = new EventEmitter();
@@ -3072,7 +2784,7 @@ test("native deadline waits for child closure when the timeout callback throws",
 
 
 test("native spawn error waits for closure before releasing its owner", async t => {
-  const { waitNative } = await import("./fixtures/codex-native/wait-native.mjs");
+  const { waitNative } = await import("./wait-child.mjs");
   const { EventEmitter } = await import("node:events");
   const child = new EventEmitter();
   t.mock.timers.enable({ apis: ["setTimeout"] });
@@ -3124,7 +2836,7 @@ for (const scenario of ['success', 'exit-error', 'bad-manifest']) test(`Codex pa
 
 
 test("native deadline escalates only its owned child and still waits for closure", async t => {
-  const { waitNative } = await import("./fixtures/codex-native/wait-native.mjs");
+  const { waitNative } = await import("./wait-child.mjs");
   const { EventEmitter } = await import("node:events");
   const { PassThrough } = await import("node:stream");
   const child = new EventEmitter(), signals = [];
@@ -3144,7 +2856,7 @@ test("native deadline escalates only its owned child and still waits for closure
 });
 
 test("native deadline cancels escalation when the owned child closes", async t => {
-  const { waitNative } = await import("./fixtures/codex-native/wait-native.mjs");
+  const { waitNative } = await import("./wait-child.mjs");
   const { EventEmitter } = await import("node:events");
   const { PassThrough } = await import("node:stream");
   const child = new EventEmitter(), signals = [];
@@ -3159,7 +2871,7 @@ test("native deadline cancels escalation when the owned child closes", async t =
 });
 
 test("native deadline retains error handling across both termination attempts", async t => {
-  const { waitNative } = await import("./fixtures/codex-native/wait-native.mjs");
+  const { waitNative } = await import("./wait-child.mjs");
   const { EventEmitter } = await import("node:events");
   const { PassThrough } = await import("node:stream");
   const child = new EventEmitter();
@@ -3180,7 +2892,7 @@ test("native deadline retains error handling across both termination attempts", 
 
 
 test("native deadline does not signal an exited child while output closure is pending", async t => {
-  const { waitNative } = await import("./fixtures/codex-native/wait-native.mjs");
+  const { waitNative } = await import("./wait-child.mjs");
   const { EventEmitter } = await import("node:events");
   const { PassThrough } = await import("node:stream");
   const child = new EventEmitter();
@@ -3386,97 +3098,6 @@ test("shared shell paths refuse redirection-only writes after uncertain director
   }
 });
 
-test("Codex patch policy protects both move targets and logbook paths in every mode", async t => {
-  const f = isolated(t, "codex");
-  const { patchEditDecision } = await import(pathToFileURL(join(f.plugin, "runtime/file-policy.mjs")));
-  assert.equal(typeof patchEditDecision, "function");
-  const cwd = join(f.dir, "project"), root = join(f.dir, "logbook"); mkdirSync(cwd); mkdirSync(root);
-  symlinkSync(root, join(cwd, "linked"));
-  const input = text => ({ tool_name: "apply_patch", tool_input: { command: `*** Begin Patch\n${text}\n*** End Patch` } });
-  const options = { cwd, roots: [root] };
-  for (const context of [{ sage: true, chief: false }, { sage: false, chief: false }, { sage: false, chief: true }]) {
-    assert.equal(patchEditDecision(input("*** Add File: ordinary\n+fixed"), context, options).decision, "pass");
-    for (const body of ["*** Add File: linked/new.tsv\n+fixed", "*** Delete File: ../logbook/ledger.tsv",
-      "*** Update File: ordinary\n*** Move to: ../logbook/new.tsv\n@@\n-old\n+new",
-      "*** Update File: ../logbook/ledger.tsv\n*** Move to: ordinary\n@@\n-old\n+new"])
-      assert.equal(patchEditDecision(input(body), context, options).decision, "deny");
-  }
-  assert.equal(patchEditDecision(input("*** Add File: ordinary\n+fixed"), { sage: true, chief: true }, options).decision, "deny");
-});
-
-test("Codex patch policy rejects unknown input shapes and retains the chief edit gate", async t => {
-  const f = isolated(t, "codex");
-  const { patchEditDecision } = await import(pathToFileURL(join(f.plugin, "runtime/file-policy.mjs")));
-  assert.equal(typeof patchEditDecision, "function");
-  const options = { cwd: f.dir, roots: [join(f.dir, "logbook")] };
-  for (const value of [null, [], {}, { patch: "invented" }, { command: "bad", extra: true }, { command: 1 },
-    { command: "*** Begin Patch\n*** Unknown: x\n*** End Patch" }])
-    assert.throws(() => patchEditDecision({ tool_name: "apply_patch", tool_input: value }, { sage: false, chief: false }, options));
-  const input = { tool_name: "apply_patch", tool_input: { command: "*** Begin Patch\n*** Add File: ordinary\n+fixed\n*** End Patch" } };
-  assert.equal(patchEditDecision(input, { sage: true, chief: true }, options).decision, "deny");
-  assert.equal(patchEditDecision(input, { sage: false, chief: true }, options).decision, "pass");
-  assert.equal(patchEditDecision({ tool_name: "read_file" }, { sage: true, chief: true }, options).decision, "pass");
-  assert.throws(() => patchEditDecision(input, { sage: false, chief: false }, { cwd: "relative", roots: options.roots }));
-  assert.equal(existsSync(join(f.dir, "ordinary")), false);
-});
-
-test("Codex patch policy rejects linked move sources and targets without applying changes", async t => {
-  const f = isolated(t, "codex");
-  const { patchEditDecision } = await import(pathToFileURL(join(f.plugin, "runtime/file-policy.mjs")));
-  assert.equal(typeof patchEditDecision, "function");
-  const root = join(f.dir, "logbook"), cwd = join(f.dir, "project"); mkdirSync(root); mkdirSync(cwd);
-  writeFileSync(join(root, "ledger.tsv"), "fixed");
-  linkSync(join(root, "ledger.tsv"), join(cwd, "alias"));
-  const decide = body => patchEditDecision({ tool_name: "apply_patch", tool_input: {
-    command: `*** Begin Patch\n${body}\n*** End Patch` } }, { sage: false, chief: false }, { cwd, roots: [root] });
-  for (const body of ["*** Update File: alias\n*** Move to: ordinary\n@@\n-fixed\n+new",
-    "*** Update File: ordinary\n*** Move to: alias\n@@\n-fixed\n+new", "*** Delete File: alias"])
-    assert.equal(decide(body).decision, "deny");
-  assert.equal(readFileSync(join(root, "ledger.tsv"), "utf8"), "fixed");
-  assert.equal(existsSync(join(cwd, "ordinary")), false);
-});
-
-test("Codex shell path decisions protect linked targets and literal equals names", async t => {
-  const f = isolated(t, "codex");
-  const { shellPathDecision } = await import(pathToFileURL(join(f.plugin, "runtime/file-policy.mjs")));
-  assert.equal(typeof shellPathDecision, "function");
-  const root = join(f.dir, "logbook"), cwd = join(f.dir, "project"); mkdirSync(root); mkdirSync(cwd);
-  writeFileSync(join(root, "ledger.tsv"), "unchanged");
-  symlinkSync(root, join(cwd, "linked"));
-  linkSync(join(root, "ledger.tsv"), join(cwd, "hard"));
-  for (const command of ["tee linked/ledger.tsv", "printf fixed > hard", "touch linked/a=b",
-    "cd ../logbook && touch new.tsv", "sort -olinked/result.tsv input"])
-    assert.equal(shellPathDecision(command, { cwd, roots: [root] }).decision, "deny", command);
-  assert.equal(readFileSync(join(root, "ledger.tsv"), "utf8"), "unchanged");
-  assert.equal(existsSync(join(root, "a=b")), false);
-});
-
-test("Codex shell path decisions deny unresolved writes without treating reader data as paths", async t => {
-  const f = isolated(t, "codex");
-  const { shellPathDecision } = await import(pathToFileURL(join(f.plugin, "runtime/file-policy.mjs")));
-  assert.equal(typeof shellPathDecision, "function");
-  const root = join(f.dir, "logbook"), cwd = join(f.dir, "project"); mkdirSync(root); mkdirSync(cwd);
-  for (const command of [null, "touch $UNKNOWN", "cd $UNKNOWN && touch file", "touch ~/file", "echo 'unfinished"])
-    assert.equal(shellPathDecision(command, { cwd, roots: [root] }).decision, "deny", String(command));
-  for (const command of ["cat ordinary.txt", "touch ordinary.txt", "touch ordinary=a", `printf '%s' '${root}/ledger.tsv'`])
-    assert.equal(shellPathDecision(command, { cwd, roots: [root] }).decision, "pass", command);
-  assert.equal(existsSync(join(cwd, "ordinary.txt")), false);
-});
-
-test("Codex shell path decisions reject invalid execution context and retain custom-array roots", async t => {
-  const f = isolated(t, "codex");
-  const { shellPathDecision } = await import(pathToFileURL(join(f.plugin, "runtime/file-policy.mjs")));
-  assert.equal(typeof shellPathDecision, "function");
-  const root = join(f.dir, "logbook"), cwd = join(f.dir, "project"); mkdirSync(root); mkdirSync(cwd);
-  for (const context of [{ cwd: "relative", roots: [root] }, { cwd, roots: [] },
-    { cwd, roots: new Array(1) }, { cwd, roots: [null] }])
-    assert.throws(() => shellPathDecision("cat ordinary.txt", context));
-  const roots = [root];
-  roots.some = () => false; roots.map = () => []; roots[Symbol.iterator] = function* () {};
-  assert.equal(shellPathDecision(`touch ${root}/ledger.tsv`, { cwd, roots }).decision, "deny");
-});
-
-// Completion changes capacity only. It does not record a successful task or review.
 test('exact completion releases one slot and repeated stale events cannot release newer work', async t => {
   const f = await roleAdmissionFixture(t, { total: 1, projects: [{ project: 'project-a', limit: 1 }] });
   assert.equal(typeof f.api.completeAdmission, 'function');
@@ -3542,16 +3163,6 @@ test('concurrent completion publishes once and reopened capacity still has one w
   assert.equal(admitted.filter(row => /capacity is occupied/.test(row.refused)).length, 1);
   assert.equal(f.api.readAdmission(f.journal).completions.length, 1);
 });
-
-test('completed native children cannot regain instructions through a repeated start binding', async t => {
-  const f = await nativeBindingFixture(t);
-  const assignment = f.reserve(1, 'lead', 'chief-of-staff');
-  const bound = f.bind(f.identity());
-  f.api.completeAdmission(f.journal, bound.binding);
-  assert.throws(() => f.bind(f.identity()), /could not bind/);
-  assert.equal(f.api.readAdmission(f.journal).completions[0].assignment, assignment.id);
-});
-
 
 test('verified interruption is immutable and releases only the exact bound slot in either provider', async t => {
   for (const provider of ['claude', 'codex']) {
@@ -4313,372 +3924,6 @@ test('review claims refuse malformed input with fixed errors and no caller mutat
   }
 });
 
-async function targetedNativeFixture(t, role = 'qa') {
-  const f = await nativeBindingFixture(t);
-  const instructions = await import(new URL('../runtime/instructions.mjs', f.url));
-  const review = reviewTarget(), runTarget = {task:'T1',run:'R1',role,round:0,taskBranch:review.branch,runBranch:'',candidate:review.sha};
-  const prepared = f.api.prepareAdmission(f.journal,f.scope,
-    {task:'T1',run:'R1',issuer:f.root,name:'agent_1'}, {issuerRole:'chief-of-staff',role},
-    completeBrief('Review this saved target.'), {review,runTarget}).preparation;
-  const message = instructions.preparedTaskMessage(prepared);
-  const {createHash} = await import('node:crypto');
-  const dispatch = {tool:'collaborationspawn_agent',turn:f.activation,name:'agent_1',argumentsHash:'a'.repeat(64),taskHash:createHash('sha256').update(message).digest('hex')};
-  const saved = f.api.reservePreparedAdmission(f.journal,f.scope,
-    {preparation:prepared.id,issuer:f.root,call:'spawn-1'},dispatch,'chief-of-staff');
-  const base = {schema:1,runtime:'0.160.0',session:f.root,actor:f.root,call:'spawn-1',turn:f.activation};
-  f.events.publish(f.observationsDirectory,{...base,kind:'spawn-request',name:'agent_1'});
-  f.events.publish(f.observationsDirectory,{...base,kind:'spawn-result',path:'/root/agent_1'});
-  const options = {directory:f.journal,project:f.scope.project,observationsDirectory:f.observationsDirectory};
-  return {...f,instructions,review,runTarget,prepared,message,saved,options};
-}
-
-test('target instructions deliver exact review scope and report values for every reviewer', async t => {
-  for (const role of ['code-reviewer','security-reviewer','ux-reviewer','qa']) {
-    const f = await targetedNativeFixture(t,role);
-    const delivered = f.instructions.boundChildInstructions(f.options,f.identity());
-    assert.equal(delivered.decision,'deliver');
-    for (const text of [f.message,delivered.brief]) {
-      assert(text.includes('# Saved run target\n\nTask round: 0\nTask branch: codex/t1-review\nRun branch: none\nCandidate: '+ 'a'.repeat(40)));
-      assert(text.includes('# Review target\n\nBranch: codex/t1-review\nCommit: '+ 'a'.repeat(40)+'\nTask round: 0\nReview cycle: 1'));
-      assert(text.includes(role === 'qa' ? 'RESULT is PASS or FAIL.' : 'RESULT is CLEAN or FINDINGS.'));
-      assert(text.includes('only the chief can accept the review'));
-      const evidence = /EVIDENCE must be a JSON object with exactly these fields: (\{[^\n]+\})/.exec(text);
-      assert(evidence, 'the child receives the exact evidence format');
-      const claims = f.api.parseReviewReport({...claimedReview(role),EVIDENCE:evidence[1]},role,f.review);
-      assert.equal(claims.evidence.commit,f.review.sha); assert.equal(claims.evidence.cycle,1);
-    }
-    assert.deepEqual(f.instructions.boundChildInstructions(f.options,f.identity()),delivered);
-    assert.equal(f.api.readAdmission(f.journal).bindings.length,1);
-  }
-});
-
-test('target instructions use only the linked preparation despite changed receipts or other saved work', async t => {
-  const f = await targetedNativeFixture(t);
-  f.api.prepareAdmission(f.journal,f.scope,{task:'T2',run:'R2',issuer:f.root,name:'other'},
-    {issuerRole:'chief-of-staff',role:'qa'},completeBrief('Other work.'),{review:{...f.review,sha:'b'.repeat(40)}});
-  f.prepared.review.sha='c'.repeat(40); f.prepared.runTarget.candidate='d'.repeat(40);
-  const bound = f.bind(f.identity());
-  assert.deepEqual(bound.review,f.review); assert.deepEqual(bound.runTarget,f.runTarget);
-  bound.review.sha='e'.repeat(40); bound.runTarget.candidate='f'.repeat(40);
-  const text = f.instructions.boundChildInstructions(f.options,f.identity()).brief;
-  assert(text.includes('Commit: '+ 'a'.repeat(40)));
-  for (const letter of ['b','c','d','e','f']) assert(!text.includes(letter.repeat(40)));
-  assert.throws(()=>f.instructions.boundChildInstructions(f.options,{...f.identity(),path:'/root/other'}));
-  assert.equal(f.api.readAdmission(f.journal).bindings.length,1);
-});
-
-test('T289: native reviewer instructions deliver one parseable findings contract', async t => {
-  const f = await targetedNativeFixture(t, 'qa');
-  const text = f.instructions.boundChildInstructions(f.options, f.identity()).brief;
-  assert.doesNotMatch(text, /Under FINDINGS, write `none` alone|The hook reads the report of a review/);
-  assert.match(text, /these EVIDENCE and FINDINGS formats replace the general report values above/);
-  assert.match(text, /FINDINGS must be a JSON array/);
-  const evidence = JSON.parse(/EVIDENCE must be a JSON object with exactly these fields: (\{[^\n]+\})/.exec(text)[1]);
-  const report = { STATUS: 'done', RESULT: 'PASS', EVIDENCE: JSON.stringify(evidence),
-    FINDINGS: '[]', QUESTIONS: 'none', 'NOT VERIFIED': 'Live deployment', BRANCH: f.review.branch };
-  assert.equal(f.api.parseReviewReport(report, 'qa', f.review).kind, 'qa-pass');
-  const problem = { severity: 'high', summary: 'An empty input loses the saved row; reproduced by the review.' };
-  const failed = f.api.parseReviewReport({ ...report, RESULT: 'FAIL', FINDINGS: JSON.stringify([problem]) }, 'qa', f.review);
-  assert.equal(failed.kind, 'qa-fail');
-  assert.deepEqual(failed.findings, [problem]);
-});
-
-test('target instructions include writer scope without introducing reviewer report rules', async t => {
-  const f = await roleAdmissionFixture(t);
-  const instructions = await import(new URL('../runtime/instructions.mjs',f.url));
-  const runTarget = {task:'T1',run:'R1',role:'implementer',round:2,taskBranch:'codex/t1-task',runBranch:'codex/r1-work',candidate:''};
-  const prepared = f.api.prepareAdmission(f.journal,f.scope,{task:'T1',run:'R1',issuer:'root',name:'writer'},
-    {issuerRole:'chief-of-staff',role:'implementer'},completeBrief('Build the saved work.'),{runTarget}).preparation;
-  const text = instructions.preparedTaskMessage(prepared);
-  assert(text.includes('Task round: 2\nTask branch: codex/t1-task\nRun branch: codex/r1-work\nCandidate: none'));
-  assert(!text.includes('# Review target')); assert(!text.includes('# Review report values'));
-  const plain = f.api.prepareAdmission(f.journal,f.scope,{task:'T2',run:'R2',issuer:'root',name:'plain'},
-    {issuerRole:'chief-of-staff',role:'implementer'},completeBrief('Ordinary saved work.')).preparation;
-  const ordinary = instructions.preparedTaskMessage(plain);
-  assert(ordinary.includes('Ordinary saved work.'));
-  assert(!ordinary.includes('# Saved run target')); assert(!ordinary.includes('# Review target'));
-});
-
-async function nativeContinuationFixture(t) {
-  const f = await nativeBindingFixture(t);
-  const { createHash } = await import('node:crypto');
-  const childTools = await import(new URL('../runtime/child-tool.mjs', f.url));
-  const stops = await import(new URL('../runtime/child-stop.mjs', f.url));
-  const instructions = await import(new URL('../runtime/instructions.mjs', f.url));
-  const first = f.reserve(1, 'qa', 'chief-of-staff');
-  const prior = f.bind(f.identity()).binding;
-  f.api.completeAdmission(f.journal, prior);
-  const observationsRoot = join(f.journal, '..', 'native-observations'), observations = join(observationsRoot, f.root);
-  cpSync(f.observationsDirectory, observations, { recursive: true });
-  const sessionsDir = join(f.journal, '..', 'sessions'); mkdirSync(sessionsDir);
-  const transcript = join(sessionsDir, 'child.jsonl'), sender = join(sessionsDir, 'root.jsonl');
-  const turn = '44444444-4444-4444-8444-444444444444';
-  const review = reviewTarget(), runTarget = {task:'T1',run:'R2',role:'qa',round:0,taskBranch:review.branch,runBranch:'',candidate:review.sha};
-  const prepared = f.api.prepareAdmission(f.journal, f.scope, {task:'T1',run:'R2',issuer:f.root,name:'next'},
-    {issuerRole:'chief-of-staff',role:'qa'}, completeBrief('Review the next saved assignment.'), {review,runTarget}).preparation;
-  const message = instructions.preparedTaskMessage(prepared);
-  const saved = f.api.reservePreparedContinuation(f.journal,f.scope,
-    {preparation:prepared.id,issuer:f.root,call:'followup-1',previous:first.id},
-    {tool:'collaborationfollowup_task',turn:f.activation,name:'next',argumentsHash:'b'.repeat(64),taskHash:createHash('sha256').update(message).digest('hex')},'chief-of-staff');
-  const start = value => [{type:'event_msg',payload:{type:'task_started',turn_id:value}},{type:'turn_context',payload:{turn_id:value}}];
-  const childPrefix = [{type:'session_meta',payload:{id:f.lead,session_id:f.root,parent_thread_id:f.root,agent_path:'/root/agent_1',cli_version:'0.160.0'}},
-    ...start(f.activation),{type:'event_msg',payload:{type:'task_complete',turn_id:f.activation}}];
-  const delivery = [...start(turn),{type:'response_item',payload:{type:'agent_message',id:'amsg_next',author:'/root',recipient:'/root/agent_1',content:[{type:'encrypted_content',encrypted_content:message}]}}];
-  const accepted = [{type:'session_meta',payload:{id:f.root,session_id:f.root,cli_version:'0.160.0'}},...start(f.activation),
-    {type:'response_item',metadata:{client_authored:false},payload:{type:'function_call',name:'followup_task',namespace:'collaboration',call_id:'followup-1',arguments:JSON.stringify({target:f.lead,message}),internal_chat_message_metadata_passthrough:{turn_id:f.activation}}},
-    {type:'response_item',metadata:{client_authored:false},payload:{type:'function_call_output',id:'fco_next',call_id:'followup-1',output:'',internal_chat_message_metadata_passthrough:{turn_id:f.activation}}}];
-  const save = (path, rows) => writeFileSync(path,rows.map(row=>JSON.stringify(row)+'\n').join(''));
-  save(sender,accepted); save(transcript,[...childPrefix,...delivery]);
-  f.events.publish(observations,{schema:1,runtime:'0.160.0',session:f.root,kind:'child-transcript',child:f.lead,turn:f.activation,transcript});
-  f.events.publish(observations,{schema:1,runtime:'0.160.0',session:f.root,kind:'followup-transcript',actor:f.root,call:'followup-1',turn:f.activation,target:f.lead,transcript:sender});
-  const options = {directory:f.journal,project:f.scope.project,observationsRoot,sessionsDir};
-  const native = {version:'0.160.0',actor:f.lead};
-  const input = {session:f.root,turn,transcript};
-  const bind = () => childTools.bindNativeChildTranscript(input,native,options);
-  const recover = () => childTools.recoverNativeChildDeliveries({version:'0.160.0',actor:f.root},f.root,options,saved.assignment.id);
-  const deliver = rows => save(transcript,[...childPrefix,...rows]);
-  return {...f,childTools,stops,prior,prepared,saved,review,runTarget,options,native,input,bind,recover,save,deliver,accepted,delivery,transcript,sender,turn,observations};
-}
-
-test('native continuation binding verifies both transcripts and preserves saved targets on retry', async t => {
-  const f = await nativeContinuationFixture(t);
-  const result = f.bind();
-  assert.equal(result.decision,'bound'); assert.equal(result.binding.turn,f.turn);
-  assert.deepEqual(result.review,f.review); assert.deepEqual(result.runTarget,f.runTarget);
-  assert.equal(f.bind().decision,'already-bound');
-  const state = f.api.readAdmission(f.journal);
-  assert.deepEqual(state.bindings[0],f.prior); assert.equal(state.bindings.length,2);
-  assert.equal(state.completions.length,1);
-  assert.equal(f.events.readObservations(f.observations).filter(row=>row.kind==='child-transcript').length,2);
-});
-
-test('native continuation binding refuses pending changed foreign duplicate and stale delivery evidence', async t => {
-  const f = await nativeContinuationFixture(t);
-  f.save(f.sender,f.accepted.slice(0,-1)); assert.throws(f.bind);
-  for (const mutate of [rows=>rows[3].payload.arguments=JSON.stringify({target:f.root,message:'changed'}),rows=>rows[4].metadata.client_authored=true]) {
-    const rows=structuredClone(f.accepted); mutate(rows); f.save(f.sender,rows); assert.throws(f.bind);
-  }
-  f.save(f.sender,f.accepted);
-  for (const mutate of [rows=>rows[2].payload.content[0].encrypted_content+='changed',rows=>rows[2].payload.recipient='/root/other',rows=>rows.push(structuredClone(rows[2])),
-    rows=>rows.push({type:'event_msg',payload:{type:'task_started',turn_id:'55555555-5555-4555-8555-555555555555'}})]) {
-    const rows=structuredClone(f.delivery); mutate(rows); f.deliver(rows); assert.throws(f.bind);
-  }
-  assert.equal(f.api.readAdmission(f.journal).bindings.length,1);
-  assert.equal(f.api.readAdmission(f.journal).completions.length,1);
-  f.deliver(f.delivery); assert.equal(f.bind().decision,'bound');
-});
-
-test('native continuation recovery retains pending capacity and recovers only its verified child after off', async t => {
-  const f = await nativeContinuationFixture(t);
-  f.api.changeAdmissionMode(f.journal,{...f.scope,after:f.activation,turn:'66666666-6666-4666-8666-666666666666',sage:false});
-  f.deliver([]); f.recover(); assert.equal(f.api.readAdmission(f.journal).bindings.length,1);
-  f.deliver(f.delivery); f.recover(); f.recover();
-  const state = f.api.readAdmission(f.journal);
-  assert.equal(state.bindings.length,2); assert.equal(state.completions.length,1);
-  assert.equal(state.bindings[1].assignment,f.saved.assignment.id);
-  assert.equal(f.api.completeAdmission(f.journal,f.prior).decision,'already-completed');
-  assert.equal(f.api.readAdmission(f.journal).completions.length,1);
-});
-
-function continuationTerminal(f) {
-  const text = 'Saved follow-up report.';
-  return [...f.delivery,{type:'response_item',payload:{type:'message',id:'next_report',role:'assistant',content:[{type:'output_text',text}],internal_chat_message_metadata_passthrough:{turn_id:f.turn}},
-    metadata:{client_authored:false,retained_source:{complete:true,id:{role:'assistant',turn_id:f.turn,message_id:'next_report'}}}},
-    {type:'event_msg',payload:{type:'task_complete',turn_id:f.turn,last_agent_message:text}}];
-}
-
-test('native continuation no-tool stop after off binds once and waits for terminal evidence', async t => {
-  const f = await nativeContinuationFixture(t);
-  f.api.changeAdmissionMode(f.journal,{...f.scope,after:f.activation,turn:'66666666-6666-4666-8666-666666666666',sage:false});
-  const stop={hook_event_name:'SubagentStop',session_id:f.root,agent_id:f.lead,turn_id:f.turn,transcript_path:f.sender,agent_transcript_path:f.transcript};
-  assert.equal(f.stops.completeNativeChild(stop,f.native,f.options).decision,'stop-observed');
-  assert.equal(f.api.readAdmission(f.journal).completions.length,1);
-  assert.throws(()=>f.stops.completeNativeChild({...stop,turn_id:f.activation},f.native,f.options));
-  assert.equal(f.api.readAdmission(f.journal).completions.length,1);
-  f.deliver(continuationTerminal(f));
-  assert.equal(f.stops.completeNativeChild(stop,f.native,f.options).decision,'completed');
-  assert.equal(f.stops.completeNativeChild(stop,f.native,f.options).decision,'already-completed');
-  assert.equal(f.api.readAdmission(f.journal).bindings.length,2);
-  assert.equal(f.api.readAdmission(f.journal).completions.length,2);
-});
-
-test('native continuation parent retries an unpublished transcript reference and completes exact work', async t => {
-  const f = await nativeContinuationFixture(t);
-  f.api.bindContinuationAdmission(f.journal,{...f.scope,assignment:f.saved.assignment.id,issuer:f.root,call:'followup-1',child:f.lead,turn:f.turn});
-  assert.equal(f.events.readObservations(f.observations).filter(row=>row.kind==='child-transcript').length,1);
-  f.deliver(continuationTerminal(f));
-  const reconcile=(actor,assignment=f.saved.assignment.id)=>f.stops.reconcileNativeCompletions({version:'0.160.0',actor},f.root,f.options,assignment);
-  reconcile(f.child); assert.equal(f.api.readAdmission(f.journal).completions.length,1);
-  reconcile(f.root,'unrelated'); assert.equal(f.api.readAdmission(f.journal).completions.length,1);
-  reconcile(f.root); reconcile(f.root);
-  const state=f.api.readAdmission(f.journal);
-  assert.equal(state.bindings.length,2); assert.equal(state.completions.length,2);
-  assert.equal(state.completions[1].assignment,f.saved.assignment.id);
-  assert.equal(f.events.readObservations(f.observations).filter(row=>row.kind==='child-transcript').length,2);
-});
-
-async function continuationReportFixture(t) {
-  const f = await nativeContinuationFixture(t);
-  const {createHash} = await import('node:crypto');
-  const reports = await import(new URL('../runtime/report-intake.mjs',f.url));
-  const recovery = await import(new URL('../runtime/report-recovery.mjs',f.url));
-  const fields = claimedReview('qa');
-  const text = Object.entries(fields).map(([key,value])=>key+'\n'+value).join('\n\n');
-  const terminal = continuationTerminal(f);
-  terminal.at(-2).payload.content[0].text=text;
-  terminal.at(-1).payload.last_agent_message=text;
-  f.deliver(terminal);
-  const parent={version:'0.160.0',actor:f.root};
-  const read=()=>reports.readChildReport({name:'next'},parent,f.options);
-  const record=reportHash=>reports.recordChildReport({name:'next',reportHash},parent,f.options);
-  const reportHash=createHash('sha256').update(text).digest('hex');
-  return {...f,reports,recovery,fields,text,terminal,parent,read,record,reportHash};
-}
-
-test('native follow-up reports reconcile exact terminal evidence and preserve one immutable receipt', async t => {
-  const f=await continuationReportFixture(t);
-  const ready=f.read();
-  assert.equal(ready.decision,'report-ready'); assert.equal(ready.assignment,f.saved.assignment.id);
-  assert.equal(ready.run,'R2'); assert.equal(ready.turn,f.turn); assert.deepEqual(ready.report,f.fields);
-  assert.equal(ready.reportHash,f.reportHash);
-  const before=f.api.readAdmission(f.journal);
-  assert.equal(before.completions.length,2); assert.equal((before.reports ?? []).length,0);
-  assert.deepEqual(f.read(),ready); assert.deepEqual(f.api.readAdmission(f.journal),before);
-  assert.equal(f.record(ready.reportHash).decision,'report-recorded');
-  assert.equal(f.record(ready.reportHash).decision,'already-recorded');
-  const after=f.api.readAdmission(f.journal);
-  assert.equal(after.reports.length,1); assert.equal(after.reports[0].binding.assignment,f.saved.assignment.id);
-  assert.deepEqual(after.reservations,before.reservations); assert.deepEqual(after.bindings,before.bindings);
-  assert.deepEqual(after.completions,before.completions); assert.deepEqual(after.modes,before.modes);
-  assert.deepEqual(after.reports[0].binding,after.bindings[1]);
-});
-
-test('native follow-up reports refuse foreign callers and changed hashes before saving claims', async t => {
-  const f=await continuationReportFixture(t);
-  assert.throws(()=>f.reports.readChildReport({name:'next'},{version:'0.160.0',actor:f.child},f.options));
-  assert.throws(()=>f.reports.readChildReport({name:'absent'},f.parent,f.options));
-  assert.throws(()=>f.record('a'.repeat(64)));
-  assert.equal((f.api.readAdmission(f.journal).reports ?? []).length,0);
-  const ready=f.read();
-  const changed=structuredClone(f.terminal);
-  changed.at(-2).payload.content[0].text+='\nchanged'; changed.at(-1).payload.last_agent_message+='\nchanged';
-  f.deliver(changed); assert.throws(()=>f.record(ready.reportHash));
-  assert.equal((f.api.readAdmission(f.journal).reports ?? []).length,0);
-  f.deliver(f.terminal); assert.equal(f.record(ready.reportHash).decision,'report-recorded');
-  assert.equal(f.api.readAdmission(f.journal).reports[0].reportHash,f.reportHash);
-});
-
-test('native follow-up reports retain exact recovery evidence after off and transcript removal', async t => {
-  const f=await continuationReportFixture(t);
-  f.recover();
-  f.stops.reconcileNativeCompletions(f.parent,f.root,f.options,f.saved.assignment.id);
-  const binding=f.api.readAdmission(f.journal).bindings.find(row=>row.assignment===f.saved.assignment.id);
-  const report={binding,task:'T1',run:'R2',reportMessage:'next_report',reportHash:f.reportHash,text:f.text};
-  for(const changed of [{...report,run:'R1'}, {...report,binding:{...binding,turn:f.activation}}, {...report,reportMessage:'other_report'}]) {
-    assert.throws(()=>f.recovery.recordReportRecovery(changed,f.options));
-  }
-  f.recovery.recordReportRecovery(report,f.options);
-  assert.equal(f.recovery.hasReportRecovery(report,f.options),true);
-  f.recovery.recordReportRecovery(report,f.options);
-  assert.equal(f.events.readObservations(f.observations).filter(row=>row.kind==='report-recovery-verified').length,1);
-  assert.equal((f.api.readAdmission(f.journal).reports ?? []).length,0);
-  f.api.recordReportAdmission(f.journal,report);
-  f.api.changeAdmissionMode(f.journal,{...f.scope,after:f.activation,turn:'66666666-6666-4666-8666-666666666666',sage:false});
-  rmSync(f.transcript);
-  assert.deepEqual(f.read().report,f.fields);
-  assert.equal(f.record(f.reportHash).decision,'already-recorded');
-  assert.throws(()=>f.reports.readChildReport({name:'next'},{version:'0.160.0',actor:f.lead},f.options));
-  assert.equal((f.api.readAdmission(f.journal).reports ?? []).length,1);
-});
-
-async function leadPreparationFixture(t) {
-  const f=await nativeBindingFixture(t);
-  const preparation=await import(new URL('../runtime/preparation.mjs',f.url));
-  const instructions=await import(new URL('../runtime/instructions.mjs',f.url));
-  const root=join(f.journal,'..'), projectDirectory=join(root,'lead-project'), logbookRoot=join(root,'lead-logbook');
-  mkdirSync(projectDirectory);
-  const runEnv={...process.env,SAGE_HOME:logbookRoot};
-  const git=(...args)=>execFileSync('git',['-C',projectDirectory,'-c','core.hooksPath=/dev/null','-c','core.fsmonitor=false',
-    '-c','user.name=Fixture','-c','user.email=fixture@users.noreply.github.com',...args],{env:runEnv,encoding:'utf8'});
-  git('init','--quiet','-b','codex/t1-fixture'); git('commit','--quiet','--allow-empty','-m','fixture');
-  git('branch','codex/t2-fixture');
-  const runTool=f.api.createStateTool({defaultRoot:()=>{throw Error('No ambient logbook');}});
-  const cli=(...args)=>runTool.sage([...args,'--project',projectDirectory],runEnv);
-  cli('init');cli('task','add', '--priority', 'P2','--title','Lead fixture','--size','small');cli('task','T1','set','branch=codex/t1-fixture');
-  cli('run','add','T1','--role','lead');cli('run','add','T1','--role','qa');
-  cli('task','add', '--priority', 'P2','--title','Chief fixture','--size','small');cli('task','T2','set','branch=codex/t2-fixture');cli('run','add','T2','--role','qa');
-  const target=(run,task='T1',role='lead')=>runTool.captureRunAssignment({project:projectDirectory,task,run,role},runEnv);
-  const review=(run,task)=>runTool.captureReviewTarget({project:projectDirectory,task,run,role:'qa',cycle:1},runEnv);
-  const initial=f.api.prepareAdmission(f.journal,f.scope,{task:'T1',run:'R1',issuer:f.root,name:'agent_1'},
-    {issuerRole:'chief-of-staff',role:'lead'},completeBrief('Lead this task.'),{runTarget:target('R1')}).preparation;
-  const args=f.args(1,f.root,f.scope);args[3].name='agent_1';args[3].tool='collaborationspawn_agent';
-  const first=f.api.reservePreparedAdmission(f.journal,f.scope,{preparation:initial.id,issuer:f.root,call:'spawn-1'},args[3],'chief-of-staff').assignment;
-  const base={schema:1,runtime:'0.160.0',session:f.root,actor:f.root,call:'spawn-1',turn:f.activation};
-  f.events.publish(f.observationsDirectory,{...base,kind:'spawn-request',name:'agent_1'});
-  f.events.publish(f.observationsDirectory,{...base,kind:'spawn-result',path:'/root/agent_1'});
-  const prior=f.bind(f.identity()).binding;
-  const observationsRoot=join(root,'lead-observations'),sessionsDir=join(root,'lead-sessions');mkdirSync(sessionsDir);
-  cpSync(f.observationsDirectory,join(observationsRoot,f.root),{recursive:true});
-  const options={directory:f.journal,project:f.scope.project,observationsRoot,projectDirectory,logbookRoot,sessionsDir};
-  const native={version:'0.160.0',actor:f.lead};
-  const input={task:'T1',run:'R2',name:'reviewer',role:'qa',reviewCycle:1,brief:completeBrief('Review the lead task.')};
-  const prepare=(changes={})=>preparation.prepareNativeTask({...input,...changes},native,options);
-  const spawnInput=saved=>({hook_event_name:'PreToolUse',session_id:f.root,turn_id:f.activation,
-    tool_name:'collaborationspawn_agent',tool_use_id:'team-spawn',tool_input:{task_name:saved.name,message:saved.message,fork_turns:'none'}});
-  const spawn=(saved,turn=f.activation)=>preparation.reservePreparedSpawn({...spawnInput(saved),turn_id:turn},native,options);
-  return {...f,preparation,instructions,first,prior,options,native,input,prepare,spawn,cli,target,review};
-}
-
-test('native lead preparation refuses other tasks while preserving same-task and chief work', async t => {
-  const f=await leadPreparationFixture(t),before=f.api.readAdmission(f.journal);
-  assert.throws(()=>f.prepare({task:'T2',run:'R3'}),/could not verify this task preparation/);
-  assert.deepEqual(f.api.readAdmission(f.journal),before);
-  const saved=f.prepare(); assert.equal(saved.task,'T1');
-  assert.equal(f.spawn(saved).decision,'permit-once');
-  const chief=f.preparation.prepareNativeTask({...f.input,task:'T2',run:'R3',name:'chief_review'},
-    {version:'0.160.0',actor:f.root},f.options);
-  assert.equal(chief.task,'T2');
-});
-
-test('native lead preparation blocks an older foreign-task preparation before dispatch', async t => {
-  const f=await leadPreparationFixture(t);
-  const old=f.api.prepareAdmission(f.journal,f.scope,{task:'T2',run:'R3',issuer:f.lead,name:'foreign'},
-    {issuerRole:'lead',role:'qa'},f.input.brief,{runTarget:f.target('R3','T2','qa'),review:f.review('R3','T2')}).preparation;
-  const before=f.api.readAdmission(f.journal);
-  assert.throws(()=>f.spawn({name:old.name,message:f.instructions.preparedTaskMessage(old)}),/could not verify this task preparation/);
-  assert.deepEqual(f.api.readAdmission(f.journal),before);
-});
-
-test('native lead preparation uses the unfinished continuation and original native identity', async t => {
-  const f=await leadPreparationFixture(t);
-  f.api.completeAdmission(f.journal,f.prior);
-  f.cli('run','done','R1','--status','done'); f.cli('run','add','T1','--role','lead'); f.cli('run','add','T1','--role','qa');
-  const next=f.api.prepareAdmission(f.journal,f.scope,{task:'T1',run:'R4',issuer:f.root,name:'lead_again'},
-    {issuerRole:'chief-of-staff',role:'lead'},completeBrief('Continue the lead task.'),
-    {runTarget:f.target('R4')}).preparation;
-  const saved=f.api.reservePreparedContinuation(f.journal,f.scope,{preparation:next.id,issuer:f.root,call:'lead-followup',previous:f.first.id},
-    {tool:'collaborationfollowup_task',turn:f.activation,name:next.name,argumentsHash:'b'.repeat(64),taskHash:'c'.repeat(64)},'chief-of-staff');
-  const bound={...f.scope,assignment:saved.assignment.id,issuer:f.root,call:'lead-followup',child:f.lead,turn:'44444444-4444-4444-8444-444444444444'};
-  f.api.bindContinuationAdmission(f.journal,bound);
-  const child=f.prepare({run:'R5',name:'next_reviewer'});
-  assert.equal(child.task,'T1'); assert.equal(f.spawn(child,bound.turn).decision,'permit-once');
-  assert.throws(()=>f.prepare({task:'T2',run:'R3',name:'foreign_after_resume'}));
-  assert.equal(f.api.readAdmission(f.journal).bindings.length,2);
-  f.api.completeAdmission(f.journal,bound);
-  assert.throws(()=>f.prepare({run:'R5',name:'after_second_end'}));
-});
-
-test('native lead preparation refuses completed and interrupted leads with valid pending work', async t => {
-  for(const outcome of ['complete','interrupt']) {
-    const f=await leadPreparationFixture(t),saved=f.prepare();
-    if(outcome==='complete') f.api.completeAdmission(f.journal,f.prior);
-    else f.api.interruptAdmission(f.journal,f.prior,'a'.repeat(64));
-    const before=f.api.readAdmission(f.journal);
-    assert.throws(()=>f.prepare({run:'R2',name:'after_end'}));
-    assert.throws(()=>f.spawn(saved));
-    assert.deepEqual(f.api.readAdmission(f.journal),before);
-  }
-});
 
 test('T47: packaged SDK keeps Zod tool validation and refuses unused JSON Schema elicitation', async t => {
   const { dir, plugin } = isolated(t, 'codex');
@@ -4897,21 +4142,6 @@ test("reported run recovers evidence linked before an interrupted temporary-file
   assert.equal(f.finish().decision, "already-finished");
 });
 
-
-test("native interruption fixture permits only the root's exact one-field child target", async () => {
-  const { fixtureInterruptDecision } = await import("./fixtures/codex-native/setup-completion.mjs");
-  const input = { tool_name: "collaborationinterrupt_agent", session_id: "root-session", tool_input: { target: "/root/probe_child" } };
-  const context = { actor: "root-session" };
-  assert.equal(fixtureInterruptDecision(input, context, true).decision, "pass");
-  for (const [event, actor, enabled] of [
-    [input, context, false], [input, { actor: "child-session" }, true],
-    [{ ...input, agent_id: "child-session" }, context, true],
-    [{ ...input, session_id: "" }, { actor: "" }, true],
-    ...[null, [], {}, { target: "/root/other" }, { target: "/root/probe_child", extra: true },
-      { agent_id: "/root/probe_child" }].map(tool_input => [{ ...input, tool_input }, context, true]),
-  ]) assert.equal(fixtureInterruptDecision(event, actor, enabled).decision, "deny");
-  assert.equal(fixtureInterruptDecision({ ...input, tool_name: "list_mcp_resources" }, context, true), null);
-});
 
 async function continuationFailureFixture(t) {
   const f = await interruptedFinishFixture(t, "qa", false);
