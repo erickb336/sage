@@ -10,13 +10,11 @@ This change implements the first Codex milestone: skills, advice hooks and manua
 
 | Source package | Responsibility | Install output |
 | --- | --- | --- |
-| `packages/sage-core` | Principle selection, change fingerprints, task routes, findings, review verdicts, merge eligibility, locking and board rendering | Identical `core/` files bundled in each plugin |
+| `packages/sage-core` | The role-to-principle map, task routes, findings, review verdicts, merge eligibility, locking and board rendering | Identical `core/` files bundled in each plugin |
 | `packages/sage-claude` | Claude event translation, launcher, orchestration hooks, agents, commands, model defaults and storage default | `plugins/sage` |
 | `packages/sage-codex` | Codex event translation, native manifest, manual logbook skill and storage default | `plugins/sage-codex` |
 
 Providers import the public `sage-core` entry point. Core never imports either provider. `createStateTool` creates an instance with a default-root function, allowed models and model defaults; it does not change process environment or share mutable provider configuration. The board receives that instance's operations, replacing the previous circular module imports.
-
-`applyPrinciples` accepts a small normalized event and returns added context or a stop decision. Each adapter owns native field names and response JSON. Codex only sends advice events; it never invokes the shared stop gate.
 
 The root's `principles/`, `writing/` and `preferences/` remain the authoring inputs for core's shared skills. `scripts/build.mjs` generates them once, then assembles both outputs. These inputs belong with `sage-core` when repositories split. Claude roles stay in the Claude source package until Codex can use and enforce them; there is no copied Codex role set to maintain.
 
@@ -64,7 +62,7 @@ Start a new Codex session with its hook features enabled:
 codex --enable codex_hooks --enable plugin_hooks
 ```
 
-Review and trust Sage's hook commands through Codex's hook controls when requested. Sage does not bypass hook trust or change global configuration itself. Use the `sage` skill for manual logbook commands. A design request or a patch to a test file should add principle context once per session/child. Check this in the target client before relying on automatic advice; skills and manual commands remain usable separately.
+Review and trust Sage's hook commands through Codex's hook controls when requested. Sage does not bypass hook trust or change global configuration itself. Use the `sage` skill for manual logbook commands. Skills and manual commands remain usable separately.
 
 The native `.codex-plugin/plugin.json` is intentional. In release `rust-v0.159.2`, a portable root manifest discovers skills but the loader excludes its hooks. `plugin/read` verified 29 skills and both hooks after switching to the native manifest. See the release's [plugin manager](https://github.com/openai/codex/blob/rust-v0.159.2/codex-rs/core-plugins/src/manager.rs) and [loader](https://github.com/openai/codex/blob/rust-v0.159.2/codex-rs/core-plugins/src/loader.rs).
 

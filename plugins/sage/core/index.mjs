@@ -4,7 +4,6 @@ export { sharedRoot } from "./shared-root.mjs";
 export { writerClass } from "./chiefs.mjs";
 export { readLocalGit } from "./local-git.mjs";
 export { checkoutContains, resolveCheckoutPath, verifiedCheckout } from "./checkout-path.mjs";
-export { applyPrinciples, MOMENTS, fingerprint } from "./principles.mjs";
 export { shellCommands, programsRun, commandText } from "./command-reader.mjs";
 export { createCommandPolicy, mentionsMerge, gitSubcommand, programName, unreadable } from "./command-policy.mjs";
 export { createPushPolicy, gitHubRepository } from "./push-policy.mjs";

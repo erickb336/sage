@@ -11,11 +11,10 @@ import { test } from "node:test";
 import { createInterface } from "node:readline";
 import { createHash } from "node:crypto";
 import { ROOT, filesUnder, outputs } from "./build.mjs";
-import { createStateTool, applyPrinciples } from "../packages/sage-core/index.mjs";
+import { createStateTool } from "../packages/sage-core/index.mjs";
 import { stateKey } from "../plugins/sage-codex/hooks/hook-state.mjs";
 
 const context = (output) => output?.hookSpecificOutput?.additionalContext ?? "";
-const state = () => ({ given: [], failures: {} });
 const source = (path) => readFileSync(join(ROOT, path), "utf8");
 const json = (path) => JSON.parse(source(path));
 
@@ -577,21 +576,6 @@ test("Codex hook state keys hash the session and the child, so a child gets its 
   assert.notEqual(stateKey({ session_id: "a/b" }), stateKey({ session_id: "a_b" }));
   assert.equal(stateKey({ session_id: "" }), undefined);
   assert.equal(stateKey({}), undefined);
-});
-
-test("unknown check outcomes cannot erase recorded failures in shared policy", (t) => {
-  const dir = mkdtempSync(join(realpathSync(tmpdir()), "sage-outcome-"));
-  t.after(() => rmSync(dir, { recursive: true, force: true }));
-  execFileSync("git", ["init", "-q", dir]);
-  writeFileSync(join(dir, "code.js"), "one");
-  const s = state();
-  const input = { kind: "after-tool", cwd: dir, command: "npm test", outcome: "failure" };
-  applyPrinciples(input, s, (name) => name);
-  assert.ok(s.failures["npm test"]);
-  applyPrinciples({ ...input, outcome: "unknown" }, s, (name) => name);
-  assert.ok(s.failures["npm test"]);
-  applyPrinciples({ ...input, outcome: "success" }, s, (name) => name);
-  assert.equal(s.failures["npm test"], undefined);
 });
 
 test("check rejects a foreign file and build removes it from an assembled plugin", (t) => {
