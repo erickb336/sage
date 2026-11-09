@@ -2209,6 +2209,55 @@ test("C4: a file tool's path to a sage root that does not exist yet is compared 
   assert.equal(denied(s.send({ ...tool("Write", { file_path: join(at, "CASE-STS", "x") }, { cwd: s.dir }), ...AGENT })), undefined, "a folder next to the root");
 });
 
+// T933 (gap G21): a read-only role changes no files from the shell either. The hook only reads these commands; none runs.
+const READ_ONLY_ROLES = ["code-reviewer", "security-reviewer", "ux-reviewer", "qa", "pe", "lead"];
+/** A scratch folder in the temp folder, outside the project (FEATURE). */
+const SCRATCH = realpathSync(mkdtempSync(join(tmpdir(), "sage-scratch-")));
+const SHELL_WRITES = ["sed -i '' 's/a/b/' README.md", "sed -i.bak s/a/b/ src/app.js", "echo x > README.md", "printf x >> notes.txt",
+  "cp README.md README.bak", "mv src/a.js src/b.js", "rm -rf src", "rm README.md", "touch new.txt", "npm test 2>&1 | tee test.log",
+  `echo x > ${FEATURE}/notes.txt`, // the project is in the temp folder here, and a redirection into the project still counts
+  "echo x > $TMPDIR/out.txt", // a variable: the hook does not expand it, so the target is not a known scratch folder
+  `cp README.md ${SCRATCH}/copy.md`, `sed -i '' s/a/b/ ${SCRATCH}/copy.md`, // only a redirection passes into scratch
+  `node -e "require('fs').writeFileSync('a.txt', 'x')"`, "git diff --output=out.patch"];
+const SHELL_READS = ["npm test", "node --test scripts/sage-hook-1.test.mjs", `npm test > ${SCRATCH}/out.txt 2>&1`,
+  `cat > ${SCRATCH}/probe.mjs <<'EOF'\nconsole.log(1)\nEOF`, `node ${SCRATCH}/probe.mjs`, `cd ${SCRATCH} && echo x > out.txt`,
+  `git show HEAD:README.md | sed 's/a/b/' > ${SCRATCH}/copy.md`, "npm test > /dev/null 2>&1", "cat README.md", "grep -n sage README.md",
+  "git diff main...HEAD", "git log --oneline -5", "mkdir -p /tmp/sage-t933-probe", `git worktree add --detach ${SCRATCH}/old HEAD`];
+
+test("T933: in sage mode a reviewer, QA, the PE and the lead change no files from the shell; a redirection into scratch passes", () => {
+  const s = session();
+  s.send(prompt("sage mode"));
+  for (const role of READ_ONLY_ROLES) {
+    const who = { agent_id: `ro-${role}`, agent_type: `sage:${role}` };
+    for (const command of SHELL_WRITES) {
+      assert.match(denied(s.send(bash(command, FEATURE, who))) ?? "", new RegExp(`the ${role} agent changes no files, also not from the shell.*write form.*Report the finding instead.*scratch folder`), `${role}: ${command}`);
+    }
+    for (const command of SHELL_READS) assert.equal(s.send(bash(command, FEATURE, who)), undefined, `${role}: ${command}`);
+  }
+  // Every command tool, also when the agent type has another letter case.
+  const qa = { agent_id: "ro-qa", agent_type: "Sage:QA" };
+  for (const name of ["Monitor", "PowerShell", "mcp__terminal__run_in_terminal"]) {
+    assert.match(denied(s.send(tool(name, { command: "rm -rf src", description: "d" }, { cwd: FEATURE, ...qa }))) ?? "", /the qa agent changes no files/, name);
+  }
+  // A sage role that core does not know counts as read-only.
+  assert.match(denied(s.send(bash("rm -rf src", FEATURE, { agent_id: "x1", agent_type: "sage:investigate" }))) ?? "", /the investigate agent changes no files/);
+});
+
+test("T933: the writers, the chief, other agents and every agent outside sage mode keep their shell writes", () => {
+  const s = session();
+  s.send(prompt("sage mode"));
+  for (const role of ["implementer", "designer", "arena-judge"]) {
+    for (const command of SHELL_WRITES) assert.equal(s.send(bash(command, FEATURE, { agent_id: `w-${role}`, agent_type: `sage:${role}` })), undefined, `${role}: ${command}`);
+  }
+  for (const command of SHELL_WRITES) {
+    assert.equal(s.send(bash(command)), undefined, `the chief: ${command}`);
+    assert.equal(s.send(bash(command, FEATURE, { agent_type: "sage:chief-of-staff" })), undefined, `the chief as an agent type: ${command}`);
+    assert.equal(s.send(bash(command, FEATURE, { agent_id: "gp", agent_type: "general-purpose" })), undefined, `an agent with no sage role: ${command}`);
+  }
+  const off = session();
+  for (const role of READ_ONLY_ROLES) assert.equal(off.send(bash("rm -rf src", FEATURE, { agent_id: `ro-${role}`, agent_type: `sage:${role}` })), undefined, `${role} outside sage mode`);
+});
+
 // T100: two lessons sealed for agents. The hook only reads these commands; nothing here runs ps or kill.
 /** The hook's own PATH: node, then /usr/bin and /bin, so a bare ps resolves to the real one even when the run has a fake ps first on PATH. */
 const SYSTEM_PATH = { PATH: `${dirname(process.execPath)}:/usr/bin:/bin` };
