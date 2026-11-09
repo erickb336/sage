@@ -16,8 +16,7 @@
   - Use only the shared frontmatter keys: `name`, `description`, `license`, `allowed-tools`, `metadata`.
   - `name` equals the folder name.
 - **Claude hooks** (`packages/sage-claude/hooks/`):
-  - `hooks.json` runs `principles-hook.mjs`, and `claude.json` runs `sage-hook.mjs`.
-  - The hooks are hand-written. The principle hook reads each principle's text from its skill.
+  - `claude.json` runs `sage-hook.mjs` through `launcher.mjs`. The hooks are hand-written.
   - Codex hooks live in `packages/sage-codex/hooks/`. Only verified events go in its hook manifest.
 - **Sage mode:**
   - A rule that matters goes into code (the sage hook or the state tool), with a test. An instruction in a prompt alone is not enough.
