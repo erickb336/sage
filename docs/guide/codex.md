@@ -16,6 +16,8 @@ The design of the two provider plugins is in [Separate provider packages](../des
 | A principle at the moment it applies | Yes | Yes, for a design request, a test or document patch, a README and a commit |
 | Advice after a failed check | Yes | No: Codex's shell hook output does not give a reliable exit status |
 | The logbook and the board | Yes | Yes: the plugin's `sage` MCP tools write the logbook, and the board phrases show the board ([The board in Codex](#the-board-in-codex)) |
+| Programs (one goal, several tasks, a breakdown gate) | Yes | Yes: the `program_propose` tool opens the breakdown gate, and `task_set` with `program=` puts a task in a program or takes it out ([The logbook tools](#the-logbook-tools)) |
+| The settings: cycle counts, `max_leads`, the project's board name and archive | Yes | Yes: the `config` tool, when you ask the chief |
 | The stop check of the chief's turn | Yes | No: sage adds no hook at the end of the chief's turn in Codex. The report check below covers role agents |
 | sage mode: the chief's role | Yes | Yes: the `sage mode` phrase gives it, and it comes back after a compaction |
 | Role agents | Yes: the lead, the implementer, the reviewers, QA, the PE, the designer and the arena judge | The public helper supports each of these roles and the investigation roles. The chief starts one lead for each task with a build, and the lead starts its team and records its task; other role agents start no agents and record nothing. A pilot on stock Codex ran a lead and its team with a test model, and each thread needs a multi-agent v2 model (see [start a role agent](../../packages/sage-codex/skills/sage/references/roles.md)). |
@@ -274,6 +276,8 @@ The plugin starts a local MCP server, `sage`, in the desktop app and in the CLI.
 | `claim` | `claim <T>`: take a task with no owning chief in a [shared logbook](using-sage.md#shared-logbooks) |
 | `offer`, `cancel`, `accept`, `release` | `offer <T>`, `cancel <T>`, `accept <T>`, `release <T>`: [hand a task to another chief](using-sage.md#shared-logbooks) |
 | `task_add`, `task_set` | `task add`, `task <T> set` |
+| `program_propose` | `program propose`, `program propose <PG>`: [a program](using-sage.md#waits-and-programs) and its breakdown gate. A task joins or leaves with `task_set` `program=` |
+| `config` | `config key=value ...`: the cycle counts, `max_leads` and the other counts for all projects, and the project's board name and archive (`name=`, `archived=`) |
 | `task_adopt` | `task-adopt <T>`: adopt another provider's task and PR from a separate logbook, with fresh destination reviews. In a shared logbook it refuses: use the takeover gate |
 | `run_add`, `run_done` | `run add`, `run done` |
 | `finding_add`, `finding_triage`, `finding_close`, `finding_move` | `finding add`, `triage`, `close`, `move` |
