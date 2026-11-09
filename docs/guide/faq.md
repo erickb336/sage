@@ -21,7 +21,7 @@ Autopilot is off until you send `autopilot on` alone, while sage mode is on. Tex
 
 In the Codex CLI and the desktop app, sage mode, autopilot, the logbook tools and the shared logbook with Claude work through the sage plugin. The chief starts one lead for each task, and the lead starts the implementer, the reviewers and QA.
 
-A pilot ran a lead and its team with a test model. The PE, the designer and the arena have not run on a real task in Codex yet, and the agent caps and the board phrases do not work there yet. See [sage in Codex](codex.md).
+A pilot ran a lead and its team with a test model. The PE, the designer and the arena have not run on a real task in Codex yet, and the agent caps do not work there yet. See [sage in Codex](codex.md).
 
 **How mature is it?** Early. I use it every day to build sage itself.
 

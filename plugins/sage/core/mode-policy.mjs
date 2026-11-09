@@ -44,12 +44,11 @@ export function phrasesNear(message) {
 
 /**
  * What differs between the hosts in the mode notes: the host's name, when a phrase works (and the limits of the host),
- * whether the board phrases work, and the update command. The default is Claude Code.
+ * and the update command. The default is Claude Code.
  */
 const claudeHost = {
   name: "Claude",
   timing: "An on phrase works only as a message alone while Claude is idle. An off phrase also works in a message sent while Claude works, but there it turns only autopilot off.",
-  board: true,
   update: "claude plugin update sage@sage",
 };
 
@@ -63,7 +62,8 @@ export function phraseHelp({ sage, autopilot }, host = claudeHost) {
     "Switches: send the phrase alone, as the whole message, in any letter case. Spaces at the ends and one full stop are fine. Any other message switches nothing.",
     host.timing,
     ...lines(false),
-    ...(host.board ? ["Board: at the start of a message.", ...BOARD_PHRASES.map(([a, b, what]) => line([a, b], what))] : []),
+    "Board: at the start of a message.",
+    ...BOARD_PHRASES.map(([a, b, what]) => line([a, b], what)),
     ...(host.update ? ["Maintenance: in a terminal, not in the chat.", line([host.update], "updates sage; each session uses the new version at its next event")] : []),
     "Help:",
     ...lines(true),

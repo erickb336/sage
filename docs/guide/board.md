@@ -24,7 +24,7 @@ Claude recognizes these phrases only at the start of your own message, outside q
 - A question mark works right after the phrase, also inside the bold (`**show board?**`). After the closing stars (`**show board**?`), it does not work.
 - Text after a question mark on the same line does not trigger the phrase.
 
-In Codex, these phrases do not work by themselves yet. Use the board commands of the `sage` skill instead, as [sage in Codex](codex.md) tells.
+Codex recognizes the same phrases by the same rules. There, the board page starts after you approve one prompt, as [The board in Codex](codex.md#the-board-in-codex) tells.
 
 The six columns are Backlog, Design, Building, In review, Ready to merge, and Done. Done includes merged and concluded tasks from the last seven days, when their completion date is recorded. Abandoned tasks remain available by exact lookup.
 
@@ -156,7 +156,7 @@ The offline HTML file holds the programs list and each program's page too, as pa
 
 The board server only reads your logbooks. It does not make or change a logbook, change the chat board's list of what merged since the last board, fetch from GitHub, or decide whether a pull request may merge. The state tool still records each change and applies the merge rules.
 
-In Claude, `show board` also starts the local board server on the Mac when it is not running (the first time, it sets it up from the standard Claude and Codex roots and the shared root), and the chief shows its address, or why it is not running, next to the chat board. On the Mac the board needs no sign-in.
+In Claude and in Codex, `show board` also starts the local board server on the Mac when it is not running (the first time, it sets it up from the standard Claude and Codex roots and the shared root), and the chief shows its address, or why it is not running, next to the chat board. In Codex, this start runs outside Codex's sandbox, so Codex asks you to approve it ([The board in Codex](codex.md#the-board-in-codex)). On the Mac the board needs no sign-in.
 
 On the phone, through a private HTTPS tunnel, you sign in as `sage` with your own password. Set it once in Terminal on the Mac with the `board --set-password` command that the line gives; until then, access from outside the Mac is off.
 
