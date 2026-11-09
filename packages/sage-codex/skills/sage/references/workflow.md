@@ -31,7 +31,7 @@ For a run created through this manual workflow, confirmed owner interruption is 
 
 After compaction or restart, read current task/run records, reports, branch/head and host status. A stored run or old mode note does not authenticate a live child. If continuity is uncertain, require explicit owner re-entry and resolve ownership before dispatch. Do not send new child input to manufacture a terminal result.
 
-Never use the manual CLI as a workaround for a refusal. Preserve the chosen Codex model. Advice is optional; this workflow changes no hooks, settings or enforcement defaults.
+Never use the manual CLI as a workaround for a refusal. Preserve the chosen Codex model. This workflow changes no hooks, settings or enforcement defaults.
 
 ## Edit project files with explicit targets
 

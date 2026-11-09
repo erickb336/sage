@@ -5,12 +5,13 @@ import { chmodSync, cpSync, existsSync, lstatSync, linkSync, mkdirSync, mkdtempS
 import { tmpdir } from "node:os";
 import { dirname, join, relative, resolve } from "node:path";
 import { pathToFileURL } from "node:url";
+import fs from "node:fs";
+import { syncBuiltinESMExports } from "node:module";
 import { test } from "node:test";
 import { createInterface } from "node:readline";
 import { createHash } from "node:crypto";
 import { ROOT, filesUnder, outputs } from "./build.mjs";
 import { createStateTool, applyPrinciples } from "../packages/sage-core/index.mjs";
-import { handle, patchPaths } from "../plugins/sage-codex/hooks/principles-hook.mjs";
 import { stateKey } from "../plugins/sage-codex/hooks/hook-state.mjs";
 
 const context = (output) => output?.hookSpecificOutput?.additionalContext ?? "";
@@ -570,38 +571,12 @@ test("T8: command reader rejects malformed input rather than inventing a request
   }
 });
 
-test("Codex patches give advice for every path and both ends of a move", () => {
-  const patch = "*** Begin Patch\n*** Update File: src/a.js\n@@\n-a\n+b\n*** Update File: tests/b.test.js\n*** Move to: README.md\n@@\n-a\n+b\n*** Add File: docs/help.md\n+*** Delete File: fake.js\n*** End Patch";
-  assert.deepEqual(patchPaths(patch), ["src/a.js", "tests/b.test.js", "README.md", "docs/help.md"]);
-  const s = state();
-  const event = { hook_event_name: "PreToolUse", tool_name: "apply_patch", tool_input: { command: patch } };
-  const advice = context(handle(event, s));
-  assert.match(advice, /Test behaviour/);
-  assert.match(advice, /reader/i);
-  assert.match(advice, /README/);
-  assert.equal(handle(event, s), undefined, "advice is given once per session");
-  assert.deepEqual(patchPaths("not a patch"), []);
-});
-
-test("Codex process hooks isolate roots, children and providers; unknown input cannot block", (t) => {
-  const { dir, plugin } = isolated(t, "codex");
-  const env = { ...process.env, AGENT_KIT_HOOKS_STATE: dir };
-  const send = (event, extra = {}) => spawnSync(process.execPath, [join(plugin, "hooks/principles-hook.mjs")], { env: { ...env, ...extra }, input: typeof event === "string" ? event : JSON.stringify(event), encoding: "utf8" });
-  const prompt = { session_id: "session", hook_event_name: "UserPromptSubmit", prompt: "Design a schema" };
-  const first = send(prompt);
-  assert.equal(first.status, 0, first.stderr);
-  assert.match(context(JSON.parse(first.stdout)), /Exhaust the design space/);
-  assert.equal(send(prompt).stdout, "");
-  assert.ok(send({ ...prompt, agent_id: "child" }).stdout);
-  assert.notEqual(stateKey(prompt), stateKey({ ...prompt, agent_id: "child" }));
+test("Codex hook state keys hash the session and the child, so a child gets its own state file", () => {
+  assert.equal(stateKey({ session_id: "session" }), "ed133cd93c6eea4c2d1386123756bfd0c51ea7b5c30e9a62d5aeeb604a07a941");
+  assert.equal(stateKey({ session_id: "session", agent_id: "child" }), "aab1d55d8c3961d024de7d577c57fa43221377c47880bd91fe2c8f8a148d2253");
   assert.notEqual(stateKey({ session_id: "a/b" }), stateKey({ session_id: "a_b" }));
-  assert.equal(send({ ...prompt, session_id: "off" }, { AGENT_KIT_HOOKS: "off" }).stdout, "");
-  for (const input of ["not json", "null", {}, { ...prompt, session_id: undefined }, { ...prompt, hook_event_name: "Stop" }, { ...prompt, hook_event_name: "PostToolUse", tool_name: "Bash", tool_input: { command: "npm test" }, tool_response: "Exit code: 0" }]) {
-    const result = send(input);
-    assert.equal(result.status, 0, result.stderr);
-    assert.equal(result.stdout, "");
-  }
-  assert.equal(existsSync(join(dir, "session.json")), false, "Claude state is not written");
+  assert.equal(stateKey({ session_id: "" }), undefined);
+  assert.equal(stateKey({}), undefined);
 });
 
 test("unknown check outcomes cannot erase recorded failures in shared policy", (t) => {
@@ -1491,90 +1466,59 @@ test("shared push policy loading failures deny Claude command tools", async t =>
   }
 });
 
-test("Codex advice refuses linked or public state directories and cannot overwrite a linked target", t => {
+test("Codex hook state refuses linked or public state directories and cannot overwrite a linked target", async t => {
   const { dir, plugin } = isolated(t, "codex");
-  const event = { session_id: "safe-state", hook_event_name: "UserPromptSubmit", prompt: "Design a schema" };
+  const { privateDirectory, readState, saveState } = await import(pathToFileURL(join(plugin, "hooks/hook-state.mjs")));
   const base = join(dir, "state"), outside = join(dir, "outside");
   mkdirSync(outside, { mode: 0o700 });
-  const run = () => spawnSync(process.execPath, [join(plugin, "hooks/principles-hook.mjs")], {
-    env: { ...process.env, AGENT_KIT_HOOKS_STATE: base }, input: JSON.stringify(event), encoding: "utf8",
-  });
   symlinkSync(outside, base, "dir");
-  assert.equal(run().stdout, "");
+  assert.throws(() => privateDirectory(join(base, "codex")), /unsafe state/);
   assert.equal(existsSync(join(outside, "codex")), false);
   rmSync(base); mkdirSync(base, { mode: 0o700 });
   symlinkSync(outside, join(base, "codex"), "dir");
-  assert.equal(run().stdout, "");
-  assert.equal(existsSync(join(outside, `${stateKey(event)}.json`)), false);
+  assert.throws(() => privateDirectory(join(base, "codex")), /unsafe state directory/);
   rmSync(join(base, "codex")); mkdirSync(join(base, "codex"), { mode: 0o700 });
   chmodSync(base, 0o777);
-  assert.equal(run().stdout, "");
+  assert.throws(() => privateDirectory(join(base, "codex")), /unsafe state parent/);
   chmodSync(base, 0o700);
   const shared = join(dir, "shared"); mkdirSync(shared); chmodSync(shared, 0o777);
-  const redirected = spawnSync(process.execPath, [join(plugin, "hooks/principles-hook.mjs")], {
-    env: { ...process.env, AGENT_KIT_HOOKS_STATE: join(shared, "state") }, input: JSON.stringify(event), encoding: "utf8",
-  });
-  assert.equal(redirected.stdout, "");
+  assert.throws(() => privateDirectory(join(shared, "state")), /unsafe state parent/);
   assert.equal(existsSync(join(shared, "state")), false, "a shared nonsticky parent can rename a private child");
+  privateDirectory(join(base, "codex"));
   const target = join(outside, "keep.json");
-  const original = JSON.stringify({ given: ["exhaust-the-design-space"], failures: {}, marker: "unchanged" });
+  const original = JSON.stringify({ sage: true, marker: "unchanged" });
   writeFileSync(target, original);
-  const file = join(base, "codex", `${stateKey(event)}.json`);
+  const file = join(base, "codex", "linked.json");
   symlinkSync(target, file);
-  const result = run();
-  assert.equal(result.status, 0, result.stderr);
-  assert.match(context(JSON.parse(result.stdout)), /Exhaust the design space/);
+  assert.throws(() => readState(file), { code: "ELOOP" });
+  saveState(file, { sage: false });
   assert.equal(readFileSync(target, "utf8"), original);
   assert.equal(lstatSync(file).isSymbolicLink(), false);
   assert.equal(lstatSync(file).mode & 0o777, 0o600);
-  assert.equal(run().stdout, "", "the private replacement preserves advice deduplication");
+  assert.deepEqual(readState(file), { sage: false });
 });
 
-
-test("Codex advice defaults to a private Codex home instead of the shared temp folder", t => {
+test("Codex hook state refuses a folder below a foreign-owned ancestor even when its mode looks safe", async t => {
   const { dir, plugin } = isolated(t, "codex");
-  const codexHome = join(dir, "codex-home"); mkdirSync(codexHome, { mode: 0o700 });
-  const event = { session_id: "private-default", hook_event_name: "UserPromptSubmit", prompt: "Design a schema" };
-  const temporary = join(dir, "temporary"); mkdirSync(temporary, { mode: 0o700 });
-  const env = { ...process.env, HOME: dir, CODEX_HOME: codexHome, TMPDIR: temporary };
-  delete env.AGENT_KIT_HOOKS_STATE;
-  const result = spawnSync(process.execPath, [join(plugin, "hooks/principles-hook.mjs")], {
-    env, input: JSON.stringify(event), encoding: "utf8",
-  });
-  assert.equal(result.status, 0, result.stderr);
-  assert.ok(result.stdout);
-  const file = join(codexHome, "advice", "codex", `${stateKey(event)}.json`);
-  assert.equal(lstatSync(file).mode & 0o777, 0o600);
-  assert.equal(lstatSync(dirname(file)).mode & 0o777, 0o700);
-  assert.equal(lstatSync(dirname(dirname(file))).mode & 0o777, 0o700);
-});
-
-test("Codex advice refuses state below a foreign-owned ancestor even when its mode looks safe", t => {
-  const { dir, plugin } = isolated(t, "codex");
-  const event = { session_id: "foreign-parent", hook_event_name: "UserPromptSubmit", prompt: "Design a schema" };
+  const { privateDirectory } = await import(pathToFileURL(join(plugin, "hooks/hook-state.mjs")));
+  const original = fs.lstatSync;
+  t.after(() => { fs.lstatSync = original; syncBuiltinESMExports(); });
   for (const mode of [0o755, 0o1777]) for (const nested of [false, true]) {
     const foreign = join(dir, `foreign-${mode}-${nested}`); mkdirSync(foreign, { mode });
     const parent = nested ? join(foreign, "owned-child") : foreign;
     if (nested) mkdirSync(parent, { mode: 0o700 });
     const base = join(parent, "state");
-    // Simulate only the UID that stat would return for another user's ancestor.
-    // The real hook and filesystem still perform every read, create, and write.
-    const preload = join(dir, `foreign-owner-${mode}-${nested}.mjs`);
-    writeFileSync(preload, `import fs from 'node:fs';
-import { syncBuiltinESMExports } from 'node:module';
-const original = fs.lstatSync;
-fs.lstatSync = (path, ...args) => {
-  const info = original(path, ...args);
-  if (path === ${JSON.stringify(foreign)}) Object.defineProperty(info, 'uid', { value: process.getuid() + 1 });
-  return info;
-};
-syncBuiltinESMExports();\n`);
-    const result = spawnSync(process.execPath, ["--import", preload, join(plugin, "hooks/principles-hook.mjs")], {
-      env: { ...process.env, AGENT_KIT_HOOKS_STATE: base }, input: JSON.stringify(event), encoding: "utf8",
-    });
-    assert.equal(result.status, 0, result.stderr);
+    // Simulate only the UID that stat would return for another user's ancestor; the filesystem does every real read.
+    fs.lstatSync = (path, ...args) => {
+      const info = original(path, ...args);
+      if (path === foreign) Object.defineProperty(info, "uid", { value: process.getuid() + 1 });
+      return info;
+    };
+    syncBuiltinESMExports();
+    try {
+      assert.throws(() => privateDirectory(join(base, "codex")), /unsafe state (parent|ancestor)/);
+    } finally { fs.lstatSync = original; syncBuiltinESMExports(); }
     assert.equal(existsSync(base), false, "another directory owner can replace the path despite safe-looking permission bits");
-    assert.equal(result.stdout, "");
   }
 });
 
@@ -1800,7 +1744,7 @@ for (const scenario of ['success', 'exit-error', 'bad-manifest']) test(`Codex pa
   writeFileSync(preload, `import {ChildProcess} from 'node:child_process';\nimport {appendFileSync} from 'node:fs';\nChildProcess.prototype.kill = function(signal) { appendFileSync(${JSON.stringify(signalLog)}, String(signal)+'\\n'); this.stdin?.end(); return true; };\n`);
   const plugin = {
     skills: readdirSync(join(ROOT, 'plugins/sage-codex/skills')).map(name => ({name: `sage:${name}`})),
-    hooks: ['permissionRequest', 'postToolUse', 'preToolUse', 'preToolUse', 'sessionStart', 'sessionStart', 'subagentStart', 'subagentStop', 'userPromptSubmit', 'userPromptSubmit'].map(eventName => ({eventName})),
+    hooks: ['permissionRequest', 'postToolUse', 'preToolUse', 'sessionStart', 'sessionStart', 'subagentStart', 'subagentStop', 'userPromptSubmit'].map(eventName => ({eventName})),
     summary: {source: {path: join(ROOT, 'plugins/sage-codex')}},
   };
   if (scenario === 'bad-manifest') plugin.hooks = [];
@@ -1817,7 +1761,7 @@ for (const scenario of ['success', 'exit-error', 'bad-manifest']) test(`Codex pa
   assert.equal(readFileSync(closed, 'utf8'), 'stdin closed', 'the child acknowledged transport closure');
   if (scenario === 'success') {
     assert.equal(result.code, 0, stderr);
-    assert.match(stdout, /discovered \d+ skills and 10 hooks/);
+    assert.match(stdout, /discovered \d+ skills and 8 hooks/);
   } else {
     assert.equal(result.code, 1, stdout + stderr);
     assert.doesNotMatch(stdout, /discovered \d+ skills/);
