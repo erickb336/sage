@@ -127,11 +127,11 @@ What the repair does:
 - It also refuses, and changes nothing, when the change may still finish elsewhere, each time with the next step:
   - The logbook is reached through a link. The line names the real folder and the next step. When the logbook's path is the link itself, move the real folder there, in place of the link. When a folder above it is the link, set the setting that the line names, `SAGE_HOME` or, for a shared logbook, `SAGE_SHARED_HOME`.
   - A newer sage wrote the change: its schema is above the highest that this version knows, or a table has columns that this version does not know. Update the sage plugin.
-- It refuses when a receipt in `task-updates` fails its check, because writes would still stop after the repair. That case needs a backup. A receipt of a newer schema gets the plugin update line instead.
-- It goes on when a receipt in `interrupted-runs` fails its check. Its output warns that a later Codex settle may stop on that receipt, and that only a backup helps then. It does not say that writes work.
 - It writes a decision row first. The row names the kept file and says that the owner accepts the loss.
 - It moves `review-pending.json` aside as `review-pending.json.lost-<n>`, and never deletes it. Each repair keeps its own file.
 - It does not repair the tables, and it says so. A half-published update can leave mixed tables: some tables hold the change and others do not. Its output ends with the result of the logbook check.
+
+Sage writes saved changes of two schemas only: 7 (usage) and 9 (Replace). Schemas 2 to 6 and 8 belonged to the Codex native runtime, which sage deleted (T732, T914). A saved change of one of them cannot finish, so it stops the writes of its logbook until the repair above. No readable logbook had one when sage deleted them.
 
 When the check fails, the output prints the refusal, and the table repair above applies. The check reads each table alone, so tables that are each whole but do not agree pass it: read the rows of the last work.
 

@@ -54,6 +54,14 @@ function row(text, id) {
   const [head, ...lines] = text.trim().split("\n"), cols = head.split("\t");
   return Object.fromEntries(cols.map((c, k) => [c, lines.map((l) => l.split("\t")).find((l) => l[0] === id)?.[k]]));
 }
+/**
+ * A task's version, as the lines of the state tool give it (offer, a claim refusal): the hash of its row as the tool reads
+ * it, with an empty offer cell left out. The offer test checks it against the task line.
+ */
+function versionOf(project, env, id) {
+  const { offer, ...task } = codex.read(codex.storeDir(project, env), "tasks").find((r) => r.id === id);
+  return createHash("sha256").update(JSON.stringify(offer ? { ...task, offer } : task)).digest("hex");
+}
 /** Sets one cell of each row of a logbook table that match picks, as a move or an earlier time leaves it (T656). */
 function setCells(dir, table, match, column, value) {
   const file = join(dir, `${table}.tsv`), [head, ...lines] = readFileSync(file, "utf8").split("\n"), k = head.split("\t").indexOf(column);
@@ -89,21 +97,18 @@ test("F-T604-23: the printed repair line on a legacy project adds no chiefs.tsv 
   assert.equal(existsSync(join(dir, "chiefs.tsv")), false);
 });
 
-test("a legacy project has no chief: no chiefs.tsv, no chief column, the same task version, and no option or claim", (t) => {
+test("a legacy project has no chief: no chiefs.tsv, no chief column, and no option or claim", (t) => {
   const w = scratch(t);
   const run = (...args) => codex.sage([...args, "--project", w.project], w.env);
   run("init");
   run("task", "add", "--title", "a", ...ADD);
   run("run", "add", "T1", "--role", "qa");
-  const dir = codex.storeDir(w.project, w.env), [head, line] = readFileSync(join(dir, "tasks.tsv"), "utf8").split("\n");
+  const dir = codex.storeDir(w.project, w.env), [head] = readFileSync(join(dir, "tasks.tsv"), "utf8").split("\n");
   assert.equal(head, "id\ttitle\tsize\trisk\troute\tstate\tbranch\tpr\tround\tkeys\thold\textra\tpriority\tkind\twaits\tprogram\tadoption\tapprovals");
   assert.equal(readFileSync(join(dir, "runs.tsv"), "utf8").split("\n")[0].endsWith("\tusage_evidence"), true);
   assert.equal(existsSync(join(dir, "chiefs.tsv")), false);
   assert.equal(codex.chiefFor(w.project, "session-a", w.env), undefined);
   assert.deepEqual(codex.actorOptions(w.project, ["task", "add"], { native: "session-a" }, w.env), []);
-  // The version is the hash of the row of today's columns, so a legacy task's version does not change.
-  const cells = line.split("\t"), legacy = Object.fromEntries(head.split("\t").map((column, k) => [column, cells[k] ?? ""]));
-  assert.equal(codex.readTaskSnapshot({ project: w.project, task: "T1" }, w.env).version, createHash("sha256").update(JSON.stringify(legacy)).digest("hex"));
   for (const args of [["status", "--chief", "C1"], ["task", "T1", "set", "title=b", "--chief", "C1"], ["status", "--lead", "R1"], ["claim", "T1", "--version", "0".repeat(64)]]) {
     assert.throws(() => run(...args), /only a shared logbook has chiefs/);
   }
@@ -294,7 +299,7 @@ for (const [name, own, other] of pairs) {
     const w = world(t, own, other);
     w.owner("task", "add", "--title", "a", ...ADD);
     writeFileSync(join(w.dir, "tasks.tsv"), w.cells("tasks").replace(/\tC1\n/, "\t\n")); // as a moved task starts
-    const { version } = codex.readTaskSnapshot({ project: w.project, task: "T1" }, w.env);
+    const version = versionOf(w.project, w.env, "T1");
     const step = name === "Claude" ? `call the claim tool with this task and version ${version}` : `run sage claim T1 --version ${version} --chief C2`; // the intruder is the other provider
     assert.throws(() => w.intruder("task", "T1", "set", "title=x"), { message: `T1 has no owning chief, so C2 cannot change it. Claim it first: ${step}. Nothing changed.` }, "F-T604-21: the reader of each provider gets only the form that it can use");
     assert.throws(() => w.intruder("claim", "T1", "--version", "0".repeat(64)), /T1 changed, so this claim is out of date/);
@@ -310,7 +315,7 @@ for (const [name, own, other] of pairs) {
   const transfer = (t) => {
     const w = world(t, own, other);
     w.owner("task", "add", "--title", "a", ...ADD);
-    const version = () => codex.readTaskSnapshot({ project: w.project, task: "T1" }, w.env).version;
+    const version = () => versionOf(w.project, w.env, "T1");
     const offer = () => JSON.parse(row(w.cells("tasks"), "T1").offer);
     return { ...w, version, offer, answer: (...args) => other.sage(["gate", "answer", ...args, "--project", w.project], w.env) };
   };
@@ -333,10 +338,10 @@ for (const [name, own, other] of pairs) {
   test(`${name}: a task with an open offer takes no second offer, and the offer's cell changes only that task's version`, (t) => {
     const w = transfer(t);
     w.owner("task", "add", "--title", "b", ...ADD);
-    const other2 = codex.readTaskSnapshot({ project: w.project, task: "T2" }, w.env).version;
+    const other2 = versionOf(w.project, w.env, "T2");
     w.owner("offer", "T1", "--to", "C2");
     assert.throws(() => w.owner("offer", "T1", "--to", "C2"), /T1 has the open offer [0-9a-f]{8} to C2: cancel it first/);
-    assert.equal(codex.readTaskSnapshot({ project: w.project, task: "T2" }, w.env).version, other2);
+    assert.equal(versionOf(w.project, w.env, "T2"), other2);
   });
 
   test(`${name}: accept: only the named recipient, with the exact offer and the current version, while no run is active; it opens a takeover gate, and only the owner's answer sets the chief and clears the offer`, (t) => {
@@ -510,7 +515,7 @@ for (const [name, own, other] of pairs) {
     setCells(w.dir, "tasks", (l) => /^T[12]\t/.test(l), "chief", "");
     setCells(w.dir, "tasks", (l) => l.startsWith("T1\t"), "adoption", moved(mine, "T7"));
     setCells(w.dir, "tasks", (l) => l.startsWith("T2\t"), "adoption", moved(theirs, "T8"));
-    const version = (id) => codex.readTaskSnapshot({ project: w.project, task: id }, w.env).version;
+    const version = (id) => versionOf(w.project, w.env, id);
     const step = name === "Claude" ? "run sage gate replace T2 --to C1 --chief C1" : "call the gate_replace tool with this task and to C1";
     assert.equal(w.owner("claim", "T1", "--version", version("T1")), "T1 claimed · chief C1", "its own provider's task: no gate");
     const before = w.tables();
@@ -602,7 +607,7 @@ for (const [name, own, other] of pairs) {
     assert.equal(check(own, "C1"), "T1 may merge: 1 clean cycle on this SHA");
     assert.throws(() => check(other, "C2"), /^Error: T1 belongs to chief C1 \(\w+\), not to C2\. Nothing changed\./, "a chief that does not own the task");
     w.owner("offer", "T1", "--to", "C2");
-    w.intruder("accept", "T1", "--offer", JSON.parse(row(w.cells("tasks"), "T1").offer).id, "--version", codex.readTaskSnapshot({ project: w.project, task: "T1" }, w.env).version);
+    w.intruder("accept", "T1", "--offer", JSON.parse(row(w.cells("tasks"), "T1").offer).id, "--version", versionOf(w.project, w.env, "T1"));
     other.sage(["gate", "answer", "G1", "--option", "1", "--project", w.project], w.env);
     // The cycle and the owner's answer at earlier seconds, so that a verdict of this test's second comes after the takeover.
     setCells(w.dir, "ledger", () => true, "at", "2026-01-01T00:00:00Z");
@@ -854,63 +859,6 @@ for (const [name, own, other] of pairs) {
   });
 }
 
-test("a native writer of a shared logbook names the session's chief, a retry keeps it, and another chief's task refuses", async (t) => {
-  const w = world(t, codex, claude);
-  const task = { project: w.project, owner: "o", request: "00000000-0000-4000-8000-000000000604", title: "a", size: "small", risk: [], add: [], why: "" };
-  assert.equal(codex.createRequestedTask(task, w.env, "session-a").task.chief, "C1");
-  assert.equal(codex.createRequestedTask(task, w.env, "session-a").decision, "already-created");
-  assert.throws(() => codex.createRequestedTask({ ...task, request: "00000000-0000-4000-8000-000000000605" }, w.env), /no session identity/);
-  const run = { project: w.project, owner: "o", request: "00000000-0000-4000-8000-000000000606", task: "T1", role: "qa", branch: "", candidate: "" };
-  assert.equal(codex.createRequestedRun(run, w.env, "session-a").run.chief, "C1");
-  assert.throws(() => codex.createRequestedRun({ ...run, request: "00000000-0000-4000-8000-000000000607" }, w.env, "session-b-of-codex"), /T1 belongs to chief C1/);
-  const { version } = codex.readTaskSnapshot({ project: w.project, task: "T1" }, w.env);
-  const never = () => { throw Error("an update of another chief reaches no decision"); };
-  const update = { project: w.project, owner: "o", request: "00000000-0000-4000-8000-000000000608", task: "T1", version, changes: { title: "b" } };
-  const owned = "T1 belongs to chief C1 (codex), not to C4. Nothing changed. Change only your own tasks. To take T1, ask C1 to offer it to you, or open a takeover gate for the owner to answer: call the gate_replace tool with this task and to C4.";
-  assert.throws(() => codex.updateRequestedTask(update, w.env, { native: "session-c", decide: never, acknowledge: never, release: never, void: never, history: never }),
-    (e) => e.code === "other-chief" && e.message === owned);
-  let digest;
-  const out = codex.updateRequestedTask(update, w.env, { native: "session-a", decide: (value) => { digest = value; return { digest: value, accepted: true, reason: "" }; },
-    acknowledge: (value, receiptHash) => ({ digest: value, receiptHash }), release: (value, receiptHash) => ({ digest: value, receiptHash }), void() {}, history: never });
-  assert.equal(out.task.title, "b");
-  assert.equal(out.task.chief, "C1");
-  assert.ok(digest);
-  assert.equal(row(w.cells("tasks"), "T1").title, "b");
-  assert.equal(row(w.cells("tasks"), "T1").chief, "C1", "the update keeps the chief cell");
-});
-
-test("F-T618-1: a chief that lost a task cannot accept a review of it, and the refusal names the owning chief", (t) => {
-  const w = world(t, codex, codex);
-  w.owner("task", "add", "--title", "a", ...ADD);
-  const findings = () => [w.cells("findings"), w.cells("ledger")].join("\f"), before = findings();
-  const review = { sha: "b".repeat(40), branch: "sage/t1-a", round: 0, cycle: 1 };
-  const fields = { STATUS: "done", RESULT: "CLEAN", EVIDENCE: JSON.stringify({ commit: review.sha, round: 0, cycle: 1, summary: "s" }), FINDINGS: "[]", QUESTIONS: "none", "NOT VERIFIED": "x", BRANCH: review.branch };
-  const text = Object.entries(fields).map(([key, value]) => `${key}: ${value}`).join("\n");
-  const input = { project: w.project, task: "T1", run: "R1", role: "code-reviewer", assignment: "00000000-0000-4000-8000-000000000618", reportHash: createHash("sha256").update(text).digest("hex"), text, review };
-  assert.throws(() => codex.acceptReportedReview(input, w.env, "session-b"), (e) => e.code === "other-chief" && /^T1 belongs to chief C1 \(codex\), not to C2\./.test(e.message));
-  assert.equal(findings(), before);
-});
-
-test("F-T618-16: the owning chief's review acceptance on a shared logbook records its verdict; the same input refuses another chief", (t) => {
-  const w = world(t, codex, codex);
-  w.owner("task", "add", "--title", "a", ...ADD);
-  w.owner("task", "T1", "set", "state=briefed");
-  w.owner("task", "T1", "set", "state=building", "branch=sage/t1-a");
-  execFileSync("git", ["-C", w.project, "branch", "sage/t1-a"]);
-  const sha = execFileSync("git", ["-C", w.project, "rev-parse", "sage/t1-a"], { encoding: "utf8" }).trim();
-  w.owner("run", "add", "T1", "--role", "code-reviewer", "--branch", "sage/t1-a");
-  const fields = { STATUS: "done", RESULT: "CLEAN", EVIDENCE: JSON.stringify({ commit: sha, round: 0, cycle: 1, summary: "s" }), FINDINGS: "[]", QUESTIONS: "none", "NOT VERIFIED": "x", BRANCH: "sage/t1-a" };
-  const text = Object.entries(fields).map(([key, value]) => `${key}: ${value}`).join("\n");
-  const work = { project: w.project, task: "T1", run: "R1", role: "code-reviewer", assignment: "00000000-0000-4000-8000-000000000616", reportHash: createHash("sha256").update(text).digest("hex"), text };
-  codex.finishReportedRun(work, w.env);
-  const input = { ...work, review: { sha, branch: "sage/t1-a", round: 0, cycle: 1 } };
-  assert.throws(() => codex.acceptReportedReview(input, w.env, "session-b"), (e) => e.code === "other-chief");
-  assert.doesNotMatch(w.cells("ledger"), /review-clean/, "the refusal recorded nothing");
-  const { decision, kind, run } = codex.acceptReportedReview(input, w.env, "session-a");
-  assert.deepEqual({ decision, kind, run }, { decision: "review-accepted", kind: "review-clean", run: "R1" });
-  assert.equal(row(w.cells("ledger"), "T1").sha, sha);
-  assert.equal(row(w.cells("ledger"), "T1").kind, "review-clean");
-});
 
 test("F-T618-2: the logbook check sees a Replace that publishes between its reads of the tables", async (t) => {
   const w = world(t, claude, codex);
@@ -926,35 +874,9 @@ test("F-T618-2: the logbook check sees a Replace that publishes between its read
     return openSync(path, ...rest);
   };
   syncBuiltinESMExports();
-  assert.throws(() => w.owner("log", "T1", "x", "--why", "y"), /A task, run, review, or Replace receipt was created while this logbook was read\. Retry the read\./);
+  assert.throws(() => w.owner("log", "T1", "x", "--why", "y"), /A Replace receipt was created while this logbook was read\. Retry the read\./);
 });
 
-test("a native update reads a table with the offer and kind columns: it keeps an open offer, and the version covers the offer", (t) => {
-  const w = world(t, codex, claude);
-  w.owner("task", "add", "--title", "a", ...ADD);
-  w.owner("task", "add", "--title", "b", ...ADD);
-  w.owner("offer", "T1", "--to", "C2");
-  w.intruder("gate", "replace", "T2", "--to", "C2");
-  w.owner("gate", "add", "T2", "--question", "q?", "--options", "a|b", "--recommend", "a");
-  const snapshot = () => codex.readTaskSnapshot({ project: w.project, task: "T1" }, w.env);
-  const never = () => { throw Error("no earlier receipt"); };
-  const out = codex.updateRequestedTask({ project: w.project, owner: "o", request: "00000000-0000-4000-8000-000000000618", task: "T1", version: snapshot().version, changes: { title: "c" } }, w.env,
-    { native: "session-a", decide: (digest) => ({ digest, accepted: true, reason: "" }), acknowledge: (digest, receiptHash) => ({ digest, receiptHash }), release: (digest, receiptHash) => ({ digest, receiptHash }), void() {}, history: never });
-  assert.equal(out.task.title, "c");
-  assert.deepEqual(JSON.parse(snapshot().task.offer).to, "C2");
-  assert.equal(row(w.cells("gates"), "G1").kind, "replace");
-});
-
-test("F-T604-4, F-T604-12: a native update of a task with no owning chief gives the guard's words, with the version to claim", (t) => {
-  const w = world(t, codex, claude);
-  w.owner("task", "add", "--title", "a", ...ADD);
-  writeFileSync(join(w.dir, "tasks.tsv"), w.cells("tasks").replace(/\tC1\n/, "\t\n"));
-  const { version } = codex.readTaskSnapshot({ project: w.project, task: "T1" }, w.env);
-  const never = () => { throw Error("an update of a task with no owning chief reaches no decision"); };
-  const update = { project: w.project, owner: "o", request: "00000000-0000-4000-8000-000000000609", task: "T1", version, changes: { title: "b" } };
-  assert.throws(() => codex.updateRequestedTask(update, w.env, { native: "session-a", decide: never, acknowledge: never, release: never, void: never, history: never }),
-    (e) => e.code === "other-chief" && e.message === `T1 has no owning chief, so C1 cannot change it. Claim it first: call the claim tool with this task and version ${version}. Nothing changed.`);
-});
 
 test("F-T604-18: a provider's command gives the real cause of a refusal: a damaged chiefs.tsv, a busy lock, or a lead with no lead run", (t) => {
   const w = world(t, codex, claude);
@@ -973,17 +895,13 @@ test("F-T604-18: a provider's command gives the real cause of a refusal: a damag
   assert.match(text, /chiefs\.tsv is damaged, so sage cannot tell which chief owns a task/);
 });
 
-test("F-T604-19: the stop writers keep a report and end a run with no chief on a shared logbook, and the chief cell stays", (t) => {
+test("F-T604-19: the stop writer keeps a report with no chief on a shared logbook, and the chief cell stays", (t) => {
   const w = world(t, codex, claude);
   w.owner("task", "add", "--title", "a", ...ADD);
   w.owner("run", "add", "T1", "--role", "implementer", "--branch", "codex/t1-report");
   w.owner("run", "add", "T1", "--role", "qa", "--branch", "codex/t1-report");
   codex.keepReport(w.project, { task: "T1", run: "R2", role: "qa", sha: SHA, text: "STATUS done" }, w.env);
   assert.equal(JSON.parse(readFileSync(join(w.dir, "kept", "R2.json"), "utf8")).text, "STATUS done");
-  const text = "STATUS: done\nRESULT: complete\nEVIDENCE: e\nFINDINGS: none\nQUESTIONS: none\nNOT VERIFIED: n\nBRANCH: b";
-  const done = codex.finishReportedRun({ project: w.project, task: "T1", run: "R1", role: "implementer", assignment: "11111111-2222-4333-8444-555555555555", reportHash: createHash("sha256").update(text).digest("hex"), text }, w.env);
-  assert.equal(done.decision, "run-finished");
-  assert.equal(row(w.cells("runs"), "R1").status, "done");
   assert.deepEqual(["R1", "R2"].map((id) => row(w.cells("runs"), id).chief), ["C1", "C1"]);
   assert.equal(row(w.cells("tasks"), "T1").chief, "C1");
 });
@@ -1012,7 +930,7 @@ test("F-T604-19: parallel processes get unique chiefs, the same ones on a repeat
 
   w.owner("task", "add", "--title", "a", ...ADD);
   writeFileSync(join(w.dir, "tasks.tsv"), w.cells("tasks").replace(/\tC1\n/, "\t\n"));
-  const { version } = codex.readTaskSnapshot({ project: w.project, task: "T1" }, w.env);
+  const version = versionOf(w.project, w.env, "T1");
   const claims = await all(ids.slice(0, 8).map((id) => [TOOL, "claim", "T1", "--version", version, "--chief", id, "--project", w.project]));
   assert.equal(claims.filter((c) => /^T1 claimed · chief C\d+$/.test(c)).length, 1, claims.join("\n"));
   assert.equal(claims.filter((c) => /T1 belongs to chief C\d+, so it takes no claim/.test(c)).length, 7, claims.join("\n"));
@@ -1265,7 +1183,8 @@ function clones(t) {
   const inB = (...args) => codex.sage([...args, "--project", b, "--chief", w.chief], w.env);
   w.owner("run", "add", "T1", "--role", "implementer", "--branch", branch);
   inB("run", "add", "T1", "--role", "code-reviewer", "--branch", branch);
-  const capture = (run) => codex.captureReviewTarget({ project: b, task: "T1", run, role: "code-reviewer", cycle: 1 }, w.env);
+  // The tip of the task's branch, as the Claude hook reads it for a review (branchTip): "" when it cannot read it.
+  const capture = () => codex.branchTip(b, branch, w.env);
   return { ...w, a, b, branch, tip, behind, inB, capture };
 }
 test("T625: after the first run add with a checkout, a sage of PR 5a refuses to write that shared logbook and says to update; its reads go on", async (t) => {
@@ -1314,63 +1233,24 @@ for (const [name, own, other] of pairs) {
   });
 }
 
-test("T625: a native run add saves the checkout; a retry gives the same row; a receipt with a changed or relative checkout is damaged", (t) => {
-  const w = world(t, codex, claude), main = realpathSync(w.project);
-  w.owner("task", "add", "--title", "a", ...ADD);
-  const input = { project: w.project, owner: "o", request: "00000000-0000-4000-8000-000000000625", task: "T1", role: "qa", branch: "", candidate: "" };
-  const made = codex.createRequestedRun(input, w.env, "session-a");
-  assert.equal(made.decision, "run-created");
-  assert.equal(made.run.checkout, main);
-  assert.equal(row(w.cells("runs"), "R1").checkout, main);
-  assert.deepEqual(codex.createRequestedRun(input, w.env, "session-a"), { decision: "already-created", run: made.run });
-  const folder = join(w.dir, "run-requests"), [file] = readdirSync(folder), receipt = join(folder, file), saved = readFileSync(receipt, "utf8");
-  const tables = w.tables();
-  // The receipt as the writer saves it: its value and the hash of the value, so only the checkout check can refuse it.
-  for (const checkout of [join(w.base, "elsewhere"), "project"]) {
-    const { value } = JSON.parse(saved);
-    value.result.checkout = checkout;
-    writeFileSync(receipt, JSON.stringify({ value, hash: createHash("sha256").update(JSON.stringify(value)).digest("hex") }) + "\n");
-    assert.throws(() => codex.createRequestedRun(input, w.env, "session-a"), { message: "The saved run update is damaged. No run table changed." }, checkout);
-  }
-  assert.equal(w.tables(), tables);
-});
 
 test("T625: the review reads the branch in the checkout of its writer run, from another clone of the logbook too", (t) => {
   const w = clones(t);
   assert.equal(row(w.cells("runs"), "R1").checkout, w.a);
   assert.equal(row(w.cells("runs"), "R2").checkout, realpathSync(w.b));
   assert.notEqual(w.tip, w.behind);
-  assert.deepEqual(w.capture("R2"), { branch: w.branch, sha: w.tip, round: 0, cycle: 1 });
-  const target = codex.captureRunAssignment({ project: w.b, task: "T1", run: "R2", role: "code-reviewer" }, w.env);
-  assert.deepEqual(codex.validateTerminalAssignment({ project: w.b, target, review: { branch: w.branch, sha: w.tip, round: 0, cycle: 1 } }, w.env), target);
+  assert.equal(w.capture(), w.tip);
 });
 
 // F-T625-6: a checkout that is now a plain file or an empty folder is gone too, with the same refusal, not a raw git error.
 const LEAVE = { "missing": () => {}, "a plain file": (path) => writeFileSync(path, ""), "an empty folder": (path) => mkdirSync(path) };
-for (const [form, leave] of Object.entries(LEAVE)) test(`T625: a gone checkout of the writer run (${form}) refuses each head read with the run's ID, and no table changes`, (t) => {
+for (const [form, leave] of Object.entries(LEAVE)) test(`T625: a gone checkout of the writer run (${form}) refuses the branch read with the run's ID, and no table changes`, (t) => {
   const w = clones(t);
-  const fields = { STATUS: "done", RESULT: "CLEAN", EVIDENCE: JSON.stringify({ commit: w.tip, round: 0, cycle: 1, summary: "s" }), FINDINGS: "[]", QUESTIONS: "none", "NOT VERIFIED": "x", BRANCH: w.branch };
-  const text = Object.entries(fields).map(([key, value]) => `${key}: ${value}`).join("\n");
-  const work = { project: w.b, task: "T1", run: "R2", role: "code-reviewer", assignment: "00000000-0000-4000-8000-000000000626", reportHash: createHash("sha256").update(text).digest("hex"), text };
-  codex.finishReportedRun(work, w.env);
-  w.inB("run", "add", "T1", "--role", "code-reviewer", "--branch", w.branch);
-  const target = codex.captureRunAssignment({ project: w.b, task: "T1", run: "R3", role: "code-reviewer" }, w.env);
-  // The clean cycle on A's tip, so that a move to verified reaches its head read.
-  const cli = (...args) => w.owner(...args), keep = (fields) => codex.keepReport(w.project, fields, w.env);
-  for (const kind of ["checks-pass", "review-clean", "qa-pass"]) cli(...backed(["verdict", "T1", "--sha", w.tip, "--kind", kind, "--cycle", "1"], { cli, keep }));
-  w.owner("task", "T1", "set", "state=reviewing");
-  w.owner("task", "T1", "set", "state=verifying");
   rmSync(w.a, { recursive: true, force: true });
   leave(w.a);
-  const tables = w.tables(), gone = { message: `The checkout of R1 (project) is gone, so sage cannot read ${w.branch}. Nothing changed.` };
-  assert.throws(() => w.capture("R3"), gone);
-  assert.throws(() => codex.validateTerminalAssignment({ project: w.b, target, review: { branch: w.branch, sha: w.tip, round: 0, cycle: 1 } }, w.env), gone);
-  assert.throws(() => codex.acceptReportedReview({ ...work, review: { sha: w.tip, branch: w.branch, round: 0, cycle: 1 } }, w.env, "session-a"), gone);
-  const never = () => { throw Error("a refused readiness reaches no decision"); };
-  const { version } = codex.readTaskSnapshot({ project: w.b, task: "T1" }, w.env);
-  assert.throws(() => codex.updateRequestedTask({ project: w.b, owner: "o", request: "00000000-0000-4000-8000-000000000627", task: "T1", version, changes: { state: "verified" } }, w.env,
-    { native: "session-a", decide: never, acknowledge: never, release: never, void: never, history: never }),
-  (e) => e.code === "readiness-checkout" && e.message === "Readiness needs the checkout of the task branch's run, and that folder is gone. Start the run again from a live checkout before submitting a new request. IDs: R1.");
+  const tables = w.tables();
+  assert.throws(() => codex.branchHome(w.b, w.branch, w.env), (e) => e.goneRun === "R1" && e.message === `The checkout of R1 (project) is gone, so sage cannot read ${w.branch}. Nothing changed.`);
+  assert.equal(w.capture(), "", "the hook's tip read fails closed");
   assert.equal(w.tables(), tables);
 });
 
@@ -1379,14 +1259,14 @@ test("T625: the review reads the branch in the checkout of the newest writer run
   const w = clones(t), done = (id) => w.owner("run", "done", id, "--status", "failed");
   done("R1");
   w.inB("run", "add", "T1", "--role", "implementer", "--branch", w.branch);
-  assert.deepEqual(w.capture("R2"), { branch: w.branch, sha: w.behind, round: 0, cycle: 1 }, "R3 in B is newer than R1 in A");
+  assert.equal(w.capture(), w.behind, "R3 in B is newer than R1 in A");
   done("R3");
   for (let i = 4; i <= 8; i++) w.inB("run", "add", "T1", "--role", "qa");
   w.inB("run", "add", "T1", "--role", "implementer", "--branch", w.branch);
   done("R9");
   w.owner("run", "add", "T1", "--role", "implementer", "--branch", w.branch);
   assert.deepEqual([row(w.cells("runs"), "R9").checkout, row(w.cells("runs"), "R10").checkout], [realpathSync(w.b), w.a]);
-  assert.deepEqual(w.capture("R2"), { branch: w.branch, sha: w.tip, round: 0, cycle: 1 }, "R10 in A is newer than R9 in B");
+  assert.equal(w.capture(), w.tip, "R10 in A is newer than R9 in B");
 });
 
 test("T625: a writer run with no checkout cell reads the branch in the command's own folder", (t) => {
@@ -1394,7 +1274,7 @@ test("T625: a writer run with no checkout cell reads the branch in the command's
   setCheckout(w, "R1", "");
   assert.equal(header(w.cells("runs")).at(-1), "checkout");
   assert.equal(row(w.cells("runs"), "R2").checkout, realpathSync(w.b));
-  assert.deepEqual(w.capture("R2"), { branch: w.branch, sha: w.behind, round: 0, cycle: 1 }, "B's own branch");
+  assert.equal(w.capture(), w.behind, "B's own branch");
 });
 
 test("T625: a writer run's checkout that is no bindings.tsv row of this logbook refuses before git reads it", (t) => {
@@ -1407,13 +1287,13 @@ test("T625: a writer run's checkout that is no bindings.tsv row of this logbook 
   mkdirSync(fake);
   writeFileSync(join(fake, "git"), `#!${process.execPath}\nconst { appendFileSync } = require("node:fs"), { spawnSync } = require("node:child_process");\nappendFileSync(${JSON.stringify(calls)}, JSON.stringify(process.argv.slice(2)) + "\\n");\nconst path = process.env.PATH.split(":").filter((dir) => dir !== ${JSON.stringify(fake)}).join(":");\nprocess.exit(spawnSync("git", process.argv.slice(2), { stdio: "inherit", env: { ...process.env, PATH: path } }).status ?? 1);\n`, { mode: 0o755 });
   const env = { ...w.env, PATH: `${fake}:${w.env.PATH}` }, tables = w.tables();
-  assert.throws(() => codex.captureReviewTarget({ project: w.b, task: "T1", run: "R2", role: "code-reviewer", cycle: 1 }, env),
+  assert.throws(() => codex.branchHome(w.b, w.branch, env),
     { message: `The checkout of R1 is not a checkout of this logbook in bindings.tsv, so sage cannot read ${w.branch}. Nothing changed.` });
   assert.equal(existsSync(calls), false, "git never ran");
   assert.equal(w.tables(), tables);
   // The same read with the writer's own checkout runs the fake git there: so the fake is what the state tool calls.
   setCheckout(w, "R1", w.a);
-  assert.equal(codex.captureReviewTarget({ project: w.b, task: "T1", run: "R2", role: "code-reviewer", cycle: 1 }, env).sha, w.tip);
+  assert.equal(codex.branchTip(w.b, w.branch, env), w.tip);
   assert.match(readFileSync(calls, "utf8"), new RegExp(`"-C","${w.a}","rev-parse"`));
 });
 
@@ -1472,7 +1352,7 @@ test("F-T656-23: after a takeover from Codex, the fresh Claude cycle counts only
     return [kind, id];
   }));
   w.owner("offer", "T1", "--to", "C2");
-  w.intruder("accept", "T1", "--offer", JSON.parse(row(w.cells("tasks"), "T1").offer).id, "--version", codex.readTaskSnapshot({ project: w.project, task: "T1" }, w.env).version);
+  w.intruder("accept", "T1", "--offer", JSON.parse(row(w.cells("tasks"), "T1").offer).id, "--version", versionOf(w.project, w.env, "T1"));
   claude.sage(["gate", "answer", "G1", "--option", "1", "--project", w.project], w.env);
   // Everything before the answer is at earlier seconds.
   setCells(w.dir, "ledger", () => true, "at", "2026-01-01T00:00:00Z");

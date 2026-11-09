@@ -4644,7 +4644,6 @@ test("F-T42-2: a config write never lands on a link's target, also when a link r
 });
 
 
-
 test("Balanced defaults cover every role and size without a config file", () => {
   const s = store();
   const roles = ["pe", "designer", "implementer", "code-reviewer", "security-reviewer", "ux-reviewer", "qa", "arena-judge"];
@@ -4827,22 +4826,6 @@ test("R1709-1: a task that ran work on the head branch owns it after it moves to
   assert.match(both.stdout.trim(), /^2 tasks have verdicts on a1b2c3d or belong to PR 41, and each must pass: \S+ T2 may merge: 1 clean cycle on this SHA; \S+ T1 may merge: 1 clean cycle on this SHA$/);
 });
 
-test("R1708-2: a run on its task's shared branch is a valid assignment for a provider's spawn", async () => {
-  const { createStateTool } = await import(new URL("../plugins/sage/core/state.mjs", import.meta.url));
-  // The logbook folder must be its own real path, and macOS's default TMPDIR is under a link, /var to /private/var (R1740-2).
-  const s = store(mkdtempSync(join(realpathSync(tmpdir()), "sage-home-")));
-  for (const title of ["first", "second"]) s.ok("task", "add", "--priority", "P2", "--title", title, "--size", "small");
-  s.ok("task", "T2", "set", "branch=sage/t2");
-  s.ok("task", "T1", "set", "branch=sage/t2"); // the sage shares T2's branch with T1
-  s.ok("run", "add", "T1", "--role", "implementer", "--branch", "sage/t2"); // R1
-  const tool = createStateTool({ defaultRoot: () => s.home });
-  const capture = (task, run, role) => tool.captureRunAssignment({ project: s.project, task, run, role }, testEnv({ SAGE_HOME: s.home }));
-  assert.deepEqual(capture("T1", "R1", "implementer"), { task: "T1", run: "R1", role: "implementer", round: 0, taskBranch: "sage/t2", runBranch: "sage/t2", candidate: "" });
-  assert.throws(() => capture("T1", "R1", "qa"), /The assignment needs one active run on its current task, role, branch, and round\./, "another role refuses");
-  s.ok("run", "add", "T2", "--role", "arena-judge", "--branch", "sage/t2-judge"); // R2
-  byHand(s.dir, "runs", 0, "R2", (cells) => cells.with(5, "SAGE/T2")); // an older logbook can hold two writers on one branch in two letter cases
-  assert.throws(() => capture("T1", "R1", "implementer"), /The assignment needs one active run on its current task, role, branch, and round\./, "T584: a judge in another letter case is a second writer");
-});
 
 test("R1741-1: a refusal for a task of the head branch that is not on the PR says how it owns the branch, and says to move it only when that works", () => {
   // T2 is on PR 41 with clean verdicts; share(s) makes T1 an owner of the head branch, with no pr=.

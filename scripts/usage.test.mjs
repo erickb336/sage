@@ -1,6 +1,6 @@
 import './test-env.mjs';
 import assert from 'node:assert/strict';
-import { createHash, randomUUID } from 'node:crypto';
+import { createHash } from 'node:crypto';
 import { test } from 'node:test';
 import { mkdtempSync, realpathSync, readFileSync, readdirSync, writeFileSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
@@ -119,21 +119,6 @@ test('T28 usage recovery completes one interrupted transaction and refuses a dif
   assert.deepEqual(s.bytes(),after);
   s.run(...command);assert.deepEqual(s.bytes(),after);
 });
-test('T28 old run-request pending bytes recover with their original header',t=>{
-  const s=fixture(t),before=s.bytes()[0];
-  const input={project:join(s.dir,'..','..','project'),owner:'test-owner',request:randomUUID(),task:'T1',role:'qa',branch:'',candidate:''};
-  const env={...process.env,SAGE_HOME:join(s.dir,'..'),SAGE_TEST_PIDS:'{}'};
-  tool.createRequestedRun(input,env);
-  const folder=join(s.dir,'run-requests'),receipt=JSON.parse(readFileSync(join(folder,readdirSync(folder)[0]),'utf8')).value;
-  const old=text=>text.split('\n').filter(Boolean).map(line=>line.split('\t').slice(0,12).join('\t')).join('\n')+'\n';
-  const oldBefore=old(before), oldAfter=old(s.bytes()[0]);
-  writeFileSync(join(s.dir,'runs.tsv'),oldBefore);
-  writeFileSync(join(s.dir,'review-pending.json'),envelope({schema:3,receipt,tables:{runs:{before:oldBefore,after:oldAfter}}}));
-  const result=tool.createRequestedRun(input,env);assert.equal(result.decision,'already-created');assert.equal(result.run.id,'R1');
-  assert.equal(readFileSync(join(s.dir,'runs.tsv'),'utf8'),oldAfter);
-  assert.equal(tool.createRequestedRun(input,env).decision,'already-created');
-  s.no('run','done','R1','--status','done',...unavailable);
-});
 
 test('T28 schema-less usage columns migrate without inventing availability',t=>{
   const s=fixture(t);s.run('run','add','T1','--role','qa');
@@ -147,21 +132,6 @@ test('T28 schema-less usage columns migrate without inventing availability',t=>{
 test('T28 other provider cannot select the Codex registry',async t=>{
   const s=fixture(t);const other=await import('../plugins/sage/skills/sage/sage.mjs');
   const before=s.bytes();assert.throws(()=>other.sage(['run','add','T1','--role','qa',...binding,'--project',join(s.dir,'..','..','project')],{...process.env,SAGE_HOME:join(s.dir,'..'),SAGE_TEST_PIDS:'{}'}),/Unknown usage interface/);assert.deepEqual(s.bytes(),before);
-});
-test('T28 modern run-request recovery never drops existing header columns',t=>{
-  const s=fixture(t);s.run('run','add','T1','--role','qa',...binding);s.run('run','done','R1','--status','done',...unavailable);
-  const before=s.bytes();
-  const input={project:join(s.dir,'..','..','project'),owner:'test-owner',request:randomUUID(),task:'T1',role:'qa',branch:'',candidate:''};
-  const env={...process.env,SAGE_HOME:join(s.dir,'..'),SAGE_TEST_PIDS:'{}'};
-  tool.createRequestedRun(input,env);
-  const folder=join(s.dir,'run-requests'),receipt=JSON.parse(readFileSync(join(folder,readdirSync(folder)[0]),'utf8')).value;
-  const regressed=s.bytes()[0].split('\n').filter(Boolean).map(line=>line.split('\t').slice(0,12).join('\t')).join('\n')+'\n';
-  writeFileSync(join(s.dir,'runs.tsv'),before[0]);
-  writeFileSync(join(s.dir,'review-pending.json'),envelope({schema:3,receipt,tables:{runs:{before:before[0],after:regressed}}}));
-  const pending=readFileSync(join(s.dir,'review-pending.json'),'utf8');
-  assert.throws(()=>tool.createRequestedRun(input,env),{code:'stuck-write'});
-  assert.deepEqual(s.bytes(),before);
-  assert.equal(readFileSync(join(s.dir,'review-pending.json'),'utf8'),pending);
 });
 test('T28 status shows exact per-task measured totals with incomplete accounting',t=>{
   const s=fixture(t);s.run('task','add', '--priority', 'P2','--title','Second','--size','small');

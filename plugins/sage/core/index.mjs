@@ -13,12 +13,9 @@ export { PR, pullRequestHead } from "./pull-request.mjs";
 export { branchProtection, protectionNote } from "./branch-protection.mjs";
 export { fileWriteOutsideRoots, partNames } from "./protected-paths.mjs";
 export { commandWrites, shellWriteEvidence, shellExecutionUncertain } from "./shell-write-policy.mjs";
-export { shellWriteOutsideRoots } from "./shell-path-policy.mjs";
 export { chiefEditDenied } from "./file-policy.mjs";
 export { PHRASES, exactPhrase, hasPhrase, phrasesNear, phraseHelp, switchModes, readModeFile, MODE_DAMAGED } from "./mode-policy.mjs";
-export { createAssignment, correlateReport } from "./assignments.mjs";
-export { AdmissionError, configureAdmission, activateAdmission, changeAdmissionMode, reserveAdmission, reserveRoleAdmission, reserveBriefAdmission, prepareAdmission, reservePreparedAdmission, reservePreparedContinuation, bindAdmission, bindContinuationAdmission, completeAdmission, recordReportAdmission, interruptAdmission, failAdmission, failContinuationAdmission, readAdmission } from "./admission.mjs";
-export { BRIEF_FIELDS, briefSections, missingBriefFields, parseBrief, renderBrief } from "./brief.mjs";
+export { BRIEF_FIELDS, briefSections, missingBriefFields } from "./brief.mjs";
 export { renderRoleInstructions, renderReportInstructions, renderChiefInstructions } from "./roles.mjs";
 export { PRIORITIES, PRIORITY_SCALE } from "./logbook-fields.mjs";
 export { readBoardSources } from "./board-reader.mjs";
@@ -33,9 +30,3 @@ export { FINDING_FORM, RESULT_WORDS, cleanReport, fieldsOf, missingFields, readR
 export { roleEditDenied, TEAM } from "./role-policy.mjs";
 
 export { REVIEW_ROLES, parseReviewTarget, parseReviewReport } from "./review.mjs";
-
-export { beginInterruptedRunFinish, endInterruptedRunFinish, voidInterruptedRunFinish } from "./admission.mjs";
-
-export { decideTaskUpdate, acknowledgeTaskUpdate, releaseTaskUpdate, voidTaskUpdate, assertTaskAdmissionOpen } from "./admission.mjs";
-
-export { TaskUpdateError, taskUpdateErrorMessage } from "./task-update-error.mjs";

@@ -10,7 +10,7 @@ import { test } from 'node:test';
 import { fileURLToPath } from 'node:url';
 import { sage as claude, mergeCheck } from '../plugins/sage/skills/sage/sage.mjs';
 import { tool } from '../plugins/sage-codex/skills/sage/sage.mjs';
-import { STUCK_WRITE } from '../plugins/sage/core/task-update-error.mjs';
+import { STUCK_WRITE } from '../plugins/sage/core/state.mjs';
 
 const codex = tool.sage, SHA = 'a'.repeat(40), MARKER = 'review-pending.json';
 const STUCK = 'This command changed nothing. This project cannot save changes; other projects work. Tell the owner. There are two ways out. With a backup: the owner restores the folder that `sage logbook` prints; rows newer than the backup are lost. With no backup: after the owner accepts the loss of this saved change, the chief runs `sage logbook repair --accept-change-loss yes --project <the project>`, or the owner runs it in a terminal when the chief cannot; it keeps the file, and a half-published update keeps mixed tables. Do not remove review-pending.json by hand.';
@@ -147,15 +147,6 @@ for (const [name, provider] of [['Claude', claude], ['Codex', codex]]) {
   });
 }
 
-test('T593 the repair refuses a coordinated update that can finish, with no change', t => {
-  const { env, one } = held(t);
-  const stop = stopAt(t, one.dir, 'receipt', false, UPDATES);
-  assert.throws(() => update(env, one, { state: 'briefed' }, answer(true)), uncertain);
-  stop();
-  const saved = snapshot(one.dir);
-  assert.throws(() => one.run(claude, ...REPAIR), /This saved change can finish/);
-  assert.deepEqual(snapshot(one.dir), saved);
-});
 
 test('T593 a file error is no stuck change: the repair moves nothing, and the line says to run again', t => {
   const { one } = fixture(t);
@@ -220,21 +211,24 @@ test('T593 a table that the stuck change left damaged still fails the check: wri
 });
 
 test('T593 mixed tables that are each whole stay as they are: the repair says so, and it does not restore them', t => {
-  const { env, one } = held(t), before = tables(one.dir);
-  const publish = stopAt(t, one.dir, 'runs', false, UPDATES);
-  assert.throws(() => update(env, one, { state: 'briefed' }, answer(true)), uncertain);
+  const { one } = fixture(t);
+  one.run(codex, 'run', 'add', 'T1', '--role', 'qa');
+  one.run(codex, 'run', 'done', 'R1', '--status', 'blocked');
+  const before = tables(one.dir);
+  const publish = stopAt(t, one.dir, 'runs', true);
+  assert.throws(() => one.run(codex, 'run', 'usage', 'R1', ...usage), /Injected stop/);
   publish();
   const mixed = tables(one.dir);
-  assert.notEqual(mixed[0], before[0], 'tasks hold the change');
-  assert.equal(mixed[1], before[1], 'runs do not');
+  assert.notEqual(mixed[1], before[1], 'runs hold the change');
+  assert.equal(mixed[2], before[2], 'decisions do not');
   const file = join(one.dir, MARKER), record = JSON.parse(readFileSync(file, 'utf8'));
   record.hash = '0'.repeat(64);
   writeFileSync(file, JSON.stringify(record) + '\n');
   const out = one.run(claude, ...REPAIR);
   assert.match(out, /A half-published update can leave mixed tables/);
   assert.match(out, /The check reads each table alone, so it cannot show that the tables agree\.$/);
-  assert.equal(tables(one.dir)[0], mixed[0]);
   assert.equal(tables(one.dir)[1], mixed[1]);
+  assert.equal(tables(one.dir)[2].startsWith(mixed[2]), true, 'the repair only adds its decision');
 });
 
 test('T593 a stuck change with a damaged decisions table: the repair refuses with the command that takes both, and that command works', t => {
@@ -441,6 +435,19 @@ for (const [name, schema] of [['an older unknown schema', 1], ['a schema that is
   assert.deepEqual(lostFiles(one.dir), [`${MARKER}.lost-1`]);
 });
 
+// T914: sage deleted the Codex native runtime, and with it the writers of schemas 2 to 6 and 8. A saved change of one of
+// them cannot finish, so it stops the writes of its logbook until the owner accepts its loss.
+for (const schema of [2, 3, 4, 5, 6, 8]) test(`T914 a saved change of schema ${schema}, a writer that sage removed, stops writes until the change-loss repair`, t => {
+  const { one } = fixture(t);
+  savedUsage(t, one);
+  rewrite(join(one.dir, MARKER), value => { value.schema = schema; });
+  const add = ['task', 'add', '--priority', 'P2', '--title', 'Saves again', '--size', 'tiny'];
+  for (const provider of [claude, codex]) assert.throws(() => one.run(provider, ...add), { message: STUCK });
+  assert.match(one.run(claude, ...REPAIR), /^The saved change \(request R1\) is lost: .* The logbook check passes, and writes work again\./);
+  assert.deepEqual(lostFiles(one.dir), [`${MARKER}.lost-1`]);
+  assert.match(one.run(codex, ...add), /^T2 framed/);
+});
+
 test('T593 a table with columns of a newer sage: the repair refuses with the plugin update, also when decisions.tsv is the one that is fine', t => {
   const { one } = fixture(t);
   stuck(t, one);
@@ -449,60 +456,6 @@ test('T593 a table with columns of a newer sage: the repair refuses with the plu
   const saved = snapshot(one.dir);
   assert.throws(() => one.run(claude, ...REPAIR), { message: `${runs} has columns that this version of sage does not know (newer): a newer sage wrote this logbook, and a write of this version would lose them. Update the sage plugin and restart this session. Nothing changed; status, logbook, standing and merge-check still work.` });
   assert.deepEqual(snapshot(one.dir), saved);
-});
-
-/** A stuck saved change, and one receipt of a whole earlier update, under task-updates. */
-function stuckWithReceipt(t) {
-  const { env, one } = fixture(t);
-  update(env, one, { title: 'First' }, answer(true));
-  stuck(t, one);
-  const [name] = readdirSync(join(one.dir, UPDATES));
-  return { one, receipt: join(one.dir, UPDATES, name) };
-}
-const BACKUP = 'A receipt in task-updates fails its check, so writes would still stop after this repair. Nothing changed. Only a backup helps here: the owner restores the folder that `sage logbook` prints; rows newer than the backup are lost.';
-test('T593 a damaged receipt: the repair refuses before the move, because the next write could not work', t => {
-  const { one, receipt } = stuckWithReceipt(t);
-  writeFileSync(receipt, 'damaged');
-  const saved = snapshot(one.dir);
-  assert.throws(() => one.run(claude, ...REPAIR), { message: BACKUP });
-  assert.deepEqual(snapshot(one.dir), saved);
-});
-
-test('T593 a receipt with a good hash that fails its check: the repair refuses before the move, with no error of another kind', t => {
-  const { one, receipt } = stuckWithReceipt(t);
-  rewrite(receipt, value => { value.intent.proposal = {}; });
-  const saved = snapshot(one.dir);
-  assert.throws(() => one.run(claude, ...REPAIR), { message: BACKUP });
-  assert.deepEqual(snapshot(one.dir), saved);
-});
-
-test('T593 a logbook of a newer sage whose receipt this version cannot read: the plugin update comes first, not the backup', t => {
-  const { one, receipt } = stuckWithReceipt(t), runs = join(one.dir, 'runs.tsv');
-  writeFileSync(receipt, 'damaged');
-  writeFileSync(runs, readFileSync(runs, 'utf8').replace('\n', '\tnewer\n'));
-  const saved = snapshot(one.dir);
-  assert.throws(() => one.run(claude, ...REPAIR), { message: `${runs} has columns that this version of sage does not know (newer): a newer sage wrote this logbook, and a write of this version would lose them. Update the sage plugin and restart this session. Nothing changed; status, logbook, standing and merge-check still work.` });
-  assert.deepEqual(snapshot(one.dir), saved);
-});
-
-test('T593 a whole receipt does not stop the repair', t => {
-  const { one } = stuckWithReceipt(t);
-  assert.match(one.run(claude, ...REPAIR), /The logbook check passes/);
-});
-
-const NEWER_RECEIPT = 'A receipt in task-updates has schema 10, and this version of sage knows schemas up to 9: a newer sage wrote it. Nothing changed. Update the sage plugin and restart this session. Then any write finishes the change or says what to do.';
-for (const [name, change] of [['with the known shape', () => {}], ['with an outcome of another shape', value => { value.outcome = { decided: true }; }]]) test(`T607 a newer receipt ${name} and no new column: the repair gives the plugin update, not the backup`, t => {
-  const { one, receipt } = stuckWithReceipt(t);
-  rewrite(receipt, value => { value.intent.schema = 10; change(value); });
-  const saved = snapshot(one.dir);
-  assert.throws(() => one.run(claude, ...REPAIR), { message: NEWER_RECEIPT });
-  assert.deepEqual(snapshot(one.dir), saved);
-});
-
-for (const [name, schema] of [['the schema of another writer', 7], ['a schema that is text', '9'], ['no schema', undefined]]) test(`T607 a receipt with ${name} is damaged, not newer: the backup line`, t => {
-  const { one, receipt } = stuckWithReceipt(t);
-  rewrite(receipt, value => { value.intent.schema = schema; });
-  assert.throws(() => one.run(claude, ...REPAIR), { message: BACKUP });
 });
 
 test('T593 the flag takes only yes, and the repair still needs a named form', t => {
@@ -671,100 +624,6 @@ for (const step of ['runs', 'decisions', 'receipt', 'clear']) for (const after o
   assert.equal(tool.read(one.dir, 'decisions').filter(line => line.decision === 'R1 usage measured').length, 1);
   assert.equal(readdirSync(join(one.dir, 'usage-requests')).length, 1);
   assert.equal(row(one.dir, 'tasks', 'T2').title, 'Third');
-});
-
-const REQUEST = '00000000-0000-4000-8000-000000000578', UPDATES = 'task-updates';
-const receipts = dir => existsSync(join(dir, UPDATES)) ? readdirSync(join(dir, UPDATES)).length : 0;
-function update(env, one, changes, callbacks) {
-  const { version } = tool.readTaskSnapshot({ project: one.project, task: 'T1' }, env);
-  return tool.updateRequestedTask({ project: one.project, owner: 'chief', request: REQUEST, task: 'T1', version, changes }, env, callbacks);
-}
-const answer = accepted => ({ voids: 0, decide: digest => ({ digest, accepted, reason: accepted ? '' : 'No' }),
-  acknowledge: (digest, receiptHash) => ({ digest, receiptHash }), release: (digest, receiptHash) => ({ digest, receiptHash }),
-  void() { this.voids += 1; }, history() { throw Error('No history here'); } });
-const uncertain = { code: 'uncertain-outcome' };
-/** T1 held with a running lead: an update to briefed changes tasks, runs and decisions. */
-function held(t) {
-  const { env, one } = fixture(t);
-  one.run(codex, 'run', 'add', 'T1', '--role', 'lead');
-  for (const state of ['briefed', 'building', 'held']) one.run(codex, 'task', 'T1', 'set', `state=${state}`);
-  return { env, one };
-}
-
-for (const step of ['tasks', 'runs', 'decisions', 'clear']) for (const after of [false, true]) test(`T578 a rollback stopped ${after ? 'after' : 'before'} ${step}: the next write restores the before tables`, t => {
-  const { env, one } = held(t), before = tables(one.dir);
-  const first = stopAt(t, one.dir, 'receipt', false, UPDATES);
-  assert.throws(() => update(env, one, { state: 'briefed' }, answer(true)), uncertain);
-  first();
-  assert.equal(existsSync(join(one.dir, MARKER)), true);
-  tables(one.dir).forEach((text, index) => assert.notEqual(text, before[index]));
-  const second = stopAt(t, one.dir, step, after, UPDATES);
-  assert.throws(() => one.run(claude, 'init'), /file error \(EIO\)/);
-  second();
-  assert.equal(existsSync(join(one.dir, MARKER)), !(step === 'clear' && after));
-  one.run(claude, 'init');
-  assert.equal(existsSync(join(one.dir, MARKER)), false);
-  assert.deepEqual(tables(one.dir), before);
-  assert.equal(receipts(one.dir), 0);
-});
-
-// The first stop leaves the update on some tables only, and the settle that undoes it stops too.
-for (const [first, second] of [['runs', 'tasks'], ['decisions', 'runs']]) test(`T578 a settle stopped at ${second}, after a stop at ${first} left mixed tables: the next write restores the before tables`, t => {
-  const { env, one } = held(t), before = tables(one.dir);
-  const publish = stopAt(t, one.dir, first, false, UPDATES);
-  assert.throws(() => update(env, one, { state: 'briefed' }, answer(true)), uncertain);
-  publish();
-  const same = dir => tables(dir).filter((text, index) => text === before[index]).length;
-  assert.equal(same(one.dir), first === 'runs' ? 2 : 1, 'the first stop left mixed tables');
-  const settle = stopAt(t, one.dir, second, false, UPDATES);
-  assert.throws(() => one.run(claude, 'init'), /file error \(EIO\)/);
-  settle();
-  assert.notEqual(same(one.dir), 3, 'the stopped settle left the tables mixed');
-  one.run(codex, 'init');
-  assert.equal(existsSync(join(one.dir, MARKER)), false);
-  assert.deepEqual(tables(one.dir), before);
-  assert.equal(receipts(one.dir), 0);
-});
-
-for (const after of [false, true]) test(`T578 a roll forward stopped ${after ? 'after' : 'before'} clear: the update stays`, t => {
-  const { env, one } = fixture(t);
-  const first = stopAt(t, one.dir, 'clear', false, UPDATES);
-  assert.throws(() => update(env, one, { title: 'New' }, answer(true)), uncertain);
-  first();
-  assert.equal(receipts(one.dir), 1);
-  const second = stopAt(t, one.dir, 'clear', after, UPDATES);
-  assert.throws(() => one.run(claude, 'task', 'add', '--priority', 'P2', '--title', 'Second', '--size', 'tiny'), /file error \(EIO\)/);
-  second();
-  one.run(claude, 'init');
-  assert.equal(existsSync(join(one.dir, MARKER)), false);
-  assert.equal(row(one.dir, 'tasks', 'T1').title, 'New');
-  assert.equal(receipts(one.dir), 1);
-});
-
-for (const [step, after] of [['intent', false], ['intent', true], ['clear', false], ['clear', true]]) test(`T578 a rejected update stopped ${after ? 'after' : 'before'} ${step} leaves no receipt, and a retry gets a fresh answer`, t => {
-  const { env, one } = fixture(t), before = tables(one.dir), no = answer(false);
-  const stop = stopAt(t, one.dir, step, after, UPDATES);
-  assert.throws(() => update(env, one, { title: 'New' }, no), uncertain);
-  stop();
-  assert.equal(no.voids, 0);
-  one.run(claude, 'init');
-  assert.equal(existsSync(join(one.dir, MARKER)), false);
-  assert.deepEqual(tables(one.dir), before);
-  assert.equal(receipts(one.dir), 0);
-  assert.equal(update(env, one, { title: 'New' }, answer(true)).decision, 'task-updated');
-  assert.equal(row(one.dir, 'tasks', 'T1').title, 'New');
-});
-
-test('T578 a file error before a task update stays an uncertain outcome, and a stuck change reads as in Claude', t => {
-  const { env, one } = fixture(t);
-  savedUsage(t, one);
-  const input = { project: one.project, owner: 'chief', request: '00000000-0000-4000-8000-000000000578', task: 'T1', version: '0'.repeat(64), changes: { title: 'New' } };
-  const callbacks = Object.fromEntries(['decide', 'acknowledge', 'release', 'void', 'history'].map(name => [name, () => {}]));
-  const stop = stopAt(t, one.dir, 'runs', false);
-  assert.throws(() => tool.updateRequestedTask(input, env, callbacks), { code: 'uncertain-outcome' });
-  stop();
-  writeFileSync(join(one.dir, MARKER), '{}');
-  assert.throws(() => tool.updateRequestedTask(input, env, callbacks), { code: 'stuck-write', message: STUCK });
 });
 
 test('T578 the merge check settles its own project first', t => {

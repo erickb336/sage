@@ -4,6 +4,7 @@
 import "./test-env.mjs"; // first: no variable of the developer's shell changes a result
 import assert from "node:assert/strict";
 import { execFileSync, spawn, spawnSync } from "node:child_process";
+import { createHash } from "node:crypto";
 import fs, { chmodSync, existsSync, linkSync, utimesSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, realpathSync, renameSync, rmSync, statSync, symlinkSync, truncateSync, writeFileSync } from "node:fs";
 import { createRequire, syncBuiltinESMExports } from "node:module";
 import { hostname, tmpdir } from "node:os";
@@ -396,31 +397,33 @@ test("T578: merge refuses a saved change that cannot finish, and it keeps the ch
   assert.equal(w.calls().filter((c) => c.args[1] === "merge").length, 0);
 });
 
-test("T578: merge reads the task again after the merge check settles: a stopped update to verified goes back, and no merge runs", (t) => {
-  const w = world();
-  const head = w.commit("b.txt");
+test("T578: merge reads the task again after the merge check settles: a Replace that stopped half way finishes and changes the task, and no merge runs", () => {
+  const w = world({ shared: true });
+  const project = w.at("project"), head = w.commit("b.txt");
   w.sage("verdict", "T1", "--sha", head, "--kind", "checks-pass");
   w.pr("create", "T1");
   w.forge("T1", "state", "verifying");
   for (const kind of ["review-clean", "qa-pass"]) w.sage("verdict", "T1", "--sha", head, "--kind", kind);
-  const target = { project: w.at("project"), task: "T1" };
-  const { version } = codex.readTaskSnapshot(target, w.env);
-  const { linkSync: link } = fs;
-  t.mock.method(fs, "linkSync", (...args) => {
-    if (String(args[1]).startsWith(join(w.logbook, "task-updates"))) throw Object.assign(Error("Injected stop"), { code: "EIO" });
-    return link(...args);
-  });
-  syncBuiltinESMExports();
-  const said = { decide: (digest) => ({ digest, accepted: true, reason: "" }), acknowledge() {}, release() {}, void() {}, history() {} };
-  const update = { ...target, owner: "chief", request: "00000000-0000-4000-8000-000000000578", version, changes: { state: "verified" } };
-  assert.throws(() => codex.updateRequestedTask(update, w.env, said), { code: "uncertain-outcome" });
-  t.mock.restoreAll();
-  syncBuiltinESMExports();
-  assert.equal(w.task("T1").state, "verified", "the stop left the update on the tables");
+  w.forge("T1", "state", "verified");
+  // C1 offers T1 to a Codex chief, which accepts; the owner declines, so the offer ends: a Replace that changes T1's row.
+  const c2 = codex.chiefFor(project, "session-b", w.env), cx = (...a) => codex.sage([...a, "--project", project, "--chief", c2], w.env);
+  const [, offer, version] = /offer ([0-9a-f]{8}) · version ([0-9a-f]{64})/.exec(w.sage("offer", "T1", "--to", c2));
+  cx("accept", "T1", "--offer", offer, "--version", version);
+  const tables = ["tasks", "runs", "gates", "decisions"], cells = (table) => readFileSync(join(w.logbook, `${table}.tsv`), "utf8");
+  const before = Object.fromEntries(tables.map((table) => [table, cells(table)]));
+  w.sage("gate", "answer", "G1", "--option", "2");
+  const after = Object.fromEntries(tables.map((table) => [table, cells(table)]));
+  assert.notEqual(after.tasks, before.tasks, "the decline clears T1's offer");
+  // The Replace stopped after it saved its change: the marker holds it, and no table or receipt has it yet.
+  const folder = join(w.logbook, "replace-requests"), [name] = readdirSync(folder), { value: receipt } = JSON.parse(readFileSync(join(folder, name), "utf8"));
+  rmSync(join(folder, name));
+  for (const table of tables) writeFileSync(join(w.logbook, `${table}.tsv`), before[table]);
+  const value = { schema: 9, receipt, tables: Object.fromEntries(tables.map((table) => [table, { before: before[table], after: after[table] }])) };
+  writeFileSync(join(w.logbook, "review-pending.json"), `${JSON.stringify({ value, hash: createHash("sha256").update(JSON.stringify(value)).digest("hex") })}\n`);
   refused(w.pr("merge", "T1"), /a saved change finished and changed T1: run sage-pr merge T1 again/);
   assert.equal(w.calls().filter((c) => c.args[1] === "merge").length, 0);
-  assert.equal(w.task("T1").state, "verifying");
-  refused(w.pr("merge", "T1"), /T1 is verifying, not verified or pr-ready/);
+  assert.equal(cells("tasks"), after.tasks, "the merge check settled the saved change");
+  assert.equal(existsSync(join(w.logbook, "review-pending.json")), false);
 });
 
 test("R1708-1: merge runs the head branch rule too: a task that shares the branch but is not on the pull request refuses it", () => {
