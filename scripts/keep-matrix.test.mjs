@@ -165,6 +165,12 @@ const REFUSED = [
   ["logbook", "rm -rf ~/../*"],
   ["logbook", `rsync -a --delete /var/empty/ ${env.SAGE_SHARED_HOME}/`],
   ["logbook", `find ${L} -delete`],
+  // A recursive mode or owner change of a root or a path in one (F-T909-5): the logbook root and the shared root.
+  ["logbook", `chmod -R 000 ${L}`],
+  ["logbook", `chown -R nobody ${L}`],
+  ["logbook", `chmod -R 000 ${env.SAGE_SHARED_HOME}`],
+  ["logbook", `chown -R nobody ${env.SAGE_SHARED_HOME}`],
+  ["logbook", `chmod -R 000 ${CODEX_SAGE}`, ["codex chief"]],
   // The Codex sage folder (the logbook and the mode files) is a root of the Codex gate only (T903).
   ["logbook", `echo '{"sage":true,"autopilot":true}' > ${CODEX_SAGE}/.hooks/codex/x.json`, ["codex chief"]],
   ["logbook", `mv ${env.CODEX_HOME} ${BASE}/codex-old`, ["codex chief"]],
@@ -226,6 +232,7 @@ const PASSED = [
   // any mode. In the Claude hook, a search of BASE also meets the board rule (it holds the home's .config), which stays.
   [`find ${BASE} -name '*.tmp' -delete`, ["codex chief"]],
   [`chmod -R u+w ${BASE}`],
+  ["chmod -R u+w ~"],
   // rm of a project link to the shared root removes the link, not the root (F-T903-10).
   [`rm ${LINK}`],
 ];

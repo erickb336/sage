@@ -1787,7 +1787,8 @@ const flat = (text) => cell(String(text ?? "").replace(BREAKS, " ")).replace(/ {
 const oneLine = (text) => flat(text) || "(no title)";
 /**
  * Does a question read as a breakdown gate's first line to the owner: "Approve program", in any case and Unicode form,
- * also after a list mark or another mark or symbol (R1270-1)? Look-alike letters of another script are a limit (T909).
+ * also after a list mark or another mark or symbol (R1270-1)? Look-alike letters of another script and filler letters
+ * (U+115F, U+3164, U+FFA0) are a limit (T909, F-T909-4).
  */
 const readsAsBreakdown = (question) => /^approve program\b/.test(looks(question).replace(/^[^\p{L}\p{N}]+/u, ""));
 /** The why of each decision row that program propose writes. */

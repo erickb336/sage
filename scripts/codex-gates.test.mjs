@@ -477,7 +477,8 @@ test("T903: a logbook file's name outside the project passes; a shell write by a
   symlinkSync(w.env.SAGE_SHARED_HOME, join(w.project, "to-shared"));
   const refused = (word) => `sage: no agent writes, moves or removes a logbook file from the shell: ${JSON.stringify(word)} is in the Codex sage folder or the shared root, or holds one. Use the sage MCP tools for the logbook`;
   const writes = [[`echo x > ${w.env.SAGE_SHARED_HOME}/p-abc/tasks.tsv`, `${w.env.SAGE_SHARED_HOME}/p-abc/tasks.tsv`], [`cd ${w.env.SAGE_HOME} && rm -f p-abc/runs.tsv`, "p-abc/runs.tsv"],
-    [`cp /dev/null ${w.env.SAGE_HOME}/p-abc/ledger.tsv`, `${w.env.SAGE_HOME}/p-abc/ledger.tsv`], [`rm -rf ${w.dir}`, w.dir], [`find ${w.env.SAGE_SHARED_HOME} -delete`, w.env.SAGE_SHARED_HOME], ["rm -rf ~/..", "~/.."]];
+    [`cp /dev/null ${w.env.SAGE_HOME}/p-abc/ledger.tsv`, `${w.env.SAGE_HOME}/p-abc/ledger.tsv`], [`rm -rf ${w.dir}`, w.dir], [`find ${w.env.SAGE_SHARED_HOME} -delete`, w.env.SAGE_SHARED_HOME], ["rm -rf ~/..", "~/.."],
+    [`chmod -R 000 ${w.env.SAGE_HOME}`, w.env.SAGE_HOME], [`chown -R x ${w.env.SAGE_SHARED_HOME}/p-abc`, `${w.env.SAGE_SHARED_HOME}/p-abc`]];
   // Ordinary commands over the home folder, which holds the roots, and rm of the project's link (F-T903-7, F-T903-10).
   const passes = [`cat ${w.env.SAGE_SHARED_HOME}/p-abc/tasks.tsv`, `ls ${w.env.SAGE_HOME}`, `rm -rf ${w.project}/build`, "echo x > ../notes.txt",
     "find ~ -name '*.tmp' -delete", "chmod -R u+w ~", `find ${w.dir} -name '*.tmp' -delete`, `chmod -R u+w ${w.dir}`, `rm ${w.project}/to-shared`, "rm to-shared"];

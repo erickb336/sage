@@ -43,8 +43,8 @@ const REDIRECT = /^(&>>?|>>|>\||>&|<>|<&|>|<)([^]*)$/;
 /**
  * The words of a program that removes or moves a whole folder, which take a root with them when they name it or a folder
  * above it (F-T815-4): rm, rmdir, unlink and shred; mv but its last word (where it moves to); rsync with a delete option.
- * A find with -delete removes only the files that it matches, and chmod -R changes no file's place (F-T903-7): each
- * counts only when a word names a path in a root.
+ * A find with -delete removes only the files that it matches (F-T903-7): it counts only when a word names a path in a
+ * root, as every write does.
  */
 function wholeWords(name, args) {
   if (/^(?:g?rm|rmdir|unlink|shred)$/.test(name)) return args;
@@ -52,6 +52,12 @@ function wholeWords(name, args) {
   if (name === "rsync") return args.some((a) => /^--(?:del|delete|remove-source-files)/.test(a)) ? args : [];
   return [];
 }
+/**
+ * The words of chmod, chown, chgrp and chflags with -R, which change every file under a word, in a line with or without
+ * a write form (F-T909-5): each counts only when it names a path in a root. A folder that only holds a root (chmod -R
+ * u+w ~) does not count (F-T903-7).
+ */
+const recursiveWords = (name, args) => /^(?:chmod|chown|chgrp|chflags)$/.test(name) && args.some((a) => /^-[a-zA-Z]*R|^--recursive$/.test(a)) ? args : [];
 
 /**
  * The word of a shell command line that writes into the sage root or the shared root (roots), or undefined (T815). In a
@@ -60,8 +66,8 @@ function wholeWords(name, args) {
  * before its first $, backtick or pattern character; ~ is the home folder), resolved from the program's folder, is in a
  * root (as written, or the root's real path), or when its text holds a root's path. A word is not followed through links:
  * rm of a link to a root removes the link, not the root (F-T903-10), and a path through a link is a limit of the hook. In
- * any line, a word of a program that removes or moves a whole folder (wholeWords) also counts when it names a folder
- * above a root: for a pattern or a variable, the folder of its literal part (so ~/* is the home folder). The reader
+ * any line, a word of a recursive mode or owner change (recursiveWords) counts when it names a path in a root, and a word
+ * of a program that removes or moves a whole folder (wholeWords) also counts when it names a folder above a root: for a pattern or a variable, the folder of its literal part (so ~/* is the home folder). The reader
  * follows a literal cd, pushd and popd; after one that it cannot follow, only absolute paths count. zsh's clobber form
  * (>! file) gives the reader a word, not a target, so with it every word counts. A line that the reader cannot read gives
  * undefined. A path that a script, a variable or code builds while it runs is a limit of the hook.
@@ -98,7 +104,8 @@ export function logbookWrite(command, cwd, roots, home = process.env.HOME) {
     const p = path(cut < 0 ? word : word.slice(0, word.lastIndexOf("/", cut) + 1) || ".", dir);
     return p !== undefined && holder(p);
   };
-  const whole = (word, args, dir) => wholeWords(programName(word), args).find((w) => above(w, dir) || named(w, dir));
+  const whole = (word, args, dir) => wholeWords(programName(word), args).find((w) => above(w, dir) || named(w, dir))
+    ?? recursiveWords(programName(word), args).find((w) => named(w, dir));
   let evidence;
   try {
     evidence = programsRun(command, cwd, undefined, { contextEvidence: true, redirectParts: true });

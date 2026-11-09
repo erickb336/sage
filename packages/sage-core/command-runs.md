@@ -18,8 +18,9 @@ gate uses `mergeRun`, the push readers and `logbookWrite`, with its own roots
   path counts too. In any line, a word of a program that removes or moves a whole
   folder (`rm`, `mv` but its last word, `rsync --delete`) also counts when it
   names a root or a folder above one; for a pattern or a variable, the folder of
-  its literal part counts. `find -delete` and `chmod -R` count only when a word
-  names a path in a root.
+  its literal part counts. `chmod`, `chown`, `chgrp` and `chflags` with `-R`
+  count in any line when a word names a root or a path in one, not a folder
+  above one. `find -delete` counts only as a write: a word in a root.
 - `stateToolRun(command, cwd)` gives each run of `sage.mjs` or `sage-pr.mjs`:
   node or the script itself as the program. A program that only reads the file
   is no run.

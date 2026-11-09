@@ -848,12 +848,15 @@ test("T815 repair: core's readers in both bundles (F-T815-4, -6, -9, -16, -27; F
     // F-T815-4: a remove, a move or a recursive lock of a root or a folder above one, also by a pattern in it.
     for (const [command, word] of [["rm -rf ~/.claude", "~/.claude"], ["mv ~/.claude ~/.claude.bak", "~/.claude"], [`rm -rf ${home}`, home], [`rm -rf ${home}/..`, `${home}/..`],
       ["rm -rf ~/*", "~/*"], ["rm -rf /", "/"], [`find ${shared} -delete`, shared],
-      [`rsync -a --delete ${work}/ ${home}/`, `${home}/`], [`sudo rm -rf ${home}`, home]]) assert.equal(write(command), word, `${provider}: ${command}`);
+      [`rsync -a --delete ${work}/ ${home}/`, `${home}/`], [`sudo rm -rf ${home}`, home],
+      // F-T909-5: a recursive mode or owner change of a root or a path in one, in a line with no write form.
+      ["chmod -R 000 ~/.claude/sage", "~/.claude/sage"], [`chmod -R 000 ${shared}`, shared], ["chown -R x ~/.sage", "~/.sage"],
+      [`chgrp -R staff ${root}/p`, `${root}/p`], [`cd ${shared} && chmod -R u+w .`, "u+w"]]) assert.equal(write(command), word, `${provider}: ${command}`);
     // Not a remove of a root: mv's last word is where it moves to, a copy or a plain mode change, a remove elsewhere, a
     // find that deletes only the files it matches and a recursive mode change (F-T903-7), and rm of a link to a root, which
     // removes the link (F-T903-10).
     for (const command of ["mv a.txt ~/", "rm -rf build", "rm *.log", `cp -R ${home}/.claude /tmp/x`, `chmod 644 ${home}/.claude`, `find ${work} -name '*.o' -delete`, "ls ~",
-      "find ~ -name '*.tmp' -delete", `find ${home} -name x -exec rm -rf {} +`, "chmod -R u+w ~", `chmod -R 000 ${home}`, `rm ${link}`, `unlink ${link}`]) {
+      "find ~ -name '*.tmp' -delete", `find ${home} -name x -exec rm -rf {} +`, "chmod -R u+w ~", `chmod -R 000 ${home}`, `chown -R x ${home}/.claude`, `rm ${link}`, `unlink ${link}`]) {
       assert.equal(write(command), undefined, `${provider}: ${command}`);
     }
     // F-T815-16: pushd moves as cd does; popd goes back. A path through a link is a limit (T909).
@@ -1350,14 +1353,14 @@ test("shared command policy classifies merge candidates and executable text in b
     assert.equal(typeof api.createCommandPolicy, "function");
     const tool = join(f.plugin, "skills/sage/sage.mjs");
     const adapter = await import(pathToFileURL(join(f.plugin, provider === "claude" ? "hooks/command-policy.mjs" : "core/index.mjs")));
-    const policy = adapter.createCommandPolicy({ stateToolPath: tool });
+    const policy = adapter.createCommandPolicy();
     const candidate = `gh pr merge 12 --squash --delete-branch --match-head-commit ${sha}`;
     assert.deepEqual(policy.mergeRun(candidate, f.dir), { pr: "12", sha });
     for (const text of [candidate.replace(" 12 ", " 012 "), candidate.replace(sha, "abc"), `${candidate} --admin`,
       `sh -c '${candidate}'`, "gh pr 'merge"]) {
       assert.equal(typeof policy.mergeRun(text, f.dir)?.problem, "string", text);
     }
-    // T815: the merge rule judges the programs that run, never text; whatever state tool path the policy has.
+    // T815: the merge rule judges the programs that run, never text.
     for (const text of ["git status", "git merge topic", `echo '${candidate}'`, `echo '${candidate}' | head -1`, `node '${tool}' log --why '${candidate}'`, `node '/other/sage.mjs' log --why '${candidate}'`]) {
       assert.equal(policy.mergeRun(text, f.dir), undefined, text);
       assert.equal(api.createCommandPolicy().mergeRun(text, f.dir), undefined, text);
