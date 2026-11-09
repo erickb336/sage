@@ -1,7 +1,6 @@
 import { accessSync, constants, realpathSync, statSync } from "node:fs";
 import { resolve } from "node:path";
 import { programName } from "./program-name.mjs";
-import { powerShellLaunch } from "./powershell-launch.mjs";
 
 /**
  * Programs that run a later word as a program, each with its options that take a value (that value is not the program).
@@ -74,9 +73,9 @@ const SHELLS = /^(?:sh|bash|zsh|dash|ksh|fish)$/;
  * With contextEvidence, return programs with their wrapper and directory certainty, plus those redirects.
  * Throws when the shell reader cannot read the line (see shellCommands), and for text nested more than 3 levels deep.
  */
-export function programsRun(command, cwd, path = process.env.PATH ?? "", { executableEvidence = false, redirectEvidence = false, contextEvidence = false, uncertainDirectory = false, redirectParts = false, powerShell = false } = {}) {
+export function programsRun(command, cwd, path = process.env.PATH ?? "", { executableEvidence = false, redirectEvidence = false, contextEvidence = false, uncertainDirectory = false, redirectParts = false } = {}) {
   const found = { redirects: [], contexts: [], publicEntries: new WeakSet(), redirectParts };
-  readPrograms(command, cwd, path, 0, found, uncertainDirectory, undefined, true, powerShell);
+  readPrograms(command, cwd, path, 0, found, uncertainDirectory);
   if (contextEvidence) return { programs: found.contexts, redirects: found.redirects };
   return redirectEvidence ? found.redirects : found.contexts
     .filter(entry => executableEvidence || (!entry.wrapper && found.publicEntries.has(entry))).map(entry => entry.run);
@@ -368,8 +367,7 @@ function shellLookup(exported) {
 function readPrograms(command, dir, path, depth, found, uncertainDirectory = false, lookup = shellLookup({
   ...(process.env.CDPATH === undefined ? {} : { cdpath: process.env.CDPATH }),
   ...(process.env.HOME === undefined ? {} : { home: process.env.HOME }),
-}), publicLeaves = true, powerShell = false, powerShellLaunchOrigin = false) {
-  if (powerShell && /\\"/.test(command) && /\b(?:git|gh)(?:\.exe)?\b/i.test(command)) throw Object.assign(new Error("PowerShell quoting is ambiguous for a protected command"), { code: "SAGE_POWERSHELL_LAUNCH" });
+}), publicLeaves = true) {
   const functionBodies = new Map(), functionIds = new WeakMap();
   const callSites = new WeakMap(), provisionalCalls = new Map(), provisionalDerived = new Map(), confirmedCalls = new Set();
   const provisionalErrors = [];
@@ -387,10 +385,10 @@ function readPrograms(command, dir, path, depth, found, uncertainDirectory = fal
     } else if (site && shellFunction) confirmedCalls.add(site);
     if (emitLeaves) found.publicEntries.add(entry);
   };
-  const inner = (text, at, here, transformed = false, uncertain = false, nextLookup = lookup, nextPowerShell = powerShell, launchOrigin = powerShellLaunchOrigin) => {
+  const inner = (text, at, here, transformed = false, uncertain = false, nextLookup = lookup) => {
     try {
       if (depth === 3) throw new Error("commands nested more than 3 levels deep");
-      readPrograms(text, at, here, depth + 1, found, uncertain, nextLookup, emitLeaves, nextPowerShell, launchOrigin);
+      readPrograms(text, at, here, depth + 1, found, uncertain, nextLookup, emitLeaves);
     } catch (error) {
       if (transformed) error.code = "SAGE_EXECUTABLE_EVIDENCE";
       throw error;
@@ -431,7 +429,7 @@ function readPrograms(command, dir, path, depth, found, uncertainDirectory = fal
     let launched = false;
     let here = path;
     let at = dir; // a wrapper chdir belongs to this command, not the following shell command
-    let viaExec = false, bypassFunctions = false, powerShellLaunchChild = powerShellLaunchOrigin;
+    let viaExec = false, bypassFunctions = false;
     let transformed = false;
     let argv = false; // argv disables assignment/keyword grammar, not same-shell builtin lookup
     let nextDir = dir, nextStack = stack, status, negate = false, nextUncertain = uncertain;
@@ -459,18 +457,6 @@ function readPrograms(command, dir, path, depth, found, uncertainDirectory = fal
       const wrapperNames = functionId ? [] : shellWrapper ? [name] : [file && programName(file), name].filter(Boolean);
       let wrapper = wrapperNames.flatMap(base => [`${base} ${words[k + 1]}`, base]).find(key =>
         WRAPPER.has(key) && (shellWrapper || !/^(?:command|builtin|exec|noglob|nocorrect)$/.test(key)) && (key !== "npm" || words.slice(k + 1).some(word => /(?:^|=)(?:exec|x)$/.test(word))));
-      if (powerShell && !viaExec && !functionId && /^(?:start-process|start)$/.test(name)) {
-        const raw = COMMAND_CONTEXT.get(c).rawWords;
-        const launch = interpret(siteFor(c, k), () => powerShellLaunch(words.length === c.words.length && c.words[k] === w ? raw.slice(k + 1) : undefined));
-        if (!launch) break;
-        emit({ word: w, file, args: words.slice(k + 1), dir: at, path: here, stdin: [], piped: false }, true, uncertain, false, siteFor(c, k));
-        const launchDir = launch.directory === undefined ? at : resolve(at, launch.directory);
-        // Replace only this dispatch's argv. The shell's later commands keep their own directory and syntax.
-        words.splice(k, words.length - k, launch.program, ...launch.args);
-        at = launchDir; argv = true; viaExec = true; bypassFunctions = true; powerShellLaunchChild = true;
-        k--;
-        continue;
-      }
       const originalArgs = words.slice(k + 1);
       const npmWords = wrapper === "npm" ? [...words] : undefined;
       const npm = npmWords && interpret(siteFor(c, k), () => wrapperArguments(npmWords, k + 1, wrapper, here, at));
@@ -500,7 +486,7 @@ function readPrograms(command, dir, path, depth, found, uncertainDirectory = fal
           const watched = interpret(dispatchSite, () => watchOptions(words, k + 1));
           if (!watched) break;
           if (watched.shellText) {
-            interpret(dispatchSite, () => inner(words.slice(watched.next).join(" "), at, here, transformed, uncertain, shellLookup(environment), powerShell, powerShellLaunchChild));
+            interpret(dispatchSite, () => inner(words.slice(watched.next).join(" "), at, here, transformed, uncertain, shellLookup(environment)));
             break;
           }
           k = watched.next - 1;
@@ -517,7 +503,7 @@ function readPrograms(command, dir, path, depth, found, uncertainDirectory = fal
           at = wrapped.dir;
           transformed ||= wrapped.split;
           if (wrapped.call) {
-            interpret(dispatchSite, () => inner(wrapped.call, at, here, true, uncertain, shellLookup(environment), powerShell, powerShellLaunchChild));
+            interpret(dispatchSite, () => inner(wrapped.call, at, here, true, uncertain, shellLookup(environment)));
             break;
           }
         }
@@ -574,17 +560,17 @@ function readPrograms(command, dir, path, depth, found, uncertainDirectory = fal
       }
       const pipes = commands.filter((p) => p.pipeTo === c);
       const stdin = [...bodies, ...pipes.map((p) => p.words.join(" "))];
-      emit({ word: w, file: w === "kill" && !viaExec ? undefined : file, args, dir: at, path: here, stdin, piped: pipes.length > 0, ...(powerShellLaunchChild ? { powerShellLaunch: true } : {}) }, false, uncertain, functionId !== undefined, siteFor(c, k));
+      emit({ word: w, file: w === "kill" && !viaExec ? undefined : file, args, dir: at, path: here, stdin, piped: pipes.length > 0 }, false, uncertain, functionId !== undefined, siteFor(c, k));
       if (!functionId) {
         const texts = name === "eval" && !(sameShellLookup && w === "eval") ? [] : commandText(name, args, bodies);
         if (texts.length) derive(siteFor(c, k));
         for (const text of texts) interpret(siteFor(c, k), () => inner(text, at, here, transformed, uncertain,
-          name === "eval" && !viaExec ? { cdpath: localCdpath, home: localHome, exported } : shellLookup(environment), /^(?:pwsh|powershell)$/.test(name), powerShellLaunchChild));
+          name === "eval" && !viaExec ? { cdpath: localCdpath, home: localHome, exported } : shellLookup(environment)));
         const exec = [name, file && programName(file)].includes("find") ? args.findIndex((a) => /^-(?:exec|execdir|ok|okdir)$/.test(a)) : -1;
         if (exec >= 0 && args[exec + 1]) {
           derive(siteFor(c, k));
           const end = args.findIndex((a, j) => j > exec && /^[;+]$/.test(a));
-          emit({ word: args[exec + 1], file: program(args[exec + 1], at, here, uncertain), args: args.slice(exec + 2, end < 0 ? undefined : end), dir: at, path: here, stdin: [], piped: false, ...(powerShellLaunchChild ? { powerShellLaunch: true } : {}) }, false, uncertain);
+          emit({ word: args[exec + 1], file: program(args[exec + 1], at, here, uncertain), args: args.slice(exec + 2, end < 0 ? undefined : end), dir: at, path: here, stdin: [], piped: false }, false, uncertain);
         }
       }
       break;
@@ -854,12 +840,12 @@ function readCommands(src, i, close, out, host, flow) {
   };
   const fresh = () => {
     const command = { words: [], syntax: [], bodies: [], host, piped: false, grouped: false, writes: false, redirects: [], heredoc: false };
-    COMMAND_CONTEXT.set(command, { children: [], rawWords: [], wordLiterals: [], bodyLiterals: [], redirectLiterals: [] });
+    COMMAND_CONTEXT.set(command, { children: [], wordLiterals: [], bodyLiterals: [], redirectLiterals: [] });
     REDIRECT_PARTS.set(command.redirects, []);
     return command;
   };
   let cmd = fresh();
-  let word, wordStart;
+  let word;
   let quoted = false, assignment = false, literal = true;
   let depth = 0;
   let target; // after a redirection: its operator, kept with its target in redirects, or "body" for the text of a here-string
@@ -889,7 +875,6 @@ function readCommands(src, i, close, out, host, flow) {
       }
       if (!quoted && !cmd.words.length && word === "}" && /^(?:brace|function)$/.test(flow.kind)) COMMAND_CONTEXT.get(cmd).closesScope = true;
       cmd.words.push(word); cmd.syntax.push({ quoted, assignment });
-      COMMAND_CONTEXT.get(cmd).rawWords.push(src.slice(wordStart, i));
       COMMAND_CONTEXT.get(cmd).wordLiterals.push(literal);
     }
     word = target = undefined;
@@ -917,7 +902,6 @@ function readCommands(src, i, close, out, host, flow) {
   };
   const here = () => ({ cmd, index: cmd.words.length });
   while (i < src.length) {
-    if (word === undefined) wordStart = i;
     const c = src[i];
     const esac = word === "esac" && !quoted && !cmd.words.length; // "esac)" closes a $( ), and "esac |" pipes the case on
     if (arm()?.pattern && "()|".includes(c) && !esac) { // a case arm: "(a|b)" or "a)"; its pattern runs nothing

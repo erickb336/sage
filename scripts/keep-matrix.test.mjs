@@ -1,6 +1,7 @@
 // The KEEP set of T815 in one table, through both hooks as processes: Claude's sage hook and Codex's gate. T815 cut the
-// hooks' shell-text rules; this table shows that every merge form, push form, literal logbook write and the board, process
-// and stash rules still refuse, and that the plain forms pass. No command of the table runs: a hook only judges it.
+// hooks' shell-text rules, and T909 cut the checks that only stopped a deliberate trick (standing order 70); this table
+// shows that each common merge form, push form, literal logbook write and the board, process and stash rules still
+// refuse, and that the plain forms pass. No command of the table runs: a hook only judges it.
 import "./test-env.mjs"; // first: no variable of the developer's shell changes a result
 import assert from "node:assert/strict";
 import { execFileSync, spawnSync } from "node:child_process";
@@ -55,18 +56,13 @@ test("T815: the fake gh answers first, and no real gh is on the hooks' PATH", ()
 
 // The project: a GitHub remote, a worktree on sage/t1-a, and a shared logbook with a chief of each provider. T1 (on
 // sage/t1-a) is the Claude chief's, T2 (on sage/t2-b) the Codex chief's.
-const PROJECT = join(BASE, "project"), TREE = join(BASE, "tree"), OTHER = join(BASE, "other");
+const PROJECT = join(BASE, "project"), TREE = join(BASE, "tree");
 mkdirSync(PROJECT);
 execFileSync("git", ["init", "-q", "-b", "main", PROJECT]);
 execFileSync("git", ["-C", PROJECT, "commit", "-q", "--allow-empty", "-m", "first"], { env: gitEnv });
 execFileSync("git", ["-C", PROJECT, "remote", "add", "origin", "https://github.com/acme/project.git"]);
 execFileSync("git", ["-C", PROJECT, "worktree", "add", "-q", "-b", "sage/t1-a", TREE]);
 for (const name of ["sage/t2-b", "sage/t9-free", "develop"]) execFileSync("git", ["-C", PROJECT, "branch", name]);
-// A second checkout whose settings send a push to another name (remote.origin.push).
-mkdirSync(OTHER);
-execFileSync("git", ["init", "-q", "-b", "sage/t1-a", OTHER]);
-execFileSync("git", ["-C", OTHER, "remote", "add", "origin", "https://github.com/acme/project.git"]);
-execFileSync("git", ["-C", OTHER, "config", "remote.origin.push", "refs/heads/sage/t1-a:refs/heads/main"]);
 const SESSION = { claude: "claude-session", codex: "codex-session" };
 claude.sage(["link", "--separate", "--project", PROJECT], env);
 const C1 = claude.chiefFor(PROJECT, SESSION.claude, env), C2 = codex.chiefFor(PROJECT, SESSION.codex, env);
@@ -75,11 +71,11 @@ for (const [tool, chief, title, branch] of [[claude, C1, "a", "sage/t1-a"], [cod
   tool.sage(["task", `T${title === "a" ? 1 : 2}`, "set", `branch=${branch}`, "--project", PROJECT, "--chief", chief], env);
 }
 const LOGBOOK = claude.storeDir(PROJECT, env);
-const LINK = join(BASE, "link");
-symlinkSync(LOGBOOK, LINK);
-// The Codex sage folder, with no SAGE_HOME: CODEX_HOME/sage, and a link to it.
-const CODEX_SAGE = join(env.CODEX_HOME, "sage"), CODEX_LINK = join(BASE, "codex-link");
-symlinkSync(CODEX_SAGE, CODEX_LINK);
+// A link in the project to the shared root: rm of the link removes the link, not the root (F-T903-10).
+const LINK = join(PROJECT, "shared-link");
+symlinkSync(env.SAGE_SHARED_HOME, LINK);
+// The Codex sage folder, with no SAGE_HOME: CODEX_HOME/sage.
+const CODEX_SAGE = join(env.CODEX_HOME, "sage");
 
 /** A hook's answer: the reason of its refusal, or undefined when it passes. */
 function answer(r) {
@@ -104,8 +100,7 @@ const BOTH = Object.keys(ROLES), CLAUDE = ["claude chief", "claude agent"], AGEN
 /** The words of each family's refusal in the Claude hook, so that no row passes for another rule's reason. */
 const WHY = {
   merge: /merge|reaches main/i, // a mergeBranch into main meets the push rule first, which runs before the merge rule
-  push: /Push only with|force-push|reaches main|default branch|gh repo sync|git command that the hook knows|subtree push|owning chief|core\.hooksPath|under a \.git folder/,
-  gh: /before or between its command words/,
+  push: /Push only with|force-push|reaches main|default branch|gh repo sync|subtree push|owning chief/,
   logbook: /logbook file from the shell/,
   board: /board password rule/,
   process: /process list/,
@@ -114,57 +109,26 @@ const WHY = {
   state: /state tool|PR script|writes the logbook/,
 };
 /** The words of a refusal in the Codex gate, where they name the family's own rule (T903); other families take any refusal. */
-const CODEX_WHY = { logbook: /^sage: no agent writes, moves or removes a logbook file from the shell|^sage: no agent runs a shell command that names the Codex sage folder, the shared root/ };
+const CODEX_WHY = { logbook: /^sage: no agent writes, moves or removes a logbook file from the shell/ };
 
 /**
  * The table: [family, command, roles, extra env]. A command is a string for every role, or { claude, codex } when the two
  * providers need another command for one case (the other chief's branch).
  */
 const T = TREE, L = LOGBOOK;
-/** Wrapper programs that the command reader does not know: each runs the program in its words. No row runs them. */
-const WRAPPERS = ["arch -arm64", "script -q /dev/null", "op run --", "direnv exec .", "unbuffer", `flock ${BASE}/lock`, "mise exec --", "chronic", "ionice -c3"];
 mkdirSync(join(env.HOME, "x")); // cd ~/x: a folder of the scratch home
 const REFUSED = [
-  // Every merge form: by gh's own words, after gh's options, at any depth that the reader sees, and through the API.
+  // Each common merge form: by gh's own words, after gh's options, and at any depth that the reader sees.
   ["merge", "gh pr merge 12"],
   ["merge", `${FORM} -R acme/project`],
   ["merge", `gh -R acme/project pr merge 12 --squash --delete-branch --match-head-commit ${SHA}`],
   ["merge", `/usr/local/bin/gh pr merge 12 --squash --delete-branch --match-head-commit ${SHA}`],
   ["merge", `env GH_TOKEN=x ${FORM}`],
-  ["merge", `command ${FORM}`],
   ["merge", `bash -c '${FORM}'`],
-  ["merge", `sh -c "${FORM}"`],
-  ["merge", `eval ${FORM}`],
-  ["merge", `echo $(${FORM})`],
-  ["merge", "echo 12 | xargs gh pr merge --squash --delete-branch"],
-  ["merge", `find . -name x -exec ${FORM} \\;`],
   ["merge", `cd ${PROJECT} && ${FORM}`],
   ["merge", "gh pr merge 12 --auto --squash --delete-branch"],
   ["merge", `gh pr merge 12 --admin --squash --delete-branch --match-head-commit ${SHA}`],
-  ["merge", "gh api -X PUT repos/acme/project/pulls/12/merge"],
-  ["merge", "gh api --method=PUT repos/acme/project/pulls/12/merge"],
-  ["merge", "gh api -XPUT repos/acme/project/pulls/12/merge"],
-  ["merge", "gh api -X PUT https://api.github.com/repos/acme/project/pulls/12/merge"],
-  ["merge", `gh api graphql -f query='mutation { mergePullRequest(input: {pullRequestId: "P1"}) { clientMutationId } }'`],
-  ["merge", `gh api graphql -f query='mutation { enablePullRequestAutoMerge(input: {pullRequestId: "P1"}) { clientMutationId } }'`],
-  ["merge", `gh api graphql -f query='mutation { mergeBranch(input: {repositoryId: "R1", base: "main", head: "sage/t1-a"}) { clientMutationId } }'`],
-  ["merge", "curl -X PUT -H 'Authorization: token x' https://api.github.com/repos/acme/project/pulls/12/merge"],
-  ["merge", "wget --method=PUT https://api.github.com/repos/acme/project/pulls/12/merge"],
-  // The REST merges endpoint merges a branch into a base (F-T815-7).
-  ["merge", "gh api -X POST repos/acme/project/merges -f base=sage/t9-free -f head=sage/t1-a"],
-  ["merge", `curl -X POST -d '{"base":"sage/t9-free","head":"sage/t1-a"}' https://api.github.com/repos/acme/project/merges`],
-  // GitHub reads a doubled slash as one (F-T815-33).
-  ["merge", "gh api -X PUT repos/acme/project/pulls/12//merge"],
-  ["merge", "curl -X POST https://api.github.com/repos//acme/project//merges -d x"],
-  // A wrapper that the reader does not know runs the program in its words (F-T815-30).
-  ...WRAPPERS.flatMap((wrapper) => [`${wrapper} gh pr merge 12 --squash`, `${wrapper} gh api -X PUT repos/acme/project/pulls/12/merge`,
-    `${wrapper} curl -X PUT -H 'Authorization: token x' https://api.github.com/repos/acme/project/pulls/12/merge`].map((command) => ["merge", command])),
-  // An option before or between gh's command words can take the next word as its value: gh pr -b view merge 12 runs
-  // gh pr merge (F-T815-5).
-  ["gh", "gh pr -b view merge 12 --squash"],
-  ["gh", "gh pr -c view close 12"],
-  ["gh", `gh --color always pr merge 12 --squash --delete-branch --match-head-commit ${SHA}`],
-  // Every push form that is not the one push form.
+  // Each common push form that is not the one push form.
   ["push", `git -C ${T} push --force origin sage/t1-a`],
   ["push", `git -C ${T} push origin +sage/t1-a`],
   ["push", `git -C ${T} push origin main`],
@@ -174,74 +138,41 @@ const REFUSED = [
   ["push", `git -C ${T} push origin :sage/t9-free`],
   ["push", `git -C ${T} push --mirror origin`],
   ["push", `git -C ${T} push --all origin`],
+  ["push", `git -C ${T} push origin`],
+  ["push", `git -C ${PROJECT} push origin sage/t1-a`],
+  ["push", `git -C ${T} push --delete origin main`],
   ["push", `git -C ${T} push origin develop`, BOTH, { KEEP_DEFAULT_BRANCH: "develop" }],
-  ["push", `git -C ${OTHER} push origin sage/t1-a`],
-  ["push", `git -c push.default=upstream -C ${T} push origin sage/t1-a`],
-  ["push", `git -C ${T} -c core.hooksPath=/x commit -m x`],
-  // A write under .git, where git keeps its hooks: also from ~ and with a pattern, which the Codex gate no longer refuses
-  // as an uncertain target (T903).
-  ["push", `echo x > ${PROJECT}/.git/hooks/pre-push`],
-  ["push", "echo x > ~/../project/.git/hooks/pre-comm?t"],
-  ["push", `cp hook ${PROJECT}/.git/hooks/*`],
-  ["push", `bash -c 'git -C ${T} push origin sage/t1-a'`],
-  ["push", `eval git -C ${T} push origin sage/t1-a`],
-  ["push", `echo $(git -C ${T} push origin sage/t1-a)`],
-  ["push", `env git -C ${T} push origin sage/t1-a`],
+  // A push that the reader finds inside another command meets the same push form.
+  ["push", `bash -c 'git -C ${T} push --force origin sage/t1-a'`],
+  ["push", `cd ${T} && git push origin main`],
   ["push", { claude: `git -C ${T} push origin sage/t2-b`, codex: `git -C ${T} push origin sage/t1-a` }],
   ["push", "gh repo sync"],
-  ["push", "gh repo edit acme/project --default-branch sage/t1-a"],
-  ["push", `gh api -X PATCH repos/acme/project/git/refs/heads/main -f sha=${SHA}`],
-  // A value option of gh api takes the next word as its value, so -XGET there is no method: gh sends PATCH (F-T815-27).
-  ["push", `gh api -X PATCH repos/acme/project/git/refs/heads/main -t -XGET -f sha=${SHA}`],
-  ["push", `gh api -X PATCH repos/acme/project/git/refs/heads/main -p -XGET -f sha=${SHA}`],
-  ["push", `gh api -X PATCH repos/acme/project/git/refs/heads/main -H --method=GET -f sha=${SHA}`],
-  ["push", `git -C ${T} subtree push --prefix=docs origin sage/t1-a`],
-  ["push", `git -C ${T} frobnicate origin`],
-  // The reader resolves a literal cd ~ and cd ~/<path>; on a line that it cannot read (cd -, an unknown wrapper option),
-  // the words still show a GitHub write of main, a branch move or an unknown git subcommand (F-T815-31).
-  ["push", `cd ~ && gh api -X PATCH repos/acme/project/git/refs/heads/main -f sha=${SHA}`],
-  ["push", "cd ~/x && gh api -X PUT repos/acme/project/contents/README.md -f message=m -f content=eA== -f branch=main"],
   ["push", "cd ~ && gh repo sync"],
-  ["push", "cd ~ && gh repo edit acme/project --default-branch sage/t1-a"],
-  ["push", `cd ~ && git -C ${T} frobnicate origin`],
-  ["push", `cd - && gh api -X PATCH repos/acme/project/git/refs/heads/main -f sha=${SHA}`],
-  ["push", "cd - && gh repo sync"],
-  ["push", "cd - && gh repo edit acme/project --default-branch sage/t1-a"],
-  ["push", `cd - && git -C ${T} frobnicate origin`],
-  ["push", `timeout --foo 60 gh api -X PATCH repos/acme/project/git/refs/heads/main -f sha=${SHA}`],
-  ["push", "timeout --foo 60 gh api -X PUT repos/acme/project/contents/README.md -f message=m -f content=eA== -f branch=main"],
-  // A wrapper that the reader does not know runs git or gh, also on a line that the reader can read (F-T815-39).
-  ["push", "cd ~ && op run -- gh repo sync"],
-  ["push", `cd ~ && arch -arm64 gh api -X PATCH repos/acme/project/git/refs/heads/main -f sha=${SHA}`],
-  ...WRAPPERS.flatMap((wrapper) => [`${wrapper} gh api -X PATCH repos/acme/project/git/refs/heads/main -f sha=${SHA}`, `${wrapper} gh repo sync`,
-    `${wrapper} gh repo edit acme/project --default-branch sage/t1-a`, `${wrapper} git -C ${T} frobnicate origin`].map((command) => ["push", command])),
-  // Logbook writes by a literal path: as written, through a link, after a cd and from ~.
+  ["push", "gh repo edit acme/project --default-branch sage/t1-a"],
+  ["push", `git -C ${T} subtree push --prefix=docs origin sage/t1-a`],
+  // Logbook writes by a literal path: as written, after a cd or a pushd, and from ~.
   ["logbook", `rm ${L}/tasks.tsv`],
   ["logbook", `echo x > ${L}/tasks.tsv`],
-  ["logbook", `cp /dev/null ${LINK}/tasks.tsv`],
+  ["logbook", `cp /dev/null ${L}/tasks.tsv`],
   ["logbook", `cd ${L} && rm tasks.tsv`],
   ["logbook", `rm ~/../shared/${L.slice(env.SAGE_SHARED_HOME.length + 1)}/tasks.tsv`],
-  // After a literal pushd, also through a link to the logbook (F-T815-16).
   ["logbook", `pushd ${L} && echo x >> tasks.tsv`],
-  ["logbook", `pushd ${LINK} && rm tasks.tsv`],
-  ["logbook", `pushd ${env.SAGE_SHARED_HOME} && echo x > a.json`],
-  ["logbook", `pushd /usr && popd && pushd ${L} && rm -rf runs.tsv`],
-  // A remove or a move of a folder that holds a root (F-T815-4): the home folder, a folder above it, a pattern in it.
+  ["logbook", `tee -a ${L}/findings.tsv`],
+  // A remove or a move of a folder that holds a root (F-T815-4): the root, a folder above it, a pattern in it.
   ["logbook", `rm -rf ${env.SAGE_SHARED_HOME}`],
   ["logbook", `mv ${env.SAGE_SHARED_HOME} ${env.SAGE_SHARED_HOME}.bak`],
-  // The Codex gate reads them with core's logbookWrite too (T903).
   ["logbook", "rm -rf ~/.."],
   ["logbook", "rm -rf ~/../*"],
-  ["logbook", `find ${BASE} -delete`],
-  ["logbook", `chmod -R 000 ${env.SAGE_SHARED_HOME}`],
   ["logbook", `rsync -a --delete /var/empty/ ${env.SAGE_SHARED_HOME}/`],
-  ["logbook", `cd ${LINK} && echo x >> runs.tsv`],
-  ["logbook", `tee -a ${LINK}/findings.tsv`],
-  // The Codex sage folder (the logbook and the mode files) is a root of the Codex gate only: a forged mode file, by a
-  // literal path, also through a link (T903).
+  ["logbook", `find ${L} -delete`],
+  // A recursive mode or owner change of a root or a path in one (F-T909-5): the logbook root and the shared root.
+  ["logbook", `chmod -R 000 ${L}`],
+  ["logbook", `chown -R nobody ${L}`],
+  ["logbook", `chmod -R 000 ${env.SAGE_SHARED_HOME}`],
+  ["logbook", `chown -R nobody ${env.SAGE_SHARED_HOME}`],
+  ["logbook", `chmod -R 000 ${CODEX_SAGE}`, ["codex chief"]],
+  // The Codex sage folder (the logbook and the mode files) is a root of the Codex gate only (T903).
   ["logbook", `echo '{"sage":true,"autopilot":true}' > ${CODEX_SAGE}/.hooks/codex/x.json`, ["codex chief"]],
-  ["logbook", `cp /dev/null ${CODEX_LINK}/.hooks/codex/x.json`, ["codex chief"]],
-  ["logbook", `cd ${CODEX_LINK} && rm -rf .hooks`, ["codex chief"]],
   ["logbook", `mv ${env.CODEX_HOME} ${BASE}/codex-old`, ["codex chief"]],
   // The board, process and stash rules: the Claude hook's (the Codex gate has none of them).
   ["board", "cat ~/.config/sage-board/board.json", CLAUDE],
@@ -251,16 +182,12 @@ const REFUSED = [
   ["process", "kill 1", AGENT],
   ["process", "pgrep node", AGENT],
   ["stash", `git -C ${T} stash`, AGENT],
-  // An agent's gh api runs only with GET: -XGET after -t is the template, so gh sends DELETE (F-T815-27).
+  // An agent's gh: only AGENT_GH, and gh api with GET. -XGET after -t is the template, so gh sends DELETE (F-T815-27).
+  ["agent gh", "gh issue close 1", AGENT],
   ["agent gh", "gh api -X DELETE repos/acme/project/git/refs/heads/x -t -XGET", AGENT],
-  ["agent gh", "op run -- gh pr close 1", AGENT],
-  ["agent gh", "arch -arm64 gh issue close 1", AGENT],
   // The state tool and the PR script: an agent runs only the tool's read commands.
   ["state", `node ${TOOL} task add --title x --size small --priority P2`, AGENT],
   ["state", `node ${PR_TOOL} create T1`, AGENT],
-  ["state", `node -e 'import("${TOOL}")'`, AGENT],
-  ["state", `arch -arm64 node ${TOOL} task add --title x --size small --priority P2`, AGENT],
-  ["state", `op run -- node ${PR_TOOL} create T1`, AGENT],
 ];
 const PASSED = [
   [`echo '${FORM}'`],
@@ -268,6 +195,10 @@ const PASSED = [
   ["gh pr create --title t --body 'after the review, the chief runs gh pr merge 12 and git push origin main'"],
   [`git -C ${T} commit --allow-empty -m 'then git push origin main'`],
   [{ claude: `git -C ${T} push -u origin sage/t1-a`, codex: `git -C ${T} push origin sage/t2-b` }],
+  // A push beside other commands, an honest hooks setup (husky) and a write under .git pass (T909, Q1).
+  [{ claude: `git -C ${T} add -A && git -C ${T} commit -m x && git -C ${T} push origin sage/t1-a`, codex: `git -C ${T} push origin sage/t2-b && npm test` }],
+  [`git -C ${T} config core.hooksPath .husky`],
+  [`echo x > ${PROJECT}/.git/info/exclude`],
   ["grep -rn 'gh pr merge' docs"],
   ["gh run list --limit 5"],
   ["rg -n -- --set-password docs", CLAUDE],
@@ -280,34 +211,30 @@ const PASSED = [
   ["command -V ps", AGENT],
   ["gh -R acme/project pr view 12", CLAUDE],
   ["rm -rf build && chmod 644 ~/x.txt", CLAUDE],
-  // A wrapper's own work, a cd to the home folder and merge text pass (F-T815-30, F-T815-31).
   ["op run -- npm test"],
   ["arch -arm64 node scripts/build.mjs"],
   ["cd ~/x && git status"],
   ["cd ~ && gh pr view 1"],
   ["echo 'gh pr merge 12'"],
   ["which gh", AGENT],
-  ["ls -la /opt/homebrew/bin/gh", AGENT],
   [`cp ${BASE}/gh ${BASE}/fake-gh`, AGENT],
-  [`arch -arm64 node ${TOOL} status`, AGENT],
-  // A word gh or git that is a file, a package or a page, not the program that runs, passes (F-T815-42).
   ["brew install gh jq"],
-  ["find . -name gh -type f"],
-  ["du -sh gh node_modules"],
-  ["cp gh backup"],
   ["man gh pr"],
-  ["tree gh src"],
   ["rm -rf gh build"],
-  ["tar -czf out.tgz gh docs"],
-  ["npm view gh version"],
-  [`cp /usr/bin/git ${BASE}/git-copy`],
   ["gh search repos git cli", ["claude chief", "codex chief"]],
-  // A logbook file's name outside a root and a variable in a write target pass in both hooks (T903). A read of a root
-  // passes the Claude hook; the Codex gate refuses any command that names its roots.
+  // A logbook file's name outside a root, a variable in a write target and a read of a root pass in both hooks (T903, T909).
   [`echo x > ${BASE}/tasks.tsv`],
   ["rm -f ../runs.tsv"],
   ["echo x > $DEST/tasks.tsv"],
-  [`cat ${L}/tasks.tsv`, CLAUDE],
+  [`cat ${L}/tasks.tsv`],
+  // Ordinary commands over a folder that holds the roots (BASE holds the shared root and the Codex home): a find that
+  // deletes only matched files and a chmod that adds a right remove no root (F-T903-7). The gate's logbook rule holds in
+  // any mode. In the Claude hook, a search of BASE also meets the board rule (it holds the home's .config), which stays.
+  [`find ${BASE} -name '*.tmp' -delete`, ["codex chief"]],
+  [`chmod -R u+w ${BASE}`],
+  ["chmod -R u+w ~"],
+  // rm of a project link to the shared root removes the link, not the root (F-T903-10).
+  [`rm ${LINK}`],
 ];
 
 /** Runs a table's rows as each of their roles; returns the rows whose answer is not the expected one, and the counts. */

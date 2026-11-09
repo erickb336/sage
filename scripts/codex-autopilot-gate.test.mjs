@@ -148,7 +148,7 @@ test("F-T663-21: the gate treats every run of merge.mjs as a merge: only the exa
   const FORM = `sage: run sage's merge command in its one form, alone: ${mergeCommand("<pr>", "<head sha>")}`;
   const script = MERGE;
   for (const command of [`SAGE_HOME=${w.home} ${COMMAND}`, `node "${script}" 41 ${SHA}`, `"${process.execPath}" "${script}" 41 ${SHA} --admin`, `${COMMAND} && echo done`,
-    `cd ${w.project} && ${COMMAND}`, `bash -c '${COMMAND}'`, `"${process.execPath}" "${script}" 041 ${SHA}`, `"${process.execPath}" ./merge.mjs 41 ${SHA}`, `node $SCRIPT 41 ${SHA} # merge.mjs`,
+    `cd ${w.project} && ${COMMAND}`, `bash -c '${COMMAND}'`, `"${process.execPath}" "${script}" 041 ${SHA}`, `"${process.execPath}" ./merge.mjs 41 ${SHA}`,
     `"${process.execPath}" "${join(SCRATCH, "copy", "skills", "sage", "merge.mjs")}" 41 ${SHA}`]) {
     assert.equal(denied(await w.run(w.input(command))), FORM, command);
   }

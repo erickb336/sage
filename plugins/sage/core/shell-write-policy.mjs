@@ -105,12 +105,6 @@ function writesIn({ words }) {
     /^(?:eval|source|\.|exec)$/.test(base[low.findIndex((w) => !/^\w+=/.test(w))] ?? "")
   );
 }
-/** An interpreter with executable stdin is opaque, even when its producer is a literal reader. */
-const executesStdin = ({ run }) => (run.piped || run.stdin.length > 0) &&
-  /^(?:node|nodejs|python[\d.]*|perl|ruby|php|sh|bash|zsh|dash|ksh|fish)$/.test(programName(run.word)) &&
-  // Python's module mode consumes stdin as module data. Other option-led launches stay opaque.
-  !(/^python[\d.]*$/.test(programName(run.word)) && /^-m/.test(run.args[0] ?? "")) &&
-  (run.args.length === 0 || run.args[0].startsWith("-"));
 /** Does one field of a command's text have a write form? A text that the hook cannot read counts as one (fail closed). */
 export function commandWrites(text, cwd) {
   if (typeof text !== "string") return true;
@@ -122,17 +116,6 @@ export function commandWrites(text, cwd) {
   } catch {
     return true;
   }
-}
-
-/** Executable stdin and redefined heredoc consumers need the caller's conservative execution policy, not a known-write verdict. */
-export function shellExecutionUncertain(text, cwd) {
-  try {
-    const commands = shellCommands(text);
-    const evidence = programsRun(text, cwd, undefined, { contextEvidence: true, redirectParts: true });
-    return evidence.programs.some(executesStdin) || (commands.some(c => c.bodies.length) &&
-      (commands.some(c => c.grouped || REDEFINES.test(c.words[0] ?? "")) ||
-        evidence.programs.some(p => p.shellFunction || p.resolvedDeclaration)));
-  } catch { return true; }
 }
 
 /** A word that opens or closes shell control flow: such a line is not a plain list of parts. */

@@ -61,8 +61,8 @@ const MOVE_NOTE = ` When the first push to a blank GitHub repository made a task
 const TO_MAIN = `work reaches main only through a pull request. Push the task's branch and open a pull request. (Only the first creation of main in a blank GitHub repository asks the user, from the main session, as a command of its own: ${FIRST_FORM}, for a commit with no parent that is already on GitHub. After it, the chief tries to turn on branch protection for that branch.)${MOVE_NOTE}`;
 const commandPolicy = await import("./command-policy.mjs")
   .then((module) => ({ ...module,
-    commands: module.createCommandPolicy({ stateToolPath: TOOL, prPattern: stateTool.PR ?? null }),
-    pushes: module.createPushPolicy({ stateToolPath: TOOL, mainReason: TO_MAIN, moveNote: MOVE_NOTE }),
+    commands: module.createCommandPolicy({ prPattern: stateTool.PR ?? null }),
+    pushes: module.createPushPolicy({ mainReason: TO_MAIN, moveNote: MOVE_NOTE }),
   }))
   .catch((error) => ({ error }));
 const SP = String.raw`[^\S\r\n  ]`; // a space, a tab or an NBSP, never a line break
@@ -349,14 +349,12 @@ export function handle(input, state, slots) {
     const cwd = /^mcp__terminal__/.test(input.tool_name) && typeof ti.cwd === "string" ? ti.cwd : input.cwd ?? process.cwd();
     // The fields that run: a description runs nothing (T386), so no rule judges its text (T815).
     const commands = runFields(ti);
-    // Keep expansion, push and merge refusals ahead of the narrower gh exceptions.
+    // Keep push and merge refusals ahead of the narrower gh exceptions.
     if (state.sage) for (const command of commands) {
-      const result = gitGate(event, command, state, cwd, false, input.tool_name);
+      const result = gitGate(event, command, state, cwd, false);
       if (result?.hookSpecificOutput?.permissionDecision === "deny") return result;
     }
-    // Keep alias payloads intact and also read PowerShell's backslash-separated paths.
-    const views = input.tool_name === "PowerShell" ? commands.flatMap(command => [command, command.replace(/\\/g, "/")]) : commands;
-    const problem = views.map(command => agentProblem(command, cwd, undefined, { powerShell: input.tool_name === "PowerShell" })).find(Boolean);
+    const problem = commands.map(command => agentProblem(command, cwd)).find(Boolean);
     if (problem) return deny(event, problem);
   }
   const tool = input.tool_name ?? "";
@@ -464,7 +462,7 @@ export function handle(input, state, slots) {
     // The rules judge the fields that run: a description runs nothing (T386, T815).
     for (const command of new Set(runFields(ti))) {
       // null, not undefined: an event with no session id still gets the owner rule of a shared logbook, and fails closed there (F-T618-27).
-      const result = gitGate(event, command, state, cwd, main, tool, input.session_id ?? null);
+      const result = gitGate(event, command, state, cwd, main, input.session_id ?? null);
       if (result?.hookSpecificOutput?.permissionDecision === "deny") return result;
       answer ??= result;
     }
@@ -474,9 +472,9 @@ export function handle(input, state, slots) {
 }
 
 /** Shared push classification. Branch reads and the first-upload exception stay in the provider. */
-function pushProblem(command, cwd, options, extra) {
+function pushProblem(command, cwd, extra) {
   if (commandPolicy.error) return "the command policy cannot load, so this push is refused.";
-  return commandPolicy.pushes.pushProblem(command, cwd, options, extra);
+  return commandPolicy.pushes.pushProblem(command, cwd, extra);
 }
 const subcommand = (words, k) => commandPolicy.gitSubcommand(words, k);
 const programName = word => commandPolicy.programName(word);
@@ -721,14 +719,7 @@ function chiefProblem(input) {
     }
   }
   if (!SHELL_TOOLS.test(input.tool_name ?? "")) return undefined;
-  let word;
-  try {
-    word = shellWrite(input.tool_input ?? {}, input.cwd ?? process.cwd());
-  } catch (e) {
-    // A path with a loop of links names no root that the hook can tell: the chief's command passes (F-T229-29).
-    if (/^too many links in /.test(e?.message ?? "")) return undefined;
-    throw e;
-  }
+  const word = shellWrite(input.tool_input ?? {}, input.cwd ?? process.cwd());
   return word === undefined ? undefined : `the chief never writes, moves or removes a logbook file from the shell (${quotedWord(word)} is in the sage root or the shared root, or holds one).`;
 }
 /** The word with which a command tool's input writes into the sage root or the shared root, or undefined. */
@@ -934,17 +925,7 @@ const LEAD_WRITES = {
   "finding add": ([, t], opt, own, view, task, ctx) => t === own && opt.key === undefined && (opt.run === undefined || ownRun(ctx, opt.run)),
   // Never a finding triaged ask (F-T284-10); while repairing, only a fix finding of the round: a new one waits for the
   // next round (F-T284-8, F-T284-12).
-  "finding close": ([, t, key], opt, own, view, task, ctx) => {
-    if (!(t === own && view.row(key)?.task === own && view.row(key).triage === "fix" && (task.state !== "repairing" || roundKeys(task).includes(key)))) return false;
-    if (task.state !== "repairing") return true;
-    // A round's finding closes only on a new commit: not on one where a review or QA helper of this lead found the
-    // round's problems, in a run of an earlier round, so that a lead cannot close the round's keys unchanged and re-add
-    // the problem under a new key (F-T289-6). A re-review of this round that finds a new problem does not count (F-T289-12).
-    const found = ctx.slots.stops(leadKey(ctx.lead)).filter((r) => REVIEWERS.includes(r?.role) && !core.cleanReport(r) && Number(view.row(r.run)?.round) < Number(task.round)).map((r) => r.sha);
-    const head = found.length ? headOf(ctx.lead.folder, own) : undefined;
-    return head === undefined || (head !== "" && !found.includes(head)) ||
-      `${key} is a finding of the round, and the head of ${own}'s branch ${head ? `(${head.slice(0, 7)}) is a commit on which a helper found problems` : "cannot be read"}: commit the repair first (F-T289-6).`;
-  },
+  "finding close": ([, t, key], opt, own, view, task) => t === own && view.row(key)?.task === own && view.row(key).triage === "fix" && (task.state !== "repairing" || roundKeys(task).includes(key)),
   // Never a finding triaged ask: only the sage changes it (F-T289-1).
   "finding triage": ([, t, key, how], opt, own, view, task) => {
     if (!(t === own && view.row(key)?.task === own)) return false;
@@ -1185,7 +1166,7 @@ function chiefPrProblem(input) {
  */
 function unreadPr(command, cwd) {
   try {
-    return core.stateToolRun(command, cwd).some((run) => run.tool === "pr" && (run.code || ["create", "merge"].includes(run.args[0])));
+    return core.stateToolRun(command, cwd).some((run) => run.tool === "pr" && ["create", "merge"].includes(run.args[0]));
   } catch {
     const text = bare(command);
     return /sage-pr\.mjs/i.test(text) && /\b(?:create|merge)\b/.test(text);
@@ -1279,9 +1260,7 @@ function agentCheck(input, file, slots) {
   const roots = rootsOf(true); // fail closed: an agent does nothing while the sage root cannot be resolved
   if (file) {
     const at = underRoot(input);
-    if (at) return `an agent never writes under ${at}.`;
-    // git's own files: a git hook or a setting there can push outside the push rule (T536).
-    return commandPolicy.gitInternalPath(ti.file_path ?? ti.notebook_path) ? "an agent never writes under a .git folder, where git keeps its hooks and settings. Ask the user." : undefined;
+    return at && `an agent never writes under ${at}.`;
   }
   if (ti.dangerouslyDisableSandbox) return "an agent never runs a command outside the sandbox (dangerouslyDisableSandbox).";
   const cwd = input.cwd ?? process.cwd();
@@ -1298,7 +1277,6 @@ function agentCheck(input, file, slots) {
     }
     for (const run of runs) {
       if (run.tool === "pr") return "only the chief runs the PR script (sage-pr.mjs).";
-      if (run.code) return `an agent runs the state tool as a program (node <path to skills/sage/sage.mjs> <command>), never from node's code or a module that it loads. ${READ_WAY}`;
       // Another copy (a checkout's, an older plugin's) can write the logbook in another way, also on a read command.
       if (canonical(from(run.dir ?? cwd, run.script)) !== canonical(TOOL)) return `an agent runs only the copy of the state tool that this hook loads, and ${quoted(run.script)} is not that copy. ${READ_WAY}`;
       const [cmd, ...args] = run.args, { pos, opt, twice } = optionsOf(args);
@@ -1320,7 +1298,7 @@ function agentCheck(input, file, slots) {
  *     when its text has it);
  *   - names the board config folder ~/.config/sage-board, its board.json or a temporary .board-*.json, in a command, a
  *     redirection, Read, Write, Edit, MultiEdit or NotebookEdit. A path resolves against its working folder first
- *     (., .., //, ~, links, git -C and the terminal tool's cwd). A word counts by its literal part, the text before its
+ *     (., .., //, ~, git -C and the terminal tool's cwd), as written: a link to the config is a limit. A word counts by its literal part, the text before its
  *     first variable, substitution or pattern character (T815), also as the value of key=value or --option=value;
  *   - searches, copies, moves or links that folder or a folder above it (grep -r, rg, find, cp -R, tar, mv, ln, the
  *     Grep and Glob tools and others).
@@ -1355,46 +1333,20 @@ function pathParts(word, dir) {
   return parts;
 }
 /**
- * The real path of an absolute path, as canonical gives it before the fold, at the cost of one lstat for each new part
- * (F-T229-20). It steps down from /: each part is lstat-ed once per call (the cache disk), only a link is resolved with
- * real, and ".." after a real folder is its parent. From the first missing part on, the rest is joined as text.
- */
-function physical(path, disk) {
-  const parts = path.split("/");
-  let at = "/";
-  for (const [k, part] of parts.entries()) {
-    if (!part || part === ".") continue;
-    if (part === "..") { at = dirname(at); continue; }
-    const next = join(at, part);
-    if (!disk.has(next)) {
-      let stat; // missing, also for a part under a file
-      try { stat = lstatSync(next, { throwIfNoEntry: false }); } catch {}
-      // A link loop throws, as real does: the path is unknown, and the caller fails closed (F-T229-29).
-      disk.set(next, stat ? (stat.isSymbolicLink() ? real(next) : true) : false);
-    }
-    const kind = disk.get(next);
-    if (!kind) return join(next, ...parts.slice(k + 1));
-    at = kind === true ? next : kind;
-  }
-  return at;
-}
-/**
  * What a word (a path from the folder dir, maybe with ~, a pattern or a variable) can stand for: config, the board
  * config folder, its board.json or a temporary .board-*.json; above, that folder or a folder above it.
  */
-function boardReach(word, dir, folders, disk) {
+function boardReach(word, dir, folders) {
   // The literal part of the word: the text before its first variable, substitution or pattern character (T815). A word
   // that starts with a variable or a substitution has none; a relative pattern stands for its own folder.
   const cut = word.search(/[$`*?[{]/);
   if (!word || (cut === 0 && /^[$`]/.test(word))) return {};
   const literal = cut < 0 ? word : word.slice(0, cut) || ".";
   if (literal.length > 4096) return {}; // the system opens no path this long
-  const parts = pathParts(literal, dir);
-  // As written, and its real path (a link to the config is the config).
-  const spellings = [fold(`/${parts.join("/")}`)];
-  try { spellings.push(fold(physical(from(dir ?? "/", literal.replace(/^~(?=\/|$)/, process.env.HOME || homedir())), disk))); } catch {}
-  const is = (path) => spellings.includes(path);
-  const temporary = (f) => spellings.some((s) => dirname(s) === f && /^\.board-.*\.json$/.test(basename(s)));
+  // As written: a link to the config is a limit of the hook (standing order 70).
+  const path = fold(`/${pathParts(literal, dir).join("/")}`);
+  const is = (p) => p === path;
+  const temporary = (f) => dirname(path) === f && /^\.board-.*\.json$/.test(basename(path));
   return {
     config: folders.some((f) => is(f) || is(`${f}/board.json`) || is(`${f}/.board-000000000000.json`) || temporary(f)),
     above: folders.some((f) => f.split("/").some((_, k, all) => is(all.slice(0, k + 1).join("/") || "/"))),
@@ -1438,10 +1390,10 @@ function boardProblem(input) {
   if (terminal) cwd = from(cwd, terminal.replace(/^~(?=\/|$)/, home));
   const uncertain = terminal !== undefined && /[$`~]/.test(terminal.replace(/^~(?=\/|$)/, ""));
   // Each word once per call: a long command line often repeats its words.
-  const folders = boardFolders(), seen = new Map(), disk = new Map();
+  const folders = boardFolders(), seen = new Map();
   const reachOf = (word, dir) => {
     const key = `${dir}\0${word}`;
-    if (!seen.has(key)) seen.set(key, boardReach(word, dir, folders, disk));
+    if (!seen.has(key)) seen.set(key, boardReach(word, dir, folders));
     return seen.get(key);
   };
   if (/^(?:Read|Write|Edit|MultiEdit|NotebookEdit)$/.test(tool)) {
@@ -1519,8 +1471,6 @@ function real(path, strict = false) {
   }
 }
 
-const expansionProblem = (command, cwd, options) => sharedCommands.expansionProblem(command, cwd, options);
-
 /** Preserve command arrays while checking every other string, including nested tool inputs. */
 function commandFields(ti) {
   return fields(Array.isArray(ti.command) ? { ...ti, command: ti.command.join(" ") } : ti);
@@ -1529,20 +1479,7 @@ function commandFields(ti) {
 /** The fields that a command tool runs: every field but the description, because a description runs nothing (T386). */
 const runFields = (ti) => commandFields({ ...ti, description: undefined });
 
-/** PowerShell expansions cannot be judged by the shared shell reader. Refuse protected words conservatively. */
-function powerShellProblem(command) {
-  if (/\\"/.test(command) && /\b(?:git|gh)(?:\.exe)?\b/i.test(command)) return "PowerShell treats a backslash before a double quote differently from the shell reader. Use literal git and gh commands without that ambiguous quoting.";
-  return /[`(]/.test(command) && /\b(?:gh|git|pr|merge|push)\b/i.test(command.replace(/`/g, ""))
-    ? "PowerShell expansion can hide a protected command. Use literal git and gh commands without backticks or parentheses."
-    : undefined;
-}
-
-function gitGate(event, command, state, cwd, main, tool, session) {
-  const powerShell = tool === "PowerShell" && powerShellProblem(command);
-  if (powerShell) return deny(event, powerShell);
-  const options = { powerShell: tool === "PowerShell" };
-  const expansion = expansionProblem(command, cwd, options);
-  if (expansion) return deny(event, expansion);
+function gitGate(event, command, state, cwd, main, session) {
   const first = main ? firstUpload(command) : undefined; // an agent never gets the exception
   if (first) {
     const { decision, reason } = firstCreation(first);
@@ -1555,7 +1492,7 @@ function gitGate(event, command, state, cwd, main, tool, session) {
   }
   // With the session, a shared logbook's task branch takes a push only from its owning chief (T822).
   const owner = session === undefined ? undefined : (dir, branch) => stateTool.branchBar(realpathSync.native(dir), branch, session);
-  const push = pushProblem(command, cwd, options, { owner });
+  const push = pushProblem(command, cwd, { owner });
   if (push) return deny(event, push);
   const merge = mergeRun(command, cwd);
   if (!merge) return undefined;
@@ -1607,19 +1544,18 @@ const PROCESS_TEXT = new RegExp(`(?:^|[\\s;&|(\`'"/<>])(?:${UNIX_PROCESS}|${POWE
 
 /** The agent's gh rule (H3): the commands of core's AGENT_GH, and gh api with GET, by gh's own words, at any depth. */
 const NO_GH = `an agent runs only these gh commands: ${Object.entries(core.AGENT_GH ?? {}).map(([group, subs]) => `gh ${group} ${subs.join(", ")}`).join("; ")}; and gh api with GET. Ask the chief to run any other gh command.`;
-export function agentProblem(command, cwd, path = process.env.PATH ?? "", options = {}) {
+export function agentProblem(command, cwd, path = process.env.PATH ?? "") {
   let runs;
   try {
-    runs = programsRun(command, cwd, path, options);
+    runs = programsRun(command, cwd, path);
   } catch (e) {
-    if (e.code === "SAGE_POWERSHELL_LAUNCH") return e.message;
     // A line that the hook cannot read is refused only when its text names gh, a stash or a process program: the cause
     // and the way forward first, then the rule (F-T815-9).
     const text = bare(command), program = PROCESS_TEXT.exec(text)?.[0].replace(/^\W/, "");
     const [what, why] = /\bgh(?:\.exe)?\b/i.test(text) ? ["gh", NO_GH] : gitThen(text, "stash") ? ["git stash", NO_STASH] : program ? [`a process program (${quoted(program)})`, NO_PROCESS(program)] : [];
     return why && `${core.unreadable(e, what)} ${why[0].toUpperCase()}${why.slice(1)}`;
   }
-  const gh = core.ghRuns(command, cwd, path, options).find((run) => !core.agentGh(run));
+  const gh = core.ghRuns(command, cwd, path).find((run) => !core.agentGh(run));
   if (gh) return `${NO_GH} ${quoted(["gh", gh.group, gh.group === "api" ? gh.method : gh.sub].filter(Boolean).join(" "))} is not one of them.`;
   for (const { word, file, args } of runs) {
     const name = programName(word);
@@ -2161,7 +2097,7 @@ if (process.argv[1] && realpathSync(process.argv[1]) === fileURLToPath(import.me
     } catch {
       chiefWrite = tools(SHELL_TOOLS);
     }
-    if (input?.hook_event_name === "PreToolUse" && ((!commands && tools(SHELL_TOOLS)) || commands?.some(command => mentionsMerge(command) || pushText(command) || (input.tool_name === "PowerShell" && powerShellProblem(command))) || agentWrite || chiefFile || chiefWrite || tools(AGENT_TOOLS) || (agentEvent(input) && tools(/^SendMessage$/)))) {
+    if (input?.hook_event_name === "PreToolUse" && ((!commands && tools(SHELL_TOOLS)) || commands?.some(command => mentionsMerge(command) || pushText(command)) || agentWrite || chiefFile || chiefWrite || tools(AGENT_TOOLS) || (agentEvent(input) && tools(/^SendMessage$/)))) {
       process.stdout.write(JSON.stringify(deny("PreToolUse", `the hook could not check this command (${e?.message ?? e}), so it refuses it. Tell the user.`)));
     } else if (input && ["SubagentStart", "SubagentStop", "PostToolUse", "PostToolUseFailure", "Stop"].includes(input.hook_event_name)) {
       process.stderr.write(`sage: agent slots could not be updated (${e?.message ?? e}); reserved capacity stays charged.\n`);

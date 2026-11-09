@@ -421,9 +421,9 @@ test("T462: the guide, the README and the CHANGELOG say what is checked in Codex
     "README: no claim that the desktop app is checked": !/the CLI or the desktop app: run/.test(readme),
     "guide: the reviewer writes that the hook does not block": /A write through `git apply`, `git commit`, a script file that `node` or `python` runs, or `make` is not blocked\./.test(guide),
     "guide: full access gives no mode guarantee": /Under full access \(`danger-full-access`\), sage mode gives no guarantee/.test(guide),
-    "guide: the sessions folder": /names the Codex sage folder, the shared root or the Codex sessions folder/.test(guide),
+    "guide: the logbook write rule": /writes into the Codex sage folder or the shared root/.test(guide),
   }, Object.fromEntries(["guide: the Codex CLI on PATH, also for a desktop app user", "guide: the app's own plugin list is not checked", "guide: checked on 0.164.0", "CHANGELOG: the desktop app should work the same way, not checked yet",
-    "README: no claim that the desktop app is checked", "guide: the reviewer writes that the hook does not block", "guide: full access gives no mode guarantee", "guide: the sessions folder"].map((k) => [k, true])));
+    "README: no claim that the desktop app is checked", "guide: the reviewer writes that the hook does not block", "guide: full access gives no mode guarantee", "guide: the logbook write rule"].map((k) => [k, true])));
 });
 
 test("T462: the chief role says what the hooks hold: role agents other than a lead start no agents and record nothing, and each spawn names its run (R1664-3, R1663-2)", async () => {
