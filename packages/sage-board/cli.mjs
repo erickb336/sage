@@ -161,11 +161,13 @@ const probe = ({ port }) => new Promise(done => {
   req.end();
 });
 
+/** What to do when a sandbox, such as Codex's, blocks this command (T921, T922). */
+const ESCALATE = "In Codex, run it escalated (outside the sandbox), or in Terminal on the Mac.";
 /** The one line for a port where this config's board does not answer; null when nothing listens. */
 function notOurs(found, configPath, config, env) {
   const at = `127.0.0.1:${config.port}`, elsewhere = `Stop it, or set another "port" in ${configPath}.`;
   if (found.kind === "none") return null;
-  if (found.kind === "blocked") return `this command cannot reach ${at}: a sandbox blocks the local network here (EPERM). In Codex, run it escalated (outside the sandbox), or in Terminal on the Mac.`;
+  if (found.kind === "blocked") return `this command cannot reach ${at}: a sandbox blocks the local network here (EPERM). ${ESCALATE}`;
   if (found.kind === "board") return found.id === configId(configPath) ? null : `another board config holds ${at}. ${elsewhere}`;
   // An older board does not name its process, so no command of this version stops it (F-T216-11, 16).
   if (found.kind === "older") return `an older board server runs on ${at}. Stop it where it started: press Ctrl+C in its terminal, or for the login service run launchctl bootout gui/$(id -u)/dev.sage.board. Then ask for the board again.`;
@@ -328,5 +330,10 @@ if (process.argv[1] === fileURLToPath(import.meta.url)) {
   try {
     const server = await runBoardCli(process.argv.slice(2));
     if (server) { const stop = () => { server.close().then(() => { process.exitCode = 0; }).catch(() => { process.exitCode = 1; }); }; process.once("SIGINT", stop); process.once("SIGTERM", stop); }
-  } catch (error) { process.stderr.write(`sage board: ${error.message}\n`); process.exitCode = 1; }
+  } catch (error) {
+    // A sandbox, such as Codex's, refuses a write outside the workspace with EPERM: on the first run, the mkdir of the
+    // board config folder (T922). The owner gets one line that says what to do, not Node's error.
+    const line = error.code === "EPERM" && error.path ? `this command cannot write ${error.path}: a sandbox blocks writes there (EPERM). ${ESCALATE}` : error.message;
+    process.stderr.write(`sage board: ${line}\n`); process.exitCode = 1;
+  }
 }
