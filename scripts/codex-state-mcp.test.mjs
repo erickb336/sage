@@ -150,9 +150,6 @@ test("the transfer commands through the server: offer, accept, cancel, release a
   const tools = await s.tools(), describe = (name) => tools.find((one) => one.name === name).description;
   assert.match(describe("accept"), /sage_read_task gives the offer's id \(in the task's offer cell\) and the version/);
   assert.match(describe("cancel"), /decline an offer that another chief made to you/);
-  const { tool: codexTool } = await import(pathToFileURL(join(s.dir, "plugin/skills/sage/sage.mjs")).href);
-  const snapshot = codexTool.readTaskSnapshot({ project: s.project, task: "T1" }, s.env);
-  assert.deepEqual([JSON.parse(snapshot.task.offer).id, snapshot.version], [offer, version]);
   assert.match((await s.call("accept", { task: "T1", offer: first, version }, as)).error, /has the open offer/);
   assert.match((await s.call("accept", { task: "T1", offer, version })).error, /names C2, not C1/);
   // T656: accept opens a takeover gate, and the owner's answer gives the task.
@@ -1049,9 +1046,9 @@ test("T586 SYNTHETIC: candidates, a judge and the landing play through the Codex
     const added = await s.call("run_add", { task: "T1", role, branch, "usage-interface": "collaboration-tools", ...(candidate ? { candidate } : {}) });
     const run = /^R\d+/.exec(added)[0], name = `sage_${role.replaceAll("-", "_")}_t1_${run.toLowerCase()}`;
     assert.equal(await gate(hookEvent("collaborationspawn_agent", { task_name: name, fork_turns: "none", message: "SAMPLE" }, null), sageOn), undefined, "the chief spawns it");
-    // The native run check reads the same logbook: this run's branch differs from the task's, and it passes.
-    const target = tool.captureRunAssignment({ project: s.project, task: "T1", run, role }, s.env);
-    assert.deepEqual([target.runBranch, target.candidate], [branch, String(candidate ?? "")]);
+    // The logbook records this run on its own branch, which differs from the task's.
+    const row = tool.logbookView(s.project, s.env).row(run);
+    assert.deepEqual([row.branch, row.candidate], [branch, String(candidate ?? "")]);
     const file = join(s.dir, `${run}-synthetic-transcript.jsonl`);
     writeFileSync(file, JSON.stringify({ type: "session_meta", payload: { id: `sample-${run}`, agent_path: `/root/${name}`, source: { subagent: { thread_spawn: {} } } } }) + "\n");
     briefHook({ hook_event_name: "SubagentStart", session_id: "sample-root", transcript_path: file, cwd: s.project }, s.env);
@@ -1097,7 +1094,7 @@ test("T586 SYNTHETIC: candidates, a judge and the landing play through the Codex
   for (const fields of [{ state: "briefed" }, { state: "building" }, { state: "reviewing", pr: String(pr) }]) assert.match(await s.call("task_set", { task: "T1", fields }), /^T1 /);
   for (const [kind, role] of [["review-clean", "code-reviewer"], ["qa-pass", "qa"]]) {
     const run = /^R\d+/.exec(await s.call("run_add", { task: "T1", role, "usage-interface": "collaboration-tools" }))[0];
-    assert.equal(tool.captureReviewTarget({ project: s.project, task: "T1", run, role, cycle: 1 }, s.env).sha, judge.sha, "a review reads the judge's head");
+    assert.equal(tool.branchTip(s.project, tool.logbookView(s.project, s.env).task("T1").branch, s.env), judge.sha, "a review reads the judge's head");
     const name = `sage_${role.replaceAll("-", "_")}_t1_${run.toLowerCase()}`, file = join(s.dir, `${run}-synthetic-transcript.jsonl`);
     writeFileSync(file, JSON.stringify({ type: "session_meta", payload: { id: `sample-${run}`, agent_path: `/root/${name}`, source: { subagent: { thread_spawn: {} } } } }) + "\n");
     briefHook({ hook_event_name: "SubagentStart", session_id: "sample-root", transcript_path: file, cwd: s.project }, s.env);
