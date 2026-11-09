@@ -1012,24 +1012,6 @@ test("the worktree root follows the HOME of its env, SAGE_WORKTREES comes first,
   assert.equal(tool.worktreeRoot({ SAGE_WORKTREES: "relative-trees" }), resolve("relative-trees"));
 });
 
-test("a chief with another logbook root finds a receipt of a shared project, so the Codex settle step cannot void a live row", (t) => {
-  const w = world(t);
-  const envA = { ...w.env, SAGE_HOME: join(w.base, "root-a") }, envB = { ...w.env, SAGE_HOME: join(w.base, "root-b") };
-  mkdirSync(envA.SAGE_HOME); mkdirSync(envB.SAGE_HOME);
-  codexSage(["link", "--separate", "--project", w.project], envA);
-  codexSage(["task", "add", "--title", "x", "--size", "tiny", "--priority", "P2", "--project", w.project], envA);
-  const owner = "chief", request = "00000000-0000-4000-8000-000000000594";
-  let digest;
-  const { version } = tool.readTaskSnapshot({ project: w.project, task: "T1" }, envA);
-  tool.updateRequestedTask({ project: w.project, owner, request, task: "T1", version, changes: { title: "y" } }, envA, {
-    native: "test-chief",
-    decide: (value) => { digest = value; return { digest: value, accepted: true, reason: "" }; },
-    acknowledge: (value, receiptHash) => ({ digest: value, receiptHash }), release: (value, receiptHash) => ({ digest: value, receiptHash }),
-    void() {}, history() { throw Error("No history here"); } });
-  const seen = (env) => tool.settleWrites({ project: w.project }, env, (receipts) => !!receipts.update({ owner, request, digest }));
-  assert.equal(seen(envA), true);
-  assert.equal(seen(envB), true, "the row of the shared project gives both chiefs one folder and one lock");
-});
 
 /**
  * Two provider roots that the test names (T641): a Claude tool and a Codex tool from the core, each with its own root and

@@ -281,7 +281,7 @@ The plugin starts a local MCP server, `sage`, in the desktop app and in the CLI.
 - When a saved change cannot finish and you have no backup, accept the loss, then run this yourself in a terminal, outside Codex: `node ~/.codex/plugins/cache/sage/sage/<version>/skills/sage/sage.mjs logbook repair --accept-change-loss yes --project <project>`.
 - When a table fails the logbook check and you have no copy, accept the loss, then run the line that the refusal prints in the same way: `logbook repair --accept-loss <table> --project <project>`. A repair names no chief, also on a shared logbook.
 - To find `<version>`, run `ls ~/.codex/plugins/cache/sage/sage/` and use the current one. When you set `CODEX_HOME`, use that folder in place of `~/.codex`.
-- Limit: the repair cannot compare a receipt with Codex's journal. A receipt that differs from its journal row still stops Codex writes after the repair, and that case needs a backup.
+- A saved change of a schema that only the deleted Codex native runtime wrote (2 to 6 and 8) cannot finish. It stops the writes of its logbook until this change-loss repair.
 
 ## Design roles and acceptance
 

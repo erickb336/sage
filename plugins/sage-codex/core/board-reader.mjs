@@ -174,7 +174,7 @@ export const SHARED = "shared";
  */
 export const hookProvider = source => source.hookProvider ?? source.provider ?? null;
 /** The folders of a logbook's receipts: a write adds one before it changes the tables. */
-const RECEIPTS = ["task-requests", "run-requests", "usage-requests", "reviews", "interrupted-runs", "replace-requests", "task-updates"];
+const RECEIPTS = ["usage-requests", "replace-requests"];
 const WATCHED = [...Object.keys(TABLES), "chiefs", "sources"].map(name => `${name}.tsv`).concat("review-pending.json");
 const MAX_ATTEMPTS = 3, MAX_OLD = 16;
 /**

@@ -106,7 +106,7 @@ test("T677 lifecycle: startup and resume turn autopilot off in the mode file; a 
   const options = { pluginRoot: join(ROOT, "plugins/sage-codex"), codexHome: home, env };
   const before = { sage: true, autopilot: true, given: true, off: "legacy" };
   const put = () => writeFileSync(file, JSON.stringify(before), { mode: 0o600 });
-  // The gh merge form never runs, in any state: only sage's merge command merges (autopilot-gate.test.mjs).
+  // The gh merge form never runs, in any state: only sage's merge command merges (codex-autopilot-gate.test.mjs).
   const refusal = async () => {
     for (const extra of [{}, { agent_id: "child" }]) {
       const result = await gate({ ...input, ...extra, hook_event_name: "PreToolUse", tool_name: "Bash", cwd: home,

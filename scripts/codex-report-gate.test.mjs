@@ -19,6 +19,15 @@ const FULL = "STATUS done\nRESULT PASS\nEVIDENCE echo ok printed ok\nFINDINGS no
 const UNREAD = { systemMessage: "sage: the report check could not read this agent's stop, so it did not check its report." };
 const BLOCK = { decision: "block", reason: 'sage: your report has no EVIDENCE, FINDINGS, QUESTIONS, NOT VERIFIED, BRANCH. End with the sage report: STATUS, RESULT, EVIDENCE, FINDINGS, QUESTIONS, NOT VERIFIED, BRANCH, each at the start of a line that is not in a list or a code block, with "none" where a field has nothing.' };
 
+// The three edge cases of core's field reader that the report check uses, as the deleted native server's test had them (T732, T914).
+test("missingFields reads a field as a table heading, and no prefixed word and no line indented with a no-break space (T461)", async () => {
+  const { missingFields } = await import(pathToFileURL(join(ROOT, "plugins/sage-codex/core/index.mjs")).href);
+  const all = ["STATUS", "RESULT", "EVIDENCE", "FINDINGS", "QUESTIONS", "NOT VERIFIED", "BRANCH"];
+  assert.deepEqual(missingFields(REPORT_FIELDS, all.map((field) => `| **${field}** |`).join("\n")), []);
+  assert.deepEqual(missingFields(REPORT_FIELDS, "prefix STATUS\nRESULTS"), all);
+  assert.deepEqual(missingFields(REPORT_FIELDS, "\u00a0STATUS done\nRESULT PASS"), all.filter((field) => field !== "RESULT"));
+});
+
 const dir = mkdtempSync(join(tmpdir(), "sage-report-gate-"));
 test.after(() => rmSync(dir, { recursive: true, force: true }));
 /** A child transcript as Codex writes it: a session_meta line with the agent path, then items. */

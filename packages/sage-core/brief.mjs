@@ -1,24 +1,10 @@
-// Structured task instructions. Role and tool authority come from separate policy.
+// The fields of a brief, and the reader that finds them in a brief's text.
 export const BRIEF_FIELDS = Object.freeze(["GOAL", "SCOPE", "CONTEXT", "DECISIONS", "ACCEPTANCE", "VERIFY", "BUDGET", "FORBIDDEN", "REPORT", "STANDING"]);
-const LIMIT = 32 * 1024;
-
-export function parseBrief(input) {
-  if (!input || typeof input !== "object" || Array.isArray(input) || Object.keys(input).length !== BRIEF_FIELDS.length
-    || BRIEF_FIELDS.some(field => !Object.hasOwn(input, field))) throw Error("A brief needs every required text field");
-  const brief = Object.fromEntries(BRIEF_FIELDS.map(field => [field, input[field]]));
-  for (const value of Object.values(brief)) {
-    if (typeof value !== "string" || value.trim().length === 0 || value.includes("\0")) throw Error("A brief needs every required text field");
-    if (value.length > LIMIT) throw Error("The encoded brief exceeds 32 KiB");
-    if (Buffer.from(value, "utf8").toString("utf8") !== value) throw Error("A brief needs valid Unicode text");
-  }
-  if (Buffer.byteLength(JSON.stringify(brief), "utf8") > LIMIT) throw Error("The encoded brief exceeds 32 KiB");
-  return brief;
-}
 
 /**
  * A field's first line: a line that is not indented, whose text after Markdown marks (*, _, #, |, >) is the field's
  * name followed by a colon ("FORBIDDEN: x", "**GOAL:** x"), by two spaces or a tab (the chief's template, "GOAL   x"),
- * or by nothing (renderBrief's form). So a line of another field that starts with a field's word and one space
+ * or by nothing (the name alone on its line). So a line of another field that starts with a field's word and one space
  * ("FORBIDDEN words are flagged") is text (F-T471-9).
  */
 const HEADER = new RegExp(`^[*_#|>]*[ \\t]*(${BRIEF_FIELDS.join("|")})(?:[*_]*:|[*_]*(?: {2,}|\\t)|[*_ \\t]*$)[*_ \\t]*(.*)$`);
@@ -54,7 +40,3 @@ export function missingBriefFields(text) {
   return BRIEF_FIELDS.filter(field => !given[field]);
 }
 
-export function renderBrief(input) {
-  const brief = parseBrief(input);
-  return BRIEF_FIELDS.map(field => `${field}\n${brief[field]}`).join("\n\n");
-}

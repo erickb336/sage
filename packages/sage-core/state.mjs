@@ -1,9 +1,7 @@
 #!/usr/bin/env node
 import { USAGE_FIELDS, tokenCount, usageText, usageRegistry, usageSnapshot, validUsageSnapshot, usageSummary } from "./usage.mjs";
-import { parseRunTarget } from "./run-target.mjs";
 import { readLocalGit } from "./local-git.mjs";
-import { STUCK_WRITE, TaskUpdateError } from "./task-update-error.mjs";
-import { PENDING, recordedWrites, coordinatedWrites, assertNoPendingWrite, hasPendingWrite, pendingRequest, pendingNames, settlePendingWrite, verifyPendingWrite, RecordedWriteError } from "./recorded-write.mjs";
+import { PENDING, recordedWrites, assertNoPendingWrite, hasPendingWrite, pendingRequest, pendingNames, settlePendingWrite, verifyPendingWrite, RecordedWriteError } from "./recorded-write.mjs";
 // sage: the state tool of sage mode. The chief of staff calls it through the shell: one command in, one line out.
 // The store is plain TSV and Markdown under the configured root ($SAGE_HOME overrides it), and every
 // table has one writer: this tool. It holds the rules that prompts alone did not hold in Orchestrator: no dropped
@@ -13,7 +11,7 @@ import { PENDING, recordedWrites, coordinatedWrites, assertNoPendingWrite, hasPe
 // run two versions of this tool, so a command refuses to change a logbook that a newer version wrote (ready).
 import { execFileSync } from "node:child_process";
 import { createHash, randomUUID } from "node:crypto";
-import { closeSync, constants, existsSync, fchmodSync, fstatSync, fsyncSync, linkSync, lstatSync, mkdirSync, openSync, readFileSync, readSync, readdirSync, realpathSync, renameSync, rmSync, rmdirSync, statSync, unlinkSync, writeFileSync } from "node:fs";
+import { closeSync, constants, existsSync, fchmodSync, fstatSync, linkSync, lstatSync, mkdirSync, openSync, readFileSync, readSync, readdirSync, realpathSync, renameSync, rmSync, rmdirSync, statSync, unlinkSync, writeFileSync } from "node:fs";
 import { homedir, hostname, platform, tmpdir, uptime } from "node:os";
 import { basename, dirname, isAbsolute, join, resolve, sep } from "node:path";
 import { boardView, sessionRoots, sessionSources } from "./board-view.mjs";
@@ -21,9 +19,8 @@ import { projectName as shownName } from "./board-model.mjs";
 import { logbookIdentity } from "./board-reader.mjs";
 import { createBoard } from "./board.mjs";
 import { PR, pullRequestHead } from "./pull-request.mjs";
-import { REPORT_FIELDS, parseReport } from "./report.mjs";
+import { REPORT_FIELDS } from "./report.mjs";
 import { cleanReport, fieldsOf, readReport } from "./report-reader.mjs";
-import { REVIEW_ROLES, parseReviewTarget, parseReviewReport } from "./review.mjs";
 import { ROLES } from "./roles.mjs";
 import { AGENT_CAPS, BREAKS, FINDING_CLASSES, HIDDEN, LINE, NAME_MAX, PRIORITIES, PRIORITY_SCALE, TABLES as PLAIN_TABLES, TASK_KINDS, countOf, nameProblem, proposalOf } from "./logbook-fields.mjs";
 import { BREAKDOWN, ENDED, GATE_ID, MET, PROGRAM_ID, TASK_ID, breakdownGate, byIds, dead, droppedBy, gateLines, lostClause, programState, progressOf, progressText, shownGraph, shownWaits, unmetWaits, waitGraph, waitWords, waitsOf, waitsWithState } from "./program-rules.mjs";
@@ -31,6 +28,9 @@ import { OBSERVATIONS_MAX_BYTES, OBSERVATION_DATA_MAX_BYTES, validateObservation
 import { MOVES, PLAN_MAX, checkoutGone, createSharedRoot, sharedRoot, unreadableFolder } from "./shared-root.mjs";
 import { changedText, countsOf, endText, gateQuestion, gateText, localTime, mapHtml, mismatchText, previewText, providersOf, reconciliationText, startText, stepText, stoppedText, title } from "./move-text.mjs";
 import { CHIEF, TAKEOVER_OPTIONS, chiefOnly, createChiefs, crossed, offerOf, replaceOf, replaceQuestion, writerClass } from "./chiefs.mjs";
+
+/** The one line for a saved change that cannot finish: the settle step refuses with it, and `sage logbook repair` is its way out. */
+export const STUCK_WRITE = 'This command changed nothing. This project cannot save changes; other projects work. Tell the owner. There are two ways out. With a backup: the owner restores the folder that `sage logbook` prints; rows newer than the backup are lost. With no backup: after the owner accepts the loss of this saved change, the chief runs `sage logbook repair --accept-change-loss yes --project <the project>`, or the owner runs it in a terminal when the chief cannot; it keeps the file, and a half-published update keeps mixed tables. Do not remove review-pending.json by hand.';
 
 export function createStateTool({ defaultRoot, legacyRoots: namedRoots = () => [], provider, models = ["inherit"], modelDefaults = {}, usageInterfaces = [], claimStep = (task, version, chief) => `run sage claim ${task} --version ${version} --chief ${chief}`, replaceStep = (task, chief) => `run sage gate replace ${task} --to ${chief} --chief ${chief}`, takeoverCycle, autopilot = () => false }) {
 if (typeof defaultRoot !== "function") throw new TypeError("defaultRoot must be a function");
@@ -566,14 +566,14 @@ const read = (dir, table) => rowsIn(table, sheet(dir, table));
  * merge check runs it on every logbook, and every write on its own, so no command hides a lost table or makes a new one.
  */
 const check = (dir, skip = [], max = Infinity) => {
-  const receipts = () => JSON.stringify([taskWrites, runWrites, reviewWrites, interruptedWrites, taskUpdates, replaceWrites].map((writes) => writes.readVersion(dir)));
+  const receipts = () => replaceWrites.readVersion(dir);
   const version = receipts();
   const tables = Object.fromEntries(Object.keys(TABLES).filter((t) => !skip.includes(t)).map((t) => [t, sheet(dir, t, skip, max)]));
   // A program's id is on one row: with two, a line could read the wrong one (R1208-3).
   const seen = new Set();
   const twice = (tables.programs ? rowsOf(tables.programs) : []).find(({ id }) => seen.has(id) || !seen.add(id))?.id;
   if (twice !== undefined) refuse(`${join(dir, "programs.tsv")} has two rows for ${visible(twice)}, but a program's id is on one row. Ask the user to fix the file: keep one row of ${visible(twice)}.`);
-  if (receipts() !== version) refuse("A task, run, review, or Replace receipt was created while this logbook was read. Retry the read.");
+  if (receipts() !== version) refuse("A Replace receipt was created while this logbook was read. Retry the read.");
   return tables;
 };
 
@@ -609,200 +609,8 @@ function knownColumns(dir, table, cols) {
 /** The hash of a task's row. An empty offer cell counts as no cell, so the first offer of a logbook changes no other task's version. */
 const taskVersion = ({ offer, ...task }) => createHash("sha256").update(JSON.stringify(offer ? { ...task, offer } : task)).digest("hex");
 
-function taskSnapshot(dir, id) {
-  const matches = read(dir, "tasks").filter(row => row.id === id);
-  if (matches.length !== 1) refuse("The task is missing or ambiguous.");
-  return { task: matches[0], version: taskVersion(matches[0]) };
-}
-
-/** Read a current task and a task-metadata token; neither grants workflow permission. */
-function readTaskSnapshot(input, env = process.env) {
-  if (!input || typeof input !== "object" || Array.isArray(input) || Object.keys(input).length !== 2
-    || !Object.hasOwn(input, "project") || !Object.hasOwn(input, "task")
-    || typeof input.project !== "string" || !input.project || typeof input.task !== "string" || !/^T[1-9]\d*$/.test(input.task)) refuse("Invalid task read");
-  const dir = storeDir(input.project, env);
-  if (realpathSync(dir) !== resolve(dir)) refuse("Invalid logbook location");
-  return withLock(dir, () => { ready(dir, env); return taskSnapshot(dir, input.task); });
-}
-
 const updateKeys = (value, keys) => value && typeof value === "object" && !Array.isArray(value)
   && Object.keys(value).length === keys.length && keys.every(key => Object.hasOwn(value, key));
-const updateDeny = () => { throw new TaskUpdateError("invalid-request"); };
-function updateReference(input) {
-  if (!updateKeys(input, ["owner", "request", "task", "version", "changes"])
-    || typeof input.owner !== "string" || !input.owner || input.owner.length > 1024 || /\p{Cc}/u.test(input.owner)
-    || typeof input.request !== "string" || !new RegExp(`^${UUID}$`).test(input.request)
-    || typeof input.task !== "string" || !/^T[1-9]\d*$/.test(input.task)
-    || typeof input.version !== "string" || !/^[0-9a-f]{64}$/.test(input.version)
-    || !input.changes || typeof input.changes !== "object" || Array.isArray(input.changes)) updateDeny();
-  const keys = ["title", "branch", "pr", "state", "approval"].filter(key => Object.hasOwn(input.changes, key));
-  if (!keys.length || !updateKeys(input.changes, keys) || keys.some(key => typeof input.changes[key] !== "string"
-    || input.changes[key].length > 4096 || cell(input.changes[key]) !== input.changes[key])
-    || (Object.hasOwn(input.changes, "state") && (!STATES.includes(input.changes.state) || ["merged", "repairing"].includes(input.changes.state)))) updateDeny();
-  return { owner: input.owner, request: input.request, task: input.task, version: input.version,
-    changes: Object.fromEntries(keys.map(key => [key, input.changes[key]])) };
-}
-function updateRows(table, text, cols = TABLES[table]) {
-  const sheet = sheetText(text);
-  if (!cols.every(key => sheet.cols.includes(key) || ADDED[table]?.includes(key))
-    || sheet.cols.some(key => !cols.includes(key)) || new Set(sheet.cols).size !== sheet.cols.length) updateDeny();
-  return rowsOf(sheet).map(row => ({ ...row, ...Object.fromEntries((FILLED[table] ?? [])
-    .filter(key => cols.includes(key) && !Object.hasOwn(row, key)).map(key => [key, ""])) }));
-}
-function updateFacts(rows, readiness, maxRounds) {
-  return { findings: rows.findings, ledger: rows.ledger, gates: rows.gates, programs: rows.programs, readiness,
-    ...(maxRounds === undefined ? {} : { maxRounds }) };
-}
-function checkUpdateFacts(facts) {
-  // The facts of a sage before programs (T337) have no programs: that sage refused a logbook with them, so it read none.
-  const tables = ["findings", "ledger", "gates", ...(facts && Object.hasOwn(facts, "programs") ? ["programs"] : [])];
-  const counts = Object.hasOwn(facts ?? {}, "maxRounds") ? ["maxRounds"] : [];
-  if (!updateKeys(facts, [...tables, "readiness", ...counts])
-    || (counts.length && (!Number.isSafeInteger(facts.maxRounds) || valid("max_rounds", facts.maxRounds) !== facts.maxRounds))) updateDeny();
-  for (const table of tables) {
-    if (!Array.isArray(facts[table]) || facts[table].some(row => !updateKeys(row, TABLES[table].filter(c => !SPARSE[table]?.includes(c) || Object.hasOwn(row, c)))
-      || Object.values(row).some(value => typeof value !== "string" || cell(value) !== value))) updateDeny();
-  }
-  const r = facts.readiness;
-  if (r !== null && (!updateKeys(r, ["head", "branch", "cycles", "config"]) || typeof r.head !== "string" || notFull(r.head)
-    || typeof r.branch !== "string" || !r.branch
-    || !Number.isSafeInteger(r.cycles) || r.cycles < 1
-    || !updateKeys(r.config, ["cycles.small", "cycles.large", "cycles.risk"])
-    || Object.entries(r.config).some(([key, value]) => !Number.isSafeInteger(value) || valid(key, value) !== value))) updateDeny();
-}
-function planNativeTaskUpdate(before, reference, at, facts, columns = Object.fromEntries(Object.keys(before).map(table => [table, columnsOf(table, before[table])])), legacyRounds = false) {
-  checkUpdateFacts(facts);
-  const old = before.tasks.filter(row => row.id === reference.task);
-  if (old.length !== 1 || taskVersion(old[0]) !== reference.version) updateDeny();
-  const changes = Object.entries(reference.changes).map(([key, value]) => `${key}=${value}`);
-  const planned = planTaskChanges(before, reference.task, changes, at, facts, legacyRounds);
-  // A saved update keeps its writer's columns; a new update uses the current columns.
-  for (const table of ["tasks", "runs", "decisions"]) planned[table] = planned[table].map(row =>
-    Object.fromEntries(columns[table].map(key => [key, row[key] ?? ""])));
-  planned.task = planned.tasks.find(row => row.id === reference.task);
-  const task = planned.task, needsReady = ["verified", "pr-ready"].includes(task.state);
-  if (needsReady) {
-    if (!facts.readiness || !task.branch) throw new TaskUpdateError("readiness-branch");
-    if (task.state === "pr-ready" && !task.pr) throw new TaskUpdateError("readiness-pr");
-    const blocking = blockingOf(facts.findings, task.id);
-    if (blocking.length) throw new TaskUpdateError("readiness-findings", blocking.map(row => row.key));
-    const gate = facts.gates.find(row => row.task === task.id && !row.answer);
-    if (gate) throw new TaskUpdateError("readiness-gates", [gate.id]);
-    const live = planned.runs.filter(row => row.task === task.id && row.status === "running" && CHECKERS.includes(row.role));
-    if (live.length) throw new TaskUpdateError("readiness-runs", live.map(row => row.id));
-    const verdict = judge("", task, facts.findings, planned.decisions, task.id, facts.ledger.filter(row => row.task === task.id
-      && row.sha === facts.readiness.head), facts.readiness.cycles, false, {});
-    if (!verdict.ok) throw new TaskUpdateError("readiness");
-    if (facts.readiness.branch !== branchOf(task.branch)
-      || facts.readiness.cycles !== cyclesFor(task, facts.readiness.config)) updateDeny();
-  } else if (facts.readiness !== null) updateDeny();
-  const disruptive = (Object.hasOwn(reference.changes, "branch") && task.branch !== old[0].branch)
-    || (Object.hasOwn(reference.changes, "state") && (task.state !== old[0].state)
-      && (["held", "replan"].includes(old[0].state) || ["briefed", "verified", "pr-ready", "concluded", "abandoned"].includes(task.state)));
-  return { ...planned, disruptive };
-}
-function validateTaskUpdateData(intent) {
-  const reference = updateReference(intent.reference), proposal = intent.proposal;
-  if (JSON.stringify(reference) !== JSON.stringify(intent.reference)
-    || !updateKeys(proposal, ["at", "facts", "task", "version", "disruptive"])
-    || typeof proposal.at !== "string" || !/^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}Z$/.test(proposal.at)
-    || !Number.isFinite(Date.parse(proposal.at)) || new Date(proposal.at).toISOString().replace(".000Z", "Z") !== proposal.at) updateDeny();
-  // The after-header records the schema used by the original writer, including
-  // columns it added to a legacy before-table. Do not migrate historical hashes.
-  const columns = Object.fromEntries(["tasks", "runs", "decisions"].map(table => {
-    const cols = sheetText(intent.tables[table].after).cols;
-    if (JSON.stringify(cols) !== JSON.stringify(TABLES[table].filter(key => cols.includes(key)))
-      || TABLES[table].some(key => !cols.includes(key) && !ADDED[table]?.includes(key))) updateDeny();
-    return [table, cols];
-  }));
-  if (Object.hasOwn(reference.changes, "approval") && !columns.tasks.includes("approvals")) updateDeny();
-  // Schema 6 predates approval grants. Its after-header distinguishes the old
-  // writer from the first approval-aware writer, which also used schema 6.
-  // Only saved records select old rules; admission always plans current rules.
-  const legacyRounds = intent.schema === 6 && !columns.tasks.includes("approvals");
-  if (intent.schema === 8 && !columns.tasks.includes("approvals")) updateDeny();
-  if (legacyRounds && Object.hasOwn(proposal.facts, "maxRounds")) updateDeny();
-  const before = Object.fromEntries(["tasks", "runs", "decisions"].map(table => [table, updateRows(table, intent.tables[table].before, columns[table])]));
-  const planned = planNativeTaskUpdate(before, reference, proposal.at, proposal.facts, columns, legacyRounds);
-  if (JSON.stringify(proposal.task) !== JSON.stringify(planned.task) || proposal.version !== taskVersion(planned.task)
-    || proposal.disruptive !== planned.disruptive) updateDeny();
-  for (const table of ["tasks", "runs", "decisions"]) if (intent.tables[table].after !== tableText(table, planned[table], columns[table])) updateDeny();
-}
-function validateTaskUpdate(intent) {
-  try { validateTaskUpdateData(intent); } catch { throw new TaskUpdateError("invalid-state"); }
-}
-const taskUpdates = coordinatedWrites({ schema: 8, previousSchemas: [6], tables: ["tasks", "runs", "decisions"], folder: "task-updates", validate: validateTaskUpdate });
-
-/** Native task updates require a trusted durable admission decision, never a model-supplied proof. */
-function updateRequestedTask(input, env, coordination) {
-  // The caller's session supplies the chief, as with every native writer (actorOf); it is no part of the saved request.
-  if (!input || typeof input.project !== "string" || !input.project || !coordination
-    || ["decide", "acknowledge", "release", "void", "history"].some(key => typeof coordination[key] !== "function")) updateDeny();
-  const { project, ...request } = input, reference = updateReference(request), dir = storeDir(project, env);
-  if (realpathSync(dir) !== resolve(dir)) updateDeny();
-  let phase = "publish";
-  try { return withLock(dir, () => {
-    settle(dir);
-    phase = "state";
-    const reply = (outcome, proposal, decision) => outcome.accepted ? { decision, task: proposal.task, version: proposal.version }
-      : { decision: "task-update-rejected", reason: outcome.reason };
-    const prior = taskUpdates.readReceipt(dir, reference);
-    if (prior) {
-      // Authenticate either historical outcome without creating a decision or inspecting current tables.
-      taskUpdates.authenticate(prior, coordination.history);
-      return reply(prior.outcome, prior.intent.proposal, "task-update-history");
-    }
-    ready(dir, env);
-    const before = Object.fromEntries(["tasks", "runs", "decisions"].map(table => [table, read(dir, table)]));
-    const current = before.tasks.filter(row => row.id === reference.task);
-    if (current.length !== 1) throw new TaskUpdateError("invalid-state");
-    if (taskVersion(current[0]) !== reference.version) throw new TaskUpdateError("stale-version");
-    if (isShared(dir, env)) guard(dir, "task", [reference.task, "set"], { chief: chiefRow(dir, coordination.native).id });
-    const facts = updateFacts(Object.fromEntries(["findings", "ledger", "gates", "programs"].map(table => [table, read(dir, table)])), null,
-      Object.hasOwn(reference.changes, "approval") ? config(env, dir).max_rounds : undefined);
-    const needsReady = ["verified", "pr-ready"].includes(reference.changes.state ?? current[0].state);
-    phase = needsReady ? "readiness" : "plan";
-    const openFindings = blockingOf(facts.findings, reference.task);
-    if (needsReady && openFindings.length) throw new TaskUpdateError("readiness-findings", openFindings.map(row => row.key));
-    const at = now();
-    const changes = Object.entries(reference.changes).map(([key, value]) => `${key}=${value}`);
-    const preliminary = planTaskChanges(before, reference.task, changes, at, facts);
-    if (moveBar(changes, preliminary)) throw new TaskUpdateError("arena-open"); // a native refusal has only its fixed text
-    if (["verified", "pr-ready"].includes(preliminary.task.state)) {
-      const cfg = config(env, dir);
-      if (Object.values(cfg).includes("invalid")) throw new TaskUpdateError("readiness-config");
-      const branch = branchOf(preliminary.task.branch);
-      let head;
-      try { head = reviewHead(dir, project, branch, env); } catch (e) { throw e.goneRun ? new TaskUpdateError("readiness-checkout", [e.goneRun]) : new TaskUpdateError("readiness-branch"); }
-      facts.readiness = { head, branch, cycles: cyclesFor(preliminary.task, cfg),
-        config: Object.fromEntries(["cycles.small", "cycles.large", "cycles.risk"].map(key => [key, cfg[key]])) };
-    }
-    const planned = planNativeTaskUpdate(before, reference, at, facts);
-    phase = "publish";
-    const proposal = { at, facts, task: planned.task, version: taskVersion(planned.task), disruptive: planned.disruptive };
-    taskUpdates.prepare(dir, reference, proposal, Object.fromEntries(["tasks", "runs", "decisions"].map(table => [table, tableText(table, planned[table])])));
-    return reply(taskUpdates.publish(dir, reference, coordination), proposal, "task-updated");
-  }); } catch (error) {
-    if (error instanceof TaskUpdateError) throw error;
-    if (error.code === "other-chief") throw new TaskUpdateError(error.code, [], error.message);
-    if (error.code === "stuck-write") throw new TaskUpdateError(error.code);
-    throw new TaskUpdateError((error instanceof RecordedWriteError && !error.code) || phase === "state" ? "invalid-state"
-      : phase === "publish" ? "uncertain-outcome" : phase === "readiness" ? "readiness" : "invalid-change");
-  }
-}
-
-/** Transaction integrity is independent of the provider's Sage on/off policy. */
-function assertTaskUpdateOpen(input, env = process.env) {
-  const dir = storeDir(input.project, env);
-  // Every supported writer observes the common marker. No mixed snapshot grants authority.
-  assertNoPendingWrite(dir);
-  return true;
-}
-
-const taskWrites = recordedWrites({ schema: 2, tables: ["tasks", "decisions"], folder: "task-requests",
-  name: /^[0-9a-f]{64}\.json$/, receiptName: reference => createHash("sha256").update(JSON.stringify([reference.owner, reference.request])).digest("hex") + ".json",
-  validate: validateTaskWrite });
-
 /** A saved writer may add known optional columns, but cannot discard existing cells. */
 function savedWriteColumns(tables, deny) {
   return Object.fromEntries(Object.entries(tables).map(([table, pair]) => {
@@ -814,124 +622,6 @@ function savedWriteColumns(tables, deny) {
     if (before.some(key => !after.includes(key))) deny();
     return [table, after];
   }));
-}
-
-/** The frames that a saved create may hold. Before T591, a tiny arena's route had the code review only when the request added it. */
-function savedFrames(id, { title, size, risk, add }, chief) {
-  const current = { ...taskFrame(id, title, size, risk, add), ...(chief === undefined ? {} : { chief }) };
-  if (size !== "tiny" || !add.includes("arena") || add.includes("code-review")) return [current];
-  return [current, { ...current, route: list(current.route).filter(block => block !== "code-review").join(",") }];
-}
-
-/** Validate saved task publication as one pure update before any recovery write. A replay keeps the route of its writer. */
-function validateTaskWrite({ reference, result }, tables) {
-  const deny = () => refuse("The saved task update is damaged. No task table changed.");
-  if (!result || typeof result.id !== "string" || !/^T[1-9]\d*$/.test(result.id)
-    || (result.chief !== undefined && !CHIEF.test(result.chief))
-    || !savedFrames(result.id, reference, result.chief).some(frame => JSON.stringify(frame) === JSON.stringify(result))) deny();
-  if (!tables) return;
-  const columns = savedWriteColumns(tables, deny);
-  const rows = (table, text) => {
-    const { cols, lines } = sheetText(text);
-    if (!TABLES[table].every(c => cols.includes(c) || ADDED[table]?.includes(c))
-      || cols.some(c => !TABLES[table].includes(c)) || new Set(cols).size !== cols.length) deny();
-    return rowsOf({ cols, lines });
-  };
-  const tasks = rows("tasks", tables.tasks.before), decisions = rows("decisions", tables.decisions.before);
-  if (tasks.some(task => task.id === result.id)
-    || tables.tasks.after !== tableText("tasks", [...tasks, result], columns.tasks)) deny();
-  if (reference.add.length) {
-    const after = rows("decisions", tables.decisions.after), at = after.at(-1)?.at;
-    if (!/^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}Z$/.test(at ?? "")
-      || !Number.isFinite(Date.parse(at)) || new Date(at).toISOString().replace(".000Z", "Z") !== at) deny();
-    decisions.push({ at, task: result.id, decision: `added ${reference.add.join(",")}`, why: reference.why });
-  }
-  if (tables.decisions.after !== tableText("decisions", decisions, columns.decisions)) deny();
-}
-
-/** Create one task for a durable caller request. The provider authenticates the opaque owner scope. */
-function createRequestedTask(input, env = process.env, native) {
-  const fields = ["project", "owner", "request", "title", "size", "risk", "add", "why"];
-  const deny = () => refuse("Task creation needs a complete, unchanged request and a valid route.");
-  if (!input || typeof input !== "object" || Array.isArray(input) || Object.keys(input).length !== fields.length
-    || fields.some(key => !Object.hasOwn(input, key)) || typeof input.project !== "string" || !input.project
-    || typeof input.owner !== "string" || !input.owner || input.owner.length > 1024 || /\p{Cc}/u.test(input.owner)
-    || typeof input.request !== "string" || !new RegExp(`^${UUID}$`).test(input.request)
-    || !["title", "why"].every(key => typeof input[key] === "string" && input[key].length <= 4096 && cell(input[key]) === input[key])
-    || !input.title.trim() || typeof input.size !== "string" || !Object.hasOwn(SIZES, input.size)
-    || !Array.isArray(input.risk) || input.risk.length > RISKS.length || input.risk.some(value => !RISKS.includes(value))
-    || !Array.isArray(input.add) || input.add.length > BLOCKS.length || input.add.some(value => !BLOCKS.includes(value))
-    || new Set(input.risk).size !== input.risk.length || new Set(input.add).size !== input.add.length
-    || (input.add.length && !input.why.trim()) || (!input.add.length && input.why)
-    || (input.size === "investigate" && input.add.includes("build"))) deny();
-  const { project, ...request } = input;
-  // Property order supplied by a transport must not change retry identity.
-  const reference = Object.fromEntries(fields.filter(key => key !== "project").map(key => [key, request[key]]));
-  const dir = storeDir(project, env);
-  if (realpathSync(dir) !== resolve(dir)) deny();
-  const checked = receipt => {
-    const result = receipt.result;
-    const matches = read(dir, "tasks").filter(row => row.id === result.id);
-    if (matches.length !== 1) deny();
-    return result;
-  };
-  return withLock(dir, () => {
-    settle(dir);
-    const prior = taskWrites.readReceipt(dir, reference);
-    if (prior) return { decision: "already-created", task: checked(prior) };
-    ready(dir, env);
-    const task = { ...taskFrame(nextId(dir, "T"), input.title, input.size, input.risk, input.add), ...(isShared(dir, env) ? { chief: chiefRow(dir, native).id } : {}) };
-    const decisions = read(dir, "decisions");
-    if (input.add.length) decisions.push({ at: now(), task: task.id, decision: `added ${input.add.join(",")}`, why: input.why });
-    taskWrites.commit(dir, { reference, result: task }, { tasks: tableText("tasks", [...read(dir, "tasks"), task]), decisions: tableText("decisions", decisions) });
-    status(dir, true);
-    return { decision: "task-created", task };
-  });
-}
-
-const runWrites = recordedWrites({ schema: 3, tables: ["runs"], folder: "run-requests",
-  name: /^[0-9a-f]{64}\.json$/, receiptName: reference => createHash("sha256").update(JSON.stringify([reference.owner, reference.request])).digest("hex") + ".json", validate: validateRunWrite });
-
-/** Record one run request using the same writer, branch, round and model rules as the CLI. */
-function createRequestedRun(input, env = process.env, native) {
-  const fields = ["project", "owner", "request", "task", "role", "branch", "candidate"];
-  const deny = () => refuse("Run creation needs a complete, unchanged request and an existing task.");
-  if (!input || typeof input !== "object" || Array.isArray(input) || Object.keys(input).length !== fields.length
-    || fields.some(key => !Object.hasOwn(input, key) || typeof input[key] !== "string") || !input.project
-    || !input.owner || input.owner.length > 1024 || /\p{Cc}/u.test(input.owner)
-    || !new RegExp(`^${UUID}$`).test(input.request) || !/^T[1-9]\d*$/.test(input.task)
-    || !/^[a-z][a-z0-9-]{0,63}$/.test(input.role)
-    || !["branch", "candidate"].every(key => input[key].length <= 4096 && cell(input[key]) === input[key])) deny();
-  if (input.branch) branchOf(input.branch);
-  const { project, ...request } = input;
-  const reference = Object.fromEntries(fields.filter(key => key !== "project").map(key => [key, request[key]]));
-  const dir = storeDir(project, env);
-  if (realpathSync(dir) !== resolve(dir)) deny();
-  const checked = receipt => {
-    const run = receipt.result;
-    const matches = read(dir, "runs").filter(row => row.id === run.id);
-    if (matches.length !== 1 || matches[0].task !== input.task || matches[0].role !== input.role) deny();
-    // The receipt and its row name the same checkout (T625): a receipt that names another folder is damaged.
-    if ((matches[0].checkout ?? "") !== (run.checkout ?? "")) refuse(RUN_DAMAGED);
-    return run;
-  };
-  return withLock(dir, () => {
-    settle(dir);
-    const prior = runWrites.readReceipt(dir, reference);
-    if (prior) return { decision: "already-created", run: checked(prior) };
-    ready(dir, env);
-    const chief = isShared(dir, env) ? guard(dir, "run", ["add", input.task], { chief: chiefRow(dir, native).id }) : undefined;
-    const matches = read(dir, "tasks").filter(row => row.id === input.task);
-    if (matches.length !== 1 || !/^(0|[1-9]\d*)$/.test(matches[0].round) || !Number.isSafeInteger(Number(matches[0].round))) deny();
-    notHeld(matches[0], "run add");
-    if (input.candidate && candidateOf(input.candidate) !== input.candidate) deny();
-    const run = runFrame(dir, matches[0], input.role, input.branch, input.candidate, env);
-    if (chief) run.chief = chief;
-    Object.assign(run, checkoutTag(dir, project, env));
-    runWrites.commit(dir, { reference, result: run }, { runs: tableText("runs", [...read(dir, "runs"), run]) });
-    status(dir, true);
-    return { decision: "run-created", run };
-  });
 }
 
 /** A recorded running run is an assignment record, not proof that a native agent started. */
@@ -968,31 +658,6 @@ function runFrame(dir, task, role, branch, candidate, env) {
   }
   return { id: nextId(dir, "R"), task: task.id, role, round: task.round, candidate, branch,
     status: "running", started: now(), model: modelFor(role, task.size, candidate, config(env), task.risk) };
-}
-
-const RUN_DAMAGED = "The saved run update is damaged. No run table changed.";
-/** Saved run facts survive later task/config changes; validate the record rather than recompute them. */
-function validateRunWrite({ reference, result: run }, tables) {
-  const deny = () => refuse(RUN_DAMAGED);
-  if (!run || typeof run.id !== "string" || !/^R[1-9]\d*$/.test(run.id) || typeof run.round !== "string" || !/^(0|[1-9]\d*)$/.test(run.round)
-    || !Number.isSafeInteger(Number(run.round)) || !RUN_ROLES.includes(run.role) || typeof run.model !== "string" || cell(run.model) !== run.model
-    || typeof run.started !== "string" || !/^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}Z$/.test(run.started)
-    || !Number.isFinite(Date.parse(run.started)) || new Date(run.started).toISOString().replace(".000Z", "Z") !== run.started
-    || (run.chief !== undefined && !CHIEF.test(run.chief))
-    || (run.checkout !== undefined && (typeof run.checkout !== "string" || !isAbsolute(run.checkout) || cell(run.checkout) !== run.checkout || run.checkout.length > 4096))
-    || JSON.stringify(run) !== JSON.stringify({ id: run.id, task: reference.task, role: reference.role, round: run.round,
-      candidate: reference.candidate, branch: reference.branch, status: "running", started: run.started, model: run.model, ...(run.chief === undefined ? {} : { chief: run.chief }),
-      ...(run.checkout === undefined ? {} : { checkout: run.checkout }) })) deny();
-  if (!tables) return;
-  const { cols, lines } = sheetText(tables.runs.before);
-  if (!TABLES.runs.every(c => cols.includes(c) || ADDED.runs?.includes(c))
-    || cols.some(c => !TABLES.runs.includes(c)) || new Set(cols).size !== cols.length) deny();
-  const runs = rowsOf({ cols, lines });
-  const after = sheetText(tables.runs.after);
-  if (!TABLES.runs.every(c => after.cols.includes(c) || ADDED.runs.includes(c)) || after.cols.some(c => !TABLES.runs.includes(c)) || new Set(after.cols).size !== after.cols.length
-    || cols.some(c => !after.cols.includes(c))) deny();
-  const expected = [after.cols.join("\t"), ...[...runs, run].map(r => after.cols.map(c => cell(r[c])).join("\t"))].join("\n") + "\n";
-  if (runs.some(row => row.id === run.id) || tables.runs.after !== expected) deny();
 }
 
 const usageReference = (run, opt) => ({ run, tokens: opt.tokens, source: opt["usage-source"], evidence: opt["usage-evidence"] });
@@ -1035,62 +700,6 @@ function enrichUsage(dir, id, opt) {
   decisions.push({ at: result.at, task: run.task, decision: `${id} usage measured`, why: JSON.stringify(reference) });
   usageWrites.commit(dir, { reference, result }, { runs: tableText("runs", runs), decisions: tableText("decisions", decisions) });
   return `${id} usage measured`;
-}
-
-const reviewWrites = recordedWrites({ schema: 4, tables: ["tasks", "findings", "ledger", "decisions"], folder: "reviews",
-  name: /^[0-9a-f-]{36}-[0-9a-f]{64}\.json$/, receiptName: reference => `${reference.assignment}-${reference.reportHash}.json`, validate: validateReviewWrite });
-
-function reviewResult(reference, claims, at) {
-  return { task: reference.task, run: reference.run, sha: reference.review.sha, cycle: reference.review.cycle,
-    kind: claims.kind, findings: claims.findings.map((_, index) => `F-${reference.task}-${reference.run}-${index + 1}`), at };
-}
-
-/** The same pure delta defines fresh publication and validates a saved recovery intent. */
-function reviewDelta({ reference, result }, claims, rows, columns = {}) {
-  const deny = () => refuse("The saved review update is damaged. No review tables changed.");
-  const { task: id, run, role, review } = reference;
-  const { tasks, findings, ledger, decisions } = structuredClone(rows);
-  const matches = tasks.filter(row => row.id === id);
-  if (matches.length !== 1) deny();
-  const task = matches[0];
-  if (!builds(task) || task.round !== String(review.round) || task.branch !== review.branch || task.state === "held"
-    || ledger.some(row => row.run === run && !["checks-pass", "checks-fail"].includes(row.kind))
-    || findings.some(row => result.findings.includes(row.key))) deny();
-  claims.findings.forEach((finding, index) => findings.push({ task: id, key: result.findings[index], round: task.round,
-    source: role, severity: finding.severity, summary: cell(finding.summary), triage: "", reason: "", status: "open", run, class: "" }));
-  ledger.push({ task: id, pr: task.pr, sha: review.sha, kind: claims.kind, cycle: String(review.cycle), run, at: result.at });
-  if (["verified", "pr-ready"].includes(task.state) && NOT_CLEAN.includes(claims.kind)) {
-    const before = task.state;
-    task.state = "reviewing";
-    decisions.push({ at: result.at, task: id, decision: `${before} → reviewing`, why: `${claims.kind} verdict on ${review.sha}` });
-  }
-  return Object.fromEntries(Object.entries({ tasks, findings, ledger, decisions }).map(([table, values]) => [table, tableText(table, values, columns[table])]));
-}
-
-/** Validate authenticated report bytes and every saved after-image before publication. No current Git reads. */
-function validateReviewWrite({ reference, result }, tables) {
-  const deny = () => refuse("The saved review update is damaged. No review tables changed.");
-  const keys = ["task", "run", "role", "assignment", "reportHash", "review", "text"];
-  if (!reference || typeof reference !== "object" || Array.isArray(reference) || Object.keys(reference).length !== keys.length
-    || keys.some(key => !Object.hasOwn(reference, key)) || typeof reference.task !== "string" || !/^T[1-9]\d*$/.test(reference.task)
-    || typeof reference.run !== "string" || !/^R[1-9]\d*$/.test(reference.run)
-    || typeof reference.assignment !== "string" || !new RegExp(`^${UUID}$`).test(reference.assignment)
-    || typeof reference.reportHash !== "string" || !/^[0-9a-f]{64}$/.test(reference.reportHash)) deny();
-  const review = parseReviewTarget(reference.review);
-  const claims = parseReviewReport(parseReport(reference.text), reference.role, review);
-  if (createHash("sha256").update(reference.text).digest("hex") !== reference.reportHash
-    || !result || typeof result.at !== "string" || !/^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}Z$/.test(result.at)
-    || !Number.isFinite(Date.parse(result.at)) || new Date(result.at).toISOString().replace(".000Z", "Z") !== result.at
-    || JSON.stringify(result) !== JSON.stringify(reviewResult(reference, claims, result.at))) deny();
-  if (!tables) return;
-  const rows = Object.fromEntries(Object.keys(tables).map(table => {
-    const { cols, lines } = sheetText(tables[table].before);
-    if (!TABLES[table].every(c => cols.includes(c) || ADDED[table]?.includes(c))
-      || cols.some(c => !TABLES[table].includes(c)) || new Set(cols).size !== cols.length) deny();
-    return [table, rowsOf({ cols, lines })];
-  }));
-  const expected = reviewDelta({ reference, result }, claims, rows, savedWriteColumns(tables, deny));
-  if (Object.keys(expected).some(table => tables[table].after !== expected[table])) deny();
 }
 
 /** The verdict kinds that a finished run of each review or QA role backs (T483): its clean kind, then its problem kind. */
@@ -1270,51 +879,6 @@ function backingProblem(dir, task, kind, opt) {
   return `${run.id}'s report has ${needed.length} medium or high finding${needed.length === 1 ? "" : "s"} (${said}), and ${task.id} holds ${tally} of ${run.id}, but each one needs a row at its severity or above: ${found ? `${record}, then record ${kind}.` : `so it backs ${problemKind}. For ${cleanKind}, ${record}, then dismiss it with a reason, move it or close it.`}`;
 }
 
-function acceptReportedReview(input, env = process.env, native) {
-  const fields = ["project", "task", "run", "role", "assignment", "reportHash", "text", "review"];
-  const deny = () => refuse("The review does not match its completed run, report, or current commit.");
-  if (!input || typeof input !== "object" || Array.isArray(input) || Object.keys(input).length !== fields.length
-    || fields.some(key => !Object.hasOwn(input, key)) || typeof input.project !== "string" || !input.project
-    || typeof input.task !== "string" || !/^T[1-9]\d*$/.test(input.task)
-    || typeof input.run !== "string" || !/^R[1-9]\d*$/.test(input.run)
-    || typeof input.assignment !== "string" || !new RegExp(`^${UUID}$`).test(input.assignment)
-    || typeof input.reportHash !== "string" || !/^[0-9a-f]{64}$/.test(input.reportHash)) deny();
-  const review = parseReviewTarget(input.review);
-  const report = parseReport(input.text);
-  const claims = parseReviewReport(report, input.role, review);
-  if (createHash("sha256").update(input.text).digest("hex") !== input.reportHash) deny();
-  const reference = { task: input.task, run: input.run, role: input.role, assignment: input.assignment, reportHash: input.reportHash, review, text: input.text };
-  const dir = storeDir(input.project, env);
-  if (realpathSync(dir) !== resolve(dir)) deny();
-  return withLock(dir, () => {
-    settle(dir);
-    const prior = reviewWrites.readReceipt(dir, reference);
-    if (prior) return { decision: "already-accepted", ...prior.result };
-    ready(dir, env);
-    if (isShared(dir, env)) guard(dir, "verdict", [input.task], { chief: chiefRow(dir, native).id });
-    const tasks = read(dir, "tasks"), runs = read(dir, "runs");
-    const matches = tasks.filter(row => row.id === input.task), assigned = runs.filter(row => row.id === input.run);
-    if (matches.length !== 1 || assigned.length !== 1) deny();
-    const task = matches[0], run = assigned[0];
-    notHeld(task, "review acceptance");
-    const path = `reports/${input.run}-${input.assignment}-${input.reportHash}.md`;
-    if (run.task !== task.id || run.role !== input.role || run.round !== String(review.round) || task.round !== run.round
-      || run.status !== "done" || !run.ended || run.report !== path || task.branch !== review.branch
-      || (run.branch && run.branch !== review.branch) || realpathSync(join(dir, "reports")) !== join(dir, "reports")
-      || readRegular(join(dir, path), { link: false, max: 32 * 1024 }) !== input.text
-      || reviewHead(dir, input.project, branchOf(task.branch), env) !== review.sha) deny();
-    const findings = read(dir, "findings"), ledger = read(dir, "ledger"), decisions = read(dir, "decisions");
-    const receipt = { reference, result: reviewResult(reference, claims, now()) };
-    const after = reviewDelta(receipt, claims, { tasks, findings, ledger, decisions });
-    reviewWrites.commit(dir, receipt, after);
-    status(dir, true);
-    return { decision: "review-accepted", ...receipt.result };
-  });
-}
-
-const interruptedWrites = recordedWrites({ schema: 5, tables: ["runs"], folder: "interrupted-runs",
-  name: /^[0-9a-f-]{36}\.json$/, receiptName: reference => `${reference.binding.assignment}.json`, validate: validateInterruptedWrite });
-/** The consumer of each schema of a saved change. Schema 6 is the old marker of a task update. */
 /**
  * The tables after a takeover answer, from the tables before it: the one write of the design's table, with the gate's
  * answer. An approve sets the chief, clears an open offer and ends the runs. A decline with an offer ends only that offer.
@@ -1345,7 +909,11 @@ const REPLACE_TABLES = ["tasks", "runs", "gates", "decisions"];
 const replaceWrites = recordedWrites({ schema: 9, tables: REPLACE_TABLES, folder: "replace-requests",
   name: /^[0-9a-f]{64}\.json$/, receiptName: reference => createHash("sha256").update(JSON.stringify(reference)).digest("hex") + ".json", validate: validateReplaceWrite });
 
-const SAVED = { 2: taskWrites, 3: runWrites, 4: reviewWrites, 5: interruptedWrites, 6: taskUpdates, 7: usageWrites, 8: taskUpdates, 9: replaceWrites };
+/**
+ * The writer of each schema of a saved change. Schemas 2 to 6 and 8 were the Codex native runtime's writers (T914): a saved
+ * change of one of them cannot finish, so it stops writes until the owner accepts its loss (sage logbook repair).
+ */
+const SAVED = { 7: usageWrites, 9: replaceWrites };
 /**
  * Step 3 of every writer, and of a read that takes the lock. Call under the lock. A file fault leaves the marker for the
  * next writer, and its error keeps the code, so that a caller reads the outcome as uncertain.
@@ -1362,7 +930,7 @@ const savedRequest = (dir) => {
   return new RegExp(`^(?:R[1-9]\\d{0,9}|${UUID})$`).test(request) ? ` (request ${visible(request)})` : "";
 };
 function settleFailure(dir, error) {
-  if (!error.code || error instanceof TaskUpdateError) return Object.assign(new RecordedWriteError(STUCK_WRITE), { code: "stuck-write" });
+  if (!error.code) return Object.assign(new RecordedWriteError(STUCK_WRITE), { code: "stuck-write" });
   return Object.assign(new RecordedWriteError(`A saved change${savedRequest(dir)} did not finish because of a file error (${error.code}). The saved change stays. Run the command again. If it repeats, check the logbook folder permissions.`), { code: error.code });
 }
 /**
@@ -1389,222 +957,12 @@ function stuckChange(dir, skip, env) {
       }
       knownColumns(dir, table, cols);
     }
-    try { taskUpdates.history(dir); }
-    catch (damaged) {
-      const failure = settleFailure(dir, damaged);
-      if (failure.code !== "stuck-write") throw failure;
-      if (Number.isSafeInteger(damaged.schema) && damaged.schema > newest) refuse(`A receipt in task-updates has schema ${damaged.schema}, and this version of sage knows schemas up to ${newest}: a newer sage wrote it. Nothing changed. Update the sage plugin and restart this session. Then any write finishes the change or says what to do.`);
-      refuse("A receipt in task-updates fails its check, so writes would still stop after this repair. Nothing changed. Only a backup helps here: the owner restores the folder that `sage logbook` prints; rows newer than the backup are lost.");
-    }
-    // A provider's settle reads this folder only for an open row of its journal, which core cannot see. A refusal here would
-    // leave a logbook with no backup and no way out, so the repair goes on, and its line warns and does not say that writes work.
-    let damagedReceipt = false;
-    try { interruptedWrites.history(dir); }
-    catch (damaged) {
-      const failure = settleFailure(dir, damaged);
-      if (failure.code !== "stuck-write") throw failure;
-      damagedReceipt = true;
-    }
     const marker = join(dir, PENDING);
-    return { request: savedRequest(dir), marker, aside: lostName(marker), damagedReceipt };
+    return { request: savedRequest(dir), marker, aside: lostName(marker) };
   }
   refuse("This saved change can finish, so it needs no repair: any write in this project finishes it. Nothing changed.");
 }
-/**
- * Settle for a provider that has its own journal: journal runs under the same lock, and reads each receipt through its two
- * readers. After a move, a change saved before the move has its receipt in an old logbook (T680), so each reader also reads
- * the old logbooks that sources.tsv names. It only reads them: a moved logbook takes no more writes. An old logbook that it
- * cannot read (a damaged receipt, a path through a link) holds no receipt for it (T687), so the journal's own fallback
- * closes the row; a read error in the project's own logbook still refuses.
- */
-function settleWrites({ project }, env, journal) {
-  const dir = storeDir(project, env);
-  if (realpathSync(dir) !== resolve(dir)) refuse("Invalid logbook location");
-  return withLock(dir, () => {
-    settle(dir);
-    const old = movedFrom(dir).map((s) => s.dir);
-    const first = (read) => read(dir) ?? old.reduce((found, book) => {
-      try { return found ?? read(book); } catch { return undefined; }
-    }, undefined);
-    return journal({
-      update: ({ owner, request, digest }) => first((book) => taskUpdates.outcome(book, owner, request, digest)),
-      finish: reference => {
-        const receipt = first((book) => interruptedWrites.readReceipt(book, reference));
-        return receipt && { receiptHash: createHash("sha256").update(JSON.stringify(receipt)).digest("hex") };
-      },
-    });
-  });
-}
-const interruptedKeys = ["binding", "task", "run", "role", "status", "evidenceHash", "runTarget"];
-function interruptedReference(value) {
-  const deny = () => refuse("The interrupted run reference is damaged.");
-  const exact = (object, keys) => object && typeof object === "object" && !Array.isArray(object)
-    && Object.keys(object).length === keys.length && keys.every(key => Object.hasOwn(object, key));
-  const bindingKeys = ["project", "session", "epoch", "assignment", "issuer", "call", "child", "turn"];
-  if (!exact(value, interruptedKeys) || !exact(value.binding, bindingKeys)
-    || bindingKeys.some(key => typeof value.binding[key] !== "string" || !/^[A-Za-z0-9_.:-]{1,256}$/.test(value.binding[key]))
-    || !new RegExp(`^${UUID}$`).test(value.binding.assignment) || !new RegExp(`^${UUID}$`).test(value.binding.epoch)
-    || typeof value.task !== "string" || !/^T[1-9]\d*$/.test(value.task)
-    || typeof value.run !== "string" || !/^R[1-9]\d*$/.test(value.run) || !RUN_ROLES.includes(value.role)
-    || !["blocked", "question", "failed"].includes(value.status)
-    || typeof value.evidenceHash !== "string" || !/^[0-9a-f]{64}$/.test(value.evidenceHash)) deny();
-  const runTarget = parseRunTarget(value.runTarget);
-  if (runTarget.task !== value.task || runTarget.run !== value.run || runTarget.role !== value.role) deny();
-  return { binding: Object.fromEntries(bindingKeys.map(key => [key, value.binding[key]])),
-    task: value.task, run: value.run, role: value.role, status: value.status, evidenceHash: value.evidenceHash, runTarget };
-}
-function interruptedResult(reference, ended) {
-  return { task: reference.task, run: reference.run, assignment: reference.binding.assignment, evidenceHash: reference.evidenceHash,
-    status: reference.status, report: "", ended };
-}
-function validateInterruptedWrite({ reference, result }, tables) {
-  const deny = () => refuse("The saved interrupted run update is damaged. No run table changed.");
-  const parsed = interruptedReference(reference);
-  if (JSON.stringify(reference) !== JSON.stringify(parsed) || !result || typeof result.ended !== "string"
-    || !/^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}Z$/.test(result.ended)
-    || !Number.isFinite(Date.parse(result.ended)) || new Date(result.ended).toISOString().replace(".000Z", "Z") !== result.ended
-    || JSON.stringify(result) !== JSON.stringify(interruptedResult(reference, result.ended))) deny();
-  if (!tables) return;
-  const { cols, lines } = sheetText(tables.runs.before);
-  if (!TABLES.runs.every(c => cols.includes(c) || ADDED.runs?.includes(c))
-    || cols.some(c => !TABLES.runs.includes(c)) || new Set(cols).size !== cols.length) deny();
-  const rows = rowsOf({ cols, lines }), matches = rows.filter(row => row.id === reference.run);
-  if (matches.length !== 1 || matches[0].task !== reference.task || matches[0].role !== reference.role
-    || matches[0].round !== String(reference.runTarget.round) || matches[0].branch !== reference.runTarget.runBranch
-    || matches[0].candidate !== reference.runTarget.candidate
-    || matches[0].status !== "running" || matches[0].ended || matches[0].report) deny();
-  Object.assign(matches[0], { status: reference.status, ended: result.ended, report: "" });
-  if (tables.runs.after !== tableText("runs", rows)) deny();
-}
 
-/** Trusted provider callbacks acquire and acknowledge admission ownership under the logbook lock.
- * They must be synchronous and must never acquire another logbook lock. */
-function finishInterruptedRun(input, env = process.env, fence) {
-  const deny = () => refuse("The interrupted run does not match its immutable finish evidence.");
-  if (!input || typeof input !== "object" || Array.isArray(input)
-    || Object.keys(input).length !== interruptedKeys.length + 1 || typeof input.project !== "string" || !input.project
-    || !Object.hasOwn(input, "project") || interruptedKeys.some(key => !Object.hasOwn(input, key))
-    || typeof fence?.begin !== "function" || typeof fence?.end !== "function") deny();
-  const reference = interruptedReference(Object.fromEntries(interruptedKeys.map(key => [key, input[key]])));
-  const dir = storeDir(input.project, env);
-  if (realpathSync(dir) !== resolve(dir)) deny();
-  return withLock(dir, () => {
-    const subject = () => {
-      const tasks = read(dir, "tasks").filter(row => row.id === reference.task);
-      const rows = read(dir, "runs").filter(row => row.id === reference.run);
-      if (tasks.length !== 1 || rows.length !== 1 || rows[0].task !== reference.task || rows[0].role !== reference.role
-        || rows[0].round !== String(reference.runTarget.round) || rows[0].branch !== reference.runTarget.runBranch
-        || rows[0].candidate !== reference.runTarget.candidate) deny();
-      return rows[0];
-    };
-    const begin = () => {
-      subject();
-      const claim = fence.begin(reference);
-      if (!claim || claim.then || JSON.stringify(claim.request) !== JSON.stringify(reference) || claim.receiptHash) deny();
-    };
-    const acknowledge = receipt => {
-      validateInterruptedWrite(receipt);
-      subject();
-      const rows = read(dir, "runs").filter(row => row.id === reference.run);
-      if (rows.length !== 1 || rows[0].task !== reference.task || rows[0].role !== reference.role
-        || rows[0].status !== receipt.result.status || rows[0].ended !== receipt.result.ended || rows[0].report) deny();
-      const receiptHash = createHash("sha256").update(JSON.stringify(receipt)).digest("hex");
-      const finished = fence.end(reference, receiptHash);
-      if (!finished || finished.then || JSON.stringify(finished.request) !== JSON.stringify(reference) || finished.receiptHash !== receiptHash) deny();
-      return receipt.result;
-    };
-    settle(dir);
-    const prior = interruptedWrites.readReceipt(dir, reference);
-    if (prior) return { decision: "already-finished", ...acknowledge(prior) };
-    ready(dir, env);
-    subject();
-    const tasks = read(dir, "tasks").filter(row => row.id === reference.task), rows = read(dir, "runs");
-    const matches = rows.filter(row => row.id === reference.run);
-    if (tasks.length !== 1 || matches.length !== 1 || matches[0].task !== reference.task || matches[0].role !== reference.role
-      || matches[0].status !== "running" || matches[0].ended || matches[0].report) deny();
-    const receipt = { reference, result: interruptedResult(reference, now()) };
-    Object.assign(matches[0], { status: reference.status, report: "", ended: receipt.result.ended });
-    interruptedWrites.commit(dir, receipt, { runs: tableText("runs", rows) }, begin);
-    const result = acknowledge(receipt);
-    status(dir, true);
-    return { decision: "run-finished", ...result };
-  });
-}
-
-/** Finish only a run from evidence already authenticated by the provider. This never records a verdict. */
-function finishReportedRun(input, env = process.env) {
-  const keys = ["project", "task", "run", "role", "assignment", "reportHash", "text"];
-  const deny = () => refuse("The saved report does not match an unfinished run or its recorded result.");
-  if (!input || typeof input !== "object" || Array.isArray(input) || Object.keys(input).length !== keys.length
-    || keys.some(key => !Object.hasOwn(input, key) || typeof input[key] !== "string") || !input.project
-    || !/^T[1-9]\d*$/.test(input.task) || !/^R[1-9]\d*$/.test(input.run)
-    || !/^[a-z][a-z-]{0,63}$/.test(input.role) || !new RegExp(`^${UUID}$`).test(input.assignment)
-    || !/^[0-9a-f]{64}$/.test(input.reportHash)) deny();
-  const report = parseReport(input.text);
-  if (createHash("sha256").update(input.text).digest("hex") !== input.reportHash) deny();
-  const dir = storeDir(input.project, env);
-  // A report must stay in the selected logbook, with no redirected directory components.
-  if (realpathSync(dir) !== resolve(dir)) deny();
-  return withLock(dir, () => {
-    ready(dir, env);
-    const tasks = read(dir, "tasks").filter(row => row.id === input.task);
-    const runs = read(dir, "runs");
-    const matches = runs.filter(row => row.id === input.run);
-    if (tasks.length !== 1 || matches.length !== 1) deny();
-    const run = matches[0];
-    if (run.task !== input.task || run.role !== input.role) deny();
-    const name = `reports/${input.run}-${input.assignment}-${input.reportHash}.md`;
-    const repeated = run.report === name && run.status === report.STATUS
-      && /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}Z$/.test(run.ended);
-    if (!repeated && (run.status !== "running" || run.report || run.ended)) deny();
-    const folder = join(dir, "reports");
-    mkdirSync(folder, { recursive: true, mode: 0o700 });
-    if (realpathSync(folder) !== folder) deny();
-    const file = join(dir, name);
-    const sameFile = () => {
-      const st = lstatSync(file, { throwIfNoEntry: false });
-      if (!st) return false;
-      // A crash can leave the publication temp file as a second hard link. Read exact bytes; never rewrite them.
-      if (!st.isFile() || readRegular(file, { link: false, max: 32 * 1024 }) !== input.text) deny();
-      return true;
-    };
-    if (!sameFile()) {
-      // A missing file on a completed run is damage, not permission to rewrite its history.
-      if (repeated) deny();
-      const temporary = join(folder, `.report-${randomUUID()}`);
-      let fd, created = false;
-      try {
-        fd = openSync(temporary, "wx", 0o600);
-        created = true;
-        writeFileSync(fd, input.text);
-        fsyncSync(fd);
-        closeSync(fd); fd = undefined;
-        try { linkSync(temporary, file); }
-        catch (error) { if (error.code !== "EEXIST") throw error; }
-      } finally {
-        if (fd !== undefined) closeSync(fd);
-        if (created) unlinkSync(temporary);
-      }
-      if (!sameFile()) deny();
-    }
-    // The evidence reaches disk before the run points at it. A retry can use an orphaned identical file.
-    const folderFd = openSync(folder, "r");
-    try { fsyncSync(folderFd); } finally { closeSync(folderFd); }
-    if (!repeated) {
-      Object.assign(run, { status: report.STATUS, report: name, ended: now() });
-      write(dir, "runs", runs);
-    }
-    status(dir, true);
-    return { decision: repeated ? "already-finished" : "run-finished", task: input.task,
-      run: run.id, status: run.status, report: name, ended: run.ended };
-  });
-}
-
-
-/** The tip of a branch, read in the checkout of the branch's newest writer run (branchCheckout). */
-function reviewHead(dir, project, branch, env) {
-  return gitIn(branchCheckout(dir, project, branch, env), env)(["rev-parse", "--verify", `refs/heads/${branch}^{commit}`]).trim();
-}
 /** git in a folder, with no GIT_ variable of the caller: repository-selection and injected-config variables cannot redirect it. */
 const gitIn = (folder, env) => (args) => git(["-C", folder, ...args], Object.fromEntries(Object.entries(env).filter(([key]) => !key.startsWith("GIT_"))));
 
@@ -1625,7 +983,7 @@ function branchCheckout(dir, project, branch, env) {
 /** Where a branch of a project lives (branchCheckout): sage-pr reads the branch's origin there. A gone checkout refuses with goneRun. */
 const branchHome = (project, branch, env = process.env) => branchCheckout(storeDir(project, env), project, branch, env);
 /**
- * The tip of a branch where it lives (reviewHead), or "" on any failure, so that a hook fails closed. When the local
+ * The tip of a branch where it lives (branchCheckout), or "" on any failure, so that a hook fails closed. When the local
  * branch is behind origin's copy (its tip is an ancestor of refs/remotes/origin/<branch>, as after gh pr update-branch
  * and a fetch), the tip is origin's (T670). A local branch that is ahead or has diverged stays as it is: nothing replaces it.
  */
@@ -1644,126 +1002,6 @@ function branchTip(project, branch, env = process.env) {
   } catch {
     return "";
   }
-}
-
-/**
- * Validate recorded work immediately before provider preparation or dispatch. This grants no role authority. An arena's
- * candidate and its judge each work on their own branch, so only they may differ from the task's branch, and only on a
- * branch of that task. A branch that another task names is not theirs, as mayName alone would let it be.
- */
-function captureRunAssignment(input, env = process.env) {
-  const keys = ["project", "task", "run", "role"];
-  const deny = () => refuse("The assignment needs one active run on its current task, role, branch, and round.");
-  if (!input || typeof input !== "object" || Array.isArray(input) || Object.keys(input).length !== keys.length
-    || keys.some(key => !Object.hasOwn(input, key)) || typeof input.project !== "string" || !input.project
-    || typeof input.task !== "string" || !/^T[1-9]\d*$/.test(input.task)
-    || typeof input.run !== "string" || !/^R[1-9]\d*$/.test(input.run)
-    || typeof input.role !== "string" || !/^[a-z][a-z-]{0,63}$/.test(input.role)) deny();
-  const dir = storeDir(input.project, env);
-  if (realpathSync(dir) !== resolve(dir)) deny();
-  return withLock(dir, () => {
-    ready(dir, env);
-    const all = read(dir, "tasks"), tasks = all.filter(row => row.id === input.task);
-    const runs = read(dir, "runs").filter(row => row.id === input.run);
-    if (tasks.length !== 1 || runs.length !== 1) deny();
-    const task = tasks[0], run = runs[0];
-    notHeld(task, "assignment");
-    if (!STATES.includes(task.state) || ["merged", "concluded", "abandoned"].includes(task.state)
-      || run.task !== task.id || run.role !== input.role || run.round !== task.round || run.status !== "running"
-      || run.report || run.ended || !/^(0|[1-9]\d*)$/.test(task.round)
-      || !Number.isSafeInteger(Number(task.round))
-      || (task.branch && !mayName(all, task, branchOf(task.branch)))
-      || (run.branch && run.branch !== task.branch && !((isCandidate(run) || run.role === "arena-judge") && branchOfTask(task, run.branch)))
-      || (WRITERS.includes(run.role) && !run.branch)) deny();
-    if (WRITERS.includes(run.role) && read(dir, "runs").some(row => row.id !== run.id
-      && row.status === "running" && WRITERS.includes(row.role) && sameBranch(row.branch, run.branch))) deny();
-    return { task: task.id, run: run.id, role: run.role, round: Number(task.round),
-      taskBranch: task.branch, runBranch: run.branch, candidate: run.candidate };
-  });
-}
-
-/** Read terminal evidence against a coherent snapshot. This never grants run authority. */
-function validateTerminalAssignment(input, env = process.env, historyProof) {
-  const deny = () => refuse("The terminal assignment has no coherent task and run evidence.");
-  if (!updateKeys(input, ["project", "target", "review", ...(Object.hasOwn(input ?? {}, "retirement") ? ["retirement"] : [])]) || typeof input.project !== "string" || !input.project
-    || !updateKeys(input.target, ["task", "run", "role", "round", "taskBranch", "runBranch", "candidate"])) deny();
-  const target = parseRunTarget(input.target), dir = storeDir(input.project, env);
-  if (realpathSync(dir) !== resolve(dir)) deny();
-  return withLock(dir, () => {
-    settle(dir);
-    const tables = Object.fromEntries(["tasks", "runs"].map(table => [table, read(dir, table)]));
-    const pair = (rows, optional = false) => {
-      const tasks = rows.tasks.filter(row => row.id === target.task), runs = rows.runs.filter(row => row.id === target.run);
-      if (optional && (!tasks.length || !runs.length)) return null;
-      if (tasks.length !== 1 || runs.length !== 1) deny();
-      return { task: tasks[0], run: runs[0] };
-    };
-    const immutable = ({ task, run }) => run.task === target.task && run.role === target.role
-      && Number(run.round) === target.round && run.branch === target.runBranch && run.candidate === target.candidate
-      && Number(task.round) === target.round && task.branch === target.taskBranch;
-    const current = pair(tables);
-    const active = ({ task, run }) => STATES.includes(task.state) && !["held", "merged", "concluded", "abandoned"].includes(task.state)
-      && run.status === "running" && !run.report && !run.ended;
-    const retirement = input.retirement ?? null;
-    if (retirement !== null && (!updateKeys(retirement, ["owner", "request", "digest"])
-      || typeof retirement.owner !== "string" || typeof retirement.request !== "string"
-      || !new RegExp(`^${UUID}$`).test(retirement.request) || typeof retirement.digest !== "string"
-      || !/^[a-f0-9]{64}$/.test(retirement.digest))) deny();
-    const retires = intent => retirement !== null && intent.reference.owner === retirement.owner
-      && intent.reference.request === retirement.request
-      && createHash("sha256").update(JSON.stringify(intent)).digest("hex") === retirement.digest;
-    const retired = retirement !== null;
-    let proven = immutable(current) && active(current) && !retired;
-    if (!proven) {
-      const receipts = taskUpdates.history(dir).filter(row => row.intent.reference.task === target.task);
-      for (const receipt of receipts) taskUpdates.authenticate(receipt, historyProof);
-      const history = receipts.filter(row => row.outcome.accepted)
-        .map(row => ({ retires: row.intent.proposal.disruptive && retires(row.intent), before: pair(Object.fromEntries(["tasks", "runs"].map(table => [table, updateRows(table, row.intent.tables[table].before)])), true),
-          after: pair(Object.fromEntries(["tasks", "runs"].map(table => [table, updateRows(table, row.intent.tables[table].after)])), true) })).filter(row => row.before && row.after);
-      // Follow exact coherent task/run pairs; a gap cannot explain a changed target.
-      const same = (left, right) => JSON.stringify(left) === JSON.stringify(right);
-      const reached = history.filter(row => immutable(row.before) && active(row.before) && (!retired || row.retires)).map(row => row.after);
-      for (let index = 0; index < reached.length && index <= history.length; index++) {
-        if (same(reached[index], current)) { proven = true; break; }
-        for (const row of history) if (same(row.before, reached[index]) && !reached.some(value => same(value, row.after))) reached.push(row.after);
-      }
-    }
-    if (!proven) deny();
-    if (input.review !== null) {
-      const review = parseReviewTarget(input.review);
-      if (!REVIEW_ROLES.includes(target.role) || review.round !== target.round || review.branch !== branchOf(target.taskBranch)
-        || (!retired && review.sha !== reviewHead(dir, input.project, review.branch, env))) deny();
-    } else if (REVIEW_ROLES.includes(target.role)) deny();
-    return structuredClone(target);
-  });
-}
-
-/** Capture a review subject from the actual logbook and local branch, never from a reported SHA. */
-function captureReviewTarget(input, env = process.env) {
-  const keys = ["project", "task", "run", "role", "cycle"];
-  const deny = () => refuse("The review needs an active run on its task's current branch and round.");
-  if (!input || typeof input !== "object" || Array.isArray(input) || Object.keys(input).length !== keys.length
-    || keys.some(key => !Object.hasOwn(input, key)) || typeof input.project !== "string" || !input.project
-    || typeof input.task !== "string" || !/^T[1-9]\d*$/.test(input.task)
-    || typeof input.run !== "string" || !/^R[1-9]\d*$/.test(input.run) || !REVIEW_ROLES.includes(input.role)
-    || !Number.isInteger(input.cycle) || input.cycle < 1 || input.cycle > 10) deny();
-  const dir = storeDir(input.project, env);
-  if (realpathSync(dir) !== resolve(dir)) deny();
-  return withLock(dir, () => {
-    ready(dir, env);
-    const tasks = read(dir, "tasks").filter(row => row.id === input.task);
-    const runs = read(dir, "runs").filter(row => row.id === input.run);
-    if (tasks.length !== 1 || runs.length !== 1) deny();
-    const task = tasks[0], run = runs[0];
-    notHeld(task, "assignment");
-    if (run.task !== task.id || run.role !== input.role || run.round !== task.round || run.status !== "running"
-      || run.report || run.ended || !/^(0|[1-9]\d*)$/.test(task.round)
-      || !Number.isSafeInteger(Number(task.round)) || (run.branch && run.branch !== task.branch)) deny();
-    const branch = branchOf(task.branch);
-    // Repository-selection and injected-config environment variables cannot redirect this read.
-    const sha = reviewHead(dir, input.project, branch, env);
-    return parseReviewTarget({ branch, sha, round: Number(task.round), cycle: input.cycle });
-  });
 }
 
 /** The columns that a write gives a table: all, but a sparse column only when a row has it. */
@@ -2747,7 +1985,7 @@ function taskOf(dir, id) {
 }
 
 /** Calculate ordered task changes over one coherent snapshot. No files or clock are read. */
-function planTaskChanges(before, id, changes, at, facts, legacyRounds = false) {
+function planTaskChanges(before, id, changes, at, facts) {
   const { tasks, runs, decisions } = structuredClone(before);
   const matches = tasks.filter(row => row.id === id);
   if (matches.length !== 1) refuse("The task is missing or ambiguous.");
@@ -2757,7 +1995,7 @@ function planTaskChanges(before, id, changes, at, facts, legacyRounds = false) {
   const states = changes.filter(kv => kv.startsWith("state="));
   const resume = task.state === "held" && task.hold === "round" && states.some(kv => kv !== "state=abandoned");
   let allowance;
-  if (!legacyRounds && (resume || approvals.length)) {
+  if (resume || approvals.length) {
     if (approvals.length !== 1 || states.length !== 1 || !["state=building", "state=briefed"].includes(states[0])
       || task.state !== "held" || task.hold !== "round") refuse(`${task.id} needs one approval=<G> with a move from a round hold to building or briefed. Nothing changed.`);
     allowance = repairApproval(task, approvals[0].slice(9), facts);
@@ -2775,17 +2013,12 @@ function planTaskChanges(before, id, changes, at, facts, legacyRounds = false) {
       if (["building", "merged", "concluded"].includes(v)) waitsMet(task, graph, `move to ${v}`);
       // A move to abandoned gives no round: the task ends (F-T286-3).
       if (was === "held" && task.hold === "round" && v !== "abandoned") {
-        if (legacyRounds) {
-          task.extra = String(extraOf(task) + 1);
-          decided.push({ at, task: task.id, decision: `held → ${v}: one more repair round`, why: "task set" });
-        } else {
         task.extra = String(allowance);
         const approval = approvals[0].slice(9);
         task.approvals = [task.approvals, approval].filter(Boolean).join(",");
         const decision = `held → ${v}: one more repair round (${approval})`;
         // A CLI retry after the decision write but before the task write completes the same grant.
         if (!decisions.some(row => row.task === task.id && row.decision === decision)) decided.push({ at, task: task.id, decision, why: "owner approval" });
-        }
       }
       if (was === "held" || v === "held") task.hold = "";
       // A new premise starts its own count: the round keys of the old plan go when the task leaves replan (F-T284-19).
@@ -3713,16 +2946,15 @@ function startsShared(checkout, env) {
 }
 
 /** What a repair of a stuck saved change says: the loss in plain words, then the logbook check of what stays. */
-function lostChangeLine(dir, { request, aside, damagedReceipt }) {
+function lostChangeLine(dir, { request, aside }) {
   const loss = `The saved change${request} is lost: ${PENDING} moved to ${aside}, and the decision is in decisions.tsv. A half-published update can leave mixed tables, where some tables hold the change and others do not. Sage does not repair them, so read the rows of the last work.`;
-  const warning = damagedReceipt ? " A receipt in interrupted-runs fails its check, so a later Codex settle may stop on it. Then only a backup helps: the owner restores the folder that `sage logbook` prints; rows newer than the backup are lost." : "";
   try {
     ready(dir);
     status(dir, true);
-    return `${loss} The logbook check passes${warning ? `.${warning}` : ", and writes work again."} The check reads each table alone, so it cannot show that the tables agree.`;
+    return `${loss} The logbook check passes, and writes work again. The check reads each table alone, so it cannot show that the tables agree.`;
   } catch (error) {
     if (!(error instanceof Refusal || error instanceof RecordedWriteError)) throw error;
-    return `${loss} The logbook check fails, so writes still stop: ${error.message}${warning}`;
+    return `${loss} The logbook check fails, so writes still stop: ${error.message}`;
   }
 }
 
@@ -4856,5 +4088,5 @@ const { bindings, fillCommits, folderOf, link, locate, movePlans, notePlugin, pl
   listed: (root) => known(root, undefined, undefined, true),
   enroll });
 const { chiefs, chiefRow, rowOf } = createChiefs({ now, provider, readRegular, refuse, rowsOf, sheetText, swap });
-return { SIZES, BLOCKS, RISKS, KINDS, STATES, DEFAULTS, PR, sageRoot, locate, chiefFor, sessionBar, branchBar, actorOptions, git, projectRoot, roleReadProject, optionsOf, slug, worktreeRoot, BRANCH, ofTask, branchOfTask, branchHome, branchTip, projectName, storeDir, config, cyclesFor, modelFor, read, mergeCheck, landingBar, boardLandingCheck, logbookView, sage, readTaskSnapshot, updateRequestedTask, assertTaskUpdateOpen, settleWrites, createRequestedTask, createRequestedRun, finishReportedRun, finishInterruptedRun, acceptReportedReview, keepReport, compareRetainedReport, takenRows, captureRunAssignment, captureReviewTarget, validateTerminalAssignment, withLock, board, answerPaths, command, runCli, waitingPlugins, writeIdFloors };
+return { SIZES, BLOCKS, RISKS, KINDS, STATES, DEFAULTS, PR, sageRoot, locate, chiefFor, sessionBar, branchBar, actorOptions, git, projectRoot, roleReadProject, optionsOf, slug, worktreeRoot, BRANCH, ofTask, branchOfTask, branchHome, branchTip, projectName, storeDir, config, cyclesFor, modelFor, read, mergeCheck, landingBar, boardLandingCheck, logbookView, sage, keepReport, compareRetainedReport, takenRows, withLock, board, answerPaths, command, runCli, waitingPlugins, writeIdFloors };
 }
