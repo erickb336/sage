@@ -156,6 +156,45 @@ test("in sage mode the chief changes no file, and a child may", async (t) => {
   assert.equal(await fixed({ sage: false }).run(pre("apply_patch", p)), undefined, "outside sage mode the root edits");
 });
 
+test("T931: a sage child, and every child in sage mode, runs no git stash and no real process program; the chief is not held", async (t) => {
+  const thread = (path) => ({ ...CHILD, transcript_path: record(t, { id: "child", session_id: base.session_id, agent_path: path, source: { subagent: { thread_spawn: { depth: 1 } } } }) });
+  const sageChild = thread("/root/sage_implementer_t1_r1"), worker = thread("/root/worker_1");
+  const STASH = "sage: an agent never runs git stash: every worktree of a repo shares one stash list, so another agent can pop or drop your work (standing order 16). To test old code, use git worktree add --detach <scratch> <sha>, or git show <sha>:<path> into your scratch folder";
+  // No command here runs: the gate only reads the line (standing order 14).
+  for (const sage of [true, false]) {
+    const g = fixed({ sage });
+    assert.equal(denied(await g.run(pre("Bash", "git stash", sageChild))), STASH, `sage mode ${sage}: a sage child`);
+    for (const [command, word] of [["ps aux", "ps"], ["pgrep -f node", "pgrep"], ["kill 1", "kill"], ["pkill node", "pkill"], ["launchctl list", "launchctl"]]) {
+      assert.match(denied(await g.run(pre("Bash", command, sageChild))) ?? "passed", new RegExp(`^sage: an agent never reads or signals the real process list \\(standing order 14\\), so "${word}" is refused\\.`), command);
+    }
+    // The chief, the root thread, is not held by these rules.
+    for (const command of ["git stash list", "ps aux", "kill 1", "launchctl list"]) assert.equal(await g.run(pre("Bash", command)), undefined, `sage mode ${sage}: the chief runs ${command}`);
+  }
+  // A child that is not under a sage name is held only in sage mode, as a Claude subagent is.
+  assert.equal(denied(await fixed({ sage: true }).run(pre("Bash", "git stash pop", worker))), STASH);
+  assert.equal(await fixed({ sage: false }).run(pre("Bash", "git stash pop", worker)), undefined);
+  // A line that the reader cannot read is refused when its text names a stash.
+  assert.match(denied(await fixed({ sage: true }).run(pre("Bash", "git stash 'pop", sageChild))) ?? "", /^sage: the hook cannot read this command .*Its text names git stash\. An agent never runs git stash/);
+});
+
+test("T931: the board password rule holds every thread in every mode, for a shell command and a patch", async (t) => {
+  const SET = "sage: the board password rule (T229): only the owner sets the board password, in Terminal on the Mac. Never run board --set-password: give the owner the command to run there, and never ask for the password in the chat";
+  const CONFIG = "sage: the board password rule (T229): no agent reads, copies or replaces the board config (~/.config/sage-board/board.json), or searches, copies or moves a folder that holds it, because it holds the owner's password hash. The board command's own output (board --ensure, the chat board) says what you need";
+  const child = { ...CHILD, transcript_path: record(t, { id: "child", session_id: base.session_id, agent_path: "/root/sage_implementer_t1_r1", source: { subagent: { thread_spawn: { depth: 1 } } } }) };
+  for (const sage of [true, false]) for (const extra of [{}, child]) {
+    const g = fixed({ sage }), who = `sage mode ${sage}, ${extra.agent_id ? "a child" : "the chief"}`;
+    assert.equal(denied(await g.run(pre("Bash", "node /opt/sage/board/cli.mjs board --set-password", extra))), SET, who);
+    for (const command of ["cat ~/.config/sage-board/board.json", `cat ${SCRATCH_HOME}/.config/sage-board/board.json`, "echo '{}' > ~/.config/sage-board/board.json", "grep -r hash ~/.config", "cp -R ~/.config /work/x"]) {
+      assert.equal(denied(await g.run(pre("Bash", command, extra))), CONFIG, `${who}: ${command}`);
+    }
+    assert.equal(denied(await g.run(pre("apply_patch", patch(`*** Update File: ${SCRATCH_HOME}/.config/sage-board/board.json`, "@@", "-a", "+b"), extra))), CONFIG, `${who}: a patch`);
+    // The plain forms pass: a search for the option word, the board command with its own --config, a repository path.
+    for (const command of ["rg -n -- --set-password docs", "node /opt/sage/board/cli.mjs board --ensure --config ~/.config/sage-board/board.json", "ls packages/sage-board"]) {
+      assert.equal(await g.run(pre("Bash", command, extra)), undefined, `${who}: ${command}`);
+    }
+  }
+});
+
 test("Codex's own threads (review, guardian) share the session id and have no agent_id, but count as read-only role agents in every rule (R1669-1)", async (t) => {
   const session = base.session_id;
   const root = record(t, { id: session, session_id: session, source: "cli", cli_version: "0.164.0" });

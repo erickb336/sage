@@ -9,6 +9,7 @@ export { shellCommands, programsRun, commandText } from "./command-reader.mjs";
 export { createCommandPolicy, mentionsMerge, gitSubcommand, programName, unreadable } from "./command-policy.mjs";
 export { createPushPolicy, gitHubRepository } from "./push-policy.mjs";
 export { logbookWrite, stateToolRun, ghRuns, AGENT_GH, agentGh } from "./command-runs.mjs";
+export { agentCommandProblem, boardCommandProblem, boardPathProblem } from "./agent-rules.mjs";
 export { PR, pullRequestHead } from "./pull-request.mjs";
 export { branchProtection, protectionNote } from "./branch-protection.mjs";
 export { fileWriteOutsideRoots, partNames } from "./protected-paths.mjs";

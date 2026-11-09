@@ -2282,7 +2282,7 @@ test("a process program is refused after a shell keyword, inside a shell's -c te
     ...(existsSync("/bin/PS") ? ["PS -ax"] : []), // a file system that ignores case, as on macOS, runs /bin/ps for PS
   ];
   for (const command of hidden) {
-    assert.match(denied(s.send(bash(command, FEATURE, AGENT))) ?? "", /standing order 14.*To stop your own server or background job, use TaskStop, or run it as a background task\./, command);
+    assert.match(denied(s.send(bash(command, FEATURE, AGENT))) ?? "", /standing order 14.*To stop your own server or background job, run it as a background task and stop that task\./, command);
   }
   for (const command of ["kill %1", "kill $!"]) assert.match(denied(s.send(bash(command, FEATURE, AGENT))) ?? "", /standing order 14/, command);
   const pass = [

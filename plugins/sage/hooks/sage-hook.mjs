@@ -32,13 +32,14 @@
 //     (T80) is the full guard for shell writes.
 //   - Only sage.mjs changes the logbook (chiefProblem): the chief's own file tools and shell writes never change it.
 //   - An agent (a sage agent, or any subagent in sage mode; never the chief) never runs git stash, and never runs a
-//     program that lists or signals processes unless that program is a fake in the temp folder (agentProblem).
+//     program that lists or signals processes unless that program is a fake in the temp folder (agentProblem, with
+//     core's agentCommandProblem, which the Codex gate calls too: T931).
 // SAGE_HOOKS=off turns it off. The hook never breaks a session: on an error it answers nothing, but it refuses a merge,
 // a push, every file change and command of an agent, and a chief's shell write into the sage root or the shared root.
 import { spawnSync } from "node:child_process";
 import { createHash, randomUUID } from "node:crypto";
 import { appendFileSync, closeSync, constants, fstatSync, lstatSync, mkdirSync, openSync, readFileSync, readdirSync, readlinkSync, realpathSync, renameSync, rmdirSync, rmSync, statSync, utimesSync, watch, writeFileSync } from "node:fs";
-import { homedir, tmpdir } from "node:os";
+import { homedir } from "node:os";
 import { basename, dirname, isAbsolute, join, resolve, sep } from "node:path";
 import { fileURLToPath } from "node:url";
 
@@ -448,8 +449,6 @@ function pushProblem(command, cwd, extra) {
   if (commandPolicy.error) return "the command policy cannot load, so this push is refused.";
   return commandPolicy.pushes.pushProblem(command, cwd, extra);
 }
-const subcommand = (words, k) => commandPolicy.gitSubcommand(words, k);
-const programName = word => commandPolicy.programName(word);
 /** The word git, and then a later word: one linear scan from the first git (T34, T100-N5). */
 const gitThen = (text, word) => new RegExp(`\\b${word}\\b`, "i").test(/\bgit\b([\s\S]*)/i.exec(text)?.[1] ?? "");
 const pushText = (text) => gitThen(text, "push");
@@ -1265,133 +1264,28 @@ function agentCheck(input, file, slots) {
   return word === undefined ? undefined : `an agent never writes, moves or removes a logbook file from the shell: ${quotedWord(word)} is in the sage root or the shared root, or holds one.`;
 }
 /**
- * The board password rule (T229): the board password is the owner's alone. No session and no agent, in any mode:
- *   - runs a program, other than grep or rg, with the word --set-password (a line that the hook cannot read is refused
- *     when its text has it);
- *   - names the board config folder ~/.config/sage-board, its board.json or a temporary .board-*.json, in a command, a
- *     redirection, Read, Write, Edit, MultiEdit or NotebookEdit. A path resolves against its working folder first
- *     (., .., //, ~, git -C and the terminal tool's cwd), as written: a link to the config is a limit. A word counts by its literal part, the text before its
- *     first variable, substitution or pattern character (T815), also as the value of key=value or --option=value;
- *   - searches, copies, moves or links that folder or a folder above it (grep -r, rg, find -exec, cp -R, tar, mv, ln, the
- *     Grep and Glob tools and others).
- * Only the board command may name its config, as the value of --config. Only the real home folder counts: a repository
- * path such as packages/sage-board, or a search word such as board.json, is not the config. A command that builds the
- * path while it runs, a variable or a pattern, and code (node -e, python3 -c) can still pass: these are limits of the
- * hook, and full protection needs the sandbox (T97 to T99, and T238).
- * Undefined, or the reason for the refusal.
+ * The board password rule (T229), from core: no session and no agent, in any mode, sets the board password, or reads,
+ * copies, replaces or searches the board config. Here each tool gives its paths: a file tool's path, a search tool's
+ * folder, and each field that a command tool runs, from the terminal tool's own cwd. Undefined, or the reason.
  */
-const BOARD_RULE = "the board password rule (T229)";
-const SET_PASSWORD = `${BOARD_RULE}: only the owner sets the board password, in Terminal on the Mac. Never run board --set-password: give the owner the command to run there, and never ask for the password in the chat.`;
-const BOARD_CONFIG = `${BOARD_RULE}: no agent reads, copies or replaces the board config (~/.config/sage-board/board.json), or searches, copies or moves a folder that holds it, because it holds the owner's password hash. The board command's own output (board --ensure, the chat board) says what you need.`;
-const VARIABLE = /[$`]/;
-/** The board config folder, as written from HOME and as its real path, in lower case: the two spellings a path can have. */
-function boardFolders() {
-  const folder = join(process.env.HOME || homedir(), ".config", "sage-board");
-  let resolved = folder;
-  try { resolved = real(folder); } catch {}
-  return [...new Set([fold(folder), fold(resolved)])];
-}
-/** The parts of a path word from its folder (undefined: not known), with ., .. and // resolved. A variable stays a part. */
-function pathParts(word, dir) {
-  const home = process.env.HOME || homedir();
-  const start = word.startsWith("/") ? [] : /^~(?:\/|$)/.test(word) ? home.split("/") : /^[$`~]/.test(word) ? [] : dir === undefined ? ["$"] : dir.split("/");
-  const parts = [];
-  for (const part of [...start, ...word.replace(/^~[^/]*/, (t) => (t === "~" ? "" : "$")).split("/")]) {
-    if (!part || part === ".") continue;
-    // ".." removes the part before it, unless that part is a variable, which can stand for any number of parts.
-    if (part === "..") { if (parts.length && !VARIABLE.test(parts.at(-1))) parts.pop(); continue; }
-    parts.push(part);
-  }
-  return parts;
-}
-/**
- * What a word (a path from the folder dir, maybe with ~, a pattern or a variable) can stand for: config, the board
- * config folder, its board.json or a temporary .board-*.json; above, that folder or a folder above it.
- */
-function boardReach(word, dir, folders) {
-  // The literal part of the word: the text before its first variable, substitution or pattern character (T815). A word
-  // that starts with a variable or a substitution has none; a relative pattern stands for its own folder.
-  const cut = word.search(/[$`*?[{]/);
-  if (!word || (cut === 0 && /^[$`]/.test(word))) return {};
-  const literal = cut < 0 ? word : word.slice(0, cut) || ".";
-  if (literal.length > 4096) return {}; // the system opens no path this long
-  // As written: a link to the config is a limit of the hook (standing order 70).
-  const path = fold(`/${pathParts(literal, dir).join("/")}`);
-  const is = (p) => p === path;
-  const temporary = (f) => dirname(path) === f && /^\.board-.*\.json$/.test(basename(path));
-  return {
-    config: folders.some((f) => is(f) || is(`${f}/board.json`) || is(`${f}/.board-000000000000.json`) || temporary(f)),
-    above: folders.some((f) => f.split("/").some((_, k, all) => is(all.slice(0, k + 1).join("/") || "/"))),
-  };
-}
-/** Programs that read, copy or move a whole folder: always, or with a recursive option. They also search their folder. */
-const SEARCHES = /^(?:e|f)?grep$|^(?:rg|ag|ack|find|fd)$/;
-const WHOLE = (name, args) => /^(?:rg|ag|ack|fd|ditto|tar|bsdtar|zip|rsync|mv|ln)$/.test(name) ||
-  // find lists names; only a program that it runs on each file reads one (F-T909-9: find ~ -name '*.tmp' -delete passes).
-  (name === "find" && args.some((a) => /^-(?:exec|execdir|ok|okdir)$/.test(a))) ||
-  (/^(?:e|f)?grep$/.test(name) && args.some((a) => /^-[^-]*[rR]|^--(?:recursive|dereference-recursive|directories=recurse)$|^recurse$/.test(a))) ||
-  (/^(?:cp|gcp|scp)$/.test(name) && args.some((a) => /^-[^-]*[rRa]|^--(?:recursive|archive)$/.test(a)));
-const BOARD_RUN = ({ word, args }) => (basename(word) === "cli.mjs" || args.some((a) => /(?:^|\/)cli\.mjs$/i.test(a)) || /^(?:npm|pnpm|yarn|bun)$/.test(programName(word))) && args.includes("board");
-/** The programs and redirections of one command line, each with its folder (undefined when the hook cannot tell it). */
-function boardCommands(text, cwd, uncertain) {
-  const { programs, redirects } = programsRun(text, cwd, undefined, { contextEvidence: true, uncertainDirectory: uncertain, home: process.env.HOME || homedir() });
-  const runs = programs.map(({ run, uncertainDirectory }) => ({ ...run, dir: uncertainDirectory ? undefined : run.dir }));
-  return { runs, redirects: redirects.map(({ redirect, dir, uncertainDirectory }) => ({ redirect, dir: uncertainDirectory ? undefined : dir })) };
-}
 function boardProblem(input) {
   const tool = input.tool_name ?? "", ti = input.tool_input ?? {}, home = process.env.HOME || homedir();
+  // Without core, a call whose text names the config folder or the option word is refused (fail closed).
+  if (core.error) return /sage-board|--set-password/i.test(fields(ti).join("\n")) ? `the board password rule (T229) could not load (${core.error?.message ?? core.error}), so a call that names the board config or --set-password is refused.` : undefined;
   let cwd = typeof input.cwd === "string" && input.cwd ? input.cwd : process.cwd();
+  if (/^(?:Read|Write|Edit|MultiEdit|NotebookEdit)$/.test(tool)) {
+    const path = [ti.file_path, ti.notebook_path].find((p) => typeof p === "string" && p);
+    return path ? core.boardPathProblem(path, cwd, { home }) : undefined;
+  }
+  if (tool === "Grep" || tool === "Glob") return core.boardPathProblem(typeof ti.path === "string" && ti.path ? ti.path : ".", cwd, { home, search: true });
+  if (!SHELL_TOOLS.test(tool)) return undefined;
   // The terminal tool runs in its own cwd, as the agent rule reads it; a variable there leaves the folder unknown.
   const terminal = /^mcp__terminal__/.test(tool) && typeof ti.cwd === "string" && ti.cwd ? ti.cwd : undefined;
   if (terminal) cwd = from(cwd, terminal.replace(/^~(?=\/|$)/, home));
   const uncertain = terminal !== undefined && /[$`~]/.test(terminal.replace(/^~(?=\/|$)/, ""));
-  // Each word once per call: a long command line often repeats its words.
-  const folders = boardFolders(), seen = new Map();
-  const reachOf = (word, dir) => {
-    const key = `${dir}\0${word}`;
-    if (!seen.has(key)) seen.set(key, boardReach(word, dir, folders));
-    return seen.get(key);
-  };
-  if (/^(?:Read|Write|Edit|MultiEdit|NotebookEdit)$/.test(tool)) {
-    const path = [ti.file_path, ti.notebook_path].find((p) => typeof p === "string" && p);
-    return path && reachOf(path, cwd).config ? BOARD_CONFIG : undefined;
-  }
-  if (tool === "Grep" || tool === "Glob") {
-    const reach = reachOf(typeof ti.path === "string" && ti.path ? ti.path : ".", cwd);
-    return reach.config || reach.above ? BOARD_CONFIG : undefined;
-  }
-  if (!SHELL_TOOLS.test(tool)) return undefined;
   for (const text of runFields(terminal ? { ...ti, cwd: undefined } : ti)) {
-    let read;
-    try { read = boardCommands(text, cwd, uncertain); } catch {
-      // The hook cannot read the line: it reads the line as code, from an unknown folder, and refuses one with a word
-      // that can stand for the config or a folder above it (fail closed). A word such as a checkout path that holds
-      // "board" or "config" is not the config (T632).
-      if (/--set-password/.test(text.replace(/['"\\]/g, ""))) return SET_PASSWORD;
-      continue;
-    }
-    const { runs, redirects } = read;
-    for (const run of runs) {
-      const name = programName(run.word), board = BOARD_RUN(run);
-      // The option word, in a run that is not a search for it (grep or rg).
-      if (!/^(?:e|f)?grep$|^rg$/.test(name) && run.args.some((a) => /^--set-password(?:=|$)/.test(a))) return SET_PASSWORD;
-      const whole = WHOLE(name, run.args);
-      let dir = run.dir;
-      for (const [k, arg] of run.args.entries()) {
-        const value = arg.startsWith("-") ? arg.slice(arg.indexOf("=") + 1 || arg.length) : arg;
-        if (!value) continue;
-        for (const path of [value, /^[\w.-]+=(.+)$/s.exec(value)?.[1]].filter(Boolean)) {
-          const reach = reachOf(path, dir);
-          // Only the board command may name its config, as the value of --config.
-          if (reach.config && !(board && (run.args[k - 1] === "--config" || arg.startsWith("--config=")))) return BOARD_CONFIG;
-          if (reach.above && whole) return BOARD_CONFIG;
-        }
-        // git -C <folder>: the path words after it are from that folder.
-        if (name === "git" && run.args[k - 1] === "-C") dir = /[$`]|^~[^/]/.test(value) || (dir === undefined && !/^[/~]/.test(value)) ? undefined : from(dir ?? "/", value.replace(/^~(?=\/|$)/, home));
-      }
-      if (SEARCHES.test(name) && whole && reachOf(".", run.dir).above) return BOARD_CONFIG;
-    }
-    for (const { redirect, dir } of redirects) if (reachOf(redirect.replace(/^\d*[<>&|]+/, ""), dir).config) return BOARD_CONFIG;
+    const why = core.boardCommandProblem(text, cwd, { home, uncertain });
+    if (why) return why;
   }
   return undefined;
 }
@@ -1477,48 +1371,21 @@ function gitGate(event, command, state, cwd, main, session) {
 }
 
 /**
- * Two lessons that came back, held for agents in every tool that runs a command line. An agent never runs git stash
- * in any form: every worktree of a repo shares one stash list, so another agent's pop can take it (standing order 16).
- * An agent never lists or signals the real processes (standing order 14): a process program passes only when its
- * word resolves, through PATH and links, to a file in the temp folder. A bare kill is the shell's builtin, so it never
- * passes. programsRun finds the programs. A process.kill inside a script is not visible here.
- * Undefined when the command line passes; else the reason for the refusal.
+ * The agent's command rules: the gh rule (H3) here, then core's stash and process rules (T931), which the Codex gate
+ * holds too. Undefined when the command line passes; else the reason for the refusal.
  */
-const NO_STASH = "an agent never runs git stash: every worktree of a repo shares one stash list, so another agent can pop or drop your work (standing order 16). To test old code, use git worktree add --detach <scratch> <sha>, or git show <sha>:<path> into your scratch folder.";
-/** The process programs: names ignore case and a trailing .exe, including PowerShell names. */
-const UNIX_PROCESS = "ps|pgrep|pkill|kill|killall|lsof|top|htop|fuser|pidof|kill-port|fkill|launchctl";
-const POWERSHELL_PROCESS = "get-process|stop-process|gps|spps";
-/** A program name, without the version that npx and its kind take after "@" (kill-port@2). */
-const isProcess = (name = "") => {
-  const bare = programName(name.replace(/(?<=.)@.*$/, ""));
-  return new RegExp(`^(?:${UNIX_PROCESS})$`, "i").test(bare) || new RegExp(`^(?:${POWERSHELL_PROCESS})$`, "i").test(bare);
-};
-const NO_PROCESS = (word) => `an agent never reads or signals the real process list (standing order 14), so ${quoted(word)} is refused. Put a fake ps first on PATH, in the temp folder or your scratch folder, that prints a start time in the past (for example "Sat Jan  1 00:00:00 2000"), and run a fake kill by its path: a bare kill is the shell's builtin. Use literal paths: the hook does not expand variables. To stop your own server or background job, use TaskStop, or run it as a background task.`;
-const TEMP = [...new Set([tmpdir(), "/tmp", process.env.TMPDIR].filter(Boolean).map((d) => { try { return realpathSync.native(d); } catch { return resolve(d); } }))];
-const inTemp = (file) => !!file && TEMP.some((t) => file.startsWith(`${t}/`));
-const PROCESS_TEXT = new RegExp(`(?:^|[\\s;&|(\`'"/<>])(?:${UNIX_PROCESS}|${POWERSHELL_PROCESS})(?:\\.exe)?(?=$|[\\s;&|)\`'"<>])`, "im");
-
-/** The agent's gh rule (H3): the commands of core's AGENT_GH, and gh api with GET, by gh's own words, at any depth. */
 const NO_GH = `an agent runs only these gh commands: ${Object.entries(core.AGENT_GH ?? {}).map(([group, subs]) => `gh ${group} ${subs.join(", ")}`).join("; ")}; and gh api with GET. Ask the chief to run any other gh command.`;
 export function agentProblem(command, cwd, path = process.env.PATH ?? "") {
-  let runs;
   try {
-    runs = programsRun(command, cwd, path);
+    programsRun(command, cwd, path);
   } catch (e) {
-    // A line that the hook cannot read is refused only when its text names gh, a stash or a process program: the cause
-    // and the way forward first, then the rule (F-T815-9).
-    const text = bare(command), program = PROCESS_TEXT.exec(text)?.[0].replace(/^\W/, "");
-    const [what, why] = /\bgh(?:\.exe)?\b/i.test(text) ? ["gh", NO_GH] : gitThen(text, "stash") ? ["git stash", NO_STASH] : program ? [`a process program (${quoted(program)})`, NO_PROCESS(program)] : [];
-    return why && `${core.unreadable(e, what)} ${why[0].toUpperCase()}${why.slice(1)}`;
+    // A line that the hook cannot read and whose text names gh: the cause and the way forward first, then the rule (F-T815-9).
+    if (/\bgh(?:\.exe)?\b/i.test(bare(command))) return `${core.unreadable(e, "gh")} ${NO_GH[0].toUpperCase()}${NO_GH.slice(1)}`;
+    return core.agentCommandProblem(command, cwd, path);
   }
   const gh = core.ghRuns(command, cwd, path).find((run) => !core.agentGh(run));
   if (gh) return `${NO_GH} ${quoted(["gh", gh.group, gh.group === "api" ? gh.method : gh.sub].filter(Boolean).join(" "))} is not one of them.`;
-  for (const { word, file, args } of runs) {
-    const name = programName(word);
-    if (name === "git" && /^stash$/i.test(subcommand(args, 0))) return NO_STASH;
-    if ((isProcess(name) || isProcess(file ?? "")) && !inTemp(file)) return NO_PROCESS(word);
-  }
-  return undefined;
+  return core.agentCommandProblem(command, cwd, path);
 }
 
 /** Shared program resolution; never executes a program. */
