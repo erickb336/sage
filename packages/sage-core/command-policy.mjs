@@ -72,8 +72,8 @@ export function createCommandPolicy({ prPattern = PR } = {}) {
     } catch (e) {
       return mentionsMerge(bare(command)) ? { problem: `${unreadable(e, "a merge")} Merge only with ${MERGE_FORM}, as a command of its own.` } : undefined;
     }
-    // A shell function's call runs the function, not the program of its name; a wrapper's own entry is not the program.
-    const merges = ({ run, wrapper, shellFunction }) => !wrapper && !shellFunction && programName(run.word) === "gh" && ghWords(run.args).slice(0, 2).join(" ") === "pr merge";
+    // A wrapper's own entry is not the program.
+    const merges = ({ run, wrapper }) => !wrapper && programName(run.word) === "gh" && ghWords(run.args).slice(0, 2).join(" ") === "pr merge";
     return programs.some(merges) ? { problem: CANNOT } : undefined;
   }
 

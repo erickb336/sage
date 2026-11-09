@@ -44,7 +44,7 @@ function curlWrites(args) {
 
 /** Known output forms, not a general guarantee that other commands cannot write. */
 export function outputDispatchWrites(entry) {
-  if (entry.wrapper || entry.shellFunction || entry.resolvedDeclaration) return false;
+  if (entry.wrapper) return false;
   const name = programName(entry.run.word), args = entry.run.args;
   if (WRITERS.has(name)) return true;
   if (name === "curl") return curlWrites(args);

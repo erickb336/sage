@@ -148,6 +148,8 @@ const REFUSED = [
   ["push", { claude: `git -C ${T} push origin sage/t2-b`, codex: `git -C ${T} push origin sage/t1-a` }],
   ["push", "gh repo sync"],
   ["push", "cd ~ && gh repo sync"],
+  // After a cd that the reader cannot follow, the folder is unknown: a push must name its checkout with git -C (T910).
+  ["push", { claude: "cd $WT && git push origin sage/t1-a", codex: "cd $WT && git push origin sage/t2-b" }],
   ["push", "gh repo edit acme/project --default-branch sage/t1-a"],
   ["push", `git -C ${T} subtree push --prefix=docs origin sage/t1-a`],
   // Logbook writes by a literal path: as written, after a cd or a pushd, and from ~.
@@ -158,6 +160,7 @@ const REFUSED = [
   ["logbook", `rm ~/../shared/${L.slice(env.SAGE_SHARED_HOME.length + 1)}/tasks.tsv`],
   ["logbook", `pushd ${L} && echo x >> tasks.tsv`],
   ["logbook", `tee -a ${L}/findings.tsv`],
+  ["logbook", `cd $X && rm ${L}/tasks.tsv`], // an absolute path still counts after a cd that the reader cannot follow
   // A remove or a move of a folder that holds a root (F-T815-4): the root, a folder above it, a pattern in it.
   ["logbook", `rm -rf ${env.SAGE_SHARED_HOME}`],
   ["logbook", `mv ${env.SAGE_SHARED_HOME} ${env.SAGE_SHARED_HOME}.bak`],
@@ -181,6 +184,8 @@ const REFUSED = [
   ["process", "ps aux", AGENT],
   ["process", "kill 1", AGENT],
   ["process", "pgrep node", AGENT],
+  ["process", "launchctl list", AGENT], // F-T909-7: launchctl stops and starts the owner's services; no row runs it
+  ["board", "find ~ -name board.json -exec cat {} +", CLAUDE], // find with -exec reads each file it finds
   ["stash", `git -C ${T} stash`, AGENT],
   // An agent's gh: only AGENT_GH, and gh api with GET. -XGET after -t is the template, so gh sends DELETE (F-T815-27).
   ["agent gh", "gh issue close 1", AGENT],
@@ -228,9 +233,12 @@ const PASSED = [
   ["echo x > $DEST/tasks.tsv"],
   [`cat ${L}/tasks.tsv`],
   // Ordinary commands over a folder that holds the roots (BASE holds the shared root and the Codex home): a find that
-  // deletes only matched files and a chmod that adds a right remove no root (F-T903-7). The gate's logbook rule holds in
-  // any mode. In the Claude hook, a search of BASE also meets the board rule (it holds the home's .config), which stays.
-  [`find ${BASE} -name '*.tmp' -delete`, ["codex chief"]],
+  // deletes only matched files and a chmod that adds a right remove no root (F-T903-7). A find that runs no program
+  // reads no file, so the Claude board rule lets it pass over a folder that holds the board config too (F-T909-9).
+  [`find ${BASE} -name '*.tmp' -delete`],
+  ["find ~ -name '*.tmp' -delete"],
+  // A dry run of the agent's own branch sends nothing (F-T909-13).
+  [{ claude: `git -C ${T} push --dry-run origin sage/t1-a`, codex: `git -C ${T} push -n origin sage/t2-b` }],
   [`chmod -R u+w ${BASE}`],
   ["chmod -R u+w ~"],
   // rm of a project link to the shared root removes the link, not the root (F-T903-10).

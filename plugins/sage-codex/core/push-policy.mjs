@@ -1,5 +1,5 @@
 import { execFileSync } from "node:child_process";
-import { resolve } from "node:path";
+import { isAbsolute, resolve } from "node:path";
 import { programsRun } from "./command-reader.mjs";
 import { GIT_VALUE, gitSubcommand, programName, unreadable } from "./command-policy.mjs";
 
@@ -55,16 +55,17 @@ export function createPushPolicy({ readGit: gitReader = readGit, readGh: ghReade
    * line that the reader cannot read is refused when its text names a push.
    */
   function pushProblem(command, cwd, { owner } = {}) {
-    let runs;
+    let programs;
     try {
-      runs = programsRun(command, cwd);
+      ({ programs } = programsRun(command, cwd, undefined, { contextEvidence: true }));
     } catch (e) {
       return pushText(bare(command)) ? refuse(unreadable(e, "a push")) : undefined;
     }
     defaults.clear(); // read GitHub's default branch once for each command, never from an earlier command
-    for (const run of runs) {
+    for (const { run, wrapper, uncertainDirectory } of programs) {
+      if (wrapper) continue;
       if (programName(run.word) === "git" && /^push$/i.test(gitSubcommand(run.args, 0))) {
-        const form = pushForm(run.args, run.dir ?? cwd);
+        const form = pushForm(run.args, uncertainDirectory ? undefined : run.dir ?? cwd);
         if (typeof form === "string") return refuse(form);
         const bar = ownerWhy(form, owner);
         if (bar) return bar;
@@ -129,14 +130,14 @@ export function createPushPolicy({ readGit: gitReader = readGit, readGh: ghReade
   const MAIN_REF = /^(?:refs\/)?(?:heads\/)?(?:main|master)$/i;
   /** A branch name with no expansion, pattern or special ref in it: not HEAD, @, a variable, a glob or a refspec. */
   const LITERAL = /^(?!-)(?!(?:.*\/)?HEAD$)[^$`*?[\]:+~^\\{}<>|&;!@'"()]+$/i;
-  const PUSH_OPTIONS = /^(?:-u|--set-upstream|--follow-tags|-q|--quiet|--no-verify|--delete|-d|-o.*|--push-option=.*)$/;
+  const PUSH_OPTIONS = /^(?:-u|--set-upstream|--follow-tags|-q|--quiet|--no-verify|--delete|-d|-n|--dry-run|-o.*|--push-option=.*)$/;
   /** git accepts a long option by any unambiguous start of its name, such as --forc. */
   const longOption = (word, names) => {
     const name = word.split("=")[0];
     return name.length > 3 && names.some((n) => n.startsWith(name));
   };
   const FORCE = "sage mode never force-pushes. Push a new commit instead.";
-  /** Why a git push (git's words after the program) is not the push form, or else the checkout (dir) and the branches that it sends. dir is where the command runs. */
+  /** Why a git push (git's words after the program) is not the push form, or else the checkout (dir) and the branches that it sends. dir is where the command runs, undefined when the reader cannot tell it. */
   function pushForm(words, dir) {
     let force = false;
     let main = false;
@@ -145,7 +146,7 @@ export function createPushPolicy({ readGit: gitReader = readGit, readGh: ghReade
     const names = [];
     let k = 0;
     for (; !/^push$/i.test(words[k]); k++) {
-      if (words[k] === "-C") dir = resolve(dir, words[k + 1]);
+      if (words[k] === "-C") dir = dir === undefined && !isAbsolute(words[k + 1] ?? "") ? undefined : resolve(dir ?? "/", words[k + 1]);
       else other ??= `"${words[k]}" is not part of the push form.`;
       if (GIT_VALUE.test(words[k])) k++;
     }
@@ -162,6 +163,7 @@ export function createPushPolicy({ readGit: gitReader = readGit, readGh: ghReade
     if (main) return mainReason;
     if (other) return other;
     if (names.length < 2) return "name the remote and the branch: a push with no branch pushes what the checkout's settings say, which can be main.";
+    if (dir === undefined) return "the hook cannot tell which checkout this push runs in, after a cd that it cannot follow (cd $X, cd -). Name the checkout with git -C <dir>.";
     const [remote, ...branches] = names;
     // git config -z --list: each setting is its key, a newline and its value, then a NUL. Section and key are in lower case.
     const settings = gitOut(dir, ["config", "-z", "--list"]);

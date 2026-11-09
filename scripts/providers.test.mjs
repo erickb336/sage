@@ -1679,7 +1679,7 @@ test("shared shell write classification detects writes without executing payload
   }
 });
 
-test("shared shell reader options preserve option values and function dispatch in either bundle", async t => {
+test("shared shell reader options preserve option values in either bundle", async t => {
   for (const provider of ["claude", "codex"]) {
     const f = isolated(t, provider);
     const { commandWrites } = await import(pathToFileURL(join(f.plugin, "core/index.mjs")));
@@ -1692,8 +1692,7 @@ test("shared shell reader options preserve option values and function dispatch i
       assert.equal(commandWrites(command, f.dir), true, command);
     for (const command of ["rg -e --pre x", "rg -e--pre x", "rg --regexp=--pre x", "rg -- --pre x",
       "rg --no-pre x", "file -m --compile ordinary", "file -- --compile", "diff -L --paginate left right",
-      "diff --label=--paginate left right", "diff -- --paginate right", "echo rg --pre cat x",
-      "rg() { :; }; rg --pre cat x", "f() { env rg --pre cat x; }; env() { :; }; f"])
+      "diff --label=--paginate left right", "diff -- --paginate right", "echo rg --pre cat x"])
       assert.equal(commandWrites(command, f.dir), false, command);
   }
 });

@@ -11,8 +11,8 @@ The public core entry point exposes the same function in both provider bundles.
 This component prepares shared rules for the Codex runtime. It does not change
 the active Claude hook or install a Codex hook.
 
-Ordinary reader arguments remain data. Option values, words after `--`, and
-shell functions retain their parser context. Redirections to files count as
+Ordinary reader arguments remain data. Option values and words after `--`
+retain their parser context. Redirections to files count as
 writes; input-only redirections and the listed standard device outputs do not.
 
 `uniq` counts as a write only with an output operand (`uniq in out`), or
