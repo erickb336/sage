@@ -2,7 +2,7 @@
 id: prove-it-works
 name: Prove it works
 applyWhen: before declaring a task done, or when judging a claim that something works.
-source: pstack principle-prove-it-works, MIT, Copyright (c) 2026 Lauren Tan, github.com/cursor/plugins at 6b03002, adapted
+source: pstack principle-prove-it-works, MIT, Copyright (c) 2026 Lauren Tan, github.com/cursor/plugins, adapted; checked against pstack 0.15.36 at commit 0bb6f37
 ---
 
 Verify the result by checking the real thing directly. Do not infer it from a proxy, a self-report or "it compiles".
@@ -14,6 +14,6 @@ Verify the result by checking the real thing directly. Do not infer it from a pr
 - Check that a process is alive directly, not through state derived from it.
 - When a check fails, suspect the way you observed before you suspect the system.
 
-**Script the check when you can.** The strongest proof is a command that re-runs the same comparison, not a one-time look. Write it, run it, and keep its output where a reviewer can re-run it.
+**Script the check when you can.** The strongest proof is a command that re-runs the same comparison, not a one-time look. Write it, run it, and keep its output where a reviewer can re-run it. Commit it only when a large change, such as a port or a migration, needs a trail that someone can audit later.
 
 **Stop** claiming when the evidence stops. Say what you ran and what you saw, and what you did not verify.

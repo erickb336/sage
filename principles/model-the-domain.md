@@ -2,7 +2,7 @@
 id: model-the-domain
 name: Model the domain
 applyWhen: you write stateful logic, or code branches a lot or repeats an assumption about a shape across files.
-source: pstack principle-model-the-domain, MIT, Copyright (c) 2026 Lauren Tan, github.com/cursor/plugins at 6b03002, adapted
+source: pstack principle-model-the-domain, MIT, Copyright (c) 2026 Lauren Tan, github.com/cursor/plugins, adapted; checked against pstack 0.15.36 at commit 0bb6f37
 ---
 
 Encode the domain in a data structure, not in scattered conditionals. A matching structure makes invalid states impossible and deletes branches. Choose it as you write; later it looks like a refactor and gets deferred.

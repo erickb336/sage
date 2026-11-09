@@ -2,7 +2,7 @@
 id: make-operations-idempotent
 name: Make operations idempotent
 applyWhen: you design commands, lifecycle steps or processing loops that run among crashes, restarts and retries.
-source: pstack principle-make-operations-idempotent, MIT, Copyright (c) 2026 Lauren Tan, github.com/cursor/plugins at 6b03002, adapted
+source: pstack principle-make-operations-idempotent, MIT, Copyright (c) 2026 Lauren Tan, github.com/cursor/plugins, adapted; checked against pstack 0.15.36 at commit 0bb6f37
 ---
 
 Design each operation to reach the correct state, however often it runs and wherever the last run stopped.

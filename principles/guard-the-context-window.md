@@ -2,7 +2,7 @@
 id: guard-the-context-window
 name: Guard the context window
 applyWhen: the context fills up: large outputs, long files, repeated reads or planning a fan-out.
-source: pstack principle-guard-the-context-window, MIT, Copyright (c) 2026 Lauren Tan, github.com/cursor/plugins at e43c7ee, adapted
+source: pstack principle-guard-the-context-window, MIT, Copyright (c) 2026 Lauren Tan, github.com/cursor/plugins, adapted; checked against pstack 0.15.36 at commit 0bb6f37
 ---
 
 The context window is finite, and you cannot renew it within a session. Each token must be worth its cost.

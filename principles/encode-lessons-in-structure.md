@@ -2,18 +2,15 @@
 id: encode-lessons-in-structure
 name: Encode lessons in structure
 applyWhen: writing the same instruction a second time, or noticing a correction that keeps recurring.
-source: pstack principle-encode-lessons-in-structure, MIT, Copyright (c) 2026 Lauren Tan, github.com/cursor/plugins at 6b03002, adapted
+source: pstack principle-encode-lessons-in-structure, MIT, Copyright (c) 2026 Lauren Tan, github.com/cursor/plugins, adapted; checked against pstack 0.15.36 at commit 0bb6f37
 ---
 
-Encode a recurring fix in a mechanism (a check, a type, a script, a lint rule) instead of in more text. Every error, correction and unexpected outcome is a lesson: capture it, put it in the right place, and close the loop.
+Encode a recurring fix in a mechanism, not in more text. Every error, correction and unexpected outcome is a lesson: capture it, put it in the right place, and close the loop.
 
 **Why.** A written instruction needs the reader to notice, remember and comply. A mechanism enforces the rule without cooperation.
 
-**What to do.** When you catch yourself writing the same instruction a second time:
-1. Ask whether it can be a lint rule, a type, a runtime check or a script.
-2. If yes, encode it and delete the instruction. The instruction was the symptom.
-3. If it needs judgement, make the instruction prominent and add an example of the failure.
+**What to do.** When you write the same instruction a second time, encode it and delete the instruction: the instruction was the symptom. If it needs judgement, make it prominent and add an example of the failure.
 
-**Pick the strongest mechanism** the situation allows: a state that cannot be represented, then a check that fails the build, then a canonical helper, then a runtime check. Agents copy what the surrounding code does, so a weak guard becomes the next template.
+**Pick the strongest mechanism** that works, in this order: the architecture (one owner for each piece of state, one supported way, old ways deleted); a type that cannot hold the bad state; a lint or check whose error names the fix; a test; a written rule last, only for a judgement call. Prove each new check fails on a real past mistake. Agents copy the code around them, so a weak guard becomes the next template.
 
 **Close the loop.** A one-off correction gets a note; a recurring fix gets a check or a rule; a systemic issue changes the vision or a flow. Acknowledging without recording changes nothing.
