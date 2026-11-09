@@ -2627,7 +2627,7 @@ test("shared command policy classifies merge candidates and executable text in b
     assert.equal(typeof api.createCommandPolicy, "function");
     const tool = join(f.plugin, "skills/sage/sage.mjs");
     const adapter = await import(pathToFileURL(join(f.plugin, provider === "claude" ? "hooks/command-policy.mjs" : "runtime/command-policy.mjs")));
-    const policy = adapter.createCommandPolicy();
+    const policy = adapter.createCommandPolicy({ stateToolPath: tool });
     const candidate = `gh pr merge 12 --squash --delete-branch --match-head-commit ${sha}`;
     assert.deepEqual(policy.mergeRun(candidate, f.dir), { pr: "12", sha });
     for (const text of [candidate.replace(" 12 ", " 012 "), candidate.replace(sha, "abc"), `${candidate} --admin`,
