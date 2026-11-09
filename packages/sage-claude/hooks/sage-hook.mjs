@@ -32,8 +32,7 @@
 //     (T80) is the full guard for shell writes.
 //   - Only sage.mjs changes the logbook (chiefProblem): the chief's own file tools and shell writes never change it.
 //   - An agent (a sage agent, or any subagent in sage mode; never the chief) never runs git stash, and never runs a
-//     program that lists or signals processes unless that program is a fake in the temp folder (agentProblem, with
-//     core's agentCommandProblem, which the Codex gate calls too: T931).
+//     program that lists or signals processes unless that program is a fake in the temp folder (agentProblem).
 // SAGE_HOOKS=off turns it off. The hook never breaks a session: on an error it answers nothing, but it refuses a merge,
 // a push, every file change and command of an agent, and a chief's shell write into the sage root or the shared root.
 import { spawnSync } from "node:child_process";
