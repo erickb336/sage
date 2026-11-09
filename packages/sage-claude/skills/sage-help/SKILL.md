@@ -147,7 +147,7 @@ Link [Where sage keeps things](https://github.com/erickb336/sage/blob/main/docs/
 
 - **The board or "status":** the board reads every project's logbook; "status" gives the lines of one project.
 - **The off phrase of sage mode, or autopilot off:** autopilot off stops only the merges; the off phrase of sage mode ends the mode, and autopilot goes off with it.
-- **Not in sage:** pstack's own modes, poteto mode, orchestrate and autopilot (sage mode replaces them; see [Following pstack](https://github.com/erickb336/sage/blob/main/docs/guide/principles.md#following-pstack)). sage's own autopilot is a different thing: the switch above. sage mode does not run in Codex yet: Codex gets the principles, the writing skills and the manual logbook commands ([sage in Codex](https://github.com/erickb336/sage/blob/main/docs/guide/codex.md)).
+- **Not in sage:** pstack's own modes, poteto mode, orchestrate and autopilot (sage mode replaces them; see [Credit](https://github.com/erickb336/sage/blob/main/CONTRIBUTING.md#credit)). sage's own autopilot is a different thing: the switch above. sage mode does not run in Codex yet: Codex gets the principles, the writing skills and the manual logbook commands ([sage in Codex](https://github.com/erickb336/sage/blob/main/docs/guide/codex.md)).
 
 ## Reply
 

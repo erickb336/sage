@@ -62,6 +62,19 @@ export const TOOLS = {
     pos: ["task", "fields"],
     argv: (i) => ["task", i.task, "set", ...Object.entries(i.fields).map(([k, v]) => `${k}=${v}`)],
   },
+  program_propose: {
+    describe: "Propose a program: one goal, a pilot task and the program's other tasks, framed first. It opens the breakdown gate on the pilot (approve, change or drop): put its question to the owner. "
+      + "A new program needs name, goal, pilot and tasks. After the owner's change, or for a new pilot, give program, the program's id, with name, goal, pilot or tasks when they change. A task joins or leaves a program with task_set program=<PG> or program=none.",
+    input: { program: id("PG", "the program's id, to propose it again").optional(), name: optional("the program's name"), goal: optional("the program's goal"),
+      pilot: id("T", "the pilot task's id").optional(), tasks: optional("the program's other task ids, joined by a comma") },
+    pos: ["program"], argv: (i) => ["program", "propose", ...(i.program ? [i.program] : [])],
+  },
+  config: {
+    describe: "Set config keys, only when the owner asks, and print the values. name (the project's name on the board; an empty value removes it) and archived (yes or no) are keys of this project's logbook: set them in a call of their own. "
+      + "cycles.small, cycles.large, cycles.risk, max_rounds, max_leads, max_agents, arena, cap_total, cap.<project> and the model keys are for all projects.",
+    input: { settings: z.record(z.string().regex(/^[a-z][a-z0-9_.-]*$/), z.string()).describe('the keys and values to set, for example {"cycles.large": "3", "max_leads": "4"} or {"name": "Council Record"}') },
+    pos: ["settings"], argv: (i) => ["config", ...Object.entries(i.settings).map(([k, v]) => `${k}=${v}`)],
+  },
   task_adopt: {
     describe: "Adopt another provider's task and PR from a separate logbook into an unstarted task of this project. Preserve spent repairs and provenance; require fresh destination reviews and QA. Read the source logbook without changing it. In a shared logbook it refuses and changes nothing: there, take another chief's task only through the owner's takeover gate (gate_replace, or accept for an offer to you).",
     input: { task, "source-logbook": z.string().refine(isAbsolute, "an absolute path"), "source-provider": z.string(), "source-task": task,

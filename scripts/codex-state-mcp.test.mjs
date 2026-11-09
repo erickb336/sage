@@ -430,8 +430,8 @@ test("F-T552-2: a lead's verdict on a commit of the ledger passes while a repair
 test("the state server lists one tool for each state-tool command, and marks only the reads read-only", async (t) => {
   const s = await connect(t);
   const tools = await s.tools();
-  assert.deepEqual(tools.map((tool) => tool.name).sort(), ["accept", "brief", "cancel", "claim", "finding_add", "finding_close", "finding_move", "finding_triage", "gate_add", "gate_answer", "gate_replace",
-    "init", "link", "log", "merge_check", "move", "offer", "pages", "release", "report_compare", "round", "run_add", "run_done", "standing", "standing_add", "status", "task_add", "task_adopt", "task_set", "verdict", "worktrees"]);
+  assert.deepEqual(tools.map((tool) => tool.name).sort(), ["accept", "brief", "cancel", "claim", "config", "finding_add", "finding_close", "finding_move", "finding_triage", "gate_add", "gate_answer", "gate_replace",
+    "init", "link", "log", "merge_check", "move", "offer", "pages", "program_propose", "release", "report_compare", "round", "run_add", "run_done", "standing", "standing_add", "status", "task_add", "task_adopt", "task_set", "verdict", "worktrees"]);
   assert.deepEqual(tools.filter((tool) => tool.annotations.readOnlyHint).map((tool) => tool.name).sort(), ["merge_check", "report_compare", "standing", "status"]);
   assert.ok(tools.every((tool) => tool.inputSchema.required.includes("project") && tool.inputSchema.additionalProperties === false));
   // T500: a task_add needs its priority, from the scale.
@@ -902,14 +902,95 @@ test("merge_check gives the state tool's refusal for a task moved off a shared P
   assert.equal(error.replace(/ \S+ T2,/, " T2,"), `sage: PR 41's head branch "codex/t1-a" is not a branch of T2, so the merge check refuses: each task that is or was on a pull request must own its head branch, a branch named for the task. It is the branch of another task, so set the branch= back to it: sage task T2 set branch=codex/t1-a, or the user lands this pull request.`);
 });
 
-test("the chief's setup text sends only read commands to the state CLI, and says that program, which has no tool, does not run in Codex (F-T471-10)", async () => {
+test("the chief's setup text sends only read commands to the state CLI, and names the program and config tools (F-T471-10, T930)", async () => {
   const setup = JSON.parse(readFileSync(join(ROOT, "plugins/sage-codex/chief-bindings.json"), "utf8")).PROJECT_SETUP;
   const { TOOLS } = await import(join(ROOT, "plugins/sage-codex/mcp/state-server.mjs"));
   const cli = setup.split(/(?<=\.) /).filter((sentence) => /state CLI/.test(sentence)).flatMap((sentence) => [...sentence.matchAll(/`([a-z-]+)`/g)].map((m) => m[1]));
   assert.ok(cli.length > 0, setup);
   assert.deepEqual(cli.filter((command) => !["board", "config", "status", "standing", "merge-check", "logbook"].includes(command)), [], "each command it runs through the CLI only reads");
-  assert.equal(Object.hasOwn(TOOLS, "program"), false);
-  assert.match(setup, /`program` has no tool yet, so no program runs in Codex/);
+  const [list] = /The tools are .*?\./.exec(setup);
+  for (const name of ["program_propose", "config"]) assert.ok(Object.hasOwn(TOOLS, name) && list.includes(`\`${name}\``), name);
+  assert.doesNotMatch(setup, /no program runs in Codex/);
+});
+
+/**
+ * T930 (gap G03): the Codex server (s) beside the built Claude state tool on a twin project (claude), each with its own
+ * roots in scratch, so that each step can compare the two result lines. claude gives the text, or { error } as the server does.
+ */
+async function programWorld(t) {
+  const s = await connect(t, { SAGE_SHARED_HOME: join(realpathSync(tmpdir()), `sage-state-mcp-t930-${process.pid}-${Date.now()}`) });
+  t.after(() => rmSync(s.env.SAGE_SHARED_HOME, { recursive: true, force: true }));
+  const project = join(s.dir, "claude", "project"); // the same folder name, so that the two logbooks have the same project name
+  mkdirSync(project, { recursive: true });
+  execFileSync("git", ["init", "-q", project]);
+  const env = { PATH: process.env.PATH, HOME: join(s.dir, "claude-home"), SAGE_HOME: join(s.dir, "claude-sage"), SAGE_SHARED_HOME: join(s.dir, "claude-shared"),
+    GIT_CONFIG_GLOBAL: "/dev/null", GIT_CONFIG_NOSYSTEM: "1", SAGE_TEST_MACHINE_ID: "test-machine" };
+  const { sage } = await import(pathToFileURL(join(ROOT, "plugins/sage/skills/sage/sage.mjs")).href);
+  const claude = (...args) => { try { return sage([...args, "--project", project], env); } catch (error) { return { error: `sage: ${error.message}` }; } };
+  /** One step on both: the Codex tool's result, which must equal the Claude command's. */
+  const both = async (name, input, args) => {
+    const codex = await s.call(name, input);
+    assert.deepEqual(codex, claude(...args), `${name} ${JSON.stringify(input)}`);
+    return codex;
+  };
+  await s.call("init");
+  claude("init");
+  for (const title of ["pilot", "second", "third"]) await both("task_add", { title, size: "small", priority: "P2" }, ["task", "add", "--title", title, "--size", "small", "--priority", "P2"]);
+  return { ...s, claude, both };
+}
+
+test("T930: program_propose (new and again) and task_set program= give the Claude state tool's own lines through the Codex server", async (t) => {
+  const { both } = await programWorld(t);
+  const first = await both("program_propose", { name: "Codex programs", goal: "Codex runs programs.", pilot: "T1", tasks: "T2" },
+    ["program", "propose", "--name", "Codex programs", "--goal", "Codex runs programs.", "--pilot", "T1", "--tasks", "T2"]);
+  assert.match(first, /^PG1 proposed .*G1/s, first);
+  assert.match((await both("program_propose", { program: "PG1", tasks: "T2,T3" }, ["program", "propose", "PG1", "--tasks", "T2,T3"])).error, /^sage: the breakdown gate G1 of PG1 is still open/);
+  assert.match(await both("gate_answer", { gate: "G1", option: 2 }, ["gate", "answer", "G1", "--option", "2"]), /^G1 answered · change/);
+  const again = await both("program_propose", { program: "PG1", tasks: "T2,T3" }, ["program", "propose", "PG1", "--tasks", "T2,T3"]);
+  assert.match(again, /G2/, again);
+  assert.match(await both("gate_answer", { gate: "G2", option: 1 }, ["gate", "answer", "G2", "--option", "1"]), /^G2 answered · approve/);
+  assert.match(await both("task_set", { task: "T3", fields: { program: "none" } }, ["task", "T3", "set", "program=none"]), /^T3 framed/);
+  assert.match(await both("task_set", { task: "T3", fields: { program: "PG1" } }, ["task", "T3", "set", "program=PG1"]), /^T3 framed .*PG1/);
+  assert.match((await both("program_propose", { program: "PG9" }, ["program", "propose", "PG9"])).error, /^sage: .*PG9/);
+  assert.match(await both("status", {}, ["status"]), /PG1/);
+});
+
+test("T930: config sets the board name, the archive, the cycle counts and max_leads through the Codex server, with the Claude state tool's lines", async (t) => {
+  const s = await programWorld(t), { both } = s;
+  assert.equal(await both("config", { settings: { name: "Council Record" } }, ["config", "name=Council Record"]), "name=Council Record archived=no");
+  assert.equal(await both("config", { settings: { archived: "yes" } }, ["config", "archived=yes"]), "name=Council Record archived=yes");
+  assert.equal(await both("config", { settings: { name: "", archived: "no" } }, ["config", "name=", "archived=no"]), "name= archived=no");
+  assert.match((await both("config", { settings: { name: "x", max_leads: "4" } }, ["config", "name=x", "max_leads=4"])).error, /^sage: "max_leads" is a key for all projects/);
+  assert.match((await both("config", { settings: { "cycles.large": "1" } }, ["config", "cycles.large=1"])).error, /^sage: cycles\.large must be a whole number of 2 or more: 1 is below the floor of 2/);
+  // The counts print with each provider's own models (arena_models and the model keys), so the lines compare without them.
+  const counts = (text) => text.replace(/ arena_models=\S+/, "").replace(/ model\..*$/, "");
+  const set = await s.call("config", { settings: { "cycles.small": "2", "cycles.large": "3", "cycles.risk": "4", max_leads: "4" } });
+  assert.equal(counts(set), counts(s.claude("config", "cycles.small=2", "cycles.large=3", "cycles.risk=4", "max_leads=4")));
+  assert.match(set, /^max_agents=10 max_leads=4 cycles\.small=2 cycles\.large=3 cycles\.risk=4 max_rounds=3 /);
+  // The values are kept in the Codex root: the CLI's read (config with no key) prints them.
+  const { tool } = await import(pathToFileURL(join(s.dir, "plugin/skills/sage/sage.mjs")).href);
+  assert.equal(tool.command(["config", "--project", s.project], s.env).text, set);
+  assert.deepEqual(JSON.parse(readFileSync(join(s.env.CODEX_HOME, "sage", "config.json"), "utf8")), { "cycles.small": 2, "cycles.large": 3, "cycles.risk": 4, max_leads: 4 });
+});
+
+test("T930: only the chief calls program_propose and config, and a lead sets no program=, at the gate and at the server", async (t) => {
+  const w = await leadWorld(t), { lead } = w;
+  const calls = [["program_propose", { name: "n", goal: "g", pilot: "T1", tasks: "T2" }], ["config", { settings: { max_leads: "9" } }], ["config", { settings: { name: "Mine" } }]];
+  const LOGBOOK = "sage: role agents report; only the chief records the logbook. Put this in your report";
+  const before = readFileSync(join(w.env.CODEX_HOME, "sage", readdirSync(join(w.env.CODEX_HOME, "sage")).find((name) => name.startsWith("project-")), "tasks.tsv"), "utf8");
+  for (const [name, args] of calls) {
+    const notLead = `sage: a lead records only its own task, and ${name} is not one of its tools. Put what the logbook needs in your report`;
+    assert.equal((await lead(name, args)).denied, notLead, `the gate: lead ${name}`);
+    assert.equal((await w.call(name, args, { agent: `${LEAD}/sage_qa_t1_r5` })).denied, LOGBOOK, `the gate: child ${name}`);
+    for (const [who, caller, why] of [["lead", { role: "lead", task: "T1", run: "R1", project: w.project }, `${notLead}.`], ["child", { role: "child" }, `${LOGBOOK}.`]]) {
+      w.writeProof(name, `forced_${who}_${name}_${JSON.stringify(args).length}`, caller);
+      assert.equal((await w.call(name, args, { gate: false, callId: `forced_${who}_${name}_${JSON.stringify(args).length}` })).error, why, `the server: ${who} ${name}`);
+    }
+  }
+  assert.match((await lead("task_set", { task: "T1", fields: { program: "PG1" } })).denied, /^sage: a lead sets only state, branch, pr of its task, not program/);
+  assert.equal(readFileSync(join(w.env.CODEX_HOME, "sage", readdirSync(join(w.env.CODEX_HOME, "sage")).find((name) => name.startsWith("project-")), "tasks.tsv"), "utf8"), before, "nothing changed");
+  assert.equal(existsSync(join(w.env.CODEX_HOME, "sage", "config.json")), false, "no config written");
+  assert.match(await w.call("config", { settings: { max_leads: "9" } }), /^max_agents=10 max_leads=9 /, "the chief sets it");
 });
 
 // R1765 F2: a chief that ended a Codex run with only status done and usage unavailable was refused, and learned the

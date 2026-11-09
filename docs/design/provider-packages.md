@@ -18,7 +18,7 @@ Providers import the public `sage-core` entry point. Core never imports either p
 
 `applyPrinciples` accepts a small normalized event and returns added context or a stop decision. Each adapter owns native field names and response JSON. Codex only sends advice events; it never invokes the shared stop gate.
 
-The root's `principles/`, `writing/`, `preferences/` and pinned `upstream/pstack/` remain the authoring inputs for core's shared skills. `scripts/build.mjs` generates them once, then assembles both outputs. These inputs belong with `sage-core` when repositories split. Claude roles stay in the Claude source package until Codex can use and enforce them; there is no copied Codex role set to maintain.
+The root's `principles/`, `writing/` and `preferences/` remain the authoring inputs for core's shared skills. `scripts/build.mjs` generates them once, then assembles both outputs. These inputs belong with `sage-core` when repositories split. Claude roles stay in the Claude source package until Codex can use and enforce them; there is no copied Codex role set to maintain.
 
 Each provider pins core's exact version in its package manifest. Build checks the pin, resolves only the public import to the bundled `core/index.mjs`, includes both MIT licenses and writes a version record in `build.json`. No npm install, network lookup or second plugin is needed at runtime. Generated plugin files are committed so existing marketplace installs work directly from Git.
 
