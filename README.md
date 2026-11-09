@@ -8,7 +8,7 @@ You say what you want in a session; the agents design, build, review and test it
   <a href="LICENSE"><img alt="licence" src="https://img.shields.io/github/license/erickb336/sage"></a>
 </p>
 
-**Status:** early, used every day by its author to build sage itself. Claude Code is supported; in Codex, sage mode and autopilot now work through the sage plugin, the lead has source tests but no real run yet, and the board phrases do not work there yet ([sage in Codex](docs/guide/codex.md)). Tested on macOS, and in CI on Ubuntu (Linux); Windows is not supported.
+**Status:** early, used every day by its author to build sage itself. Claude Code is supported; in Codex (the CLI and the desktop app), sage mode, autopilot and the shared logbook work through the sage plugin, and the board phrases do not work yet ([sage in Codex](docs/guide/codex.md)). Tested on macOS, and in CI on Ubuntu (Linux); Windows is not supported.
 
 Start with the [Quick start](#quick-start). Then follow one task from start to merge in [Learn sage in 5 minutes](docs/guide/learn-sage.md).
 
@@ -36,8 +36,7 @@ And the toad? In the story, toads teach Sage Mode. So sage's mascot is a toad sa
 For Claude Code. For Codex, see [In Codex](#in-codex) below. Before you start:
 
 - Install Claude Code and sign in, with a Claude plan or API credits ([install Claude Code](https://code.claude.com/docs/en/setup)).
-- Install Node.js 20 or later (the minimum; CI runs the tests on Node 24), and git.
-- Install `gh` and log in (`gh auth login`). sage uses it for pull requests and the merge check.
+- Install Node.js 20 or later (the minimum; CI runs the tests on Node 24), git and `gh`, and log in to `gh` (`gh auth login`). sage uses `gh` for pull requests and the merge check.
 - Give your project a GitHub remote, if you can: without one, work stops at a verified branch.
 
 1. Install sage, in a terminal:
@@ -66,7 +65,7 @@ claude plugin update sage@sage
 
 ### In Codex
 
-Use the Codex CLI 0.164 to 0.167, and a multi-agent v2 model; the desktop app should work the same way, but it is not checked yet, and it needs the CLI for these commands. You also need Node.js 20 or later, `gh` logged in, and a GitHub remote for the project (see [What you need](docs/guide/codex.md#what-you-need)).
+Use Codex 0.164 to 0.167, in the CLI or the desktop app, and a multi-agent v2 model. The install commands are CLI commands, also for the desktop app. You also need Node.js 20 or later, `gh` logged in, and a GitHub remote for the project (see [What you need](docs/guide/codex.md#what-you-need)).
 
 1. Add the sage marketplace and install sage, in a terminal:
    ```sh
@@ -76,7 +75,8 @@ Use the Codex CLI 0.164 to 0.167, and a multi-agent v2 model; the desktop app sh
    codex plugin add sage@sage
    ```
 2. Run `codex` in a project folder, choose **Trust all and continue** at the "Hooks need review" screen, and send `sage mode` alone ([sage in Codex](docs/guide/codex.md)). The chief starts one lead for each task, and the lead starts the implementer, the reviewers and QA. Each report goes in the task's pages folder.
-3. Codex asks you at least 5 times in each small task (the worktree, the add, the commit, the push and the pull request): read the choices, then approve ([The approval prompts of each task](docs/guide/codex.md#the-approval-prompts-of-each-task)). To let sage merge verified work itself, send `autopilot on` alone after `sage mode`. It needs Codex 0.164 to 0.167, and `node` and `gh` outside the sandbox's writable folders; Esc stops a merge ([Autopilot in Codex](docs/guide/codex.md#autopilot-in-codex)).
+3. Codex asks you at least 5 times in each small task (the worktree, the add, the commit, the push and the pull request): read the choices, then approve ([The approval prompts of each task](docs/guide/codex.md#the-approval-prompts-of-each-task)).
+4. To let sage merge verified work itself, send `autopilot on` alone after `sage mode`, while Codex is idle (if it is busy, press Esc, then send). Merges need `node` and `gh` outside the sandbox's writable folders, and they wait after a Codex update until sage tests that version. Esc stops a merge, and `autopilot off` counts at any time, from any thread ([Autopilot in Codex](docs/guide/codex.md#autopilot-in-codex)).
 
 ## The board
 
@@ -95,14 +95,14 @@ Send `show board` to see what needs you, the agents at work, and each task in it
 | --- | --- |
 | `sage mode` | The session becomes your chief of staff. Send your request next. |
 | `show status` | Where each task is: running, waiting for you, verified. It names each open task with no priority. |
-| Tell either chief to take over a task of the other provider, with its PR | In a shared logbook, the chief opens a [takeover gate](docs/guide/using-sage.md#shared-logbooks), and you approve or decline it in either chat. The branch and the verdicts stay, but a Claude chief that takes a task from Codex runs one fresh Claude cycle first. In separate logbooks, the chief uses [task adoption](docs/guide/codex.md#task-adoption), and reviews and QA start fresh. |
+| Tell either chief to take over a task of another chief, with its PR | In a shared logbook, the chief opens a [takeover gate](docs/guide/using-sage.md#shared-logbooks), and only your answer, in either chat, gives the task to another chief. The branch and the verdicts stay, and then only the new owning chief and its agents push to the branch; a Claude chief that takes a task from Codex runs one fresh Claude cycle first. In separate logbooks, the chief uses [task adoption](docs/guide/codex.md#task-adoption), and reviews and QA start fresh. |
 | Tell the chief that a checkout joins a shared logbook, or starts its own, or ask it to move this project there | The chief runs [`sage link`](docs/guide/using-sage.md#shared-logbooks) after your answer, and two linked clones are one project on the board. Each task there has one owning chief, who can offer it to another chief, and you answer a takeover gate for each change of owning chief. [`sage move`](docs/guide/using-sage.md#move-an-existing-project) shows a preview and one gate, then takes the open tasks of the Claude and Codex logbooks into one shared logbook, with an end check and the steps to restore by hand; a new project starts in a shared logbook when both plugins are updated ([`sage init`](docs/guide/using-sage.md#shared-logbooks)). |
 | `show board` | The board in the chat, and the address of the board page. |
 | `autopilot on` / `autopilot off` | Verified pull requests merge by themselves, or wait for you again. Off by default. |
 | `sage mode off` | A normal session again, for the rest of the session. Autopilot goes off too. |
 | `sage help` | Every phrase, and whether sage mode and autopilot are on. |
 
-Send each phrase alone, as the whole message. Every phrase, also the board forms, and the exact rules: [Every phrase](docs/guide/using-sage.md#every-phrase). In Codex, the mode phrases and `sage help` work, and the board phrases do not yet ([sage in Codex](docs/guide/codex.md#turn-on-sage-mode)).
+Send each phrase alone, as the whole message: `autopilot on` counts only from a message that starts a turn, so send it while the session is idle, and `autopilot off` counts at any time. Every phrase, also the board forms, and the exact rules: [Every phrase](docs/guide/using-sage.md#every-phrase); in Codex, the board phrases do not work yet ([sage in Codex](docs/guide/codex.md#turn-on-sage-mode)).
 
 ## How sage works
 
@@ -120,6 +120,8 @@ You talk only to the chief. The chief frames each task and asks you the product 
 - **One lead for each pull request** runs the build, the reviews, QA and the repairs, with up to 9 helpers at once, and reports to the chief once. In Claude Code, a project runs at most 10 agents at once by default (`max_agents`), so one lead and its 9 helpers fit, and all projects 20 (`cap_total`). A project runs at most 5 leads by default (`max_leads`).
 - **One writer for each branch.** Only one agent writes on a branch at a time: the designer, the implementer or the arena judge, each in its own git worktree. Reviewers start fresh.
 - **Each task** has a priority, P0 to P3, and the least route for its size; a risk flag adds the security review. A **cycle** is one full set of fresh reviews and QA on one commit; a new commit starts again from cycle 1, except a clean merge of main that keeps the pull request's own change the same and passes CI.
+- **Findings.** A medium or high finding goes to a repair round: 3 rounds by default, then the task waits for you; with autopilot on, the chief may give rounds 4 and 5 itself, with a reason. A low finding never blocks a merge: it stays on the task's polish list.
+- **Guards.** The hooks guard ordinary commands against honest mistakes, and a disguised command is a documented limit. GitHub's protection of main, the merge check, the sandbox and your phrases guard against deliberate tricks ([Rules held in code](docs/design/rules-in-code.md)).
 
 <a href="docs/assets/routes-light.svg">
 <picture>
@@ -137,8 +139,7 @@ You talk only to the chief. The chief frames each task and asks you the product 
 
 ## Learn more
 
-- [Learn sage in 5 minutes](docs/guide/learn-sage.md): one small task, from your first message to a merged pull request.
-- [How sage works](docs/guide/how-it-works.md): the long version, with the arena.
+- [Learn sage in 5 minutes](docs/guide/learn-sage.md): one small task, from your first message to a merged pull request. [How sage works](docs/guide/how-it-works.md): the long version, with the arena.
 - [Rules held in code](docs/design/rules-in-code.md): every rule that the hook and the state tool hold, why, and what the hook does not stop.
 - [SECURITY.md](SECURITY.md): how to report a vulnerability, and the known limits.
 - [Using sage](docs/guide/using-sage.md): phrases, questions, update, stop, uninstall and troubleshooting. Also [Concepts](docs/guide/concepts.md), [principles](docs/guide/principles.md), and the [FAQ and credits](docs/guide/faq.md).
@@ -146,5 +147,4 @@ You talk only to the chief. The chief frames each task and asks you the product 
 
 ## Credits and licence
 
-Built on [pstack](https://github.com/cursor/plugins/tree/main/pstack) and poteto mode by [Lauren Tan (poteto)](https://github.com/poteto). The name nods to Sage Mode in *Naruto*; the drawings are original ([all credits](docs/guide/faq.md#credits)).
-MIT licence ([LICENSE](LICENSE)); pstack's text keeps [its MIT licence](upstream/pstack/LICENSE).
+Built on [pstack](https://github.com/cursor/plugins/tree/main/pstack) and poteto mode by [Lauren Tan (poteto)](https://github.com/poteto). The name nods to Sage Mode in *Naruto*; the drawings are original ([all credits](docs/guide/faq.md#credits)). MIT licence ([LICENSE](LICENSE)); pstack's text keeps [its MIT licence](upstream/pstack/LICENSE).

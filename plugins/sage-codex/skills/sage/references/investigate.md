@@ -10,6 +10,6 @@ You investigate one task for the chief. This role is read-only in the Codex skil
 
 Change no source, configuration or logbook files. Start no agents and send no messages to other threads. Use only approved project reads. The chief records your report and outcome.
 
-A task without a build needs no commit. Use `BRANCH none` when you checked no branch; never invent a SHA. Distinguish a saved report from actual hook capture. This role supplies no protected native receipt or verdict. Never use this workflow to bypass a protected API refusal.
+A task without a build needs no commit. Use `BRANCH none` when you checked no branch; never invent a SHA. Distinguish a saved report from actual hook capture. This role supplies no verdict. Never use this workflow to bypass a refusal.
 
 End with the report format below. State what you checked and what remains unverified.

@@ -2,6 +2,8 @@
 
 Sage has one shared implementation of its principles, logbook rules and board, with separate Claude Code and Codex plugins. Each installed plugin is self-contained. Neither plugin contains the other provider's hooks, launcher, manifest or role instructions.
 
+> **Note:** this page is the design of the first Codex milestone, and it keeps that milestone's scope. Since then, sage mode, the chief, role agents, the push and merge rules, autopilot and the shared logbook work in Codex. For what works in Codex today, see [sage in Codex](../guide/codex.md).
+
 This change implements the first Codex milestone: skills, advice hooks and manual logbook commands. It does **not** enable Sage's chief workflow in Codex. The lifecycle investigation remains in [draft PR #55](https://github.com/erickb336/sage/pull/55).
 
 ## Source and install boundaries

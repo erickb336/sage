@@ -1,6 +1,6 @@
 # sage in Codex
 
-This page tells you how to install sage in Codex, what it does there today, and what does not work yet. sage installs as a Codex plugin from its own marketplace, with your normal Codex: the terminal CLI, and the Codex desktop app in the ChatGPT app, which should work the same way but is not checked yet.
+This page tells you how to install sage in Codex, what it does there today, and what does not work yet. sage installs as a Codex plugin from its own marketplace, with your normal Codex: the terminal CLI, and the Codex desktop app in the ChatGPT app. sage was checked with the CLI and with the desktop app's own Codex (see [What you need](#what-you-need)).
 
 In Codex, sage mode gives the session the chief's role, its role agents and the logbook tools. Hooks hold the bounded merge and edit rules described below, and autopilot merges verified work with sage's merge command.
 
@@ -16,7 +16,7 @@ The design of the two provider plugins is in [Separate provider packages](../des
 | A principle at the moment it applies | Yes | Yes, for a design request, a test or document patch, a README and a commit |
 | Advice after a failed check | Yes | No: Codex's shell hook output does not give a reliable exit status |
 | The logbook and the board | Yes | Yes: the plugin's `sage` MCP tools write the logbook, and the `sage` skill's commands read it and show the board |
-| The stop check | Yes | No, until native captures prove it |
+| The stop check of the chief's turn | Yes | No: sage adds no hook at the end of the chief's turn in Codex. The report check below covers role agents |
 | sage mode: the chief's role | Yes | Yes: the `sage mode` phrase gives it, and it comes back after a compaction |
 | Role agents | Yes: the lead, the implementer, the reviewers, QA, the PE, the designer and the arena judge | The public helper supports each of these roles and the investigation roles. The chief starts one lead for each task with a build, and the lead starts its team and records its task; other role agents start no agents and record nothing. A pilot on stock Codex ran a lead and its team with a test model, and each thread needs a multi-agent v2 model (see [start a role agent](../../packages/sage-codex/skills/sage/references/roles.md)). |
 | The brief check | Yes: the hook refuses a brief without every field | Yes, as a check, not a block: the chief runs the `brief` tool before each spawn. Each role agent starts with the project's standing orders and its checked brief, and a spawn with no checked brief gives the chief a warning ([The brief check](#the-brief-check)) |
@@ -28,7 +28,9 @@ The design of the two provider plugins is in [Separate provider packages](../des
 | The mode phrases (`sage mode`, `sage mode off`, `autopilot on`, `autopilot off`, `sage help`) | Yes | Yes |
 | The board phrases (`show board`, `show status`) | Yes | No: use the manual skill commands |
 
-The Codex logbook is in `~/.codex/sage` (or `CODEX_HOME`), apart from Claude's. The chat board in Codex shows only the Codex logbook. The browser board shows both by default, and each card says which provider's logbook holds it.
+A project can use one [shared logbook](using-sage.md#shared-logbooks) for Claude and Codex, in `~/.sage` (or `SAGE_SHARED_HOME`). A new project gets one when both plugins are updated, and the chief can [move an existing project](using-sage.md#move-an-existing-project) into one. A project that did not move keeps its Codex logbook in `~/.codex/sage` (or `CODEX_HOME`), apart from Claude's.
+
+The browser board shows every logbook by default, and each card says which provider's logbook holds it.
 
 ## What you need
 
@@ -79,7 +81,7 @@ The Codex logbook is in `~/.codex/sage` (or `CODEX_HOME`), apart from Claude's. 
 
 In the desktop app, do steps 1 and 2 in a terminal, with the Codex CLI (see [What you need](#what-you-need)). The app reads the same Codex home (`~/.codex`), so sage shows under the sage marketplace in its plugins list. An install from the app's own plugin list is not checked yet.
 
-If the app does not ask you to trust the hooks, do step 3 once in the terminal. This desktop path is not checked yet.
+If the app does not ask you to trust the hooks, do step 3 once in the terminal. The app's own hook review is not checked yet: sage's desktop checks drove the app's Codex as the app drives it, not the app's screens.
 
 Then do the [gate check](#check-that-the-sage-gate-runs). Trust the sage hooks again after each update of sage, and do the check again.
 
@@ -230,7 +232,7 @@ When a network proxy is on, the prompt shows **Yes, just this once** in place of
 
 To remove a saved rule, delete its line from `~/.codex/rules/default.rules` (or `$CODEX_HOME/rules/default.rules` when you set `CODEX_HOME`), then restart Codex: Codex reads its rules at startup ([Codex: Rules](https://learn.chatgpt.com/docs/agent-configuration/rules)).
 
-The desktop app gets the same choices from Codex, but its docs do not name their text, and sage was not run in the app yet. So it is not checked yet that a child's prompt reaches you there.
+The desktop app gets the same choices from Codex, but its docs do not name their text, and sage's desktop checks did not use the app's screens. So it is not checked yet that a child's prompt reaches you there.
 
 **`writable_roots` and the network: not proved.** sage keeps Codex's defaults, and it does not recommend this option: `writable_roots` with the project's `.git` folder, and `network_access = true`. With the worktree inside the project, the pilot's git commands asked for no approval, but the push failed on the scratch remote. sage's task folders are outside the project, and there the pilot failed:
 
@@ -271,7 +273,7 @@ The plugin starts a local MCP server, `sage`, in the desktop app and in the CLI.
 - The chief records the logbook, and a lead records its own task. Codex blocks another role agent's call of a tool that writes (for example `verdict`, `gate_answer` or `brief`), and the agent gets one line that says to put it in its report. Codex's own review thread (`/review`, the app's review button) and its approval check count as role agents here.
 - A role agent may call `status`, `standing`, `merge_check`, and `pages` without `record`.
 - In a [shared logbook](using-sage.md#shared-logbooks), the server finds the chief from the session, and a tool takes no chief field. A lead acts for the chief of its lead run.
-- A write on a task of another chief refuses and names the owning chief, as in Claude. The native tools `sage_update_task` and `sage_create_run` give the same words. A task with no owning chief refuses and prints its version: call `claim` with the task and that version.
+- A write on a task of another chief refuses and names the owning chief, as in Claude. A task with no owning chief refuses and prints its version: call `claim` with the task and that version.
 - To abandon a task with no owning chief, any chief needs no claim: call `task_set` with `fields` `{"state": "abandoned"}` alone and `why`, the reason. The task keeps no chief.
 - A review or QA `verdict` on a task with a build needs `run`: a done run of the task whose child had the run in its task name (`sage_qa_t12_r40`) and ended with its full report. At that stop, the report check keeps the report in the logbook, and `verdict` refuses a verdict that no kept report backs. A report that `pages` saved backs no verdict, because the chief gives its text.
 - Codex starts the server outside the shell sandbox. Under `workspace-write`, the logbook is not a writable folder of an agent's shell, so only the server writes it.
@@ -297,7 +299,7 @@ Ordinary open design gates do not generally prevent merge in code. The chief mus
 
 Generated-package tests use labelled synthetic artifacts and hook events. Installed acceptance still needs the reviewed package, updated hook trust, both role texts, actual child runs, permission refusals, report retention and the saved prototype.
 
-Protected native completion remains unverified, and a lead's first real run is the installed pilot. An arena runs in Codex from [the arena steps](../../packages/sage-codex/skills/sage/references/arena.md); a synthetic test plays it, and its first real run is the installed pilot. See the [design procedure](../../packages/sage-codex/skills/sage/references/workflow.md#design-before-build).
+A pilot on stock Codex ran a lead and its team with a test model; a lead's first run on a real task is still to come. An arena runs in Codex from [the arena steps](../../packages/sage-codex/skills/sage/references/arena.md); a synthetic test plays it, and its first real run is the installed pilot. See the [design procedure](../../packages/sage-codex/skills/sage/references/workflow.md#design-before-build).
 
 ## Task adoption
 

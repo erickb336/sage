@@ -126,7 +126,7 @@ export const TOOLS = {
     input: { task, offer: offerId }, pos: ["task"], argv: (i) => ["cancel", i.task],
   },
   accept: {
-    describe: "Ask for a task that another chief offered to you: it opens a takeover gate, and the task is yours only after the owner's answer approve. No run of the task may be active. sage_read_task gives the offer's id (in the task's offer cell) and the version; so does the line that the offer printed.",
+    describe: "Ask for a task that another chief offered to you: it opens a takeover gate, and the task is yours only after the owner's answer approve. No run of the task may be active. The CLI's task command gives the offer's id (in the task's offer cell) and the version; so does the line that the offer printed.",
     input: { task, offer: offerId, version }, pos: ["task"], argv: (i) => ["accept", i.task],
   },
   release: {

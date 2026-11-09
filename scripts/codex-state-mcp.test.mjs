@@ -148,7 +148,7 @@ test("the transfer commands through the server: offer, accept, cancel, release a
   const [, offer, version] = /offer ([0-9a-f]{8}) · version ([0-9a-f]{64})/.exec(await s.call("offer", { task: "T1", to: "C2" }));
   // F-T618-32: the accept tool names a reader that a Codex chief has, and that reader gives the offer's id and the version that accept takes.
   const tools = await s.tools(), describe = (name) => tools.find((one) => one.name === name).description;
-  assert.match(describe("accept"), /sage_read_task gives the offer's id \(in the task's offer cell\) and the version/);
+  assert.match(describe("accept"), /The CLI's task command gives the offer's id \(in the task's offer cell\) and the version/);
   assert.match(describe("cancel"), /decline an offer that another chief made to you/);
   assert.match((await s.call("accept", { task: "T1", offer: first, version }, as)).error, /has the open offer/);
   assert.match((await s.call("accept", { task: "T1", offer, version })).error, /names C2, not C1/);

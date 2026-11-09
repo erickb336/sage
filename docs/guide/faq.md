@@ -17,9 +17,11 @@ Autopilot is off until you send `autopilot on` alone, while sage mode is on. Tex
 - Without tests, QA can only check by running the app.
 - Without a remote, the work stops at a verified branch.
 
-**Does it work in Codex?** In part, and the work goes on. In the Codex CLI, sage mode, autopilot, the implementer, the three reviewers, QA and the logbook tools work through the sage plugin.
+**Does it work in Codex?** In part, and the work goes on.
 
-No lead yet, and the PE, the designer and the arena have not run in an installed Codex yet. The agent caps and the board phrases do not work in Codex yet, and the desktop app is not checked yet. See [sage in Codex](codex.md).
+In the Codex CLI and the desktop app, sage mode, autopilot, the logbook tools and the shared logbook with Claude work through the sage plugin. The chief starts one lead for each task, and the lead starts the implementer, the reviewers and QA.
+
+A pilot ran a lead and its team with a test model. The PE, the designer and the arena have not run on a real task in Codex yet, and the agent caps and the board phrases do not work there yet. See [sage in Codex](codex.md).
 
 **How mature is it?** Early. I use it every day to build sage itself.
 

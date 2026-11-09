@@ -4,7 +4,7 @@ import { readFileSync, realpathSync } from "node:fs";
 import { fileURLToPath } from "node:url";
 import { renderReportInstructions, renderRoleInstructions } from "sage-core";
 
-// These two roles belong to the Codex skill-led path, not protected native admission.
+// These two roles belong to the Codex skill-led path; core has no role text for them.
 const localRoles = new Map([
   ["investigate", "references/investigate.md"],
   ["evidence-review", "references/evidence-review.md"],

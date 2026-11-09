@@ -23,19 +23,19 @@ Tiny work still needs an independent code review under this workflow; add that b
 
 Use current host limits. Five subagents in one environment is not a portable limit. If capacity is full, wait or use supported lifecycle controls. A spawn that fails with `collab spawn failed: agent thread limit reached` is this case: see [the thread limit](roles.md#thread-limit). Continue only independent work that fits the available capability.
 
-A failed skill read stops the work that depends on it. An unsupported state transition remains blocked. A child's success report remains reported until supported by evidence; obtain the missing check rather than invent it. Preserve native API refusals and permission boundaries.
+A failed skill read stops the work that depends on it. An unsupported state transition remains blocked. A child's success report remains reported until supported by evidence; obtain the missing check rather than invent it. Preserve refusals and permission boundaries.
 
 On `sage mode off`, stop new dispatch first. Request interruption only for owned active agents through supported host tools. Inspect their results, preserve files and unfinished work, and record only established outcomes. A timeout, lost process or missing status proves no completion or capacity release. Do not launch an overlapping replacement while ownership is unresolved.
 
-For a run created through this manual workflow, confirmed owner interruption is `blocked`, not `done`. Save a stop report with the task/run IDs, native agent identities, terminal evidence, preserved artifacts and remaining work. After the owned team has settled, record each interrupted run through `run done <R> --status blocked --report <stop-report>`. Keep the task unfinished. Read the run records again and disclose any recording failure. If a child or descendant remains active or uncertain, keep the affected ownership unresolved; do not release its run from a timeout or an interruption request alone. Protected native runs still require their protected finish path; these manual commands cannot replace it.
+For a run created through this manual workflow, confirmed owner interruption is `blocked`, not `done`. Save a stop report with the task/run IDs, Codex agent ids, terminal evidence, preserved artifacts and remaining work. After the owned team has settled, record each interrupted run through `run done <R> --status blocked --report <stop-report>`. Keep the task unfinished. Read the run records again and disclose any recording failure. If a child or descendant remains active or uncertain, keep the affected ownership unresolved; do not release its run from a timeout or an interruption request alone.
 
 After compaction or restart, read current task/run records, reports, branch/head and host status. A stored run or old mode note does not authenticate a live child. If continuity is uncertain, require explicit owner re-entry and resolve ownership before dispatch. Do not send new child input to manufacture a terminal result.
 
-The manual logbook does not replace protected native preparation, report, review or completion receipts. Never switch to it as a workaround for a protected API denial. Preserve the chosen Codex model. Advice is optional; this workflow changes no hooks, settings or enforcement defaults.
+Never use the manual CLI as a workaround for a refusal. Preserve the chosen Codex model. Advice is optional; this workflow changes no hooks, settings or enforcement defaults.
 
 ## Edit project files with explicit targets
 
-Use the native `apply_patch` tool for a permitted project edit. Give each target a literal path inside the assigned worktree. Put program text inside the patch body. Do not wrap the patch in a shell command or an interpreter.
+Use Codex's `apply_patch` tool for a permitted project edit. Give each target a literal path inside the assigned worktree. Put program text inside the patch body. Do not wrap the patch in a shell command or an interpreter.
 
 The shell guard reads the programs that a command runs and the literal paths in the words of a write: program arguments and redirection targets. It refuses a write into the logbook roots, a `.codex` folder or Codex's config; a read of them runs. A written word counts by its literal part, the text before its first `$`, backtick or pattern character, as written, not through a link. A variable, a substitution or a pattern does not make the guard refuse a word, and a path that only such a form names is a documented limit, not a permission. The guard does not run a program to find what it writes.
 
@@ -54,15 +54,15 @@ After an edit, read the target files and inspect the diff. Run only the checks a
 
 If a protected action refuses, stop and report the action and refusal. Do not retry it through a shell, interpreter, CLI or another tool. Keep private payloads local. A later authorized task can establish a permitted project edit with explicit targets; it cannot override a protected denial.
 
-Fictional gate inputs check source behavior only. They do not establish which input caused an earlier refusal, or prove installed native behavior. Retain the exact input, normalized event, working folder, writer identity and executing revision when an investigation permits it.
+Fictional gate inputs check source behavior only. They do not establish which input caused an earlier refusal, or prove installed behavior. Retain the exact input, normalized event, working folder, writer identity and executing revision when an investigation permits it.
 
 ### A managed worktree receives a protected-folder refusal
 
-Successful worktree creation and task lookup do not prove that a later patch is permitted. Stop when the native hook refuses it. Assignment and Git linkage do not override protected targets.
+Successful worktree creation and task lookup do not prove that a later patch is permitted. Stop when the sage hook refuses it. Assignment and Git linkage do not override protected targets.
 
-The current source checks `.codex` segments below the detected project root, or the whole target path outside that root. Existing coverage allows ordinary files inside a detected project under `.codex/worktrees`. A linked checkout under `.codex` can still refuse when the event's working folder identifies another project root. This distinction does not establish the cause of a native refusal without its event and executing revision.
+The current source checks `.codex` segments below the detected project root, or the whole target path outside that root. Existing coverage allows ordinary files inside a detected project under `.codex/worktrees`. A linked checkout under `.codex` can still refuse when the event's working folder identifies another project root. This distinction does not establish the cause of a refusal without its event and executing revision.
 
-The T111 evidence has two separate limits. R24 lacks the original payload and cannot establish its refusal's cause. R27 reports an actual native structured-patch refusal naming `.codex`, after managed worktree creation and task lookup succeeded. The earlier native demonstration outside `.codex` resolves neither case. Synthetic linked-worktree inputs demonstrate source behavior only.
+The T111 evidence has two separate limits. R24 lacks the original payload and cannot establish its refusal's cause. R27 reports an actual structured-patch refusal naming `.codex`, after managed worktree creation and task lookup succeeded. The earlier demonstration outside `.codex` resolves neither case. Synthetic linked-worktree inputs demonstrate source behavior only.
 
 For a later task, the owner can keep the task blocked while investigating the installed behavior, or authorize a separate ordinary linked worktree. Recommend the ordinary worktree outside `.codex`, with a fresh branch and explicit owner/chief assignment. Leave the managed checkout untouched. These are proposed steps, not permission to retry an active denial:
 
@@ -72,7 +72,7 @@ For a later task, the owner can keep the task blocked while investigating the in
 4. After separate authorization, run `git worktree add -b <new-branch> <absolute-new-path> <verified-head>`. Use a fresh `codex/` branch; do not force-checkout or move the managed checkout's branch.
 5. The owner/chief assigns the new path, branch, writer and allowed files in a new brief before any source edit.
 6. In that assigned checkout, verify `pwd -P`, `git status --short`, `git branch --show-current` and `git rev-parse HEAD` against the brief.
-7. Use native explicit patches only for the newly authorized scope. Stop and report any protected refusal; do not switch tools or weaken enforcement.
+7. Use explicit patches only for the newly authorized scope. Stop and report any protected refusal; do not switch tools or weaken enforcement.
 
 This procedure changes no settings, credentials, logbooks or protected-path policy. It does not authorize edits to an unrelated checkout.
 
@@ -80,9 +80,9 @@ This procedure changes no settings, credentials, logbooks or protected-path poli
 
 Keep actual token counts when the execution interface supplies them. A retrieval error does not make usage unavailable.
 
-The chief can declare `--usage-interface collaboration-tools` when adding a manual run. This records the provider's fixed capability description. It is a chief declaration, not host attestation. The `app-server` interface exposes usage and cannot select this exception. Native and older runs have no declared interface and cannot select it either.
+The chief can declare `--usage-interface collaboration-tools` when adding a manual run. This records the provider's fixed capability description. It is a chief declaration, not host attestation. The `app-server` interface exposes usage and cannot select this exception. Older runs have no declared interface and cannot select it either.
 
-For the declared unsupported interface, end the run with `--usage unavailable`, `--usage-source`, `--usage-evidence` and `--report`. Give the actual capability evidence. Do not put zero or a word in `--tokens`. The exception changes no report, review, ownership or native completion check.
+For the declared unsupported interface, end the run with `--usage unavailable`, `--usage-source`, `--usage-evidence` and `--report`. Give the actual capability evidence. Do not put zero or a word in `--tokens`. The exception changes no report, review or ownership check.
 
 If a measurement arrives later, use `run usage <R> --tokens <n> --usage-source <source> --usage-evidence <reference>`. This command records an audited enrichment. It preserves the terminal status, timestamp and report. An exact retry adds nothing. A conflicting count or source refuses. Previously blocked runs remain blocked.
 
@@ -90,13 +90,13 @@ Status and stats show measured, unavailable and legacy-unrecorded completed runs
 
 ## Investigate and review evidence
 
-For an existing investigation route, the chief records an `investigate` run and dispatches its named role through the public helper. Save the complete returned report with `pages record`, then end that actual run with `run_done`. These manual records are chief-supplied evidence, not proof of native authorship.
+For an existing investigation route, the chief records an `investigate` run and dispatches its named role through the public helper. Save the complete returned report with `pages record`, then end that actual run with `run_done`. These manual records are chief-supplied evidence, not proof of who wrote the report.
 
 Start a different agent with the `evidence-review` role and its own recorded run. Give it the investigation report and evidence locations. Retain its complete report and record its actual outcome. A `blocked` or `question` report stays that outcome; resolve it before acceptance. Record findings before a verdict.
 
 When that independent review supports acceptance, the chief records `evidence-clean` for the task without a SHA, with the real review run reference. Follow the existing state transitions to `concluded`. Retention alone grants no verdict. Core neither requires a run/report for this task-scoped verdict nor authenticates a supplied run reference. A deliberate false reference is a known trust limit, never an allowed practice.
 
-Manual pages and run records, actual hook-retained reports, and evidence-clean acceptance are three different facts. Local generated-package fixtures can check their behavior. They do not verify installed hooks, live dispatch or protected native integration; those checks remain pending.
+Manual pages and run records, actual hook-retained reports, and evidence-clean acceptance are three different facts. Local generated-package fixtures can check their behavior. They do not verify installed hooks or live dispatch; those checks remain pending.
 
 ## Design before build
 
@@ -108,6 +108,6 @@ The chief keeps this order: designer → PE → owner’s design approval → bu
 4. Start a distinct PE child with its own run, the saved prototype, screenshots and designer report. Save its complete report and actual outcome. Resolve PE `CHANGE`, `blocked` and `question` outcomes before acceptance.
 5. Show the design and PE report to the owner. Record the owner’s actual design approval before starting dependent implementation. A stored report supplies no approval.
 
-An ordinary open design gate is not a general merge refusal. The chief must preserve the design procedure. Existing missing-review and program-wait refusals still apply. Protected native completion remains outside this support. A design arena keeps the same order: candidates and a judge stand for the designer, then PE, owner’s design approval and build.
+An ordinary open design gate is not a general merge refusal. The chief must preserve the design procedure. Existing missing-review and program-wait refusals still apply. A design arena keeps the same order: candidates and a judge stand for the designer, then PE, owner’s design approval and build.
 
 Label local fixture artifacts and synthetic hook events as sample data. They demonstrate storage and sequencing, not actual designer creation, independent PE work or installed acceptance.
