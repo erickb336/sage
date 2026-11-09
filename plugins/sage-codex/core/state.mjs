@@ -2548,11 +2548,10 @@ const WAITS_MAX = 20;
 const flat = (text) => cell(String(text ?? "").replace(BREAKS, " ")).replace(/ {2,}/g, " ");
 const oneLine = (text) => flat(text) || "(no title)";
 /**
- * Does a question read as a breakdown gate's first line to the owner? Also with blank, mark or symbol characters before it
- * (U+034F, U+2800, U+3164) and with Cyrillic or Greek letters that look like its Latin ones (R1249-2).
+ * Does a question read as a breakdown gate's first line to the owner: "Approve program", in any case and Unicode form,
+ * also after a list mark or another mark or symbol (R1270-1)? Look-alike letters of another script are a limit (T909).
  */
-const LOOK_ALIKE = { "а": "a", "α": "a", "р": "p", "ρ": "p", "г": "r", "о": "o", "ο": "o", "ѵ": "v", "ν": "v", "е": "e", "ε": "e", "ɡ": "g", "м": "m" };
-const readsAsBreakdown = (question) => /^approve program\b/.test([...looks(question.replace(/[\u034f\u115f\u1160\u3164\uffa0\u2800]/gu, " ")).replace(/^[^\p{L}\p{N}]+/u, "")].map((c) => LOOK_ALIKE[c] ?? c).join(""));
+const readsAsBreakdown = (question) => /^approve program\b/.test(looks(question).replace(/^[^\p{L}\p{N}]+/u, ""));
 /** The why of each decision row that program propose writes. */
 const PROPOSE = "program propose";
 /** Has the owner not yet approved or dropped the program's breakdown? Then no task joins it once its build has begun, and none leaves it. */

@@ -12,28 +12,28 @@ gate uses `mergeRun`, the push readers and `logbookWrite`, with its own roots
   program that is not a reader, the value of a `key=value` or an
   `--option=value`, and each redirection's target. A word counts by its literal
   part, the text before its first `$`, backtick or pattern character, resolved
-  from the program's folder (after a literal `cd`, `pushd` or `popd`) and through
-  the links on disk; a word whose text holds a root's path counts too. In any
-  line, a word of a program that removes, moves or locks a whole folder (`rm`,
-  `mv` but its last word, `rsync --delete`, `find -delete`, `chmod -R` and the
-  like) also counts when it names a root or a folder above one; for a pattern or
-  a variable, the folder of its literal part counts. It throws on a loop of links.
+  from the program's folder (after a literal `cd`, `pushd` or `popd`). Only the
+  roots are resolved through links: a word is judged as written, so `rm` of a
+  link to a root removes the link and passes. A word whose text holds a root's
+  path counts too. In any line, a word of a program that removes or moves a whole
+  folder (`rm`, `mv` but its last word, `rsync --delete`) also counts when it
+  names a root or a folder above one; for a pattern or a variable, the folder of
+  its literal part counts. `find -delete` and `chmod -R` count only when a word
+  names a path in a root.
 - `stateToolRun(command, cwd)` gives each run of `sage.mjs` or `sage-pr.mjs`:
-  node or the script itself as the program, and node's code or module that names
-  one of them. A program that only reads the file is no run.
-- `ghRuns(command, cwd, path, options)` gives each gh run's command words and,
-  for `gh api`, its method (core's `ghApiMethod`, which the push rules use too).
-  It finds gh behind an unknown wrapper with `gitOrGh`, the reader that the push
-  rules and the Codex gate use too.
+  node or the script itself as the program. A program that only reads the file
+  is no run.
+- `ghRuns(command, cwd, path)` gives each gh run's command words and, for
+  `gh api`, its method (core's `ghApiMethod`).
   `AGENT_GH` and `agentGh` are the gh commands that an agent runs.
 
 The merge rule is `mergeRun`, a method of `createCommandPolicy`, because it
-needs the policy's pull request pattern for the one merge form. The policy's
-`expansionProblem` refuses a pattern in a program word or in git's or gh's
-command words, and an option before or between gh's first two command words.
+needs the policy's pull request pattern for the one merge form.
 
-A variable or a substitution in a program word or a path, a pattern in a path or
-a plain argument after its literal part, code, a script and text piped into a
-shell can build a path or a command while the line runs. These
+These rules guard the common forms against honest mistakes (standing order 70).
+A wrapper program that the reader does not know, a variable or a substitution in
+a program word or a path, a pattern in a path after its literal part, a path
+through a link, code (`node -e`), a script and text piped into a shell can build
+a path or a command while the line runs. These
 are limits of the hook ([Rules held in code](../../docs/design/rules-in-code.md#the-limits-of-the-hook)),
-and the sandbox is the full guard.
+and the sandbox, GitHub's protection of main and the merge check are the guards.

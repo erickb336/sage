@@ -150,7 +150,7 @@ const fakeGit = (branch, { head = "main", settings = "remote.origin.url\nhttps:/
 /** A fake readGh (T536): GitHub names main as the default branch of every repository. */
 const fakeGh = (args) => (args.at(-1) === ".default_branch" ? "main\n" : undefined);
 
-test("T51: external command operands retain executable identity and expansion refusals", async t => {
+test("T51: external command operands do not become executable evidence", async t => {
   for (const provider of ["claude", "codex"]) {
     const f = isolated(t, provider);
     const api = await import(pathToFileURL(join(f.plugin, "core/index.mjs")));
@@ -161,30 +161,6 @@ test("T51: external command operands retain executable identity and expansion re
     assert.deepEqual(runs.map(({ word, file, args }) => ({ word, file, args })), [
       { word: "command", file: external, args: ["g{i..i}t", "push", "origin", "HEAD:main"] },
     ], "prospective operands must not become executable evidence");
-    const policy = api.createCommandPolicy();
-    for (const command of [sample, "env command -p command -- git pu{s..s}h origin topic", "env command -- gh pr m?rg* 1"])
-      assert.match(policy.expansionProblem(command, f.dir), /shell expansion in "[^"]+" can hide the command/, command);
-    for (const command of ["env command printf '%s' 'g{i..i}t push origin HEAD:main'", "env command git log --format='{x}'",
-      "env command gh api 'repos/{owner}/{repo}/pulls?state=open'", "env command eval 'g{i..i}t push origin HEAD:main'", "env command -v 'g*'",
-      "command() { printf '%s' \"$@\"; }; command 'g{i..i}t' push origin HEAD:main"])
-      assert.equal(policy.expansionProblem(command, f.dir), undefined, command);
-  }
-});
-
-test("T51: external command operands keep protected API refusals without judging data or reads", async t => {
-  for (const provider of ["claude", "codex"]) {
-    const f = isolated(t, provider);
-    const api = await import(pathToFileURL(join(f.plugin, "core/index.mjs")));
-    const request = "/usr/local/bin/gh api -X POST repos/acme/blank/git/refs -f ref=refs/heads/main -f sha=1111111111111111111111111111111111111111";
-    const sample = `A=1 env B=2 command ${request}`;
-    assert.deepEqual(api.programsRun(sample, f.dir, "").map(run => run.word), ["command"]);
-    const policy = api.createPushPolicy({ readGh: fakeGh, readGit: fakeGit("topic") });
-    for (const command of [sample, `env command -p command -- ${request}`])
-      assert.match(policy.pushProblem(command, f.dir), /work reaches main only through a pull request/, command);
-    for (const command of [sample.replace("heads/main", "heads/topic"), sample.replace("-X POST", "-X GET"),
-      `env command printf '%s' '${request}'`, `env command eval '${request}'`, `env command -v gh`,
-      `command() { printf '%s' "$@"; }; command ${request}`])
-      assert.equal(policy.pushProblem(command, f.dir), undefined, command);
   }
 });
 
@@ -253,84 +229,6 @@ test("T51: built hook normalizes agent stash, process, reader and writer executa
     assert.equal(decide(command)?.hookSpecificOutput?.permissionDecision, "deny", command);
   for (const command of [`CAT.exe '${logbook}/tasks.tsv'`, `PRINTF.exe '%s' 'GIT stash'`, `CAT.exe '${f.plugin}/skills/sage/sage.mjs'`])
     assert.notEqual(decide(command)?.hookSpecificOutput?.permissionDecision, "deny", command);
-});
-
-test("T51: PowerShell launcher evidence preserves literal arguments and reaches push and stash guards", async t => {
-  for (const provider of ["claude", "codex"]) {
-    const f = isolated(t, provider);
-    const api = await import(pathToFileURL(join(f.plugin, "core/index.mjs")));
-    const options = { powerShell: true };
-    const forms = [
-      `Start-Process git -ArgumentList 'push','origin','main'`,
-      `start -ArgumentList 'push origin main' -FilePath Git.exe`,
-      `START-PROCESS -FilePath '/tools/GIT.exe' -Wait -ArgumentList "push", "origin", "main"`,
-      `Start-Process git 'push', 'origin', 'main'`,
-      `Start-Process -ArgumentList 'push','--force','origin','topic' -FilePath git`,
-    ];
-    const policy = api.createPushPolicy({ readGh: fakeGh, readGit: fakeGit("topic") });
-    for (const command of forms) {
-      const runs = api.programsRun(command, f.dir, "", options);
-      assert.equal(runs.length, 1, command);
-      assert.equal(runs[0].args[0], "push", "the launcher exposes the real child subcommand");
-      assert.equal(api.programName(runs[0].word), "git");
-      assert.ok(policy.pushProblem(command, f.dir, options), command);
-    }
-    for (const command of [
-      `Start-Process env -ArgumentList 'git push origin main'`,
-      `Start-Process pwsh -ArgumentList '-Command "git push origin main"'`,
-      `Start-Process bash -ArgumentList '-c "git push origin main"'`,
-    ]) {
-      assert.ok(api.programsRun(command, f.dir, "", options).some(run => run.word === "git" && run.powerShellLaunch === true), command);
-      assert.ok(policy.pushProblem(command, f.dir, options), command);
-    }
-    const comma = api.programsRun(`Start-Process -FilePath echo -ArgumentList 'literal,comma','"two words"'`, f.dir, "", options);
-    assert.deepEqual(comma[0].args, ["literal,comma", "two words"]);
-    assert.deepEqual(api.programsRun(`Start-Process start -ArgumentList 'literal'`, f.dir, "", options).map(({ word, args }) => ({ word, args })), [{ word: "start", args: ["literal"] }], "a native child is not interpreted again as a PowerShell alias");
-    assert.equal(api.programsRun(`start git -ArgumentList 'stash'`, f.dir, "")[0].word, "start", "Bash start remains an ordinary executable");
-    // R1935-1 item 2: a push found only through a launcher gets the same check of the commands beside it.
-    assert.equal(policy.pushProblem("Start-Process git -ArgumentList 'push','origin','topic'", f.dir, options), undefined, "the launched push form passes");
-    assert.match(policy.pushProblem("git config remote.origin.push refs/heads/topic:refs/heads/main; Start-Process git -ArgumentList 'push','origin','topic'", f.dir, options) ?? "",
-      /"git config remote\.origin\.push refs\/heads\/topic:refs\/heads\/main" runs in the same command line as the push/);
-    const nested = `pwsh -Command "Start-Process git -ArgumentList 'stash'"`;
-    const nestedPush = `PowerShell.exe -Command "start -ArgumentList 'push','origin','main' -FilePath git"`;
-    assert.ok(policy.pushProblem(nestedPush, f.dir), "nested launcher push reaches the policy");
-    assert.ok(api.programsRun(nested, f.dir, "").some(run => api.programName(run.word) === "git" && run.args[0] === "stash"));
-    if (provider !== "claude") continue;
-    const hook = await import(pathToFileURL(join(f.plugin, "hooks/sage-hook.mjs")));
-    const decide = (command, actor = {}, tool_name = "PowerShell") => hook.handle({ hook_event_name: "PreToolUse", tool_name,
-      cwd: f.dir, tool_input: { command }, ...actor }, { sage: true }, { touch() {} });
-    for (const actor of [{}, { agent_id: "fixture", agent_type: "sage:implementer" }]) {
-      for (const command of [...forms, nestedPush, "Git push origin main", "git.exe push --force origin topic"])
-        assert.equal(decide(command, actor)?.hookSpecificOutput?.permissionDecision, "deny", command);
-      for (const command of [`Start-Process git -ArgumentList 'status'`, `start -ArgumentList 'status' -FilePath git -Wait`, `git status`])
-        assert.notEqual(decide(command, actor)?.hookSpecificOutput?.permissionDecision, "deny", command);
-    }
-    for (const command of [`Start-Process git -ArgumentList 'stash'`, `start -ArgumentList 'stash' -FilePath git`, nested])
-      assert.equal(decide(command, { agent_id: "fixture", agent_type: "sage:implementer" }, command === nested ? "Bash" : "PowerShell")?.hookSpecificOutput?.permissionDecision, "deny", command);
-    assert.equal(decide(`Start-Process GH.exe -ArgumentList 'repo delete example'`, { agent_id: "fixture", agent_type: "sage:implementer" })?.hookSpecificOutput?.permissionDecision, "deny", "launcher child reaches the agent gh policy");
-    for (const command of [`Start-Process -FilePath $program -ArgumentList 'status'`, `Start-Process git -Mystery ignored -ArgumentList status`])
-      assert.equal(decide(command)?.hookSpecificOutput?.permissionDecision, "deny", command);
-  }
-});
-
-test("T51: PowerShell quote ambiguity cannot hide a protected push or merge", async t => {
-  const f = isolated(t, "claude");
-  const hook = await import(pathToFileURL(join(f.plugin, "hooks/sage-hook.mjs")));
-  const wrap = command => `echo "\\"; ${command}; echo "\\"`;
-  for (const actor of [{}, { agent_id: "fixture", agent_type: "sage:implementer" }]) {
-    for (const protectedCommand of ["git push origin main", "Gh.exe pr merge 1 --admin"]) {
-      const command = wrap(protectedCommand);
-      const result = hook.handle({ hook_event_name: "PreToolUse", tool_name: "PowerShell", cwd: f.dir,
-        tool_input: { command }, ...actor }, { sage: true }, { touch() {} });
-      assert.equal(result?.hookSpecificOutput?.permissionDecision, "deny", command);
-    }
-    const result = hook.handle({ hook_event_name: "PreToolUse", tool_name: "PowerShell", cwd: f.dir,
-      tool_input: { command: `echo 'ordinary text'` }, ...actor }, { sage: true }, { touch() {} });
-    assert.notEqual(result?.hookSpecificOutput?.permissionDecision, "deny");
-    const bash = hook.handle({ hook_event_name: "PreToolUse", tool_name: "Bash", cwd: f.dir,
-      tool_input: { command: wrap("git push origin main") }, ...actor }, { sage: true }, { touch() {} });
-    assert.notEqual(bash?.hookSpecificOutput?.permissionDecision, "deny", "Bash quote semantics remain unchanged");
-  }
 });
 
 test("T49: built Claude hook protects the logbook from output writers while preserving reads and scratch output", async t => {
@@ -809,22 +707,20 @@ test("check rejects a hook change made only in the generated Claude plugin", (t)
   assert.equal(current.status, 0, current.stderr);
 });
 
-test("F-T114-3: shared write classification keeps executable stdin separate from known writes", async t => {
+test("F-T114-3: shared write classification keeps executable stdin out of known writes and reader evidence", async t => {
   for (const provider of ["claude", "codex"]) {
     const f = isolated(t, provider);
-    const { commandWrites, shellWriteEvidence, shellExecutionUncertain } = await import(pathToFileURL(join(f.plugin, "core/index.mjs")));
+    const { commandWrites, shellWriteEvidence } = await import(pathToFileURL(join(f.plugin, "core/index.mjs")));
     for (const command of [
       "bash <<'EOF'\ngrep -n 'merge' *.md\nEOF",
       "python3 - <<'EOF'\nimport subprocess\nsubprocess.run([\"gh\", \"pr\", \"merge\", \"41\"])\nEOF",
       "cat script.txt | sh",
     ]) {
       assert.equal(commandWrites(command, f.dir), false, `${provider}: ${command}`);
-      assert.equal(shellExecutionUncertain(command, f.dir), true, `${provider}: executable stdin`);
       assert.equal(shellWriteEvidence(command, f.dir, ""), undefined, "executable input is not proven reader data");
     }
     for (const command of ["cat <<'EOF' > src/a.mjs\nliteral\nEOF", "bash -c 'echo x > out'", "cat < input > output"])
       assert.equal(commandWrites(command, f.dir), true, `${provider}: ${command}`);
-    assert.equal(shellExecutionUncertain("cat <<'EOF' > src/a.mjs\nliteral\nEOF", f.dir), false);
     assert.deepEqual(shellWriteEvidence("cat < input > output", f.dir, ""), {
       reads: [{ word: "cat", dir: f.dir }, { word: "input", dir: f.dir }],
       writes: [{ word: "output", dir: f.dir }],
@@ -876,50 +772,31 @@ test("shared command extraction parses executable text in both isolated bundles"
   }
 });
 
-test("shared command extraction preserves T199 and harmless arguments in both isolated bundles", async t => {
-  for (const provider of ["claude", "codex"]) {
-    const f = isolated(t, provider);
-    const api = await import(pathToFileURL(join(f.plugin, "core/index.mjs")));
-    assert.equal(typeof api.createCommandPolicy, "function");
-    const tool = join(f.plugin, "skills/sage/sage.mjs");
-    const policy = api.createCommandPolicy({ stateToolPath: tool });
-    for (const [command, word] of [["g{h,h} pr view 1", "g{h,h}"], ["git pu{s,s}h origin topic", "pu{s,s}h"], ["gh pr {m,m}erge 1", "{m,m}erge"]]) {
-      assert.equal(policy.expansionProblem(command, f.dir), `shell expansion in "${word}" can hide the command. Use literal program and git or gh subcommand words, without {, [, * or ?.`, "F-T815-10: the refusal names its word");
-    }
-    // T815: text piped into a shell is a limit of the hook.
-    for (const command of ["echo '{sample}'", "git add '*.mjs'", "gh pr view 1", "[ -f '*.txt' ]", "[[ -f '*.txt' ]]", "printf 'gh pr {m,m}erge 1' | cat | sh"]) {
-      assert.equal(policy.expansionProblem(command, f.dir), undefined, command);
-    }
-    const rows = policy.runnable(api.shellCommands(`node '${tool}' log --why 'gh pr merge'; git push origin topic`));
-    assert.deepEqual(rows.map(r => r.words), [["node", tool], ["git", "push", "origin", "topic"]]);
-  }
-});
-
 test("shared merge and push extraction classifies merges in both isolated bundles", async t => {
   const sha = "a".repeat(40);
   for (const provider of ["claude", "codex"]) {
     const f = isolated(t, provider);
     const api = await import(pathToFileURL(join(f.plugin, "core/index.mjs")));
     const tool = join(f.plugin, "skills/sage/sage.mjs");
-    const policy = api.createCommandPolicy({ stateToolPath: tool });
+    const policy = api.createCommandPolicy();
     const candidate = `gh pr merge 12 --squash --delete-branch --match-head-commit ${sha}`;
     assert.deepEqual(policy.mergeRun(candidate, f.dir), { pr: "12", sha });
     for (const text of [candidate.replace(" 12 ", " 012 "), candidate.replace(sha, "abc"), `${candidate} --admin`,
-      `sh -c '${candidate}'`, "gh api repos/o/r/pulls/12/merge", "gh pr 'merge"]) {
+      `sh -c '${candidate}'`, "gh pr 'merge"]) {
       assert.equal(typeof policy.mergeRun(text, f.dir)?.problem, "string", text);
     }
-    // T815: text is no merge, and text piped into a shell, a file that a later command runs and a substitution in the
-    // program word are limits of the hook.
-    for (const text of ["git status", "git merge topic", `echo '${candidate}'`, `echo '${candidate}' | head -1`,
+    // T815, T909: text is no merge, and text piped into a shell, a file that a later command runs, a substitution in the
+    // program word and the GitHub API are limits of the hook.
+    for (const text of ["git status", "git merge topic", "gh api repos/o/r/pulls/12/merge -X PUT", `echo '${candidate}'`, `echo '${candidate}' | head -1`,
       `node '${tool}' log --why '${candidate}'`, `node '/other/sage.mjs' log --why '${candidate}'`,
       `echo '${candidate}' | sh`, `echo '${candidate}' > run; sh run`, "$(echo gh) pr merge 12"]) assert.equal(policy.mergeRun(text, f.dir), undefined, text);
-    assert.equal(api.mentionsMerge("gh api graphql -f query=mergePullRequest"), true);
+    assert.equal(api.mentionsMerge("gh pr 'merge 1"), true);
     assert.equal(api.mentionsMerge("git merge topic"), false);
     assert.equal(api.PR.test("12"), true);
     assert.equal(api.PR.test("012"), false);
     if (provider === "claude") {
       const adapter = await import(pathToFileURL(join(f.plugin, "hooks/command-policy.mjs")));
-      assert.deepEqual(adapter.createCommandPolicy({ stateToolPath: tool }).mergeRun(candidate, f.dir), { pr: "12", sha });
+      assert.deepEqual(adapter.createCommandPolicy().mergeRun(candidate, f.dir), { pr: "12", sha });
       const hook = await import(pathToFileURL(join(f.plugin, "hooks/sage-hook.mjs")));
       assert.deepEqual(hook.mergeRun(candidate, f.dir), { pr: "12", sha });
     }
@@ -931,18 +808,21 @@ test("shared merge and push extraction applies push rules and injected branch ev
     const f = isolated(t, provider);
     const api = await import(pathToFileURL(join(f.plugin, "core/index.mjs")));
     const tool = join(f.plugin, "skills/sage/sage.mjs");
-    const policy = api.createPushPolicy({ stateToolPath: tool, readGh: fakeGh, readGit: fakeGit(dir => dir === join(f.dir, "project/nested") ? "main" : "topic") });
-    // T815: push text given to another program is no push, and text piped into a shell is a limit of the hook.
+    mkdirSync(join(f.dir, "project/nested"), { recursive: true }); // the reader follows a cd into a folder that exists
+    const policy = api.createPushPolicy({ readGh: fakeGh, readGit: fakeGit(dir => dir === join(f.dir, "project/nested") ? "main" : "topic") });
+    // T815: push text given to another program is no push, and text piped into a shell is a limit of the hook. T909: each
+    // push that the reader finds, also inside another command, meets the push form; the GitHub API is a limit.
     for (const text of ["git push origin topic", "git push -u --follow-tags origin topic", "git push --delete origin topic",
       "echo 'git push origin main'", "git status", `node '${tool}' log --why 'git push origin main'`,
-      "node /other/sage.mjs log --why 'git push origin main'", "echo 'git push origin main' | sh"]) {
+      "node /other/sage.mjs log --why 'git push origin main'", "echo 'git push origin main' | sh", "sudo git push origin topic",
+      "sh -c 'git push origin topic'", "eval git push origin topic", "echo $(git push origin topic)", "gh api repos/o/r/git/refs -f ref=refs/heads/main"]) {
       assert.equal(policy.pushProblem(text, f.dir), undefined, text);
     }
     for (const text of ["git push origin main", "git push origin refs/heads/master", "git push origin topic:main",
       "git push -f origin topic", "git push --force-with-lease origin topic", "git push --forc origin topic",
       "git push --mirror origin", "git push origin HEAD", "git push origin", "git push upstream topic",
-      "git push origin '$BRANCH'", "sudo git push origin topic", "sh -c 'git push origin topic'",
-      "eval git push origin topic", "echo $(git push origin topic)", "git push 'origin", "gh api repos/o/r/git/refs -f ref=refs/heads/main"]) {
+      "git push origin '$BRANCH'", "sudo git push origin main", "sh -c 'git push -f origin topic'",
+      "eval git push origin main", "echo $(git push origin HEAD)", "git push 'origin"]) {
       assert.equal(typeof policy.pushProblem(text, f.dir), "string", text);
     }
     assert.match(policy.pushProblem("cd project; git -C nested push origin topic", f.dir), /checkout is on main/);
@@ -970,8 +850,7 @@ test("T42: shared push policy recognizes executable spelling in both bundles", a
     assert.equal(policy.pushProblem("echo 'GIT push origin main'", f.dir), undefined);
     assert.match(api.createPushPolicy({ readGh: fakeGh, readGit: fakeGit("main") }).pushProblem("GIT -C nested push origin Topic", f.dir), /checkout is on main/);
     for (const executable of ["GH", "Gh.exe", "/usr/bin/GH", "'C:\\Tools\\GH.EXE'"]) {
-      assert.match(policy.pushProblem(`${executable} api repos/o/r/git/refs/heads/main -X PATCH -f sha=abc`, f.dir), /work reaches main only through a pull request/);
-      assert.equal(policy.pushProblem(`${executable} api repos/o/r/git/refs/heads/main`, f.dir), undefined);
+      assert.match(policy.pushProblem(`${executable} repo sync`, f.dir), /gh repo sync writes a branch on GitHub/);
     }
     if (provider === "claude") {
       const hook = await import(pathToFileURL(join(f.plugin, "hooks/sage-hook.mjs")));
@@ -984,28 +863,19 @@ test("T42: shared push policy recognizes executable spelling in both bundles", a
   }
 });
 
-test("T42: shared expansion rules recognize executable spelling without changing arguments or merge form", async t => {
+test("T42: the shared merge rule recognizes executable spelling without changing arguments or merge form", async t => {
   for (const provider of ["claude", "codex"]) {
     const f = isolated(t, provider);
     const api = await import(pathToFileURL(join(f.plugin, "core/index.mjs")));
     const policy = api.createCommandPolicy();
-    for (const executable of ["GIT", "Git.exe", "/usr/bin/GIT", "'C:\\Tools\\Git.EXE'"]) {
-      assert.match(policy.expansionProblem(`${executable} p* origin main`, f.dir), /shell expansion in "p\*" can hide the command/, executable);
-      assert.equal(policy.expansionProblem(`${executable} status 'Topic*'`, f.dir), undefined, executable);
-    }
     for (const executable of ["GH", "Gh.exe", "/usr/bin/GH", "'C:\\Tools\\GH.EXE'"]) {
-      assert.match(policy.expansionProblem(`${executable} pr m*`, f.dir), /shell expansion in "m\*" can hide the command/, executable);
-      assert.match(policy.expansionProblem(`${executable} p? merge`, f.dir), /shell expansion in "p\?" can hide the command/, executable);
-      assert.match(policy.expansionProblem(`${executable} pr CL*SE 1`, f.dir), /shell expansion in "CL\*SE" can hide the command/, "F-T815-10: in the command's own capitals");
-      assert.equal(policy.expansionProblem(`${executable} pr view 'Topic*'`, f.dir), undefined, executable);
-      assert.equal(policy.expansionProblem(`${executable} api 'repos/{owner}/{repo}/issues'`, f.dir), undefined, executable);
       assert.match(policy.mergeRun(`${executable} pr merge 12 --squash --delete-branch --match-head-commit ${"a".repeat(40)}`, f.dir)?.problem, /merge only with/, executable);
     }
     assert.deepEqual(policy.mergeRun(`gh pr merge 12 --squash --delete-branch --match-head-commit ${"a".repeat(40)}`, f.dir), { pr: "12", sha: "a".repeat(40) });
   }
 });
 
-test("T815 repair: core's readers in both bundles (F-T815-4, -5, -6, -7, -9, -16, -27)", async t => {
+test("T815 repair: core's readers in both bundles (F-T815-4, -6, -9, -16, -27; F-T903-7, F-T903-10)", async t => {
   for (const provider of ["claude", "codex"]) {
     const f = isolated(t, provider);
     const api = await import(pathToFileURL(join(f.plugin, "core/index.mjs")));
@@ -1015,14 +885,17 @@ test("T815 repair: core's readers in both bundles (F-T815-4, -5, -6, -7, -9, -16
     const write = (command) => api.logbookWrite(command, work, [root, shared], home);
     // F-T815-4: a remove, a move or a recursive lock of a root or a folder above one, also by a pattern in it.
     for (const [command, word] of [["rm -rf ~/.claude", "~/.claude"], ["mv ~/.claude ~/.claude.bak", "~/.claude"], [`rm -rf ${home}`, home], [`rm -rf ${home}/..`, `${home}/..`],
-      ["rm -rf ~/*", "~/*"], ["rm -rf /", "/"], [`find ${home} -delete`, home], [`find ${home} -name x -exec rm -rf {} +`, home],
-      [`rsync -a --delete ${work}/ ${home}/`, `${home}/`], [`chmod -R 000 ${shared}`, shared], [`sudo rm -rf ${home}`, home]]) assert.equal(write(command), word, `${provider}: ${command}`);
-    // Not a remove of a root: mv's last word is where it moves to, a copy or a plain mode change, and a remove elsewhere.
-    for (const command of ["mv a.txt ~/", "rm -rf build", "rm *.log", `cp -R ${home}/.claude /tmp/x`, `chmod 644 ${home}/.claude`, `find ${work} -name '*.o' -delete`, "ls ~"]) {
+      ["rm -rf ~/*", "~/*"], ["rm -rf /", "/"], [`find ${shared} -delete`, shared],
+      [`rsync -a --delete ${work}/ ${home}/`, `${home}/`], [`sudo rm -rf ${home}`, home]]) assert.equal(write(command), word, `${provider}: ${command}`);
+    // Not a remove of a root: mv's last word is where it moves to, a copy or a plain mode change, a remove elsewhere, a
+    // find that deletes only the files it matches and a recursive mode change (F-T903-7), and rm of a link to a root, which
+    // removes the link (F-T903-10).
+    for (const command of ["mv a.txt ~/", "rm -rf build", "rm *.log", `cp -R ${home}/.claude /tmp/x`, `chmod 644 ${home}/.claude`, `find ${work} -name '*.o' -delete`, "ls ~",
+      "find ~ -name '*.tmp' -delete", `find ${home} -name x -exec rm -rf {} +`, "chmod -R u+w ~", `chmod -R 000 ${home}`, `rm ${link}`, `unlink ${link}`]) {
       assert.equal(write(command), undefined, `${provider}: ${command}`);
     }
-    // F-T815-16: pushd moves as cd does, also through a link; popd goes back.
-    for (const [command, word] of [[`pushd ${root} && echo x >> tasks.json`, "tasks.json"], [`pushd ${link} && echo x >> tasks.json`, "tasks.json"],
+    // F-T815-16: pushd moves as cd does; popd goes back. A path through a link is a limit (T909).
+    for (const [command, word] of [[`pushd ${root} && echo x >> tasks.json`, "tasks.json"],
       [`pushd ${root} && rm -rf p`, "p"], [`pushd ${shared} && echo x > a.json`, "a.json"], [`pushd /usr && popd && pushd ${root} && rm x`, "x"]]) assert.equal(write(command), word, `${provider}: ${command}`);
     assert.equal(write(`pushd ${root} && popd && echo x > tasks.json`), undefined, "popd goes back to the work folder");
     // F-T815-6: one method reader, with cobra's bundled -iX.
@@ -1033,173 +906,8 @@ test("T815 repair: core's readers in both bundles (F-T815-4, -5, -6, -7, -9, -16
       assert.deepEqual(api.ghRuns(command, work).map((run) => run.method), [method], command);
     }
     const policy = api.createCommandPolicy();
-    // F-T815-7: the REST merges endpoint merges a branch into a base.
-    for (const command of ["gh api -X POST repos/o/r/merges -f base=x -f head=y", "curl -X POST https://api.github.com/repos/o/r/merges", "wget --method=POST https://api.github.com/repositories/12/merges"]) {
-      assert.match(policy.mergeRun(command, work)?.problem ?? "", /^merge only with/, command);
-    }
-    assert.equal(policy.mergeRun("gh api repos/o/r/merges-report", work), undefined, "another path");
-    // F-T815-5: an option before or between gh's command words; -R and --repo with their value, and options after them, pass.
-    for (const [command, option] of [["gh pr -b view merge 12 --squash", "-b"], ["gh pr -c view close 12", "-c"], ["gh --color always pr merge 12", "--color"]]) {
-      assert.equal(policy.expansionProblem(command, work), `gh reads "${option}" before or between its command words, and an option there can take the next word as its value, so the hook cannot tell which command gh runs. Write gh's command words first, then the options, for example gh pr view 12 --json state. Only -R <owner/repo> or --repo <owner/repo> may come before them.`, command);
-    }
-    for (const command of ["gh -R o/r pr view 1", "gh --repo o/r pr view 1", "gh --repo=o/r pr list", "gh pr view 12 --json state", "gh api --paginate repos/o/r/pulls", "gh --version", "gh pr --help", "gh status --org acme", "gh browse --branch main README.md"]) {
-      assert.equal(policy.expansionProblem(command, work), undefined, command);
-    }
     // F-T815-9: an unread line that names a merge leads with the cause and the way forward.
     assert.equal(policy.mergeRun("gh pr merge 1 && echo 'x", work)?.problem, "the hook cannot read this command (an open quote), so it refuses it. Close each quote, substitution and heredoc. Its text names a merge. Merge only with gh pr merge <n> --squash --delete-branch --match-head-commit <sha>, as a command of its own.");
-  }
-});
-
-test("T41: shared push policy refuses GitHub API writes to protected branches in both bundles", async t => {
-  for (const provider of ["claude", "codex"]) {
-    const f = isolated(t, provider);
-    const api = await import(pathToFileURL(join(f.plugin, "core/index.mjs")));
-    const policy = api.createPushPolicy({ readGh: fakeGh, readGit: fakeGit("topic") });
-    for (const command of [
-      "gh api -X PATCH repos/o/r/git/refs/heads/main -f sha=abc -F force=true",
-      "GH_REPO=o/contents gh api 'repos/victim/repo/{repo}/file' -X PUT -f content=abc",
-      "GH_REPO=o/merges gh api 'repos/victim/repo/:repo' -f base=main -f head=topic",
-      `gh api 'graphql#fragment' -f 'query=mutation { updateRef(input: {refId: "id", oid: "abc"}) { clientMutationId } }'`,
-      "gh api 'repos/o/r/merge-upstream#fragment' -f branch=main",
-      "gh api 'repos/o/r/branches/main/rename#fragment' -f new_name=topic",
-      "gh api 'repos/o/r/{branch}' -X PATCH -f sha=abc",
-      "gh api 'repos/o/r/:branch' -X PATCH -f sha=abc",
-      "gh api repos/o/r/{git/refs/heads/main,issues} -X PATCH -f sha=abc",
-      `gh api graphql -F 'query=mutation { createCommitOnBranch(input: {branch: {branchName: ":branch"}}) { clientMutationId } }'`,
-      "gh api -iX PATCH repos/o/r/git/refs/heads/main -f sha=abc",
-      "gh api repos/o/r/contents/file -ifbranch=main -f content=abc",
-      "env -u UNUSED gh api -X PATCH repos/o/r/git/refs/heads/main -f sha=abc",
-      "command -- gh api -X PATCH repos/o/r/git/refs/heads/main -f sha=abc",
-      "gh -X PATCH api repos/o/r/git/refs/heads/main -f sha=abc",
-      "gh api -X PATCH https://enterprise.example/api/v3/repos/o/r/git/refs/heads/main -f sha=abc",
-      "gh api -X PATCH repositories/123/git/refs/heads/main -f sha=abc",
-      "gh api repos/o/r/merge-upstream -f branch=main",
-      "gh api repos/o/r/merges -f 'base[=main' -f head=topic",
-      `gh api graphql -f 'query[=mutation { updateRef(input:{refId:"id",oid:"abc"}){clientMutationId}}'`,
-      "gh api repos/o/r/pulls/1/update-branch -X PUT",
-      "gh api graphql -f 'query=mutation { updatePullRequestBranch(input: {pullRequestId: \"opaque-id\"}) { clientMutationId } }'",
-      "gh api graphql -f 'query=mutation { createLinkedBranch(input: {issueId: \"opaque-id\", name: \"main\"}) { clientMutationId } }'",
-      "gh api https://enterprise.example/api/graphql -f 'query=mutation { updateRef(input: {refId: \"id\", oid: \"abc\"}) { clientMutationId } }'",
-      "gh api graphql -F 'query=mutation { createCommitOnBranch(input: {branch: {branchName: \"{branch}\"}}) { clientMutationId } }'",
-      "gh api repos/o/r/git/refs/heads/master --method=PATCH -f sha=abc",
-      "gh api -XPUT repos/o/r/contents/file -f branch=main -f content=abc",
-      "gh api repos/o/r/contents/file --method PUT --raw-field=branch=master",
-      "gh api repos/o/r/git/refs -f ref=refs/heads/main -f sha=abc",
-      "gh api graphql -f 'query=mutation { updateRefs(input: {repositoryId: \"id\", refUpdates: []}) { clientMutationId } }'",
-      "gh api graphql -f 'query=mutation { updateRef(input: {refId: \"id\", oid: \"abc\"}) { clientMutationId } }'",
-      "gh api graphql -f 'query=mutation { updateRef # comment\n (input: {refId: \"id\", oid: \"abc\"}) { clientMutationId } }'",
-      "gh api graphql -f 'query=mutation { updateRef,(input: {refId: \"id\", oid: \"abc\"}) { clientMutationId } }'",
-      "gh api graphql -f 'query=mutation { createCommitOnBranch # comment\n (input: {branch: {branchName: \"main\"}}) { clientMutationId } }'",
-      "gh api graphql -f 'query=mutation { createCommitOnBranch(input: {branch: {branchName: \"main\"}}) { clientMutationId } }'",
-      "gh api graphql -f 'query=mutation { createCommitOnBranch(input: {branch: {id: \"opaque-ref-id\"}}) { clientMutationId } }'",
-      "gh api repos/o/r/contents/file --input body.json",
-      "gh api repos/o/r/contents/file -f content=abc",
-      "gh api repos/o/r/contents/file -F branch=@branch.txt -f content=abc",
-      "gh api graphql --input body.json",
-      "gh api graphql -F query=@query.graphql",
-      'gh api graphql -f "query=$QUERY"',
-      'gh api "https://$DEST" -X PATCH -f sha=abc',
-      'gh api "https://{branch}" -X PATCH -f sha=abc',
-      'gh api "https://{branch}@github.com" -X PUT -f content=abc',
-      "gh api 'https://api.github.com/{branch}/../repos/o/r/issues' -X PATCH -f sha=abc",
-      'gh api "$ENDPOINT" -X PATCH -f sha=abc',
-      'gh api "repos/o/r/$RESOURCE/heads/main" -X PATCH -f sha=abc',
-      "gh api --method DELETE repos/o/r/git/refs/heads/main",
-      "gh api -X PATCH https://api.github.com/repos/o/r/git/refs/heads/%6dain -f sha=abc",
-      'gh api repos/o/r/contents/file -X PUT -f branch="$BRANCH"',
-      'gh api -X PATCH repos/o/r/git/refs/heads/$BRANCH -f sha=abc',
-      "gh api -X PATCH repos/o/r/git/refs/heads/ma?n -f sha=abc",
-      "gh api -X DELETE repos/o/r/git/refs/heads/maste?",
-      "gh api -X PUT 'repos/o/r/contents/file?branch=main' -f branch=topic",
-      String.raw`gh api graphql -f 'query=mutation { createCommitOnBranch(input: {branch: {branchName: "\u006dain"}}) { clientMutationId } }'`,
-    ]) assert.match(policy.pushProblem(command, f.dir), /work reaches main only through a pull request|the hook cannot prove that this command is only the merge command|the hook cannot establish the GitHub API command's destination/, `${provider}: ${command}`);
-    for (const command of [
-      "gh api 'https://api.github.com/repos/{owner}/{repo}/git/refs/heads/topic' -X PATCH -f sha=abc",
-      "gh api 'repos/{owner}/{repo}/git/refs/heads/topic' -X PATCH -f sha=abc",
-      "gh api 'repos/:owner/:repo/git/refs/heads/topic' -X PATCH -f sha=abc",
-      "gh api 'repos/o/r/{branch}' -X GET",
-      `gh api graphql -f 'query=mutation { createCommitOnBranch(input: {branch: {repositoryNameWithOwner: "o/r", branchName: ":branch"}}) { clientMutationId } }'`,
-      "gh api repos/o/r/git/refs/heads/main",
-      "gh api repos/o/r/contents/file -X GET -f ref=main",
-      "gh api --method=GET repos/o/r/contents/file -f ref=master",
-      "gh api -XGET repos/o/r/git/refs -f ref=refs/heads/main",
-      "gh api -iX GET repos/o/r/git/refs/heads/main",
-      "gh api repos/o/r/contents/file -X PUT -f branch=topic",
-      "gh api graphql -f 'query=query { repository(owner: \"o\", name: \"r\") { ref(qualifiedName: \"refs/heads/main\") { id } } }'",
-      "gh api repos/o/r/issues -f title=main",
-      "gh api repos/o/r/pulls -f base=main -f head=topic -f title=change",
-      "gh api repos/o/r/pulls/1 -X PATCH -f base=main",
-      "env -u UNUSED gh api repos/o/r/contents/file -X GET -f ref=main",
-      "gh -X GET api repos/o/r/git/refs/heads/main",
-      "gh api -X PATCH repositories/123/git/refs/heads/topic -f sha=abc",
-      "gh api graphql -f 'query=mutation { createIssue(input: {title: \"main\", body: \"updateRef(\"}) { clientMutationId } }'",
-      "gh api graphql -f 'query=mutation { createCommitOnBranch(input: {branch: {repositoryNameWithOwner: \"o/r\", branchName: \"topic\"}}) { clientMutationId } }'",
-      "gh api repos/o/r/issues --input body.json",
-      "gh api repos/o/r/git/refs/heads/topic -X PATCH -f sha=abc --template main",
-      "gh api repos/o/r/contents/main -X PUT -f branch=topic -f content=abc",
-      "gh api 'repos/o/r/contents/file?ref=main'",
-    ]) assert.equal(policy.pushProblem(command, f.dir), undefined, `${provider}: ${command}`);
-    if (provider === "claude") {
-      const hook = await import(pathToFileURL(join(f.plugin, "hooks/sage-hook.mjs")));
-      for (const actor of [{}, { agent_id: "fixture-child", agent_type: "sage:implementer" }]) {
-        for (const command of [
-          "gh api -X PATCH repos/o/r/git/refs/heads/main -f sha=abc -F force=true",
-          "gh api -X PUT repos/o/r/contents/file -f branch=main -f content=abc",
-          "gh api graphql -f 'query=mutation { updateRefs(input: {repositoryId: \"id\", refUpdates: []}) { clientMutationId } }'",
-        ]) {
-          const result = hook.handle({ hook_event_name: "PreToolUse", tool_name: "Bash", cwd: f.dir,
-            tool_input: { command }, ...actor }, { sage: true }, { touch() {} });
-          assert.equal(result?.hookSpecificOutput?.permissionDecision, "deny", command);
-          if (!actor.agent_id) assert.match(result.hookSpecificOutput.permissionDecisionReason, /work reaches main only through a pull request/);
-        }
-      }
-    }
-  }
-});
-
-test("T536 R2003-1, R2002-1: the push rule follows only a plain cd, binds createCommitOnBranch to its repository, reads routes with extra slashes, and reads commit and search text as text", async t => {
-  for (const provider of ["claude", "codex"]) {
-    const f = isolated(t, provider);
-    const api = await import(pathToFileURL(join(f.plugin, "core/index.mjs")));
-    // The checkout "bad" sends topic to main by its settings; f.dir is a clean checkout. other/repo's default branch is trunk.
-    const bad = join(f.dir, "bad");
-    const clean = fakeGit("topic");
-    const readGit = (dir, args) => args[0] === "config" && dir === bad ? `${clean(dir, args)}remote.origin.push\nrefs/heads/topic:refs/heads/main\0` : clean(dir, args);
-    const readGh = (args) => (args.at(-1) === ".default_branch" ? (args[3] === "repos/other/repo" ? "trunk\n" : "main\n") : undefined);
-    const policy = api.createPushPolicy({ readGh, readGit });
-    const says = (command, cwd = f.dir) => policy.pushProblem(command, cwd) ?? "allowed";
-    // 1a: a cd that the hook cannot follow beside a push, in the checkout where the push really runs.
-    for (const [command, cwd] of [[`cd -P ${bad} && git push origin topic`], [`cd -L ${bad} && git push origin topic`], [`cd -- ${bad} && git push origin topic`],
-      ["cd && git push origin topic"], [`(cd ${f.dir}) && git push origin topic`, bad], [`true || cd ${f.dir}; git push origin topic`, bad],
-      [`cd ${f.dir} & git push origin topic`, bad]]) {
-      // Refused for the cd beside the push, or for the settings of the checkout where the push really runs.
-      assert.match(says(command, cwd), /runs in the same command line as the push|git's setting remote\.origin\.push/, `${provider}: ${command}`);
-    }
-    assert.match(says(`cd ${bad} && git push origin topic`), /git's setting remote\.origin\.push can send the branch/, "a plain cd moves the read");
-    assert.equal(says(`cd ${f.dir} && git push origin topic`, bad), "allowed", "a plain cd to a clean checkout passes");
-    // 1b: createCommitOnBranch is checked against the default branch of the repository it names, not the checkout's.
-    const commit = (repo, branch) => `gh api graphql -f 'query=mutation { createCommitOnBranch(input: {branch: {repositoryNameWithOwner: "${repo}", branchName: "${branch}"}, expectedHeadOid: "abc", message: {headline: "x"}}) { clientMutationId } }'`;
-    for (const command of [commit("other/repo", "trunk"), commit("other/repo", "main"), commit("../x", "topic"),
-      `gh api graphql -f 'query=mutation { createCommitOnBranch(input: {branch: {branchName: "topic"}}) { clientMutationId } }'`]) {
-      assert.match(says(command), /work reaches main only through a pull request/, `${provider}: ${command}`);
-    }
-    assert.equal(says(commit("other/repo", "topic")), "allowed");
-    // 1c: a doubled or trailing slash does not skip the route checks.
-    for (const command of ["gh api -X PUT repos/o/r//contents/file -f content=abc", "gh api -X PATCH repos/o/r/ -f default_branch=topic",
-      "gh api -X PATCH repos/o/r//git/refs/heads/main -f sha=abc", "gh api -X PATCH https://api.github.com/repos/o/r//git//refs/heads/main -f sha=abc",
-      `gh api graphql/ -f 'query=mutation { updateRef(input: {refId: "id", oid: "abc"}) { clientMutationId } }'`]) {
-      assert.match(says(command), /work reaches main only through a pull request/, `${provider}: ${command}`);
-    }
-    assert.equal(says("gh api repos/o/r//issues -f title=x"), "allowed");
-    // 2: a commit message or a search pattern is text, also after git -C; a setting that runs still refuses.
-    for (const command of [`git -C ${f.dir} commit -m "refuse git config core.hooksPath /tmp/h"`, `git grep -n "git config core.hooksPath /tmp/h"`,
-      `rg "git config core.fsmonitor /tmp/h" docs`, `git -C ${f.dir} commit -m "explain the git push rule"`]) {
-      assert.equal(says(command), "allowed", `${provider}: ${command}`);
-    }
-    for (const command of [`git -C ${f.dir} -c core.hooksPath=/tmp/h commit -m x`, `git grep -O"sh -c 'git config core.hooksPath /tmp/h'" x`,
-      `rg --pre "sh -c 'git config core.hooksPath /tmp/h'" x`, `sh -c "git config core.hooksPath /tmp/h"`]) {
-      assert.match(says(command), /sets core\.hooksPath or core\.fsmonitor/, `${provider}: ${command}`);
-    }
   }
 });
 
@@ -2919,11 +2627,11 @@ test("shared command policy classifies merge candidates and executable text in b
     assert.equal(typeof api.createCommandPolicy, "function");
     const tool = join(f.plugin, "skills/sage/sage.mjs");
     const adapter = await import(pathToFileURL(join(f.plugin, provider === "claude" ? "hooks/command-policy.mjs" : "runtime/command-policy.mjs")));
-    const policy = adapter.createCommandPolicy({ stateToolPath: tool });
+    const policy = adapter.createCommandPolicy();
     const candidate = `gh pr merge 12 --squash --delete-branch --match-head-commit ${sha}`;
     assert.deepEqual(policy.mergeRun(candidate, f.dir), { pr: "12", sha });
     for (const text of [candidate.replace(" 12 ", " 012 "), candidate.replace(sha, "abc"), `${candidate} --admin`,
-      `sh -c '${candidate}'`, "gh api repos/o/r/pulls/12/merge", "gh pr 'merge"]) {
+      `sh -c '${candidate}'`, "gh pr 'merge"]) {
       assert.equal(typeof policy.mergeRun(text, f.dir)?.problem, "string", text);
     }
     // T815: the merge rule judges the programs that run, never text; whatever state tool path the policy has.
@@ -2931,8 +2639,6 @@ test("shared command policy classifies merge candidates and executable text in b
       assert.equal(policy.mergeRun(text, f.dir), undefined, text);
       assert.equal(api.createCommandPolicy().mergeRun(text, f.dir), undefined, text);
     }
-    const rows = policy.runnable(api.shellCommands(`echo 'git push origin main'; git push origin topic`));
-    assert.deepEqual(rows.map(row => row.words), [["echo"], ["git", "push", "origin", "topic"]]);
     if (provider === "claude") {
       const hook = await import(pathToFileURL(join(f.plugin, "hooks/sage-hook.mjs")));
       assert.deepEqual(hook.mergeRun(candidate, f.dir), policy.mergeRun(candidate, f.dir));
@@ -2941,34 +2647,11 @@ test("shared command policy classifies merge candidates and executable text in b
   }
 });
 
-test("shared command policy rejects invalid trusted paths and snapshots its binding", async t => {
-  const f = isolated(t, "codex");
-  const api = await import(pathToFileURL(join(f.plugin, "core/index.mjs")));
-  assert.equal(typeof api.createCommandPolicy, "function");
-  for (const path of [null, 1, "", "relative/sage.mjs", "/tmp/bad\npath", "/tmp/bad\0path"]) {
-    assert.throws(() => api.createCommandPolicy({ stateToolPath: path }), /absolute path/);
-  }
-  const binding = { stateToolPath: join(f.dir, "sage.mjs") };
-  const original = binding.stateToolPath;
-  const policy = api.createCommandPolicy(binding);
-  binding.stateToolPath = "/other/sage.mjs";
-  // The policy keeps the path that it got: its runnable rows read the original tool's words as text, not the new one's.
-  assert.deepEqual(policy.runnable(api.shellCommands(`node '${original}' log --why 'gh pr merge'`)).map((row) => row.words), [["node", original]]);
-  assert.deepEqual(policy.runnable(api.shellCommands(`node '${binding.stateToolPath}' log --why 'gh pr merge'`)).map((row) => row.words), [["node", binding.stateToolPath, "log", "--why", "gh pr merge"]]);
-});
-
 test("shared command policy failures deny recognized Claude command tools before native handling", async t => {
-  for (const missing of ["hooks/command-policy.mjs", "core/command-policy.mjs", "invalid-path"]) {
+  for (const missing of ["hooks/command-policy.mjs", "core/command-policy.mjs"]) {
     const f = isolated(t, "claude");
-    assert.ok(existsSync(join(f.plugin, "hooks/command-policy.mjs")));
-    if (missing === "invalid-path") {
-      const odd = join(f.dir, "plugin\tpath");
-      cpSync(f.plugin, odd, { recursive: true });
-      f.plugin = odd;
-    } else {
-      assert.ok(existsSync(join(f.plugin, missing)));
-      rmSync(join(f.plugin, missing));
-    }
+    assert.ok(existsSync(join(f.plugin, missing)));
+    rmSync(join(f.plugin, missing));
     const hook = await import(pathToFileURL(join(f.plugin, "hooks/sage-hook.mjs")));
     for (const sage of [false, true]) for (const tool_name of ["Bash", "Monitor", "PowerShell", "mcp__terminal__run"]) {
       for (const actor of [{}, { agent_id: "fixture-child" }]) {
@@ -2995,8 +2678,7 @@ test("shared push policy applies the same branch and force rules in both isolate
     for (const text of ["git push origin main", "git push origin refs/heads/master", "git push origin topic:main",
       "git push -f origin topic", "git push --force-with-lease origin topic", "git push --forc origin topic",
       "git push --mirror origin", "git push origin HEAD", "git push origin", "git push upstream topic",
-      "git push origin '$BRANCH'", "sudo git push origin topic", "sh -c 'git push origin topic'",
-      "git push 'origin", "gh api repos/o/r/git/refs -f ref=refs/heads/main"]) {
+      "git push origin '$BRANCH'", "sudo git push origin main", "sh -c 'git push -f origin topic'", "git push 'origin"]) {
       const before = calls.length;
       assert.equal(typeof policy.pushProblem(text, f.dir), "string", text);
       assert.equal(calls.length, before, "invalid forms must not query a checkout");
@@ -3015,7 +2697,8 @@ test("shared push policy derives checkout paths and scopes the state-tool text e
   assert.equal(typeof api.createPushPolicy, "function");
   const tool = join(f.dir, "sage.mjs");
   const calls = [];
-  const policy = api.createPushPolicy({ stateToolPath: tool, readGh: fakeGh, readGit: fakeGit(dir => { calls.push(dir); return "topic"; }) });
+  mkdirSync(join(f.dir, "project/nested"), { recursive: true }); // the reader follows a cd into a folder that exists
+  const policy = api.createPushPolicy({ readGh: fakeGh, readGit: fakeGit(dir => { calls.push(dir); return "topic"; }) });
   assert.equal(policy.pushProblem("cd project; git -C nested push origin topic", f.dir), undefined);
   assert.deepEqual(calls, [join(f.dir, "project/nested")]);
   // T815: push text in another program's words is no push, whatever the program.

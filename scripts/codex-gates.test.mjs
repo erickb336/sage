@@ -22,7 +22,7 @@ process.on("exit", () => rmSync(SCRATCH_HOME, { recursive: true, force: true }))
 // the gate a fixed mode and merge check; the process tests run the built hook with a mode file, a logbook and a fake gh.
 const HOOK = fileURLToPath(new URL("../plugins/sage-codex/hooks/gate-hook.mjs", import.meta.url));
 const TOOL = fileURLToPath(new URL("../plugins/sage-codex/skills/sage/sage.mjs", import.meta.url));
-const { gate, readMode, namesSageFolder, codexRuns } = await import(HOOK);
+const { gate, readMode, codexRuns } = await import(HOOK);
 // Codex adds ". Command: <the command>" after a refusal reason, so no reason ends with a period (F-T470-6).
 const UNREADABLE = "sage: the hook could not read this tool call, so it refuses it. Codex may have changed its hook input: update the sage plugin, or tell the user";
 const { stateKey } = await import(new URL("../plugins/sage-codex/hooks/principles-hook.mjs", import.meta.url));
@@ -104,7 +104,7 @@ test("no refusal reason ends with a period, because Codex adds \". Command: …\
     unreadable: denied(await g.run(null)),
     chief: denied(await g.run(pre("apply_patch", patch("*** Update File: src/a.js", "@@", "-a", "+b")))),
     codexFolder: denied(await g.run(pre("apply_patch", patch("*** Add File: .codex/config.toml", "+x")))),
-    sageFolder: denied(await g.run(pre("Bash", "ls ~/.codex/sage"))),
+    logbookWrite: denied(await g.run(pre("Bash", "rm -rf ~/.codex/sage"))),
     resume: denied(await g.run(pre("Bash", "codex resume --last"))),
     logbook: denied(await g.run(mcp("verdict", { task: "T1" }, CHILD))),
     spawn: denied(await g.run({ ...base, ...CHILD, hook_event_name: "PreToolUse", tool_name: "spawn_agent", tool_use_id: "call_1", tool_input: { task_name: "x", message: "y" } })),
@@ -229,7 +229,7 @@ test("a chief's transcript over Node's string limit still reads as the chief; a 
 test("T115: every recognized merge refuses in every mode, role and check result", async () => {
   for (const sage of [false, true]) for (const autopilot of [false, true]) for (const ok of [false, true]) {
     const g = fixed({ sage, autopilot, ok });
-    for (const extra of [{}, CHILD]) for (const command of [MERGE, `gh pr merge 41 --squash --match-head-commit ${SHA}`, "gh pr merge 41 --squash --delete-branch", `${MERGE} && echo done`, `bash -c "${MERGE}"`, "gh api -X PUT repos/o/r/pulls/41/merge"]) {
+    for (const extra of [{}, CHILD]) for (const command of [MERGE, `gh pr merge 41 --squash --match-head-commit ${SHA}`, "gh pr merge 41 --squash --delete-branch", `${MERGE} && echo done`, `bash -c "${MERGE}"`]) {
       assert.equal(denied(await g.run(pre("Bash", command, extra))), OWNER_MERGE, command);
       assert.equal(await g.run(ask(command, extra)), undefined);
     }
@@ -429,63 +429,36 @@ test("a mode file, a record and a ledger that an agent writes under /tmp turn on
   assert.deepEqual(readMode({ session: base.session_id }, w.env), { sage: true, autopilot: false }, "the gate's own mode file says off; the forged one is not read");
 });
 
-test("no thread names the Codex sage folder in a shell command (T460)", (t) => {
+test("T909: a shell write into the Codex sage folder or the shared root refuses in any mode and thread; a read of them passes", (t) => {
   const w = world(t);
-  const home = w.env.HOME;
-  const env = { ...w.env, SAGE_HOME: undefined, CODEX_HOME: join(home, ".codex") };
-  const named = ["cat ~/.codex/sage/.hooks/codex/x.json", `echo '{}' > "${home}/.codex/sage/.hooks/codex/x.json"`, "echo > .hooks/codex/a.json", `ls ${home.toUpperCase()}/.CODEX/SAGE`];
-  // T903: a variable in a path is a documented limit, as in the Claude hook (T815); the sandbox keeps the folder closed.
-  const clean = ["ls ~/.codex/sagebook", `node ${home}/.codex/plugins/cache/sage/sage/0.1.0/skills/sage/sage.mjs status --project /p`, "echo sage mode", "git log",
-    "ls $HOME/.codex/sage", "rm -rf ${CODEX_HOME}/sage", "cp f $SAGE_HOME/x"];
-  assert.deepEqual(named.filter((c) => !namesSageFolder(c, env)), [], "each form is found");
-  assert.deepEqual(clean.filter((c) => namesSageFolder(c, env)), [], "no false match");
+  const refused = /^sage: no agent writes, moves or removes a logbook file from the shell/;
   for (const mode of [{ sage: false, autopilot: false }, { sage: true, autopilot: true }]) {
     w.mode(mode);
-    for (const extra of [{}, CHILD]) {
-      assert.match(denied(w.send(pre("Bash", `cat ${w.env.SAGE_HOME}/.hooks/codex/x.json`, extra))) ?? "", /^sage: no agent runs a shell command that names the Codex sage folder/);
+    for (const extra of [{}, CHILD, w.child("/root/sage_lead_t1_r1")]) {
+      for (const command of [`echo '{}' > ${w.env.SAGE_HOME}/.hooks/codex/x.json`, `echo x >> ${w.env.SAGE_SHARED_HOME}/bindings.tsv`]) {
+        assert.match(denied(w.send(pre("Bash", command, extra))) ?? "", refused, command);
+      }
+      for (const command of [`cat ${w.env.SAGE_HOME}/.hooks/codex/x.json`, `cat ${w.env.SAGE_SHARED_HOME}/bindings.tsv`, `ls ${w.env.SAGE_HOME}`]) {
+        assert.equal(denied(w.send(pre("Bash", command, extra))), undefined, command);
+      }
     }
   }
 });
 
-test("no thread names the shared root in a shell command: its default, SAGE_SHARED_HOME, and a set folder (T594)", (t) => {
+test("T909: a patch into the Codex sage folder or the shared root refuses in any mode with the logbook's reason; the project's own .sage stays free", (t) => {
   const w = world(t);
-  const home = w.env.HOME;
-  const byDefault = { ...w.env, SAGE_HOME: undefined, SAGE_SHARED_HOME: undefined };
-  const named = ["cat ~/.sage/bindings.tsv", `echo x >> "${home}/.sage/plugins.tsv"`];
-  // T903: a variable in a path is a documented limit, as in the Claude hook (T815).
-  const clean = ["ls ~/.sagebook", "echo sage mode", "git log", "ls $HOME/.sage", "rm -rf $SAGE_SHARED_HOME/x", "cp f ${SAGE_SHARED_HOME}/x"];
-  assert.deepEqual(named.filter((c) => !namesSageFolder(c, byDefault)), [], "each form is found");
-  assert.deepEqual(clean.filter((c) => namesSageFolder(c, byDefault)), [], "no false match");
-  assert.equal(namesSageFolder("cat /shared/root/bindings.tsv", { ...byDefault, SAGE_SHARED_HOME: "/shared/root" }), true, "a set folder");
-  w.mode({ sage: true, autopilot: false });
-  for (const thread of [CHILD, w.child("/root/sage_lead_t1_r1")]) {
-    assert.match(denied(w.send(pre("Bash", `cat ${w.env.SAGE_SHARED_HOME}/bindings.tsv`, thread))) ?? "", /^sage: no agent runs a shell command that names the Codex sage folder/);
-  }
-});
-
-test("the .sage folder outside the project counts by name, in the shell and in a patch, in any mode; the project's own .sage stays free (T594)", (t) => {
-  const w = world(t);
-  const cwd = join(w.project, "src");
-  mkdirSync(cwd);
-  const byDefault = { ...w.env, SAGE_HOME: undefined, SAGE_SHARED_HOME: undefined };
-  const named = ["cd ~ && rm -rf .sage", "cd ~ && cat .sage/bindings.tsv", "cat ~/.sa*/bindings.tsv", "ls ~/.SAGE", "cat ../../../.sage/z", `cat ${w.env.HOME}/other/.sage/x`];
-  // T903: a word with a variable has no known place, so it no longer counts as a path out of the project.
-  const clean = ["cat .sage/notes.md", "cat ../.sage/notes.md", `cat ${w.project}/.sage/notes.md`, "ls ~/.sagebook", "echo .sage", "cat $HOME/./.sage/z"];
-  assert.deepEqual(named.filter((c) => !namesSageFolder(c, byDefault, cwd)), []);
-  assert.deepEqual(clean.filter((c) => namesSageFolder(c, byDefault, cwd)), []);
   const edit = (path, extra) => pre("apply_patch", patch(`*** Add File: ${path}`, "+x"), extra);
-  const refused = /names the Codex sage folder, the shared root or the Codex sessions folder, and no patch changes them/;
   const implementer = w.child("/root/sage_implementer_t1_r1");
   for (const mode of [{ sage: false, autopilot: false }, { sage: true, autopilot: true }]) {
     w.mode(mode);
-    for (const path of ["~/.sage/bindings.tsv", "~/.sage/p-abc123/ledger.tsv", `${w.env.SAGE_SHARED_HOME}/bindings.tsv`, "../.sage/bindings.tsv"]) {
-      assert.match(denied(w.send(edit(path, implementer))) ?? "", refused, path);
+    for (const path of [`${w.env.SAGE_SHARED_HOME}/bindings.tsv`, `${w.env.SAGE_HOME}/.hooks/codex/x.json`]) {
+      assert.equal(denied(w.send(edit(path, implementer))), `sage: no patch changes a logbook file: ${JSON.stringify(path)} is in the Codex sage folder or the shared root. Use the sage MCP tools for the logbook`, path);
     }
     assert.equal(w.send(edit(".sage/notes.md", implementer)), undefined, "the project's own folder");
   }
 });
 
-test("T903: a logbook file's name outside the project passes; a shell write by a literal path into the Codex sage folder or the shared root refuses, also through a link and in any mode (core's logbookWrite)", (t) => {
+test("T903: a logbook file's name outside the project passes; a shell write by a literal path into the Codex sage folder or the shared root refuses in any mode (core's logbookWrite)", (t) => {
   const w = world(t);
   const implementer = w.child("/root/sage_implementer_t1_r1");
   const bash = (command, extra = implementer) => pre("Bash", command, extra);
@@ -496,27 +469,28 @@ test("T903: a logbook file's name outside the project passes; a shell write by a
     assert.equal(denied(w.send(bash(`rm ../${name}`, {}))), undefined, `the chief: ${name}`);
   }
   assert.equal(denied(w.send(bash("cd $SOMEWHERE && rm tasks.tsv"))), undefined, "no known place: a documented limit");
-  // The roots: the Codex sage folder (SAGE_HOME here) and a shared root of its own, each also through a link.
+  // The roots: the Codex sage folder (SAGE_HOME here) and a shared root of its own. A link in the project to the shared
+  // root is a link: rm of it removes the link (F-T903-10), and a write through it is a limit of the hook (T909).
   w.env.SAGE_SHARED_HOME = join(w.dir, "shared");
   mkdirSync(join(w.env.SAGE_SHARED_HOME, "p-abc"), { recursive: true });
   mkdirSync(join(w.env.SAGE_HOME, "p-abc"), { recursive: true });
-  symlinkSync(w.env.SAGE_SHARED_HOME, join(w.dir, "to-shared"));
-  symlinkSync(w.env.SAGE_HOME, join(w.dir, "to-sage"));
+  symlinkSync(w.env.SAGE_SHARED_HOME, join(w.project, "to-shared"));
   const refused = (word) => `sage: no agent writes, moves or removes a logbook file from the shell: ${JSON.stringify(word)} is in the Codex sage folder or the shared root, or holds one. Use the sage MCP tools for the logbook`;
-  const writes = [[`echo x > ${w.dir}/to-shared/p-abc/tasks.tsv`, `${w.dir}/to-shared/p-abc/tasks.tsv`], [`cd ${w.dir}/to-sage && rm -f p-abc/runs.tsv`, "p-abc/runs.tsv"],
-    [`cp /dev/null ${w.dir}/to-sage/p-abc/ledger.tsv`, `${w.dir}/to-sage/p-abc/ledger.tsv`], [`rm -rf ${w.dir}`, w.dir], [`find ${w.dir} -delete`, w.dir], ["rm -rf ~/..", "~/.."]];
+  const writes = [[`echo x > ${w.env.SAGE_SHARED_HOME}/p-abc/tasks.tsv`, `${w.env.SAGE_SHARED_HOME}/p-abc/tasks.tsv`], [`cd ${w.env.SAGE_HOME} && rm -f p-abc/runs.tsv`, "p-abc/runs.tsv"],
+    [`cp /dev/null ${w.env.SAGE_HOME}/p-abc/ledger.tsv`, `${w.env.SAGE_HOME}/p-abc/ledger.tsv`], [`rm -rf ${w.dir}`, w.dir], [`find ${w.env.SAGE_SHARED_HOME} -delete`, w.env.SAGE_SHARED_HOME], ["rm -rf ~/..", "~/.."]];
+  // Ordinary commands over the home folder, which holds the roots, and rm of the project's link (F-T903-7, F-T903-10).
+  const passes = [`cat ${w.env.SAGE_SHARED_HOME}/p-abc/tasks.tsv`, `ls ${w.env.SAGE_HOME}`, `rm -rf ${w.project}/build`, "echo x > ../notes.txt",
+    "find ~ -name '*.tmp' -delete", "chmod -R u+w ~", `find ${w.dir} -name '*.tmp' -delete`, `chmod -R u+w ${w.dir}`, `rm ${w.project}/to-shared`, "rm to-shared"];
   for (const mode of [{ sage: false, autopilot: false }, { sage: true, autopilot: false }]) {
     w.mode(mode);
     for (const [who, extra] of [["the chief", {}], ["an implementer", implementer]]) {
       for (const [command, word] of writes) assert.equal(denied(w.send(bash(command, extra))), refused(word), `${who} ${JSON.stringify(mode)}: ${command}`);
-      for (const command of [`cat ${w.dir}/to-shared/p-abc/tasks.tsv`, `ls ${w.dir}/to-sage`, `rm -rf ${w.project}/build`, "echo x > ../notes.txt"]) {
-        assert.equal(denied(w.send(bash(command, extra))), undefined, `${who}: ${command}`);
-      }
+      for (const command of passes) assert.equal(denied(w.send(bash(command, extra))), undefined, `${who} ${JSON.stringify(mode)}: ${command}`);
     }
   }
 });
 
-test("a task worktree in a sibling folder counts as the project from the main checkout; the shared root and a .sage folder outside the project still refuse, and a logbook file's name in Claude's logbook folder, a forged checkout or another repository passes the shell (T594, T903)", (t) => {
+test("a task worktree in a sibling folder counts as the project from the main checkout; the shared root still refuses, and a logbook file's name in Claude's logbook folder, a forged checkout or another repository passes the shell (T594, T903)", (t) => {
   const w = world(t);
   const linked = join(w.dir, "linked"), forged = join(w.dir, "forged"), other = join(w.dir, "other");
   assert.equal(spawnSync("git", ["-C", w.project, "worktree", "add", "-qb", "linked", linked]).status, 0);
@@ -527,25 +501,22 @@ test("a task worktree in a sibling folder counts as the project from the main ch
   const logbook = join(w.env.HOME, ".claude", "sage", "p-abc123");
   const implementer = w.child("/root/sage_implementer_t1_r1");
   const writes = [(path) => pre("apply_patch", patch(`*** Add File: ${path}`, "+x"), implementer), (path) => pre("Bash", `echo x > '${path}'`, implementer)];
-  const sageFolder = /names the Codex sage folder, the shared root or the Codex sessions folder/;
+  const logbookRule = /^sage: no (?:patch|agent writes, moves or removes a logbook file)/;
   w.mode({ sage: true, autopilot: false });
   for (const write of writes) {
     for (const name of ["config.json", "status.md", "src/config.json", ".sage/x"]) assert.equal(w.send(write(join(linked, name))), undefined, `the worktree: ${name}`);
-    for (const name of ["config.json", "status.md", ".sage/x"]) assert.match(denied(w.send(write(join(w.env.SAGE_SHARED_HOME, name)))) ?? "", sageFolder, `the shared root: ${name}`);
-    assert.match(denied(w.send(write(join(logbook, ".sage/x")))) ?? "", sageFolder, "a .sage folder in a logbook");
+    for (const name of ["config.json", "status.md", ".sage/x"]) assert.match(denied(w.send(write(join(w.env.SAGE_SHARED_HOME, name)))) ?? "", logbookRule, `the shared root: ${name}`);
     // T903: the name rule is gone, so a logbook file's name in another folder is no logbook path. A patch to Claude's
     // logbook folder still meets the patch's checkout rule.
     for (const dir of [logbook, forged, other]) {
-      for (const name of ["config.json", "status.md"]) {
+      for (const name of ["config.json", "status.md", ".sage/x"]) {
         const why = denied(w.send(write(join(dir, name))));
         if (dir === logbook && write === writes[0]) assert.match(why ?? "", /^sage: this patch reaches protected storage/, join(dir, name));
         else assert.equal(why, undefined, join(dir, name));
       }
     }
-    assert.match(denied(w.send(write(join(forged, ".sage/x")))) ?? "", sageFolder, "a forged checkout's .sage folder");
   }
   assert.equal(denied(w.send(pre("Bash", `cd '${linked}' && echo x > config.json`, implementer))), undefined, "a cd into the worktree");
-  assert.equal(namesSageFolder(`cat ${w.project}/.sage/x`, w.env, linked), false, "the main checkout from the worktree");
   w.mode({ sage: false, autopilot: false });
   for (const write of writes) assert.equal(denied(w.send(write(join(linked, ".sage/x")))), undefined, "out of sage mode");
 });
@@ -820,16 +791,16 @@ function fakeCodex(w) {
   return { pkg, vendor, arg0, env: { ...w.env, PATH: [arg0, join(vendor, "codex-path"), join(w.dir, "bin"), "/usr/bin", "/bin"].join(":") } };
 }
 
-test("a codex program is found by the real file of a Codex executable, as node's script, and through an expansion, also for resume (R1664-4)", (t) => {
+test("a codex program is found by its name, also as node's script and from npx, also for resume (R1664-4); a renamed copy or an expansion is a limit (T909)", (t) => {
   const w = world(t);
   const { pkg, vendor, env } = fakeCodex(w);
-  const starts = [`node ${pkg}/bin/codex.js exec hi`, `node --no-warnings ${pkg}/bin/codex.js`, `${w.dir}/bin/helper-tool exec hi`, "helper-tool exec hi",
-    `${vendor}/bin/codex exec hi`, "native-tool exec hi", "app-tool exec hi", "npx @openai/codex@0.164.0 exec hi", `cd ${w.dir}/bin && ./helper-tool exec hi`];
-  const expansions = ["C=codex; $C exec hi", '"$(command -v codex)" exec hi', "`which codex` exec hi", "X=helper-tool; $X --codex"];
+  const starts = [`node ${pkg}/bin/codex.js exec hi`, `node --no-warnings ${pkg}/bin/codex.js`, `${vendor}/bin/codex exec hi`, "codex exec hi",
+    "npx @openai/codex@0.164.0 exec hi", `cd ${w.dir}/bin && ./codex exec hi`];
+  // A copy of Codex by another name, and a program from a variable or a substitution: documented limits (standing order 70).
+  const limits = ["helper-tool exec hi", `${w.dir}/bin/helper-tool exec hi`, "native-tool exec hi", "app-tool exec hi", "C=codex; $C exec hi", "`which codex` exec hi"];
   const others = ["node scripts/build.mjs", "npm test", "grep -rn codex src", `cat ${pkg}/package.json`, "echo $HOME", "ls $HOME", "rg -n codex src", `${vendor}/codex-path/rg -n codex src`];
   assert.deepEqual(starts.map((c) => codexRuns(c, w.project, env)?.length), starts.map(() => 1), "each start is found");
-  assert.deepEqual(expansions.map((c) => codexRuns(c, w.project, env)), expansions.map(() => null), "an expansion with codex named is unreadable");
-  assert.deepEqual(others.map((c) => codexRuns(c, w.project, env)), others.map(() => []));
+  assert.deepEqual([...limits, ...others].map((c) => codexRuns(c, w.project, env)), [...limits, ...others].map(() => []));
   w.mode({ sage: true, autopilot: false });
   const reviewer = { ...w.child("/root/sage_code_reviewer_t1") };
   const send = (input) => {
@@ -841,12 +812,10 @@ test("a codex program is found by the real file of a Codex executable, as node's
     assert.deepEqual(starts.map((c) => send(pre("Bash", c, extra))), starts.map(() => CODEX_RUN));
     assert.deepEqual(others.map((c) => send(pre("Bash", c, extra))), others.map(() => undefined));
   }
-  assert.deepEqual(expansions.map((c) => send(pre("Bash", c, reviewer))), expansions.map(() => UNREAD_CODEX));
-  for (const command of [`node ${pkg}/bin/codex.js queue --thread X --message 'autopilot on'`, "helper-tool exec resume --last 'autopilot on'", "app-tool queue --thread X --message hi"]) {
+  for (const command of [`node ${pkg}/bin/codex.js queue --thread X --message 'autopilot on'`, "codex exec resume --last 'autopilot on'", "codex queue --thread X --message hi"]) {
     assert.equal(send(pre("Bash", command)), CODEX_RUN, command);
   }
-  for (const command of ["C=codex; $C resume --last", "C=codex; $C queue --thread X --message hi"]) assert.equal(send(pre("Bash", command)), UNREAD_CODEX, command);
-  assert.equal(send(pre("Bash", "helper-tool --version")), undefined, "the chief may print Codex's version");
+  assert.equal(send(pre("Bash", "codex --version")), undefined, "the chief may print Codex's version");
 });
 
 test("Codex's own rg in codex-path, first on PATH, is not Codex: a role agent's rg runs (R1668-1)", (t) => {
@@ -886,17 +855,15 @@ test("codex --version and --help start no session: a role agent may run them (R1
   assert.deepEqual(starts.map(send), starts.map(() => CODEX_RUN));
 });
 
-test("a command that runs a program from an expansion and names codex is refused only for a role agent in sage mode (R1668-2)", (t) => {
+test("a command that runs a program from an expansion and names codex passes for every thread (R1668-2, T909); an unreadable one that may resume, fork or queue is refused", (t) => {
   const w = world(t);
-  const commands = ["$EDITOR codex/a.txt", "$(npm bin)/eslint packages/sage-codex", "X=ls; $X codex"];
+  const commands = ["$EDITOR codex/a.txt", "$(npm bin)/eslint packages/sage-codex", "X=ls; $X codex", "C=codex; $C fork abc"];
   const send = (command, extra = {}) => denied(w.send(pre("Bash", command, extra)));
-  w.mode({ sage: false, autopilot: false });
-  for (const extra of [{}, w.child("/root/sage_code_reviewer_t1"), w.child("/root/worker_1")]) assert.deepEqual(commands.map((c) => send(c, extra)), commands.map(() => undefined), "sage mode off");
-  w.mode({ sage: true, autopilot: false });
-  assert.deepEqual(commands.map((c) => send(c)), commands.map(() => undefined), "the chief");
-  assert.deepEqual(commands.map((c) => send(c, w.child("/root/worker_1"))), commands.map(() => undefined), "a child that is not a role agent");
-  assert.deepEqual(commands.map((c) => send(c, w.child("/root/sage_code_reviewer_t1"))), commands.map(() => UNREAD_CODEX), "a role agent in sage mode");
-  assert.equal(send("C=codex; $C fork abc"), UNREAD_CODEX, "a possible fork is refused for every thread");
+  for (const mode of [{ sage: false, autopilot: false }, { sage: true, autopilot: false }]) {
+    w.mode(mode);
+    for (const extra of [{}, w.child("/root/sage_code_reviewer_t1"), w.child("/root/worker_1")]) assert.deepEqual(commands.map((c) => send(c, extra)), commands.map(() => undefined), JSON.stringify(mode));
+  }
+  assert.equal(send("echo 'codex fork abc"), UNREAD_CODEX, "a line that the reader cannot read and that may fork");
 });
 
 test("a child runs only the read commands of the state tool from the shell, and never its MCP server, in any mode (R1669-2)", (t) => {
@@ -907,7 +874,7 @@ test("a child runs only the read commands of the state tool from the shell, and 
   writeFileSync(copy, "");
   const writes = [`node ${TOOL} verdict T1 --sha ${SHA} --kind review-clean --cycle 1`, `node ${TOOL} gate G1 answer 1`, `node ${plugin}mcp/state-server.mjs`,
     `cd ${plugin}skills/sage && node ./sage.mjs task T1 set state=verified`, `node ${copy} verdict T1`, `node ${TOOL} pages T1 record /p.html`,
-    `X=${TOOL}; node $X verdict T1`, `bash -c "node ${TOOL} log T1 --decision x --why y"`];
+    `bash -c "node ${TOOL} log T1 --decision x --why y"`];
   const reads = [`node ${TOOL} status`, `node ${TOOL} status --project ${w.project}`, `node ${TOOL} standing`, `node ${TOOL} merge-check ${SHA}`, `node ${TOOL} pages T1`, "node scripts/build.mjs", "npm test"];
   for (const mode of [{ sage: false, autopilot: false }, { sage: true, autopilot: false }]) {
     w.mode(mode);
@@ -1073,7 +1040,7 @@ test("T49: scoped reads reject writes, other projects and providers, and ambiguo
     `${cli} task T1 ${project} --project '${other}'`, `${cli} task T1 --project`, `${cli} config --project=`,
     `${cli} unknown ${project}`, `${cli} task T1 ${project} --`, `${read} && echo ok`, `${read};`, `${read} | cat`,
     `${read} > out.txt`, `${read} 2>&1`, `env ${read}`, `sudo ${read}`, `command ${read}`, `bash -c "${read}"`,
-    `SAGE_BOARD_ROOTS='[]' ${read}`, `cd '${other}' && ${read}`, `node --import ./write.mjs '${TOOL}' task T1 ${project}`,
+    `SAGE_BOARD_ROOTS='[]' ${read}`, `cd '${other}' && ${read}`,
     `node '${TOOL.replace('sage-codex/', 'sage/')}' task T1 ${project}`, `${read} '`,
   ];
   for (const sage of [false, true]) {
@@ -1130,7 +1097,7 @@ test("in sage mode a push takes core's push form, as in the Claude hook; outside
   spawnSync("git", ["-C", w.project, "remote", "add", "origin", "https://github.com/acme/project.git"]);
   const pushes = { "git push --force origin sage/t1": /^sage: sage mode never force-pushes/, "git push origin main": /^sage: work reaches main only through a pull request/,
     "git push": /^sage: name the remote and the branch/, "git push upstream sage/t1": /^sage: push to a remote of this checkout/, "git push origin HEAD:main": /^sage: work reaches main only through a pull request/,
-    "bash -c 'git push -f origin sage/t1'": /^sage: /, "gh api -X PUT repos/o/r/contents/a.txt -f branch=main -f message=x -f content=eA==": /^sage: /, "git push origin +sage/t1": /^sage: sage mode never force-pushes/ };
+    "bash -c 'git push -f origin sage/t1'": /^sage: /, "git push origin +sage/t1": /^sage: sage mode never force-pushes/ };
   for (const mode of [{ sage: true, autopilot: false }, { sage: true, autopilot: true }]) {
     w.mode(mode);
     w.typed("sage mode", "autopilot on");
@@ -1170,125 +1137,35 @@ test("T536: in sage mode no push reaches the default branch, whatever the remote
     "git push https://github.com/acme/site.git sage/t1": /^sage: push to a remote of this checkout \(git remote -v\), not to "https:/,
     "git -c push.default=upstream push github sage/t1": /^sage: "-c" is not part of the push form/,
     "git -c remote.github.push=sage/t1:main push github sage/t1": /^sage: "-c" is not part of the push form/,
-    "git config remote.github.push refs/heads/sage/t1:refs/heads/main && git push github sage/t1": /^sage: "git config remote.github.push/,
-    "export GIT_CONFIG_COUNT=1 GIT_CONFIG_KEY_0=push.default GIT_CONFIG_VALUE_0=upstream; git push github sage/t1": /^sage: "export GIT_CONFIG_COUNT=1/,
-    "printf x >> .git/config; git push github sage/t1": /^sage: this command writes a file under a \.git folder/,
-    "printf x >> notes.txt; git push github sage/t1": /^sage: "a file write" runs in the same command line as the push/,
-    "git push github sage/t1 2>&1 | tee push.log": /^sage: "tee push\.log" runs in the same command line as the push/,
   };
+  // T909: a push beside other commands passes; each push that the reader finds meets the push form.
   const passes = ["git push -u github sage/t1", "git push github sage/t1 2>&1 | tail -3", "git push --delete github sage/t9",
-    "git add -A && git commit -m x && git push -u github sage/t1 && gh pr create --draft --title t --body b"];
+    "git add -A && git commit -m x && git push -u github sage/t1 && gh pr create --draft --title t --body b",
+    "printf x >> notes.txt; git push github sage/t1", "git push github sage/t1 2>&1 | tee push.log", "git fetch -u github main; git push github sage/t1"];
   const check = (cases, ok, label) => {
     for (const [command, why] of Object.entries(cases)) assert.match(denied(w.send(pre("Bash", command))) ?? "runs", why, `${label}: ${command}`);
     for (const command of ok) assert.equal(denied(w.send(pre("Bash", command))), undefined, `${label}: ${command}`);
   };
   check(refused, passes, "default main");
-  // Settings that send a plain push of the task's branch to main: remote.<name>.push, and push.default upstream.
-  git("config", "remote.github.push", "refs/heads/sage/t1:refs/heads/main");
-  check({ "git push github sage/t1": /^sage: git's setting remote\.github\.push can send the branch to another name/ }, ["git push --delete github sage/t9"], "remote push setting");
-  git("config", "--unset", "remote.github.push");
-  // R1935-1 item 4: remote.<name>.mirror makes a push of one branch a mirror push.
-  git("config", "remote.github.mirror", "true");
-  check({ "git push github sage/t1": /^sage: git's setting remote\.github\.mirror makes every push a mirror push/ }, [], "mirror setting");
-  git("config", "--unset", "remote.github.mirror");
-  // push.default upstream sends a named branch to its upstream, and a fetch in the same line can set that upstream after the
-  // hook read it (R1950-1). So no push runs while it is set, whatever the upstream is now (also F5's refs/heads/<branch>).
-  const UPSTREAM = /^sage: git's setting push\.default is upstream, so git can send the branch to its upstream/;
-  git("config", "push.default", "upstream");
-  git("branch", "sage/t5-x");
-  git("config", "branch.sage/t5-x.merge", "refs/heads/main");
-  check({ "git push github sage/t1": UPSTREAM, "git push github refs/heads/sage/t5-x": UPSTREAM,
-    "git fetch --set-upstream github main && git push github sage/t1": UPSTREAM }, ["git push --delete github sage/t9"], "push.default upstream");
-  git("config", "push.default", "tracking");
-  check({ "git push github sage/t1": UPSTREAM }, [], "push.default tracking");
-  git("config", "--unset", "push.default");
-  // An upstream set beside a push is refused, also when push.default is not upstream now.
-  check({ "git fetch --set-upstream github main && git push github sage/t1": /^sage: "git fetch --set-upstream github main" runs in the same command line as the push/,
-    "git fetch -u github main; git push github sage/t1": /^sage: "git fetch -u github main" runs in the same command line/,
-    "git fetch --set-up github main; git push github sage/t1": /^sage: "git fetch --set-up github main" runs in the same command line/ },
-    ["git fetch github && git push -u github sage/t1", "git add -u && git push github sage/t1"], "upstream beside a push");
-  // R1936 F6: a task-branch name that is a symbolic ref to main sends main.
-  git("branch", "main");
-  git("symbolic-ref", "refs/heads/sage/t5-sym", "refs/heads/main");
-  check({ "git push github sage/t5-sym": /^sage: sage\/t5-sym is not a plain branch of this checkout \(git reads it as refs\/heads\/main\)/ }, [], "symbolic branch");
-  // R1936 F7: GitHub names the default branch; the local ref only has to agree, and a failed read refuses.
-  const API_MAIN = /^sage: work reaches main only through a pull request/;
+  // A git setting that redirects a push (remote.<name>.push, url.<base>.insteadOf, push.default upstream) is a limit of
+  // the hook (T909, standing order 70): GitHub's protection of main is the guard.
+  // R1936 F7: GitHub names the default branch, and a failed read refuses.
   git("branch", "trunk");
   git("branch", "topic");
   writeFileSync(join(w.dir, "default-branch"), "trunk\n");
-  check({ "git push github topic": /^sage: refs\/remotes\/github\/HEAD names main, but GitHub names trunk as the default branch/ }, [], "planted local default");
-  git("symbolic-ref", "--delete", "refs/remotes/github/HEAD");
-  check({ "git push github trunk": /^sage: trunk is the default branch of github: work reaches main/, "git push --delete github trunk": /^sage: trunk is the default branch/,
-    // A GitHub API write to that default branch, as to main (F3 of R1893).
-    "gh api -X PATCH repos/acme/site/git/refs/heads/trunk -f sha=abc": API_MAIN,
-    "gh api -X PUT repos/acme/site/contents/a.txt -f branch=trunk -f message=x -f content=eA==": API_MAIN },
-    ["git push github topic", "git push github sage/t1", "gh api -X PATCH repos/acme/site/git/refs/heads/sage/t1 -f sha=abc",
-      "gh api -X PUT repos/acme/site/contents/a.txt -f branch=sage/t1 -f message=x -f content=eA=="], "default trunk from GitHub");
+  check({ "git push github trunk": /^sage: trunk is the default branch of github: work reaches main/, "git push --delete github trunk": /^sage: trunk is the default branch/ },
+    ["git push github topic", "git push github sage/t1"], "default trunk from GitHub");
   writeFileSync(join(w.dir, "default-branch"), "fail\n");
-  check({ "git push github sage/t1": /^sage: the hook cannot read the default branch of acme\/site from GitHub/,
-    "gh api -X PATCH repos/acme/site/git/refs/heads/sage/t1 -f sha=abc": API_MAIN }, [], "GitHub read fails");
+  check({ "git push github sage/t1": /^sage: the hook cannot read the default branch of acme\/site from GitHub/ }, [], "GitHub read fails");
   writeFileSync(join(w.dir, "default-branch"), "main\n");
-  // R1936 F1, F2, F3: other ways to send commits: subtree push, send-pack, an alias, a git-<name> program.
-  git("config", "alias.ship", "push github HEAD:main");
-  const UNKNOWN = /^sage: "git (?:ship|send-pack|xyz)" is not a git command that the hook knows/;
+  // R1936 F1: subtree push sends commits outside the push form. A git alias or a git-<name> program is a limit (T909).
   check({ "git subtree push --prefix=docs github main": /^sage: git subtree push sends commits outside the push form/,
-    "git subtree push --prefix=docs github sage/t1": /^sage: git subtree push/,
-    "git send-pack https://github.com/acme/site.git main": UNKNOWN, "git ship": UNKNOWN, "git -c alias.xyz=push xyz github HEAD:main": UNKNOWN,
-    "env GIT_TRACE=0 git ship": UNKNOWN, "git xyz": UNKNOWN }, ["git status", "git lfs ls-files", "git subtree split --prefix=docs",
-    "git stripspace", "git verify-pack -v x.idx", "git request-pull main origin"], "other senders");
-  // R1949-2: a refusal of a command that does not push gives no push form.
-  assert.doesNotMatch(denied(w.send(pre("Bash", "git credential fill"))) ?? "", /Push only with/);
-  assert.match(denied(w.send(pre("Bash", "git credential fill"))) ?? "", /^sage: "git credential" is not a git command that the hook knows/);
-  // R1936 F4: a git hook or core.hooksPath runs a program on a commit or a push.
-  const HOOKS = /^sage: a command that sets core\.hooksPath or core\.fsmonitor/;
-  // R1949-1: a read or a search that names those keys passes, and so does a read of .git with output elsewhere.
-  check({}, ["grep -rn hooksPath packages/", "git log --grep fsmonitor", "git config --get core.hooksPath", "git config get core.hooksPath",
-    "git commit -m 'refuse core.hooksPath'", "ls .git/ > /tmp/out.txt", "cat .git/HEAD > /tmp/head.txt"], "reads of hook settings");
-  const GIT_WRITE = /^sage: this command writes a file under a \.git folder/;
-  check({ "echo 'git push github HEAD:main' > .git/hooks/pre-push": GIT_WRITE, "cp /tmp/hook .git/hooks/post-commit": GIT_WRITE,
-    "git config core.hooksPath /tmp/h": HOOKS, "git -c core.hooksPath=/tmp/h commit -m x": HOOKS,
-    "GIT_CONFIG_COUNT=1 GIT_CONFIG_KEY_0=core.hooksPath GIT_CONFIG_VALUE_0=/tmp/h git commit -m x": HOOKS,
-    "git config core.fsmonitor /tmp/m": HOOKS }, ["git commit --allow-empty -m x", "echo x > notes.txt"], "git hooks");
-  // R1971-1: get or list is a read only right after config; as the value it is a write.
-  check({ "git config core.hooksPath get": HOOKS, "git config core.hooksPath list": HOOKS, "git config set core.hooksPath get": HOOKS,
-    "git config core.fsmonitor get": HOOKS, "git config core.fsmonitor list": HOOKS, "git config set core.fsmonitor list": HOOKS,
-    "git config core.hooksPath -- --get": HOOKS },
-    ["git config --get core.hooksPath", "git config get core.hooksPath", "git config --list", "git config get core.fsmonitor"], "config grammar");
-  // R1972-1: GIT_CONFIG_PARAMETERS in any quoting refuses; a message, a search or an echo that names the setting passes.
-  check({ "GIT_CONFIG_PARAMETERS=\"'core.hooksPath'='list'\" git commit -m x": HOOKS, "GIT_CONFIG_PARAMETERS=\"'CORE.FSMONITOR'='x'\" git status": HOOKS,
-    "env GIT_CONFIG_PARAMETERS=\"'core.hookspath'=/tmp/h\" git commit -m x": HOOKS, "git --config-env=core.hooksPath=H commit -m x": HOOKS,
-    "bash -c 'git -c core.hooksPath=/tmp/h commit -m x'": HOOKS },
-    ["git commit -m 'set core.hooksPath=/tmp/h'", "grep -rn 'core.hooksPath=' packages/", "git log --grep 'core.fsmonitor=x'",
-      "echo 'git -c core.hooksPath=/tmp/h'"], "parsed settings");
-  // R1971-2: git's own output options do not write under .git.
-  check({ "git checkout-index --prefix=.git/hooks/ -a": GIT_WRITE, "git checkout-index --prefix .git/hooks/ -a": GIT_WRITE,
-    "git diff --output=.git/hooks/pre-push": GIT_WRITE, "git format-patch -o .git/hooks HEAD~1": GIT_WRITE },
-    ["git checkout-index --prefix=build/ -a", "git format-patch -o patches HEAD~1"], "git output options");
-  for (const extra of [{}, w.child("/root/sage_implementer_t1")]) {
-    assert.match(denied(w.send(pre("apply_patch", patch("*** Add File: .git/hooks/pre-push", "+git push github HEAD:main"), extra))) ?? "runs",
-      /^sage: in sage mode no thread changes files under a \.git folder/, "apply_patch to .git/hooks");
-  }
-  // R1936 F8, F9: a move of the default branch and gh repo sync.
-  // The gh command allowlist refuses repo edit and sync before the push policy runs.
-  const GH_REPO_EDIT = /^sage: in sage mode, gh runs only the commands that sage uses \(.*\), because "gh repo edit" can be an alias or an extension/;
-  const GH_REPO_SYNC = /^sage: in sage mode, gh runs only the commands that sage uses \(.*\), because "gh repo sync" can be an alias or an extension/;
-  check({ "gh api -X PATCH repos/acme/site -f default_branch=sage/t1": API_MAIN, "gh api -X PATCH repos/acme/site --input body.json": API_MAIN,
-    "gh repo edit acme/site --default-branch sage/t1": GH_REPO_EDIT,
-    "gh repo sync": GH_REPO_SYNC, "gh repo sync acme/site --branch main": GH_REPO_SYNC },
+    "git subtree push --prefix=docs github sage/t1": /^sage: git subtree push/ }, ["git status", "git lfs ls-files", "git subtree split --prefix=docs",
+    "git stripspace", "git verify-pack -v x.idx", "git request-pull main origin", "git credential fill"], "other senders");
+  // R1936 F8, F9: a move of the default branch and gh repo sync, by the push rules.
+  check({ "gh repo edit acme/site --default-branch sage/t1": /^sage: gh repo edit --default-branch moves the default branch, and only the user does that/,
+    "gh repo sync": /^sage: gh repo sync writes a branch on GitHub outside a pull request/, "gh repo sync acme/site --branch main": /^sage: gh repo sync/ },
     ["gh api -X PATCH repos/acme/site -f description=x", "gh repo view acme/site"], "default branch moves");
-});
-
-test("the sage folder rule also covers the Codex sessions folder, where the typed messages are (R1664-8)", (t) => {
-  const w = world(t);
-  const home = w.env.HOME;
-  const env = { ...w.env, SAGE_HOME: undefined, CODEX_HOME: join(home, ".codex") };
-  const named = ["cat ~/.codex/sessions/2026/10/25/rollout-x.jsonl", `echo '{}' >> ${home}/.codex/sessions/2026/10/25/rollout-x.jsonl`, "grep -r autopilot ~/.codex/sessions"];
-  // T903: a variable in a path is a documented limit (T815); the sandbox keeps the sessions folder closed.
-  const clean = ["ls ~/.codex/sessionsx", "ls ~/.codex/worktrees", "echo sessions", "cat notes/sessions/a.md", "ls $CODEX_HOME/sessions", "ls ${CODEX_HOME}/sessions/2026", "grep -r autopilot $HOME/.codex/sessions"];
-  assert.deepEqual(named.filter((c) => !namesSageFolder(c, env)), []);
-  assert.deepEqual(clean.filter((c) => namesSageFolder(c, env)), []);
-  w.mode({ sage: false, autopilot: false });
-  assert.match(denied(w.send(pre("Bash", `ls ${w.env.CODEX_HOME}/sessions`, CHILD))) ?? "", /^sage: no agent runs a shell command that names the Codex sage folder, the shared root or the Codex sessions folder/);
 });
 
 test("a project under the desktop app's ~/.codex/worktrees edits as usual, with sage mode off and on; its own .codex folder stays closed (R1666-1)", (t) => {
@@ -1347,7 +1224,8 @@ test("T111: structured project edits preserve protected targets and read-only ro
     ["../config.json", /^sage: this patch reaches protected storage or has unverified checkout paths$/],
     [".codex/config.toml", /files under a \.codex folder/],
     [".codex/auth.json", /files under a \.codex folder/],
-    [".git/config", /files under a \.git folder/],
+    // T909: no .git rule in the gate; a patch into git's own folder still meets the patch's checkout rule.
+    [".git/config", /^sage: this patch reaches protected storage or has unverified checkout paths$/],
   ]) {
     assert.match(denied(await g.run(pre("apply_patch", patch(`*** Add File: ${path}`, "+SAMPLE"), child))), reason, path);
   }
@@ -1366,8 +1244,9 @@ test("T111: an ambiguous executable command keeps its refusal; T903: shell patte
     'node -e \'require("node:fs").writeFileSync(process.argv[1], "SAMPLE")\' ../tasks.tsv']) {
     assert.equal(denied(await g.run(pre("Bash", command, child))), undefined, command);
   }
-  assert.equal(denied(await g.run(pre("Bash", "$EDITOR codex/sample.txt", child))), UNREAD_CODEX);
-  t.diagnostic("Synthetic gate: patterns, unknown location and interpreter write passed; ambiguous executable refused; none executed");
+  // T909: a program from a variable is a documented limit too.
+  assert.equal(denied(await g.run(pre("Bash", "$EDITOR codex/sample.txt", child))), undefined);
+  t.diagnostic("Synthetic gate: patterns, unknown location, interpreter write and a program from a variable passed; none executed");
 });
 
 /** A sage child's event fields: its agent_id and Codex's record of it, with its agent path. */
@@ -1391,55 +1270,29 @@ test("T114: source redirects do not inherit protected reader inputs or literal b
     "cat .codex/AGENTS.md; echo x > .codex/config.toml",
     "cat < .codex/AGENTS.md > src/a.mjs 2> .codex/errors.txt",
     "cat <> .codex/config.toml", "cat > '.codex/file with spaces'",
-    "cat > .git/hooks/pre-commit",
-    "cat ~/.codex/sessions/private.jsonl > src/a.mjs",
-    "cat <<'SOURCE' | sh\necho x > .codex/config.toml\nSOURCE",
-    "cat <<'SOURCE' | node --input-type=module\nwrite('.codex/config.toml')\nSOURCE",
-    "cat <<'SOURCE' | python -u\nwrite('.codex/config.toml')\nSOURCE",
     "cat <<'SOURCE' > generated.sh\necho x > .codex/config.toml\nSOURCE\nsh generated.sh",
     "cat <<SOURCE > src/a.mjs\n$(echo x > .codex/config.toml)\nSOURCE",
     "rg --pre 'echo x > .codex/config.toml' x > src/a.mjs",
     "file -z .codex/config.toml > src/a.mjs",
     "alias cat=sh; cat <<'SOURCE' > src/a.mjs\necho x > .codex/config.toml\nSOURCE",
     "printf -vPATH '%s' evil; cat <<'SOURCE' > src/a.mjs\n.codex/config.toml\nSOURCE",
-    "cat() { sh; }; cat <<'SOURCE'\necho x > .codex/config.toml\nSOURCE",
     "node -e 'const x = `.codex/config.toml`' > src/a.mjs",
   ]) assert.equal(typeof denied(await g.run(pre("Bash", command, child))), "string", command);
-  // T903: a logbook file's name outside the project, and a variable or a pattern in a write target, are no refusal.
-  for (const command of ["cat ../tasks.tsv > ../runs.tsv", "cat > $DEST", "cat > unknown*", "cat > $(printf x)"]) {
+  // T903: a logbook file's name outside the project, and a variable or a pattern in a write target, are no refusal. T909:
+  // text piped into a shell or an interpreter, and a function that runs one, are documented limits (standing order 70).
+  for (const command of ["cat ../tasks.tsv > ../runs.tsv", "cat > $DEST", "cat > unknown*", "cat > $(printf x)",
+    "cat <<'SOURCE' | sh\necho x > .codex/config.toml\nSOURCE", "cat <<'SOURCE' | python -u\nwrite('.codex/config.toml')\nSOURCE",
+    "cat() { sh; }; cat <<'SOURCE'\necho x > .codex/config.toml\nSOURCE"]) {
     assert.equal(denied(await g.run(pre("Bash", command, child))), undefined, command);
   }
   assert.equal(denied(await g.run(pre("Bash", "cat .codex/AGENTS.md; echo x > src/a.mjs",
     sageChild(t, "/root/sage_code_reviewer_t1_r2")))), RO("code-reviewer"));
 });
 
-test("F-T114-3: Codex keeps executable stdin checks for protected writes and read-only roles", async t => {
+test("F-T114-3: a shell's own heredoc is read as its commands: a write into .codex there refuses (T909: code on stdin is a limit)", async t => {
   const g = fixed(), implementer = sageChild(t, "/root/sage_implementer_t1_r1");
-  const reviewer = sageChild(t, "/root/sage_code_reviewer_t1_r2");
-  for (const command of [
-    "bash <<'EOF'\necho x > .codex/config.toml\nEOF",
-    "python3 - <<'EOF'\nopen('.codex/config.toml', 'w').write('x')\nEOF",
-  ]) assert.match(denied(await g.run(pre("Bash", command, implementer))), /^sage: no agent changes files under a \.codex folder/);
-  assert.equal(denied(await g.run(pre("Bash", "bash <<'EOF'\ngrep -n 'merge' *.md\nEOF", reviewer))), RO("code-reviewer"));
-  assert.equal(await g.run(pre("Bash", "cat <<'EOF'\nliteral\nEOF", reviewer)), undefined);
-  for (const [command, cwd] of [
-    ["python3 - <<'EOF'\nprint('fixture')\nEOF", `${CWD}/.git/hooks`],
-    ["python3 - .git/hooks/pre-commit <<'EOF'\nprint('fixture')\nEOF", CWD],
-  ]) assert.match(denied(await g.run(pre("Bash", command, { ...implementer, cwd }))), /writes a file under a \.git folder/);
-});
-
-test("F-T114-2: expanding input redirects retain protected read checks", async t => {
-  const g = fixed(), child = sageChild(t, "/root/sage_implementer_t1_r1");
-  // These strings go only to the gate. No shell executes them or reads a session file.
-  // T903: $HOME is a variable, a documented limit (T815): only the literal ~ form counts.
-  for (const target of ["~/.codex/sessions/private.jsonl", "~/.codex/sage/private.json"]) {
-    await t.test(target, async () => {
-      for (const suffix of ["", " > src/a.mjs", " | head -n 1 > src/a.mjs"]) {
-        const command = `cat < ${target}${suffix}`;
-        assert.equal(typeof denied(await g.run(pre("Bash", command, child))), "string", command);
-      }
-    });
-  }
+  assert.match(denied(await g.run(pre("Bash", "bash <<'EOF'\necho x > .codex/config.toml\nEOF", implementer))), /^sage: no agent changes files under a \.codex folder/);
+  assert.equal(await g.run(pre("Bash", "cat <<'EOF'\nliteral\nEOF", sageChild(t, "/root/sage_code_reviewer_t1_r2"))), undefined);
 });
 
 test("T114: shared parser proves literal heredoc data without trusting expanding input", async () => {
@@ -1476,8 +1329,6 @@ test("T114: directory context locates targets but grants no protected-path autho
       `cd '${other}' && echo x > .codex/config.toml`,
       `echo x > '${w.env.CODEX_HOME}/config.toml'`,
       `echo x > '${w.env.SAGE_HOME}/forged.json'`,
-      `echo x > '${other}/.git'`,
-      `cat '${w.env.CODEX_HOME}/sessions/private.jsonl'`,
       "cat .codex/AGENTS.md; echo x > 'unfinished",
     ]) assert.equal(typeof denied(await run(command, cwd)), "string", command);
     assert.equal(typeof denied(await run("echo x > .codex/config.toml", cwd,
@@ -1494,8 +1345,8 @@ test("in sage mode, normal commands that name codex run for every agent: a progr
     [sageChild(t, "/root/sage_implementer_t1_r1"), [...reads, "cat x.json | python3 -mjson.tool > codex.json"]]]) {
     assert.deepEqual(await Promise.all(list.map(async (c) => denied(await g.run(pre("Bash", c, who))))), list.map(() => undefined), who.transcript_path ?? "the chief");
   }
-  // A program from an expansion stays unreadable for a role agent in sage mode.
-  assert.equal(denied(await g.run(pre("Bash", "$EDITOR codex/a.txt", sageChild(t, "/root/sage_implementer_t1_r1")))), UNREAD_CODEX);
+  // T909: a program from an expansion is a documented limit, also for a role agent in sage mode.
+  assert.equal(denied(await g.run(pre("Bash", "$EDITOR codex/a.txt", sageChild(t, "/root/sage_implementer_t1_r1")))), undefined);
 });
 
 test("a child's node run of a file that only has the state tool's name in it, or of a script that reads the state tool as data, runs; logbook repair and standing add are writes (R1713-1, R1711-2, R1712-4, R1733-3)", async (t) => {
@@ -1649,22 +1500,6 @@ test("no thread writes Codex's config file or the sage plugin's folder from the 
   }
 });
 
-test("the sage folder and a .codex folder are found also behind quotes and ~, and from the folder a command runs in (R1669-4, R1669-6)", async (t) => {
-  const home = "/Users/someone";
-  const env = { ...process.env, HOME: home, SAGE_HOME: undefined, CODEX_HOME: `${home}/.codex` };
-  const named = [`echo x > ~/.co""dex/sa""ge/m.json`, `cat ~/".codex/sage/x"`, `ls "${home}/.codex"/sessions`];
-  assert.deepEqual(named.filter((c) => !namesSageFolder(c, env, CWD)), []);
-  // T903: a variable in a path is a documented limit (T815).
-  assert.deepEqual([`echo x > "$HOME"/.co""dex/sa""ge/m.json`, `cat "\${CODEX_HOME}"/sage/x`].filter((c) => namesSageFolder(c, env, CWD)), []);
-  assert.equal(namesSageFolder("cat sage/.hooks/x.json", env, `${home}/.codex`), true, "from the Codex home");
-  assert.deepEqual(["cat sage/notes.md", "ls sessions", "echo sage mode", `cat "${home}/.codex/config.toml"`].filter((c) => namesSageFolder(c, env, CWD)), []);
-  const g = fixed({ sage: false });
-  for (const command of [`touch ".co"dex/config.toml`, "echo x > .co''dex/config.toml"]) {
-    assert.match(denied(await g.run(pre("Bash", command))) ?? "", /^sage: no agent changes files under a \.codex folder/, command);
-  }
-  assert.equal(await g.run(pre("Bash", `cat ".co"dex/config.toml`)), undefined, "a read");
-});
-
 test("no thread sends input to the main thread, in any spelling that Codex reads, and in sage mode no thread uses multi-agent v1 (T534, R1940-1, R1945-1)", async (t) => {
   const ROOT = "sage: no thread sends input to the session's main thread, because Codex counts that message as the user's own typed message, also a mode phrase. Put it in your reply or your report";
   const V1 = "sage: in sage mode, no thread uses multi-agent v1's send_input, because Codex can deliver it to the main thread as the user's typed message. sage sends with multi-agent v2";
@@ -1691,38 +1526,22 @@ test("no thread sends input to the main thread, in any spelling that Codex reads
   }
 });
 
-test("in sage mode gh runs only the command paths that sage uses, by name (T534, R1940-2, R1946-2, R1947-1, F-T534-1, T903)", async () => {
-  const g = fixed({ sage: true, autopilot: true });
-  /** The gh path that the refusal names, or the whole reason when it is another refusal. */
-  const path = (reason) => reason?.match(/^sage: in sage mode, gh runs only the commands that sage uses \(.*\), because "(gh [^"]+)" can be an alias or an extension that runs any gh command, also a merge\. Write one of these, or ask the user$/)?.[1] ?? reason;
-  assert.equal(denied(await g.run(pre("Bash", "gh pr mrg 360"))), "sage: in sage mode, gh runs only the commands that sage uses (pr checkout|checks|close|comment|create|diff|edit|list|merge|ready|reopen|review|status|view, issue close|comment|create|edit|list|reopen|status|view, repo clone|list|view, run list|rerun|view|watch, workflow list|view, release list|view, search code|commits|issues|prs|repos, auth status, label list, api, status, version), because \"gh pr mrg\" can be an alias or an extension that runs any gh command, also a merge. Write one of these, or ask the user", "a two-word alias under a group (F-T534-1)");
-  const refused = [["gh land 360", "gh land"], ["gh co 360", "gh co"], [`cd /work && gh ship 41 ${SHA}`, "gh ship"], ["env FOO=1 gh land 41", "gh land"],
-    // F-T534-1, R1940-2: a two-word alias under a built-in group, and an option before the subcommand, which hides it.
-    ["gh pr mrg 360", "gh pr mrg"], ["gh pr land 360 --admin", "gh pr land"], ["gh issue mrg 1", "gh issue mrg"], ["gh run x", "gh run x"], ["gh pr -R o/r mrg 41", "gh pr -R"],
-    // T815: the merge rule reads gh's own words, so an alias body is the gh path rule's (gh alias), not a merge.
-    ["gh alias set 'pr mrg' 'pr merge --admin'", "gh alias"], ["gh auth token", "gh auth token"],
-    // R1946-2: alias, extension and config are no path that sage uses.
-    ["gh alias import aliases.yml", "gh alias"], ["gh alias list", "gh alias"], ["gh extension install o/gh-land", "gh extension"], ["gh ext create land", "gh ext"],
-    ["gh extensions exec land 41", "gh extensions"], ["gh extension list", "gh extension"], ["gh config set pager 'sh -c x'", "gh config"], ["gh config set -h github.com editor vim", "gh config"],
-    // F-T815-39: gh behind a wrapper that the reader does not know is read by core's reader, as gh by its name.
-    ["op run -- gh secret set X", "gh secret"], ["arch -arm64 gh pr mrg 360", "gh pr mrg"], ["chronic gh ext install o/gh-land", "gh ext"]];
-  for (const [command, reason] of refused) assert.equal(path(denied(await g.run(pre("Bash", command)))), reason, command);
-  for (const command of ["gh pr view 41", "gh pr checks 41", "gh pr create --fill", "gh pr list", "gh pr diff 41", "gh pr ready 41", "gh pr view 41 -R o/r", "gh pr", "gh pr --help",
-    "gh api repos/o/r/pulls/41", "gh --version", "gh auth status", "gh issue view 2", "gh repo view", "gh run view 7 --log", "gh status", "gh version",
-    "/opt/homebrew/bin/gh pr view 41", "echo $HOME && gh pr view 41", "op run -- gh pr view 41",
-    // T903: gh from a variable or a substitution, and gh's settings (pager, editor, browser, HOME, config folder), are
-    // documented limits, as in the Claude hook (T815); the gh path rule still reads gh's own words.
-    "$(which gh) land 41", "G=gh; $G land 41", "`which gh` land 41", "GH_PAGER='sh -c x' gh pr view 41", "PAGER=x gh pr diff 41", "env BROWSER=x gh pr view --web 41",
-    "export EDITOR=x; gh pr edit 41", "GH_EDITOR=x gh pr create", "VISUAL=x gh issue create", "GH_BROWSER=x gh pr view --web 1", "GH_CONFIG_DIR=/tmp/x gh pr view 41",
-    "XDG_CONFIG_HOME=/tmp/x gh pr view 41", "HOME=/tmp/x gh pr view 41", "env HOME=/tmp/x gh pr checks 41", "export HOME=/tmp/x && gh pr list", "gh pr create --body 'HOME=/x and PAGER=y'",
-    // F-T815-42: a word gh that is a file, a package or a page is not gh.
-    "brew install gh jq", "man gh pr", "npm view gh version", "cp gh backup"]) {
-    assert.equal(denied(await g.run(pre("Bash", command))), undefined, command);
+test("in sage mode an agent runs only core's AGENT_GH commands and gh api with GET, as in the Claude hook; the chief's gh meets only the merge and push rules (T909)", async (t) => {
+  const g = fixed({ sage: true, autopilot: true }), child = sageChild(t, "/root/sage_implementer_t1_r1");
+  const NO_GH = /^sage: in sage mode, an agent runs only these gh commands: gh pr create, view, comment, edit, checks, diff, list, status; gh issue view, list; gh run view, list, watch; gh repo view; and gh api with GET\. "(gh [^"]+)" is not one of them\. Ask the chief to run any other gh command$/;
+  const refused = [["gh pr close 1", "gh pr close"], ["gh issue close 1", "gh issue close"], ["gh pr ready 41", "gh pr ready"], ["env FOO=1 gh alias set x y", "gh alias set"],
+    ["gh api -X DELETE repos/o/r/git/refs/heads/x", "gh api DELETE"], ["gh api repos/o/r/pulls/41/merge -X PUT", "gh api PUT"], ["gh repo sync", "gh repo sync"]];
+  for (const [command, words] of refused) assert.equal(NO_GH.exec(denied(await g.run(pre("Bash", command, child))) ?? "")?.[1], words, command);
+  // A wrapper that the reader does not know, and gh from a variable, are documented limits (standing order 70).
+  const passes = ["gh pr view 41", "gh pr create --fill", "gh pr checks 41", "gh pr diff 41", "gh api repos/o/r/pulls/41", "gh run view 7 --log", "gh issue view 2",
+    "gh repo view", "brew install gh jq", "man gh pr", "op run -- gh pr close 1", "G=gh; $G pr close 1"];
+  for (const command of passes) assert.equal(denied(await g.run(pre("Bash", command, child))), undefined, command);
+  for (const command of ["gh pr close 1", "gh alias list", "gh land 360", "gh pr ready 41", "gh config set pager less"]) {
+    assert.equal(denied(await g.run(pre("Bash", command))), undefined, `the chief: ${command}`);
   }
-  assert.equal(await fixed({ sage: false }).run(pre("Bash", "gh land 360")), undefined, "outside sage mode the gate does not judge gh");
+  assert.equal(await fixed({ sage: false }).run(pre("Bash", "gh pr close 1", child)), undefined, "outside sage mode the gate does not judge gh");
   assert.equal(denied(await g.run(pre("Bash", MERGE))), OWNER_MERGE, "the merge command always refuses");
 });
-
 
 // T51 uses only disposable repositories and copied plugin files. Never inspect the installed plugin here.
 function installFixture(t) {

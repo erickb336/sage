@@ -577,65 +577,6 @@ const wrongRefusals = (s, cases, expected, cwd) => cases.flatMap((command) => {
   return expected.test(reason) ? [] : [`${command} -> ${reason}`];
 });
 
-for (const toolName of ["Bash", "Monitor"]) for (const agent of [false, true]) {
-  test(`T199: ${toolName} refuses expanded command words for ${agent ? "an agent" : "the main session"}, while ordinary arguments pass`, () => {
-    const s = session();
-    s.send(prompt("sage mode"));
-    const identity = agent ? { agent_id: "a1", agent_type: "sage:implementer" } : {};
-    const send = (command) => s.send(tool(toolName, { command }, { cwd: FEATURE, ...identity }));
-    // These strings go only to the hook on stdin. No shell expands or executes them.
-    const attacks = [
-      `gh pr {m..m}erge 41 --squash --delete-branch --match-head-commit ${SHA}`,
-      "git pu{s..s}h --force origin claude/t1",
-      "g{i..i}t push origin HEAD:main",
-      `g{h..h} pr merge 41 --squash --delete-branch --match-head-commit ${SHA}`,
-      `gh pr m[e]rge 41 --squash --delete-branch --match-head-commit ${SHA}`,
-      "g?t push origin HEAD:main",
-      "g*t push origin HEAD:main",
-      "git p?sh --force origin claude/t1",
-      "git p*sh --force origin claude/t1",
-      "gh p[r] merge 41",
-      "gh pr m?rg* 41",
-      `git -C ${FEATURE} pu{s..s}h --force origin claude/t1`,
-      "gh -R acme/repo pr m[e]rge 41",
-      "gh pr --repo acme/repo m?rg* 41",
-      "env X=1 command g{i..i}t push origin HEAD:main",
-      "if true; then { git pu{s..s}h --force origin claude/t1; }; fi",
-      "bash -c 'gh pr {m..m}erge 41'",
-      "echo $(git pu{s..s}h --force origin claude/t1)",
-      "X=1 ${G} pr merge 41",
-    ];
-    const wrong = attacks.flatMap((command) => {
-      const reason = denied(send(command)) ?? "allowed";
-      return /shell expansion in "[^"]+" can hide the command/.test(reason) ? [] : [`${command} -> ${reason}`];
-    });
-    // T815: text piped into a shell is a limit of the hook (C10's piped-text rule is gone).
-    for (const command of ["echo 'git pu{s..s}h --force origin claude/t1' | bash", "printf '%s\\n' 'g{i..i}t push origin HEAD:main' | bash", "echo 'git pu{s..s}h --force origin claude/t1' | head | bash"]) {
-      assert.doesNotMatch(denied(send(command)) ?? "", /shell expansion in "[^"]+" can hide the command/, command);
-    }
-    for (const command of [
-      "git log --format='%h {x}'",
-      "grep -n 'merge' *.md",
-      "gh pr view 41",
-      "git push origin claude/t1",
-      `git -C ${FEATURE} log --format='%h {x}'`,
-      "gh pr view 41 --json title --jq '.title // \"?\"'",
-      "gh api 'repos/{owner}/{repo}/pulls?state=open'",
-      "echo 'gh pr {m..m}erge'",
-      "echo 'gh pr {m..m}erge' | head",
-      "[ -f README.md ] && echo yes",
-      "[[ -f README.md ]]",
-      "if [[ -f README.md ]]; then echo yes; fi",
-      "bash <<'EOF'\ngit log --format='%h {x}'\nEOF",
-      "bash <<'EOF'\ngrep -n 'merge' *.md\nEOF",
-    ]) {
-      const answer = send(command);
-      if (answer !== undefined) wrong.push(`${command} -> ${JSON.stringify(answer)}`);
-    }
-    assert.deepEqual(wrong, [], "expanded command words are refused; ordinary arguments and test commands pass");
-  });
-}
-
 test("a push to main is refused in any position: behind a wrapper, a shell keyword, a group, a redirection or a shell", () => {
   const s = session();
   s.send(prompt("sage mode"));
@@ -723,7 +664,6 @@ test("a push to main is refused in any position: behind a wrapper, a shell keywo
     "xargs git push origin < /dev/null main",
     "xargs git push origin <<< main",
     "bash <<'EOF'\ngit push origin main\nEOF",
-    "echo git push origin main | sh",
     "git push",
     "git push origin",
     "git push origin HEAD",
@@ -790,7 +730,7 @@ test("a push from a checkout of main or master is refused; a push with -C or aft
   assert.equal(s.send(bash("git push --delete origin claude/t1", MAIN_CHECKOUT)), undefined, "deleting a feature branch is not a push of the checkout");
 });
 
-test("T536: no push reaches the default branch through a remote with another name, a setting or a line beside it; the task's branch goes to any remote", () => {
+test("T536: no push reaches the default branch through a remote with another name; the task's branch goes to any remote", () => {
   const s = session();
   s.send(prompt("sage mode"));
   // The incident's project: its one remote is github, not origin.
@@ -802,62 +742,36 @@ test("T536: no push reaches the default branch through a remote with another nam
   const passes = (command) => assert.equal(denied(s.send(bash(command, dir))), undefined, command);
   for (const command of ["git push github HEAD:main", "git push github :main", "git push github HEAD:refs/heads/main", "git push --all github"]) refused(command, TO_MAIN);
   refused("git push https://github.com/acme/project.git claude/t1", /^sage: push to a remote of this checkout/);
-  refused("git config push.default upstream && git push github claude/t1", /^sage: "git config push\.default upstream" runs in the same command line as the push/);
   git("branch", "topic");
   git("branch", "trunk");
   passes("git push -u github claude/t1");
   passes("git push github topic");
-  git("config", "remote.github.push", "refs/heads/claude/t1:refs/heads/main");
-  refused("git push github claude/t1", /^sage: git's setting remote\.github\.push can send the branch to another name/);
-  git("config", "--unset", "remote.github.push");
-  // R1950-1: no push while push.default is upstream, and no upstream set beside a push.
-  git("config", "push.default", "upstream");
-  refused("git push github claude/t1", /^sage: git's setting push\.default is upstream, so git can send the branch to its upstream/);
-  git("config", "--unset", "push.default");
-  refused("git fetch --set-upstream github main && git push github claude/t1", /^sage: "git fetch --set-upstream github main" runs in the same command line as the push/);
-  // R1936 F6: a branch name that is a symbolic ref to main; F2: an alias; F4: a git hook; F9: gh repo sync.
-  git("branch", "main");
-  git("symbolic-ref", "refs/heads/claude/t5-sym", "refs/heads/main");
-  refused("git push github claude/t5-sym", /^sage: claude\/t5-sym is not a plain branch of this checkout/);
-  git("config", "alias.ship", "push github HEAD:main");
-  refused("git ship", /^sage: "git ship" is not a git command that the hook knows/);
-  refused("printf x > .git/hooks/pre-push", /^sage: this command writes a file under a \.git folder/);
-  refused("git config core.hooksPath /tmp/h", /^sage: a command that sets core\.hooksPath/);
-  // R1949-1: reads and searches pass, and a description runs nothing.
-  for (const command of ["grep -rn hooksPath packages/", "git log --grep fsmonitor", "git config --get core.hooksPath", "git commit -m 'refuse core.hooksPath'"]) passes(command);
-  assert.equal(denied(s.send(tool("Bash", { command: "git status", description: "git config core.hooksPath /tmp/h" }, { cwd: dir }))), undefined, "a description runs nothing");
-  // R2002-1: a description that starts with git and a word is not an unknown git command; commit and search text is text.
+  // T909: a git setting that redirects a push, a setting beside a push, a git alias, a git hook and a write under .git
+  // are documented limits (standing order 70): GitHub's protection of main is the guard.
+  passes("git config push.default upstream && git push github claude/t1");
+  passes("git fetch --set-upstream github main && git push github claude/t1");
+  passes("printf x > .git/info/exclude");
+  passes("git ship");
+  // A description runs nothing (T386), and names no git command (R2002-1).
+  assert.equal(denied(s.send(tool("Bash", { command: "git status", description: "git push --force github main" }, { cwd: dir }))), undefined, "a description runs nothing");
   assert.equal(denied(s.send(tool("Bash", { command: "git status", description: "git checks the branch" }, { cwd: dir }))), undefined, "a description names no git command");
-  refused("git checks the branch", /^sage: "git checks" is not a git command that the hook knows/);
-  for (const command of [`git -C ${dir} commit -m "refuse git config core.hooksPath /tmp/h"`, `git grep -n "git config core.hooksPath /tmp/h"`, `rg "git config core.fsmonitor /tmp/h" docs`]) passes(command);
-  // R1971-1: get or list as the value is a write; R1972-1: a quoted GIT_CONFIG_PARAMETERS refuses, a message passes.
-  for (const command of ["git config core.hooksPath get", "git config set core.fsmonitor list", "GIT_CONFIG_PARAMETERS=\"'core.hooksPath'='list'\" git commit -m x"]) {
-    refused(command, /^sage: a command that sets core\.hooksPath/);
-  }
-  for (const command of ["git config get core.hooksPath", "git config --list", "git commit -m 'set core.hooksPath=/tmp/h'", "grep -rn 'core.fsmonitor=' packages/"]) passes(command);
-  // R1971-2: git's own output option under .git.
-  refused("git checkout-index --prefix=.git/hooks/ -a", /^sage: this command writes a file under a \.git folder/);
   refused("gh repo sync", /^sage: gh repo sync writes a branch on GitHub/);
-  // F-T815-39: git or gh behind a wrapper that the reader does not know, on a line that it can read; a file named git passes.
-  refused("op run -- gh repo sync", /^sage: gh repo sync writes a branch on GitHub/);
-  refused("cd ~ && op run -- gh repo sync", /^sage: gh repo sync writes a branch on GitHub/);
-  refused(`arch -arm64 git -C ${dir} frobnicate github`, /^sage: "git frobnicate" is not a git command that the hook knows/);
+  refused("cd ~ && gh repo sync", /^sage: gh repo sync writes a branch on GitHub/);
+  // T909: git or gh behind a wrapper that the reader does not know is a limit too.
+  passes("op run -- gh repo sync");
   passes("cp /usr/bin/git /tmp/git-copy");
-  // R1936 F7: GitHub names the default branch, trunk here; a planted local ref that disagrees refuses, and so does a failed read.
+  // R1936 F7: GitHub names the default branch, trunk here, and a failed read refuses.
   const trunk = session({ FAKE_DEFAULT_BRANCH: "trunk" });
   trunk.send(prompt("sage mode"));
   const trunkSays = (command) => denied(trunk.send(bash(command, dir))) ?? "allowed";
-  assert.match(trunkSays("git push github topic"), /^sage: refs\/remotes\/github\/HEAD names main, but GitHub names trunk/);
-  git("symbolic-ref", "--delete", "refs/remotes/github/HEAD");
   assert.match(trunkSays("git push github trunk"), /^sage: trunk is the default branch of github: work reaches main only through a pull request/);
+  assert.equal(trunkSays("git push github topic"), "allowed");
   assert.equal(trunkSays("git push github claude/t1"), "allowed");
   const unread = session({ FAKE_DEFAULT_BRANCH: "fail" });
   unread.send(prompt("sage mode"));
   assert.match(denied(unread.send(bash("git push github claude/t1", dir))) ?? "allowed", /^sage: the hook cannot read the default branch of acme\/project from GitHub/);
-  // A file tool of an agent never writes under .git (R1936 F4).
-  for (const file_path of [join(dir, ".git/hooks/pre-push"), join(dir, ".git/config")]) {
-    assert.match(denied(s.send({ ...tool("Write", { file_path, content: "x" }, { cwd: dir }), ...AGENT })) ?? "allowed", /an agent never writes under a \.git folder/, file_path);
-  }
+  // T909 (Q1): an agent's file tool may write under .git, as an honest setup does.
+  assert.equal(denied(s.send({ ...tool("Write", { file_path: join(dir, ".git/info/exclude"), content: "x" }, { cwd: dir }), ...AGENT })), undefined);
 });
 
 /**
@@ -1048,10 +962,11 @@ test("a commit answer with no list of parents gets its own reason, not that it h
   assert.match(denied(s.send(bash(CREATE))) ?? "not refused", NOT_FIRST(`GitHub's answer for commit ${ROOT_SHA} has no list of parents\\. `));
 });
 
-test("only the exact gh api form from the main session can ask; every other form keeps the refusal (T24 DESTINATION-NOT-BOUND, MULTI-URL-ORIGIN)", () => {
+const AGENT_GH = /^sage: an agent runs only these gh commands/;
+test("only the exact gh api form from the main session can ask; no other form asks (T24 DESTINATION-NOT-BOUND, MULTI-URL-ORIGIN)", () => {
   const s = firstSession();
   const agent = { agent_id: "a1", agent_type: "sage:implementer" };
-  assert.match(denied(s.send(tool("Bash", { command: CREATE }, { cwd: FEATURE, ...agent }))) ?? "not refused", TO_MAIN, "a subagent never gets the exception");
+  assert.match(denied(s.send(tool("Bash", { command: CREATE }, { cwd: FEATURE, ...agent }))) ?? "not refused", AGENT_GH, "a subagent never gets the exception");
   const near = [
     `GH_HOST=github.com ${CREATE}`,
     `env ${CREATE}`,
@@ -1077,21 +992,21 @@ test("only the exact gh api form from the main session can ask; every other form
     `${CREATE}\necho ok`,
     CREATE.replace("refs/heads/main", "'refs/heads/main'"),
   ];
+  // T909: a GitHub API write is a documented limit (standing order 70), so a near form is no refusal; it never asks.
   const out = near.map((command) => [command, s.send(bash(command))]);
   assert.deepEqual(out.filter(([, o]) => asked(o)).map(([command]) => command), [], "no near form asks");
-  const refused = out.filter(([, o]) => TO_MAIN.test(denied(o) ?? "")).map(([command]) => command);
-  assert.deepEqual(near.filter((command) => !refused.includes(command)), [], "every near form keeps the refusal");
 });
 
-test("gh api behind a prefix that names main is refused for the main session and an agent; another ref is not judged (T29 PREFIX-GH-FIRST-CREATION)", () => {
+test("gh api behind a prefix never asks: an agent's POST meets the agent gh rule (T29 PREFIX-GH-FIRST-CREATION, T909)", () => {
   const s = firstSession();
   const agent = { agent_id: "a1", agent_type: "sage:implementer" };
   const create = `gh api -X POST repos/acme/blank/git/refs -f ref=refs/heads/main -f sha=${ROOT_SHA}`;
   for (const prefix of ["GH_HOST=github.com ", "env ", "env GH_HOST=github.com ", "command ", "/opt/homebrew/bin/", "A=1 env B=2 command /usr/local/bin/"]) {
     const command = prefix + create;
-    assert.match(denied(s.send(bash(command))) ?? "not refused", TO_MAIN, `main session: ${command}`);
-    assert.match(denied(s.send(tool("Bash", { command }, { cwd: FEATURE, ...agent }))) ?? "not refused", TO_MAIN, `agent: ${command}`);
-    assert.equal(s.send(bash(prefix + create.replace("heads/main", "heads/claude/t1"))), undefined, `another ref is not judged: ${command}`);
+    assert.equal(asked(s.send(bash(command))), undefined, `main session: ${command}`);
+    // An external program named command (after env) is a wrapper that the reader does not know: a limit (T909).
+    if (prefix.includes("env B=2 command")) continue;
+    assert.match(denied(s.send(tool("Bash", { command }, { cwd: FEATURE, ...agent }))) ?? "not refused", AGENT_GH, `agent: ${command}`);
   }
   assert.equal(asked(s.send(bash(CREATE))), ASKED, "the exact form with no prefix still asks");
 });
@@ -1548,7 +1463,7 @@ test("a merge passes only as the one merge form; any other command that names a 
   assert.match(denied(off.send(bash(MERGE))) ?? "", /autopilot is off/);
   assert.equal(on.send(bash(MERGE)), undefined, "the merge form passes to the merge check");
   const M = "gh pr merge 41";
-  // T815: a merge by gh's own words, at any depth that the reader sees, and the API's merge path or mutation.
+  // T815: a merge by gh's own words, at any depth that the reader sees.
   const refused = [
     `cd /x && ${MERGE}`,
     `${MERGE} && echo done`,
@@ -1563,24 +1478,17 @@ test("a merge passes only as the one merge form; any other command that names a 
     `git ls-files | xargs sh -c '${M}'`,
     `bash -c "${MERGE}"`,
     `sh <<'EOF'\n${MERGE}\nEOF`,
-    // The GitHub API, with a number in the path, and GraphQL.
-    `gh api -X PUT repos/o/r/pulls/41/merge -f sha=${SHA}`,
-    "gh api --method=PUT /repos/o/r/pulls/41/merge",
-    'curl -X PUT -H "Authorization: Bearer x" https://api.github.com/repos/o/r/pulls/41/merge',
-    "curl -X PUT https://api.github.com/repos/o/r/pulls/$N/merge",
-    `gh api graphql -f query='mutation { mergePullRequest(input: {pullRequestId: "x"}) { clientMutationId } }'`,
   ];
   for (const s of [off, on]) for (const command of refused) assert.match(denied(s.send(bash(command))) ?? "", CANNOT, command);
   // A command that the hook cannot read, and names a merge: the cause and the way forward first (F-T815-9).
   for (const s of [off, on]) assert.equal(denied(s.send(bash(`echo "${MERGE}`))), "sage: the hook cannot read this command (an open quote), so it refuses it. Close each quote, substitution and heredoc. Its text names a merge. Merge only with gh pr merge <n> --squash --delete-branch --match-head-commit <sha>, as a command of its own.");
-  // Refused by another rule: a git alias (an unknown git subcommand), and an API write whose path a variable or a
-  // substitution gives, or that merges main (the push rule runs first).
-  for (const s of [off, on]) for (const command of [`git -c alias.m='!${M} --squash' m`, "gh api -X POST repos/o/r/merges -f base=main -f head=t4",
-    "N=41; gh api -X PUT repos/o/r/pulls/$N/merge -f merge_method=squash", "gh api -X PUT repos/o/r/pulls/$(echo 41)/merge"]) assert.ok(denied(s.send(bash(command))), command);
-  // T815: the documented limits pass the hook: a variable or a substitution in gh's words, code of another language, text
-  // piped into a shell, a file that a later command runs, a gh alias and another host. GitHub's branch protection holds.
+  // T815, T909: the documented limits pass the hook: a variable or a substitution in gh's words, code of another language,
+  // text piped into a shell, a file that a later command runs, a gh alias, a git alias, another host, and a merge through
+  // the GitHub API, curl or wget. GitHub's branch protection and the merge check hold.
   const limits = [`G=gh; $G pr merge 41 --squash`, `gh pr $(echo merge) 41`, `awk 'BEGIN{system("${M} --squash")}'`, `node -e "require('child_process').execSync('${MERGE}')"`,
-    `echo '${M}' | sh`, `echo '${M}' > x.sh; bash x.sh`, `gh alias set --shell m '${M} --squash'; gh m`, `ssh host '${M}'`, "$'\\x67h' pr merge 41 --admin"];
+    `echo '${M}' | sh`, `echo '${M}' > x.sh; bash x.sh`, `gh alias set --shell m '${M} --squash'; gh m`, `ssh host '${M}'`, "$'\\x67h' pr merge 41 --admin",
+    `git -c alias.m='!${M} --squash' m`, `gh api -X PUT repos/o/r/pulls/41/merge -f sha=${SHA}`, 'curl -X PUT -H "Authorization: Bearer x" https://api.github.com/repos/o/r/pulls/41/merge',
+    `gh api graphql -f query='mutation { mergePullRequest(input: {pullRequestId: "x"}) { clientMutationId } }'`, "gh api -X POST repos/o/r/merges -f base=main -f head=t4"];
   for (const command of limits) assert.equal(denied(off.send(bash(command))), undefined, `${command} (a limit of the hook)`);
 });
 
@@ -1599,7 +1507,7 @@ test("T670-MERGETEXT: the word merge in a program's text, or a local git merge-t
   for (const s of [off, on]) for (const command of text) assert.equal(denied(s.send(bash(command))), undefined, command);
 });
 
-test("T670-KEEP-MERGES: any other merge form, and a merge as a real command, also in a loop, a chain, bash -c, sh -c or eval, by the API, or put together from two commands, is still refused", () => {
+test("T670-KEEP-MERGES: any other merge form, and a merge as a real command, also in a loop, a chain, bash -c, sh -c or eval, is still refused", () => {
   const off = session();
   off.send(prompt("sage mode"));
   const on = autopilotSession();
@@ -1612,10 +1520,6 @@ test("T670-KEEP-MERGES: any other merge form, and a merge as a real command, als
     "bash -c 'gh pr merge 5 --rebase'": CANNOT,
     'sh -c "gh pr view 5; gh pr merge 5"': CANNOT,
     'eval "gh pr merge 5 --admin"': CANNOT,
-    "gh api -X PUT repos/o/r/pulls/5/merge": CANNOT,
-    "for n in 5; do gh api -X PUT repos/o/r/pulls/$n/merge; done": /merge only with|reaches main only through a pull request/,
-    "gh pr view 5 && gh api --method PUT repos/o/r/pulls/5/merge -f merge_method=squash": CANNOT,
-    "sh -c \"gh api graphql -f query='mutation { mergePullRequest(input: {pullRequestId: 1}) { clientMutationId } }'\"": CANNOT,
   };
   for (const s of [off, on]) for (const [command, why] of Object.entries(refused)) assert.match(denied(s.send(bash(command))) ?? "", why, command);
   // T815: a merge that a variable, a substitution, xargs, a file or code puts together while the line runs is a limit.
@@ -1925,32 +1829,6 @@ test("when the rule cannot run, every command and file change of an agent is ref
   assert.equal(denied(s.send(bash("npm test"))), undefined, "the chief is unchanged");
 });
 
-// F-T229-29: a write through a link loop is an unknown path, so the logbook rule refuses it for an agent (fail closed),
-// as before the cheap path walk of F-T229-20. A read through the loop and the chief stay allowed.
-test("F-T229-29: an agent's write through a link loop is refused; a read and the chief are not (table)", () => {
-  const s = session();
-  const dir = realpathSync(mkdtempSync(join(tmpdir(), "sage-loop-")));
-  const loop = join(dir, "loop"), a = join(dir, "a");
-  symlinkSync("loop", loop); symlinkSync("b", a); symlinkSync("a", join(dir, "b"));
-  const LOOP = /could not check this agent's command \(too many links in /;
-  const rows = [
-    [`printf x > ${loop}/f`, LOOP], [`touch ${loop}/f`, LOOP], [`rm ${a}/f`, LOOP], [`cp /etc/hosts ${loop}`, LOOP],
-    [`cat ${loop}/f`, null], [`touch ${dir}/plain`, null],
-  ];
-  const wrong = [];
-  try {
-    for (const [command, expected] of rows) {
-      const agent = denied(s.send(bash(command, FEATURE, AGENT))) ?? "";
-      if (expected ? !expected.test(agent) : agent) wrong.push(`an agent: ${command}: got ${agent || "allowed"}`);
-      const chief = denied(s.send(bash(command))) ?? "";
-      if (chief) wrong.push(`the chief: ${command}: got ${chief}`);
-    }
-  } finally {
-    rmSync(dir, { recursive: true, force: true });
-  }
-  assert.deepEqual(wrong, []);
-});
-
 test("the rule holds for every tool that runs a command: Monitor, PowerShell and the terminal tools (T83)", () => {
   const s = session();
   const forged = `node ${TOOL} verdict T2 --kind qa-pass --sha ${SHA} --project /p`;
@@ -2043,7 +1921,7 @@ const LOGBOOK_SHELL = /never writes, moves or removes a logbook file from the sh
 
 // T815: the rule reads literal paths, resolved through ., .., //, a cd, ~ and the links on disk. A pattern, a variable and
 // code that builds a path are limits of the hook; the literal part before a pattern still counts.
-test("F1, T815: an agent's literal shell write into the sage root is refused: ./ and //, a cd, a link, the literal part of a pattern", () => {
+test("F1, T815: an agent's literal shell write into the sage root is refused: ./ and //, a cd, the literal part of a pattern", () => {
   const s = session();
   const root = s.vars.SAGE_HOME;
   mkdirSync(root, { recursive: true }); // a cd into the root needs the folder
@@ -2052,11 +1930,12 @@ test("F1, T815: an agent's literal shell write into the sage root is refused: ./
   const row = "printf 'T1\\t41\\tSHA\\tqa-pass\\t1\\t\\tnow\\n'";
   const forms = [
     `${row} >> ${root}/./proj-abc/x`, `${row} >> ${root}//proj-abc/x`, `${row} >> ${s.dir}/x/../home/proj-abc/x`, `cd ${root} && ${row} >> proj-abc/x`,
-    `${row} | tee -a ${link}/proj-abc/ledger.tsv`, `${row} >> ${link}/proj-abc/LEDGER.TSV`, `ln -s ${root} /tmp/s`, `cp /tmp/forged ${link}/proj-abc/l*`,
+    `${row} | tee -a ${root}/proj-abc/ledger.tsv`, `${row} >> ${root}/proj-abc/LEDGER.TSV`, `ln -s ${root} /tmp/s`, `cp /tmp/forged ${root}/proj-abc/l*`,
     `find ${root} -name ledger.tsv -delete`, `node -e "require('fs').appendFileSync('${root}/p/ledger.tsv', 'x')"`,
   ];
   for (const command of forms) assert.match(denied(s.send(bash(command, FEATURE, AGENT))) ?? "", LOGBOOK_SHELL, command);
-  const limits = [`${row} >> ${s.dir}/h*/proj-abc/x`, `H=home; ${row} >> ${s.dir}/$H/proj-abc/x`, `node -e "require('fs').appendFileSync(process.env.SAGE_HOME + '/p/ledger.tsv', 'x')"`];
+  // T909: a path through a link is a limit too, as a variable or a pattern is.
+  const limits = [`${row} >> ${s.dir}/h*/proj-abc/x`, `H=home; ${row} >> ${s.dir}/$H/proj-abc/x`, `${row} | tee -a ${link}/proj-abc/ledger.tsv`, `node -e "require('fs').appendFileSync(process.env.SAGE_HOME + '/p/ledger.tsv', 'x')"`];
   for (const command of limits) assert.equal(denied(s.send(bash(command, FEATURE, AGENT))), undefined, `${command} (a limit of the hook)`);
 });
 
@@ -2184,28 +2063,25 @@ test("COST-GLOB: an agent's pattern or logbook-file name in a project passes; wi
   const ordinary = ["rm dist/*", "cp x out/*", "jq '.a = 1' in.json > config.json", "rm -rf build/*/*.o", "sed -i '' s/a/b/ src/*.js"];
   for (const cwd of [s.proj, s.w1]) for (const command of ordinary) assert.equal(denied(s.send(bash(command, cwd, AGENT))), undefined, `${cwd}: ${command}`);
   symlinkSync(s.vars.SAGE_HOME, join(s.w1, "l"));
-  // T815: a pattern or a logbook file's name anywhere but the roots passes; into the sage root, through a link or from a
-  // folder in it, it is refused by its literal part.
-  for (const command of ["rm ../dist/*", "rm $OUT/*", "rm `cat t.txt`/*", "cd dist && rm *", "jq . in.json > ../config.json", "jq . in.json > /tmp/config.json", "rm -rf h*/proj-x"]) {
+  // T815: a pattern or a logbook file's name anywhere but the roots passes; into the sage root or from a folder in it, it
+  // is refused by its literal part. T909: a write through a link is a limit of the hook (standing order 70).
+  for (const command of ["rm ../dist/*", "rm $OUT/*", "rm `cat t.txt`/*", "cd dist && rm *", "jq . in.json > ../config.json", "jq . in.json > /tmp/config.json", "rm -rf h*/proj-x",
+    "cp x l/proj-x/*", "jq . in.json > l/proj-x/config.json", "cp -R forge/. l/", "rm l"]) {
     assert.equal(denied(s.send(bash(command, s.w1, AGENT))), undefined, command);
   }
-  for (const command of ["cp x l/proj-x/*", "jq . in.json > l/proj-x/config.json", "cp -R forge/. l/"]) assert.match(denied(s.send(bash(command, s.w1, AGENT))) ?? "", LOGBOOK_SHELL, command);
+  for (const command of [`cp x ${s.vars.SAGE_HOME}/proj-x/*`, `jq . in.json > ${s.vars.SAGE_HOME}/proj-x/config.json`]) assert.match(denied(s.send(bash(command, s.w1, AGENT))) ?? "", LOGBOOK_SHELL, command);
   for (const command of ["rm *", "jq . in.json > config.json"]) assert.match(denied(s.send(bash(command, join(s.vars.SAGE_HOME, "proj-x"), AGENT))) ?? "", LOGBOOK_SHELL, `in the sage root: ${command}`);
 });
 
-test("S-WTLINK: an agent's write through a link in its worktree into the sage root is refused, and so is the link (T83)", () => {
+test("S-WTLINK: an agent's link to the sage root is refused; a write through a link is a limit of the hook (T83, T909)", () => {
   const s = project();
   const wt = ".claude/worktrees/w1";
   assert.match(denied(s.send(bash(`ln -s ${s.vars.SAGE_HOME} ${wt}/l2`, s.proj, AGENT))) ?? "", LOGBOOK_SHELL, "ln -s to the root");
   // T815: a link's target that a substitution gives, or that is relative to the link's own folder, is a limit.
   for (const command of [`ln -s $(cat ${wt}/t.txt) ${wt}/l2`, `ln -s ../../../../home ${wt}/l3`]) assert.equal(denied(s.send(bash(command, s.proj, AGENT))), undefined, command);
   symlinkSync(s.vars.SAGE_HOME, join(s.w1, "l2")); // as a script that the agent ran could make it (T83-S-SCRIPT, the sandbox's job)
-  for (const command of [
-    `cp -R ${wt}/forge/. ${wt}/l2/proj-x/`,
-    `tar -C ${wt}/l2 -xf ${wt}/forge.tar`,
-    `rsync -a ${wt}/forge/ ${wt}/l2/`,
-    `rm -rf ${wt}/l2/proj-x`,
-  ]) assert.match(denied(s.send(bash(command, s.proj, AGENT))) ?? "", LOGBOOK_SHELL, command);
+  // T909: a word is judged as written, not through the links on disk; rm of the link removes the link (F-T903-10).
+  for (const command of [`cp -R ${wt}/forge/. ${wt}/l2/proj-x/`, `rm -rf ${wt}/l2/proj-x`, `rm ${wt}/l2`]) assert.equal(denied(s.send(bash(command, s.proj, AGENT))), undefined, command);
   assert.equal(readFileSync(join(s.vars.SAGE_HOME, "proj-x", "ledger.tsv"), "utf8"), "");
   for (const command of [`cp a ${wt}/out.txt`, `ln -s ../shared ${wt}/node_modules`, `cd ${wt} && npm test > /tmp/out.log 2>&1`]) assert.equal(denied(s.send(bash(command, s.proj, AGENT))), undefined, command);
 });
@@ -2253,11 +2129,10 @@ test("C2: an agent's read, diff or commit that names sage.mjs passes; running th
       `eval node ${TOOL} task T2 set branch=main`,
       `find . -exec node ${TOOL} init ;`,
       `echo init | xargs node ${TOOL}`,
-      `node -e "import('${TOOL}')"`,
     ];
     for (const command of runs) assert.match(denied(s.send(bash(command, FEATURE, AGENT))) ?? "", ONLY_CHIEF, `sage mode ${on}: ${command}`);
-    // T815: the tool's text on node's stdin and a variable that names it are limits of the hook.
-    for (const command of [`cat ${TOOL} | node - verdict T2`, `S=${TOOL}; node $S verdict T2`]) assert.equal(denied(s.send(bash(command, FEATURE, AGENT))), undefined, `sage mode ${on}: ${command}`);
+    // T815, T909: the tool's text on node's stdin, a variable that names it and code that loads it are limits of the hook.
+    for (const command of [`cat ${TOOL} | node - verdict T2`, `S=${TOOL}; node $S verdict T2`, `node -e "import('${TOOL}')"`]) assert.equal(denied(s.send(bash(command, FEATURE, AGENT))), undefined, `sage mode ${on}: ${command}`);
     assert.match(denied(s.send(bash(`git log && node ${PR_SCRIPT} create T2`, FEATURE, AGENT))) ?? "", /only the chief runs the PR script/);
     assert.match(denied(s.send({ ...tool("Write", { file_path: join(s.vars.SAGE_HOME, "p", "ledger.tsv"), content: "x" }), ...AGENT, cwd: s.dir })) ?? "", /never writes under the sage root/);
   }
@@ -2544,8 +2419,8 @@ test("R466-PROCSUB: a process substitution is read as commands of its own, not a
   const withGh = session();
   withGh.send(prompt("sage mode"));
   assert.equal(withGh.send(bash("cat <(git log) <(git status); git push origin t100-x")), undefined);
-  // A command beside a push that can change git's settings refuses the push (T536); the hook reads it inside <(…).
-  assert.match(denied(withGh.send(bash("comm <(git branch) <(git branch -r); git push origin t100-x"))) ?? "", /"git branch" runs in the same command line as the push/);
+  // T909: a command beside a push passes; a push inside <(…) meets the push form.
+  assert.equal(withGh.send(bash("comm <(git branch) <(git branch -r); git push origin t100-x")), undefined);
   assert.match(denied(s.send(bash("diff <(git push origin main) x"))) ?? "", TO_MAIN);
   assert.equal(await refusal("diff <(sort a) <(sort b) | grep kill"), undefined);
   for (const command of ["diff <(ps) x", "tee >(kill 1) < f", "cat <(echo $(ps))"]) assert.match((await refusal(command)) ?? "", /standing order 14/, command);
@@ -2937,17 +2812,78 @@ const MAIN_LIMITS = new Set([
   "{ echo 'gh pr merge 41'; } | sh",
   "bash x.sh <<EOF\ngit push origin main\nEOF", "bash x.sh <<EOF\ngh pr merge 1 --admin\nEOF",
   "echo gh pr merge 1 --admin | sh", "$(echo gh pr merge 1 --admin)", "P=gh pr merge 1 --admin; $P",
-  // F-T815-30: gh pr merge in the words of a run counts as a merge (sh -c gh pr merge 1, a script's arguments,
-  // find -exec sudo gh pr merge), so those forms are refused again.
+  // F-T815-30 refused gh pr merge in the words of a run (sh -c gh pr merge 1, a script's arguments, find -exec sudo gh
+  // pr merge); T909 cut that wrapper reading, so those forms are in T909_LIMITS.
   // F-T815-17: command -v only looks the names up; it runs no merge.
   "command -v gh pr merge 1 --admin",
+]);
+
+/**
+ * T909: the forms of MAIN_DENIES that pass since the checks of deliberate tricks went (standing order 70): a GitHub API
+ * write or merge (gh api, curl), a git alias, a variable in the program word, text piped into a shell, a wrapper inside
+ * find -exec, and forms that run no push or merge at all (sh -c git with the rest as $0 and $1, a script's arguments,
+ * command -v). GitHub's protection of main and the merge check are the guards.
+ */
+const T909_LIMITS = new Set([
+  "/opt/homebrew/bin/gh api --hostname github.com -X POST repos/o/r/git/refs -f ref=refs/heads/main -f sha=1111111111111111111111111111111111111111",
+  "/opt/homebrew/bin/gh api -X POST repos/acme/blank/git/refs -f ref=refs/heads/main -f sha=1111111111111111111111111111111111111111",
+  "A=1 env B=2 command /usr/local/bin/gh api -X POST repos/acme/blank/git/refs -f ref=refs/heads/main -f sha=1111111111111111111111111111111111111111",
+  "GH_HOST=github.com gh api --hostname github.com -X POST repos/o/r/git/refs -f ref=refs/heads/main -f sha=1111111111111111111111111111111111111111",
+  "GH_HOST=github.com gh api -X POST repos/acme/blank/git/refs -f ref=refs/heads/main -f sha=1111111111111111111111111111111111111111",
+  "N=41; gh api -X PUT repos/o/r/pulls/$N/merge -f merge_method=squash",
+  "X=1 ${G} pr merge 41",
+  "command gh api --hostname github.com -X POST repos/o/r/git/refs -f ref=refs/heads/main -f sha=1111111111111111111111111111111111111111",
+  "command gh api -X POST repos/acme/blank/git/refs -f ref=refs/heads/main -f sha=1111111111111111111111111111111111111111",
+  "curl -X PUT -H \"Authorization: Bearer x\" https://api.github.com/repos/o/r/pulls/41/merge",
+  "curl -X PUT https://api.github.com/repos/o/r/pulls/$N/merge",
+  "echo git push origin main | sh",
+  "env GH_HOST=github.com gh api -X POST repos/acme/blank/git/refs -f ref=refs/heads/main -f sha=1111111111111111111111111111111111111111",
+  "env gh api --hostname github.com -X POST repos/o/r/git/refs -f ref=refs/heads/main -f sha=1111111111111111111111111111111111111111",
+  "env gh api -X POST repos/acme/blank/git/refs -f ref=refs/heads/main -f sha=1111111111111111111111111111111111111111",
+  "gh api --hostname ghe.example.com -X POST repos/o/r/git/refs -f ref=refs/heads/main -f sha=1111111111111111111111111111111111111111",
+  "gh api --hostname github.com -X PATCH repos/o/r/git/refs -f ref=refs/heads/main -f sha=1111111111111111111111111111111111111111",
+  "gh api --hostname github.com -X POST repos/../r/git/refs -f ref=refs/heads/main -f sha=1111111111111111111111111111111111111111",
+  "gh api --hostname github.com -X POST repos/o/r/git/refs -f ref='refs/heads/main' -f sha=1111111111111111111111111111111111111111",
+  "gh api --hostname github.com -X POST repos/o/r/git/refs -f ref=main -f sha=1111111111111111111111111111111111111111",
+  "gh api --hostname github.com -X POST repos/o/r/git/refs -f ref=refs/heads/main -F sha=1111111111111111111111111111111111111111",
+  "gh api --hostname github.com -X POST repos/o/r/git/refs -f ref=refs/heads/main -f sha=111111111111",
+  "gh api --hostname github.com -X POST repos/o/r/git/refs -f ref=refs/heads/main -f sha=1111111111111111111111111111111111111111 && echo ok",
+  "gh api --hostname github.com -X POST repos/o/r/git/refs -f ref=refs/heads/main -f sha=1111111111111111111111111111111111111111 --hostname github.com",
+  "gh api --hostname github.com -X POST repos/o/r/git/refs -f ref=refs/heads/main -f sha=1111111111111111111111111111111111111111 --include",
+  "gh api --hostname github.com -X POST repos/o/r/git/refs -f ref=refs/heads/main -f sha=1111111111111111111111111111111111111111 -f force=true",
+  "gh api --hostname github.com -X POST repos/o/r/git/refs -f ref=refs/heads/main -f sha=1111111111111111111111111111111111111111 -f sha=1111111111111111111111111111111111111111",
+  "gh api --hostname github.com -X POST repos/o/r/git/refs -f ref=refs/heads/main -f sha=1111111111111111111111111111111111111111 >/dev/null",
+  "gh api --hostname github.com -X POST repos/o/r/git/refs -f ref=refs/heads/main -f sha=1111111111111111111111111111111111111111; echo ok",
+  "gh api --hostname github.com -X POST repos/o/r/git/refs -f ref=refs/heads/main -f sha=1111111111111111111111111111111111111111\necho ok",
+  "gh api --hostname github.com -X POST repos/{owner}/{repo}/git/refs -f ref=refs/heads/main -f sha=1111111111111111111111111111111111111111",
+  "gh api --hostname github.com repos/o/r/git/refs -f ref=refs/heads/main -f sha=1111111111111111111111111111111111111111",
+  "gh api --hostname=github.com -X POST repos/o/r/git/refs -f ref=refs/heads/main -f sha=1111111111111111111111111111111111111111",
+  "gh api --method=PUT /repos/o/r/pulls/41/merge",
+  "gh api -X POST repos/o/r/git/refs -f ref=refs/heads/main -f sha=1111111111111111111111111111111111111111",
+  "gh api -X POST repos/o/r/merges -f base=main -f head=t4",
+  "gh api -X PUT repos/o/r/pulls/$(echo 41)/merge",
+  "gh api -X PUT repos/o/r/pulls/41/merge -f sha=a1b2c3d4e5f60718293a4b5c6d7e8f9012345678",
+  "gh api graphql -f query='mutation { mergePullRequest(input: {pullRequestId: \"x\"}) { clientMutationId } }'",
+  "git -c alias.m='!gh pr merge 41 --squash' m",
+  "sh -c git push origin main",
+  "sh -c gh pr merge 1 --admin",
+  "bash ./x.sh git push origin main",
+  "bash ./x.sh gh pr merge 1 --admin",
+  "bash -c 'echo $0' git push origin main",
+  "bash -c 'echo $0' gh pr merge 1 --admin",
+  "bash -c git push origin main x",
+  "bash -c gh pr merge 1 --admin x",
+  "$(echo git push origin main)",
+  "find . -exec sudo git push origin main {} ;",
+  "find . -exec sudo gh pr merge 1 --admin {} ;",
+  "command -v git push origin main",
 ]);
 
 test("R466-REGRESSION, T815: every command that main's reader denies for the main session is still denied, but the documented limits", async () => {
   const { handle } = await import("../plugins/sage/hooks/sage-hook.mjs");
   const slots = { bind() {}, release() {}, drop() {}, touch() {}, reconcile() {} };
   const allowed = MAIN_DENIES.filter((command) => !denied(handle(bash(command), { sage: true, autopilot: false }, slots)));
-  assert.deepEqual(allowed, MAIN_DENIES.filter((command) => MAIN_LIMITS.has(command)));
+  assert.deepEqual(allowed, MAIN_DENIES.filter((command) => MAIN_LIMITS.has(command) || T909_LIMITS.has(command)));
 });
 
 test("T216: the board note's two commands pass the hook for the chief, as the note gives them", async () => {
@@ -2979,8 +2915,9 @@ test("T229: the board password rule refuses the ordinary shapes, and allows repo
   const dir = realpathSync(mkdtempSync(join(tmpdir(), "sage-board-rule-"))), home = join(dir, "home"), folder = join(home, ".config", "sage-board"), config = join(folder, "board.json");
   mkdirSync(folder, { recursive: true }); writeFileSync(config, "{}\n"); writeFileSync(join(folder, "board.log"), "log\n");
   mkdirSync(join(dir, "other", "sage-board"), { recursive: true }); writeFileSync(join(dir, "other", "sage-board", "board.json"), "{}\n");
-  symlinkSync(config, join(dir, "plain-name.txt")); // a link to the config is the config
-  symlinkSync(join(home, ".config"), join(dir, "linked-config")); // and so is a path through a link to a folder above it
+  // T909: a path is judged as written: a link to the config, or through a link to a folder above it, is a limit.
+  symlinkSync(config, join(dir, "plain-name.txt"));
+  symlinkSync(join(home, ".config"), join(dir, "linked-config"));
   const SET = /^sage: the board password rule \(T229\): only the owner sets the board password, in Terminal on the Mac\. Never run board --set-password/;
   const CONFIG = /^sage: the board password rule \(T229\): no agent reads, copies or replaces the board config \(~\/\.config\/sage-board\/board\.json\), or searches, copies or moves a folder that holds it/;
   const OK = null, REPO = FEATURE;
@@ -3004,7 +2941,7 @@ test("T229: the board password rule refuses the ordinary shapes, and allows repo
     // F-T815-16: pushd moves as cd does, and popd goes back (by the reader, and by its fallback after pushd ~).
     ["pushd ~/.config && cat sage-board/board.json", CONFIG], [`pushd ${home}/.config && cat sage-board/board.json`, CONFIG],
     [`pushd ${home}/.config && popd && cat sage-board/board.json`, OK], ["pushd ~/.config && popd && cat sage-board/board.json", OK],
-    [`cat ${dir}/plain-name.txt`, CONFIG], [`cat ${dir}/linked-config/sage-board/board.json`, CONFIG], ["head < ~/.config/sage-board/board.json", CONFIG],
+    [`cat ${dir}/plain-name.txt`, OK], [`cat ${dir}/linked-config/sage-board/board.json`, OK], ["head < ~/.config/sage-board/board.json", CONFIG],
     // T815: a line that the hook cannot read is refused only when it names a merge, a push, the state tool or the option.
     ["cat ~/.config/sage-board/board.json \"", OK], ["cat board.json \"", OK], ["cd ~/.config && cat sage-board/board.json \"", OK], ["cp -R .config /tmp/copy \"", OK],
     [`cat ~/.config/sage-b*/board.json "`, OK], [`tar -cf /tmp/x.tar ${home}/.config "`, OK], [`node ${BOARD} board --set-password "`, SET],
@@ -3048,9 +2985,9 @@ test("T229: the board password rule refuses the ordinary shapes, and allows repo
     ["cat board.json", join(dir, "other", "sage-board"), OK], ["cat README.md", "packages/sage-board", OK],
   ];
   const files = [
-    [{ file_path: config }, CONFIG], [{ file_path: "~/.config/sage-board/board.json" }, CONFIG], [{ file_path: join(dir, "plain-name.txt") }, CONFIG],
+    [{ file_path: config }, CONFIG], [{ file_path: "~/.config/sage-board/board.json" }, CONFIG], [{ file_path: join(dir, "plain-name.txt") }, OK],
     [{ file_path: "board.json" }, CONFIG, folder], [{ file_path: "./x/../board.json" }, CONFIG, folder], [{ file_path: join(folder, ".board-0123456789ab.json") }, CONFIG],
-    [{ file_path: join(dir, "linked-config", "sage-board", "board.json") }, CONFIG], [{ file_path: "packages/sage-board/board.json" }, OK], [{ file_path: `${REPO}/README.md` }, OK],
+    [{ file_path: join(dir, "linked-config", "sage-board", "board.json") }, OK], [{ file_path: "packages/sage-board/board.json" }, OK], [{ file_path: `${REPO}/README.md` }, OK],
   ];
   const greps = [
     [{ pattern: "hash", path: `${home}/.config` }, CONFIG], [{ pattern: "hash", path: folder }, CONFIG], [{ pattern: "hash", path: "~" }, CONFIG], [{ pattern: "hash" }, CONFIG, home],
@@ -3223,7 +3160,7 @@ for (const name of Object.keys(PATH_WORK_SHAPES)) test(`F-T229-20: one-MB parser
   } finally { rmSync(s.dir, { recursive: true, force: true }); }
 });
 
-test("F-T229-20: the work oracle detects long-prefix walks and repeated uncached prefixes", async (t) => {
+test("F-T229-20: the work oracle detects long-prefix walks", async (t) => {
   const s = session();
   try {
     const plugin = join(s.dir, "mutated-plugin");
@@ -3234,7 +3171,6 @@ test("F-T229-20: the work oracle detects long-prefix walks and repeated uncached
     const shapes = { ...PATH_WORK_SHAPES, "long components": () => ("x".repeat(127) + "/").repeat(8192) };
     for (const [before, after, shape, kind] of [
       ["if (!strict && path.length > 4096)", "if (false)", "long components", "characters"],
-      ["if (!disk.has(next))", "if (true)", "relative words", "repeated-path"],
     ]) {
       assert.equal(original.split(before).length, 2, "the controlled regression must change exactly one guard");
       const event = shape === "long components"
@@ -3416,9 +3352,10 @@ test("N4-READS: diff <(git show …) of sage.mjs passes; runs of the state tool 
   const s = session();
   const path = "plugins/sage/skills/sage/sage.mjs";
   assert.equal(denied(s.send(bash(`diff <(git show main:${path}) ${path}`, FEATURE, AGENT))), undefined, "a diff");
-  for (const command of [`node -c -e "import('${TOOL}')"`, `node --check ${path} && node ${TOOL} init`]) assert.match(denied(s.send(bash(command, FEATURE, AGENT))) ?? "", ONLY_CHIEF, command);
-  // T815: python code that runs the tool is a limit of the hook; the state tool's own rules still hold for it.
+  assert.match(denied(s.send(bash(`node --check ${path} && node ${TOOL} init`, FEATURE, AGENT))) ?? "", ONLY_CHIEF);
+  // T815, T909: code that runs or loads the tool is a limit of the hook; the state tool's own rules still hold for it.
   assert.equal(denied(s.send(bash(`python3 -c "__import__('os').system('node ${TOOL} init')"`, FEATURE, AGENT))), undefined, "code that runs the tool");
+  assert.equal(denied(s.send(bash(`node -c -e "import('${TOOL}')"`, FEATURE, AGENT))), undefined, "code that loads the tool");
   const root = s.vars.SAGE_HOME;
   for (const command of [`grep -rn x ${root}/p | head > ${root}/p/ledger.tsv`, `grep -n x ${path} | head > ${root}/p/notes.txt`]) {
     assert.match(denied(s.send(bash(command, FEATURE, AGENT))) ?? "", LOGBOOK_SHELL, command);
@@ -3617,7 +3554,6 @@ test("T529, T815: in its scratch subfolder a reviewer still writes no logbook fi
   assert.match(denied(s.send(bash(fake(join(s.vars.SAGE_HOME, "p", "tasks.tsv")), FEATURE, reviewer))) ?? "", LOGBOOK_SHELL, "the logbook");
   assert.equal(denied(s.send(bash(`${fake(join(own, "x.sh"))}\ncd ${own} && echo "$*" > y.sh; echo $?`, FEATURE, reviewer))), undefined, "work in the folder");
   assert.match(denied(s.send(bash(`node ${TOOL} verdict T1 --kind qa-pass --sha ${SHA} > ${own}/x`, FEATURE, reviewer))) ?? "", ONLY_CHIEF);
-  assert.match(denied(s.send(bash(`node -e 'require("node:child_process").spawnSync("node", ["${TOOL}", "verdict"])' > ${own}/x`, FEATURE, reviewer))) ?? "", ONLY_CHIEF);
   assert.match(denied(s.send(bash(`kill -9 1 && echo done > ${own}/x`, FEATURE, reviewer))) ?? "", /standing order 14/);
 });
 
@@ -3682,7 +3618,7 @@ test("Q3-N1WORD, T815: every run of the state tool's write is refused wherever t
   const cases = [
     `for k in a b; do node ${TOOL} verdict T2 --kind $k --sha ${SHA}; done`, `while true; do ${write}; done`, `if true; then ${write}; fi`,
     `case x in x) ${write};; esac`, `{ ${write}; }`, `! ${write}`, `sudo -u root ${write}`, `timeout -s KILL 5 ${write}`, `env -u X ${write}`, `npx -p x ${write}`,
-    `node --check ${path} && node ${TOOL} init`, `node -e "import('${TOOL}')"`, `node ${TOOL} status; node ${TOOL} init`, `echo init | xargs node ${TOOL}`,
+    `node --check ${path} && node ${TOOL} init`, `node ${TOOL} status; node ${TOOL} init`, `echo init | xargs node ${TOOL}`,
     `node ${TOOL} status <<'EOF'\n"open\nEOF\n"`,
   ];
   for (const command of cases) {
@@ -3726,19 +3662,6 @@ test("missing command modules refuse command tools before protected API writes",
 
 
 for (const actor of ["main", "agent"]) {
-  test(`T196: ${actor} refuses ambiguous PowerShell protected commands`, () => {
-    const s = session(); s.send(prompt("sage mode"));
-    const extra = actor === "agent" ? { agent_id: "a1", agent_type: "sage:implementer" } : {};
-    for (const command of [
-      "g`h pr me`rge 41", 'gh pr ("mer"+"ge") 41', 'gh pr $("mer"+"ge") 41',
-      "g`it pu`sh origin claude/t1", 'git ("pu"+"sh") origin claude/t1',
-      "G`H PR ME`RGE 41",
-    ]) assert.match(denied(s.send(tool("PowerShell", { command }, { cwd: FEATURE, ...extra }))) ?? "", /PowerShell expansion/, command);
-    for (const command of ["Write-Output hello", 'Write-Output ("hello"+"world")', "Get-Date", "git status"]) {
-      assert.equal(s.send(tool("PowerShell", { command }, { cwd: FEATURE, ...extra })), undefined, command);
-    }
-  });
-
   test(`T196: ${actor} checks merge and push text in every command input field`, () => {
     const s = session(); s.send(prompt("sage mode"));
     const extra = actor === "agent" ? { agent_id: "a1", agent_type: "sage:implementer" } : {};
@@ -3752,7 +3675,6 @@ for (const actor of ["main", "agent"]) {
       assert.equal(s.send(tool(name, { script: "git status", payload: { code: "echo safe" } }, { cwd: FEATURE, ...extra })), undefined);
       assert.ok(denied(s.send(tool(name, { command: ["gh", "pr", "merge", "41"] }, { cwd: FEATURE, ...extra }))));
     }
-    assert.match(denied(s.send(tool("PowerShell", { command: "echo safe", payload: { script: 'gh pr ("mer"+"ge") 41' } }, { cwd: FEATURE, ...extra }))) ?? "", /PowerShell expansion/);
     let nested = { script: "git push origin main" };
     for (let n = 0; n < 3500; n++) nested = { payload: nested };
     assert.ok(denied(s.send(tool("Monitor", nested, { cwd: FEATURE, ...extra }))), "unreadable nested input must produce a refusal, not a hook crash");
@@ -3808,18 +3730,11 @@ test("T197, T815: an agent runs the gh commands of core's list and gh api with G
   ]) assert.match(denied(f.send(command)) ?? "", /an agent runs only these gh commands|reaches main only through a pull request/, command);
   assert.equal(f.send("gh auth status", false), undefined, "the chief keeps its own gh");
   for (const command of [`${f.hard} auth status`, `${f.linked} auth status`, `cp ${f.gh} /tmp/x`, "alias m='gh pr view'"]) assert.equal(f.send(command), undefined, `${command} (a limit of the hook)`);
-  // F-T815-42: a word gh that is a file, a package or a page is not the program that runs; gh behind a wrapper is.
+  // F-T815-42: a word gh that is a file, a package or a page is not the program that runs. T909: gh behind a wrapper that
+  // the reader does not know is a limit of the hook (standing order 70).
   for (const command of ["brew install gh jq", "find . -name gh -type f", "du -sh gh node_modules", "cp gh backup", "man gh pr", "tree gh src",
-    "rm -rf gh build", "tar -czf out.tgz gh docs", "npm view gh version", "op run -- gh pr view 41"]) assert.equal(f.send(command), undefined, command);
-  for (const command of ["op run -- gh auth status", "chronic gh repo delete o/r", "ionice -c3 gh issue create --title x"]) {
-    assert.match(denied(f.send(command)) ?? "", /an agent runs only these gh commands/, command);
-  }
-});
-
-test("T197: PowerShell literal Windows gh paths are refused", () => {
-  const f = ghAgentSession();
-  for (const command of [String.raw`& 'C:\tools\gh.exe' auth status`, String.raw`& '.\gh.exe' auth status`, String.raw`C:\tools\gh.exe auth status`, String.raw`.\gh.exe auth status`]) {
-    assert.ok(denied(f.send(command, true, "PowerShell")), command);
+    "rm -rf gh build", "tar -czf out.tgz gh docs", "npm view gh version", "op run -- gh pr view 41", "op run -- gh auth status", "chronic gh repo delete o/r"]) {
+    assert.equal(f.send(command), undefined, command);
   }
 });
 
@@ -5406,15 +5321,13 @@ test("F-T289-3: a lead ends a run whose helper never started as failed or blocke
   assert.match(denied(stateRun(s, `run done ${live} --status failed`)) ?? "", /R6's helper has not stopped/, "a helper that started must stop first");
 });
 
-test("F-T289-6: a lead closes a round's finding only on a new commit, not on the one where its helper found the problem", () => {
+test("F-T289-6, T909: a lead closes a fix finding of its round while repairing, also before a new commit; the next review cycle checks the repair", () => {
   const s = leadSession();
   helpedRun(s, "code-reviewer", report("FINDINGS", "- Y1 medium a.mjs:1 run x")); // R5, at the head
   sageFind(s, "T1", "code-reviewer", "--severity", "medium", "--summary", "y1"); // F-T1-3
   s.sage("finding", "triage", "T1", "F-T1-3", "fix");
   setState(s, "T1", "repairing", { keys: "F-T1-3", round: "1" });
-  assert.match(denied(stateRun(s, "finding close T1 F-T1-3")) ?? "", /F-T1-3 is a finding of the round, and the head of T1's branch \(\w{7}\) is a commit on which a helper found problems: commit the repair first \(F-T289-6\)/);
-  s.commit();
-  assert.equal(denied(stateRun(s, "finding close T1 F-T1-3")), undefined, "after the repair's commit");
+  assert.equal(denied(stateRun(s, "finding close T1 F-T1-3")), undefined, "on the commit that the helper reviewed");
 });
 
 test("F-T289-7: a lead writes nothing and starts no child on an abandoned, merged or concluded task", () => {
@@ -6102,12 +6015,12 @@ test("F-T289-62: an indented item or prose line with a higher severity word anyw
   assert.match(s.send({ hook_event_name: "SubagentStop", agent_id: "honest", agent_type: "sage:code-reviewer", last_assistant_message: honest })?.reason ?? "", /the line "steps: load a high row count" under FINDINGS has a severity word above the severity of its finding \(low\)/);
 });
 
-test("F-T289-63: a look-alike or hidden severity word counts, and U+2028 before a fence does not hide a second FINDINGS", () => {
+// T909: a severity word in look-alike letters of another script (Cyrillic, Greek) is a limit of the reader (standing order 70).
+test("F-T289-63: a full-width or hidden severity word counts, and U+2028 before a fence does not hide a second FINDINGS", () => {
   const ch = (...codes) => String.fromCharCode(...codes);
   for (const tail of [
     `  ${ch(0x2013)} K2 high SQL injection`, `  ${ch(0x2022)} K2 high SQL injection`, "  a) K2 high SQL injection", `  ${ch(0x2212)} K2 high SQL injection`,
-    `  - K2 h${ch(0x456)}gh SQL injection`, `  - K2 ${ch(0xff48, 0xff49, 0xff47, 0xff48)} SQL injection`, `  - K2 hi${ch(0x200b)}gh SQL injection`,
-    `  - K2 ${ch(0x397, 0x399)}G${ch(0x397)} SQL injection`, `  - K2 ${ch(0x441)}ritical SQL injection`,
+    `  - K2 ${ch(0xff48, 0xff49, 0xff47, 0xff48)} SQL injection`, `  - K2 hi${ch(0x200b)}gh SQL injection`,
   ]) {
     assert.match(freshVerdict(report("FINDINGS", lines("", "- K1 low a typo", tail))) ?? "", UNREADABLE, JSON.stringify(tail));
   }
@@ -6942,20 +6855,19 @@ test("T621: the move is refused when GitHub does not show a nearly empty reposit
  */
 const P = "~/.claude/sage/p", TABLE = `${P}/tasks.tsv`;
 const NEAR = /never writes, moves or removes|cannot read/;
-/** A project folder with lnk, a link to the session's sage root. */
+/** A session whose sage root is the folder lnk, and that folder's parent as the cwd (T909: a word is judged as written, not through a link). */
+const rootSession = () => session({ SAGE_HOME: join(mkdtempSync(join(tmpdir(), "sage-t621-")), "lnk") });
 const linkedProject = (s) => {
-  const cwd = mkdtempSync(join(tmpdir(), "sage-t621-link-"));
   mkdirSync(join(s.vars.SAGE_HOME, "p"), { recursive: true });
-  symlinkSync(s.vars.SAGE_HOME, join(cwd, "lnk"));
-  return cwd;
+  return dirname(s.vars.SAGE_HOME);
 };
 /** The forms of a list that the hook lets pass, so that a failure names every one of them. */
 const notRefused = (s, commands, cwd, roles = AS_BOTH) => commands.flatMap((command) => roles.flatMap(([who, extra]) => (NEAR.test(denied(s.send(bash(command, cwd, extra))) ?? "") ? [] : [`${who}: ${command}`])));
 
-// T815: the rule judges the words of each program that is not a reader, by their literal paths into a root (lnk is a link
-// to the session's sage root). Code, a file that a later command runs, an alias and text piped into a shell are limits.
+// T815: the rule judges the words of each program that is not a reader, by their literal paths into a root (lnk is the
+// session's sage root). Code, a file that a later command runs, an alias and text piped into a shell are limits.
 test("T621 F-T621-7, T815: a program that the hook does not know is judged by its words, beside a known write and in a line that only redirects", () => {
-  const s = session();
+  const s = rootSession();
   s.send(prompt("sage mode"));
   const cwd = linkedProject(s);
   const T = "lnk/p/tasks.tsv";
@@ -6980,7 +6892,7 @@ test("T621 F-T621-7, T815: a program that the hook does not know is judged by it
 });
 
 test("T621 F-T621-9: zsh's clobber forms keep the line whole, so the real target is judged", () => {
-  const s = session();
+  const s = rootSession();
   s.send(prompt("sage mode"));
   const cwd = linkedProject(s);
   const inside = join(s.vars.SAGE_HOME, "projects", "x");

@@ -1692,7 +1692,7 @@ test("T901: a line that runs sage-pr create or merge in a form that the hook can
     assert.equal(run(`node ${PR_TOOL} ${verb} T1; echo done`), plain);
     assert.equal(run(`bash -c "node ${PR_TOOL} ${verb} T1"`), plain);
   }
-  assert.equal(run(`node -e "import('${PR_TOOL}')"`), plain, "node's code: the hook cannot see the script's words");
+  assert.equal(run(`node -e "import('${PR_TOOL}')"`), undefined, "node's code that loads the script is a limit of the hook (T909)");
   assert.equal(run(`grep -n merge ${PR_TOOL}`), undefined, "a read of the script runs nothing");
   // F-T901-7: text that names the script and a verb runs nothing, so the owner check has nothing to judge (T815).
   assert.equal(run(`echo "next: node ${PR_TOOL} merge T1"`), undefined, "an echo");

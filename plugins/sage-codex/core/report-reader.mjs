@@ -94,15 +94,13 @@ function lineOf(text) {
 const LEVELS = ["none", "low", "medium", "high"];
 const LEVEL = { low: 1, medium: 2, high: 3, critical: 3, severe: 3, blocker: 3 };
 const LEVEL_WORD = /(?<![\p{L}\p{N}])(?:low|medium|high|critical|severe|blocker)(?![\p{L}\p{N}])/gu;
-/** Cyrillic and Greek letters that look like the Latin letters of LEVEL's words, in lower case, as the Latin letter. */
-const LOOK_ALIKE = { а: "a", в: "b", с: "c", ԁ: "d", е: "e", ԍ: "g", һ: "h", н: "h", і: "i", ӏ: "l", к: "k", м: "m", о: "o", р: "p", ѕ: "s", т: "t", у: "y", ԝ: "w", х: "x", α: "a", β: "b", ε: "e", η: "h", ι: "i", κ: "k", μ: "m", ν: "v", ο: "o", ρ: "p", τ: "t", υ: "u", ω: "w", χ: "x" };
 /**
- * The level of the highest severity word in a line, as a whole word in any case, after NFKC, look-alike Cyrillic and
- * Greek letters as Latin ones, and no zero-width or other format character: "a Hіgh risk" with a Cyrillic і is high
- * (F-T289-60, F-T289-62, F-T289-63). 0 when it has none.
+ * The level of the highest severity word in a line, as a whole word in any case, after NFKC and with no zero-width or
+ * other format character (F-T289-60, F-T289-62). 0 when it has none. A severity word in look-alike letters of another
+ * script is a limit of the reader (standing order 70).
  */
 function levelIn(line) {
-  const text = line.normalize("NFKC").toLowerCase().replace(/[^\0-\x7f]/g, (c) => LOOK_ALIKE[c] ?? c).replace(/\p{Cf}/gu, "");
+  const text = line.normalize("NFKC").toLowerCase().replace(/\p{Cf}/gu, "");
   return Math.max(0, ...[...text.matchAll(LEVEL_WORD)].map(([word]) => LEVEL[word]));
 }
 /** None alone, in any case, also as a list item or with a period: the one clean form of FINDINGS (F-T289-48, F-T289-51). */

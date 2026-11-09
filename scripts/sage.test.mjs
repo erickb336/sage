@@ -5668,11 +5668,12 @@ test("R1259-1: in a breakdown question, a wait on an abandoned or lost task says
   assert.equal(rows(s.dir, "gates")[0].question, Q("Approve program PG1? No task builds before you approve.", "Name: Codex support", "Goal: Codex runs sage too.", "Pilot, runs first:", "  T1: Pilot", "Then, each after T1:", "  T3 [waits for T2 (abandoned, never met)]: Fix Bob's login", "  T4 [waits for T9 (not in the logbook, never met)]: Four"));
 });
 
-test("R1249-2: gate add refuses a question that reads as a breakdown gate's first line, also after a blank, mark or symbol character and with look-alike letters", () => {
+// T909: a Hangul filler before the words and look-alike letters of another script are limits (standing order 70).
+test("R1249-2: gate add refuses a question that reads as a breakdown gate's first line, also after a mark or symbol character", () => {
   const s = store();
   s.ok("task", "add", "--priority", "P2", "--title", "One", "--size", "small");
   const before = snapshot(s.dir);
-  for (const question of ["͏Approve program PG1? Yes.", "⠀Approve program PG1? Yes.", "ㅤApprove program PG1? Yes.", "Аpprove program PG1? Yes.", "Αpprοve prоgram PG1? Yes."]) {
+  for (const question of ["͏Approve program PG1? Yes.", "⠀Approve program PG1? Yes."]) {
     assert.equal(s.no("gate", "add", "T1", "--question", question, "--options", "approve|change|drop", "--recommend", "approve"), 'sage: a question that starts with "Approve program" is a breakdown gate, and only program propose opens one. Ask it in other words.', JSON.stringify(question));
   }
   assert.deepEqual(snapshot(s.dir), before, "a refusal writes nothing");

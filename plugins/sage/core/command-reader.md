@@ -12,6 +12,6 @@ an explicit denial. Non-command events keep their existing handling.
 
 Both provider bundles include the reader. Sharing it does not make it a complete
 shell interpreter or command policy. It does not expand variables, inspect script
-contents, or implement PowerShell grammar. Existing wrapper and quoting behavior
+contents, or implement PowerShell grammar: a PowerShell command is read as shell text. Existing wrapper and quoting behavior
 remains unchanged. A Codex tool adapter must identify the actual command fields
 and shell before applying the appropriate policy; parsing alone grants no permission.

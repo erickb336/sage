@@ -37,7 +37,7 @@ The manual logbook does not replace protected native preparation, report, review
 
 Use the native `apply_patch` tool for a permitted project edit. Give each target a literal path inside the assigned worktree. Put program text inside the patch body. Do not wrap the patch in a shell command or an interpreter.
 
-The shell guard reads the programs that a command runs and the literal paths in their words: program arguments, stdin and redirection targets. A word counts by its literal part, the text before its first `$`, backtick or pattern character. A variable, a substitution or a pattern does not make the guard refuse a word, and a path that only such a form names is a documented limit, not a permission. The guard does not run a program to find what it writes.
+The shell guard reads the programs that a command runs and the literal paths in the words of a write: program arguments and redirection targets. It refuses a write into the logbook roots, a `.codex` folder or Codex's config; a read of them runs. A written word counts by its literal part, the text before its first `$`, backtick or pattern character, as written, not through a link. A variable, a substitution or a pattern does not make the guard refuse a word, and a path that only such a form names is a documented limit, not a permission. The guard does not run a program to find what it writes.
 
 For program text, prefer this form for an authorized implementer:
 
