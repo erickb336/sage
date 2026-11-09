@@ -3578,15 +3578,13 @@ test("T594, T815: a project's own .sage folder is free; the home's .sage, when i
   }
 });
 
-test("T529: a reviewer writes a fake with \"$*\", a heredoc with braces, and runs node -e with spawnSync, all in its own scratch subfolder", () => {
+test("T529: a reviewer writes a fake with \"$*\", a heredoc with braces, and runs a probe file with spawnSync, all in its own scratch subfolder", () => {
   const { s, own, reviewer } = scratchSession();
   const allowed = [
     // R1873: a fake script with "$*"
     `mkdir -p ${own}/bin && cat > ${own}/bin/gh <<'EOF'\n#!/bin/sh\necho "fake gh $*" >&2\nexit 1\nEOF\nchmod +x ${own}/bin/gh`,
     // R1873: a proof file with braces, run by node, with $? after it (R1871)
     `cat > ${own}/proof.mjs <<'EOF'\nconst cp = await import("node:child_process");\nconst r = cp.spawnSync("${own}/bin/gh", ["pr", "view"]);\nif (r.status !== 1) { throw new Error([r.status].join()); }\nEOF\nnode ${own}/proof.mjs; echo $?`,
-    // R1873: node -e with {spawnSync}
-    `node -e 'const {spawnSync}=require("node:child_process"); console.log(spawnSync("${own}/bin/gh", ["x"]).status)'`,
     // R1871: a variable and a bracket list in a fake, with output into the folder
     `cat > ${own}/bin/ps <<'EOF'\n#!/bin/sh\nfor a in "$@"; do [ "$a" = "-o" ] && echo "Sat Jan  1 00:00:00 2000"; done\nEOF\nchmod 755 ${own}/bin/ps && node ${own}/proof.mjs > ${own}/out.txt 2>&1 || echo FAIL`,
     // R1859: a scratch home, config and PATH for the run's own script
@@ -3596,6 +3594,8 @@ test("T529: a reviewer writes a fake with \"$*\", a heredoc with braces, and run
     `printf '%s\\n' 'kill -9 1' 'sage.mjs verdict T1' > ${own}/more.txt`,
   ];
   for (const command of allowed) assert.equal(denied(s.send(bash(command, FEATURE, reviewer))), undefined, command);
+  // R1873's node -e is code that can write, so a read-only role runs it from a probe file in scratch instead (T933).
+  assert.match(denied(s.send(bash(`node -e 'const {spawnSync}=require("node:child_process"); console.log(spawnSync("${own}/bin/gh", ["x"]).status)'`, FEATURE, reviewer))) ?? "", /the code-reviewer agent changes no files, also not from the shell/);
   for (const role of ["sage:security-reviewer", "sage:ux-reviewer", "sage:qa"]) {
     const n = role.length; // a distinct run for each role
     const other = scratchSession(), who = other.agent(`a${n}`, role, `Run R${n} · task T521`);
@@ -3608,6 +3608,8 @@ test("T529: a reviewer writes a fake with \"$*\", a heredoc with braces, and run
 // T815: the scratch rule (T529) is gone: scratch work passes by the usual rules, and they still hold in the folder.
 test("T529, T815: in its scratch subfolder a reviewer still writes no logbook file, runs no write of the state tool and no process program", () => {
   const { s, own, reviewer } = scratchSession();
+  // The reviewer made its folder in an earlier call: the hook follows a cd only into a folder that exists (T933).
+  mkdirSync(own, { recursive: true });
   const fake = (to) => `cat > ${to} <<'EOF'\necho "$*" {a}\nEOF`;
   assert.match(denied(s.send(bash(fake(join(s.vars.SAGE_HOME, "p", "tasks.tsv")), FEATURE, reviewer))) ?? "", LOGBOOK_SHELL, "the logbook");
   assert.equal(denied(s.send(bash(`${fake(join(own, "x.sh"))}\ncd ${own} && echo "$*" > y.sh; echo $?`, FEATURE, reviewer))), undefined, "work in the folder");
