@@ -1,0 +1,16 @@
+---
+id: guard-the-context-window
+name: Guard the context window
+applyWhen: the context fills up: large outputs, long files, repeated reads or planning a fan-out.
+source: pstack principle-guard-the-context-window, MIT, Copyright (c) 2026 Lauren Tan, github.com/cursor/plugins at e43c7ee, adapted
+upstream: af0b9dd70b43628c
+---
+
+The context window is finite, and you cannot renew it within a session. Each token must be worth its cost.
+
+**Why.** When the context overflows, reasoning gets worse, compression loses detail, and progress stops.
+
+**What to do.**
+- **Isolate large payloads.** Send long outputs, screenshots and large documents to subagents. The main context gets summaries, not the raw data.
+- **Keep content that you use often inline.** A template or reference that each use needs belongs in the skill file, not in a separate file that costs a read each time.
+- **Size the phases and limit the scope.** Limit the files in each phase, set turn budgets, and count the cost of each mechanism.
