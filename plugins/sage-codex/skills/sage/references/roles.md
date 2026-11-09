@@ -60,23 +60,23 @@ The chief can call `report_compare` through the sage MCP server for its assigned
 
 The result contains only `status`: `match`, `mismatch`, `missing` or `damaged`. A match requires valid stored identity fields and an equal recomputed digest. Existing records have no stored digest. Unknown or incomplete storage formats return `damaged`; access and input failures remain errors. No report text or private identifiers leave this operation.
 
-This read changes no logbook, retained report, review decision or approval. It uses the existing one-call gate admission. Role agents cannot call it. A match describes the observed stored text; it does not prove native authenticity or successful review. An incomplete, blocked or question report can match. A manually saved report page does not count as retained text.
+This read changes no logbook, retained report, review decision or approval. It uses the existing one-call gate admission. Role agents cannot call it. A match describes the observed stored text; it does not prove who wrote the report or that the review succeeded. An incomplete, blocked or question report can match. A manually saved report page does not count as retained text.
 
 ## Read-only investigation roles
 
 Use `role.mjs investigate` for the investigator and `role.mjs evidence-review` for a separate evidence reviewer. Each prints its own instructions and the shared report contract. These names are exact; do not relabel another role.
 
-Both roles use the existing assigned-project read approval. In Sage mode, the gate explicitly refuses their file changes. The existing configuration, logbook-write, child-spawn, messaging and foreign-project read refusals still apply. Keep native sandbox restrictions; the hook does not inspect every program's effects.
+Both roles use the existing assigned-project read approval. In Sage mode, the gate explicitly refuses their file changes. The existing configuration, logbook-write, child-spawn, messaging and foreign-project read refusals still apply. Keep Codex's sandbox restrictions; the hook does not inspect every program's effects.
 
 Give each child its real task and run in the task name. The trusted start and stop hooks can retain its exact report only for the matching direct child, task, run and role. A no-build task can retain a report without a SHA. The hook also retains the exact report of an `implementer` and of an `arena-judge` run; no verdict depends on it. An `implementer`, `arena-judge` or `designer` run gets the head of its own branch at its stop, also when it committed during the run; a missing branch gives no SHA. Any other run reads the branch of its task, and that branch must not move during the run, or the run gets no SHA. A missing or conflicting identity does not become a retained report. Incomplete reports continue once; a second stop preserves their limitations.
 
-This support concerns the public skill-led helper. Protected native role support and installed execution remain unverified. A protected API refusal is not permission to switch paths.
+This support concerns the public skill-led helper. Installed execution remains unverified. A refusal is not permission to switch paths.
 
 ## PE and designer
 
 Use `role.mjs pe` and `role.mjs designer`. Both print the existing shared role text and every report field. PE checks the design and changes nothing. The designer makes a clickable prototype with labelled sample data and screenshots. Give the designer its own branch, worktree and explicit artifact paths. Give PE those actual artifacts and the complete designer report.
 
-Both roles keep the existing assigned-project reads. PE edits refuse. The designer keeps its existing edit authority; the brief scopes its prototype files. This adds no path confinement. Configuration, logbook writes, child spawning, messaging and foreign-project read refusals still apply to both roles. Keep the native sandbox restrictions.
+Both roles keep the existing assigned-project reads. PE edits refuse. The designer keeps its existing edit authority; the brief scopes its prototype files. This adds no path confinement. Configuration, logbook writes, child spawning, messaging and foreign-project read refusals still apply to both roles. Keep Codex's sandbox restrictions.
 
 Use a direct child with its task, run and role in the name, such as `sage_designer_t12_r40` or `sage_pe_t12_r41`. The trusted start hook binds that identity to the running run. The stop hook retains its exact report, with a SHA when available. A missing SHA is allowed. Missing, conflicting, nested or ended-run identities cannot retain a report. An exact repeat preserves the first report; different text cannot replace it.
 
@@ -90,4 +90,4 @@ Each candidate and the judge write on their own branch, in their own worktree, s
 
 ## Before installed acceptance
 
-Generated-package tests establish source support only. Before installed acceptance, verify the package version, the public role texts, actual child and lead runs, permission refusals, exact retention and the saved prototype. Synthetic hook events do not prove installed execution or protected native completion. Stop at a protected denial; do not try another path.
+Generated-package tests establish source support only. Before installed acceptance, verify the package version, the public role texts, actual child and lead runs, permission refusals, exact retention and the saved prototype. Synthetic hook events do not prove installed execution. Stop at a refusal; do not try another path.

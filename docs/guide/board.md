@@ -8,7 +8,7 @@ The board only reads. To change a task, a priority or a kind, ask the chief.
 
 ## Ask for the board
 
-The chat view shows the tasks in the logbook of the tool that you use (Claude or Codex), and it needs no server. The browser view shows the logbooks in its config: by default, both the Claude and the Codex logbook. It also has filters and task pages.
+The chat view shows the tasks in the project's logbook: its shared logbook, or else the logbook of the tool that you use (Claude or Codex), and it needs no server. The browser view shows the logbooks in its config: by default, the Claude and the Codex logbooks and the [shared logbooks](#a-shared-project-on-the-board), with filters and task pages.
 
 | Say | You see |
 | --- | --- |

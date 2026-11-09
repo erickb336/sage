@@ -403,10 +403,10 @@ test("T453: the README and the Codex guide say what the hook really does in Code
     "guide: a damaged mode file": found(guide, /A damaged mode file turns sage mode and autopilot off/),
     "guide: send a phrase when Codex is idle": found(guide, /Send an on phrase when Codex is idle\. An off phrase works at any time: sent with Enter while Codex works, it stops merges from Codex's next step\. A phrase that you queue with Tab waits until the turn ends\./),
     "guide: no exact phrase for a question": found(guide, /unless your message was a question/),
-    "guide: the desktop app, not yet checked": found(guide, /desktop app.*This desktop path is not checked yet\./i),
+    "guide: the app's own hook review, not yet checked": found(guide, /desktop app.*The app's own hook review is not checked yet: sage's desktop checks drove the app's Codex as the app drives it, not the app's screens\./i),
     "guide: step 3 starts Codex with no flags and trusts the hooks": found(guide, /3\. Run `codex` in a project folder\. At the "Hooks need review" screen .*choose \*\*Trust all and continue\*\*/),
     "guide: a fork starts with sage mode off": found(guide, /A forked thread starts with sage mode and autopilot off/),
-  }, Object.fromEntries(["guide and README: no obsolete merge status", "README: no claim that every phrase works as in Claude Code", "guide: the warning line, and that codex exec does not show it", "guide: no claim that the hook shows one line", "guide: a damaged mode file", "guide: send a phrase when Codex is idle", "guide: no exact phrase for a question", "guide: the desktop app, not yet checked", "guide: step 3 starts Codex with no flags and trusts the hooks", "guide: a fork starts with sage mode off"].map((k) => [k, true])));
+  }, Object.fromEntries(["guide and README: no obsolete merge status", "README: no claim that every phrase works as in Claude Code", "guide: the warning line, and that codex exec does not show it", "guide: no claim that the hook shows one line", "guide: a damaged mode file", "guide: send a phrase when Codex is idle", "guide: no exact phrase for a question", "guide: the app's own hook review, not yet checked", "guide: step 3 starts Codex with no flags and trusts the hooks", "guide: a fork starts with sage mode off"].map((k) => [k, true])));
 });
 
 test("T462: the guide, the README and the CHANGELOG say what is checked in Codex and what is not (R1665-1, R1665-2, R1664-7, R1664-8)", () => {

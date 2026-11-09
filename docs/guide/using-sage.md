@@ -381,7 +381,7 @@ A Claude chief adds `--chief C<n>` to each command below. A Codex chief calls th
 | `sage release <T>` | The owning chief. The task has no open offer and no active or unknown run. | The task has no owning chief. Only that chief claims it back; another chief takes it through a takeover gate. Its work and reports stay. |
 | `sage gate replace <T> --to C<n>` | Any chief: for a task of another chief, for a task with no owning chief that it may not claim, or for an owning chief that stopped. | The takeover gate for you, with the options approve and decline, or the gate that is open already for the same task and chiefs. It asks "Hand T331 and PR 92 from C2 (codex) to C1 (claude)?", names each run that will end as failed, with its role, and the task's title. It says what each answer does, and that the branch keeps its name, the PR its number and the verdicts stay. |
 
-- `offer` and `task <T>` print the offer's id and the version that `accept` needs. A Codex chief reads them with `sage_read_task`.
+- `offer` and `task <T>` print the offer's id and the version that `accept` needs. A Codex chief reads them with the `task <T>` command of the bundled CLI, which only reads the logbook.
 - An accept or a release that waits for a run names the takeover gate too: a run of unknown status may never end, and only a takeover ends it.
 - A run that ends does not advance a transfer: the recipient still accepts. A transfer changes no run: each run keeps the chief that dispatched it.
 - Sage cannot see that a chief ended, so a stopped chief stays the owning chief until you answer. A takeover gate is the only way to take a task with no consent from its chief.
@@ -389,7 +389,7 @@ A Claude chief adds `--chief C<n>` to each command below. A Codex chief calls th
 - The branch keeps its name, and the PR keeps its number.
 - When another worktree of the repository holds the branch, the answer's line names it. Below it, one safe command that frees it, with its files kept, stands alone on a line, with the path quoted for the shell: `git -C '<worktree>' switch --detach`. Then the new chief checks out the branch in its own worktree.
 - Sage never prints `--force`. For a worktree path with a control character, it prints no command.
-- One ledger: a verdict counts on its commit, whichever chief recorded it. A Codex chief that took a Claude task counts the Claude cycles, and you merge in GitHub.
+- One ledger: a verdict counts on its commit, whichever chief recorded it. A Codex chief that took a Claude task counts the Claude cycles, and merges as for any Codex task: with autopilot on, it merges itself; with autopilot off, you merge in GitHub.
 - A Claude chief that took a task from a Codex chief runs one Claude cycle on a `sage-pr import` of the head first, then merges with `sage-pr merge`. That cycle counts only the verdicts of review and QA runs that started after your answer. The gate's question says so, and the board shows the task in review until that cycle.
 - A move between two chiefs of one provider needs no new cycle.
 - `merge-check --chief C<n>` judges for that chief, as the hook does: a live task of another chief refuses. A Codex chief's `merge_check` passes its chief by itself.
@@ -482,13 +482,13 @@ After a restore, the old move gate moves nothing: to move again, ask the chief f
 - `plugins.tsv` shows the contract of the last command that each provider ran. A session that started before the update still runs the old code, so the gate asks you to check that every session restarted.
 - An older plugin refuses a write to an old logbook, because it does not know the `moved` column. In the new logbook it gives new numbers above the move's floors, but its merge check refuses a moved task: it does not know adoption version 2.
 - The move also takes the logbooks of each clone with the same first commit. It leaves out a fork only when both checkouts have a GitHub remote and the two differ: a fork with no GitHub remote moves too, so answer keep, and tell the chief which folder is another project.
-- The Codex journal and its open fences are the Codex part of the move. The preview in core does not read them, so a preview from the Claude chief does not show them. The move finishes each saved change of the old logbooks first, and a Codex chief runs no separate check of the fences before it opens the gate.
+- The move first finishes each saved change that an earlier write left in the old logbooks.
 - The move prints its steps at the end, not as each one ends: the chief's chat shows them when the command returns.
 - Sage finds each provider's legacy logbook through the roots that its adapter names, from its own environment. A provider that runs with a custom `CLAUDE_CONFIG_DIR` or `CODEX_HOME` that the other provider does not see has a root that the other one cannot read, so `init` there may start a shared logbook while that root holds a logbook of the repository, and the move from the other provider does not take it. Keep both settings the same in Claude and in Codex, or unset.
 
 ## Where sage keeps things
 
-- **The logbook** of each project: `~/.claude/sage/<project>-<hash>/`. It holds the tasks, the agent runs, the findings, the verdicts, your answers and the decision trail. So you can leave and come back: a new session on the same Mac continues the work, and Remote Control lets you follow it from a phone.
+- **The logbook** of each project: in the shared root (below) when Claude and Codex share it, else `~/.claude/sage/<project>-<hash>/` (in Codex, `~/.codex/sage/<project>-<hash>/`). It holds the tasks, the agent runs, the findings, the verdicts, your answers and the decision trail. So you can leave and come back: a new session on the same Mac continues the work, and Remote Control lets you follow it from a phone.
 - **The shared root**: `~/.sage/`, or `SAGE_SHARED_HOME`. It holds the logbooks that Claude and Codex share, `bindings.tsv` (which checkout uses which logbook), `plugins.tsv` (which providers ran) and the cycle counts of the shared logbooks. See [Shared logbooks](#shared-logbooks).
 - **The hook's state**: `~/.claude/sage/.hooks/`. It keeps the mode, autopilot and the agent slots.
 - **The pages** of each task: `~/sage-worktrees/<project>-<hash>/pages/<task>/`, outside the logbook. Agents save their research pages and designs there. The chief makes the folder and prints its path.

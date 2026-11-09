@@ -6,7 +6,7 @@ license: MIT
 
 # Sage for Codex
 
-This skill guides the chief, a lead and specialist agents through an explicit workflow. The parent writes the logbook, and a lead the records of its own task, through the plugin's `sage` MCP tools; the bundled CLI reads it. Native Codex tools perform agent work when available. The sage hook records the mode from the owner's typed phrases, and the sage gate guards the landing command of a PR. These instructions do not enforce native admission or global ownership.
+This skill guides the chief, a lead and specialist agents through an explicit workflow. The parent writes the logbook, and a lead the records of its own task, through the plugin's `sage` MCP tools; the bundled CLI reads it. Codex's own agent tools do the agent work. The sage hook records the mode from the owner's typed phrases, and the sage gate guards the landing command of a PR. These instructions do not enforce global ownership.
 
 ## Entry and owner commands
 
@@ -38,4 +38,4 @@ Each new session starts off. Keep the owner's instruction in context. After unce
 
 The phrases match Claude's interface. Timing differs: Claude's queued off phrase disables autopilot while its active guards remain. Here, off requests the stop/interruption/preservation procedure above; do not claim timing parity.
 
-Keep the selected Codex model and native permissions, sandbox and hooks. Advice hooks are optional. Do not change settings or defaults to use this skill. A native protected API denial remains a denial: never use the manual CLI to bypass it or fabricate native receipts. Automatic recovery needs separate evidence.
+Keep the selected Codex model and Codex's permissions, sandbox and hooks. Advice hooks are optional. Do not change settings or defaults to use this skill. A refusal of the sage gate or of Codex's sandbox remains a refusal: never use the manual CLI to bypass it. Automatic recovery needs separate evidence.
