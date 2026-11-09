@@ -61,8 +61,8 @@ function readerRuns(name, args) {
   }
   return false;
 }
-/** Function arguments are data; only an actual reader dispatch owns its options. */
-export const readerDispatch = entry => !entry.wrapper && !entry.shellFunction && !entry.resolvedDeclaration &&
+/** Only a reader's own run owns its options; a wrapper's entry does not. */
+export const readerDispatch = entry => !entry.wrapper &&
   readerRuns(programName(entry.run.word), entry.run.args);
 /** Keep operator and target separate: quoted filename prefixes are not shell operators. */
 function toFile({ operator: op, target: to }) {
@@ -147,7 +147,7 @@ export function shellWriteEvidence(text, cwd, path) {
       (c.words.length && !plainReader(c, cwd) && !/^(?:cd|pushd)$/.test(c.words[0])) ||
       (c.words[0] === "printf" && (c.words.slice(1).some(word => /^-v/.test(word)) ||
         /%[^%]*n/.test(c.words[c.words[1] === "--" ? 2 : 1] ?? ""))))) return undefined;
-    if (evidence.programs.some(p => p.wrapper || p.shellFunction || p.resolvedDeclaration || p.uncertainDirectory)) return undefined;
+    if (evidence.programs.some(p => p.wrapper || p.uncertainDirectory)) return undefined;
     const reads = evidence.programs.flatMap(({ run }) => /^(?:echo|printf)$/.test(run.word) ? [] :
       [run.word, ...run.args].map(word => ({ word, dir: run.dir ?? cwd })));
     reads.push(...evidence.redirects.filter(r => !toFile(r)).map(r => ({ word: r.target, dir: r.dir ?? cwd })));

@@ -3,7 +3,7 @@
 // logbookWrite (T903). None of them runs the command that it judges.
 import { realpathSync } from "node:fs";
 import { basename, dirname, isAbsolute, join, resolve, sep } from "node:path";
-import { programsRun, shellCommands } from "./command-reader.mjs";
+import { programsRun } from "./command-reader.mjs";
 import { commandWrites, readerDispatch, uniqWrites } from "./shell-write-policy.mjs";
 import { outputDispatchWrites } from "./output-writes.mjs";
 import { programName } from "./program-name.mjs";
@@ -108,15 +108,15 @@ export function logbookWrite(command, cwd, roots, home = process.env.HOME) {
     ?? recursiveWords(programName(word), args).find((w) => named(w, dir));
   let evidence;
   try {
-    evidence = programsRun(command, cwd, undefined, { contextEvidence: true, redirectParts: true });
+    evidence = programsRun(command, cwd, undefined, { contextEvidence: true, redirectParts: true, home });
   } catch {
-    return unreadWrite(command, cwd, named, whole, home);
+    return undefined;
   }
   const clobber = evidence.redirects.some(({ operator, target }) => /^&?>>?$/.test(operator) && target.startsWith("!"));
   for (const entry of evidence.programs) {
     const { run, uncertainDirectory } = entry;
     const dir = uncertainDirectory ? undefined : run.dir ?? cwd;
-    const top = entry.wrapper || entry.shellFunction ? undefined : whole(run.word, run.args, dir);
+    const top = entry.wrapper ? undefined : whole(run.word, run.args, dir);
     if (top !== undefined) return top;
     if (!writes || (!clobber && !judged(run.word, run.args, entry))) continue;
     const word = [run.word, ...run.args].find((w) => named(w, dir));
@@ -128,35 +128,6 @@ export function logbookWrite(command, cwd, roots, home = process.env.HOME) {
   }
   return undefined;
 }
-/** The same check, when the reader cannot follow the line's folders (cd ~, cd $X): each command by its own words, in order. */
-function unreadWrite(command, cwd, named, whole, home) {
-  let commands;
-  try { commands = shellCommands(command); } catch { return undefined; }
-  let dir = cwd;
-  for (const c of commands) {
-    const k = c.words.findIndex((_, i) => !c.syntax?.[i]?.assignment);
-    const [word, ...args] = k < 0 ? [] : c.words.slice(k);
-    const at = c.host ? undefined : dir;
-    // A literal cd or pushd gives the folder of the commands after it; popd and any other form leave it unknown.
-    if (/^(?:cd|pushd|popd)$/.test(word ?? "") && !c.host) {
-      const to = word !== "popd" && args.length === 1 && !/[$`*?[{]/.test(args[0]) ? args[0].replace(/^~(?=\/|$)/, home ?? "~") : undefined;
-      dir = to && !to.startsWith("~") ? (isAbsolute(to) ? to : dir && `${dir}/${to}`) : undefined;
-      continue;
-    }
-    const top = word === undefined ? undefined : whole(word, args, at);
-    if (top !== undefined) return top;
-    if (word !== undefined && judged(word, args)) {
-      const found = [word, ...args].find((w) => named(w, at));
-      if (found !== undefined) return found;
-    }
-    for (const redirect of c.redirects) {
-      const [, operator, target] = REDIRECT.exec(redirect) ?? [];
-      if (operator && toFile(operator, target) && named(target, at)) return target;
-    }
-  }
-  return undefined;
-}
-
 /** Node's options that take the next word as a value, not as the program. */
 const NODE_VALUE = /^(?:-e|--eval|-p|--print|-r|--require|--import|--loader|--experimental-loader|-C|--conditions|--input-type|--title)$/;
 const TOOL_FILE = /(?:^|[/\\])(sage(?:-pr)?)\.mjs$/i;
@@ -170,8 +141,8 @@ const TOOL_FILE = /(?:^|[/\\])(sage(?:-pr)?)\.mjs$/i;
 export function stateToolRun(command, cwd) {
   const { programs } = programsRun(command, cwd, undefined, { contextEvidence: true });
   const found = [];
-  for (const { run, wrapper, shellFunction } of programs) {
-    if (wrapper || shellFunction) continue;
+  for (const { run, wrapper, uncertainDirectory } of programs) {
+    if (wrapper) continue;
     let script = run.word, args = run.args;
     if (/^(?:node|nodejs)$/.test(programName(run.word))) {
       let k = 0;
@@ -185,7 +156,7 @@ export function stateToolRun(command, cwd) {
       [script, ...args] = run.args.slice(k);
     }
     const tool = TOOL_FILE.exec(script ?? "");
-    if (tool) found.push({ tool: tool[1].toLowerCase() === "sage-pr" ? "pr" : "state", script, args, dir: run.dir });
+    if (tool) found.push({ tool: tool[1].toLowerCase() === "sage-pr" ? "pr" : "state", script, args, dir: uncertainDirectory ? undefined : run.dir });
   }
   return found;
 }
@@ -198,7 +169,7 @@ export function stateToolRun(command, cwd) {
  */
 export function ghRuns(command, cwd, path) {
   const { programs } = programsRun(command, cwd, path, { contextEvidence: true });
-  return programs.filter(({ run, wrapper, shellFunction }) => !wrapper && !shellFunction && programName(run.word) === "gh").map(({ run }) => {
+  return programs.filter(({ run, wrapper }) => !wrapper && programName(run.word) === "gh").map(({ run }) => {
     const [group, sub] = ghWords(run.args);
     return { group, sub, method: group === "api" ? ghApiMethod(run.args) : undefined, args: run.args };
   });

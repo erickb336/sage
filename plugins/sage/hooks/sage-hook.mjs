@@ -1300,7 +1300,7 @@ function agentCheck(input, file, slots) {
  *     redirection, Read, Write, Edit, MultiEdit or NotebookEdit. A path resolves against its working folder first
  *     (., .., //, ~, git -C and the terminal tool's cwd), as written: a link to the config is a limit. A word counts by its literal part, the text before its
  *     first variable, substitution or pattern character (T815), also as the value of key=value or --option=value;
- *   - searches, copies, moves or links that folder or a folder above it (grep -r, rg, find, cp -R, tar, mv, ln, the
+ *   - searches, copies, moves or links that folder or a folder above it (grep -r, rg, find -exec, cp -R, tar, mv, ln, the
  *     Grep and Glob tools and others).
  * Only the board command may name its config, as the value of --config. Only the real home folder counts: a repository
  * path such as packages/sage-board, or a search word such as board.json, is not the config. A command that builds the
@@ -1354,33 +1354,17 @@ function boardReach(word, dir, folders) {
 }
 /** Programs that read, copy or move a whole folder: always, or with a recursive option. They also search their folder. */
 const SEARCHES = /^(?:e|f)?grep$|^(?:rg|ag|ack|find|fd)$/;
-const WHOLE = (name, args) => /^(?:rg|ag|ack|find|fd|ditto|tar|bsdtar|zip|rsync|mv|ln)$/.test(name) ||
+const WHOLE = (name, args) => /^(?:rg|ag|ack|fd|ditto|tar|bsdtar|zip|rsync|mv|ln)$/.test(name) ||
+  // find lists names; only a program that it runs on each file reads one (F-T909-9: find ~ -name '*.tmp' -delete passes).
+  (name === "find" && args.some((a) => /^-(?:exec|execdir|ok|okdir)$/.test(a))) ||
   (/^(?:e|f)?grep$/.test(name) && args.some((a) => /^-[^-]*[rR]|^--(?:recursive|dereference-recursive|directories=recurse)$|^recurse$/.test(a))) ||
   (/^(?:cp|gcp|scp)$/.test(name) && args.some((a) => /^-[^-]*[rRa]|^--(?:recursive|archive)$/.test(a)));
 const BOARD_RUN = ({ word, args }) => (basename(word) === "cli.mjs" || args.some((a) => /(?:^|\/)cli\.mjs$/i.test(a)) || /^(?:npm|pnpm|yarn|bun)$/.test(programName(word))) && args.includes("board");
 /** The programs and redirections of one command line, each with its folder (undefined when the hook cannot tell it). */
 function boardCommands(text, cwd, uncertain) {
-  try {
-    const { programs, redirects } = programsRun(text, cwd, undefined, { contextEvidence: true, uncertainDirectory: uncertain });
-    const runs = programs.map(({ run, uncertainDirectory }) => ({ ...run, dir: uncertainDirectory ? undefined : run.dir }));
-    return { runs, redirects: redirects.map(({ redirect, dir, uncertainDirectory }) => ({ redirect, dir: uncertainDirectory ? undefined : dir })) };
-  } catch {
-    // The reader cannot follow a cd here (cd ~, cd $X): read each command's words alone, in order. A literal cd (~ is the
-    // home folder) gives the folder of the commands after it; after any other cd the folder is unknown.
-    const commands = shellCommands(text); // throws when it cannot read the line at all
-    const runs = [], redirects = [], home = process.env.HOME || homedir();
-    let dir = cwd;
-    for (const { words, bodies, redirects: own = [], host } of commands) {
-      const at = host ? undefined : dir;
-      if (/^(?:cd|pushd|popd)$/.test(words[0] ?? "") && !host) { // popd and any other form leave the folder unknown
-        const to = words[0] !== "popd" && words.length === 2 && !/[$`*?[{]|^~[^/]/.test(words[1]) ? words[1].replace(/^~(?=\/|$)/, home) : undefined;
-        dir = to === undefined ? undefined : isAbsolute(to) ? to : dir && from(dir, to);
-      }
-      runs.push({ word: words[0] ?? "", args: words.slice(1), stdin: bodies, dir: at });
-      redirects.push(...own.map((redirect) => ({ redirect, dir: at })));
-    }
-    return { runs, redirects };
-  }
+  const { programs, redirects } = programsRun(text, cwd, undefined, { contextEvidence: true, uncertainDirectory: uncertain, home: process.env.HOME || homedir() });
+  const runs = programs.map(({ run, uncertainDirectory }) => ({ ...run, dir: uncertainDirectory ? undefined : run.dir }));
+  return { runs, redirects: redirects.map(({ redirect, dir, uncertainDirectory }) => ({ redirect, dir: uncertainDirectory ? undefined : dir })) };
 }
 function boardProblem(input) {
   const tool = input.tool_name ?? "", ti = input.tool_input ?? {}, home = process.env.HOME || homedir();
@@ -1530,7 +1514,7 @@ function gitGate(event, command, state, cwd, main, session) {
  */
 const NO_STASH = "an agent never runs git stash: every worktree of a repo shares one stash list, so another agent can pop or drop your work (standing order 16). To test old code, use git worktree add --detach <scratch> <sha>, or git show <sha>:<path> into your scratch folder.";
 /** The process programs: names ignore case and a trailing .exe, including PowerShell names. */
-const UNIX_PROCESS = "ps|pgrep|pkill|kill|killall|lsof|top|htop|fuser|pidof|kill-port|fkill";
+const UNIX_PROCESS = "ps|pgrep|pkill|kill|killall|lsof|top|htop|fuser|pidof|kill-port|fkill|launchctl";
 const POWERSHELL_PROCESS = "get-process|stop-process|gps|spps";
 /** A program name, without the version that npx and its kind take after "@" (kill-port@2). */
 const isProcess = (name = "") => {

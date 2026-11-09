@@ -1473,8 +1473,6 @@ test("a merge passes only as the one merge form; any other command that names a 
     `sudo ${MERGE}`,
     `GH_TOKEN=x ${MERGE}`,
     `GH_REPO=other/repo ${MERGE}`,
-    `env -S '${M} --squash'`,
-    `watch -n 1 '${M} --squash'`,
     `git ls-files | xargs sh -c '${M}'`,
     `bash -c "${MERGE}"`,
     `sh <<'EOF'\n${MERGE}\nEOF`,
@@ -1487,6 +1485,7 @@ test("a merge passes only as the one merge form; any other command that names a 
   // the GitHub API, curl or wget. GitHub's branch protection and the merge check hold.
   const limits = [`G=gh; $G pr merge 41 --squash`, `gh pr $(echo merge) 41`, `awk 'BEGIN{system("${M} --squash")}'`, `node -e "require('child_process').execSync('${MERGE}')"`,
     `echo '${M}' | sh`, `echo '${M}' > x.sh; bash x.sh`, `gh alias set --shell m '${M} --squash'; gh m`, `ssh host '${M}'`, "$'\\x67h' pr merge 41 --admin",
+    `env -S '${M} --squash'`, `watch -n 1 '${M} --squash'`, // T910: watch's shell text and env -S's split string
     `git -c alias.m='!${M} --squash' m`, `gh api -X PUT repos/o/r/pulls/41/merge -f sha=${SHA}`, 'curl -X PUT -H "Authorization: Bearer x" https://api.github.com/repos/o/r/pulls/41/merge',
     `gh api graphql -f query='mutation { mergePullRequest(input: {pullRequestId: "x"}) { clientMutationId } }'`, "gh api -X POST repos/o/r/merges -f base=main -f head=t4"];
   for (const command of limits) assert.equal(denied(off.send(bash(command))), undefined, `${command} (a limit of the hook)`);
@@ -2218,8 +2217,8 @@ const STASHES = ["git stash", "git stash push -m wip", "git stash save wip", "gi
 const FAKES = (() => {
   const dir = realpathSync(mkdtempSync(join(tmpdir(), "sage-fakes-")));
   writeFileSync(join(dir, "ps"), "#!/bin/sh\necho 'Sat Jan  1 00:00:00 2000'\n");
-  for (const name of ["kill", "pgrep", "pkill"]) writeFileSync(join(dir, name), "#!/bin/sh\nexit 0\n");
-  for (const name of ["ps", "kill", "pgrep", "pkill"]) chmodSync(join(dir, name), 0o755);
+  for (const name of ["kill", "pgrep", "pkill", "launchctl"]) writeFileSync(join(dir, name), "#!/bin/sh\nexit 0\n");
+  for (const name of ["ps", "kill", "pgrep", "pkill", "launchctl"]) chmodSync(join(dir, name), 0o755);
   symlinkSync("/bin/ps", join(dir, "real-ps")); // links in the temp folder to the real ps
   mkdirSync(join(dir, "links"));
   symlinkSync("/bin/ps", join(dir, "links", "ps"));
@@ -2245,12 +2244,13 @@ test("an agent never runs git stash in any form; the chief may, and git status a
 test("an agent never lists or signals the real processes: ps, pgrep, kill and pkill pass only as fakes in the temp folder", () => {
   const s = session(SYSTEM_PATH);
   s.send(prompt("sage mode"));
-  const real = ["ps -U me", "pgrep -fl node", "pkill -f node", "kill 12345", "/bin/ps -ax", "/bin/kill -9 1", "/usr/bin/pgrep node", "/usr/bin/pkill node", "killall node", "lsof -i :8080", "top -l 1", "sudo kill 1", "xargs kill", `${FAKES}/real-ps`, `PATH=${FAKES}/links:$PATH ps`, `bash -c "ps -ax"`, "find . -name x -exec kill {} ;", `PATH=${FAKES}:$PATH kill 1`];
+  const real = ["ps -U me", "pgrep -fl node", "pkill -f node", "kill 12345", "/bin/ps -ax", "/bin/kill -9 1", "/usr/bin/pgrep node", "/usr/bin/pkill node", "killall node", "lsof -i :8080", "top -l 1", "sudo kill 1", "xargs kill", `${FAKES}/real-ps`, `PATH=${FAKES}/links:$PATH ps`, `bash -c "ps -ax"`, "find . -name x -exec kill {} ;", `PATH=${FAKES}:$PATH kill 1`,
+    "launchctl list", "/bin/launchctl bootout gui/501/x"]; // F-T909-7: launchctl stops and starts the owner's services
   for (const command of real) {
     assert.match(denied(s.send(bash(command, FEATURE, AGENT))) ?? "", /never reads or signals the real process list \(standing order 14\).*fake ps.*Sat Jan  1 00:00:00 2000/, command);
     assert.equal(s.send(bash(command)), undefined, `the chief: ${command}`);
   }
-  const fakes = [`PATH=${FAKES}:$PATH ps -o lstart= -p 1`, `export PATH=${FAKES}:$PATH; ps -ax`, `PATH=${FAKES}:$PATH pgrep -fl node`, `PATH=${FAKES}:$PATH pkill -f node`, `${FAKES}/ps -ax`, `${FAKES}/kill 1`, `PATH=${FAKES}:$PATH env kill 1`, `cd ${FAKES} && ./pkill node`];
+  const fakes = [`PATH=${FAKES}:$PATH ps -o lstart= -p 1`, `export PATH=${FAKES}:$PATH; ps -ax`, `PATH=${FAKES}:$PATH pgrep -fl node`, `PATH=${FAKES}:$PATH pkill -f node`, `${FAKES}/ps -ax`, `${FAKES}/kill 1`, `PATH=${FAKES}:$PATH env kill 1`, `cd ${FAKES} && ./pkill node`, `${FAKES}/launchctl list`];
   for (const command of fakes) assert.equal(s.send(bash(command, FEATURE, AGENT)), undefined, command);
   assert.match(denied(s.send(tool("Monitor", { command: "ps -ax", description: "d" }, { cwd: FEATURE, ...AGENT }))) ?? "", /standing order 14/);
   assert.match(denied(s.send(tool("PowerShell", { command: "Get-Process" }, { cwd: FEATURE, ...AGENT }))) ?? "", /standing order 14/);
@@ -2879,11 +2879,20 @@ const T909_LIMITS = new Set([
   "command -v git push origin main",
 ]);
 
+/**
+ * T910: the forms of MAIN_DENIES that pass since the command reader stopped reading text that only a deliberate trick
+ * hands to a shell: watch's shell text and env -S's split string (standing order 70).
+ */
+const T910_LIMITS = new Set([
+  "env -S 'gh pr merge 41 --squash'", "watch -n 1 'gh pr merge 41 --squash'",
+  'watch "git push origin main -ax"', 'watch "gh pr merge 1 --admin -ax"',
+]);
+
 test("R466-REGRESSION, T815: every command that main's reader denies for the main session is still denied, but the documented limits", async () => {
   const { handle } = await import("../plugins/sage/hooks/sage-hook.mjs");
   const slots = { bind() {}, release() {}, drop() {}, touch() {}, reconcile() {} };
   const allowed = MAIN_DENIES.filter((command) => !denied(handle(bash(command), { sage: true, autopilot: false }, slots)));
-  assert.deepEqual(allowed, MAIN_DENIES.filter((command) => MAIN_LIMITS.has(command) || T909_LIMITS.has(command)));
+  assert.deepEqual(allowed, MAIN_DENIES.filter((command) => MAIN_LIMITS.has(command) || T909_LIMITS.has(command) || T910_LIMITS.has(command)));
 });
 
 test("T216: the board note's two commands pass the hook for the chief, as the note gives them", async () => {
@@ -3738,18 +3747,6 @@ test("T197, T815: an agent runs the gh commands of core's list and gh api with G
   }
 });
 
-test("T197: env split-string owns its command mode inside watch exec", () => {
-  const f = ghAgentSession();
-  writeFileSync(join(f.dir, "gh auth status"), "ordinary executable must never execute", { mode: 0o755 });
-  const cases = [
-    'watch -x env -S "gh auth status"', 'watch --exec env -S"gh auth status"',
-    'watch -x env --split-string "gh auth status"', 'watch --exec env --split-string="gh auth status"',
-  ];
-  assert.deepEqual(cases.map(command => [command, Boolean(denied(f.send(command)))]), cases.map(command => [command, true]));
-  assert.equal(f.send('watch -x env "gh auth status"'), undefined);
-  assert.equal(f.send('watch --exec env -S "echo harmless"'), undefined);
-});
-
 test("T197: documented package options and sudo help keep ordinary commands", () => {
   const f = ghAgentSession();
   const safe = ["sudo -h", "sudo --help", "npx --no-install prettier --check .", "npx --no prettier --check .",
@@ -3814,8 +3811,6 @@ test("T186: reader options follow their dispatch and preserve ordinary argument 
     `rg() { :; }; command rg --pre cat x ${ledger}`,
   ]) assert.match(denied(s.send(bash(command, FEATURE, AGENT))) ?? "", LOGBOOK_SHELL, command);
   for (const command of [
-    `rg() { :; }; rg --pre cat x ${ledger}`,
-    `f() { env rg --pre cat x ${ledger}; }; env() { :; }; f`,
     `echo rg --pre cat x ${ledger}`,
     `constructor --pre x ${ledger}`,
     `__proto__ --pre x ${ledger}`,
