@@ -32,7 +32,7 @@ import { isAbsolute, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { readModeFile } from "sage-core";
 import { autopilotSwitch, readRecord, turnAborted } from "../../hooks/owner-record.mjs";
-import { privateDirectory, readState } from "../../hooks/principles-hook.mjs";
+import { privateDirectory, readState } from "../../hooks/hook-state.mjs";
 
 /** The age after which a merge permit is no longer valid. */
 const PERMIT_AGE = 300_000;

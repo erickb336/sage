@@ -30,7 +30,7 @@ import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { boardNote, exactPhrase, MODE_DAMAGED, parseBoardIntent, PHRASES, protectionNote, readModeFile, renderChiefInstructions, switchModes } from "sage-core";
 import { NEW_ON, onCanCount, readRecord } from "./owner-record.mjs";
-import { modeDirectory, privateDirectory, readState, saveState, stateKey } from "./principles-hook.mjs";
+import { modeDirectory, privateDirectory, readState, saveState, stateKey } from "./hook-state.mjs";
 import { sessionMeta } from "./report-gate.mjs";
 import { saveStartMark } from "./start-mark.mjs";
 import { mergeCommand } from "../skills/sage/merge.mjs";

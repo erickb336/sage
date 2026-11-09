@@ -87,7 +87,7 @@ function installed(t, { trust = [], cliVersion } = {}) {
   };
   return { run, home };
 }
-const { stateKey } = await import(new URL("../plugins/sage-codex/hooks/principles-hook.mjs", import.meta.url));
+const { stateKey } = await import(new URL("../plugins/sage-codex/hooks/hook-state.mjs", import.meta.url));
 
 /** The hook's output: the status for the chief always, and a warning for the user only when there is a limit. */
 const output = (status, warning) => ({ ...(warning ? { systemMessage: warning } : {}), hookSpecificOutput: { hookEventName: "SessionStart", additionalContext: `${status}\nAutopilot is off at each start of a session. To turn it on, the user sends "autopilot on" alone, while sage mode is on.${warning ? `\n${warning}` : ""}` } });

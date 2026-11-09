@@ -10,7 +10,8 @@ import { createInterface } from "node:readline";
 import { createHash } from "node:crypto";
 import { ROOT, filesUnder, outputs } from "./build.mjs";
 import { createStateTool, applyPrinciples } from "../packages/sage-core/index.mjs";
-import { handle, patchPaths, stateKey } from "../plugins/sage-codex/hooks/principles-hook.mjs";
+import { handle, patchPaths } from "../plugins/sage-codex/hooks/principles-hook.mjs";
+import { stateKey } from "../plugins/sage-codex/hooks/hook-state.mjs";
 
 const context = (output) => output?.hookSpecificOutput?.additionalContext ?? "";
 const state = () => ({ given: [], failures: {} });

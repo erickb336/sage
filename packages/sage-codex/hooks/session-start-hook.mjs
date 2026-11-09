@@ -9,7 +9,7 @@ import { homedir } from "node:os";
 import { basename, dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { PHRASES, readModeFile } from "sage-core";
-import { privateDirectory, readState, saveState, stateKey } from "./principles-hook.mjs";
+import { privateDirectory, readState, saveState, stateKey } from "./hook-state.mjs";
 import { sessionMeta } from "./report-gate.mjs";
 import { modeDirectory, TESTED_CODEX } from "./sage-codex-hook.mjs";
 import { saveStartMark } from "./start-mark.mjs";
