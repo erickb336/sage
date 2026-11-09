@@ -2,7 +2,7 @@
 id: prove-it-works
 name: Prove it works
 applyWhen: before declaring a task done, or when judging a claim that something works.
-source: pstack principle-prove-it-works, MIT, Copyright (c) 2026 Lauren Tan, github.com/cursor/plugins at 12d587d, adapted
+source: pstack principle-prove-it-works, MIT, Copyright (c) 2026 Lauren Tan, github.com/cursor/plugins at 6b03002, adapted
 upstream: ec79a15025bac8d3
 ---
 

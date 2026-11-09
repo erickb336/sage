@@ -2,8 +2,8 @@
 id: subtract-before-you-add
 name: Subtract before you add
 applyWhen: ordering an addition, a refactor or a rewrite.
-source: pstack principle-subtract-before-you-add, MIT, Copyright (c) 2026 Lauren Tan, github.com/cursor/plugins at 12d587d, adapted
-upstream: a983a50e732c1ed3
+source: pstack principle-subtract-before-you-add, MIT, Copyright (c) 2026 Lauren Tan, github.com/cursor/plugins at 6b03002, adapted
+upstream: 8c93bb9d1a7f38e2
 ---
 
 When evolving a system, remove complexity first, then build.

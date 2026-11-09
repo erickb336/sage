@@ -2,7 +2,7 @@
 id: boundary-discipline
 name: Boundary discipline
 applyWhen: reviewing or writing validation, error handling or framework adapters.
-source: pstack principle-boundary-discipline, MIT, Copyright (c) 2026 Lauren Tan, github.com/cursor/plugins at 12d587d, adapted
+source: pstack principle-boundary-discipline, MIT, Copyright (c) 2026 Lauren Tan, github.com/cursor/plugins at 6b03002, adapted
 upstream: 62ac2862c2caa22d
 ---
 
