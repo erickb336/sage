@@ -142,7 +142,7 @@ You talk only to the chief. The chief frames each task and asks you the product 
 - [Learn sage in 5 minutes](docs/guide/learn-sage.md): one small task, from your first message to a merged pull request. [How sage works](docs/guide/how-it-works.md): the long version, with the arena.
 - [Rules held in code](docs/design/rules-in-code.md): every rule that the hook and the state tool hold, why, and what the hook does not stop.
 - [SECURITY.md](SECURITY.md): how to report a vulnerability, and the known limits.
-- [Using sage](docs/guide/using-sage.md): phrases, questions, update, stop, uninstall and troubleshooting. Also [Concepts](docs/guide/concepts.md), [principles](docs/guide/principles.md), and the [FAQ and credits](docs/guide/faq.md).
+- [Using sage](docs/guide/using-sage.md): phrases, questions, update, stop, [clean up old worktrees](docs/guide/using-sage.md#clean-up-worktrees), uninstall and troubleshooting. Also [Concepts](docs/guide/concepts.md), [principles](docs/guide/principles.md), and the [FAQ and credits](docs/guide/faq.md).
 - [What's new](CHANGELOG.md): every change for users, newest first. Each pull request writes its entry in `changes/` ([Contributing](CONTRIBUTING.md)); the [docs index](docs/README.md) lists every page.
 
 ## Credits and licence
