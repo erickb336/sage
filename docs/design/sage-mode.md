@@ -20,7 +20,7 @@ Design v3 · the sage plugin · 4 Oct 2026 · status: **the kitchen and the team
 
 - **What came before.**
 
-  - *agent-kit* gave every session its principles, the writing standard and the prove-it-works stop check. It is now the same plugin as sage mode, named sage: the kitchen and the orchestration layer in one place, with pstack's principles followed by a weekly sync.
+  - *agent-kit* gave every session its principles, the writing standard and the prove-it-works stop check. It is now the same plugin as sage mode, named sage: the kitchen and the orchestration layer in one place, with sage's own adapted text of pstack's principles.
 
   - *Orchestrator* proved the factory ideas: a PE, reviews running side by side, no dropped findings. It's a heavy app with fixed flows.
 

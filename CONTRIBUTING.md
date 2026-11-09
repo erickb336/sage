@@ -1,6 +1,6 @@
 # Contributing to sage
 
-This page tells you how to change sage: which files are sources, how to build and check them, and how sage follows pstack. An agent that works on sage also reads [AGENTS.md](AGENTS.md), which has the same rules in short form.
+This page tells you how to change sage: which files are sources, how to build and check them, and how sage credits pstack. An agent that works on sage also reads [AGENTS.md](AGENTS.md), which has the same rules in short form.
 
 To report a security problem, do not open an issue: see [SECURITY.md](SECURITY.md).
 
@@ -10,7 +10,7 @@ To report a security problem, do not open an issue: see [SECURITY.md](SECURITY.m
 | --- | --- |
 | `packages/` | The sources: shared core, the Claude Code and Codex parts, and the board server. |
 | `plugins/sage/`, `plugins/sage-codex/` | The built plugins for Claude Code and Codex. Never edit them by hand. |
-| `principles/`, `upstream/pstack/`, `writing/`, `preferences/` | The principles (sage's and pstack's), the writing standard, the dictionary and the author's working preferences. |
+| `principles/`, `writing/`, `preferences/` | The principles (adapted from pstack, and sage's own), the writing standard, the dictionary and the author's working preferences. |
 | `docs/` | The guides, the design pages, the dry run report and the README's graphics: see the [docs index](docs/README.md). |
 | `scripts/` | The build, the checks, the tests, and the scripts that draw the graphics and take the board screenshots. |
 
@@ -24,9 +24,8 @@ Edit only the sources. The build makes everything else, and `npm run check` fail
 | `packages/` (shared code, and each provider's hooks, agents and skills) | `instructions/core.md` (built from `preferences/` and `writing/`) |
 | `scripts/graphics.mjs` (draws the README's graphics) | `docs/assets/*.svg` (drawn by the script) |
 | `scripts/board-shots.mjs` (takes the board screenshots) | `docs/assets/board-*.png` and `learn-*.png` (taken by the script) |
-| | `upstream/pstack/` (`npm run sync` owns it) |
 
-To override a pstack principle, add `principles/<name>.md` with `source: pstack principle-<name>` and its `upstream:` fingerprint.
+To add a principle, add `principles/<name>.md`. A principle adapted from pstack has `source: pstack principle-<name>`, with the credit and the pstack commit (see [Credit](#credit)).
 
 ## Change it
 
@@ -120,22 +119,15 @@ node scripts/board-shots.mjs
 
 For board QA, `node scripts/board-sample.mjs <empty folder>` writes sample logbooks (made-up data), with sample agent slots for the Agents page. It prints the board sources as JSON.
 
-## Following pstack
+## Credit
 
-pstack changes often. sage follows it so that its users do not have to.
+sage's principles come from pstack, by Lauren Tan (poteto), under the MIT licence. sage keeps its own text of each principle in `principles/`, and it does not copy or sync pstack.
 
-<a href="docs/assets/pstack-light.svg">
-<picture>
-  <source media="(prefers-color-scheme: dark)" srcset="docs/assets/pstack-dark.svg">
-  <img alt="Following pstack: a weekly sync into upstream/pstack, local versions in principles/ that win, one build, the sage plugin. If pstack changed a local version, the update waits for review; otherwise it merges." src="docs/assets/pstack-light.svg" width="100%">
-</picture>
-</a>
+- Each principle's `source` line names its pstack principle and the pstack commit that its text comes from.
+- pstack's MIT licence is in [principles/LICENSE-pstack](principles/LICENSE-pstack). The build puts it in each plugin as `LICENSE-pstack`.
+- To bring in a later pstack change, adapt the text in `principles/` by hand, and change the commit in its `source` line.
 
-1. `upstream/pstack/` holds pstack's principles and its MIT licence, at the commit in `upstream/pstack.json`.
-2. The build takes each pstack principle as it is, unless `principles/` has sage's adapted version with the same name.
-3. Every Monday, a workflow brings pstack up to date, rebuilds, and runs the checks and tests. The update merges by itself, unless pstack changed a principle that sage adapted. Then its pull request waits for the maintainer, with the change listed.
-
-Only principles come in for now. pstack's own modes (poteto mode, orchestrate, autopilot) stay out, because sage mode is the orchestration layer here. Each other pstack skill comes in only when it works in Claude Code and has a test.
+pstack's own modes (poteto mode, orchestrate, autopilot) stay out, because sage mode is the orchestration layer here. Another pstack skill comes in only when it works in Claude Code and has a test.
 
 ## Design pages
 

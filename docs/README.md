@@ -22,7 +22,7 @@ This is the index of sage's documentation, by reader. Start with the [README](..
 
 ## If you change sage
 
-- [Contributing](../CONTRIBUTING.md): sources and build output, the checks, and how sage follows pstack.
+- [Contributing](../CONTRIBUTING.md): sources and build output, the checks, and the credit to pstack.
 - [Security](../SECURITY.md): how to report a vulnerability.
 - [The sage mode design](design/sage-mode.md): the first design of sage mode, with its decisions.
 - [Rules held in code](design/rules-in-code.md): every rule that the hook and the state tool hold, and why.
