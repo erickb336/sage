@@ -143,8 +143,9 @@ function boardCommand(option, configPath, env, explicit = false) {
 
 /**
  * What answers on the board's port, on the Mac and with no sign-in: { kind: "none" } (nothing listens), "timeout",
- * "other", "older" (a board server from before T216's repair, which does not name its config) or "board" with the
- * id, pid and start time of its X-Sage-Board header.
+ * "blocked" (a sandbox, such as Codex's, does not let this process reach the port: EPERM, T921), "other", "older" (a
+ * board server from before T216's repair, which does not name its config) or "board" with the id, pid and start time
+ * of its X-Sage-Board header.
  */
 const probe = ({ port }) => new Promise(done => {
   const req = request({ host: "127.0.0.1", port, path: "/", method: "HEAD", agent: false, timeout: 2000, headers: { Host: `127.0.0.1:${port}` } }, response => {
@@ -156,7 +157,7 @@ const probe = ({ port }) => new Promise(done => {
     else done({ kind: boardHeaders && response.statusCode === 401 && realm.startsWith('Basic realm="Sage board"') ? "older" : "other" });
   });
   req.once("timeout", () => req.destroy(Object.assign(new Error("timeout"), { code: "TIMEOUT" })));
-  req.once("error", error => done({ kind: error.code === "ECONNREFUSED" ? "none" : error.code === "TIMEOUT" ? "timeout" : "other" }));
+  req.once("error", error => done({ kind: { ECONNREFUSED: "none", TIMEOUT: "timeout", EPERM: "blocked" }[error.code] ?? "other" }));
   req.end();
 });
 
@@ -164,6 +165,7 @@ const probe = ({ port }) => new Promise(done => {
 function notOurs(found, configPath, config, env) {
   const at = `127.0.0.1:${config.port}`, elsewhere = `Stop it, or set another "port" in ${configPath}.`;
   if (found.kind === "none") return null;
+  if (found.kind === "blocked") return `this command cannot reach ${at}: a sandbox blocks the local network here (EPERM). In Codex, run it escalated (outside the sandbox), or in Terminal on the Mac.`;
   if (found.kind === "board") return found.id === configId(configPath) ? null : `another board config holds ${at}. ${elsewhere}`;
   // An older board does not name its process, so no command of this version stops it (F-T216-11, 16).
   if (found.kind === "older") return `an older board server runs on ${at}. Stop it where it started: press Ctrl+C in its terminal, or for the login service run launchctl bootout gui/$(id -u)/dev.sage.board. Then ask for the board again.`;

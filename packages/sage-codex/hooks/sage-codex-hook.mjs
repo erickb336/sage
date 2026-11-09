@@ -8,6 +8,8 @@
 //     is never one phrase alone, so it switches nothing. So the whole prompt is one message of the owner for the core
 //     mode rules (switchModes, the rules of the Claude hook). When sage mode turns on, the chief role goes into that
 //     turn as developer context.
+//   - A board phrase (core's parseBoardIntent), in any mode: the chief gets core's board note, as in the Claude hook,
+//     with Codex's commands (CODEX_BOARD, T921).
 //   - SessionStart with source compact: a compaction can drop the role, so the hook gives it again while sage mode is on.
 //   - SessionStart with source fork: a fork has a new session id, and Codex does not give the hook the parent's id.
 //     So a fork starts with sage mode off, and the hook tells the chief so, because its history can show the role.
@@ -26,7 +28,7 @@
 import { readdirSync, readFileSync, realpathSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
-import { exactPhrase, MODE_DAMAGED, PHRASES, protectionNote, readModeFile, renderChiefInstructions, switchModes } from "sage-core";
+import { boardNote, exactPhrase, MODE_DAMAGED, parseBoardIntent, PHRASES, protectionNote, readModeFile, renderChiefInstructions, switchModes } from "sage-core";
 import { NEW_ON, onCanCount, readRecord } from "./owner-record.mjs";
 import { modeDirectory, privateDirectory, readState, saveState, stateKey } from "./principles-hook.mjs";
 import { sessionMeta } from "./report-gate.mjs";
@@ -35,13 +37,26 @@ import { mergeCommand } from "../skills/sage/merge.mjs";
 
 const ROOT = join(dirname(fileURLToPath(import.meta.url)), "..");
 const TOOL = join(ROOT, "skills/sage/sage.mjs");
+/** The board server's command, which the build copies into the plugin from packages/sage-board. */
+const BOARD = join(ROOT, "board/cli.mjs");
 
-/** What the mode notes say about Codex, for the user (the help list). Codex has no queued messages and no board phrase in this hook. */
+/** What the mode notes say about Codex, for the user (the help list). Codex has no queued messages. */
 const CODEX_HOST = {
   name: "Codex",
   timing: "Send an on phrase when Codex is idle. With autopilot on, sage merges a pull request by itself after its clean reviews and checks. To stop a merge now, press Esc: a merge whose call to GitHub has started still completes, and autopilot stays on. An off phrase sent with Enter stops merges from Codex's next step, but not a merge that sage already admitted. A phrase queued with Tab waits until the turn ends.",
-  board: false,
   update: null,
+};
+
+/**
+ * Codex's parts of core's board note (T921). The chat board only reads, so it runs in the sandbox. The board server's
+ * commands open a local port and write the board config in the home folder, which Codex's sandbox blocks (no network,
+ * writes only in the workspace and the temp folders), so they run escalated: Codex's own prompt asks the owner.
+ */
+const CODEX_BOARD = {
+  state: (args) => `node "${TOOL}" ${args}`,
+  ensure: `node "${BOARD}" board --ensure`,
+  server: "Codex's sandbox blocks the first command below, because it opens a local port and writes the board config in the owner's home folder. So run it escalated (outside the sandbox), and Codex asks the owner to approve it; run the board's stop command in the same way. If it cannot run outside the sandbox (the owner declines, or approvals are off), still run the chat board, and give the owner the first command to run in Terminal on the Mac. ",
+  choice: "a choice card",
 };
 
 /** The Codex versions (major.minor, both ends included) that sage was checked with. */
@@ -111,6 +126,9 @@ export function handle(input, state, env = process.env) {
   if (why) return context(event, joinedOn(state.autopilot, why));
   const was = { sage: Boolean(state.sage), autopilot: Boolean(state.autopilot) };
   const notes = switchModes({ owner: true, text: input.prompt, all: input.prompt }, state, { autopilotOn: () => AUTOPILOT_ON + protectionNote(state, input.cwd, env), host: CODEX_HOST });
+  // A board phrase works in every mode, as in the Claude hook: Codex sends only the text that the user typed (T451).
+  const asked = parseBoardIntent(input.prompt);
+  if (asked) notes.push(boardNote(asked, input.cwd, CODEX_BOARD));
   if (on && state.autopilot) state.onTurn = input.turn_id; // the gate needs the latest on of Codex's record in this turn
   if (state.sage && !state.given) {
     state.given = true;

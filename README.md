@@ -8,7 +8,7 @@ You say what you want in a session; the agents design, build, review and test it
   <a href="LICENSE"><img alt="licence" src="https://img.shields.io/github/license/erickb336/sage"></a>
 </p>
 
-**Status:** early, used every day by its author to build sage itself. Claude Code is supported; in Codex (the CLI and the desktop app), sage mode, autopilot and the shared logbook work through the sage plugin, and the board phrases do not work yet ([sage in Codex](docs/guide/codex.md)). Tested on macOS, and in CI on Ubuntu (Linux); Windows is not supported.
+**Status:** early, used every day by its author to build sage itself. Claude Code is supported; in Codex (the CLI and the desktop app), sage mode, autopilot, the shared logbook and the board phrases work through the sage plugin ([sage in Codex](docs/guide/codex.md)). Tested on macOS, and in CI on Ubuntu (Linux); Windows is not supported.
 
 Start with the [Quick start](#quick-start). Then follow one task from start to merge in [Learn sage in 5 minutes](docs/guide/learn-sage.md).
 
@@ -102,7 +102,7 @@ Send `show board` to see what needs you, the agents at work, and each task in it
 | `sage mode off` | A normal session again, for the rest of the session. Autopilot goes off too. |
 | `sage help` | Every phrase, and whether sage mode and autopilot are on. |
 
-Send each phrase alone, as the whole message: `autopilot on` counts only from a message that starts a turn, so send it while the session is idle, and `autopilot off` counts at any time. Every phrase, also the board forms, and the exact rules: [Every phrase](docs/guide/using-sage.md#every-phrase); in Codex, the board phrases do not work yet ([sage in Codex](docs/guide/codex.md#turn-on-sage-mode)).
+Send each phrase alone, as the whole message: `autopilot on` counts only from a message that starts a turn, so send it while the session is idle, and `autopilot off` counts at any time. Every phrase, also the board forms, and the exact rules: [Every phrase](docs/guide/using-sage.md#every-phrase); in Codex, the board page starts after you approve one prompt ([The board in Codex](docs/guide/codex.md#the-board-in-codex)).
 
 ## How sage works
 

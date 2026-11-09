@@ -24,7 +24,7 @@ Only a direct owner message can change mode. Use `commands.mjs` beside this skil
 
 Switches require the whole message, ignoring letter case, outer spaces and one final period. A near match changes nothing; explain the exact phrase. Do not invent an alternative activation phrase.
 
-Board/status requests work without activation. Preserve `show board`, `sage board`, `show board for all`, `sage board for all projects`, `show board for <project>`, `sage board for <project>`, `show board T7`, `sage board T7`, `board T7`, `show status` and `sage status`. Their shared parser recognizes the start of the message. Resolve the project before a task lookup.
+Board/status requests work without activation, as in Claude: `show board`, `sage board`, `show board for all`, `sage board for all projects`, `show board for <project>`, `sage board for <project>`, `show board T7`, `sage board T7`, `board T7`, `show status` and `sage status`, at the start of the owner's message. For each of them the sage hook gives you a note with the exact commands: follow it. It runs the board server's start command escalated, because the sandbox blocks its local port. When no note comes (the hooks are not trusted), use the reads of [commands](references/commands.md), and resolve the project before a task lookup.
 
 ## Landing a PR
 

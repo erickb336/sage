@@ -22,7 +22,7 @@ export { readBoardSources } from "./board-reader.mjs";
 export { buildBoardModel } from "./board-model.mjs";
 export { renderBoardHtml, renderAgentsHtml, renderProgramsHtml, renderBoardText, renderTaskText, renderBoardStatus } from "./board-render.mjs";
 export { boardView, landingRule } from "./board-view.mjs";
-export { parseBoardIntent, BOARD_PHRASES } from "./board-intent.mjs";
+export { parseBoardIntent, boardNote, BOARD_PHRASES } from "./board-intent.mjs";
 
 export { REPORT_FIELDS, parseReport } from "./report.mjs";
 export { FINDING_FORM, RESULT_WORDS, cleanReport, fieldsOf, missingFields, readReport } from "./report-reader.mjs";
