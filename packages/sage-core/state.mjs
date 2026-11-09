@@ -27,6 +27,7 @@ import { BREAKDOWN, ENDED, GATE_ID, MET, PROGRAM_ID, TASK_ID, breakdownGate, byI
 import { OBSERVATIONS_MAX_BYTES, OBSERVATION_DATA_MAX_BYTES, validateObservation, validateObservations } from "./observations.mjs";
 import { MOVES, PLAN_MAX, checkoutGone, createSharedRoot, sharedRoot, unreadableFolder } from "./shared-root.mjs";
 import { changedText, countsOf, endText, gateQuestion, gateText, localTime, mapHtml, mismatchText, previewText, providersOf, reconciliationText, startText, stepText, stoppedText, title } from "./move-text.mjs";
+import { worktrees } from "./worktrees.mjs";
 import { CHIEF, TAKEOVER_OPTIONS, chiefOnly, createChiefs, crossed, offerOf, replaceOf, replaceQuestion, writerClass } from "./chiefs.mjs";
 
 /** The one line for a saved change that cannot finish: the settle step refuses with it, and `sage logbook repair` is its way out. */
@@ -124,7 +125,7 @@ TABLES.gates = [...TABLES.gates, "kind"];
 const ADDED = { ...FILLED, runs: [...FILLED.runs, ...SPARSE.runs], tasks: [...FILLED.tasks, ...SPARSE.tasks], gates: SPARSE.gates };
 /** The status of a run that ended. Any other status is an active or an unknown run. */
 const RUN_ENDS = ["done", "blocked", "question", "failed"];
-const COMMANDS = ["init", "logbook", "standing", "pages", "task", "task-adopt", "program", "round", "run", "finding", "verdict", "gate", "log", "status", "stats", "merge-check", "config", "projects", "board", "observe", "link", "claim", "offer", "cancel", "accept", "release", "move"];
+const COMMANDS = ["init", "logbook", "standing", "pages", "task", "task-adopt", "program", "round", "run", "finding", "verdict", "gate", "log", "status", "stats", "merge-check", "config", "projects", "board", "observe", "link", "claim", "offer", "cancel", "accept", "release", "move", "worktrees"];
 /** The options of each command, by its name or by its name and first word. Every command also takes --project. */
 const OPTIONS = {
   "logbook repair": ["accept-loss", "accept-change-loss"],
@@ -156,6 +157,7 @@ const OPTIONS = {
   board: ["remember", "name-hex", "view"],
   stats: ["task"],
   pages: ["run", "text"],
+  "worktrees prune": ["yes"],
 };
 /** The canonical number of a PR in an older row: "040" is PR 40. */
 const prNumber = (pr) => (/^\d+$/.test(pr ?? "") ? String(BigInt(pr)) : pr);
@@ -185,7 +187,7 @@ function sageRoot(env = process.env) {
  */
 function git(args, env = process.env) {
   const neutral = { ...env, GIT_CONFIG_NOSYSTEM: "1", GIT_ALLOW_PROTOCOL: "file:https:ssh", GIT_TERMINAL_PROMPT: "0" };
-  return execFileSync("git", ["-c", "core.fsmonitor=false", "-c", "core.hooksPath=/dev/null", ...args], { encoding: "utf8", env: neutral, stdio: ["ignore", "pipe", "ignore"] });
+  return execFileSync("git", ["-c", "core.fsmonitor=false", "-c", "core.hooksPath=/dev/null", ...args], { encoding: "utf8", env: neutral, stdio: ["ignore", "pipe", "pipe"] }); // a failure's message ends with git's reason
 }
 
 /**
@@ -1731,7 +1733,7 @@ function parse(cmd, args) {
     else {
       const eq = a.includes("=");
       const o = a.slice(2, eq ? a.indexOf("=") : undefined);
-      const flag = !eq && ((cmd === "link" && o === "separate") || (cmd === "move" && o === "preview")); // the options with no value
+      const flag = !eq && ((cmd === "link" && o === "separate") || (cmd === "move" && o === "preview") || (cmd === "worktrees" && o === "yes")); // the options with no value
       const v = flag ? true : eq ? a.slice(a.indexOf("=") + 1) : args[++i];
       if (!eq && !flag) spaced.push(o);
       if (o in opt) refuse(`--${o} is given twice. Give it once${o === "accept-loss" ? `, with the tables joined by a comma: --accept-loss ${opt[o]},${v}` : ""}.`);
@@ -2900,7 +2902,7 @@ function sage(argv, env = process.env) {
     refuse(`no logbook for the project ${printed}. ${printed === project ? `Run: sage init --project ${shell(project)}` : "Its path has control characters, so no command is printed to paste. Rename the folder, or run sage init from inside it."}`);
   }
   // A read takes no lock: every file is replaced whole, so it sees the store before or after a change, never half of one.
-  if (readOnly || (cmd === "logbook" && !repair) || cmd === "status" || cmd === "stats" || (cmd === "standing" && pos[0] !== "add") || (cmd === "pages" && pos[1] !== "record")) return act(cmd, pos, opt, dir, env, [], project);
+  if (readOnly || (cmd === "logbook" && !repair) || cmd === "status" || cmd === "stats" || (cmd === "standing" && pos[0] !== "add") || (cmd === "pages" && pos[1] !== "record") || cmd === "worktrees") return act(cmd, pos, opt, dir, env, [], project);
   notePlugin(env);
   if (place.row && !place.row.commits && fillCommits(place.checkout, env)) locate(project, env); // the filled row may show a folder of another project
   const run = () => change(cmd, pos, opt, dir, env, skip, project, place.shared);
@@ -3831,6 +3833,16 @@ function act(cmd, pos, opt, dir, env, skip, project) {
     case "stats":
       if (pos.length) refuse("stats takes no words: sage stats [--task <T>]");
       return stats(dir, opt.task === undefined ? undefined : taskOf(dir, opt.task).task.id);
+    case "worktrees": {
+      // worktrees lists the worktrees of the project's repository; worktrees prune --yes removes the clean ones that may go (worktrees.mjs).
+      const prune = sub === "prune";
+      if (pos.length > (prune ? 1 : 0)) refuse("worktrees takes no words, or prune --yes: sage worktrees, then sage worktrees prune --yes.");
+      if (prune && opt.yes !== true) refuse("worktrees prune removes worktrees, so it needs --yes: run sage worktrees first, show its list, then run sage worktrees prune --yes. Nothing changed.");
+      assertNoPendingWrite(dir);
+      const root = projectRoot(project);
+      try { git(["-C", root, "rev-parse", "--git-dir"], env); } catch { refuse(`${visible(root)} is not a git repository, so it has no worktrees. Nothing changed.`); }
+      return worktrees({ git: (args) => git(args, env), root, tasks: read(dir, "tasks"), runs: read(dir, "runs"), ledger: read(dir, "ledger"), here: [folderHere(), project], prune });
+    }
     case "pages": {
       // pages <T> makes the task's pages folder (mode 700) and prints it. pages <T> record <file> logs a page in it, with its sha256.
       const taskId = taskOf(dir, need(sub, "the task id")).task.id, folder = pagesDir(project, taskId, env);
