@@ -673,30 +673,6 @@ function arena(t, id) {
   return panel(t, id, W, H, body, "The arena: one brief and a hidden rubric go to three candidates on a mix of Claude models, each with a different angle. The arena judge scores them, picks a base and grafts the best parts into one final version, which then goes through reviews and QA.");
 }
 
-/** Following pstack: a weekly sync, your overrides, one build. */
-function pstack(t, id) {
-  const W = 1100, H = 570;
-  const body = [
-    backdrop(t, id, W, H, { moon: [972, 140, 110], seeds: [37, 66, 3], far: [H - 80, 60, 180, 70, 140], near: [H + 40, 90, 220, 80, 170], pagodas: [[150, H - 40, 0.9, 1.6]], mist: [140, 280, H - 140], mistK: 0.6 }),
-    heading(t, 36, 62, "FOLLOWING PSTACK, EVERY WEEK"),
-    tile(t, id, 36, 140, 180, 120, "pstack", ["by Lauren Tan", "(poteto)"], false, { titleY: 42 }),
-    flow(id, "M222 200 L 322 200", t.edge, "hot"), text(272, 184, "weekly", { size: SMALL, fill: t.muted, anchor: "middle" }),
-    tile(t, id, 330, 140, 240, 120, "upstream/pstack", ["pinned commit", "+ licence"], false, { titleY: 42 }),
-    tile(t, id, 330, 300, 240, 100, "principles/", "local versions win", true, { titleY: 42 }),
-    flow(id, "M576 200 C 606 200, 606 262, 634 262", t.line, "muted"),
-    flow(id, "M576 350 C 606 350, 606 298, 634 298", t.line, "muted"),
-    tile(t, id, 642, 224, 184, 112, "Build", "checks + tests", true, { titleY: 44, ...chiefTile(id) }),
-    flow(id, "M832 280 L 872 280", t.edge, "hot"),
-    emblem(972, 140, 52, id),
-    tile(t, id, 880, 224, 184, 112, "sage plugin", "25 principles", false, { titleY: 44 }),
-    path("M734 342 L 734 446", { stroke: t.edge, sw: 2, dash: "5 6" }),
-    rect(330, 452, 734, 96, { rx: 8, fill: t.tile, stroke: t.edge, sw: 1.5 }),
-    text(697, 490, "pstack changed a local version?", { size: SMALL, weight: 700, fill: t.ink, anchor: "middle" }),
-    text(697, 524, "The update waits for review. Otherwise it merges.", { size: SMALL, fill: t.muted, anchor: "middle" }),
-  ].join("\n");
-  return panel(t, id, W, H, body, "Following pstack: every week, pstack's principles come into upstream/pstack at a pinned commit. Local versions in principles/ win. The build runs the checks and tests and makes the sage plugin. If pstack changed a principle that has a local version, the update waits for review; otherwise it merges.");
-}
-
 /** A tip from the toad sage: its emblem on the left, and the tip on a hanging scroll to the right. */
 const tip = (lines, label) => (t, id) => {
   const W = 1100, H = 230 + Math.max(0, lines.length - 3) * 34, size = 24, lh = 1.4;
@@ -718,7 +694,7 @@ const tip = (lines, label) => (t, id) => {
 };
 
 const GRAPHICS = {
-  hero, loop, routes, lifecycle, arena, pstack,
+  hero, loop, routes, lifecycle, arena,
   "tip-start": tip(["Send “sage mode” alone to switch it on,", "and “sage mode off” alone to switch it off.", "With any other words, it does nothing."], "The toad sage's tip: send sage mode alone to switch it on, and sage mode off alone to switch it off. With any other words, it does nothing."),
   "tip-try": tip(["Try it on one small, real bug, from your phone.", "Then look at the result, not the code."], "The toad sage's tip: try it on one small, real bug from your phone, then look at the result, not the code."),
   "tip-seal": tip(["Seal the lesson: give a mistake that comes back twice", "a lasting fix. A test or a check in code first; a principle", "or a standing order only when code cannot hold it.", "That's how the dojo gets stronger."], "The toad sage's tip: seal the lesson. Give a mistake that comes back twice a lasting fix: a test or a check in code first; a principle or a standing order only when code cannot hold it. That is how the dojo gets stronger."),

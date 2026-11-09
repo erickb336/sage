@@ -61,6 +61,6 @@ Agents seldom load a skill by themselves, so a **hook** gives the principle at t
 
 The hook also has **one check**, the stop check. When the agent tries to finish, the code changed, and no check ran after the change, it stops the agent once. The agent must run a check or say what it did not verify.
 
-## Following pstack
+## Where the principles come from
 
-pstack changes often. sage follows it so that you don't have to: a weekly sync brings pstack's principles in, and sage's adapted versions win. [CONTRIBUTING.md](../../CONTRIBUTING.md#following-pstack) shows how.
+sage's principles come from pstack, by Lauren Tan (MIT). sage keeps its own text of each one and does not follow later pstack changes. [CONTRIBUTING.md](../../CONTRIBUTING.md#credit) shows how a principle credits pstack.
