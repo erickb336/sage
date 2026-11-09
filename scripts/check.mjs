@@ -10,7 +10,6 @@ import { BRIEF_FIELDS as CORE_BRIEF_FIELDS, FINDING_FORM } from "../packages/sag
 import { TASK_KINDS } from "../packages/sage-core/logbook-fields.mjs";
 import { BRIEF_FIELDS, REPORT_FIELDS } from "../plugins/sage/hooks/sage-hook.mjs";
 import { handle as codexModeHook } from "../plugins/sage-codex/hooks/sage-codex-hook.mjs";
-import { chiefInstructionParts } from "../plugins/sage-codex/runtime/chief-output.mjs";
 import { fingerprint, overrides } from "./sync-pstack.mjs";
 import { withoutPrinciplesTable } from "./principles-table.mjs";
 import { PRINCIPLES_PAGE } from "./dictionary.mjs";
@@ -161,12 +160,10 @@ try { dictionary = checkWords(parseSource(readFileSync(join(ROOT, "writing/dicti
 const readByPeople = [
   ...agents.map((f) => `plugins/sage/agents/${f}`),
   ...readdirSync(skillsDir).map((d) => `plugins/sage/skills/${d}/SKILL.md`).filter((f) => existsSync(join(ROOT, f)) && !readFileSync(join(ROOT, f), "utf8").includes(GENERATED)),
-  // The README and the docs: every page that docFiles reads for links, except the internal Codex probe notes.
-  ...docFiles(ROOT).filter((f) => !f.startsWith("docs/verification/")),
+  // The README and the docs: every page that docFiles reads for links.
+  ...docFiles(ROOT),
   // The change log fragments, which CHANGELOG.md on main gets only later: so the task pull request that adds one fails.
   ...readdirSync(join(ROOT, "changes")).filter((f) => f.endsWith(".md")).map((f) => `changes/${f}`),
-  ...["packages/sage-codex/runtime", "plugins/sage-codex/runtime"].flatMap(root =>
-    ["automatic-workflow-design.md", "claude-parity-audit.md"].map(name => `${root}/${name}`)),
   ...readdirSync(join(ROOT, "docs/assets")).filter((f) => f.endsWith(".svg")).map((f) => `docs/assets/${f}`),
 ];
 for (const f of dictionary ? readByPeople : []) {
@@ -221,7 +218,6 @@ try {
   const limit = tokens * 4;
   const role = Buffer.byteLength(codexModeHook({ hook_event_name: "UserPromptSubmit", session_id: "check", prompt: "sage mode" }, {}).hookSpecificOutput.additionalContext);
   if (role > limit) problems.push(`Codex chief role: the sage hook gives ${role} bytes, ${role - limit} bytes over its limit of ${limit} bytes (0 bytes left; additionalContextLimit ${tokens} tokens at 4 bytes each, in packages/sage-codex/hooks/hooks.json), so Codex would cut the rules. Shorten the chief text (packages/sage-core/roles/chief-of-staff.md) or raise the limit`);
-  chiefInstructionParts();
 } catch (e) { problems.push(`Codex chief role: ${e.message} (packages/sage-core/roles/chief-of-staff.md)`); }
 
 // A test must not hold wall-clock or CPU time under a tight fixed bound: load and machine differences can fail a
