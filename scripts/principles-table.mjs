@@ -19,7 +19,7 @@ export function principleRows(principles) {
 export function principlesTable(rows) {
   const own = rows.filter((r) => r.text === OWN).length;
   return [
-    `There are ${rows.length} principles: ${rows.length - own} come from pstack, by Lauren Tan (MIT), and ${own} ${own === 1 ? "is" : "are"} sage's own. sage keeps its own text of each one and does not follow later pstack changes.`,
+    `There are ${rows.length} principles: ${rows.length - own} come from pstack, by Lauren Tan (MIT), and ${own} ${own === 1 ? "is" : "are"} sage's own. sage keeps its own text of each one. The baseline below compares each text with pstack's latest text.`,
     "",
     "<details>",
     `<summary><strong>All ${rows.length} principles</strong></summary>`,
@@ -30,7 +30,7 @@ export function principlesTable(rows) {
     "",
     "Under each name, a note says where its text comes from:",
     "",
-    `- "${ADAPTED}" is sage's text of a pstack principle: it is shorter, and it follows sage's writing standard. Its \`source\` line names the pstack commit that it comes from.`,
+    `- "${ADAPTED}" is sage's text of a pstack principle: it is shorter, and it follows sage's writing standard. Its \`source\` line names the pstack version and commit that its text was checked against.`,
     `- "${OWN}" has no pstack source.`,
     "",
     "</details>",

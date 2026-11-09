@@ -25,7 +25,7 @@ Edit only the sources. The build makes everything else, and `npm run check` fail
 | `scripts/graphics.mjs` (draws the README's graphics) | `docs/assets/*.svg` (drawn by the script) |
 | `scripts/board-shots.mjs` (takes the board screenshots) | `docs/assets/board-*.png` and `learn-*.png` (taken by the script) |
 
-To add a principle, add `principles/<name>.md`. A principle adapted from pstack has `source: pstack principle-<name>`, with the credit and the pstack commit (see [Credit](#credit)).
+To add a principle, add `principles/<name>.md`. A principle adapted from pstack has `source: pstack principle-<name>`, with the credit and the pstack version and commit that it was checked against (see [Credit](#credit)).
 
 ## Change it
 
@@ -123,9 +123,10 @@ For board QA, `node scripts/board-sample.mjs <empty folder>` writes sample logbo
 
 sage's principles come from pstack, by Lauren Tan (poteto), under the MIT licence. sage keeps its own text of each principle in `principles/`, and it does not copy or sync pstack.
 
-- Each principle's `source` line names its pstack principle and the pstack commit that its text comes from.
+- Each principle's `source` line names its pstack principle, and the pstack version and commit that its text was checked against, for example `checked against pstack 0.15.36 at commit 0bb6f37`.
 - pstack's MIT licence is in [principles/LICENSE-pstack](principles/LICENSE-pstack). The build puts it in each plugin as `LICENSE-pstack`.
-- To bring in a later pstack change, adapt the text in `principles/` by hand, and change the commit in its `source` line.
+- The [baseline table](docs/guide/principles.md#baseline-against-pstack) gives the state of each principle against that commit.
+- To check against a later pstack, compare each text by hand and adapt it in `principles/`. Then update the baseline table and the version and commit in each `source` line.
 
 pstack's own modes (poteto mode, orchestrate, autopilot) stay out, because sage mode is the orchestration layer here. Another pstack skill comes in only when it works in Claude Code and has a test.
 

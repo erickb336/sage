@@ -4,7 +4,7 @@ A principle is a short rule for one kind of moment, for example "test behaviour,
 
 <!-- The principles table comes from principles/: edit them there, then run npm run build. -->
 
-There are 25 principles: 24 come from pstack, by Lauren Tan (MIT), and 1 is sage's own. sage keeps its own text of each one and does not follow later pstack changes.
+There are 25 principles: 24 come from pstack, by Lauren Tan (MIT), and 1 is sage's own. sage keeps its own text of each one. The baseline below compares each text with pstack's latest text.
 
 <details>
 <summary><strong>All 25 principles</strong></summary>
@@ -39,7 +39,7 @@ There are 25 principles: 24 come from pstack, by Lauren Tan (MIT), and 1 is sage
 
 Under each name, a note says where its text comes from:
 
-- "pstack, adapted" is sage's text of a pstack principle: it is shorter, and it follows sage's writing standard. Its `source` line names the pstack commit that it comes from.
+- "pstack, adapted" is sage's text of a pstack principle: it is shorter, and it follows sage's writing standard. Its `source` line names the pstack version and commit that its text was checked against.
 - "sage's own" has no pstack source.
 
 </details>
@@ -61,6 +61,47 @@ Agents seldom load a skill by themselves, so a **hook** gives the principle at t
 
 The hook also has **one check**, the stop check. When the agent tries to finish, the code changed, and no check ran after the change, it stops the agent once. The agent must run a check or say what it did not verify.
 
-## Where the principles come from
+## Baseline against pstack
 
-sage's principles come from pstack, by Lauren Tan (MIT). sage keeps its own text of each one and does not follow later pstack changes. [CONTRIBUTING.md](../../CONTRIBUTING.md#credit) shows how a principle credits pstack.
+sage's principles come from pstack, by Lauren Tan (MIT). sage keeps its own text of each one, and nothing syncs it with pstack. Instead, a review compares each text with pstack's latest text by hand, and this table records the result.
+
+- **Checked against:** pstack 0.15.36, at commit `0bb6f379f2c3cd07c92a4e0bfa815ffa773bd4f3` of [github.com/cursor/plugins](https://github.com/cursor/plugins), on 2026-11-09 (task T935). pstack's principles are the same there as at commit `6b03002`, which T924 used.
+- **Where the commit is:** each principle's `source` line names the version and the commit.
+- **To repeat the check:** compare each text with pstack's text, its references and the pstack skills that took over cut content. Then update the texts, this table and each `source` line. [CONTRIBUTING.md](../../CONTRIBUTING.md#credit) shows how a principle credits pstack.
+
+The status says how sage's text compares with pstack's text:
+
+| Status | Meaning |
+| --- | --- |
+| matches pstack | The same rules as pstack, in sage's format and writing standard. It is shorter, and it has no links to pstack skills that sage does not have. |
+| adapted from pstack | pstack's rules, and sage adds or changes a rule on purpose, for example a Stop rule. |
+| sage keeps fuller text | pstack cut its text to little more than its description. sage keeps the rules that pstack dropped, and takes any rule that moved to another pstack skill. |
+| sage only | pstack has no such principle. |
+
+| Principle | pstack version checked | Status | What differs |
+| --- | --- | --- | --- |
+| attack-the-premise | 0.15.36 (`0bb6f37`) | adapted from pstack | Says "check or review" for pstack's "gate", because a gate in sage is a question for the owner. sage adds: report the premise that you questioned. |
+| boundary-discipline | 0.15.36 (`0bb6f37`) | adapted from pstack | sage adds files as a boundary, and a line for reviewers: report input that reaches logic unvalidated. |
+| build-the-lever | 0.15.36 (`0bb6f37`) | matches pstack | Shorter. |
+| contextualize-and-write-for-the-reader | none | sage only | This kit's own principle. |
+| encode-lessons-in-structure | 0.15.36 (`0bb6f37`) | sage keeps fuller text | pstack cut its text to two lines. The order of mechanisms moved to pstack's `correct` skill, and sage takes that order: architecture, a type, a lint or check whose error names the fix, a test, a written rule last. sage keeps the feedback loop, which pstack dropped. |
+| exhaust-the-design-space | 0.15.36 (`0bb6f37`) | sage keeps fuller text | pstack cut its text to one line; the rule stays in its description. sage keeps when it applies and when it does not, and adds a Stop rule. |
+| experience-first | 0.15.36 (`0bb6f37`) | adapted from pstack | sage adds a Stop rule: cut a feature that the user's side cannot justify. |
+| explain-the-number | 0.15.36 (`0bb6f37`) | matches pstack | Shorter. No link to pstack's `benchmark-checklist` skill. |
+| fix-root-causes | 0.15.36 (`0bb6f37`) | adapted from pstack | sage adds a Stop rule: stop when the reproduction no longer fails for the reason you found. |
+| foundational-thinking | 0.15.36 (`0bb6f37`) | matches pstack | Shorter. The scaffold examples name checks in place of CI and linting. |
+| guard-the-context-window | 0.15.36 (`0bb6f37`) | sage keeps fuller text | pstack cut its text to the reason and one rule. sage keeps two rules that pstack dropped: send large payloads to subagents, and keep content that you use often inline. |
+| laziness-protocol | 0.15.36 (`0bb6f37`) | sage keeps fuller text | pstack cut its text to two rules. sage keeps the four rules and the test that pstack dropped: prefer deletion, a flat call hierarchy, question the threading, and remove small leaks. |
+| make-operations-idempotent | 0.15.36 (`0bb6f37`) | matches pstack | Shorter. |
+| migrate-callers-then-delete-legacy-apis | 0.15.36 (`0bb6f37`) | sage keeps fuller text | pstack cut its text to the line about tests and when the rule applies. sage keeps the rule and the reason, and adds where it applies in a task (external callers, repairs) and a Stop rule. |
+| minimize-reader-load | 0.15.36 (`0bb6f37`) | matches pstack | Takes pstack's new wording (T935). Shorter. |
+| model-the-domain | 0.15.36 (`0bb6f37`) | matches pstack | Shorter. |
+| never-block-on-the-human | 0.15.36 (`0bb6f37`) | adapted from pstack | Takes pstack's new wording (T935). sage adds spending money as an irreversible action, and a last paragraph on how the user steers. |
+| outcome-oriented-execution | 0.15.36 (`0bb6f37`) | matches pstack | Shorter. |
+| prove-it-works | 0.15.36 (`0bb6f37`) | adapted from pstack | sage adds a Stop rule: say what you ran, what you saw and what you did not verify. No link to pstack's `show-me-your-work` skill. |
+| redesign-from-first-principles | 0.15.36 (`0bb6f37`) | matches pstack | Same rules. |
+| separate-before-serializing-shared-state | 0.15.36 (`0bb6f37`) | matches pstack | Same rules. |
+| sequence-verifiable-units | 0.15.36 (`0bb6f37`) | matches pstack | Shorter. Says "a script" for pstack's "a lever". |
+| subtract-before-you-add | 0.15.36 (`0bb6f37`) | adapted from pstack | Takes pstack's new wording (T935). sage adds a Stop rule: stop when the next removal would change behaviour that the specification asks for. |
+| test-behavior-not-implementation | 0.15.36 (`0bb6f37`) | matches pstack | Shorter. |
+| type-system-discipline | 0.15.36 (`0bb6f37`) | matches pstack | Shorter. No link to pstack's `typescript-best-practices` skill. |
