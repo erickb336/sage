@@ -1164,6 +1164,26 @@ test("the Claude hook keeps a lead on its lead run in a shared logbook, and a he
   assert.match(w.bash("task T1 set state=building", "s1", { agent_id: "qa-1", agent_type: "sage:qa" }), /writes the logbook, or is not a read command/);
 });
 
+test("T927: the Claude chief runs worktrees and its prune with no --chief in a shared logbook; a lead and a helper run neither", (t) => {
+  const w = hookWorld(t);
+  const sage = (...args) => claude.sage([...args, "--project", w.project], w.env);
+  sage("link", "--separate");
+  w.send({ hook_event_name: "UserPromptSubmit", prompt: "sage mode" });
+  const chief = claude.chiefFor(w.project, "s1", w.env);
+  sage("task", "add", "--title", "a", ...ADD, "--chief", chief);
+  sage("task", "T1", "set", "state=briefed", "--chief", chief);
+  sage("run", "add", "T1", "--role", "lead", "--chief", chief);
+  const start = { subagent_type: "sage:lead", name: "lead-T1", description: "lead-T1", prompt: "GOAL a\nSCOPE b\nCONTEXT c\nDECISIONS d\nACCEPTANCE e\nVERIFY f\nBUDGET 1 hour of agent time\nFORBIDDEN g\nREPORT h\nSTANDING i", run_in_background: true };
+  assert.equal(w.denied(w.send({ hook_event_name: "PreToolUse", tool_name: "Agent", tool_input: start, tool_use_id: "start-1" })), undefined);
+  w.send({ hook_event_name: "PostToolUse", tool_name: "Agent", tool_use_id: "start-1", tool_response: { status: "async_launched", agentId: "lead-1" } });
+  w.send({ hook_event_name: "SubagentStart", agent_id: "lead-1", agent_type: "sage:lead" });
+  for (const line of ["worktrees", "worktrees prune --yes"]) {
+    assert.equal(w.bash(line), undefined, `the chief: ${line}`);
+    assert.match(w.bash(line, "s1", { agent_id: "qa-1", agent_type: "sage:qa" }), new RegExp(`"${line.replace(" --yes", "")}" writes the logbook, or is not a read command of the state tool\\.`), `a helper: ${line}`);
+    assert.match(w.bash(`${line} --lead R1`, "s1", { agent_id: "lead-1", agent_type: "sage:lead" }), /is not on the lead's list/, `a lead: ${line}`);
+  }
+});
+
 // T625 (PR 5b of the T306 shared logbook): each run of a shared logbook saves its checkout, and the review reads a branch
 // in the checkout of the branch's writer run. A gone checkout refuses with its run's ID. A legacy logbook does not change.
 const git = (...args) => execFileSync("git", args, { encoding: "utf8", env: gitEnv }).trim();

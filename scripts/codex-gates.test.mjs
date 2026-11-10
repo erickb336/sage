@@ -907,6 +907,27 @@ test("T658: the gate treats move as a write: only the chief calls the move tool 
   }
 });
 
+test("T927: only the chief calls the worktrees tool or runs worktrees from the shell, also its listing; a lead and a role agent never prune", async (t) => {
+  const { TOOLS, argvFor } = await import(new URL("../plugins/sage-codex/mcp/state-server.mjs", import.meta.url));
+  const { CHILD_READS } = await import(HOOK);
+  assert.deepEqual([argvFor("worktrees", { project: CWD }), argvFor("worktrees", { project: CWD, prune: true }), CHILD_READS.has("worktrees")],
+    [["worktrees", `--project=${CWD}`], ["worktrees", "prune", "--yes", `--project=${CWD}`], false]);
+  assert.ok(Object.hasOwn(TOOLS, "worktrees"));
+  const w = world(t);
+  const shell = [`node ${TOOL} worktrees`, `node ${TOOL} worktrees prune --yes --project ${w.project}`];
+  const calls = [["worktrees", {}], ["worktrees", { prune: true }]];
+  const LEAD = "sage: a lead records only its own task, and worktrees is not one of its tools. Put what the logbook needs in your report";
+  for (const mode of [{ sage: false, autopilot: false }, { sage: true, autopilot: false }]) {
+    w.mode(mode);
+    for (const path of ["/root/sage_implementer_t1_r1", "/root/sage_qa_t1_r1", "/root/sage_lead_t1_r1"]) {
+      assert.deepEqual(shell.map((c) => denied(w.send(pre("Bash", c, w.child(path))))?.replace(/ \(.*\)/, "")), shell.map(() => (path.includes("lead") ? "sage: a lead records with the sage MCP tools, not from the shell. Use one of these, or put what the logbook needs in your report" : LOGBOOK)), path);
+      assert.deepEqual(calls.map(([name, args]) => denied(w.send(mcp(name, args, w.child(path))))), calls.map(() => (path.includes("lead") ? LEAD : LOGBOOK)), path);
+    }
+    assert.deepEqual(calls.map(([name, args]) => denied(w.send(mcp(name, args)))), calls.map(() => undefined), "the chief calls the worktrees tool");
+    assert.deepEqual(shell.map((c) => denied(w.send(pre("Bash", c)))), shell.map(() => undefined), "the chief runs worktrees from the shell");
+  }
+});
+
 for (const args of ["task T1", "board T1 --view task", "config"]) {
   test(`T49: a role reads ${args} for the hook's project`, (t) => {
     const w = world(t);

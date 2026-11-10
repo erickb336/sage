@@ -220,6 +220,28 @@ A new hook event or matcher needs a restart, and so do the instructions that a s
 
 Nothing reaches main without a pull request, so a stopped task leaves at most a branch and an open pull request. Close or delete them on GitHub when you do not want them.
 
+## Clean up worktrees
+
+Each task builds in its own git worktree, so a busy project collects old ones. The idea of this clean-up comes from pstack's worktree audit playbook.
+
+To remove them, ask the chief in your own words, for example "clean up the old worktrees". The chief runs `sage worktrees` first and shows you the list, then runs `sage worktrees prune --yes`.
+
+Each line of the list gives the path, the branch, the task, the task's state and one reason:
+
+| Reason | Means | The prune |
+| --- | --- | --- |
+| `merged` | The task of the worktree is merged. | Removes it when it is clean. |
+| `abandoned` | The task of the worktree is abandoned. | Removes it when it is clean. |
+| `branch merged` | No task names the branch, and the branch is in origin/main. | Removes it when it is clean. |
+| `open` | The task is in another state, also concluded. | Keeps it. |
+| `unknown` | No task names the branch, and the branch is not in origin/main, or the worktree has no branch. | Keeps it. |
+
+- A worktree matches a task only through the logbook: the branch of the task, or of one of its runs. A number in a branch's name does not count, because older branches carry the numbers of another logbook.
+- The list uses the origin/main that git has now, and prints its commit. It does not fetch, so fetch first when main moved.
+- The prune also keeps the primary checkout, the worktree that the command runs in, a locked worktree, a worktree that holds another worktree, and a worktree with uncommitted changes, untracked files or unpushed commits. A commit counts as pushed when a remote branch holds it, or when the ledger has a verdict on it or on a later commit of its task: a squash merge deletes the task's branch on GitHub.
+- It prints each path that it removes or keeps, with the reason. It removes the entry of a worktree whose folder is gone, and it deletes no branch.
+- Only the chief runs it. A lead, a reviewer or QA cannot.
+
 ## Uninstall sage
 
 1. If you sent the board phrase (`show board`) on the Mac, or started the board server, a server may still run after the chat. Stop it first, in a terminal, before you delete the plugin cache. To find the installed version, use the "Version:" line under `sage@sage` in the output of this command:

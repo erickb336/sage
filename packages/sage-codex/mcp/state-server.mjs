@@ -158,6 +158,12 @@ export const TOOLS = {
     input: { task: z.union([task, z.literal("-")]).describe("the task id, or - for none"), decision: word.describe("the decision"), why: z.string().describe("the reason") },
     pos: ["task", "decision"], argv: (i) => ["log", i.task, i.decision],
   },
+  worktrees: {
+    describe: "List the git worktrees of the project's repository, each with its path, branch, task, task state and reason: merged, abandoned, branch merged, open or unknown. It reads the local origin/main and does not fetch. "
+      + "With prune true, after you showed the list, it removes each clean worktree of a merged or abandoned task, or of a branch in origin/main, and prints each path that it removes or keeps with the reason. It keeps the primary checkout, the project's own worktree, a locked one, one that holds another worktree, and one with changes, untracked files or unpushed commits, and it deletes no branch.",
+    input: { prune: z.literal(true).optional().describe("true: remove the clean worktrees that may go") },
+    pos: ["prune"], argv: (i) => ["worktrees", ...(i.prune ? ["prune", "--yes"] : [])],
+  },
   standing: { describe: "Print the standing orders as written. Every agent reads them before it starts; a brief points to them.", argv: () => ["standing"] },
   standing_add: { describe: "Add one standing order.", input: { order: word.describe("the order") }, pos: ["order"], argv: (i) => ["standing", "add", i.order] },
   pages: {
