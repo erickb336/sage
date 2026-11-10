@@ -11,7 +11,11 @@ import { answer } from "./sage-codex-hook.mjs";
 import { startStatus } from "./session-start-hook.mjs";
 
 const mode = (input) => answer(input, process.env);
-/** Each event's routes: [the field that Codex matched, its pattern, the hook], the first that matches runs. */
+const stop = (input) => reportGate(input, process.env);
+/**
+ * Each event's routes: [the field that Codex matched, its pattern, the hook], the first that matches runs. A hook gets the
+ * input and the launcher's context; a hook whose second parameter is its env gets a wrapper (mode, stop), never the context.
+ */
 export const ROUTES = {
   SessionStart: [["source", /^(?:startup|resume|clear)$/, startStatus], ["source", /^(?:compact|fork)$/, mode]],
   UserPromptSubmit: [[null, null, mode]],
@@ -19,7 +23,7 @@ export const ROUTES = {
   PermissionRequest: [["tool_name", /^Bash$/, gateAnswer]],
   PostToolUse: [["tool_name", /spawn_agent$/, briefAnswer]],
   SubagentStart: [[null, null, briefAnswer]],
-  SubagentStop: [[null, null, reportGate]],
+  SubagentStop: [[null, null, stop]],
 };
 
 /** The output object of sage's hook for one event and its parsed input (undefined when it was not JSON), or undefined. */

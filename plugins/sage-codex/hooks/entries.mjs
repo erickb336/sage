@@ -7,17 +7,17 @@ import { mkdirSync, readFileSync, realpathSync } from "node:fs";
 import { homedir } from "node:os";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
-import { activeVersion, LAUNCHER_VERSION, launchCommand, launcherFolder, planHooks, pluginOff, readText, uninstall, versionsFolder, writeAtomic } from "./launch.mjs";
+import { activeVersion, LAUNCHER_VERSION, launchCommand, launcherFolder, planHooks, pluginOff, readText, TIMEOUTS, uninstall, versionsFolder, writeAtomic } from "./launch.mjs";
 
-/** Each event's fields: the largest timeout of the hooks before T957, and the context limits that the roles need. */
+/** Each event's fields: its timeout (the launcher's TIMEOUTS), and the context limits that the roles need. */
 export const EVENTS = {
-  SessionStart: { timeout: 10, additionalContextLimit: 6000 },
-  UserPromptSubmit: { timeout: 10, additionalContextLimit: 6000 },
-  PreToolUse: { timeout: 30 },
-  PermissionRequest: { timeout: 30 },
-  PostToolUse: { timeout: 10 },
-  SubagentStart: { timeout: 10, additionalContextLimit: 16000 },
-  SubagentStop: { timeout: 10 },
+  SessionStart: { timeout: TIMEOUTS.SessionStart, additionalContextLimit: 6000 },
+  UserPromptSubmit: { timeout: TIMEOUTS.UserPromptSubmit, additionalContextLimit: 6000 },
+  PreToolUse: { timeout: TIMEOUTS.PreToolUse },
+  PermissionRequest: { timeout: TIMEOUTS.PermissionRequest },
+  PostToolUse: { timeout: TIMEOUTS.PostToolUse },
+  SubagentStart: { timeout: TIMEOUTS.SubagentStart, additionalContextLimit: 16000 },
+  SubagentStop: { timeout: TIMEOUTS.SubagentStop },
 };
 
 /** sage's groups for a Codex home, by event. */
@@ -75,9 +75,9 @@ function installedLauncher(codexHome) {
 /** Install or update sage's entries and the launcher in a Codex home. It returns the lines to print, and throws on a refusal. */
 export function install(codexHome) {
   if (/["$`\\]/.test(codexHome)) throw new Error(`the Codex home ${JSON.stringify(codexHome)} has a " $ \` or \\ character, which the hook command cannot hold. Use a Codex home without them`);
-  const file = join(codexHome, "hooks.json");
+  const file = join(codexHome, "hooks.json"), text = readText(file);
   let planned;
-  try { planned = planHooks(readText(file), codexHome, entries(codexHome)); } catch (error) { throw new Error(`${file}: ${error.message}. Fix or move the file, then run this again. Nothing changed`); }
+  try { planned = planHooks(text, codexHome, entries(codexHome)); } catch (error) { throw new Error(`${file}: ${error.message}. Fix or move the file, then run this again. Nothing changed`); }
   const lines = [];
   // The launcher first, so that no entry runs a missing launcher.
   const source = join(HERE, "launch.mjs"), target = join(launcherFolder(codexHome), "launch.mjs");
@@ -88,7 +88,8 @@ export function install(codexHome) {
   }
   if (planned.changed) {
     writeAtomic(file, JSON.stringify(planned.data, null, 2) + "\n");
-    lines.push(`Wrote sage's ${Object.keys(EVENTS).length} entries in ${file}; the other hooks there stay as they were. A copy of the old file is in ${file}.sage-backup.`);
+    lines.push(text === undefined ? `Wrote sage's ${Object.keys(EVENTS).length} entries in a new ${file}.`
+      : `Wrote sage's ${Object.keys(EVENTS).length} entries in ${file}; the other hooks there stay as they were. A copy of the old file is in ${file}.sage-backup.`);
   }
   if (!lines.length) lines.push(`sage's hooks are already installed in ${file}. Nothing changed.`);
   const { present, trusted } = hookState(codexHome);

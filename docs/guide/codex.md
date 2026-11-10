@@ -77,7 +77,7 @@ The browser board shows every logbook by default, and each card says which provi
       node ~/.codex/plugins/cache/sage/sage/0.1.0/skills/sage/sage.mjs hooks install
       ```
 
-      It puts 7 sage entries at the end of your Codex hooks file (`~/.codex/hooks.json`), and copies sage's hook launcher to `~/.codex/sage-hooks`. Your own hooks in that file stay as they were, and a copy of the old file stays in `~/.codex/hooks.json.sage-backup`. A second run changes nothing. The command refuses a hooks file that it cannot read, and changes nothing then.
+      It puts 7 sage entries at the end of your Codex hooks file (`~/.codex/hooks.json`), and copies sage's hook launcher to `~/.codex/sage-hooks`. When you have no hooks file yet, it makes one. When you have one, your own hooks in it stay as they were, and a copy of the old file stays in `~/.codex/hooks.json.sage-backup`. A second run changes nothing. The command refuses a hooks file that it cannot read, and changes nothing then.
    3. Run `codex` in a project folder. At the "Hooks need review" screen, choose **Trust all and continue**. Codex runs the sage hooks only after this step.
 
    > **Note:** `codex exec` skips hooks without your trust, and it gives no warning.
@@ -112,7 +112,7 @@ The desktop app puts its worktree threads under `~/.codex/worktrees`. sage's `.c
 - An update needs no new trust. Codex trusts each sage entry of your hooks file by its text and its place, not by sage's files, and an update does not change the entries. The launcher runs the hooks of the sage version that Codex uses, so a new version runs at once, with no new review of its code, as in Claude Code.
 - When an update changes the entries or the launcher, the start status says so and names the `hooks install` command. Run it, then trust the changed entries with `/hooks`.
 - The first update to a version with the launcher (T957): sage's hooks move from the plugin to your hooks file. Do step 3 of the [install](#install) once, then do the [gate check](#check-that-the-sage-gate-runs). Until then, no sage hook runs, and sage's logbook tools refuse every call with a line that names the install command.
-- To turn sage off, turn the plugin off in Codex (`enabled = false` in its `[plugins."sage@sage"]` table). The launcher then does nothing.
+- To turn sage off, turn the plugin off in Codex (`enabled = false` for `plugins."sage@sage"`, in its own table or in any other TOML form). The launcher then does nothing.
 - To remove sage:
   1. Run `node ~/.codex/sage-hooks/launch.mjs --uninstall`. It removes the 7 sage entries from your hooks file and the `~/.codex/sage-hooks` folder. Your own hooks stay.
   2. Run `codex plugin remove sage@sage`, then `codex plugin marketplace remove sage`.
@@ -472,6 +472,7 @@ Limits:
 - Codex 0.164.0 runs no hook for text that an agent types into a shell that still runs (`write_stdin`, for example after `zsh -i`). That text passes every sage rule, also a push or a merge. Autopilot off does not stop such a merge.
 - In workspace-write, the sandbox keeps this text off the network and keeps the logbook and the sessions folder closed. Keep network access off for the session (`[sandbox_workspace_write] network_access = false`, the default). When Codex asks to run an interactive shell (for example `zsh -i`) outside the sandbox, refuse.
 - Codex runs a sage hook only when your trust record matches its entry. When the record does not match, for example after you edit an entry or `hooks install` changes one, Codex runs the tool call with no hook and no warning; the proof check then refuses every sage logbook tool, so sage does no work until you trust the hooks again. When a hook fails or times out, Codex runs the tool call too, and it shows a Failed line for the hook.
+- When sage's hooks do not load, or give no answer in four fifths of their timeout, the launcher refuses a shell merge or push itself, and lets every other call run. When a hook blocks the launcher's process (a call that waits with no timeout of its own), the launcher cannot answer either, and Codex runs the call.
 - An update of sage runs with no new review: Codex trusts the entries, and the launcher runs the code of the version that Codex uses. This is the same as in Claude Code, by the owner's choice (T957).
 - sage finds its entries in your hooks file by their command text. An entry that you or another tool writes with the same text counts as sage's: `hooks install` replaces it, and `hooks uninstall` removes it. sage does not guard against such an entry.
 - When the installed sage cannot load its hooks (a broken install), the launcher refuses only a shell command that names a merge or a push, and lets every other call run, so that a new install can repair it.

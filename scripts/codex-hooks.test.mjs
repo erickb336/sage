@@ -269,3 +269,111 @@ test("the start status names each missing or changed entry, each entry without a
   assert.equal(warning().split("\n")[0], "sage: 3 of the 7 sage hooks have no trust record yet, so they do not run. To trust them, type /hooks in the Codex CLI.", "fixed: only the trust is left");
   assert.match(s.hooks("status", root).stdout, /: 7 of 7 match this sage version\. 4 of 7 have a trust record\.\nLauncher: version 1 in /);
 });
+
+test("F-T957-1: through the launcher, a review child's stop keeps its report in the SAGE_HOME logbook, where its start bound it", (t) => {
+  const s = scratch(t);
+  const root = s.version("0.1.0");
+  assert.equal(s.hooks("install").status, 0);
+  const project = join(s.dir, "project");
+  mkdirSync(project);
+  const git = (...args) => spawnSync("git", ["-C", project, "-c", "user.name=t", "-c", "user.email=t@t", ...args], { encoding: "utf8" });
+  git("init", "-q", "-b", "main");
+  git("commit", "-q", "--allow-empty", "-m", "start");
+  const ok = (...args) => { const r = spawnSync(process.execPath, [join(root, "skills/sage/sage.mjs"), ...args, "--project", project], { env: s.env, encoding: "utf8" }); assert.equal(r.status, 0, r.stderr); return r.stdout.trim(); };
+  ok("init");
+  ok("task", "add", "--priority", "P2", "--title", "t1", "--size", "small");
+  const run = ok("run", "add", "T1", "--role", "qa").split(" ")[0];
+  const transcript = join(s.dir, "child.jsonl");
+  writeFileSync(transcript, JSON.stringify({ type: "session_meta", payload: { id: "01a1726e-0000-7000-8000-000000000001", agent_path: `/root/sage_qa_t1_${run.toLowerCase()}` } }) + "\n");
+  const start = s.launch("SubagentStart", { hook_event_name: "SubagentStart", session_id: "s1", transcript_path: transcript, cwd: project });
+  assert.equal(start.status, 0, start.stderr);
+  const report = "STATUS done\nRESULT PASS\nEVIDENCE npm test passed\nFINDINGS none\nQUESTIONS none\nNOT VERIFIED none\nBRANCH none";
+  const stop = s.launch("SubagentStop", { hook_event_name: "SubagentStop", session_id: "s1", transcript_path: transcript, agent_transcript_path: transcript, cwd: project, stop_hook_active: false, last_assistant_message: report });
+  assert.equal(stop.status, 0, stop.stderr);
+  assert.deepEqual(JSON.parse(stop.stdout), {}, "the report is kept, with no line for the chief");
+  const book = ok("logbook");
+  assert.ok(book.startsWith(`${s.env.SAGE_HOME}/`), book);
+  assert.equal(JSON.parse(readFileSync(join(book, "kept", `${run}.json`), "utf8")).text, report);
+});
+
+test("F-T957-3, F-T957-11: hooks install with no hooks file makes one, and names no backup and no other hooks", (t) => {
+  const s = scratch(t);
+  const r = s.hooks("install");
+  assert.equal(r.status, 0, r.stderr);
+  assert.match(r.stdout, new RegExp(`\\nWrote sage's 7 entries in a new ${s.file.replaceAll(".", "\\.")}\\.\\n`));
+  assert.doesNotMatch(r.stdout, /sage-backup|stay as they were/);
+  assert.equal(existsSync(`${s.file}.sage-backup`), false);
+  assert.deepEqual(Object.keys(JSON.parse(readFileSync(s.file, "utf8")).hooks), Object.keys(EVENTS));
+});
+
+test("F-T957-12: hooks uninstall refuses a hooks.json that does not parse, names the file and changes nothing", (t) => {
+  const s = scratch(t);
+  assert.equal(s.hooks("install").status, 0);
+  writeFileSync(s.file, "{ not json");
+  const r = s.hooks("uninstall");
+  assert.equal(r.status, 1);
+  assert.match(r.stderr, new RegExp(`^sage: ${s.file.replaceAll(".", "\\.")}: it does not parse as JSON \\(.*\\)\\. Nothing changed\\.\\n$`));
+  assert.equal(readFileSync(s.file, "utf8"), "{ not json");
+  assert.equal(existsSync(join(s.codex, "sage-hooks/launch.mjs")), true, "the launcher stays");
+  const own = spawnSync(process.execPath, [join(s.codex, "sage-hooks/launch.mjs"), "--uninstall"], { env: s.env, encoding: "utf8" });
+  assert.equal(own.status, 1);
+  assert.equal(own.stderr, r.stderr, "the launcher's --uninstall says the same");
+});
+
+test("F-T957-9: the launcher does nothing for each TOML form that turns the plugin off, and runs when it is on or when the reader is not sure", (t) => {
+  const s = scratch(t);
+  assert.equal(s.hooks("install").status, 0);
+  marker(s, "0.1.0");
+  const merge = { hook_event_name: "PreToolUse", tool_name: "Bash", tool_input: { command: MERGE } };
+  const config = join(s.codex, "config.toml");
+  const off = [
+    '[plugins."sage@sage"]\nenabled = false\n',
+    'model = "x"\nplugins."sage@sage".enabled = false\n',
+    '[plugins]\n"sage@sage".enabled = false\n',
+    '[plugins]\n"sage@sage" = { enabled = false }\n',
+    'plugins = { "sage@sage" = { enabled = false } }\n',
+    "plugins.'sage@sage' = { release_id = \"r1\", enabled = false } # off\n",
+    "[ plugins . 'sage@sage' ]  # sage\n  enabled=false\n",
+  ];
+  for (const text of off) {
+    writeFileSync(config, text);
+    const r = s.launch("PreToolUse", merge);
+    assert.deepEqual([r.status, r.stdout, r.stderr], [0, "", ""], text);
+  }
+  const on = [
+    '[plugins."sage@sage"]\nenabled = true\n',
+    '[plugins."other@x"]\nenabled = false\n',
+    '[plugins."sage@sage".x]\nenabled = false\n',
+    '[plugins]\n"sage@sage" = { enabled = true }\n[other]\nenabled = false\n',
+    '[[profiles]]\nplugins."sage@sage".enabled = false\n',
+    '[plugins."sage\\u0040sage"]\nenabled = false\n', // an escape in the key: the reader is not sure, so the hooks run
+  ];
+  for (const text of on) {
+    writeFileSync(config, text);
+    assert.equal(JSON.parse(s.launch("PreToolUse", merge).stdout).version, "0.1.0", text);
+  }
+});
+
+test("F-T957-5: the launcher refuses a Bash merge or push when the dispatcher gives no answer before the entry's timeout, then ends; an answer in time ends at once", (t) => {
+  const s = scratch(t);
+  assert.equal(s.hooks("install").status, 0);
+  const root = marker(s, "0.1.0");
+  const launcher = join(s.codex, "sage-hooks/launch.mjs");
+  const call = (command) => spawnSync(process.execPath, [launcher, "PreToolUse"], { cwd: s.dir, env: s.env, encoding: "utf8", timeout: 10000,
+    input: JSON.stringify({ hook_event_name: "PreToolUse", tool_name: "Bash", tool_input: { command } }) });
+  // An answer in time: the 30 s entry's timer goes, so the process ends long before the timer would fire (24 s).
+  const quick = call(MERGE);
+  assert.deepEqual([quick.status, quick.signal, JSON.parse(quick.stdout).version], [0, null, "0.1.0"]);
+  // A dispatcher that never answers and holds the process open; the test's copy of the launcher has a 0.5 s timeout.
+  writeFileSync(join(root, "hooks/dispatch.mjs"), "export const dispatch = () => new Promise(() => { setInterval(() => {}, 1000); });\n");
+  writeFileSync(launcher, readFileSync(launcher, "utf8").replace(/\bPreToolUse: 30\b/, "PreToolUse: 0.5"));
+  for (const command of [MERGE, "git push origin HEAD"]) {
+    const r = call(command);
+    assert.deepEqual([r.status, r.signal], [0, null], command);
+    assert.deepEqual(JSON.parse(r.stdout).hookSpecificOutput, { hookEventName: "PreToolUse", permissionDecision: "deny",
+      permissionDecisionReason: "sage: sage's Codex hooks could not load (no answer in 0.4 s). Tell the user. It refuses a merge or a push until sage's hooks load" }, command);
+  }
+  const other = call("ls");
+  assert.deepEqual([other.status, other.signal, other.stdout], [0, null, ""]);
+  assert.match(other.stderr, /could not load \(no answer in 0\.4 s\)/);
+});

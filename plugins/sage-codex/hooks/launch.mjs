@@ -9,9 +9,10 @@
 // installed.rs). It imports that version's hooks/dispatch.mjs in this process, after it checks that the file's real path
 // is inside that cache folder. CODEX_HOME comes from the launcher's own real path, as in the Claude launcher.
 // It does nothing, with no output, when sage is not installed, when the installed version has no dispatch.mjs (a version
-// before T957 runs its own plugin hooks), or when config.toml turns the plugin off ([plugins."sage@sage"] enabled = false).
-// Fail closed: when dispatch.mjs fails to load or to answer, it refuses a Bash call that names a merge or a push, so that
-// no broken install lets a merge skip the merge check. Every other call passes, so that a new install can repair it.
+// before T957 runs its own plugin hooks), or when config.toml turns the plugin off (plugins."sage@sage".enabled = false).
+// Fail closed: when dispatch.mjs fails to load, or gives no answer before the entry's timeout, it refuses a Bash call that
+// names a merge or a push, so that no broken install lets a merge skip the merge check. Every other call passes, so that a
+// new install can repair it.
 // It imports Node's built-ins only: `hooks install` and `--uninstall` use the same planner (planHooks) and writer.
 import { copyFileSync, existsSync, readdirSync, readFileSync, realpathSync, renameSync, rmSync, statSync, writeFileSync } from "node:fs";
 import { dirname, join, sep } from "node:path";
@@ -19,6 +20,13 @@ import { fileURLToPath, pathToFileURL } from "node:url";
 
 /** The launcher's version: the start status asks for `hooks install` when the installed launcher is older than its plugin's. */
 export const LAUNCHER_VERSION = 1;
+/** Each event's timeout in seconds, in sage's entry (entries.mjs): the largest timeout of the hooks before T957. */
+export const TIMEOUTS = { SessionStart: 10, UserPromptSubmit: 10, PreToolUse: 30, PermissionRequest: 30, PostToolUse: 10, SubagentStart: 10, SubagentStop: 10 };
+/**
+ * The milliseconds that the launcher waits for sage's answer: four fifths of the entry's timeout. Codex stops a hook at its
+ * timeout and runs the tool call (a Failed hook does not block), so the launcher gives its own answer first.
+ */
+const deadline = (event) => (TIMEOUTS[event] ?? 10) * 800;
 /** The folder of the launcher in a Codex home. */
 export const launcherFolder = (codexHome) => join(codexHome, "sage-hooks");
 /** The command of sage's entry for one event: the text by which the planner finds sage's groups. */
@@ -83,7 +91,9 @@ export function uninstall(codexHome) {
   const file = join(codexHome, "hooks.json"), text = readText(file);
   const lines = [];
   if (text !== undefined) {
-    const { data, changed } = planHooks(text, codexHome, {});
+    let planned;
+    try { planned = planHooks(text, codexHome, {}); } catch (error) { throw new Error(`${file}: ${error.message}. Nothing changed`); }
+    const { data, changed } = planned;
     if (changed) { writeAtomic(file, JSON.stringify(data, null, 2) + "\n"); lines.push(`Removed sage's entries from ${file}. The other hooks there stay as they were.`); }
     else lines.push(`${file} has no sage entries.`);
   }
@@ -121,15 +131,81 @@ export function activeVersion(codexHome) {
   return names.includes("local") ? "local" : names.sort(compareVersions).at(-1);
 }
 
-/** Whether config.toml turns the plugin off: enabled = false in its [plugins."sage@sage"] table. */
-export function pluginOff(codexHome) {
-  let table = false;
-  for (const raw of (readText(join(codexHome, "config.toml")) ?? "").split(/\r?\n/)) {
-    const line = raw.replace(/(^|\s)#.*$/, "").trim();
-    if (line.startsWith("[")) table = /^\[\s*plugins\s*\.\s*(?:"sage@sage"|'sage@sage')\s*\]$/.test(line);
-    else if (table && /^enabled\s*=\s*false$/.test(line)) return true;
+/**
+ * The settings of one line of a TOML file, as [key parts, value text] pairs, with an inline table read as its keys: for
+ * `[plugins]` and `"sage@sage" = { enabled = false }`, [["plugins", "sage@sage", "enabled"], "false"]. A table header gives
+ * { table }. It throws on a form that it does not read (a multi-line value, an escape in a key).
+ */
+function tomlLine(text, table) {
+  let i = 0;
+  const space = () => { while (text[i] === " " || text[i] === "\t") i++; };
+  const fail = () => { throw new Error("not read"); };
+  const key = () => {
+    const parts = [];
+    for (;;) {
+      space();
+      const part = /^(?:"([^"\\]*)"|'([^']*)'|([A-Za-z0-9_-]+))/.exec(text.slice(i)) ?? fail();
+      parts.push(part[1] ?? part[2] ?? part[3]);
+      i += part[0].length;
+      space();
+      if (text[i] !== ".") return parts;
+      i++;
+    }
+  };
+  const value = (path, out) => {
+    space();
+    if (text[i] !== "{") {
+      const scalar = /^(?:"(?:[^"\\]|\\.)*"|'[^']*'|[^\s,{}[\]#"']+)/.exec(text.slice(i)) ?? fail();
+      i += scalar[0].length;
+      return out.push([path, scalar[0]]);
+    }
+    i++; space();
+    if (text[i] === "}") return i++;
+    for (;;) {
+      const parts = key();
+      if (text[i++] !== "=") fail();
+      value([...path, ...parts], out);
+      space();
+      const next = text[i++];
+      if (next === "}") return;
+      if (next !== ",") fail();
+    }
+  };
+  const end = () => { space(); if (i < text.length && text[i] !== "#") fail(); };
+  space();
+  if (i === text.length || text[i] === "#") return [];
+  if (text[i] === "[") {
+    const array = text[i + 1] === "[";
+    i += array ? 2 : 1;
+    const parts = key();
+    if (text.slice(i, i + (array ? 2 : 1)) !== (array ? "]]" : "]")) fail();
+    i += array ? 2 : 1;
+    end();
+    return { table: array ? null : parts };
   }
-  return false;
+  const out = [], parts = key();
+  if (text[i++] !== "=") fail();
+  value([...table, ...parts], out);
+  end();
+  return out;
+}
+
+/**
+ * Whether config.toml turns the plugin off: plugins."sage@sage".enabled = false, in any form of TOML that sets that key
+ * (Codex reads the file with a TOML library: core-plugins loader.rs). A line that the reader cannot read sets nothing, and
+ * so does each line under an array of tables or a table header that it cannot read, so that sage's hooks keep running when
+ * it is not sure.
+ */
+export function pluginOff(codexHome) {
+  let table = [], off = false;
+  for (const line of (readText(join(codexHome, "config.toml")) ?? "").split(/\r?\n/)) {
+    let read;
+    try { read = tomlLine(line, table ?? []); } catch { if (/^\s*\[/.test(line)) table = null; continue; }
+    if (!Array.isArray(read)) { table = read.table; continue; }
+    if (table === null) continue;
+    for (const [path, value] of read) if (path.join("\n") === "plugins\nsage@sage\nenabled") off = value === "false";
+  }
+  return off;
 }
 
 /** The real path of the active version's hooks/dispatch.mjs, null when it has none, undefined when sage is not installed or off. */
@@ -153,16 +229,21 @@ function fallback(event, data, error) {
   return undefined;
 }
 
-/** One event: the output object of sage's hooks for this input text, or undefined. */
-export async function launch(event, raw, codexHome) {
-  let data;
+/**
+ * One event: { output, late }, the output object of sage's hooks for this input text (or undefined), and true when sage's
+ * hooks gave no answer in the time (ms) and the output is the fallback's.
+ */
+export async function launch(event, raw, codexHome, ms = deadline(event)) {
+  let data, timer;
   try { data = JSON.parse(raw); } catch { /* the dispatcher answers an unread input */ }
+  const late = new Promise((resolve) => { timer = setTimeout(() => resolve({ late: true }), ms); });
   try {
     const file = dispatchFile(codexHome);
-    if (!file) return undefined;
-    const { dispatch } = await import(pathToFileURL(file).href);
-    return await dispatch(event, data, { codexHome, launcherVersion: LAUNCHER_VERSION });
-  } catch (error) { return fallback(event, data, error); }
+    if (!file) return { output: undefined };
+    const answer = import(pathToFileURL(file).href).then(({ dispatch }) => dispatch(event, data, { codexHome, launcherVersion: LAUNCHER_VERSION }));
+    const first = await Promise.race([answer.then((output) => ({ output })), late]);
+    return first.late ? { output: fallback(event, data, new Error(`no answer in ${ms / 1000} s`)), late: true } : first;
+  } catch (error) { return { output: fallback(event, data, error) }; } finally { clearTimeout(timer); }
 }
 
 const self = (() => { try { return realpathSync(fileURLToPath(import.meta.url)); } catch { return undefined; } })();
@@ -172,14 +253,17 @@ if (self && entry === self) {
   const codexHome = dirname(dirname(self));
   const event = process.argv[2] ?? "";
   if (event === "--uninstall") {
-    try { console.log(uninstall(codexHome).join("\n")); } catch (error) { console.error(`sage: ${join(codexHome, "hooks.json")}: ${error.message}. Nothing changed.`); process.exitCode = 1; }
+    try { console.log(uninstall(codexHome).join("\n")); } catch (error) { console.error(`sage: ${error.message}.`); process.exitCode = 1; }
   } else if (!/^[A-Z][A-Za-z]+$/.test(event)) {
     process.stderr.write("usage: node launch.mjs <Codex hook event>, or node launch.mjs --uninstall\n");
     process.exitCode = 1;
   } else {
     let raw = "";
     try { raw = readFileSync(0, "utf8"); } catch { /* an unread input */ }
-    const output = await launch(event, raw, codexHome);
-    if (output !== undefined) process.stdout.write(JSON.stringify(output));
+    const { output, late } = await launch(event, raw, codexHome);
+    // A late answer ends the process after its output, because the hooks that did not answer may hold it open.
+    const done = () => { if (late) process.exit(); };
+    if (output !== undefined) process.stdout.write(JSON.stringify(output), done);
+    else done();
   }
 }

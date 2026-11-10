@@ -91,7 +91,7 @@ import { agentPathOf, sageName, sessionMeta, TASK_NAME } from "./report-gate.mjs
 import { modeDirectory } from "./sage-codex-hook.mjs";
 import { autopilotSwitch, callInRecord, NEW_ON, readRecord, RECORD_RANGE, RECORD_VERSION } from "./owner-record.mjs";
 import { markFile } from "./start-mark.mjs";
-import { launcherFolder } from "./launch.mjs";
+import { launcherFolder, versionsFolder } from "./launch.mjs";
 import { INSTALL } from "./entries.mjs";
 import { TEMP } from "../core/index.mjs";
 import { mergeCommand, permitFile, permitFolder } from "../skills/sage/merge.mjs";
@@ -105,7 +105,7 @@ const pushes = createPushPolicy();
 
 const UNREADABLE = "sage: the hook could not read this tool call, so it refuses it. Codex may have changed its hook input: update the sage plugin, or tell the user.";
 const CODEX_FOLDER = "sage: no agent changes files under a .codex folder, because Codex reads its project settings there. Ask the user to make this change.";
-const CODEX_SETTINGS = "sage: no agent writes Codex's config file, its hooks.json, sage's hook launcher (sage-hooks) or the sage plugin's folder from the shell, because sage's hooks and their trust are there. Ask the user to make this change.";
+const CODEX_SETTINGS = "sage: no agent writes Codex's config file, its hooks.json, sage's hook launcher (sage-hooks), the sage plugin's folder or its installed versions (plugins/cache/sage/sage) from the shell, because sage's hooks and their trust are there. Ask the user to make this change.";
 const CHIEF = 'sage: sage mode is on, so the chief does not change files. Brief an implementer to make this change. The user ends sage mode with the message "sage mode off", alone.';
 const CHIEF_SHELL = 'sage: sage mode is on, so the chief does not change files, also not from the shell: this command has a write form (a redirection into a file, tee, cp, mv, rm, sed -i, or code in node -e). Brief an implementer to make this change. To keep output, redirect it into a scratch folder in the temp folder, outside the project, with a literal path (for example > /tmp/notes/out.txt). git, gh, the sage tools and reads run as before. The user ends sage mode with the message "sage mode off", alone.';
 const OWNER_MERGE = "sage: in Codex, only sage's merge command merges, on autopilot, as the chief's instructions say. Without autopilot, the owner merges the pull request in GitHub";
@@ -354,11 +354,12 @@ const asWord = (path) => `: '${path.replaceAll("'", "'\\''")}'`;
 const asWrite = (path) => `: > '${path.replaceAll("'", "'\\''")}'`;
 /**
  * Whether a shell command names Codex's config file, which keeps the trust records of the hooks, its hooks.json and the
- * launcher's folder, which hold sage's entries (T957), or the folder of this installed plugin, whose hooks are the gate
- * (R1916-2): the same literal forms as the sage folder.
+ * launcher's folder, which hold sage's entries (T957), the folder of this installed plugin, whose hooks are the gate
+ * (R1916-2), or the folder of sage's installed versions, from which the launcher imports the hooks (T957): the same
+ * literal forms as the sage folder.
  */
 export const namesCodexSettings = (command, env = process.env, cwd = "/") =>
-  names(command, env, cwd, [join(codexHome(env), "config.toml"), join(codexHome(env), "hooks.json"), launcherFolder(codexHome(env)), ROOT], []);
+  names(command, env, cwd, [join(codexHome(env), "config.toml"), join(codexHome(env), "hooks.json"), launcherFolder(codexHome(env)), versionsFolder(codexHome(env)), ROOT], []);
 
 /**
  * Whether a shell command names one of these paths, or matches one of these patterns: in its text, or in a word as the

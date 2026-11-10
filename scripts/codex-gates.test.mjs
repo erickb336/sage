@@ -1082,7 +1082,7 @@ test("T108: a quoted plugin path in a digest remains a hook false positive, whil
   const implementer = w.child("/root/sage_implementer_t1_r1");
   const digest = text => `${process.execPath} -e "require('node:crypto').createHash('sha256').update('${text}').digest('hex')"`;
   assert.equal(w.send(pre("Bash", digest("sample report"), implementer)), undefined);
-  assert.match(denied(w.send(pre("Bash", digest(TOOL), implementer))), /no agent writes Codex's config file, its hooks\.json, sage's hook launcher \(sage-hooks\) or the sage plugin's folder/);
+  assert.match(denied(w.send(pre("Bash", digest(TOOL), implementer))), /no agent writes Codex's config file, its hooks\.json, sage's hook launcher \(sage-hooks\), the sage plugin's folder or its installed versions/);
   const lead = w.child("/root/sage_lead_t1_r1");
   assert.equal(w.send(pre("Bash", "git config --get user.email", lead)), undefined);
   assert.match(denied(w.send(pre("Bash", `node ${TOOL} task T1 --project ${w.project}`, lead))), /a lead records with the sage MCP tools/);
@@ -1632,7 +1632,7 @@ test("T552: the proof of a lead's call carries its role, task, run and project, 
 });
 
 test("no thread writes Codex's config file, its hooks.json, sage's launcher or the sage plugin's folder from the shell, in any mode; reads run (R1916-3, T957)", async () => {
-  const SETTINGS = "sage: no agent writes Codex's config file, its hooks.json, sage's hook launcher (sage-hooks) or the sage plugin's folder from the shell, because sage's hooks and their trust are there. Ask the user to make this change";
+  const SETTINGS = "sage: no agent writes Codex's config file, its hooks.json, sage's hook launcher (sage-hooks), the sage plugin's folder or its installed versions (plugins/cache/sage/sage) from the shell, because sage's hooks and their trust are there. Ask the user to make this change";
   const plugin = fileURLToPath(new URL("../plugins/sage-codex", import.meta.url));
   const writes = [`cp a.json ${plugin}/hooks/hooks.json`, `rm -rf ${plugin}`];
   for (const mode of [{ sage: false }, { sage: true }]) {
@@ -1651,6 +1651,15 @@ test("no thread writes Codex's config file, its hooks.json, sage's launcher or t
     assert.equal(denied(await gate(pre("Bash", command), { mode: () => ({ sage: false }), env })), SETTINGS, command);
   }
   for (const command of ["cat /opt/codex-home/hooks.json", "node /opt/codex-home/sage-hooks/launch.mjs --help"]) assert.equal(await gate(pre("Bash", command), { mode: () => ({ sage: false }), env }), undefined, command);
+});
+
+test("F-T957-7: no thread writes a new version into the folder of sage's installed versions, which the launcher imports, also in a Codex home that is not named .codex; reads run", async () => {
+  const env = { ...process.env, CODEX_HOME: "/opt/codex-home" };
+  const run = (command) => gate(pre("Bash", command), { mode: () => ({ sage: false }), env });
+  for (const command of ["cp -R ./build /opt/codex-home/plugins/cache/sage/sage/9.9.9", "mv /x/build /opt/codex-home/plugins/cache/sage/sage/local", "cd /opt && cp -R /x/build codex-home/plugins/cache/sage/sage/9.9.9"]) {
+    assert.match(denied(await run(command)) ?? "", /^sage: no agent writes Codex's config file, its hooks\.json, sage's hook launcher \(sage-hooks\), the sage plugin's folder or its installed versions \(plugins\/cache\/sage\/sage\) from the shell/, command);
+  }
+  for (const command of ["ls /opt/codex-home/plugins/cache/sage/sage", "cat /opt/codex-home/plugins/cache/sage/sage/0.1.0/.codex-plugin/plugin.json"]) assert.equal(await run(command), undefined, command);
 });
 
 test("no thread sends input to the main thread, in any spelling that Codex reads, and in sage mode no thread uses multi-agent v1 (T534, R1940-1, R1945-1)", async (t) => {
