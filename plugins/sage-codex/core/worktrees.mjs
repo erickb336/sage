@@ -5,8 +5,8 @@
 // The listing reads the local git data and the logbook only: it does not fetch. The prune runs git worktree remove with
 // no --force, so git also refuses a worktree with changes; it keeps a worktree with ignored files, except REBUILT
 // folders, and it deletes no branch.
-import { realpathSync } from "node:fs";
-import { sep } from "node:path";
+import { lstatSync, realpathSync } from "node:fs";
+import { join, sep } from "node:path";
 
 /** The states of a task that is over, in the order that names a row's reason: a worktree of another task is open. */
 const OVER = ["merged", "concluded", "abandoned"];
@@ -15,12 +15,13 @@ const REASONS = [...OVER, "branch merged", "open", "unknown"];
 const REMOVABLE = REASONS.slice(0, 4);
 /**
  * The ignored folders that a package install or a build makes again, by the last name of the path, at any depth. Such a
- * folder, or a link with such a name, keeps no worktree: the prune deletes it with the worktree and names it on the
- * removed line. Every other ignored entry, also a whole folder such as secrets/, keeps the worktree (F-T937-1). The
- * guide's "Clean up worktrees" lists the same names.
+ * folder (git's entry ends in "/"), or a link with such a name, keeps no worktree: the prune deletes it with the worktree
+ * and names it on the removed line. Every other ignored entry, also a whole folder such as secrets/ or a regular file
+ * named dist (F-T937-6), keeps the worktree (F-T937-1). The guide's "Clean up worktrees" lists the same names.
  */
 const REBUILT = ["node_modules", "dist"];
-const rebuilt = (entry) => REBUILT.includes(entry.replace(/\/$/, "").split("/").at(-1));
+const isLink = (path) => { try { return lstatSync(path).isSymbolicLink(); } catch { return false; } };
+const rebuilt = (top, entry) => REBUILT.includes(entry.replace(/\/$/, "").split("/").at(-1)) && (entry.endsWith("/") || isLink(join(top, entry)));
 /** At most three items, then a count of the rest. */
 const some = (items) => (items.length > 3 ? `${items.slice(0, 3).join(", ")} and ${items.length - 3} more` : items.join(", "));
 const real = (path) => { try { return realpathSync(path); } catch { return path; } };
@@ -48,6 +49,19 @@ function listed(git, root) {
 const commitOf = (git, root, ref) => { try { return git(["-C", root, "rev-parse", "--verify", "--quiet", `${ref}^{commit}`]).trim(); } catch { return undefined; } };
 /** Is the commit in origin/main? */
 const inMain = (git, root, sha, main) => { try { git(["-C", root, "merge-base", "--is-ancestor", sha, main]); return true; } catch { return false; } };
+/**
+ * Is a commit of origin/main on its first-parent line, k commits back? k is the count of first-parent commits of main
+ * that the commit does not reach, so it is main~k exactly when it is on that line. Each git answer is one line, for any
+ * size of history (F-T937-7). A failure gives git's reason, and the row stays unknown.
+ */
+function onTrunk(git, root, sha, main) {
+  try {
+    const k = git(["-C", root, "rev-list", "--first-parent", "--count", main, `^${sha}`]).trim();
+    return { fresh: git(["-C", root, "rev-parse", "--verify", `${main}~${k}^{commit}`]).trim() === sha };
+  } catch (e) {
+    return { fresh: false, failed: String(e.stderr || e.message).trim().split("\n").at(-1) };
+  }
+}
 /** The top folder of the worktree that holds a folder, as a real path, or undefined outside a repository. */
 const topOf = (git, path) => { try { return real(git(["-C", path, "rev-parse", "--show-toplevel"]).trim()); } catch { return undefined; } };
 const lower = (s) => String(s ?? "").toLowerCase();
@@ -58,20 +72,20 @@ const lower = (s) => String(s ?? "").toLowerCase();
  * because older branches carry another logbook's numbers). A detached worktree has no branch, so its reason is unknown.
  * A branch with no task is merged only when it adds a commit that a merge brought into origin/main. A head on the first-
  * parent line of origin/main adds no commit: it is also where a new run starts (F-T927-1), so its row is fresh and unknown.
+ * A row whose check fails (failed) is unknown too.
  */
 function rows({ git, root, tasks, runs, main }) {
   const byId = new Map(tasks.map((t) => [t.id, t]));
-  const trunk = new Set(main ? git(["-C", root, "rev-list", "--first-parent", main]).split("\n") : []);
   return listed(git, root).map((w, k) => {
     const name = lower(w.branch);
     const ids = !w.branch ? [] : [...new Set([...tasks.filter((t) => lower(t.branch) === name).map((t) => t.id), ...runs.filter((r) => lower(r.branch) === name).map((r) => r.task)])].filter((id) => byId.has(id));
     const matched = ids.map((id) => byId.get(id)), open = matched.filter((t) => !OVER.includes(t.state));
     const shown = open.length ? open : matched;
-    const fresh = !matched.length && Boolean(w.branch) && trunk.has(w.head);
+    const check = !matched.length && w.branch && main && w.head && inMain(git, root, w.head, main) ? onTrunk(git, root, w.head, main) : undefined;
     const reason = matched.length
       ? (open.length ? "open" : OVER.find((s) => matched.some((t) => t.state === s)))
-      : w.branch && main && w.head && !fresh && inMain(git, root, w.head, main) ? "branch merged" : "unknown";
-    return { ...w, primary: k === 0, tasks: shown, reason, fresh };
+      : check && !check.fresh && !check.failed ? "branch merged" : "unknown";
+    return { ...w, primary: k === 0, tasks: shown, reason, fresh: Boolean(check?.fresh), failed: check?.failed };
   });
 }
 
@@ -91,6 +105,7 @@ function kept(w, here, all) {
   if (REMOVABLE.includes(w.reason)) return "";
   if (w.tasks.length) return `open: ${w.tasks.map((t) => `${t.id} is ${t.state}`).join(", ")}, so its work may still need this folder`;
   if (!w.branch) return "unknown: it has no branch, so no task matches it";
+  if (w.failed) return `unknown: no task of the logbook names its branch, and git could not check it against origin/main: ${w.failed}`;
   return `unknown: no task of the logbook names its branch, and ${w.fresh ? "the branch adds no commit to origin/main, so a run may have just started on it" : "the branch is not in origin/main"}`;
 }
 
@@ -106,7 +121,7 @@ function changed(git, root, w, ledger) {
   const status = git(["-C", w.path, "status", "--porcelain", "-z", "--untracked-files=all", "--ignored=matching"]).split("\0").filter(Boolean);
   const untracked = status.filter((s) => s.startsWith("?? ")).length, edits = status.filter((s) => !/^(\?\?|!!) /.test(s)).length;
   const ignored = status.filter((s) => s.startsWith("!! ")).map((s) => s.slice(3));
-  const lost = ignored.filter((s) => !rebuilt(s)), again = ignored.filter(rebuilt);
+  const again = ignored.filter((s) => rebuilt(w.path, s)), lost = ignored.filter((s) => !again.includes(s));
   const why = [edits && "uncommitted changes", untracked && "untracked files", lost.length && `ignored files that the prune would delete: ${some(lost)}`].filter(Boolean);
   if (why.length) return { why: why.join(" and "), again };
   const ids = w.tasks.map((t) => t.id), reviewed = [...new Set(ledger.filter((l) => ids.includes(l.task) && /^[0-9a-f]{40}$/i.test(l.sha ?? "")).map((l) => l.sha))];

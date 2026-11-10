@@ -161,7 +161,7 @@ export const TOOLS = {
   },
   worktrees: {
     describe: "List the git worktrees of the project's repository, each with its path, branch, task, task state and reason: merged, concluded, abandoned, branch merged, open or unknown. It reads the local origin/main and does not fetch. "
-      + "With prune true, after you showed the list, it removes each clean worktree of a merged, concluded or abandoned task, or of a branch that a merge brought into origin/main, and prints each path that it removes or keeps with the reason. It keeps the primary checkout, the project's own worktree, a locked one, one that holds another worktree, and one with changes, untracked files, ignored files or unpushed commits, and it deletes no branch.",
+      + "With prune true, after you showed the list, it removes each clean worktree of a merged, concluded or abandoned task, or of a branch that a merge brought into origin/main, and prints each path that it removes or keeps with the reason. It keeps the primary checkout, the project's own worktree, a locked one, one that holds another worktree, and one with changes, untracked files, ignored files or unpushed commits, and it deletes no branch. Only an ignored node_modules or dist folder or link keeps no worktree: the prune deletes it with the worktree and names it.",
     input: { prune: z.literal(true).optional().describe("true: remove the clean worktrees that may go") },
     pos: ["prune"], argv: (i) => ["worktrees", ...(i.prune ? ["prune", "--yes"] : [])],
   },
