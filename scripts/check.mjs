@@ -16,7 +16,7 @@ import { packageBoundaryProblems } from "./package-boundaries.mjs";
 import { docFiles, linkProblems, paragraphProblems, readmeProblems } from "./readme-checks.mjs";
 import { SHOTS, SHOTS_RECORD, sampleHash } from "./board-shots.mjs";
 import { unrunTestFiles } from "./test-commands.mjs";
-import { startTextProblems } from "./start-text.mjs";
+import { referenceFiles, startTextProblems } from "./start-text.mjs";
 
 const problems = [];
 try { problems.push(...packageBoundaryProblems(ROOT)); }
@@ -155,6 +155,8 @@ try { dictionary = checkWords(parseSource(readFileSync(join(ROOT, "writing/dicti
 const readByPeople = [
   ...agents.map((f) => `plugins/sage/agents/${f}`),
   ...readdirSync(skillsDir).map((d) => `plugins/sage/skills/${d}/SKILL.md`).filter((f) => existsSync(join(ROOT, f)) && !readFileSync(join(ROOT, f), "utf8").includes(GENERATED)),
+  // The references that the start texts point to (T934): the agents read them as part of their instructions.
+  ...referenceFiles().map((f) => `plugins/sage/${f}`),
   // The README and the docs: every page that docFiles reads for links.
   ...docFiles(ROOT),
   // The change log fragments, which CHANGELOG.md on main gets only later: so the task pull request that adds one fails.

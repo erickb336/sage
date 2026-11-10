@@ -57,118 +57,23 @@ In a shared logbook, each write names its actor: the chief adds `--chief C<n>`, 
 
 For agents and the main session in sage mode, the hook refuses `{`, `[`, `*` or `?` in program words, the first git/gh subcommand, and the subcommand after `gh pr`, except the literal `[` and `[[` test commands; ordinary arguments are allowed.
 
-## Cycles and merges
-
-- A cycle is one full set of fresh reviews and QA on one head SHA. Record each verdict with `--cycle <n>`.
-- A cycle is clean when no medium or high finding of the task is open. A review or QA that found only low findings records its clean verdict, not `findings` or `qa-fail`: the tool refuses those without an open medium or high finding. An open medium or high finding blocks the move to verifying and the merge. An open low finding never blocks a merge; it stays on the task's polish list.
-- A `findings`, `qa-fail` or `checks-fail` verdict blocks its SHA: repair, then review the new SHA. Triage can clear a `findings` or `qa-fail` verdict on its SHA: the verdict's run must link to at least one finding, and each finding of that run must be moved, or dismissed below high; an open low finding of the run does not count. A closed finding does not clear it, because a new head confirms a fix, and a dismissed high finding does not either. A `findings` or `qa-fail` verdict needs each medium and high finding of its run's report on record for that run first, at its severity or above. A cleared verdict stops the refusal only: the SHA still needs its clean cycles.
-- A merge needs the task's clean cycles on its head SHA: 1 for every task (`cycles.small`), 2 for a large task (`cycles.large`), and 2 for any task with a risk flag (`cycles.risk`); the largest count that applies wins. A task with no review or QA in its route needs only checks-pass: a tiny task without a risk flag or an added review. Verified needs 1 for every task.
-- A clean merge of main keeps the cycles. The merge check counts the clean cycles of an earlier head H1 of the task for the head H2 when all of these hold: each commit from H1 to H2 on H2's first-parent line merges a commit of `origin/main` with no conflict and no other edit (its tree is the tree of `git merge-tree` of its parents); the pull request's own diff, from the merge base with `origin/main`, has the same `git patch-id --stable` on both heads; checks-pass is on H2; H2 has no review or QA verdict of its own; and no commit between H1 and H2 (`git rev-list H1..H2`, also on the main side of a merge) has a review or QA verdict of the task, so a findings verdict on a middle head is never skipped. git reads each commit's own parents: it ignores replace refs, `info/grafts` and the commit-graph of the clone. It uses the earlier head with the most clean cycles, and says so: `cycles from <H1> carried to <H2>: clean merge of main, same patch-id`. In any other case, or when git fails, H2 needs its own cycles, and the refusal says why. Fetch origin first, so that `origin/main` has the merged main commits. The board's merge check reads git in the project's folder too, so the board shows the same carried cycles.
-- A repair round re-runs only the roles that `round` names, on the repair's diff. The re-check confirms each fix (`finding close`) or opens the finding again; it records no verdict. Then the task needs its clean cycles on the final SHA, with every role.
-- A new medium or low finding that a round raises goes to a follow-up task with `finding move`, not to another round. A high finding always blocks.
-- With autopilot on, merge with `gh pr merge <n> --squash --delete-branch --match-head-commit <sha>`. The sage hook runs `merge-check` first and refuses a SHA that is not ready. It refuses every merge by an agent.
-- A new commit is a new SHA. Its verdicts start again from cycle 1.
-- Every task with verdicts on a SHA counts, also an abandoned one. When two tasks share a pull request, give both the same `branch=` and `pr=`, and record each verdict under both: autopilot merges it when each task passes on its own verdicts. Only the chief puts a task on a shared branch or takes it off one: a branch that another task names by its `branch=` or ran work on. To leave an old task's verdicts behind, push a new commit.
-
 ## What the hook refuses an agent
 
 - `git stash` in any form, also with `-C` or `--git-dir`: every worktree shares one stash list. Use `git worktree add --detach <scratch> <sha>` or `git show <sha>:<path>`.
 - A program that lists or signals processes (`ps`, `pgrep`, `pkill`, `kill`, `killall`, `lsof`, `top`), unless it resolves to a fake in the temp folder. Put a fake `ps` first on PATH that prints a start time in the past, and run a fake `kill` by its path. The chief is not limited.
+
+## References
+
+These rules are in files of the sage plugin's folder, which your start text names. Read a file when its trigger holds:
+
+- Read `core/references/cycles-and-merges.md` when you need a cycle rule that your start text does not give: a verdict that clears or blocks a SHA, a clean merge of main, two tasks on one pull request, or an abandoned task's verdicts.
+- Read `core/references/round-hold.md` when `round` says held, and before you give an extra round in autopilot.
+- Read `core/references/logbook-recovery.md` when a command refuses for a table of the logbook or for a saved change that cannot finish, and before any `logbook repair`.
+- Read `core/references/sessions.md` when a command says that the logbook is busy, refuses for a lock, or refuses for a newer version of sage.
+- Read `core/references/hidden-characters.md` when the tool prints `\xNN` or `\u{N}`, or keeps a character out of a cell or the standing orders.
 
 ## How an investigation ends
 
 - An investigate task has no build block, so it ends at `concluded`, not at verified. Its last states are reviewing → verifying → concluded.
 - `concluded` needs no open findings, and the task's latest verdict must be `evidence-clean`. Record it with `verdict <T> --kind evidence-clean --run <R>`, without `--sha`.
 - A task with a build block cannot use `concluded`.
-
-## Several sessions on one project
-
-- Several chief sessions may share one project's logbook. Each command that changes the logbook holds its lock while it runs.
-- A command waits up to 3 s for the lock. Then it refuses with `the logbook is busy: pid <n> on <host> has held <path> for <n> s`, or with `<path> has no valid owner file`. Nothing changed: run the command again.
-- The next command clears a lock that a crashed command left. A lock from another machine, a live process that is not sage, or an odd owner file stays. Remove the folder in the message only when no sage command runs.
-- The next command also removes the temp folder (`.lock.<id>`) of a command that was killed while it waited.
-- `status`, `logbook`, `standing` and `merge-check` take no lock. They work while another command runs.
-- The sessions may run two versions of sage. A version refuses to change a logbook whose tables have columns that it does not know: its write would lose them. The refusal says to update the sage plugin and restart the session, and that `status`, `logbook`, `standing` and `merge-check` still work.
-- A command refuses, before any change, when status.md or standing.md is not a regular file, also a link to nothing.
-
-## The logbook check
-
-One check guards the merge check and every write, `init` on an existing logbook too. Each of the seven tables must be:
-
-- there (not deleted, and not a link to nothing);
-- a regular file that the tool can read;
-- not empty (not 0 bytes, and not only blank lines);
-- with its header line: the first line names each of its columns. A BOM and CRLF line ends from an editor are read as a plain file.
-
-A table that fails refuses every merge and every write, and the refusal names the file. No command makes a lost table again or repairs it in silence. The ways out:
-
-- Restore the file from a copy.
-- A table that cannot be read (EACCES): fix its permissions. Do not remove it: its rows are there.
-- If no copy is left and the user accepts the loss: `logbook repair --accept-loss <table>`. Run the command that the refusal prints. When a second table fails too, the repair refuses and prints the command with both tables: run that one.
-
-After a repair of tasks.tsv, the verdicts of its lost tasks stay in ledger.tsv. The merge check refuses their SHA, says that tasks.tsv was started again, and asks for a new commit with its verdicts under a task that the logbook has.
-
-The programs table came after the others. A logbook made before it has no programs.tsv: that reads as a table with no rows while no task names a program, and `program propose` writes the file. When a task names a program and the file is missing, its rows are lost, as for any table.
-
-Limit: a table cut to only its header line is a table without rows. The check cannot tell it from a new table.
-
-A folder without tasks.tsv is no logbook: `init` has not finished it. `init` finishes it when its tables have no rows. When they have rows, its task list is lost, and `init` refuses: restore tasks.tsv, or repair it.
-
-## A saved change that cannot finish
-
-Each write starts by finishing or undoing a saved change that an earlier write left. Sage never drops a saved change by itself. When the change cannot finish, every write and merge of that project refuses with one line, and other projects go on. The line names two ways out:
-
-1. **With a backup:** the owner restores the folder that `sage logbook` prints. Rows newer than the backup are lost.
-2. **With no backup:** ask the owner in the chat to accept the loss of this saved change. After the answer, run `logbook repair --accept-change-loss yes`, or the owner runs it in a terminal when you cannot. This is the one step that passes a saved change, and it needs the owner's answer each time.
-
-What the repair does:
-
-- It works the same on a shared logbook, from any checkout with a row in `bindings.tsv`, also on a path through a link to that checkout.
-- It refuses, and changes nothing, on a logbook with no saved change and on a saved change that can finish. Any write finishes that one.
-- It also refuses, and changes nothing, when the change may still finish elsewhere, each time with the next step:
-  - The logbook is reached through a link. The line names the real folder and the next step. When the logbook's path is the link itself, move the real folder there, in place of the link. When a folder above it is the link, set the setting that the line names, `SAGE_HOME` or, for a shared logbook, `SAGE_SHARED_HOME`.
-  - A newer sage wrote the change: its schema is above the highest that this version knows, or a table has columns that this version does not know. Update the sage plugin.
-- It writes a decision row first. The row names the kept file and says that the owner accepts the loss.
-- It moves `review-pending.json` aside as `review-pending.json.lost-<n>`, and never deletes it. Each repair keeps its own file.
-- It does not repair the tables, and it says so. A half-published update can leave mixed tables: some tables hold the change and others do not. Its output ends with the result of the logbook check.
-
-Sage writes saved changes of two schemas only: 7 (usage) and 9 (Replace). Schemas 2 to 6 and 8 belonged to the Codex native runtime, which sage deleted (T732, T914). A saved change of one of them cannot finish, so it stops the writes of its logbook until the repair above. No readable logbook had one when sage deleted them.
-
-When the check fails, the output prints the refusal, and the table repair above applies. The check reads each table alone, so tables that are each whole but do not agree pass it: read the rows of the last work.
-
-When decisions.tsv fails the check, the repair cannot write its decision, and it prints the command that takes both losses: `logbook repair --accept-change-loss yes --accept-loss decisions`.
-
-## Hidden characters
-
-The tool keeps no hidden character in a cell, and removes them from the standing orders. Hidden characters are those that a person does not see but a terminal or an agent acts on:
-
-- the control characters (C0, DEL and C1), except a tab and a line end in the standing orders;
-- the bidi embeddings, overrides, isolates and marks (U+202A to U+202E, U+2066 to U+2069, U+200E, U+200F, U+061C);
-- the zero-width characters (U+200B to U+200D, U+2060, U+FEFF);
-- the variation selectors (U+FE00 to U+FE0F, U+E0100 to U+E01EF);
-- the tag characters (U+E0000 to U+E007F), text that only an agent reads.
-
-Other text stays: each script, and emoji. A zero-width joiner or non-joiner between two letters stays: Persian and Indic text needs it. A zero-width joiner between two emoji stays, so a joined emoji stays whole, and the emoji selector (U+FE0F) stays after an emoji or a keycap base (`1️⃣`). A subdivision flag (England, Scotland, Wales) shows as a black flag.
-
-The tool prints each hidden character in an id, a column or a path as `\xNN` or `\u{N}`. For a project path with a control character, it prints no command to paste.
-
-
-### An approved repair after a round hold
-
-A round hold needs an explicit answer from the owner. A default answer does not grant a repair.
-
-For a task with four spent rounds and a current limit of three, open a gate on that task:
-
-```text
-sage gate add T1 --question "Approve one more repair round for T1 after 4 spent rounds and limit 3?" --options "approve|decline" --recommend approve
-```
-
-After the owner chooses approve, record that answer with `gate_answer`, then call `task_set` with `task: T1` and `fields: {"state":"building","approval":"G1"}`. Use the actual gate ID. Use `briefed` instead of `building` when a new brief is needed. The CLI form is `task T1 set state=building approval=G1`.
-
-The limit is `max_rounds + extra`. One approval permits the next round above the greater of spent rounds and that limit. This example permits round five; round six holds again. The task keeps its cumulative rounds, PR, branch, earlier allowances and review minimum.
-
-Missing, declined, wrong-task, stale, malformed or used approvals refuse before any changes. A repeated CLI or `task_set` call after success refuses and adds nothing. After an uncertain result, read the task before a new request. The allowance and used gate IDs share one task-row write.
-
-### An extra round in autopilot
-
-While autopilot is on for your session, you give the next round past `max_rounds` yourself, up to 5 rounds in all, with the reason: `sage round T1 --why "<reason>"`. It works from the round hold or before it, and writes a decision row with the reason. Without `--why`, with autopilot off, or for round 6 and later, the round hold and the owner's gate above stay. Only the chief gives such a round: a lead's `round` takes no `--why`.
