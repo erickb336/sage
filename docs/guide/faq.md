@@ -19,9 +19,9 @@ Autopilot is off until you send `autopilot on` alone, while sage mode is on. Tex
 
 **Does it work in Codex?** In part, and the work goes on.
 
-In the Codex CLI and the desktop app, sage mode, autopilot, the logbook tools and the shared logbook with Claude work through the sage plugin. The chief starts one lead for each task, and the lead starts the implementer, the reviewers and QA.
+In the Codex CLI and the desktop app, sage mode, autopilot, the logbook tools, the board phrases and the shared logbook with Claude work through the sage plugin. sage was checked with the CLI and with the desktop app's own Codex, not with the app's screens: the app's hook review and a child's approval prompt there are not checked yet. The chief starts one lead for each task, and the lead starts the implementer, the reviewers and QA.
 
-A pilot ran a lead and its team with a test model. The PE, the designer and the arena have not run on a real task in Codex yet, and the agent caps do not work there yet. See [sage in Codex](codex.md).
+A pilot ran a lead and its team with a test model. The PE, the designer and the arena have not run on a real task in Codex yet. Codex has no agent caps in code, and other [known limits](codex.md#known-limits-in-codex).
 
 **How mature is it?** Early. I use it every day to build sage itself.
 
