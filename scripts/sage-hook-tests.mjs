@@ -6316,7 +6316,7 @@ test("F-T289-60: a higher severity word later on a finding line or in its detail
   }
   const s = leadSession();
   const out = s.send({ hook_event_name: "SubagentStop", agent_id: "later", agent_type: "sage:code-reviewer", last_assistant_message: report("FINDINGS", "\n- K1 low noisy log, K2 high SQL injection") });
-  assert.match(out?.reason ?? "", /cannot read your report: the line "- K1 low noisy log, K2 high SQL injection" under FINDINGS has a severity word above the severity of its finding \(low\): write that finding as its own line - <key> <severity> <summary>\./, "the stop gate quotes the line and names the way out");
+  assert.match(out?.reason ?? "", /cannot read your report: the line "- K1 low noisy log, K2 high SQL injection" under FINDINGS has the severity word "high" above the severity of its finding \(low\): write that finding as its own line - <key> <severity> <summary>, or put quoted output in backticks\./, "the stop gate quotes the line and names the way out");
   assert.match(freshVerdict(report("FINDINGS", lines("", "- K1 high the token is logged", "    the impact on the logs is low, a medium fix"))) ?? "", /helpers reported medium or high findings on T1 \(R\d+ high\)/, "a lower word under a higher finding is detail");
 });
 
@@ -6324,10 +6324,10 @@ test("F-T289-62: an indented item or prose line with a higher severity word anyw
   for (const tail of ["  - K2 [security] high SQL injection in login", "  - K2 severity: high SQL injection", "  - Also K2 high SQL injection", "    steps: found a High problem in the loader", "    K2 is high: SQL injection", "    1. H1 high real crash"]) {
     assert.match(freshVerdict(report("FINDINGS", lines("", "- K1 low a typo", tail))) ?? "", UNREADABLE, tail);
   }
-  // The trade-off: an honest detail line with a higher word blocks once at the stop, and the helper writes it again.
+  // The trade-off: an honest detail line with a higher word blocks once at the stop, and the helper writes it again (F-T964-1).
   const s = leadSession();
   const honest = report("FINDINGS", lines("", "- K1 low the list is slow", "    steps: load a high row count"));
-  assert.match(s.send({ hook_event_name: "SubagentStop", agent_id: "honest", agent_type: "sage:code-reviewer", last_assistant_message: honest })?.reason ?? "", /the line "steps: load a high row count" under FINDINGS has a severity word above the severity of its finding \(low\)/);
+  assert.match(s.send({ hook_event_name: "SubagentStop", agent_id: "honest", agent_type: "sage:code-reviewer", last_assistant_message: honest })?.reason ?? "", /the line "steps: load a high row count" under FINDINGS has the severity word "high" above the severity of its finding \(low\)/);
 });
 
 // T909: a severity word in look-alike letters of another script (Cyrillic, Greek) is a limit of the reader (standing order 70).
@@ -6354,10 +6354,114 @@ test("F-T298-1: each finding line and its detail compare with that finding's own
   }
   const s = leadSession();
   const out = s.send({ hook_event_name: "SubagentStop", agent_id: "raised", agent_type: "sage:code-reviewer", last_assistant_message: report("FINDINGS", lines("", "- K1 high a crash", "- K2 low a log", "    steps: this one is medium")) });
-  assert.match(out?.reason ?? "", /cannot read your report: the line "steps: this one is medium" under FINDINGS has a severity word above the severity of its finding \(low\): write that finding as its own line - <key> <severity> <summary>\./, "the stop gate quotes the line and names the way out");
-  assert.match(out?.reason ?? "", /No line under FINDINGS has a severity word above the severity of the finding that it is under\./, "F-T300-1: the help text names the per-finding rule");
+  assert.match(out?.reason ?? "", /cannot read your report: the line "steps: this one is medium" under FINDINGS has the severity word "medium" above the severity of its finding \(low\): write that finding as its own line - <key> <severity> <summary>, or put quoted output in backticks\./, "the stop gate quotes the line and names the way out");
+  assert.match(out?.reason ?? "", /No line under FINDINGS has a severity word above the severity of the finding that it is under, also in a sentence: write that problem as its own finding line\. Only a span in backticks or double quotes and a word after not or no are text\./, "F-T300-1: the help text names the per-finding rule");
   assert.doesNotMatch(out?.reason ?? "", /highest finding/, "F-T300-1: the help text no longer names the old rule");
   assert.match(freshVerdict(report("FINDINGS", lines("", "- K1 low a log", "- K2 high a crash", "    steps: a medium load, then a low disk"))) ?? "", /helpers reported medium or high findings on T1 \(R\d+ high\)/, "a lower word under a higher finding is detail, also after a lower finding");
+});
+
+// T964: the lost runs R3084, R3062 and R2942 each lost a review or QA run to a severity word in a sentence. Their lines,
+// without local paths. A span in backticks or double quotes and a word after not or no are text; any other higher word
+// under a lower finding stops the agent once, with the line and the word named, and is never read as the lower severity.
+const LOST = {
+  R3084: "- F-R3084-1 low proof-check.md:49 a proof that needs a file outside the head can lead a real medium finding to be dropped",
+  R3062: lines("- K2 low sage-hook.mjs:246 the proof gate uses the one stop that an unreadable report used to get",
+    "  2. A `saw:` line with real output such as \"not ok 3 a high finding is refused\", under a medium finding, then makes the report unreadable."),
+  R2942: lines("- F1 low state-server.mjs config: a name prints two values", "  - Reproduce with config settings {\"name\": \"x\"}. This is a follow-up note and not a blocker."),
+};
+const stopOf = (s, id, message, role = "sage:qa") => s.send({ hook_event_name: "SubagentStop", agent_id: id, agent_type: role, last_assistant_message: message })?.reason;
+test("T964: the lines of the lost runs pass the stop gate, or stop it once with the line and the word named", () => {
+  const s = leadSession();
+  const passes = [LOST.R2942, lines("- K2 low the proof gate uses the one stop", "  2. A `saw:` line with real output such as \"not ok 3 a high finding is refused\" then makes the report unreadable.")];
+  for (const [k, findings] of passes.entries()) {
+    const message = report("FINDINGS", `\n${findings}`);
+    assert.equal(stopOf(s, `lost-${k}`, message), undefined, findings);
+    assert.equal(cleanVerdictOf(s, message, "qa"), undefined, `a low finding backs qa-pass: ${findings}`);
+  }
+  assert.match(stopOf(s, "R3084", report("FINDINGS", `\n${LOST.R3084}`)) ?? "", /^sage: the hook cannot read your report: the line "- F-R3084-1 low proof-check\.md:49 a proof that needs a file outside the head can" under FINDINGS has the severity word "medium" above the severity of its finding \(low\): write that finding as its own line - <key> <severity> <summary>, or put quoted output in backticks\./);
+  assert.match(stopOf(s, "R3062", report("FINDINGS", `\n${LOST.R3062}`)) ?? "", /the line "2\. A `saw:` line with real output such as \\"not ok 3 a high finding is refused\\", " under FINDINGS has the severity word "medium" above/, "the word under a medium finding counts; the quoted test name does not");
+});
+
+// F-T964-1: the probe forms of review R3108 (D1 to D7) and its reclassified detail. Each is a higher severity in a plain
+// sentence under a low finding: the old reader stopped each once, and the reader of 07eac431 read each as low.
+const PLAIN = [
+  "- K1 low the log is noisy; also save drops rows, a high severity bug",
+  lines("- K1 low the log is noisy", "  Separately, the save path has a critical data loss on empty input"),
+  lines("- K1 low the log is noisy", "  This is a blocker for the release"),
+  lines("- K1 low the log is noisy", "  I would rate this high but the brief says otherwise"),
+  lines("- K1 low the save drops rows", "  Really a high."),
+  lines("- K1 low the save drops rows", "  The crash is severe and loses data"),
+  "- K1 low the save drops rows, which is a medium problem",
+  lines("- K1 low the log holds the session token", "    Reclassified as critical after the proof of concept worked"),
+];
+test("F-T964-1: a higher severity word in a plain sentence under a low finding is never read as low: one stop, then no verdict", () => {
+  for (const [k, findings] of PLAIN.entries()) {
+    const message = report("FINDINGS", `\n${findings}`);
+    assert.match(stopOf(leadSession(), `plain-${k}`, message, "sage:code-reviewer") ?? "", /^sage: the hook cannot read your report: the line ".*" under FINDINGS has the severity word "(?:high|critical|blocker|severe|medium)" above the severity of its finding \(low\)/, findings);
+    // The report that keeps the line after the one stop stays unreadable: the lead records no verdict, and the sage reads it.
+    assert.match(freshVerdict(message) ?? "", UNREADABLE, findings);
+  }
+});
+
+test("F-T964-1: only a span in backticks or double quotes, and a word right after not or no, are text", () => {
+  for (const tail of ["    saw: `not ok 3 a high finding is refused`", "    saw: \"not ok 3 a high finding is refused\"", "    saw: “not ok 3 a high finding is refused”", "    This is a follow-up note and not a blocker.", "    There is no high risk in it", "    saw: `3 high, 2 low`"]) {
+    assert.equal(freshVerdict(report("FINDINGS", lines("", "- K1 low a log", tail))), undefined, tail);
+  }
+  for (const tail of ["    I rate it \"high\"", "    I rate it `High`", "    a 5\" screen shows a high crash on the \"save\" button", "    not only a high one", "    the crash is high, not low", "    saw: not ok 3 a high finding is refused"]) {
+    assert.match(freshVerdict(report("FINDINGS", lines("", "- K1 low a log", tail))) ?? "", UNREADABLE, tail);
+  }
+});
+
+// F-T964-2: the probe forms of review R3108: an indented second finding line, with or without a list mark, also at the
+// severity of its parent. The reader of 07eac431 read the forms without a mark as detail.
+test("F-T964-2: an indented line in the form of a second finding is never detail, with or without a list mark", () => {
+  for (const findings of [
+    lines("- K1 medium a.js:1 a bad value", "  proof: npm test", "  saw: not ok 1", "  K2 medium b.js:9 a second bug"),
+    lines("- K1 medium a.js:1 a bad value", "  medium: b.js:9 a second bug"),
+    lines("- K1 medium a.js:1 a bad value", "  - K2 medium b.js:9 a second bug"),
+    lines("- K1 low a log", "  K2 low a second log"),
+    lines("- K1 low a log", "  K2: low a second log"),
+  ]) {
+    assert.match(freshVerdict(report("FINDINGS", `\n${findings}`)) ?? "", UNREADABLE, findings);
+  }
+  const s = leadSession(), message = report("FINDINGS", lines("", "- K1 low a log", "  K2 low a second log"));
+  assert.match(stopOf(s, "second", message, "sage:code-reviewer") ?? "", /^sage: the hook cannot read your report: a line under FINDINGS is not none alone and not a finding in the form - <key> <severity> <summary>: "K2 low a second log"\./);
+});
+
+// F-T964-4: a count in a saw line ("3 high, 2 low") is also how a writer counts real findings ("2 high bugs"), so it
+// stops once under a lower finding; the same output in backticks is text, and the proof check reads it without them.
+test("F-T964-4: a count line in a saw detail stops once, and passes in backticks", () => {
+  const s = leadSession();
+  assert.match(stopOf(s, "count", report("FINDINGS", lines("", "- K1 low a log", "    saw: 3 high, 2 low"))) ?? "", /the line "saw: 3 high, 2 low" under FINDINGS has the severity word "high" above the severity of its finding \(low\): write that finding as its own line - <key> <severity> <summary>, or put quoted output in backticks\./);
+  assert.match(freshVerdict(report("FINDINGS", lines("", "- K1 low a log", "    I found 2 high bugs in it"))) ?? "", UNREADABLE, "a count of real findings");
+  assert.equal(stopOf(s, "ticked", report("FINDINGS", lines("", "- K1 low a log", "    saw: `3 high, 2 low`"))), undefined);
+});
+
+test("T964: a real medium or high finding written as a finding line counts at its own severity, also with severity words in its text", () => {
+  for (const [findings, severity] of [
+    [lines("- K1 medium a.js:1 an empty name saves a row, not a blocker.", "  proof: npm test", "  saw: `not ok 3 a high finding is refused`"), "medium"],
+    [lines("- K1 low a log can lead a real \"medium finding\" to be dropped", "- K2 high a.js:2 the token is logged", "  proof: npm test", "  saw: not ok 1 a low line"), "high"],
+    [lines("- K2 Medium a.js:2 a bad value in a low row count", "  proof: npm test", "  saw: not ok 1"), "medium"],
+  ]) {
+    assert.match(freshVerdict(report("FINDINGS", `\n${findings}`)) ?? "", new RegExp(`helpers reported medium or high findings on T1 \\(R\\d+ ${severity}\\)`), findings);
+  }
+});
+
+test("T964: a line that states a severity above its finding's, or a second finding line in the detail, is still caught; the stop gate names the line once", () => {
+  for (const tail of ["  - K2 high a crash", "    see K2 high: a crash", "    steps: this one is rated high", "    (raise to medium)", "    High load drops rows", "    saw: not ok 3 K2 HIGH is refused"]) {
+    assert.match(freshVerdict(report("FINDINGS", lines("", "- K1 low a log", tail))) ?? "", UNREADABLE, tail);
+  }
+  const s = leadSession(), message = report("FINDINGS", lines("", "- K1 low a log", "  - K2 high a crash"));
+  const first = s.send({ hook_event_name: "SubagentStop", agent_id: "second", agent_type: "sage:code-reviewer", last_assistant_message: message });
+  assert.match(first?.reason ?? "", /^sage: the hook cannot read your report: a line under FINDINGS is not none alone and not a finding in the form - <key> <severity> <summary>: "- K2 high a crash"\./, "the stop names the line");
+  assert.equal(s.send({ hook_event_name: "SubagentStop", agent_id: "second", agent_type: "sage:code-reviewer", last_assistant_message: message, stop_hook_active: true }), undefined, "once");
+});
+
+test("T964: one stop names both the line that the reader cannot read and the medium finding without a proof", () => {
+  const s = leadSession();
+  const out = s.send({ hook_event_name: "SubagentStop", agent_id: "both", agent_type: "sage:qa", last_assistant_message: report("FINDINGS", lines("", "- K1 medium a.js:1 a bad value", "- K2 low a log, K3 high a crash")) });
+  assert.match(out?.reason ?? "", /^sage: the hook cannot read your report: the line "- K2 low a log, K3 high a crash" under FINDINGS has the severity word "high" above the severity of its finding \(low\)/);
+  assert.match(out?.reason ?? "", /\. sage: K1 is medium and has no proof line\. Under each medium or high finding, give its proof/);
 });
 
 test("F-T289-64: a lead's finding that the sage raises, or adds again with another source, no longer counts for the lead", () => {
