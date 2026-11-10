@@ -26,7 +26,7 @@ cpSync(BUILT, PLUGIN, { recursive: true });
 const { gate } = await import(join(PLUGIN, "hooks/gate-hook.mjs"));
 const { answer } = await import(join(PLUGIN, "hooks/sage-codex-hook.mjs"));
 const { mergeCommand, permitFolder } = await import(join(PLUGIN, "skills/sage/merge.mjs"));
-const { stateKey } = await import(join(PLUGIN, "hooks/principles-hook.mjs"));
+const { stateKey } = await import(join(PLUGIN, "hooks/hook-state.mjs"));
 const MERGE = join(PLUGIN, "skills/sage/merge.mjs");
 
 const FAKES = join(SCRATCH, "fakes");

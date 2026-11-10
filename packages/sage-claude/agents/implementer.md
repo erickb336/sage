@@ -9,6 +9,9 @@ skills:
   - sage:principle-migrate-callers-then-delete-legacy-apis
   - sage:principle-prove-it-works
   - sage:principle-fix-root-causes
+  - sage:principle-attack-the-premise
+  - sage:principle-build-the-lever
+  - sage:principle-sequence-verifiable-units
   - sage:dictionary
 ---
 

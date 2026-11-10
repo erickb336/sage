@@ -110,7 +110,7 @@ sage mode is the default answer for real work: the chief runs the agents and the
 
 For a skill that is not in this table, read its description in its `SKILL.md` and route by it. Two skills are for sage itself, not for the user: `sage` (the chief's state tool) and `report` (the end of each agent's run).
 
-A hook gives each principle at the moment that it applies, so the user seldom loads one. To ask for one, the user names it in the request, for example "apply prove it works".
+Each role agent of sage mode starts with the principles of its role, so the user seldom loads one. To ask for one, the user names it in the request, for example "apply prove it works".
 
 ## Fix a run that went wrong
 

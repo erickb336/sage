@@ -13,8 +13,7 @@ The design of the two provider plugins is in [Separate provider packages](../des
 | Install from the sage marketplace | Yes | Yes: `codex plugin marketplace add`, then `codex plugin add sage@sage` |
 | A status at the start of each session | No | Yes: the chief gets the sage version, the Codex version, how many sage hooks have a trust record and the on phrase. You see a warning only when a sage hook has no trust record yet or your Codex is outside the tested range |
 | Principles and the writing skills | Yes | Yes: the same skills, including the `sage` skill for manual logbook commands |
-| A principle at the moment it applies | Yes | Yes, for a design request, a test or document patch, a README and a commit |
-| Advice after a failed check | Yes | No: Codex's shell hook output does not give a reliable exit status |
+| The principles of each role | Yes: each agent file preloads them | Yes: `role.mjs` puts them in each role's text. A lead gets the path of each one to read |
 | The logbook and the board | Yes | Yes: the plugin's `sage` MCP tools write the logbook, and the board phrases show the board ([The board in Codex](#the-board-in-codex)) |
 | Programs (one goal, several tasks, a breakdown gate) | Yes | Yes: the `program_propose` tool opens the breakdown gate, and `task_set` with `program=` puts a task in a program or takes it out ([The logbook tools](#the-logbook-tools)) |
 | The settings: cycle counts, `max_leads`, the project's board name and archive | Yes | Yes: the `config` tool, when you ask the chief |
@@ -61,14 +60,14 @@ The browser board shows every logbook by default, and each card says which provi
 
    You see ``Added plugin `sage` from marketplace `sage`.`` Then `codex plugin list` shows `sage@sage  installed, enabled`.
 
-3. Run `codex` in a project folder. At the "Hooks need review" screen ("10 hooks are new or changed"), choose **Trust all and continue**. Codex runs the sage hooks only after this step.
+3. Run `codex` in a project folder. At the "Hooks need review" screen ("8 hooks are new or changed"), choose **Trust all and continue**. Codex runs the sage hooks only after this step.
 
    > **Note:** `codex exec` skips hooks without your trust, and it gives no warning.
 
-4. Send the on phrase alone (see [Turn on sage mode](#turn-on-sage-mode)). When all is well, you see no sage line: the chief gets the status (the sage version, the Codex version, how many of the 10 sage hooks have a trust record, and how to start sage mode). You see a warning line only for a limit, for example:
+4. Send the on phrase alone (see [Turn on sage mode](#turn-on-sage-mode)). When all is well, you see no sage line: the chief gets the status (the sage version, the Codex version, how many of the 8 sage hooks have a trust record, and how to start sage mode). You see a warning line only for a limit, for example:
 
    ```text
-   sage: 3 of the 10 sage hooks are not trusted yet, so some sage rules do not run. To trust them, type /hooks in the Codex CLI.
+   sage: 3 of the 8 sage hooks are not trusted yet, so some sage rules do not run. To trust them, type /hooks in the Codex CLI.
    ```
 
    The other limit is a Codex version outside the tested range, for example:
@@ -93,6 +92,7 @@ The desktop app puts its worktree threads under `~/.codex/worktrees`. sage's `.c
 
 - To update, run `codex plugin marketplace upgrade sage`, then `codex plugin add sage@sage` again. For a local clone, run `git pull` in the clone instead of the upgrade command.
 - A new sage version needs your trust again: Codex 0.164 asks for it again for every sage hook when any file of the plugin changes. At the next start, choose **Trust all and continue** again, then do the [gate check](#check-that-the-sage-gate-runs). Until you trust the hooks again, sage's logbook tools refuse every call.
+- The update without the principles hook (T925) moves the other sage hooks in the hook list, and Codex keeps each trust record by place. So the start status can count an old record of another hook, which Codex does not run. After this update, type `/hooks` in the Codex CLI, trust each sage hook again, and do the [gate check](#check-that-the-sage-gate-runs).
 - To remove sage, run `codex plugin remove sage@sage`, then `codex plugin marketplace remove sage`. The Codex logbook in `~/.codex/sage` stays; delete that folder yourself to remove it.
 - Codex keeps the trust records of the sage hooks in your Codex config (`~/.codex/config.toml`, the `[hooks.state."sage@sage:..."]` tables), where they do nothing. To remove them too, delete those tables from the file.
 

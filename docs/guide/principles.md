@@ -1,6 +1,6 @@
 # Principles
 
-A principle is a short rule for one kind of moment, for example "test behaviour, not implementation" when you change a test. sage gives every Claude Code session its principles, also outside sage mode.
+A principle is a short rule for one kind of moment, for example "test behaviour, not implementation" when you change a test. In sage mode, each role agent starts with the principles of its role.
 
 <!-- The principles table comes from principles/: edit them there, then run npm run build. -->
 
@@ -46,20 +46,13 @@ Under each name, a note says where its text comes from:
 
 <!-- The end of the principles table. -->
 
-Agents seldom load a skill by themselves, so a **hook** gives the principle at the moment it applies, once per session.
+Agents seldom load a skill by themselves, so each **role** brings its principles:
 
-| The moment | The principles it gets |
-| --- | --- |
-| The request asks for a design, a plan or a new feature | exhaust-the-design-space, experience-first, foundational-thinking |
-| The request asks for a refactor or a cleanup | subtract-before-you-add, laziness-protocol, migrate-callers-then-delete-legacy-apis |
-| The agent is about to change a test file | test-behavior-not-implementation |
-| The agent is about to write a document | contextualize-and-write-for-the-reader |
-| The agent is about to write or change a README | readme-guide (not a principle: the README guide) |
-| The agent is about to commit | sequence-verifiable-units |
-| A check fails | fix-root-causes |
-| Two changes in a row do not make the same check pass | attack-the-premise |
+- A Claude Code agent loads them from the `skills:` list of its agent file.
+- A Codex role agent gets them in its role text.
+- One map in core, `ROLE_PRINCIPLES` in `packages/sage-core/roles.mjs`, says which role gets which principle. `npm run check` checks the agent files against it.
 
-The hook also has **one check**, the stop check. When the agent tries to finish, the code changed, and no check ran after the change, it stops the agent once. The agent must run a check or say what it did not verify.
+Outside sage mode, no hook gives a principle: name one in your request, for example "apply prove it works".
 
 ## Baseline against pstack
 

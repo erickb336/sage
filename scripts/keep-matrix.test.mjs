@@ -12,7 +12,7 @@ import { test } from "node:test";
 import { fileURLToPath } from "node:url";
 import * as claude from "../plugins/sage/skills/sage/sage.mjs";
 import { tool as codex } from "../plugins/sage-codex/skills/sage/sage.mjs";
-import { stateKey } from "../plugins/sage-codex/hooks/principles-hook.mjs";
+import { stateKey } from "../plugins/sage-codex/hooks/hook-state.mjs";
 
 const at = (path) => fileURLToPath(new URL(path, import.meta.url));
 const CLAUDE_HOOK = at("../plugins/sage/hooks/sage-hook.mjs"), CODEX_HOOK = at("../plugins/sage-codex/hooks/gate-hook.mjs");

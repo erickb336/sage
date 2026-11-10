@@ -17,7 +17,7 @@
 import { existsSync, readFileSync, unlinkSync } from "node:fs";
 import { basename, join } from "node:path";
 import { threadOf } from "./gate-hook.mjs";
-import { privateDirectory, saveState, stateKey } from "./principles-hook.mjs";
+import { privateDirectory, saveState, stateKey } from "./hook-state.mjs";
 
 /** The mark file of the session's root thread, in the mode folder dir. */
 export const markFile = (dir, sessionId) => join(dir, "marks", `${stateKey({ session_id: sessionId })}.json`);
