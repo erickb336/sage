@@ -3,7 +3,9 @@
 // Both stop gates ask for missing fields by its one field rule too (T461).
 import { REPORT_FIELDS } from "./report.mjs";
 import { agentCommandProblem, TEMP } from "./agent-rules.mjs";
-import { commandWrites } from "./shell-write-policy.mjs";
+import { commandWrites, inlineCode } from "./shell-write-policy.mjs";
+import { programsRun } from "./command-reader.mjs";
+import { programName } from "./command-policy.mjs";
 
 const SP = String.raw`[^\S\r\n  ]`; // a space, a tab or an NBSP, never a line break
 /** A line end, kept by a split: LF, CRLF, and each other break that a reader sees as one: CR, VT, FF, NEL, U+2028 and U+2029 (F-T289-26). */
@@ -167,13 +169,33 @@ export function readReport(text, { requireComplete = false } = {}) {
  */
 function proofLine(finding, text) {
   const [, name, value] = /^(?:[-*+][ \t]+)?(proof|saw|steps):[ \t]*(\S.*)$/i.exec(text) ?? [];
-  if (name && !Object.hasOwn(finding, name.toLowerCase())) finding[name.toLowerCase()] = value.trim();
+  // One pair of Markdown backticks around the whole value is a mark, not part of the command (F-T947-5).
+  if (name && !Object.hasOwn(finding, name.toLowerCase())) finding[name.toLowerCase()] = value.trim().replace(/^`([^`]+)`$/, "$1").trim();
+}
+/** The git subcommands that a proof may run: they only read (F-T947-2). */
+const PROOF_GIT = ["status", "log", "show", "diff", "rev-parse", "ls-files", "grep", "cat-file", "blame"];
+/**
+ * Why a proof's git command is refused, or undefined (F-T947-2). A proof runs git only to read its own working copy: one of
+ * PROOF_GIT, with no option before it but --no-pager (so no -C, -c, --git-dir or --work-tree), and no option that writes
+ * a file or runs a program (--output, grep's -O). A line that the reader cannot read is commandWrites' to refuse.
+ */
+function gitProblem(proof, cwd) {
+  let runs;
+  try { runs = programsRun(proof, cwd); } catch { return undefined; }
+  for (const { word, args } of runs) {
+    if (programName(word) !== "git") continue;
+    const at = args.findIndex((a) => !/^(?:--no-pager|-P)$/.test(a)), sub = args[at] ?? "";
+    const bad = !PROOF_GIT.includes(sub) || args.slice(at + 1).some((a) => /^(?:--output|-O|--open-files-in-pager)/.test(a));
+    if (bad) return `a proof runs git only to read its own working copy: git ${PROOF_GIT.join(", ")}, with no -C, -c, --git-dir, --work-tree or --output`;
+  }
+  return undefined;
 }
 /**
  * Why a review's or QA's report does not carry the proof of each medium or high finding, or undefined (T947). A finding
  * carries one command and the output line that shows the problem (proof: and saw:), or a screenshot and its steps (proof:
  * screenshot and steps:). The proof check reruns the command on a fresh copy of the head, so it is one that an agent may
- * run there: no stash or process program (agentCommandProblem), and no write outside the scratch folders (commandWrites).
+ * run there: no stash or process program (agentCommandProblem), git only to read (gitProblem), no inline code, and no write
+ * outside the scratch folders (commandWrites).
  * A low finding needs no proof, and an unreadable report gets the reader's own reason.
  */
 export function proofProblem(text, cwd, scratch = TEMP) {
@@ -182,24 +204,33 @@ export function proofProblem(text, cwd, scratch = TEMP) {
     if (!proof) return `${key} is ${severity} and has no proof line`;
     const shot = /^screenshot[ \t]+\S/i.test(proof);
     if (shot ? !steps : !saw) return `${key}'s proof has no ${shot ? "steps" : "saw"} line`;
-    const refused = !shot && (agentCommandProblem(proof, cwd) ?? (commandWrites(proof, cwd, scratch) ? "it writes outside the scratch folder" : undefined));
+    const refused = !shot && (agentCommandProblem(proof, cwd) ?? gitProblem(proof, cwd) ??
+      (inlineCode(proof) ? "it runs inline code (such as node -e or sh -c), which the gate cannot check: put the script in a file in your scratch folder, and run that file" :
+        commandWrites(proof, cwd, scratch) ? "it writes outside the scratch folder" : undefined));
     if (refused) return `${key}'s proof ${JSON.stringify(proof.slice(0, 80))} is refused: ${refused}`;
   }
   return undefined;
 }
 /** The way to give a proof, for the stop gates of both providers (T947). */
-export const PROOF_RULE = "Under each medium or high finding, give its proof on indented lines: proof: <one command, run from the repository root of the head> and saw: <the one output line that shows the problem>, or proof: screenshot <path> and steps: <the url and the actions>. The command only reads, or writes only into your scratch folder in the temp folder, and runs no process program and no git stash. Put long output in a scratch file, and name its path. A low finding needs no proof. A proof, saw or steps line has no severity word. This stop gate stops you once.";
-/** The outcomes of a proof check (T947), as its EVIDENCE gives each finding on a list line of its own. */
-const PROOF_LINE = /^[-*+][ \t]+`?([^\s`]+)`?[ \t]+(reproduced|not reproduced|could not run)\.?[ \t]*$/i;
+export const PROOF_RULE = "Under each medium or high finding, give its proof on indented lines: proof: <one command, run from the repository root of the head> and saw: <the one output line that shows the problem>, or proof: screenshot <path> and steps: <the url and the actions>. The command only reads, or writes only into your scratch folder in the temp folder; it runs no process program, no inline code and git only to read (status, log, show, diff, rev-parse, ls-files, grep, cat-file or blame). It runs from a fresh copy of the head after the project's dependency install (such as npm ci --ignore-scripts). Put long output in a scratch file, and name its path. A low finding needs no proof. A proof, saw or steps line has no severity word. This stop gate stops you once.";
 /**
- * The results of a proof check's report: each finding key that EVIDENCE lists, with its outcome (reproduced, not
- * reproduced or could not run), in a Map. The first line of a key counts. An empty Map for any other report.
+ * The outcome of a proof check (T947) on one line of its EVIDENCE: a key with a digit, then reproduced, not reproduced or
+ * could not run, and any note after it. Near forms count too (F-T947-1): an indent (a nested list), a list mark (-, *, +,
+ * 1. or a table bar) or none, marks around the key (`F-T1-1`, **F-T1-1**, [F-T1-1]) or the outcome, and a colon, a dash
+ * or a bar between them: "- F-T1-1: reproduced", "1. **F-T1-1** — not reproduced", "| F-T1-1 | could not run |".
+ * No part of the pattern can backtrack far, so a long line costs time in proportion to its length.
+ */
+const PROOF_LINE = /^[ \t]*(?:(?:[-*+|]|\d+[.)])[ \t]+)?[`*_[(]*([^\s`*_[\]():|]+)[`*_\])]*:?[ \t]+(?:[-–—:|][ \t]+)?[`*_]*(not[ \t]+reproduced|reproduced|could[ \t]+not[ \t]+run)(?![\p{L}\p{N}])/iu;
+/**
+ * The results of a proof check's report: each finding key that EVIDENCE lists, on the field's own line or a line under
+ * it, with its outcome (reproduced, not reproduced or could not run), in a Map. The first line of a key counts. An
+ * empty Map for any other report. A report with any such line is a proof check, so it backs no verdict.
  */
 export function proofResults(text) {
   const results = new Map();
-  for (const line of fieldsOf(text, REPORT_FIELDS).filter((f) => f.name === "EVIDENCE").flatMap((f) => f.lines)) {
-    const [, key, outcome] = PROOF_LINE.exec(line) ?? [];
-    if (key && !results.has(key)) results.set(key, outcome.toLowerCase());
+  for (const line of fieldsOf(text, REPORT_FIELDS).filter((f) => f.name === "EVIDENCE").flatMap((f) => [f.rest, ...f.lines])) {
+    const [, key, outcome] = PROOF_LINE.exec(line.slice(0, LINE_MAX)) ?? [];
+    if (/\d/.test(key) && !results.has(key)) results.set(key, outcome.toLowerCase().replace(/[ \t]+/g, " "));
   }
   return results;
 }

@@ -2356,6 +2356,11 @@ test("T947: a review's or QA's medium or high finding carries a proof that the p
     ["- K1 medium a.js:1 a stuck job\n  proof: kill 1\n  saw: done", /^sage: K1's proof "kill 1" is refused: an agent never reads or signals the real process list/],
     ["- K1 medium a.js:1 a bad file\n  proof: npm test > out.txt\n  saw: not ok 1", /^sage: K1's proof "npm test > out\.txt" is refused: it writes outside the scratch folder\./],
     ["- K1 low a.js:1 a nit\n- K2 medium a.js:2 a bad value", /^sage: K2 is medium and has no proof line\./],
+    // F-T947-2: git only reads; F-T947-8: inline code has its own reason; F-T947-5: one pair of backticks is a mark.
+    ...["git reset --hard", "git clean -fdx", "git -C /Users/x/repo log", "npm test && git branch -D claude/t12", "git worktree add /tmp/w HEAD"].map((proof) =>
+      [`- K1 medium a.js:1 a bad value\n  proof: ${proof}\n  saw: not ok 1`, /^sage: K1's proof ".*" is refused: a proof runs git only to read its own working copy: git status, log, show, diff, rev-parse, ls-files, grep, cat-file, blame, with no -C, -c, --git-dir, --work-tree or --output\./]),
+    ["- K1 medium a.js:1 a bad value\n  proof: node -e \"console.log(1)\"\n  saw: 1", /^sage: K1's proof "node -e \\"console\.log\(1\)\\"" is refused: it runs inline code \(such as node -e or sh -c\), which the gate cannot check: put the script in a file in your scratch folder, and run that file\./],
+    ["- K1 medium a.js:1 a bad file\n  proof: `npm test > out.txt`\n  saw: not ok 1", /^sage: K1's proof "npm test > out\.txt" is refused: it writes outside the scratch folder\./],
   ]) {
     for (const type of ["sage:code-reviewer", "sage:security-reviewer", "sage:ux-reviewer", "sage:qa"]) {
       const first = stop(type, report("FINDINGS", `\n${finding}`));
@@ -2366,7 +2371,8 @@ test("T947: a review's or QA's medium or high finding carries a proof that the p
     }
   }
   for (const finding of ["- K1 low a.js:1 a nit", "- K1 medium a.js:1 an empty name saves a row\n  proof: node --test test/form.test.mjs > /tmp/r40/out.txt\n  saw: not ok 3 an empty name is refused",
-    "- K1 high a page\n  proof: screenshot /tmp/r40/a.png\n  steps: open http://localhost:5173/form, press Save"]) assert.equal(stop("sage:code-reviewer", report("FINDINGS", `\n${finding}`)), undefined, finding);
+    "- K1 high a page\n  proof: screenshot /tmp/r40/a.png\n  steps: open http://localhost:5173/form, press Save",
+    "- K1 medium a.js:1 a bad value\n  proof: `git --no-pager diff HEAD~1 -- a.js`\n  saw: +const a = 1", "- K1 medium a.js:1 a bad value\n  proof: git grep -n TODO a.js\n  saw: a.js:1:TODO"]) assert.equal(stop("sage:code-reviewer", report("FINDINGS", `\n${finding}`)), undefined, finding);
   for (const type of ["sage:implementer", "sage:evidence-review"]) assert.equal(stop(type, report("FINDINGS", "\n- K1 medium a.js:1 a bad value")), undefined, `${type} gives no finding that a proof check reruns`);
 });
 
