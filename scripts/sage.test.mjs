@@ -4689,7 +4689,9 @@ test("Balanced defaults cover every role and size without a config file", () => 
         || (["implementer", "code-reviewer"].includes(role) && size === "tiny") ? "sonnet" : "opus";
       const args = ["run", "add", task, "--role", role];
       if (["implementer", "designer", "arena-judge"].includes(role)) args.push("--branch", `sample/${task}-${role}`);
-      assert.ok(s.ok(...args).endsWith(` · model ${expected}`), `${role} on ${size}`);
+      const out = s.ok(...args);
+      assert.ok(out.endsWith(` · model ${expected}`), `${role} on ${size}`);
+      s.ok("run", "done", out.split(" ")[0], "--status", "failed"); // an ended run holds no place of the agent cap (T952)
     }
   }
 });
@@ -4718,6 +4720,7 @@ test("T40: each agent role gets its model by task size; run add prints it and re
   const out = s.ok("config");
   assert.ok(out.startsWith("max_agents=10 max_leads=5 cycles.small=1 cycles.large=2 cycles.risk=2 max_rounds=3 arena=3 arena_models=opus,sonnet,sonnet cap_total=20 model."), out);
   assert.equal(out.slice(out.indexOf(" model.") + 1), MODEL_DEFAULTS, "the model keys print after the numbers");
+  s.ok("config", "max_agents=50"); // the runs below stay running, so the agent cap needs room for them (T952)
   for (const size of ["tiny", "small", "large", "investigate"]) s.ok("task", "add", "--priority", "P2", "--title", size, "--size", size);
   const selected = (t, role) => role === "ux-reviewer" || (role === "qa" && ["T1", "T2"].includes(t)) || (role === "code-reviewer" && t === "T1") ? "sonnet" : "opus";
   let r = 0;
