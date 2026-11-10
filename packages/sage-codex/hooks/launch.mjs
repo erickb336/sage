@@ -212,13 +212,13 @@ function tomlLine(text, table) {
 }
 
 /**
- * Whether config.toml turns the plugin off: plugins."sage@sage".enabled = false, in any form of TOML that sets that key
- * (Codex reads the file with a TOML library: core-plugins loader.rs). A line that the reader cannot read sets nothing, and
- * so does each line under an array of tables or a table header that it cannot read, so that sage's hooks keep running when
- * it is not sure. It reads config.toml only, not a -c override, a profile or a managed policy (a documented limit).
+ * The value text of one key of config.toml (its last setting), by its key parts, in any form of TOML that sets that key
+ * (Codex reads the file with a TOML library: core-plugins loader.rs), or undefined. A line that the reader cannot read
+ * sets nothing, and so does each line under an array of tables or a table header that it cannot read. It reads
+ * config.toml only, not a -c override, a profile or a managed policy (a documented limit).
  */
-export function pluginOff(codexHome) {
-  let table = [], off = false, string;
+export function tomlValue(codexHome, key) {
+  let table = [], found, string;
   for (const line of (readText(join(codexHome, "config.toml")) ?? "").split(/\r?\n/)) {
     // A line inside a multi-line string sets nothing (F-T957-13). An odd count of its quotes on a line opens or ends it.
     const quotes = (mark) => line.split(mark).length - 1;
@@ -229,10 +229,13 @@ export function pluginOff(codexHome) {
     try { read = tomlLine(line, table ?? []); } catch { if (/^\s*\[/.test(line)) table = null; continue; }
     if (!Array.isArray(read)) { table = read.table; continue; }
     if (table === null) continue;
-    for (const [path, value] of read) if (path.join("\n") === "plugins\nsage@sage\nenabled") off = value === "false";
+    for (const [path, value] of read) if (path.join("\n") === key.join("\n")) found = value;
   }
-  return off;
+  return found;
 }
+
+/** Whether config.toml turns the plugin off (plugins."sage@sage".enabled = false), so that sage's hooks keep running when the reader is not sure. */
+export const pluginOff = (codexHome) => tomlValue(codexHome, ["plugins", "sage@sage", "enabled"]) === "false";
 
 /**
  * The real path of the active version's hooks/dispatch.mjs, null for a version before T957 (its plugin declares its own
