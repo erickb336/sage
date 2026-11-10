@@ -773,6 +773,41 @@ test("T609-LEAD-KEY: max_leads sets the limit, a bad value refuses, and a lower 
   assert.match(s.no("run", "add", "T4", "--role", "lead"), /^sage: the project has 3 running lead runs, the most it holds: /, "it only refuses the next one");
 });
 
+test("T952-AGENT-CAP: run add holds max_agents running runs of every role in a project; the 11th is refused with the running runs named, and an ended run frees a place", () => {
+  const s = store();
+  for (let i = 0; i < 6; i++) s.ok("task", "add", "--priority", "P2", "--title", `t${i + 1}`, "--size", "small");
+  for (const t of ["T1", "T2", "T3", "T4", "T5"]) s.ok("run", "add", t, "--role", "lead");
+  for (const t of ["T1", "T2", "T3"]) s.ok("run", "add", t, "--role", "implementer", "--branch", `claude/${t.toLowerCase()}`);
+  s.ok("run", "add", "T1", "--role", "code-reviewer");
+  s.ok("run", "add", "T6", "--role", "security-reviewer");
+  s.ok("run", "done", "R10", "--status", "failed"); // an ended run holds no place
+  s.ok("run", "add", "T6", "--role", "pe");
+  assert.equal(rows(s.dir, "runs").filter((r) => r.status === "running").length, 10);
+  assert.equal(s.no("run", "add", "T2", "--role", "qa"), "sage: the project has 10 running runs, its agent cap (max_agents, or cap.<project>): R1 lead on T1, R2 lead on T2, R3 lead on T3, R4 lead on T4, R5 lead on T5, R6 implementer on T1, R7 implementer on T2, R8 implementer on T3, R9 code-reviewer on T1, R11 pe on T6. Finish one of them first (sage run done <R> --status done, blocked, question or failed). Nothing changed.");
+  assert.equal(rows(s.dir, "runs").length, 11, "the refused run is not recorded");
+  s.ok("run", "done", "R9", "--status", "failed"); // the chief ends a stuck run to free a place
+  assert.match(s.ok("run", "add", "T2", "--role", "qa"), /^R12 running · qa on T2/);
+  assert.match(s.no("run", "add", "T3", "--role", "qa"), /^sage: the project has 10 running runs, its agent cap/);
+  const other = store(s.home); // another project of the same root counts its own runs
+  other.ok("task", "add", "--priority", "P2", "--title", "t", "--size", "small");
+  assert.match(other.ok("run", "add", "T1", "--role", "lead"), /^R1 running · lead on T1/);
+});
+
+test("T952-AGENT-CAP-KEY: a lower max_agents, or the project's own cap.<project>, sets the cap at run add, and a lower value ends no run", () => {
+  const s = store(undefined, "cap-project-");
+  for (let i = 0; i < 2; i++) s.ok("task", "add", "--priority", "P2", "--title", `t${i + 1}`, "--size", "small");
+  s.ok("config", "max_agents=2");
+  s.ok("run", "add", "T1", "--role", "lead");
+  s.ok("run", "add", "T2", "--role", "lead");
+  assert.match(s.no("run", "add", "T1", "--role", "qa"), /^sage: the project has 2 running runs, its agent cap \(max_agents, or cap\.<project>\): R1 lead on T1, R2 lead on T2\./);
+  const name = basename(s.project).toLowerCase().replace(/[^a-z0-9]+/g, "-");
+  s.ok("config", `cap.${name}=3`); // the project's own cap wins over max_agents, as in the hook
+  assert.match(s.ok("run", "add", "T1", "--role", "qa"), /^R3 running · qa on T1/);
+  assert.match(s.no("run", "add", "T2", "--role", "qa"), /^sage: the project has 3 running runs/);
+  s.ok("config", `cap.${name}=1`);
+  assert.equal(rows(s.dir, "runs").filter((r) => r.status === "running").length, 3, "a lower value ends no run");
+});
+
 test("T266-LEAD-INVESTIGATE: an investigation takes no lead run, and the refusal says why", () => {
   const s = store();
   s.ok("task", "add", "--priority", "P2", "--title", "look", "--size", "investigate");
