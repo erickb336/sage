@@ -85,12 +85,12 @@ export const TOOLS = {
     describe: "Record an agent run of a task before the agent starts. It prints the run id and the model to pass.",
     input: { task, role: z.string().describe("lead, implementer, pe, designer, arena-judge, code-reviewer, security-reviewer, ux-reviewer, qa, investigate or evidence-review"),
       branch: optional("the run's branch"), candidate: count("the arena candidate number"),
-      "usage-interface": optional("collaboration-tools, when Codex gives no token count for the run") },
+      "usage-interface": optional("collaboration-tools, for a Codex agent: its agent tools give no token count, so the report gate keeps the count at the agent's stop") },
     pos: ["task"], argv: (i) => ["run", "add", i.task],
   },
   run_done: {
-    describe: "Record the end of a run. A done review, QA or evidence-review run needs tokens. A run added with usage-interface collaboration-tools has no token count: "
-      + "save its report with pages (task, run and text), then end it as done with usage unavailable, usage-source, usage-evidence, the path that pages printed as report, and no tokens, for example "
+    describe: "Record the end of a run. A done review, QA or evidence-review run needs tokens. For a run added with usage-interface collaboration-tools, the report gate keeps the token count at its agent's stop, "
+      + "and run_done records it; usage unavailable stands only when the gate kept none. Save its report with pages (task, run and text), then end it as done with usage unavailable, usage-source, usage-evidence, the path that pages printed as report, and no tokens, for example "
       + '{"project": "/absolute/project", "run": "R40", "status": "done", "usage": "unavailable", "usage-source": "codex collaboration-tools", "usage-evidence": "wait_agent gives no token count", "report": "<the path that pages printed>"}.',
     input: { run: id("R", "the run id"), status: z.enum(["done", "blocked", "question", "failed"]), tokens: count("the run's tokens, a whole number"),
       report: optional("the absolute path of the saved report, as pages printed it; needed with usage unavailable"),

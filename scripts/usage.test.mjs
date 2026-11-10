@@ -144,3 +144,23 @@ test('T28 status shows exact per-task measured totals with incomplete accounting
   assert.match(status,/^usage T1 · 1000 measured tokens · 1 measured, 0 unavailable, 0 legacy-unrecorded$/m);
   assert.match(status,/^usage T2 · 2400 measured tokens · partial measured total; 1 measured, 1 unavailable, 0 legacy-unrecorded$/m);
 });
+// T954: no Claude lead run had tokens (41 of 41 in a shared logbook), because the chief ended each with run done --status
+// done and no --tokens, and nothing refused it. A lead that gave a report now gives its own tokens, as a review run does.
+test('T954 a Claude lead run that ends with a report needs its tokens; a lead with no report ends without them',async t=>{
+  const claude=await import('../plugins/sage/skills/sage/sage.mjs');
+  const base=realpathSync(mkdtempSync(join(tmpdir(),'sage-usage-lead-')));t.after(()=>rmSync(base,{recursive:true,force:true}));
+  const env={...process.env,SAGE_HOME:join(base,'home'),HOME:join(base,'home'),SAGE_TEST_PIDS:'{}'},project=join(base,'project');
+  const run=(...args)=>claude.sage([...args,'--project',project],env);
+  const dir=run('init').replace(/^logbook /,'');
+  run('task','add','--priority','P2','--title','Lead tokens','--size','small');run('task','T1','set','state=briefed');
+  const tokens=()=>readFileSync(join(dir,'runs.tsv'),'utf8').trimEnd().split('\n').slice(1).map(line=>line.split('\t')[7]);
+  for(const status of ['done','blocked','question']){
+    const id=run('run','add','T1','--role','lead').split(' ')[0];
+    assert.throws(()=>run('run','done',id,'--status',status),new RegExp(`${id} is a lead run, so run done --status ${status} needs --tokens with the lead's own tokens`),status);
+    assert.equal(run('run','done',id,'--status',status,'--tokens','108973'),`${id} ${status}`);
+  }
+  const failed=run('run','add','T1','--role','lead').split(' ')[0];
+  assert.equal(run('run','done',failed,'--status','failed'),`${failed} failed`);
+  assert.deepEqual(tokens(),['108973','108973','108973','']);
+  assert.match(run('status'),/about 109k tokens · 1 measured, 0 unavailable, 0 legacy-unrecorded/); // the totals count done runs only
+});

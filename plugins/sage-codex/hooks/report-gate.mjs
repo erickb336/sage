@@ -6,7 +6,7 @@
 // the one reader of core. Other agents pass. An input that the gate cannot read stops nothing: it gives one
 // plain line, and the gate never reads it as a checked report.
 import { spawnSync } from "node:child_process";
-import { closeSync, mkdirSync, openSync, readFileSync, readSync, realpathSync, writeFileSync } from "node:fs";
+import { closeSync, fstatSync, mkdirSync, openSync, readFileSync, readSync, realpathSync, writeFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { REPORT_FIELDS, TEAM, missingFields, stopReason } from "../core/index.mjs";
@@ -49,11 +49,11 @@ const REPORT_ROLES = { implementer: "implementer", arena_judge: "arena-judge", p
  * run (sage_qa_t12_r40), and its agent path is the root thread, that lead if it has one, and that name, so no other child of a child names a run.
  * Its thread id is the session_meta id.
  */
-export function reviewChild(meta) {
+export function reviewChild(meta, roles = REPORT_ROLES) {
   const path = agentPathOf(meta), [, role, number, run] = /^sage_([a-z_]+)_t([1-9]\d*)_(r[1-9]\d*)$/.exec(path.at(-1) ?? "") ?? [];
-  const underLead = path.length === 3 && TEAM.has(REPORT_ROLES[role]) && new RegExp(`^sage_lead_t${number}(?:_r[1-9]\\d*)?$`).test(path[1]);
-  if (!REPORT_ROLES[role] || (path.length !== 2 && !underLead) || path[0] !== "root" || typeof meta.id !== "string" || !meta.id) return undefined;
-  return { role: REPORT_ROLES[role], task: `T${number}`, run: run.toUpperCase(), thread: meta.id };
+  const underLead = path.length === 3 && TEAM.has(roles[role]) && new RegExp(`^sage_lead_t${number}(?:_r[1-9]\\d*)?$`).test(path[1]);
+  if (!roles[role] || (path.length !== 2 && !underLead) || path[0] !== "root" || typeof meta.id !== "string" || !meta.id) return undefined;
+  return { role: roles[role], task: `T${number}`, run: run.toUpperCase(), thread: meta.id };
 }
 /** The name of a role whose report the stop gate reads with the one reader (the Claude hook's REVIEWERS). It takes any letter
  * case, and it needs no task or run: as Claude reads an agent by its role, not by the run that keeps its report (T461). */
@@ -108,6 +108,48 @@ function keep(meta, text, cwd, env) {
   return undefined;
 }
 
+/** The most of a session record's end that tokenTotal reads. Codex writes a token line after each model response, so the last one is near the end. */
+export const TAIL_BYTES = 8 << 20;
+/**
+ * An agent's own token count from its Codex session record (T954): thread_token_usage.total_tokens of the last
+ * token_usage_record line of its own thread (a line of another thread is skipped), as { tokens }, a whole number as text.
+ * When the record gives none, { reason }: the gate never guesses a number.
+ */
+export function tokenTotal(path, thread) {
+  let text;
+  try {
+    const fd = openSync(path, "r");
+    try {
+      const size = fstatSync(fd).size, start = Math.max(0, size - TAIL_BYTES), chunk = Buffer.alloc(size - start);
+      text = chunk.subarray(0, readSync(fd, chunk, 0, chunk.length, start)).toString("utf8");
+      if (start) text = text.slice(text.indexOf("\n") + 1); // the first line of a tail is only a part of a line
+    } finally { closeSync(fd); }
+  } catch (error) { return { reason: `the session record cannot be read (${error?.code ?? "unknown error"})` }; }
+  const lines = text.split("\n");
+  for (let i = lines.length - 1; i >= 0; i--) {
+    if (!lines[i].trim()) continue;
+    let line;
+    try { line = JSON.parse(lines[i]); } catch { return { reason: "a line of the session record is not JSON" }; }
+    if (line?.type !== "token_usage_record" || line.payload?.thread_id !== thread) continue;
+    const total = line.payload.thread_token_usage?.total_tokens;
+    return Number.isSafeInteger(total) && total > 0 && total < 1e12 ? { tokens: String(total) }
+      : { reason: `the last token_usage_record of the session record has no total_tokens of 1 to 12 digits (${JSON.stringify(total) ?? "none"})` };
+  }
+  return { reason: `the session record has no token_usage_record line of this agent in its last ${TAIL_BYTES >> 20} MiB` };
+}
+/** The roles whose run gets its token count at its stop: each role of a run, and the lead. */
+const USAGE_ROLES = { ...REPORT_ROLES, lead: "lead" };
+/** At the stop of a run's agent, keep its token count for the run, or why there is none (T954). It never stops the agent. */
+function keepTokens(meta, path, cwd, env) {
+  const child = reviewChild(meta, USAGE_ROLES);
+  if (!child || typeof cwd !== "string") return;
+  const { tokens, reason } = tokenTotal(path, child.thread);
+  try {
+    tool.keepUsage(cwd, { role: child.role, task: child.task, run: child.run, tokens, source: "Codex session record: thread_token_usage.total_tokens of the agent's last token_usage_record line",
+      evidence: reason ? `unavailable: ${reason}` : `the record of thread ${child.thread}, read at SubagentStop` }, env);
+  } catch {}
+}
+
 export function reportGate(input, env = process.env) {
   const message = input?.last_assistant_message;
   if (input?.hook_event_name !== "SubagentStop" || typeof input.stop_hook_active !== "boolean"
@@ -122,6 +164,7 @@ export function reportGate(input, env = process.env) {
   if (reason) return { decision: "block", reason };
   // A stop that goes through retains the bound child's exact report; the chief decides the outcome separately.
   const unkept = !missing.length || input.stop_hook_active ? keep(meta, message, input.cwd, env) : undefined;
+  if (!missing.length || input.stop_hook_active) keepTokens(meta, input.agent_transcript_path, input.cwd, env);
   if (!missing.length) return unkept ? { systemMessage: unkept } : {};
   if (input.stop_hook_active) return { systemMessage: [`sage: the agent ${task} ended without a full report (no ${missing.join(", ")}). The chief reads it as it is.`, unkept].filter(Boolean).join(" ") };
   return { decision: "block", reason: `sage: your report has no ${missing.join(", ")}. End with the sage report: ${REPORT_FIELDS.join(", ")}, each at the start of a line that is not in a list or a code block, with "none" where a field has nothing.` };
