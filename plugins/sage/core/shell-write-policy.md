@@ -18,7 +18,7 @@ The public core entry point exposes the same function in both provider bundles.
 The Codex gate and the Claude hook both call it for a read-only role, with
 core's `roleEditDenied`.
 
-Ordinary reader arguments remain data. Option values and words after `--`
+The words of `gh` are its own arguments, so a word such as `PATCH` or `less` after `gh` does not count (`gh api -X PATCH`, T948); a redirection still counts. Ordinary reader arguments remain data. Option values and words after `--`
 retain their parser context. Redirections to files count as
 writes; input-only redirections and the listed standard device outputs do not.
 

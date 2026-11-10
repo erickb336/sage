@@ -1,8 +1,8 @@
 #!/usr/bin/env node
 // The sage hook. Claude Code sends one JSON event on stdin; the hook answers with one JSON object on stdout, or nothing.
 //   - "sage mode" makes the session the user's chief of staff (agents/chief-of-staff.md) until "sage mode off". A
-//     session that starts as the sage:chief-of-staff agent is in sage mode from its first event, and "sage mode off"
-//     holds there too (T398). Only a message of the
+//     session that starts as the sage:chief-of-staff agent, or in a project whose logbook has start=sage-mode (T948), is
+//     in sage mode from its first event, and "sage mode off" holds there too (T398). Only a message of the
 //     user that is exactly one phrase (mode-policy.mjs) switches sage mode or autopilot: never an agent's report, a task
 //     notification, a hand-back or another session's message (promptOf, T215, T240). A message the owner sends while
 //     Claude works counts as a message of its own. When the hook cannot read the frames of a prompt, nothing in it
@@ -202,6 +202,12 @@ export function handle(input, state, slots) {
   // The agent type turns sage mode on unless the owner's off phrase turned it off, so that phrase holds (T398) and an off
   // value that another writer left is no off (F-R1516-2).
   if (main && CHIEF.test(input.agent_type ?? "") && !(state.sage === false && state.off === "owner")) state.sage = true;
+  // The project's start setting (config start=sage-mode, read by core for both providers, T948) turns sage mode on at the
+  // session's first event, once: the off phrase then holds for the rest of the session.
+  if (main && !("start" in state)) {
+    try { state.start = core.startsInSageMode(stateTool.storeDir(input.cwd ?? process.cwd())); } catch { state.start = false; }
+    if (state.start === true && state.sage === undefined) state.sage = true;
+  }
 
   if (event === "UserPromptSubmit") {
     const prompt = promptOf(input);

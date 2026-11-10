@@ -95,7 +95,10 @@ export function uniqWrites(words, base) {
 function writesIn({ words }) {
   const low = words.map((w) => w.toLowerCase());
   const base = words.map(programName);
-  if (READERS.test(base[low.findIndex((w) => !/^\w+=/.test(w))] ?? "")) return false;
+  const program = base[low.findIndex((w) => !/^\w+=/.test(w))] ?? "";
+  // gh's words are its own arguments, never a program that it runs: "gh api -X PATCH" or "gh config set pager less"
+  // writes no file (T948). A redirection still counts, and so does gh after a wrapper (xargs gh, env gh).
+  if (READERS.test(program) || program === "gh") return false;
   const has = (re) => base.some((w) => re.test(w));
   return (
     base.some((w) => WRITE_NAMES.has(w)) || uniqWrites(words, base) ||

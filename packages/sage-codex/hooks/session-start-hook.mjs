@@ -3,15 +3,18 @@
 // model (additionalContext). Startup and resume turn autopilot off in the mode file before status, as a new start does
 // in Claude; the owner record reader needs a new on after the start mark anyway. Startup, resume and clear save the
 // session's start mark (start-mark.mjs); a failed save is a limit line and never blocks. One script for each event, after
-// oh-my-codex (MIT, github.com/Yeachan-Heo/oh-my-codex).
+// oh-my-codex (MIT, github.com/Yeachan-Heo/oh-my-codex). Startup and clear also turn sage mode on when the project's
+// logbook has start=sage-mode (core's startsInSageMode, T948), as in Claude; the start mark keeps that start, so that the
+// owner record reader starts its replay with sage mode on.
 import { readFileSync, realpathSync } from "node:fs";
 import { homedir } from "node:os";
 import { agentCaps } from "sage-core";
 import { basename, dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
-import { PHRASES, readModeFile } from "sage-core";
+import { PHRASES, readModeFile, startsInSageMode } from "sage-core";
 import { privateDirectory, readState, saveState, stateKey } from "./hook-state.mjs";
 import { sessionMeta } from "./report-gate.mjs";
+import { RECORD_RANGE } from "./owner-record.mjs";
 import { modeDirectory, TESTED_CODEX } from "./sage-codex-hook.mjs";
 import { saveStartMark } from "./start-mark.mjs";
 import { tool } from "../skills/sage/sage.mjs";
@@ -112,6 +115,29 @@ function sageOn(input, env) {
   try { return readModeFile(readState, join(modeDirectory(env), `${stateKey(input)}.json`)).state.sage === true; } catch { return false; }
 }
 
+/**
+ * Turn sage mode on at a new start (startup or clear) of the root thread when the project's logbook says so (T948). It
+ * returns { on } (sage mode is on from this start), or { warning } when the hook could not save it. As in the Claude
+ * hook, it turns on only a mode that nothing set yet, so an off phrase in the same session holds.
+ */
+function startMode(input, env) {
+  if (!["startup", "clear"].includes(input.source) || typeof input.session_id !== "string" || !input.session_id || "agent_id" in input) return {};
+  let on;
+  try { on = startsInSageMode(tool.storeDir(input.cwd ?? process.cwd(), env)); } catch { on = false; }
+  if (!on) return {};
+  try {
+    const dir = modeDirectory(env);
+    privateDirectory(dir);
+    const file = join(dir, `${stateKey(input)}.json`);
+    const { state, damaged } = readModeFile(readState, file);
+    if (damaged || state.sage === false) return {};
+    if (state.sage === undefined) saveState(file, { ...state, sage: true, given: false });
+    return { on: true };
+  } catch {
+    return { warning: `sage: this project starts each session in sage mode, but the hook could not save the mode of this session, so sage mode is off. To start sage mode, send this message alone: ${ON_PHRASE}` };
+  }
+}
+
 /** Turn autopilot off before status. The gate does not depend on this write: the start mark ends every earlier on. */
 function resetAutopilot(input, env) {
   if (input.source !== "startup" && input.source !== "resume") return undefined;
@@ -135,7 +161,8 @@ function resetAutopilot(input, env) {
 export function sessionStatus(input, { pluginRoot, codexHome, env = process.env }) {
   if (input?.hook_event_name !== "SessionStart") return undefined;
   const resetWarning = resetAutopilot(input, env);
-  const markWarning = ["startup", "resume", "clear"].includes(input.source) ? saveStartMark(modeDirectory(env), input) : undefined;
+  const start = startMode(input, env);
+  const markWarning = ["startup", "resume", "clear"].includes(input.source) ? saveStartMark(modeDirectory(env), input, start.on === true) : undefined;
   const plugin = readJson(join(pluginRoot, ".codex-plugin/plugin.json")).version;
   const version = codexVersion(input.transcript_path);
   const keys = hookKeys(pluginRoot);
@@ -143,16 +170,16 @@ export function sessionStatus(input, { pluginRoot, codexHome, env = process.env 
   const [low, high] = TESTED_CODEX.map(minor);
   const at = version && minor(version);
   const inRange = at && (at[0] - low[0] || at[1] - low[1]) >= 0 && (at[0] - high[0] || at[1] - high[1]) <= 0;
-  const limits = [resetWarning, markWarning].filter(Boolean);
+  const limits = [resetWarning, start.warning, markWarning].filter(Boolean);
   if (trusted < keys.length) limits.push(`sage: ${keys.length - trusted} of the ${keys.length} sage hooks ${keys.length - trusted === 1 ? "is" : "are"} not trusted yet, so some sage rules do not run. To trust them, type /hooks in the Codex CLI.`);
-  if (!inRange) limits.push(`sage: ${version ? `this is Codex ${version}` : "the hook could not read the Codex version"}, and sage is tested only with Codex ${TESTED_CODEX.join(" to ")}. Some sage rules may not run.`);
+  if (!inRange) limits.push(`sage: ${version ? `sage was not tested with Codex ${version}` : "the hook could not read the Codex version"}, so some sage rules may not run. Autopilot merges in Codex ${RECORD_RANGE}.`);
   // Codex trusts a plugin hook only when its record matches the hash of the hook and of the plugin's files. Codex
   // computes both, so the status counts only the records, and says that Codex checks each hash.
   const threads = threadWarning(input, codexHome, env);
   if (threads) limits.push(threads);
   const status = [
     `sage ${plugin} is installed. Codex ${version ?? "version unknown"}. sage hooks: ${trusted} of ${keys.length} have a trust record (Codex checks each hash).`,
-    sageOn(input, env) ? "sage mode is on in this session." : `To start sage mode, the user sends this message alone: ${ON_PHRASE}`,
+    sageOn(input, env) ? `sage mode is on in this session${start.on ? ", because this project starts each session in sage mode" : ""}.` : `To start sage mode, the user sends this message alone: ${ON_PHRASE}`,
     'Autopilot is off at each start of a session. To turn it on, the user sends "autopilot on" alone, while sage mode is on.',
     ...limits,
   ].join("\n");

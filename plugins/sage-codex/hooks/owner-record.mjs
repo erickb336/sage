@@ -20,7 +20,8 @@
 //     item, each with provenance user (Codex marks hook text, goal text and its own context as harness or tool). The
 //     mode phrase counts also with an image, as the hook counts it; the on phrase counts only alone, with no image.
 //   - The replay starts at the last session_meta line with both modes off, as a new mode file does (a fork's record
-//     starts fresh: proof case 5b). A resume writes no session_meta, so sage mode carries over a resume, as the
+//     starts fresh: proof case 5b), or with sage mode on when the start mark says that the session started in sage mode
+//     by the project's start setting (T948). A resume writes no session_meta, so sage mode carries over a resume, as the
 //     session's mode file does.
 //   - An on counts only after the start mark (proof case 5c: a resume must not count an earlier on), and only in a turn
 //     that a person started: turn trigger user in the TUI, exec for codex exec, and composer for a message typed in the
@@ -199,7 +200,7 @@ export function autopilotSwitch(record, mark, onTurn) {
   const from = mark.lines;
   if (!Number.isInteger(from) || from < 0 || from > record.lines) return refusal("sage's note of this session start does not match Codex's record of this session", RESUME);
   const { trigger, opener, start } = turnsOf(record);
-  const state = {};
+  const state = mark.sage === true ? { sage: true } : {};
   let counted = false, countedTurn;
   for (let i = start; i < record.entries.length; i++) {
     const message = userMessage(record.entries[i]);

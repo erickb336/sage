@@ -34,10 +34,10 @@ The hook refuses recognized shell merge commands in every Sage mode. This is a b
 
 ## Continuity and limits
 
-Each new session starts off. Keep the owner's instruction in context. After uncertain recovery, inspect current evidence and require explicit re-entry before dispatch. A stale file is not proof of activation or ownership.
+Each new session starts off, unless the project's logbook has `start=sage-mode` (set with the `config` tool, only when the owner asks): then the start hook turns sage mode on, and the off phrase still turns it off. Keep the owner's instruction in context. After uncertain recovery, inspect current evidence and require explicit re-entry before dispatch. A stale file is not proof of activation or ownership.
 
 The phrases match Claude's interface. Timing differs: Claude's queued off phrase disables autopilot while its active guards remain. Here, off requests the stop/interruption/preservation procedure above; do not claim timing parity.
 
-Known limits in Codex, for `sage help` and the owner's questions: every agent runs on the session's model; a run has no token count; the brief check warns and does not block; a lead's missing finding is refused only at its verdict; the chief's shell writes are not blocked; each sage update needs the hooks trusted again. Give the owner the guide's list: https://github.com/erickb336/sage-stack/blob/main/docs/guide/codex.md#known-limits-in-codex
+Known limits in Codex, for `sage help` and the owner's questions: every agent runs on the session's model; a run has no token count; the brief check warns and does not block; a lead's missing finding is refused only at its verdict; the chief's shell writes are refused only in their plain forms; each sage update needs the hooks trusted again. Give the owner the guide's list: https://github.com/erickb336/sage-stack/blob/main/docs/guide/codex.md#known-limits-in-codex
 
 Keep the selected Codex model and Codex's permissions, sandbox and hooks. Do not change settings or defaults to use this skill. A refusal of the sage gate or of Codex's sandbox remains a refusal: never use the manual CLI to bypass it. Automatic recovery needs separate evidence.
