@@ -186,10 +186,14 @@ async function leadWorld(t) {
   const { tool } = await import(pathToFileURL(join(s.dir, "plugin/skills/sage/sage.mjs")).href);
   return { ...s, tool, lead: (name, args, options) => s.call(name, args, { agent: LEAD, ...options }) };
 }
-/** A run of a role that ends done with a kept report, as Codex's stop hook keeps it (T483). Its id. */
-async function reviewed(w, role, text) {
+/**
+ * A run of a role that ends done with a kept report, as Codex's stop hook keeps it (T483). Its id. record(run) records the
+ * report's findings before the run ends, as the gap rule asks (T956).
+ */
+async function reviewed(w, role, text, record = async () => {}) {
   const run = (await w.lead("run_add", { task: "T1", role })).split(" ")[0];
   w.tool.keepReport(w.project, { task: "T1", run, role, sha: SHA, text }, w.env);
+  await record(run);
   assert.equal(await w.lead("run_done", { run, status: "done", tokens: 1 }), `${run} done`);
   return run;
 }
@@ -205,8 +209,7 @@ test("T552: a lead records its own task's cycle through the state server, from a
   assert.equal(await lead("brief", { task_name: "sage_implementer_t1_r3", brief: BRIEF }), "brief sage_implementer_t1_r3 checked: all 10 fields. Spawn the agent with this task name and this brief.");
   assert.equal(await lead("run_done", { run: "R3", status: "done" }), "R3 done");
   assert.match(await lead("task_set", { task: "T1", fields: { state: "reviewing", pr: "5" } }), /^T1 reviewing .* PR 5/);
-  const found = await reviewed(w, "code-reviewer", FOUND);
-  assert.equal(await lead("finding_add", { task: "T1", source: "code-reviewer", severity: "medium", summary: "a.js:1 a bad value", run: found, class: "state-edge" }), "F-T1-1 open · medium · T1");
+  const found = await reviewed(w, "code-reviewer", FOUND, async (run) => assert.equal(await lead("finding_add", { task: "T1", source: "code-reviewer", severity: "medium", summary: "a.js:1 a bad value", run, class: "state-edge" }), "F-T1-1 open · medium · T1"));
   // T947: the proof check reruns the finding's proof before the verdict and the triage.
   const proof = await proofCheck(w, { "F-T1-1": "reproduced" });
   assert.match(await lead("verdict", { task: "T1", kind: "findings", sha: SHA, pr: 5, run: found }), /^T1 findings · 1111111/);
@@ -329,19 +332,18 @@ test("T552: a reviewer, QA, an implementer, a run of another task and a lead tha
   assert.match((await lead("round", { task: "T1" })).denied, /^sage: T1 has no running lead run R1/);
 });
 
-/** A leadWorld whose T1 is reviewing on PR 5, with a done code-reviewer run that holds a medium finding. Its run id. */
+/** A leadWorld whose T1 is reviewing on PR 5, with a done code-reviewer run (found) whose medium finding is F-T1-1. */
 async function reviewingWorld(t) {
   const w = await leadWorld(t);
   await w.lead("task_set", { task: "T1", fields: { state: "building" } });
   await w.lead("task_set", { task: "T1", fields: { state: "reviewing", pr: "5" } });
-  return { ...w, found: await reviewed(w, "code-reviewer", FOUND) };
+  return { ...w, found: await reviewed(w, "code-reviewer", FOUND, (run) => add({ ...w, found: run }, "medium")) };
 }
 const add = (w, severity, summary = "a.js:1 a bad value") => w.lead("finding_add", { task: "T1", source: "code-reviewer", severity, summary, run: w.found, class: "other" });
 const triage = (w, key, decision = "fix", proof) => w.lead("finding_triage", { task: "T1", key, decision, proof });
 
 test("T947: in a cycle, a lead triages a medium or high finding fix, or drops a medium one, only with a proof check; a high one is never its to drop", async (t) => {
   const w = await reviewingWorld(t), { lead } = w;
-  await add(w, "medium"); // F-T1-1
   await add(w, "high", "c.js:3 a crash"); // F-T1-2
   await add(w, "medium", "d.js:4 a leak"); // F-T1-3
   const proof = await proofCheck(w, { "F-T1-1": "not reproduced", "F-T1-2": "not reproduced", "F-T1-3": "reproduced" });
@@ -357,7 +359,6 @@ test("T947: in a cycle, a lead triages a medium or high finding fix, or drops a 
 
 test("F-T552-1: a lead leaves repairing only after it closed each fix key of the round, so a correct repair never ends in replan", async (t) => {
   const w = await reviewingWorld(t), { lead } = w;
-  await add(w, "medium"); // F-T1-1
   await add(w, "low", "b.js:2 slow"); // F-T1-2
   await triage(w, "F-T1-1", "fix", await proofCheck(w, { "F-T1-1": "reproduced" }));
   await triage(w, "F-T1-2");
@@ -428,7 +429,6 @@ test("F-T552-2: a lead gives its task no PR that another task has or had", async
 
 test("F-T552-2: a lead dismisses no fix key of a round, of this round or an earlier one", async (t) => {
   const w = await reviewingWorld(t), { lead } = w;
-  await add(w, "medium"); // F-T1-1
   await add(w, "low", "b.js:2 slow"); // F-T1-2, a key of the round
   await add(w, "low", "c.js:3 slow"); // F-T1-3, from before the round
   await triage(w, "F-T1-1");
@@ -443,12 +443,35 @@ test("F-T552-2: a lead dismisses no fix key of a round, of this round or an earl
 
 test("F-T552-2: a lead's verdict on a commit of the ledger passes while a repair waits, so a cycle's other reports still count", async (t) => {
   const w = await reviewingWorld(t), { lead } = w;
-  await add(w, "medium");
   await lead("verdict", { task: "T1", kind: "findings", sha: SHA, pr: 5, run: w.found });
   await triage(w, "F-T1-1");
-  const other = await reviewed(w, "code-reviewer", FOUND);
-  await add({ ...w, found: other }, "medium");
+  const other = await reviewed(w, "code-reviewer", FOUND, (run) => add({ ...w, found: run }, "medium"));
   assert.match(await lead("verdict", { task: "T1", kind: "findings", sha: SHA, pr: 5, run: other }), /^T1 findings · 1111111/);
+});
+
+test("T956: the gap rule holds a Codex lead at its next step: a medium finding of a kept report needs its row with the run; a low one does not", async (t) => {
+  const w = await leadWorld(t), { lead } = w;
+  await lead("task_set", { task: "T1", fields: { state: "building" } });
+  await lead("task_set", { task: "T1", fields: { state: "reviewing", pr: "5" } });
+  const run = (await lead("run_add", { task: "T1", role: "code-reviewer" })).split(" ")[0];
+  w.tool.keepReport(w.project, { task: "T1", run, role: "code-reviewer", sha: SHA, text: FOUND.replace("- K1 medium", "- K2 low b.js:2 a typo\n- K1 medium") }, w.env);
+  const GAP = `sage: ${run}'s code-reviewer report has a medium or high finding with no row on T1: K1 (medium). Record each one first, one row for each key, at its severity or above and with the run: sage finding add T1 --source code-reviewer --severity medium --summary=<word> --run ${run} --class <class>`;
+  const calls = [["run_add", { task: "T1", role: "code-reviewer" }], ["run_done", { run, status: "done", tokens: 1 }], ["task_set", { task: "T1", fields: { state: "verifying" } }]];
+  for (const [name, args] of calls) {
+    assert.equal((await lead(name, args)).denied, GAP, `the gate: ${name}`);
+    // A proof of the lead for this call, as if the gate had let it through: the server holds the rule itself.
+    w.writeProof(name, `gap_${name}`, { role: "lead", task: "T1", run: "R1", project: w.project });
+    const error = String((await w.call(name, args, { gate: false, callId: `gap_${name}` })).error);
+    assert.ok(error.startsWith(GAP), `the server: ${name}: ${error}`);
+  }
+  // A run of another role goes on; a row below the finding's severity does not count.
+  assert.match(await lead("run_add", { task: "T1", role: "qa" }), /^R\d+ running · qa on T1/);
+  await lead("finding_add", { task: "T1", source: "code-reviewer", severity: "low", summary: "a.js:1 a bad value", run, class: "other" });
+  assert.equal((await lead(...calls[0])).denied, GAP, "a low row does not hold a medium finding");
+  assert.match(await lead("finding_add", { task: "T1", source: "code-reviewer", severity: "medium", summary: "a.js:1 a bad value", run, class: "state-edge" }), /^F-T1-2 open · medium · T1$/);
+  // K1 has its row, and the low K2 needs none: the lead goes on.
+  assert.equal(await lead("run_done", { run, status: "done", tokens: 1 }), `${run} done`);
+  assert.match(await lead(...calls[0]), /^R\d+ running · code-reviewer on T1/);
 });
 
 test("the state server lists one tool for each state-tool command, and marks only the reads read-only", async (t) => {

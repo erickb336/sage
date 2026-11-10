@@ -848,6 +848,20 @@ const ofRun = (f, run) => f.run === run || f.key.startsWith(`${run}-`);
 const movedOf = (decisions, task, run, severity = "") => decisions.filter((d) => d.task === task.id && / moved to T[1-9]\d* as /.test(d.decision) && d.why.startsWith(`the follow-up task (from ${run}, ${severity}`));
 
 /**
+ * The medium and high findings of a run's report ({ key, severity }, highest first) that the task's finding rows do not
+ * hold (T483, T956). Each one needs its own row of the run (its run cell, or an older key with the run) at its severity or
+ * above, in any status; a medium one may have moved to a follow-up task instead, as its move's decision says. A low
+ * finding needs no row.
+ */
+function unheld(findings, decisions, task, run, reported) {
+  const level = { medium: 2, high: 3 }, down = (a, b) => b - a;
+  const held = [...findings.filter((f) => f.task === task.id && ofRun(f, run) && f.severity !== "low").map((f) => level[f.severity]), ...movedOf(decisions, task, run, "medium").map(() => level.medium)].sort(down);
+  // The highest finding takes the highest row left; a finding that the highest row left does not cover has none.
+  let k = 0;
+  return reported.filter((f) => f.severity !== "low").sort((a, b) => down(level[a.severity], level[b.severity])).filter((f) => !(held[k] >= level[f.severity] && ++k));
+}
+
+/**
  * Does triage clear this findings or qa-fail verdict (T294)? Its run links it to its findings: at least one, and each is
  * moved, or dismissed by a triage that still says so, below high. A row back on the task under a moved key counts as that
  * finding. A closed finding does not clear it: a new head confirms a fix, not this one. A high finding needs a new head
@@ -938,14 +952,11 @@ function backingProblem(dir, task, kind, opt) {
   const rows = read(dir, "findings").filter((f) => f.task === task.id && ofRun(f, run.id) && f.severity !== "low");
   const open = rows.filter((f) => f.status === "open");
   if (open.length && !found) return `${run.id}'s report has findings (${said}), and ${open.map((f) => `${f.key} (${f.severity})`).join(", ")} ${open.length === 1 ? "is" : "are"} still open: so it backs ${problemKind}, or ${cleanKind} after each one is dismissed with a reason, moved or closed.`;
-  // A finding that moved to a follow-up task left its run behind: its move's decision names the run and the severity.
-  const moved = movedOf(read(dir, "decisions"), task, run.id, "medium");
-  const level = { medium: 2, high: 3 }, down = (a, b) => b - a;
-  const held = [...rows.map((f) => level[f.severity]), ...moved.map(() => level.medium)].sort(down);
-  const needed = report.severities.filter((s) => s !== "low").map((s) => level[s]).sort(down);
-  if (!needed.some((n, k) => !(held[k] >= n))) return undefined;
+  const decisions = read(dir, "decisions"), needed = report.severities.filter((s) => s !== "low");
+  if (!unheld(rows, decisions, task, run.id, report.findings).length) return undefined;
   // The rows by severity, as the report gives its findings, so the line says which severity lacks a row (F-T294-6).
-  const tally = ["high", "medium"].map((s) => [held.filter((n) => n === level[s]).length, s]).filter(([n]) => n).map(([n, s]) => `${n} ${s}`).join(" and ") || "none";
+  const held = [...rows.map((f) => f.severity), ...movedOf(decisions, task, run.id, "medium").map(() => "medium")];
+  const tally = ["high", "medium"].map((s) => [held.filter((v) => v === s).length, s]).filter(([n]) => n).map(([n, s]) => `${n} ${s}`).join(" and ") || "none";
   // --key with the run's prefix: a retry finds the same row, so a lost reply adds no second one.
   const record = `record each one first (sage finding add ${task.id} --source ${run.role} --run ${run.id} --key ${run.id}-<its key> --class <class> --severity <its severity> --summary "<the problem>")`;
   return `${run.id}'s report has ${needed.length} medium or high finding${needed.length === 1 ? "" : "s"} (${said}), and ${task.id} holds ${tally} of ${run.id}, but each one needs a row at its severity or above: ${found ? `${record}, then record ${kind}.` : `so it backs ${problemKind}. For ${cleanKind}, ${record}, then dismiss it with a reason, move it or close it.`}`;
@@ -2799,24 +2810,19 @@ function logbookView(project, env = process.env, { max = Infinity } = {}) {
     leadRun: (task) => one(rows("runs").filter((r) => r.task === task && r.role === "lead" && r.status === "running")),
     findings: (task) => rows("findings").filter((f) => f.task === task),
     /**
-     * The row of a finding key now, in any status: its own row, or after finding move (once or more), the row that the
-     * moves gave it. A move counts only as the decision that finding move writes: on the key's task, in the form "<key>
-     * moved to <task> as <new key on that task>: <summary>", where the summary is the one of the row at the end
-     * (F-T289-44, F-T289-49). Undefined when a key on the way is on no row and in no one such move, or on two rows.
+     * The task's review and QA runs, in any status, whose kept report has a medium or high finding with no row (unheld),
+     * each { run, role, missing }, or whose kept report cannot be read while the run still runs, { run, role, problem }
+     * (T956). A run with no kept report, or a damaged one, gives nothing here: it backs no verdict either.
      */
-    traced(key) {
-      const said = [];
-      for (let k = key, seen = new Set(); !seen.has(k); ) {
-        seen.add(k);
-        const now = rows("findings").filter((f) => f.key === k);
-        if (now.length) return said.every((s) => s === now[0].summary) ? one(now) : undefined;
-        const moves = rows("decisions").filter((d) => d.task === /^F-(T[1-9]\d*)-[1-9]\d*$/.exec(k)?.[1] && subjects(d.decision)[0] === k && /^F-T[1-9]\d*-[1-9]\d*$/.test(subjects(d.decision)[2] ?? ""));
-        const [, to, next] = moves.length === 1 ? subjects(moves[0].decision) : [];
-        if (!next?.startsWith(`F-${to}-`)) return undefined;
-        said.push(moves[0].decision.slice(`${k} moved to ${to} as ${next}: `.length));
-        k = next;
-      }
-      return undefined;
+    unrecorded(id) {
+      const task = one(rows("tasks").filter((t) => t.id === id));
+      return !task ? [] : rows("runs").filter((r) => r.task === id && Object.hasOwn(BACKS, r.role)).flatMap((run) => {
+        const kept = keptOf(dir, run.id);
+        if (!kept || kept.damaged || kept.task !== id || kept.role !== run.role) return [];
+        const report = readReport(kept.text), missing = report.unreadable ? [] : unheld(rows("findings"), rows("decisions"), task, run.id, report.findings);
+        if (report.unreadable) return run.status === "running" ? [{ run: run.id, role: run.role, problem: report.problem }] : [];
+        return missing.length ? [{ run: run.id, role: run.role, missing }] : [];
+      });
     },
     shas: (task) => new Set(rows("ledger").filter((r) => r.task === task && r.sha).map((r) => r.sha)),
     verdicts: (task) => rows("ledger").filter((r) => r.task === task),

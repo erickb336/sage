@@ -501,7 +501,7 @@ Limits:
   - A finished or interrupted agent frees its thread, and the agent then tries again with the same name.
   - The state tool holds at most `max_agents` running runs for a project, in both providers, so set Codex's limit to that cap ([What you need](#what-you-need)). The start status warns while it is lower. Codex counts the threads of one session; the state tool counts the runs of the project's logbook, in all sessions.
 - The reviewer's limits above hold for a lead too: its shell write is blocked only in the plain forms. A lead sends the branch and opens the pull request from the shell, under the same push and `gh` rules as the chief, and it never merges. It starts no lead, PE, designer or arena judge.
-- A lead records every finding of a helper's report. The state tool refuses a review or QA verdict while a medium or high finding of its kept report has no row, in Claude and in Codex. Claude's hook also stops the lead earlier, at its next run, verdict or state move (its gap rule), and the Codex gate does not.
+- A lead records every finding of a helper's report. In Claude and in Codex, the state tool refuses the lead's next run of that role, its run done of that run and its state move while a medium or high finding of a kept report has no row with the run (the gap rule), and it refuses a review or QA verdict that such a report backs.
 - The chief's own `resume_agent` is not blocked. The chief's text says to start a fresh agent.
 
 ## Inactive trigger observation
@@ -515,9 +515,7 @@ These are the differences from Claude Code that stay in sage 1.0, by the owner's
 | Limit | What you see | What to do |
 | --- | --- | --- |
 | **One model for all agents** | Every agent runs on the session's model, also a light role such as the UX review. | Choose a multi-agent v2 model for the session. Do not change it during a run. |
-| **Late check of a left-out finding** | A lead that leaves out a medium or high finding of a helper learns it only when it records the verdict. | Nothing. The state tool refuses that verdict, so the clean cycles stay safe. |
 
 ### Why each limit stays
 
 - **One model for all agents:** Codex children inherit the session's model, so sage sets no model for each role and size.
-- **Late check of a left-out finding:** the state tool refuses that verdict in both providers. Claude's hook also checks it earlier, at the lead's next run or state move.
