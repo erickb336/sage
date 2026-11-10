@@ -3,6 +3,7 @@ export { createStateTool } from "./state.mjs";
 export { sharedRoot } from "./shared-root.mjs";
 export { writerClass } from "./chiefs.mjs";
 export { readLocalGit } from "./local-git.mjs";
+export { agentCaps } from "./logbook-fields.mjs";
 export { checkoutContains, resolveCheckoutPath, verifiedCheckout } from "./checkout-path.mjs";
 export { shellCommands, programsRun, commandText } from "./command-reader.mjs";
 export { createCommandPolicy, mentionsMerge, gitSubcommand, programName, unreadable } from "./command-policy.mjs";

@@ -6646,13 +6646,13 @@ test("T482 R1764-2 R1764-3: a lead's refusal at a cap names the wait command and
   assert.match(tenth, /^sage: this lead already has 9 children\. /);
   assert.match(tenth, tail);
   assert.doesNotMatch(tenth, /Report to the sage|report the cap/, "no stop that the hook then blocks: its helpers run");
-  s.sage("config", "max_agents=5");
+  s.sage("config", "cap.other=5"); // the helpers' project, not the logbook's: the state tool's own cap still has room (T952)
   const project = spawn();
   assert.match(project, /^sage: 9 sage agents are running for other, and its cap is 5 /, "the helpers' project: their spawns name no folder");
   assert.match(project, tail);
   assert.match(project, /If no helper of yours runs, report the cap to the sage\.$/);
   assert.doesNotMatch(project, /config cap/, "a lead may not run the config command");
-  s.sage("config", "max_agents=20", "cap_total=5");
+  s.sage("config", "cap.other=20", "cap_total=5");
   const total = spawn();
   assert.match(total, /^sage: 10 sage agents are running across all projects, and the total cap is 5 /);
   assert.match(total, tail);
@@ -6701,6 +6701,7 @@ test("T482 R1836-1 T504: after a restart, an old helper's slot frees by the stal
   for (const helpersFirst of [false, true]) { // variant A: the fresh lead first, as lead.md and the chief text say; variant B: the helper runs first
     const s = leadSession();
     s.sage("run", "done", "R2", "--status", "done", "--tokens", "1");
+    s.sage("run", "done", "R3", "--status", "failed"); // T2's run has no agent: the state tool's cap counts only this test's runs (T952)
     // Two old helpers of lead-a, in the project's folder, that never stop: their session ended.
     const old = [1, 2].map((k) => {
       const run = leadAdd(s, "qa");

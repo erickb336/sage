@@ -997,6 +997,24 @@ test("T930: config sets the board name, the archive, the cycle counts and max_le
   assert.deepEqual(JSON.parse(readFileSync(join(s.env.CODEX_HOME, "sage", "config.json"), "utf8")), { "cycles.small": 2, "cycles.large": 3, "cycles.risk": 4, max_leads: 4 });
 });
 
+test("T952: run_add holds the project's agent cap in Codex as in Claude: the 11th running run is refused with the same line, and an ended run frees a place", async (t) => {
+  const s = await programWorld(t), { both } = s;
+  for (let n = 1; n <= 10; n++) {
+    const task = `T${(n % 3) + 1}`;
+    assert.match(await s.call("run_add", { task, role: "qa" }), new RegExp(`^R${n} running · qa on ${task}`));
+    assert.match(s.claude("run", "add", task, "--role", "qa"), new RegExp(`^R${n} running · qa on ${task}`));
+  }
+  const refused = await both("run_add", { task: "T1", role: "code-reviewer" }, ["run", "add", "T1", "--role", "code-reviewer"]);
+  assert.equal(refused.error, "sage: the project has 10 running runs, its agent cap (max_agents, or cap.<project>): R1 qa on T2, R2 qa on T3, R3 qa on T1, R4 qa on T2, R5 qa on T3, R6 qa on T1, R7 qa on T2, R8 qa on T3, R9 qa on T1, R10 qa on T2. Wait for one of them to end, or end a run whose agent has stopped (sage run done <R> --status done, blocked, question or failed). Nothing changed.");
+  // The lead's steps name this refusal, and say to wait for a helper's report, as the refusal does (F-T952-1).
+  const steps = readFileSync(new URL("../plugins/sage-codex/skills/sage/references/lead-steps.md", import.meta.url), "utf8");
+  assert.match(steps, /\*\*Agent cap\.\*\* When `run_add` says that the project is at its agent cap, wait for a helper's report with `wait_agent`, end its run, then call `run_add` again\. Never end the run of a helper that still works\./);
+  assert.equal(await both("run_done", { run: "R4", status: "failed" }, ["run", "done", "R4", "--status", "failed"]), "R4 failed");
+  assert.match(await s.call("run_add", { task: "T1", role: "code-reviewer" }), /^R11 running · code-reviewer on T1/);
+  assert.match(s.claude("run", "add", "T1", "--role", "code-reviewer"), /^R11 running · code-reviewer on T1/);
+  assert.match((await both("run_add", { task: "T1", role: "qa" }, ["run", "add", "T1", "--role", "qa"])).error, /^sage: the project has 10 running runs, its agent cap/);
+});
+
 test("T930: only the chief calls program_propose and config, and a lead sets no program=, at the gate and at the server", async (t) => {
   const w = await leadWorld(t), { lead } = w;
   const calls = [["program_propose", { name: "n", goal: "g", pilot: "T1", tasks: "T2" }], ["config", { settings: { max_leads: "9" } }], ["config", { settings: { name: "Mine" } }]];

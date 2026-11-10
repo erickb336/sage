@@ -8,6 +8,7 @@
 // owner record reader starts its replay with sage mode on.
 import { readFileSync, realpathSync } from "node:fs";
 import { homedir } from "node:os";
+import { agentCaps } from "../core/index.mjs";
 import { basename, dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { PHRASES, readModeFile, startsInSageMode } from "../core/index.mjs";
@@ -56,6 +57,57 @@ function trustedCount(keys, codexHome) {
     else if (table && /^\s*trusted_hash\s*=\s*"sha256:/.test(line)) trusted.add(table);
   }
   return keys.filter((key) => trusted.has(key)).length;
+}
+
+/** The numbers of a config.toml by their dotted key: plain key = value lines, under [table] headers, and inline tables, also nested ones. */
+function tomlNumbers(text) {
+  const path = (key) => key.split(".").map((part) => part.trim().replace(/^"(.*)"$|^'(.*)'$/, "$1$2"));
+  const pair = (text) => /^([^=]+?)\s*=\s*(.+)$/.exec(text.trim());
+  const numbers = new Map();
+  // One value by its key: an inline table gives each of its pairs, split at the commas outside a nested { } or [ ].
+  const read = (key, value) => {
+    const inline = /^\{(.*)\}$/.exec(value.trim());
+    if (!inline) return void (/^\d+$/.test(value.trim()) && numbers.set(key.join("."), Number(value)));
+    let depth = 0, start = 0;
+    for (let i = 0; i <= inline[1].length; i++) {
+      const c = inline[1][i];
+      if (c === "{" || c === "[") depth++;
+      else if (c === "}" || c === "]") depth--;
+      else if (i === inline[1].length || (c === "," && !depth)) {
+        const p = pair(inline[1].slice(start, i));
+        if (p) read([...key, ...path(p[1])], p[2]);
+        start = i + 1;
+      }
+    }
+  };
+  let table = [];
+  for (const raw of text.split(/\r?\n/)) {
+    const line = raw.replace(/(^|\s)#.*$/, "").trim();
+    const header = /^\[\s*([^[\]]+?)\s*\]$/.exec(line), p = pair(line);
+    if (header) table = path(header[1]);
+    else if (line.startsWith("[")) table = null; // an array of tables: no key of sage's is in one
+    else if (table && p) read([...table, ...path(p[1])], p[2]);
+  }
+  return numbers;
+}
+
+/**
+ * The warning when Codex runs fewer agents at once than the project's agent cap (T952), or undefined. Codex counts the
+ * threads of one session: features.multi_agent_v2.max_concurrent_threads_per_session wins and counts the chief's own
+ * thread; else agents.max_concurrent_threads_per_session (or max_threads) counts only the agents; else Codex allows 4
+ * threads, so 3 agents (codex-rs/core/src/config/mod.rs, resolve_multi_agent_v2_config). A plugin cannot set this value.
+ */
+function threadWarning(input, codexHome, env) {
+  let numbers = new Map();
+  try { numbers = tomlNumbers(readFileSync(join(codexHome, "config.toml"), "utf8")); } catch { /* No config yet: Codex's default. */ }
+  const need = agentCaps(tool.config(env)).cap(tool.projectName(input.cwd ?? process.cwd()));
+  const v2 = "features.multi_agent_v2.max_concurrent_threads_per_session", own = numbers.get(v2);
+  const agents = numbers.get("agents.max_concurrent_threads_per_session") ?? numbers.get("agents.max_threads");
+  const [allowed, from, fix] = own !== undefined ? [Math.max(own - 1, 0), `${v2} = ${own}, which counts the chief's own thread`, `max_concurrent_threads_per_session = ${need + 1} under [features.multi_agent_v2]`]
+    : agents !== undefined ? [agents, `agents.max_concurrent_threads_per_session = ${agents}`, `max_concurrent_threads_per_session = ${need} under [agents]`]
+    : [3, "Codex's default of 4 threads, the chief's own included", `max_concurrent_threads_per_session = ${need} under [agents]`];
+  if (allowed >= need) return undefined;
+  return `sage: Codex runs at most ${allowed} agents at once in this session (${from}), and this project's agent cap is ${need} (max_agents, or cap.<project>). An agent over Codex's limit fails to start with "agent thread limit reached". To raise it, set ${fix} in ${join(codexHome, "config.toml")}, then start a new session.`;
 }
 
 /** Whether sage mode is on in the session, from the mode hook's file (a resumed session keeps it). */
@@ -123,6 +175,8 @@ export function sessionStatus(input, { pluginRoot, codexHome, env = process.env 
   if (!inRange) limits.push(`sage: ${version ? `sage was not tested with Codex ${version}` : "the hook could not read the Codex version"}, so some sage rules may not run. Autopilot merges in Codex ${RECORD_RANGE}.`);
   // Codex trusts a plugin hook only when its record matches the hash of the hook and of the plugin's files. Codex
   // computes both, so the status counts only the records, and says that Codex checks each hash.
+  const threads = threadWarning(input, codexHome, env);
+  if (threads) limits.push(threads);
   const status = [
     `sage ${plugin} is installed. Codex ${version ?? "version unknown"}. sage hooks: ${trusted} of ${keys.length} have a trust record (Codex checks each hash).`,
     sageOn(input, env) ? `sage mode is on in this session${start.on ? ", because this project starts each session in sage mode" : ""}.` : `To start sage mode, the user sends this message alone: ${ON_PHRASE}`,

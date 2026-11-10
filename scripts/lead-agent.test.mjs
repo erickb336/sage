@@ -665,12 +665,18 @@ test("T301: the lead file's helper cap is the hook's, and with the default agent
   assert.match(fill(raised, cap), new RegExp(`already has ${cap} children`), `helper ${cap + 1} waits for the lead's cap`);
   const p = project({ size: "large" }); // the default max_agents
   play(BUILD, p);
-  assert.match(fill(p, DEFAULT_CAP - 1), new RegExp(`its cap is ${DEFAULT_CAP}\\b`), "under the default cap, the project's cap holds first");
+  play(Array.from({ length: DEFAULT_CAP - 1 }, (_, i) => [`$ sage run add T1 --role ${ROLES[i % ROLES.length]}`, `> R${i + 3} sage:${ROLES[i % ROLES.length]}`]).flat(), p);
+  // Under the default cap, the lead and its 9 helpers fill the project: the state tool refuses one more run (T952).
+  const full = new RegExp(`^sage: the project has ${DEFAULT_CAP} running runs, its agent cap`);
+  const refused = p.run("sage", ["run", "add", "T1", "--role", "qa"]).stderr.toString();
+  assert.match(refused, full, "the lead's next run waits for room under the default cap");
+  // The refusal says to wait, as the file's cap rule does, and the file names it (F-T952-1).
+  assert.match(refused, /Wait for one of them to end, or end a run whose agent has stopped /);
+  assert.match(/^- \*\*A cap:\*\* .*$/m.exec(TEXT)?.[0] ?? assert.fail("the file has its cap rule"), /`run add` says that the project is at its agent cap, wait for a helper's stop \(`wait <T>`\)/);
   // A second lead finds the project's cap full while lead-T1 and its helpers run.
   p.chief("task", "add", "--priority", "P2", "--title", "second", "--size", "small");
   p.chief("task", "T2", "set", "state=briefed");
-  p.chief("run", "add", "T2", "--role", "lead");
-  assert.match(p.startLead("T2") ?? "", new RegExp(`cap is ${DEFAULT_CAP}\\b`), "a second lead waits for room under the default cap");
+  assert.throws(() => p.chief("run", "add", "T2", "--role", "lead"), (e) => full.test(e.message.split(": ").slice(1).join(": ")), "a second lead waits for room under the default cap");
 });
 
 test("T301: the hook refuses what the lead file says is the sage's, so the examples' passes are real", () => {
