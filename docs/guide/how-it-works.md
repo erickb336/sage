@@ -12,12 +12,12 @@ This page shows the parts of sage and how a request becomes a verified pull requ
 There are two loops:
 
 - **The inner loop** turns a request into verified work: the chief runs the design and the PE check, and one lead for each pull request runs the build, the reviews and QA. Findings go back to the build. A clean result becomes a pull request.
-- **The outer loop** [seals the lesson](concepts.md): it gives a mistake that comes back twice a lasting fix, a test or a check in code first. Each sealed lesson makes [the dojo](concepts.md) stronger.
+- **The outer loop** [seals the lesson](concepts.md): it gives a mistake that comes back twice a lasting fix at the highest level that works: the architecture, a type, a check whose error names the fix, a test, and a written rule last. Each sealed lesson makes [the dojo](concepts.md) stronger.
 
 <a href="../assets/tip-seal-light.svg">
 <picture>
   <source media="(prefers-color-scheme: dark)" srcset="../assets/tip-seal-dark.svg">
-  <img alt="The toad sage's tip: seal the lesson. Give a mistake that comes back twice a lasting fix: a test or a check in code first; a principle or a standing order only when code cannot hold it. That is how the dojo gets stronger." src="../assets/tip-seal-light.svg" width="100%">
+  <img alt="The toad sage's tip: seal the lesson. Give a mistake that comes back twice a lasting fix, at the highest level that works: the architecture, a type, a check whose error names the fix, a test, and a written rule last. Prove that each new check fails on the past mistake. That is how the dojo gets stronger." src="../assets/tip-seal-light.svg" width="100%">
 </picture>
 </a>
 

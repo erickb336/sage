@@ -49,8 +49,8 @@ writeFileSync(VERSION, "0.164.0\n");
 const ghCalls = () => (existsSync(GH_LOG) ? readFileSync(GH_LOG, "utf8").trim().split("\n").map((line) => JSON.parse(line)) : []);
 
 test("the fakes are the ones that run: gh by its absolute path, and the Codex of the arg0 link", () => {
-  assert.equal(spawnSync(join(FAKES, "gh"), ["--version"], { encoding: "utf8", env: { PATH: FAKES } }).stdout, "FAKE-gh T677\n");
-  assert.equal(spawnSync(join(ARG0, "apply_patch"), ["--version"], { encoding: "utf8", env: {} }).stdout, "codex-cli 0.164.0\n");
+  assert.equal(spawnSync(join(FAKES, "gh"), ["--version"], { encoding: "utf8", env: { PATH: FAKES, HOME: SCRATCH } }).stdout, "FAKE-gh T677\n");
+  assert.equal(spawnSync(join(ARG0, "apply_patch"), ["--version"], { encoding: "utf8", env: { HOME: SCRATCH } }).stdout, "codex-cli 0.164.0\n");
   rmSync(GH_LOG);
   console.log("fakes proven: FAKE-gh T677, codex-cli 0.164.0");
 });
@@ -314,8 +314,8 @@ test("F-T677-1: gh runs with the name gh, so a shared launcher that picks its to
   clearPermits();
   const w = world();
   const gh = loggingGh("launcher");
-  assert.equal(spawnSync(join(gh.dir, "gh"), ["pr", "x"], { encoding: "utf8", env: { ...gh.env, PATH: gh.dir } }).stdout, "FAKE-gh T677 launcher\n", "the launcher runs gh by the link's name");
-  assert.match(spawnSync(realpathSync(join(gh.dir, "gh")), ["pr", "x"], { encoding: "utf8", env: gh.env }).stderr, /^launcher: no tool named node/, "by its real file's name it refuses");
+  assert.equal(spawnSync(join(gh.dir, "gh"), ["pr", "x"], { encoding: "utf8", env: { ...gh.env, PATH: gh.dir, HOME: SCRATCH } }).stdout, "FAKE-gh T677 launcher\n", "the launcher runs gh by the link's name");
+  assert.match(spawnSync(realpathSync(join(gh.dir, "gh")), ["pr", "x"], { encoding: "utf8", env: { ...gh.env, HOME: SCRATCH } }).stderr, /^launcher: no tool named node/, "by its real file's name it refuses");
   rmSync(join(gh.dir, "calls.log"));
   const env = { ...w.env, ...gh.env, PATH: `${ARG0}:${gh.dir}` };
   assert.equal(denied(await w.run(w.input(), { env })), undefined, "the gate admits the call");

@@ -15,7 +15,7 @@ import { sessionMeta } from "./report-gate.mjs";
 import { RECORD_RANGE } from "./owner-record.mjs";
 import { modeDirectory, TESTED_CODEX } from "./sage-codex-hook.mjs";
 import { saveStartMark } from "./start-mark.mjs";
-import { ASK_INSTALL, hookState } from "./entries.mjs";
+import { ASK_INSTALL, hookState, pinWarning } from "./entries.mjs";
 import { LAUNCHER_VERSION, launcherFolder } from "./launch.mjs";
 import { tool } from "../skills/sage/sage.mjs";
 
@@ -130,8 +130,8 @@ function resetAutopilot(input, env) {
 /**
  * The hook's output JSON for one SessionStart input, or undefined for any other event. The chief always gets the
  * status. The user gets a warning (a systemMessage) only for a limit: a sage entry of hooks.json that is missing or
- * changed, a sage hook without a trust record, a launcher older than this version's, or a Codex outside the tested
- * range. codexHome is the launcher's (its real path), and launcherVersion its LAUNCHER_VERSION (T957).
+ * changed, a sage hook without a trust record, a launcher older than this version's, a marketplace pinned to one
+ * commit (T971), or a Codex outside the tested range. codexHome is the launcher's (its real path), and launcherVersion its LAUNCHER_VERSION (T957).
  */
 export function sessionStatus(input, { pluginRoot, codexHome, launcherVersion, env = process.env }) {
   if (input?.hook_event_name !== "SessionStart") return undefined;
@@ -150,6 +150,8 @@ export function sessionStatus(input, { pluginRoot, codexHome, launcherVersion, e
   const [is, they, them] = untrusted === 1 ? ["is", "it does", "it"] : ["are", "they do", "them"];
   if (untrusted) limits.push(`sage: ${untrusted} of the ${total} sage hooks ${is} not trusted or turned off, so ${they} not run. To trust ${them} or turn ${them} on, type /hooks in the Codex CLI.`);
   if (!(launcherVersion >= LAUNCHER_VERSION)) limits.push(`sage: the sage hook launcher in ${launcherFolder(codexHome)} is older than this sage version. To update it, ${ASK_INSTALL}`);
+  const pin = pinWarning(codexHome);
+  if (pin) limits.push(pin);
   if (!inRange) limits.push(`sage: ${version ? `sage was not tested with Codex ${version}` : "the hook could not read the Codex version"}, so some sage rules may not run. Autopilot merges in Codex ${RECORD_RANGE}.`);
   // Codex trusts a user hook only when its record matches the hash of the entry. Codex computes it, so the status counts
   // only the records, and says that Codex checks each hash.

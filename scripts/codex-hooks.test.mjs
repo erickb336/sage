@@ -543,3 +543,26 @@ test("F-T957-22: the launcher orders build metadata as Codex does: numeric parts
   marker(s, "1.0.1-rc.10");
   assert.equal(run(), "1.0.1-rc.10", "a pre-release, as before");
 });
+
+test("T971: a sage marketplace pinned to one commit gets a warning in the start status and in hooks status, with the steps that end the pin", (t) => {
+  const s = scratch(t);
+  const root = s.version("0.1.0");
+  assert.equal(s.hooks("install").status, 0);
+  const config = join(s.codex, "config.toml");
+  const start = { hook_event_name: "SessionStart", source: "startup", session_id: "s1", cwd: s.dir, transcript_path: join(s.dir, "none.jsonl") };
+  const lines = () => [JSON.parse(s.launch("SessionStart", start).stdout).systemMessage.split("\n"), s.hooks("status", root).stdout.trimEnd().split("\n")];
+  const sha = "06d98f689984132d0185ed3dff0e4171b8bd838a";
+  const pin = `sage: ${config} pins the sage marketplace to the commit ${sha}, so an upgrade gets no newer sage. To get updates, the user runs in a terminal: ` +
+    "codex plugin marketplace remove sage, then codex plugin marketplace add https://github.com/erickb336/sage-stack.git, then codex plugin add sage@sage. Then start a new session.";
+  // The text that `codex plugin marketplace add https://github.com/erickb336/sage.git --ref <sha>` writes (Codex 0.164.0).
+  const marketplace = (ref) => `[marketplaces.sage]\nsource_type = "git"\nsource = "https://github.com/erickb336/sage.git"\n${ref === undefined ? "" : `ref = ${ref}\n`}`;
+  writeFileSync(config, marketplace(`"${sha}"`));
+  for (const [i, found] of lines().entries()) assert.ok(found.includes(pin), `${["start status", "hooks status"][i]}: ${found.join("\n")}`);
+  writeFileSync(config, `[marketplaces]\nsage = { source = "x", ref = '${sha.slice(0, 8)}' }\n`);
+  assert.ok(lines()[1].includes(pin.replace(sha, sha.slice(0, 8))), "another TOML form and a short commit");
+  // No pin: a ref that names a branch follows it, and a marketplace without a ref follows its default branch.
+  for (const ref of ['"main"', undefined]) {
+    writeFileSync(config, marketplace(ref));
+    for (const found of lines()) assert.ok(!found.some((line) => line.includes("pins the sage marketplace")), String(ref));
+  }
+});

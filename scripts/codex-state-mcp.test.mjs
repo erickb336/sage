@@ -1120,7 +1120,7 @@ test("T506: the chief saves a report with pages, and each run_done example ends 
   assert.equal(await s.call("run_add", { task: "T1", role: "code-reviewer", "usage-interface": usageInterface }), "R1 running · code-reviewer on T1 · reasoning_effort high");
   assert.equal(await s.call("run_add", { task: "T2", role: "qa" }), "R2 running · qa on T2 · reasoning_effort medium");
   assert.equal((await s.call("run_done", { run: "R1", status: "done", usage: "unavailable" })).error,
-    "sage: Unavailable usage needs a running run, its unsupported interface snapshot, a report, source and evidence, without tokens. Nothing changed.");
+    "sage: Unavailable usage needs a running run, its unsupported interface snapshot (or a lead run with a report), a report, source and evidence, without tokens. Nothing changed.");
 
   // pages saves a report only for a run of its task, only with a text, and builds the path itself.
   const folder = join(s.env.SAGE_WORKTREES, basename(logbook), "pages", "T1");
