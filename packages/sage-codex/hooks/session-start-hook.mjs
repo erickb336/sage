@@ -13,6 +13,7 @@ import { fileURLToPath } from "node:url";
 import { PHRASES, readModeFile, startsInSageMode } from "sage-core";
 import { privateDirectory, readState, saveState, stateKey } from "./hook-state.mjs";
 import { sessionMeta } from "./report-gate.mjs";
+import { RECORD_RANGE } from "./owner-record.mjs";
 import { modeDirectory, TESTED_CODEX } from "./sage-codex-hook.mjs";
 import { saveStartMark } from "./start-mark.mjs";
 import { tool } from "../skills/sage/sage.mjs";
@@ -119,7 +120,7 @@ export function sessionStatus(input, { pluginRoot, codexHome, env = process.env 
   const inRange = at && (at[0] - low[0] || at[1] - low[1]) >= 0 && (at[0] - high[0] || at[1] - high[1]) <= 0;
   const limits = [resetWarning, start.warning, markWarning].filter(Boolean);
   if (trusted < keys.length) limits.push(`sage: ${keys.length - trusted} of the ${keys.length} sage hooks ${keys.length - trusted === 1 ? "is" : "are"} not trusted yet, so some sage rules do not run. To trust them, type /hooks in the Codex CLI.`);
-  if (!inRange) limits.push(`sage: ${version ? `this is Codex ${version}` : "the hook could not read the Codex version"}, and sage is tested only with Codex ${TESTED_CODEX.join(" to ")}. Some sage rules may not run.`);
+  if (!inRange) limits.push(`sage: ${version ? `sage was not tested with Codex ${version}` : "the hook could not read the Codex version"}, so some sage rules may not run. Autopilot merges in Codex ${RECORD_RANGE}.`);
   // Codex trusts a plugin hook only when its record matches the hash of the hook and of the plugin's files. Codex
   // computes both, so the status counts only the records, and says that Codex checks each hash.
   const status = [

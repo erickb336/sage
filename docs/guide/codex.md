@@ -70,10 +70,10 @@ The browser board shows every logbook by default, and each card says which provi
    sage: 3 of the 8 sage hooks are not trusted yet, so some sage rules do not run. To trust them, type /hooks in the Codex CLI.
    ```
 
-   The other limit is a Codex version outside the tested range, for example:
+   The other limit is a Codex version outside the tested range (0.164 to 0.167), for example:
 
    ```text
-   sage: this is Codex 0.168.0, and sage is tested only with Codex 0.164 to 0.167. Some sage rules may not run.
+   sage: sage was not tested with Codex 0.168.0, so some sage rules may not run. Autopilot merges in Codex 0.164 and later.
    ```
 
    Codex starts a session at your first message, so a warning comes then. The status counts the trust records in your Codex config; Codex itself checks the hash of each hook and of the plugin's files, and it runs a hook only when both match.
@@ -462,15 +462,26 @@ sage no longer has the inactive turn-trigger observer or its sample command. No 
 
 ## Known limits in Codex
 
-These are the differences from Claude Code that stay in sage 1.0, by the owner's choice. Each row says what you see, why, and what to do. The security limits of the hooks are in [The rules in Codex](#the-rules-in-codex).
+These are the differences from Claude Code that stay in sage 1.0, by the owner's choice. Each row gives the limit, what you see and what to do, and [Why each limit stays](#why-each-limit-stays) gives the reasons. The security limits of the hooks are in [The rules in Codex](#the-rules-in-codex).
 
-| What you see | Why | What to do |
+| Limit | What you see | What to do |
 | --- | --- | --- |
-| After each sage update, Codex asks you to trust every sage hook again. Until you do, sage records nothing, and the chief says why. | Codex runs a plugin hook only when your trust record matches the hook and the plugin's files, and an update changes them. | Choose **Trust all and continue**, or type `/hooks` and trust each sage hook. Then do the [gate check](#check-that-the-sage-gate-runs). |
-| With the default thread limit, a third helper at the same time fails with `collab spawn failed: agent thread limit reached`, then tries again. | sage counts no running agents in Codex, so it caps no agents in code: Codex's own thread limit is the cap, 4 threads by default. The state tool still holds at most 5 running lead runs for a project (`max_leads`). | Set `agents.max_concurrent_threads_per_session` to 10 before you run more than one lead. |
-| Every agent runs on the session's model, also a light role such as the UX review. | Codex children inherit the session's model, so sage sets no model for each role and size. | Choose a multi-agent v2 model for the session, and do not switch it during a run. |
-| The logbook and the board show no token count for a Codex run. | Codex's agent tools give no token count for each run, so the chief records the usage as unavailable. | Nothing in sage. |
-| A spawn with a missing brief field runs, and the chief gets a warning. | Codex sends the spawn message encrypted, so no hook can read it. | Nothing in normal use: the chief checks each brief with the `brief` tool first ([The brief check](#the-brief-check)). |
-| A lead with no running lead run starts, then stops at its first logbook write or agent start, with one line. | Claude Code checks the lead run when the chief starts the lead. The Codex gate checks it at the lead's first write or start. | Nothing: the lead stops safely, and the chief starts a lead on a new lead run. |
-| A lead that leaves out a medium or high finding of a helper learns it only when it records the verdict. | The state tool refuses that verdict in both providers. Claude's hook also checks it earlier, at the lead's next run or state move. | Nothing: the clean cycles stay safe. |
-| The chief can still change a file from the shell in a form that the gate does not read, such as a variable in a path, a script file or `git apply`. | The gate refuses the plain write forms only, as for a reviewer (standing order 70). | If the chief edits a file, tell it to brief an implementer. A change still needs a pull request, clean cycles and the merge check. |
+| **Hook trust after updates** | After each sage update, Codex asks you to trust the sage hooks again. Until then, sage records nothing. | Choose **Trust all and continue**, or type `/hooks`. Then do the [gate check](#check-that-the-sage-gate-runs). |
+| **Thread limit** | With the default limit, a third helper at the same time fails with `collab spawn failed: agent thread limit reached`, then tries again. | Set `agents.max_concurrent_threads_per_session` to 10 before you run more than one lead. |
+| **One model for all agents** | Every agent runs on the session's model, also a light role such as the UX review. | Choose a multi-agent v2 model for the session. Do not change it during a run. |
+| **No token counts** | The logbook and the board show no token count for a Codex run. | Nothing. |
+| **Brief check warns only** | An agent with a missing brief field starts, and the chief gets a warning. | Nothing. The chief checks each brief with the `brief` tool first ([The brief check](#the-brief-check)). |
+| **Late lead run check** | A lead with no running lead run starts, then stops at its first logbook write or agent start. | Nothing. The chief starts the lead again on a new lead run. |
+| **Late check of a left-out finding** | A lead that leaves out a medium or high finding of a helper learns it only when it records the verdict. | Nothing. The state tool refuses that verdict, so the clean cycles stay safe. |
+| **Shell writes in other forms** | The chief can still change a file from the shell in a form that the gate does not read ([examples](#why-each-limit-stays)). | Tell the chief to brief an implementer. A change still needs a pull request, clean cycles and the merge check. |
+
+### Why each limit stays
+
+- **Hook trust after updates:** Codex runs a plugin hook only when your trust record matches the hook and the plugin's files. An update changes them.
+- **Thread limit:** sage counts no running agents in Codex, so Codex's own thread limit (4 by default) is the cap. The state tool still holds at most 5 running lead runs for a project (`max_leads`).
+- **One model for all agents:** Codex children inherit the session's model, so sage sets no model for each role and size.
+- **No token counts:** Codex's agent tools give no token count for each run, so the chief records the usage as unavailable.
+- **Brief check warns only:** Codex sends the spawn message encrypted, so no hook can read it.
+- **Late lead run check:** Claude Code checks the lead run when the chief starts the lead. The Codex gate checks it at the lead's first write or start.
+- **Late check of a left-out finding:** the state tool refuses that verdict in both providers. Claude's hook also checks it earlier, at the lead's next run or state move.
+- **Shell writes in other forms:** the gate refuses the plain write forms only, as for a reviewer (standing order 70). It does not read a variable in a path, a script file or `git apply`.
