@@ -7,7 +7,7 @@ import { mkdirSync, readFileSync, realpathSync } from "node:fs";
 import { homedir } from "node:os";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
-import { activeVersion, LAUNCHER_VERSION, launchCommand, launcherFolder, planHooks, pluginOff, readText, TIMEOUTS, uninstall, versionsFolder, writeAtomic } from "./launch.mjs";
+import { activeVersion, LAUNCHER_VERSION, launchCommand, launcherFolder, planHooks, pluginOff, readText, sageGroup, TIMEOUTS, uninstall, versionsFolder, writeAtomic } from "./launch.mjs";
 
 /** Each event's fields: its timeout (the launcher's TIMEOUTS), and the context limits that the roles need. */
 export const EVENTS = {
@@ -27,25 +27,36 @@ export const entries = (codexHome) => Object.fromEntries(Object.entries(EVENTS).
 const HERE = dirname(fileURLToPath(import.meta.url));
 /** The plugin's state tool, for the install command in each line that asks for it. */
 export const INSTALL = `node "${join(HERE, "..", "skills", "sage", "sage.mjs")}" hooks install`;
+/**
+ * How a line asks for the install (F-T957-19): it writes the user's hooks file, so the owner decides. The user runs the
+ * command, or says yes and the chief runs it; the chief never runs it on its own.
+ */
+export const ASK_INSTALL = `the user runs this command in a terminal, or says yes and then the chief runs it (never without that yes): ${INSTALL}`;
 const snake = (event) => event.replace(/(?<!^)([A-Z])/g, "_$1").toLowerCase();
 
-/** The keys that have a trust record in config.toml: [hooks.state."<key>"] tables with a trusted_hash. Codex checks each hash. */
+/**
+ * The keys that have a trust record in config.toml: [hooks.state."<key>"] tables with a trusted_hash, and not turned off
+ * (enabled = false, from /hooks). Codex checks each hash.
+ */
 function trustRecords(codexHome) {
-  const trusted = new Set();
+  const hashed = new Set(), off = new Set();
   let table = null;
   for (const line of (readText(join(codexHome, "config.toml")) ?? "").split("\n")) {
     const header = /^\s*\[hooks\.state\."([^"]+)"\]\s*$/.exec(line);
     if (header) table = header[1];
     else if (/^\s*\[/.test(line)) table = null;
-    else if (table && /^\s*trusted_hash\s*=\s*"sha256:/.test(line)) trusted.add(table);
+    else if (table && /^\s*trusted_hash\s*=\s*"sha256:/.test(line)) hashed.add(table);
+    else if (table && /^\s*enabled\s*=\s*false\s*(?:#.*)?$/.test(line)) off.add(table);
   }
-  return trusted;
+  return new Set([...hashed].filter((key) => !off.has(key)));
 }
 
 /**
  * The state of sage's entries in a Codex home (its real path): for each event of the list, "ok", "changed" or "missing",
- * and how many of the present entries have a trust record. Codex keys a user hook as <hooks.json>:<event>:<group>:<handler>,
- * from CODEX_HOME's real path, or from ~/.codex as it is when CODEX_HOME is not set, so both forms count.
+ * and how many of the present entries are trusted: an entry that matches, with a trust record that is on. A changed entry
+ * keeps the record of its old text, which Codex reports as Modified, so it does not count (F-T957-4). Codex keys a user
+ * hook as <hooks.json>:<event>:<group>:<handler>, from CODEX_HOME's real path, or from ~/.codex as it is when CODEX_HOME is
+ * not set, so both forms count. Only sage's handler counts in its group: the group's other fields are Codex's matcher.
  */
 export function hookState(codexHome, env = process.env) {
   const file = join(codexHome, "hooks.json");
@@ -57,11 +68,13 @@ export function hookState(codexHome, env = process.env) {
   const records = trustRecords(codexHome), wanted = entries(codexHome);
   const events = Object.keys(EVENTS).map((event) => {
     const groups = Array.isArray(hooks[event]) ? hooks[event] : [];
-    const g = groups.findIndex((group) => Array.isArray(group?.hooks) && group.hooks.some((h) => h?.command === launchCommand(codexHome, event)));
+    const g = groups.findIndex((group) => sageGroup(group, event, codexHome));
     if (g < 0) return { event, state: "missing" };
-    const h = groups[g].hooks.findIndex((x) => x?.command === launchCommand(codexHome, event));
-    const trusted = sources.some((source) => records.has(`${source}:${snake(event)}:${g}:${h}`));
-    return { event, state: JSON.stringify(groups[g]) === JSON.stringify(wanted[event]) ? "ok" : "changed", trusted };
+    const { hooks: handlers, ...fields } = groups[g];
+    const h = handlers.findIndex((x) => x?.command === launchCommand(codexHome, event));
+    const ok = !Object.keys(fields).length && JSON.stringify(handlers[h]) === JSON.stringify(wanted[event].hooks[0]);
+    const trusted = ok && sources.some((source) => records.has(`${source}:${snake(event)}:${g}:${h}`));
+    return { event, state: ok ? "ok" : "changed", trusted };
   });
   return { file, events, present: events.filter((e) => e.state !== "missing").length, trusted: events.filter((e) => e.trusted).length };
 }
@@ -93,7 +106,8 @@ export function install(codexHome) {
   }
   if (!lines.length) lines.push(`sage's hooks are already installed in ${file}. Nothing changed.`);
   const { present, trusted } = hookState(codexHome);
-  if (trusted < present) lines.push(`Next: in the Codex CLI, type /hooks and trust the ${present - trusted} sage hooks that have no trust record (the hooks of ${file}). Codex runs a hook only after this.`);
+  const left = present - trusted;
+  if (left) lines.push(`Next: in the Codex CLI, type /hooks and trust the ${left} sage ${left === 1 ? "hook that is" : "hooks that are"} not trusted yet (the hooks of ${file}). Codex runs a hook only after this.`);
   if (/^\s*\[{1,2}\s*hooks\s*(?:\.\s*(?!"?state\b)[^\]]*)?\]{1,2}\s*(?:#.*)?$/m.test(readText(join(codexHome, "config.toml")) ?? ""))
     lines.push(`Note: ${join(codexHome, "config.toml")} also has hooks in a [hooks] table. Codex runs those too, and it warns that one layer has two kinds of hook files.`);
   return lines;
@@ -105,20 +119,39 @@ export function status(codexHome, env = process.env) {
   const version = activeVersion(codexHome), launcher = installedLauncher(codexHome);
   const bad = events.filter((e) => e.state !== "ok").map((e) => `${e.event} ${e.state}`);
   return [
-    `Entries in ${file}: ${events.length - bad.length} of ${events.length} match this sage version${bad.length ? ` (${bad.join(", ")})` : ""}. ${trusted} of ${present} have a trust record.`,
+    `Entries in ${file}: ${events.length - bad.length} of ${events.length} match this sage version${bad.length ? ` (${bad.join(", ")})` : ""}. ${trusted} of ${present} are trusted (by their trust records).`,
     `Launcher: ${launcher === undefined ? `none in ${launcherFolder(codexHome)}` : `version ${launcher} in ${launcherFolder(codexHome)}`}; this sage version's launcher is version ${LAUNCHER_VERSION}.`,
     `Installed sage: ${version === undefined ? `none in ${versionsFolder(codexHome)}` : join(versionsFolder(codexHome), version)}${pluginOff(codexHome) ? ", turned off in config.toml" : ""}.`,
-    ...(bad.length || launcher !== LAUNCHER_VERSION ? [`To fix: ${INSTALL}`] : []),
+    ...(bad.length || launcher !== LAUNCHER_VERSION ? [`To fix: ${ASK_INSTALL}`] : []),
   ];
 }
 
-/** The `hooks` command of the state tool: install, uninstall or status, for CODEX_HOME (or ~/.codex). */
-export function hooksCommand(args, env = process.env) {
+/** The Codex home whose plugin cache holds this plugin (<home>/plugins/cache/sage/sage/<version>), or undefined. */
+export function pluginHome(root = join(HERE, "..")) {
+  let real;
+  try { real = realpathSync(root); } catch { return undefined; }
+  const home = dirname(dirname(dirname(dirname(dirname(real)))));
+  return dirname(real) === versionsFolder(home) ? home : undefined;
+}
+
+/**
+ * The `hooks` command of the state tool: install, uninstall or status, for the Codex home that holds this plugin, so that
+ * the entries run the version that this home's Codex uses (F-T957-25); for a plugin outside a Codex home (a clone), for
+ * CODEX_HOME, or ~/.codex. It refuses when CODEX_HOME names another home than the plugin's, because one of the two is a
+ * mistake.
+ */
+export function hooksCommand(args, env = process.env, own = pluginHome()) {
   const [word] = args;
   if (!["install", "uninstall", "status"].includes(word) || args.length !== 1) return { code: 1, text: "usage: sage.mjs hooks install|uninstall|status" };
   const given = env.CODEX_HOME || join(env.HOME || homedir(), ".codex");
-  let codexHome;
-  try { codexHome = realpathSync(given); } catch { return { code: 1, text: `sage: the Codex home ${given} does not exist. Run codex once, or set CODEX_HOME, then run this again.` }; }
+  let codexHome = own;
+  if (!codexHome) {
+    try { codexHome = realpathSync(given); } catch { return { code: 1, text: `sage: the Codex home ${given} does not exist. Run codex once, or set CODEX_HOME, then run this again.` }; }
+  } else if (env.CODEX_HOME) {
+    let named;
+    try { named = realpathSync(env.CODEX_HOME); } catch { named = env.CODEX_HOME; }
+    if (named !== codexHome) return { code: 1, text: `sage: this sage plugin is in the Codex home ${codexHome}, but CODEX_HOME is ${env.CODEX_HOME}. Run the command of the plugin in ${env.CODEX_HOME}/plugins/cache/sage/sage, or run this one without CODEX_HOME. Nothing changed.` };
+  }
   try {
     const lines = word === "install" ? install(codexHome) : word === "uninstall" ? uninstall(codexHome) : status(codexHome, env);
     return { code: 0, text: lines.join("\n") };

@@ -11,7 +11,7 @@ The design of the two provider plugins is in [Separate provider packages](../des
 | Part of sage | Claude Code | Codex today |
 | --- | --- | --- |
 | Install from the sage marketplace | Yes | Yes: `codex plugin marketplace add`, then `codex plugin add sage@sage` |
-| A status at the start of each session | No | Yes: the chief gets the sage version, the Codex version, how many sage hooks have a trust record and the on phrase. You see a warning only when a sage hook entry is missing or changed, a sage hook has no trust record yet, the hook launcher is old, or your Codex is outside the tested range |
+| A status at the start of each session | No | Yes: the chief gets the sage version, the Codex version, how many sage hooks are trusted and the on phrase. You see a warning only when a sage hook entry is missing or changed, a sage hook is not trusted or turned off, the hook launcher is old, or your Codex is outside the tested range |
 | Principles and the writing skills | Yes | Yes: the same skills, including the `sage` skill for manual logbook commands |
 | The principles of each role | Yes: each agent file preloads them | Yes: `role.mjs` puts them in each role's text. A lead gets the path of each one to read |
 | The logbook and the board | Yes | Yes: the plugin's `sage` MCP tools write the logbook, and the board phrases show the board ([The board in Codex](#the-board-in-codex)) |
@@ -70,6 +70,9 @@ The browser board shows every logbook by default, and each card says which provi
    You see ``Added plugin `sage` from marketplace `sage`.`` Then `codex plugin list` shows `sage@sage  installed, enabled`.
 
 3. Install sage's hooks and trust them. You do this once on each computer (each Codex home), not after each update:
+
+   > **Note:** the paths in this page use the default Codex home, `~/.codex`. When you set `CODEX_HOME`, use that folder in place of `~/.codex` in each path, for example `ls "$CODEX_HOME/plugins/cache/sage/sage"`.
+
    1. Find the folder of the installed plugin: `ls ~/.codex/plugins/cache/sage/sage` shows one folder, for example `0.1.0`.
    2. Run the install command of that folder, in a terminal:
 
@@ -77,24 +80,24 @@ The browser board shows every logbook by default, and each card says which provi
       node ~/.codex/plugins/cache/sage/sage/0.1.0/skills/sage/sage.mjs hooks install
       ```
 
-      It puts 7 sage entries at the end of your Codex hooks file (`~/.codex/hooks.json`), and copies sage's hook launcher to `~/.codex/sage-hooks`. When you have no hooks file yet, it makes one. When you have one, your own hooks in it stay as they were, and a copy of the old file stays in `~/.codex/hooks.json.sage-backup`. A second run changes nothing. The command refuses a hooks file that it cannot read, and changes nothing then.
+      It writes the Codex home that holds the plugin, also when `CODEX_HOME` is not set; it refuses when `CODEX_HOME` names another home. It puts 7 sage entries at the end of your Codex hooks file (`~/.codex/hooks.json`), and copies sage's hook launcher to `~/.codex/sage-hooks`. When you have no hooks file yet, it makes one. When you have one, your own hooks in it stay as they were (also a hook that you put in a sage group), and a copy of the old file stays in `~/.codex/hooks.json.sage-backup`. A second run changes nothing. The command refuses a hooks file that it cannot read, and changes nothing then.
    3. Run `codex` in a project folder. At the "Hooks need review" screen, choose **Trust all and continue**. Codex runs the sage hooks only after this step.
 
    > **Note:** `codex exec` skips hooks without your trust, and it gives no warning.
 
-4. Send the on phrase alone (see [Turn on sage mode](#turn-on-sage-mode)). When all is well, you see no sage line: the chief gets the status (the sage version, the Codex version, how many of the 7 sage hooks have a trust record, and how to start sage mode). You see a warning line only for a limit, for example:
+4. Send the on phrase alone (see [Turn on sage mode](#turn-on-sage-mode)). When all is well, you see no sage line: the chief gets the status (the sage version, the Codex version, how many of the 7 sage hooks are trusted, and how to start sage mode). You see a warning line only for a limit, for example:
 
    ```text
-   sage: 3 of the 7 sage hooks have no trust record yet, so they do not run. To trust them, type /hooks in the Codex CLI.
+   sage: 3 of the 7 sage hooks are not trusted or turned off, so they do not run. To trust them or turn them on, type /hooks in the Codex CLI.
    ```
 
-   When a sage entry of your hooks file is missing or changed, or the launcher is older than the installed sage, the warning names the command that fixes it (`hooks install`). The other limit is a Codex version outside the tested range (0.164 to 0.167), for example:
+   When a sage entry of your hooks file is missing or changed, or the launcher is older than the installed sage, the warning names the command that fixes it (`hooks install`). Run it yourself in a terminal, or tell the chief yes, and then the chief runs it. The chief does not run it without your yes, because it writes your hooks file. The other limit is a Codex version outside the tested range (0.164 to 0.167), for example:
 
    ```text
    sage: sage was not tested with Codex 0.168.0, so some sage rules may not run. Autopilot merges in Codex 0.164 and later.
    ```
 
-   Codex starts a session at your first message, so a warning comes then. The status counts the trust records in your Codex config; Codex itself checks the hash of each entry, and it runs a hook only when they match.
+   Codex starts a session at your first message, so a warning comes then. The status counts the trust records in your Codex config: a changed entry or a hook that you turned off in `/hooks` does not count. Codex itself checks the hash of each entry, and it runs a hook only when they match.
 
    > **Warning:** when no sage hook is trusted, no sage hook runs, so you see no sage line at all, also no warning. If sage mode does not start, type `/hooks` in the Codex CLI. If the 7 sage hooks are not in the list, do step 3 again; if they are not trusted, trust them there.
 
@@ -112,8 +115,8 @@ The desktop app puts its worktree threads under `~/.codex/worktrees`. sage's `.c
 - An update needs no new trust. Codex trusts each sage entry of your hooks file by its text and its place, not by sage's files, and an update does not change the entries. The launcher runs the hooks of the sage version that Codex uses, so a new version runs at once, with no new review of its code, as in Claude Code.
 - When an update changes the entries or the launcher, the start status says so and names the `hooks install` command. Run it, then trust the changed entries with `/hooks`.
 - The first update to a version with the launcher (T957): sage's hooks move from the plugin to your hooks file. Do step 3 of the [install](#install) once, then do the [gate check](#check-that-the-sage-gate-runs). Until then, no sage hook runs, and sage's logbook tools refuse every call with a line that names the install command.
-- To turn sage off, turn the plugin off in Codex (`enabled = false` for `plugins."sage@sage"`, in its own table or in any other TOML form). The launcher then does nothing.
-- To remove sage:
+- To turn sage off, turn the plugin off in your Codex config file (`enabled = false` for `plugins."sage@sage"`, in its own table or in any other TOML form). The launcher then does nothing. The launcher reads only that file: a `-c` option, a profile or a managed policy that turns the plugin off does not stop sage's hooks (a documented limit).
+- To remove sage (with `CODEX_HOME` set, use that folder in place of `~/.codex`):
   1. Run `node ~/.codex/sage-hooks/launch.mjs --uninstall`. It removes the 7 sage entries from your hooks file and the `~/.codex/sage-hooks` folder. Your own hooks stay.
   2. Run `codex plugin remove sage@sage`, then `codex plugin marketplace remove sage`.
 
@@ -480,7 +483,7 @@ Limits:
 - When sage's hooks do not load, or give no answer in four fifths of their timeout, the launcher refuses a shell merge or push itself, and lets every other call run. When a hook blocks the launcher's process (a call that waits with no timeout of its own), the launcher cannot answer either, and Codex runs the call.
 - An update of sage runs with no new review: Codex trusts the entries, and the launcher runs the code of the version that Codex uses. This is the same as in Claude Code, by the owner's choice (T957).
 - sage finds its entries in your hooks file by their command text. An entry that you or another tool writes with the same text counts as sage's: `hooks install` replaces it, and `hooks uninstall` removes it. sage does not guard against such an entry.
-- When the installed sage cannot load its hooks (a broken install), the launcher refuses only a shell command that names a merge or a push, and lets every other call run, so that a new install can repair it.
+- When the installed sage cannot load its hooks (a broken install, or a newest version folder with no `hooks/dispatch.mjs`, such as an empty one), the launcher refuses only a shell command whose text names a merge or a push (also a `gh api` merge or ref write), and lets every other call run, so that a new install can repair it. It does not run an older version's hooks in place of the version that Codex uses.
 - A `js` call or a command that runs outside the sandbox can still change Codex's config file or the sage plugin's folder, and so turn the gate off. The proof check then finds it at the next sage logbook call. Do the [gate check](#check-that-the-sage-gate-runs) when a sage rule seems not to run.
 - In sage mode, every tool other than sage's own runs with no sage rule, by your choice: app tools, MCP tools of other servers, and dynamic tools. For example, the Sites publish tool publishes a page with no sage check. The rules above cover only shell commands, `apply_patch`, agent starts, messages to other threads and the sage logbook tools.
 - A `js` call of the desktop app's REPL can run shell commands that no sage hook sees; sage mode allows it so the chief keeps its browser previews. The REPL runs the code in its own Node process, so a push, a merge or a file change in that code passes every sage rule. The `exec` tool of code mode is different: each tool call inside its code reaches the sage hook.
