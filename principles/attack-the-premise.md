@@ -5,14 +5,11 @@ applyWhen: two or more fixes that share one premise have failed the same check o
 source: pstack principle-attack-the-premise, MIT, Copyright (c) 2026 Lauren Tan, github.com/cursor/plugins, adapted; checked against pstack 0.15.36 at commit 0bb6f37
 ---
 
-When two or more fixes that share one premise have failed the same check or review, suspect the premise, not the fixes. Each failed fix is evidence against the belief it assumed.
+When two or more fixes on one premise fail the same check or review, suspect the premise, not the fixes. Each failed fix is evidence against the belief it assumed. A third fix on it spends effort where the cause is not.
 
-**What to do.**
 - **Write the premise down:** the one sentence every failed fix assumed.
 - **Test the premise before the next fix.** Find an observation that would differ if the premise were false, and make it. Look at the spread of the failures, not only their size. Make the check rerunnable.
 - **Follow the evidence.** If it contradicts the premise, the cause is elsewhere: look for what the failures have in common that the premise did not predict. If it confirms the premise, ask the next "why" (see "fix root causes"). The earlier fixes may have treated a consequence.
-- **Remove the cause instead of compensating for it.** If one part always ends on the losing side, change what puts it there. A retry, fallback, special case or periodic cleanup leaves the cause in place and adds work on every run.
+- **Remove the cause instead of compensating for it.** If one part always ends on the losing side, change what puts it there. A retry, fallback or cleanup leaves the cause in place and adds work on every run.
 
-**Stop.** Do not start the next fix before the premise is written down and tested.
-
-Report the premise you questioned and what you found.
+**Stop.** Do not start the next fix before the premise is written down and tested. Report the premise and what you found.

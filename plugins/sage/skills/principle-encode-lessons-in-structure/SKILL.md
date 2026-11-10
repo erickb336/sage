@@ -10,12 +10,10 @@ metadata:
 
 # Encode lessons in structure
 
-Encode a recurring fix in a mechanism, not in more text. Every error, correction and unexpected outcome is a lesson: capture it, put it in the right place, and close the loop.
+Encode a recurring fix in a mechanism, such as a lint, a metadata flag, a runtime check or a script, not in more text. A written instruction needs the reader to notice, remember and comply; a mechanism does not.
 
-**Why.** A written instruction needs the reader to notice, remember and comply. A mechanism enforces the rule without cooperation.
+**When you write an instruction a second time,** encode it and delete the instruction, which was the symptom. If it needs judgement, make it prominent, with an example of the failure.
 
-**What to do.** When you write the same instruction a second time, encode it and delete the instruction: the instruction was the symptom. If it needs judgement, make it prominent and add an example of the failure.
+**Pick the strongest mechanism** that works, in order: the architecture (one owner for each piece of state, one supported way, old ways deleted); a type that cannot hold the bad state; a lint or check whose error names the fix; a test; a written rule last. Prove each new check fails on a real past mistake. Agents copy nearby code, so a weak guard becomes the next template.
 
-**Pick the strongest mechanism** that works, in this order: the architecture (one owner for each piece of state, one supported way, old ways deleted); a type that cannot hold the bad state; a lint or check whose error names the fix; a test; a written rule last, only for a judgement call. Prove each new check fails on a real past mistake. Agents copy the code around them, so a weak guard becomes the next template.
-
-**Close the loop.** A one-off correction gets a note; a recurring fix gets a check or a rule; a systemic issue changes the vision or a flow. Acknowledging without recording changes nothing.
+**Close the loop.** Capture every error, correction and surprise, and route it: a one-off correction gets a note, a recurring fix gets a check or a rule, and a systemic issue changes the vision or a flow. Apply it now or add a concrete task. Acknowledging without recording, recording without routing, and fixing one instance without the pattern change nothing.

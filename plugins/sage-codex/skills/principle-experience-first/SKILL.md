@@ -10,7 +10,7 @@ metadata:
 
 # Experience first
 
-When implementation convenience conflicts with the user's experience, choose the experience.
+When implementation convenience conflicts with the user's delight, choose delight.
 
 - Every feature, control and option has to justify itself.
 - Ship less, ship better: a polished experience with three features beats a rough one with ten.

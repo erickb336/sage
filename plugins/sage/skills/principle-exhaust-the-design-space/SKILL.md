@@ -10,7 +10,7 @@ metadata:
 
 # Exhaust the design space
 
-When the right answer is not obvious, do not build the first idea. Sketch two or three competing designs and compare them side by side before you commit. Building the wrong thing costs more than exploring three options. A second flavour of the first shape does not count as an alternative.
+When the right answer is not obvious, do not build the first idea. Build two or three competing prototypes and compare them side by side before you commit. Building the wrong thing costs more than exploring three options. A second flavour of the first shape does not count as an alternative.
 
 **When it applies.**
 - A new interaction with no prior art in the code.
