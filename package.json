@@ -2,7 +2,7 @@
   "name": "sage",
   "private": true,
   "type": "module",
-  "description": "Shared Sage policies with separate Claude Code and Codex plugins.",
+  "description": "sage-stack: a multi-agent development stack for Claude Code and Codex. Your session becomes a chief of staff, and a team of agents designs, builds, reviews and tests each change, with the rules held in code.",
   "license": "MIT",
   "scripts": {
     "build": "node scripts/build.mjs",

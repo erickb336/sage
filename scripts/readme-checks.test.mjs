@@ -12,7 +12,7 @@ import { anchors, linkProblems, paragraphProblems, readmeProblems, slug } from "
 
 const README = (lines = {}) => [
   "<p>", "  <img alt=\"a graphic\" src=\"x.svg\">", "</p>", "",
-  lines.pitch ?? "**sage is a plugin for Claude Code that turns a session into your chief of staff.**",
+  lines.pitch ?? "**sage-stack is a multi-agent development stack for Claude Code and Codex.**",
   "**Status:** early. Start with the [Quick start](#quick-start).", "",
   "## Quick start", "", "Install it.", "",
   "## Learn more", "", "- [What's new](CHANGELOG.md): every change.", "", ...(lines.more ?? []),
@@ -24,7 +24,7 @@ test("a README within its budget, with a changelog link and a first screen that 
 
 test("a missing changelog link and a first screen without the pitch, the status or the quick start link are problems", () => {
   assert.deepEqual(readmeProblems(README().replace("](CHANGELOG.md)", "](docs/)")), ["README.md: no link to CHANGELOG.md; the changelog holds the list of changes"]);
-  assert.deepEqual(readmeProblems(README({ pitch: "sage helps you." })), ['README.md: the first screen (the first 10 lines with text) needs one bold sentence that starts "**sage is a"']);
+  assert.deepEqual(readmeProblems(README({ pitch: "**sage is a plugin for Claude Code.**" })), ['README.md: the first screen (the first 10 lines with text) needs one bold sentence that starts "**sage-stack is a"']);
   // Ten lines of text before the status line push it and its link off the first screen.
   const late = README().replace("**Status:**", `${Array.from({ length: 10 }, (_, i) => `Line ${i}.`).join("\n")}\n**Status:**`);
   assert.deepEqual(readmeProblems(late), ['README.md: the first screen (the first 10 lines with text) needs a status line that starts "**Status:**"', "README.md: the first screen (the first 10 lines with text) needs a link to #quick-start"]);
@@ -125,7 +125,7 @@ test("a relative link, or a link to the main branch on GitHub, to a missing file
     "# Top",
     "",
     "[no file](docs/missing.md) [no anchor](docs/guide.md#nothing) <a href=\"#nowhere\">x</a> [out](../outside.md)",
-    "[main](https://github.com/erickb336/sage/blob/main/docs/guide.md#step) [main, no anchor](https://github.com/erickb336/sage/blob/main/docs/guide.md#gone) [main, no file](https://github.com/erickb336/sage/blob/main/gone.md)",
+    "[main](https://github.com/erickb336/sage-stack/blob/main/docs/guide.md#step) [main, no anchor](https://github.com/erickb336/sage-stack/blob/main/docs/guide.md#gone) [main, no file](https://github.com/erickb336/sage-stack/blob/main/gone.md)",
     "",
     "```",
     "[fenced](missing.md)",
@@ -136,8 +136,8 @@ test("a relative link, or a link to the main branch on GitHub, to a missing file
     "README.md:6: docs/guide.md#nothing names #nothing, which docs/guide.md does not have",
     "README.md:6: #nowhere names #nowhere, which README.md does not have",
     "README.md:6: ../outside.md leaves the repository",
-    "README.md:7: https://github.com/erickb336/sage/blob/main/docs/guide.md#gone names #gone, which docs/guide.md does not have",
-    "README.md:7: https://github.com/erickb336/sage/blob/main/gone.md does not exist",
+    "README.md:7: https://github.com/erickb336/sage-stack/blob/main/docs/guide.md#gone names #gone, which docs/guide.md does not have",
+    "README.md:7: https://github.com/erickb336/sage-stack/blob/main/gone.md does not exist",
   ]);
 });
 
@@ -147,7 +147,7 @@ test("a link to the repository root, a query and a link to a folder on GitHub pa
   mkdirSync(join(dir, "docs"));
   writeFileSync(join(dir, "docs/guide.md"), "# Guide\n\n[root](../) [root](..) [plain](guide.md?plain=1) [line](guide.md?plain=1#L3) [query](guide.md?x=1#guide)\n");
   writeFileSync(join(dir, "README.md"), [
-    "[tree](https://github.com/erickb336/sage/tree/main/docs) [tree root](https://github.com/erickb336/sage/tree/main) [tree, no folder](https://github.com/erickb336/sage/tree/main/gone)",
+    "[tree](https://github.com/erickb336/sage-stack/tree/main/docs) [tree root](https://github.com/erickb336/sage-stack/tree/main) [tree, no folder](https://github.com/erickb336/sage-stack/tree/main/gone)",
     "[ok][g] [no file][x] [no anchor][y] [^1]",
     "",
     "[g]: docs/guide.md#guide",
@@ -156,7 +156,7 @@ test("a link to the repository root, a query and a link to a folder on GitHub pa
     "[^1]: A footnote, not a link.",
   ].join("\n"));
   assert.deepEqual(linkProblems(dir, ["README.md", "docs/guide.md"]), [
-    "README.md:1: https://github.com/erickb336/sage/tree/main/gone does not exist",
+    "README.md:1: https://github.com/erickb336/sage-stack/tree/main/gone does not exist",
     "README.md:5: docs/missing.md does not exist",
     "README.md:6: docs/guide.md#nothing names #nothing, which docs/guide.md does not have",
   ]);

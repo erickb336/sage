@@ -47,10 +47,10 @@ The browser board shows every logbook by default, and each card says which provi
 1. Add the sage marketplace, in a terminal:
 
    ```sh
-   codex plugin marketplace add https://github.com/erickb336/sage.git
+   codex plugin marketplace add https://github.com/erickb336/sage-stack.git
    ```
 
-   You see ``Added marketplace `sage` ``. To try a local clone instead, give its folder: `codex plugin marketplace add ./sage`.
+   You see ``Added marketplace `sage` ``. To try a local clone instead, give its folder: `codex plugin marketplace add ./sage-stack`.
 
 2. Install the plugin:
 

@@ -1,14 +1,14 @@
-# sage
+# sage-stack
 
-**sage is a Claude Code and Codex plugin for developers who want a team of agents to build, review and prove their work, while they review results instead of code.**
-You say what you want in a session; the agents design, build, review and test it, and you get a pull request with evidence.
+**sage-stack is a multi-agent development stack for Claude Code and Codex: a team of agents builds, reviews and proves your work, and you review results instead of code.**
+Its plugin and its commands say "sage": you turn on sage mode, and the chief of staff runs the team. You say what you want in a session; the agents design, build, review and test it, and you get a pull request with evidence.
 
 <p align="center">
-  <a href="https://github.com/erickb336/sage/actions/workflows/check.yml"><img alt="checks" src="https://github.com/erickb336/sage/actions/workflows/check.yml/badge.svg"></a>
-  <a href="LICENSE"><img alt="licence" src="https://img.shields.io/github/license/erickb336/sage"></a>
+  <a href="https://github.com/erickb336/sage-stack/actions/workflows/check.yml"><img alt="checks" src="https://github.com/erickb336/sage-stack/actions/workflows/check.yml/badge.svg"></a>
+  <a href="LICENSE"><img alt="licence" src="https://img.shields.io/github/license/erickb336/sage-stack"></a>
 </p>
 
-**Status:** early, used every day by its author to build sage itself. Claude Code is supported; in Codex (the CLI and the desktop app), sage mode, autopilot, the shared logbook and the board phrases work through the sage plugin ([sage in Codex](docs/guide/codex.md)). Tested on macOS, and in CI on Ubuntu (Linux); Windows is not supported.
+**Status:** early, used every day by its author to build sage-stack itself. Claude Code is supported; in Codex (the CLI and the desktop app), sage mode, autopilot, the shared logbook and the board phrases work through the sage plugin ([sage in Codex](docs/guide/codex.md)). Tested on macOS, and in CI on Ubuntu (Linux); Windows is not supported.
 
 Start with the [Quick start](#quick-start). Then follow one task from start to merge in [Learn sage in 5 minutes](docs/guide/learn-sage.md).
 
@@ -41,7 +41,7 @@ For Claude Code. For Codex, see [In Codex](#in-codex) below. Before you start:
 
 1. Install sage, in a terminal:
    ```sh
-   claude plugin marketplace add erickb336/sage
+   claude plugin marketplace add erickb336/sage-stack
    ```
    ```sh
    claude plugin install sage@sage
@@ -69,7 +69,7 @@ Use Codex 0.164 to 0.167, in the CLI or the desktop app, and a multi-agent v2 mo
 
 1. Add the sage marketplace and install sage, in a terminal:
    ```sh
-   codex plugin marketplace add https://github.com/erickb336/sage.git
+   codex plugin marketplace add https://github.com/erickb336/sage-stack.git
    ```
    ```sh
    codex plugin add sage@sage

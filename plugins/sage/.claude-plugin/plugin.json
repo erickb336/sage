@@ -1,11 +1,11 @@
 {
   "name": "sage",
-  "description": "Principles, a writing standard, and sage mode: a chief of staff that runs a team of specialist agents, with the important rules enforced in code.",
+  "description": "sage-stack: a multi-agent development stack for Claude Code and Codex. Your session becomes a chief of staff, and a team of agents designs, builds, reviews and tests each change, with the rules held in code.",
   "author": {
     "name": "Erick Benitez-Ramos"
   },
-  "homepage": "https://github.com/erickb336/sage",
-  "repository": "https://github.com/erickb336/sage",
+  "homepage": "https://github.com/erickb336/sage-stack",
+  "repository": "https://github.com/erickb336/sage-stack",
   "license": "MIT",
   "keywords": [
     "principles",

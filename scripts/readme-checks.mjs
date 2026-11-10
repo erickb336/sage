@@ -11,7 +11,7 @@ import { dirname, join, relative } from "node:path";
 export const MAX_LINES = 150;
 export const MAX_BYTES = 15_000;
 /** A link to a file or a folder on this repository's main branch, which the check reads as a path from the root. */
-const GITHUB = /^https:\/\/github\.com\/erickb336\/sage\/(?:blob|tree)\/main(?:\/|(?=[?#]|$))/;
+const GITHUB = /^https:\/\/github\.com\/erickb336\/sage-stack\/(?:blob|tree)\/main(?:\/|(?=[?#]|$))/;
 
 /** The first screen, as the README guide defines it: the first 10 lines that are not blank and not a lone tag. */
 export const firstScreen = (text) => text.split("\n").filter((l) => !/^\s*(<\/?(a|picture|p)( [^>]*)?>|<source [^>]*>)?\s*$/.test(l)).slice(0, 10);
@@ -24,7 +24,7 @@ export function readmeProblems(text) {
   if (bytes > MAX_BYTES) problems.push(`README.md: ${bytes} bytes; keep it at ${MAX_BYTES} or fewer. Move reference material to a page under docs/`);
   if (!text.includes("](CHANGELOG.md)")) problems.push("README.md: no link to CHANGELOG.md; the changelog holds the list of changes");
   const screen = firstScreen(text).join("\n");
-  for (const [need, what] of [[/^\*\*sage is an? [^*]+\.\*\*/m, 'one bold sentence that starts "**sage is a"'], [/^\*\*Status:\*\* /m, 'a status line that starts "**Status:**"'], [/\]\(#quick-start\)/, "a link to #quick-start"]])
+  for (const [need, what] of [[/^\*\*sage-stack is an? [^*]+\.\*\*/m, 'one bold sentence that starts "**sage-stack is a"'], [/^\*\*Status:\*\* /m, 'a status line that starts "**Status:**"'], [/\]\(#quick-start\)/, "a link to #quick-start"]])
     if (!need.test(screen)) problems.push(`README.md: the first screen (the first 10 lines with text) needs ${what}`);
   return problems;
 }

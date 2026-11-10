@@ -2683,7 +2683,7 @@ test("F-R57-2: a PR is only digits, so a typo never hides a task from merge-chec
   const s = store();
   s.ok("task", "add", "--priority", "P2", "--title", "t", "--size", "tiny");
   assert.equal(s.no("task", "T1", "set", "pr=#5"), 'sage: "#5" is not a pull request number. Give only its digits, with no leading zero, for example pr=5 or --pr 5.');
-  const url = "https://github.com/erickb336/sage/pull/5";
+  const url = "https://github.com/erickb336/sage-stack/pull/5";
   assert.equal(s.no("verdict", "T1", "--sha", SHA, "--kind", "checks-pass", "--pr", url), `sage: "${url}" is not a pull request number. Give only its digits, with no leading zero, for example pr=5 or --pr 5.`);
   assert.deepEqual([rows(s.dir, "tasks")[0].pr, rows(s.dir, "ledger")], ["", []]);
   s.ok("verdict", "T1", "--sha", SHA, "--kind", "checks-pass", "--pr", "5");
