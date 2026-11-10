@@ -49,8 +49,8 @@ writeFileSync(VERSION, "0.164.0\n");
 const ghCalls = () => (existsSync(GH_LOG) ? readFileSync(GH_LOG, "utf8").trim().split("\n").map((line) => JSON.parse(line)) : []);
 
 test("the fakes are the ones that run: gh by its absolute path, and the Codex of the arg0 link", () => {
-  assert.equal(spawnSync(join(FAKES, "gh"), ["--version"], { encoding: "utf8", env: { PATH: FAKES } }).stdout, "FAKE-gh T677\n");
-  assert.equal(spawnSync(join(ARG0, "apply_patch"), ["--version"], { encoding: "utf8", env: {} }).stdout, "codex-cli 0.164.0\n");
+  assert.equal(spawnSync(join(FAKES, "gh"), ["--version"], { encoding: "utf8", env: { PATH: FAKES, HOME: SCRATCH } }).stdout, "FAKE-gh T677\n");
+  assert.equal(spawnSync(join(ARG0, "apply_patch"), ["--version"], { encoding: "utf8", env: { HOME: SCRATCH } }).stdout, "codex-cli 0.164.0\n");
   rmSync(GH_LOG);
   console.log("fakes proven: FAKE-gh T677, codex-cli 0.164.0");
 });

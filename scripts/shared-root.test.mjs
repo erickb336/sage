@@ -103,10 +103,33 @@ try { console.log(sharedRoot(${env})); } catch (e) { console.log(e.message); }`]
   const old = run("{}");
   assert.equal(old.status, 1);
   assert.match(old.stdout, /^a test reached the real home folder: os\.homedir\(\) at sharedRoot \(file:.*shared-root\.mjs:\d+:\d+\)\. Give that env a scratch HOME\.\n$/);
-  assert.match(old.stderr, /^A test reached the real home folder through os\.homedir\(\) \(T944\)\. Give each env a scratch HOME:\nat sharedRoot /);
+  assert.match(old.stderr, /^A test reached the real home folder \(T944, T969\)\. Give each env a scratch HOME:\nat sharedRoot /);
   const fixed = run('{ HOME: "/scratch/home" }');
   assert.equal(fixed.status, 0, fixed.stderr);
   assert.equal(fixed.stdout, "/scratch/home/.sage\n");
+});
+
+test("T969: the guard also refuses the account's home after a test deletes HOME, and a child process whose env has no HOME", (t) => {
+  const home = realpathSync(mkdtempSync(join(tmpdir(), "sage-guard-home-")));
+  t.after(() => rmSync(home, { recursive: true, force: true }));
+  const href = (path) => JSON.stringify(pathToFileURL(join(REPO, path)).href);
+  // A test file of its own that starts with a scratch HOME, as an agent's run does, and catches each throw.
+  const run = (body) => spawnSync(process.execPath, ["--input-type=module", "-e", `import ${href("scripts/test-env.mjs")};
+import { spawnSync } from "node:child_process";
+import { sharedRoot } from ${href("packages/sage-core/shared-root.mjs")};
+try { ${body} } catch (e) { console.log(e.message); }`], { encoding: "utf8", env: { ...process.env, HOME: home } });
+  // F-T944-1, F-T944-5: with HOME deleted, os.homedir() gives the account's home, which is not the home of the start.
+  const deleted = run("delete process.env.HOME; console.log(sharedRoot({}));");
+  assert.equal(deleted.status, 1, deleted.stdout);
+  assert.match(deleted.stdout, /^a test reached the real home folder: os\.homedir\(\) at sharedRoot \(file:.*shared-root\.mjs:\d+:\d+\)\. Give that env a scratch HOME\.\n$/);
+  // F-T944-4: a child whose env has no HOME gets the account's home; one whose env has a HOME, or that inherits the env, runs.
+  const child = run(`spawnSync(process.execPath, ["-e", ""], { env: { PATH: process.env.PATH } });`);
+  assert.equal(child.status, 1, child.stdout);
+  assert.match(child.stdout, /^a test reached the real home folder: spawnSync\(\) with an env that has no HOME at file:.*\[eval1\]:\d+:\d+\. Give that env a scratch HOME\.\n$/);
+  assert.match(child.stderr, /^A test reached the real home folder \(T944, T969\)\. Give each env a scratch HOME:\nat file:.*\[eval1\]/);
+  const ok = run(`for (const options of [{ env: { PATH: process.env.PATH, HOME: "/scratch/home" } }, {}]) console.log(spawnSync(process.execPath, ["-e", "console.log(require('node:os').homedir())"], { encoding: "utf8", ...options }).stdout.trim());`);
+  assert.equal(ok.status, 0, ok.stderr);
+  assert.equal(ok.stdout, `/scratch/home\n${home}\n`);
 });
 
 test("a run with SAGE_HOME removed and HOME in scratch writes under that HOME, and the old fault lands in a scratch decoy, never the real root", (t) => {

@@ -20,21 +20,38 @@ process.env.GIT_CONFIG_NOSYSTEM = "1";
 process.env.SAGE_TEST_MACHINE_ID = "test-machine";
 
 // T944: every sage root falls back to os.homedir() when the env that it gets has no HOME, so a call such as config({})
-// reached the real ~/.sage. In a test, os.homedir() never gives the home that the test started with to sage code or a
-// test: it throws, and the file fails at exit also when sage code caught the throw. A test that sets process.env.HOME
-// to a fixture gets the fixture, and a package under node_modules (Playwright's browser cache) still gets the real home.
+// reached the real ~/.sage. In a test, os.homedir() never gives a real home to sage code or a test: the home that the test
+// started with, or the account's home from the system (after a test deletes HOME, T969). It throws, and the file fails at
+// exit also when sage code caught the throw. A test that sets process.env.HOME to a fixture gets the fixture, and a package
+// under node_modules (Playwright's browser cache) still gets the real home.
 import os from "node:os";
+import childProcess from "node:child_process";
 import { syncBuiltinESMExports } from "node:module";
-const homedir = os.homedir, startHome = homedir(), reached = [];
-os.homedir = () => {
-  const home = homedir(), caller = (new Error().stack.split("\n")[2] ?? "").trim();
-  if (home !== startHome || caller.includes("/node_modules/")) return home;
+const homedir = os.homedir, reached = [];
+const account = (() => { try { return os.userInfo().homedir; } catch { return undefined; } })();
+const realHomes = new Set([homedir(), account].filter(Boolean));
+const callerOf = (stack) => (stack.split("\n")[2] ?? "").trim(); // [0] is "Error", [1] the guard itself
+const refuse = (what, caller) => {
   reached.push(caller);
-  throw new Error(`a test reached the real home folder: os.homedir() ${caller}. Give that env a scratch HOME.`);
+  throw new Error(`a test reached the real home folder: ${what} ${caller}. Give that env a scratch HOME.`);
 };
+os.homedir = () => {
+  const home = homedir(), caller = callerOf(new Error().stack);
+  return realHomes.has(home) && !caller.includes("/node_modules/") ? refuse("os.homedir()", caller) : home;
+};
+// T969: a child whose env has no HOME gets the account's home (git's ~/.gitconfig, sage code's os.homedir()). Each
+// child_process call of a test or of sage code whose env has no HOME throws in the same way.
+for (const name of ["spawn", "spawnSync", "execFile", "execFileSync", "exec", "execSync", "fork"]) {
+  const call = childProcess[name];
+  childProcess[name] = function (...args) {
+    const options = args.find((arg) => arg && typeof arg === "object" && !Array.isArray(arg)), caller = callerOf(new Error().stack);
+    if (options?.env && !options.env.HOME && !caller.includes("/node_modules/")) refuse(`${name}() with an env that has no HOME`, caller);
+    return call.apply(this, args);
+  };
+}
 syncBuiltinESMExports();
 process.on("exit", () => {
   if (!reached.length) return;
-  console.error(`A test reached the real home folder through os.homedir() (T944). Give each env a scratch HOME:\n${reached.join("\n")}`);
+  console.error(`A test reached the real home folder (T944, T969). Give each env a scratch HOME:\n${reached.join("\n")}`);
   process.exitCode = 1;
 });

@@ -47,9 +47,9 @@ console.log(${JSON.stringify(MARKER)});
 const ghCalls = () => (existsSync(GH_LOG) ? readFileSync(GH_LOG, "utf8").trim().split("\n").map((line) => JSON.parse(line)) : []);
 
 test("the fake gh is the one that runs: by its absolute path, and by name with PATH set to the fakes folder only", () => {
-  const direct = spawnSync(GH, ["--version"], { encoding: "utf8", env: { PATH: FAKES } });
+  const direct = spawnSync(GH, ["--version"], { encoding: "utf8", env: { PATH: FAKES, HOME: SCRATCH } });
   assert.equal(direct.stdout, `${MARKER}\n`);
-  const byName = spawnSync(process.execPath, ["-e", 'require("node:child_process").execFileSync("gh", ["--version"], { stdio: "inherit" })'], { encoding: "utf8", env: { PATH: FAKES } });
+  const byName = spawnSync(process.execPath, ["-e", 'require("node:child_process").execFileSync("gh", ["--version"], { stdio: "inherit" })'], { encoding: "utf8", env: { PATH: FAKES, HOME: SCRATCH } });
   assert.equal(byName.stdout, `${MARKER}\n`);
   assert.deepEqual(ghCalls().map((call) => call.args), [["--version"], ["--version"]]);
   rmSync(GH_LOG);
