@@ -4,7 +4,7 @@ This page lists every rule that sage keeps in code, and why. It is reference mat
 
 A rule written only in a prompt fades over a long session. So sage keeps its important rules in code: a hook that checks each action, and a state tool that refuses a wrong move.
 
-The rules come from two places: the sage hook (`packages/sage-claude/hooks/sage-hook.mjs`) and the state tool (`packages/sage-core/state.mjs`). In the rows, "the sage" is the chief, and "you" is the owner of the project.
+The rules come from two places: the sage hook (`packages/sage-claude/hooks/sage-hook.mjs`) and the state tool (`packages/sage-core/state.mjs`). Some of the hook's rules are core's, and the Codex gate holds them too: the stash, process and board password rules are in `packages/sage-core/agent-rules.mjs` (T931). In the rows, "the sage" is the chief, and "you" is the owner of the project.
 
 ## The chief, briefs and switches
 

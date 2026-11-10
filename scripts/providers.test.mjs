@@ -965,6 +965,11 @@ test("shared file and mode extraction refuses active edits when the file policy 
       const output = hook.handle({ hook_event_name: "PreToolUse", tool_name: "Bash", tool_input: { command: "gh api repos/o/r/git/refs -f ref=refs/heads/main" } }, { sage: false }, {});
       assert.equal(output?.hookSpecificOutput?.permissionDecision, "deny");
       assert.match(output.hookSpecificOutput.permissionDecisionReason, /command modules could not load/);
+      // The board password rule is core's (T931): without core, a file tool's call that names the board config is refused
+      // by its text (a command is refused above).
+      const read = (file_path) => hook.handle({ hook_event_name: "PreToolUse", tool_name: "Read", cwd: f.dir, tool_input: { file_path } }, { sage: false }, {});
+      assert.match(read("~/.config/sage-board/board.json")?.hookSpecificOutput?.permissionDecisionReason ?? "passed", /^sage: the board password rule \(T229\) could not load/);
+      assert.equal(read(join(f.dir, "sample.txt")), undefined);
     }
   }
 });

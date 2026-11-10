@@ -20,7 +20,7 @@ const from = (cwd, path) => isAbsolute(path) ? path : `${cwd}/${path}`;
 const fold = text => text.normalize("NFKC").toLowerCase();
 
 // Resolve links before '..'. Preserve missing suffixes so new files are checked too.
-function canonical(path) {
+export function canonical(path) {
   let rest = [], hops = 0;
   for (;;) {
     try { return fold(join(realpathSync.native(path), ...rest)); }
