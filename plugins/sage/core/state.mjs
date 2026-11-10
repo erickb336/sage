@@ -20,7 +20,7 @@ import { logbookIdentity } from "./board-reader.mjs";
 import { createBoard } from "./board.mjs";
 import { PR, pullRequestHead } from "./pull-request.mjs";
 import { REPORT_FIELDS } from "./report.mjs";
-import { cleanReport, fieldsOf, readReport } from "./report-reader.mjs";
+import { cleanReport, fieldsOf, proofResults, readReport } from "./report-reader.mjs";
 import { ROLES } from "./roles.mjs";
 import { AGENT_CAPS, BREAKS, FINDING_CLASSES, HIDDEN, LINE, NAME_MAX, PRIORITIES, PRIORITY_SCALE, START_SAGE_MODE, TABLES as PLAIN_TABLES, TASK_KINDS, countOf, nameProblem, proposalOf } from "./logbook-fields.mjs";
 import { BREAKDOWN, ENDED, GATE_ID, MET, PROGRAM_ID, TASK_ID, breakdownGate, byIds, dead, droppedBy, gateLines, lostClause, programState, progressOf, progressText, shownGraph, shownWaits, unmetWaits, waitGraph, waitWords, waitsOf, waitsWithState } from "./program-rules.mjs";
@@ -148,7 +148,7 @@ const OPTIONS = {
   "run done": ["status", "tokens", "report", "usage", "usage-source", "usage-evidence"],
   "run usage": ["tokens", "usage-source", "usage-evidence"],
   "finding add": ["source", "severity", "summary", "key", "run", "class"],
-  "finding triage": ["reason"],
+  "finding triage": ["reason", "proof"],
   "finding move": ["to", "size"],
   verdict: ["sha", "kind", "cycle", "pr", "run"],
   "gate add": ["question", "options", "recommend", "default"],
@@ -827,6 +827,45 @@ function cleared(verdict, task, findings, decisions) {
 }
 
 /**
+ * The commit of a run's kept report: the commit that the hook saw the helper review, or the full SHA that the report's
+ * BRANCH names (its one full SHA, or the one after the word head when it names more, a base and a head). { sha } (none
+ * when neither gives one: the report may be of an older head, R1908-1), or { problem } when they disagree or BRANCH names
+ * more than one and none as its head.
+ */
+function reportHead(kept, run) {
+  const branch = fieldsOf(kept.text, REPORT_FIELDS).filter((f) => f.name === "BRANCH").flatMap((f) => [f.rest, ...f.lines]).join("\n");
+  const full = /(?<![0-9a-f])[0-9a-f]{40}(?![0-9a-f])/gi, named = [...new Set((branch.match(full) ?? []).map((s) => s.toLowerCase()))];
+  const afterHead = /\bhead\b[^\n]{0,40}?(?<![0-9a-f])([0-9a-f]{40})(?![0-9a-f])/i.exec(branch)?.[1]?.toLowerCase();
+  const head = named.length < 2 ? named[0] : afterHead ?? named.find((s) => s === kept.sha);
+  if (named.length > 1 && !head) return { problem: `${run}'s report names ${named.length} commits in BRANCH and none as its head (the word head before it)` };
+  if (kept.sha && head && kept.sha !== head) return { problem: `${run}'s report names ${head.slice(0, 7)} as its head, and the hook saw it review ${kept.sha.slice(0, 7)}: the report and the hook disagree` };
+  return { sha: kept.sha || head };
+}
+
+/**
+ * The proof check behind a triage with --proof (T947): run id is a done qa run of the finding's task whose kept report
+ * lists the finding in EVIDENCE, on the head that the kept report of the finding's own run names. Not reproduced backs a
+ * dismissal; reproduced or could not run backs a fix (could not run keeps the finding). Its outcome and head, or a refusal.
+ */
+function proofOf(dir, f, decision, id) {
+  const run = read(dir, "runs").find((r) => r.id === id), how = "A proof check is the done qa run that reran the finding's proof on its head (the proof-check reference).";
+  const no = (why) => refuse(`${why}. ${how} Nothing changed.`);
+  if (decision === "ask") no("--proof goes with fix or dismiss, not with ask");
+  if (!run) no(`${visible(id)} is not a run in this logbook`);
+  if (run.task !== f.task) no(`${run.id} is a run of ${run.task}, not of ${f.task}`);
+  if (run.role !== "qa") no(`${run.id} is a ${run.role} run, not a qa run`);
+  if (run.status !== "done") no(`${run.id} ${run.status === "running" ? "still runs" : `ended as ${run.status}`}, and only a done proof check backs a triage`);
+  const kept = keptOf(dir, run.id), outcome = kept && !kept.damaged ? proofResults(kept.text).get(f.key) : undefined;
+  if (!outcome) no(`${run.id}'s kept report does not list ${f.key}: its EVIDENCE gives a line "- ${f.key} reproduced", "- ${f.key} not reproduced" or "- ${f.key} could not run"`);
+  const from = f.run || /^(R[1-9]\d*)-/.exec(f.key)?.[1], source = from && keptOf(dir, from);
+  const found = source && !source.damaged ? reportHead(source, from) : {}, checked = reportHead(kept, run.id);
+  if (!found.sha) no(found.problem ?? `${f.key} names no run with a kept report whose head reads, so no proof check backs its triage: ask your chief`);
+  if (checked.sha !== found.sha) no(checked.problem ?? `${run.id} checked ${checked.sha ? checked.sha.slice(0, 7) : "no head that its report names"}, and ${f.key}'s report (${from}) is on ${found.sha.slice(0, 7)}: a proof check reruns the proof on that head`);
+  if ((decision === "dismiss") !== (outcome === "not reproduced")) no(`${run.id} says ${f.key} ${outcome}, so ${decision === "dismiss" ? "it is not dismissed: triage it fix" : "triage it dismiss"}`);
+  return { outcome, sha: found.sha };
+}
+
+/**
  * Does a kept report back this review or QA verdict on a task with a build block (T483)? The run that --run names is a
  * run of the task, of a role that gives the kind, that ended done, with a kept report that reads, on the commit of --sha
  * when the report names one. A clean report backs only a clean kind. A report with a medium or high finding backs findings
@@ -849,21 +888,14 @@ function backingProblem(dir, task, kind, opt) {
   const kept = keptOf(dir, run.id);
   if (!kept) return `${run.id} has no kept report: sage keeps a helper's report at its stop only when it knows the helper's run, by the first line of its brief, "Run ${run.id} · task ${task.id}", or by its task name with the run (sage_<role>_t<n>_r<n>). ${again}`;
   if (kept.damaged || kept.task !== task.id || kept.role !== run.role) return `${run.id}'s kept report is damaged, so it backs no verdict. ${again}`;
+  // A proof check reruns the proofs of other runs' findings (T947): its report backs a triage, never a verdict.
+  if (proofResults(kept.text).size) return `${run.id}'s report is a proof check (its EVIDENCE lists findings as reproduced or not), so it backs no verdict: name it in the triage of each finding with --proof ${run.id}, and record the verdict from the report of the run that found it.`;
   const report = readReport(kept.text, { requireComplete: true });
   if (report.unreadable) return `${run.id}'s kept report cannot be read (${report.problem}), so it backs no verdict: read it yourself. ${again}`;
-  // The commit that the hook saw the helper review, and each full SHA that the report's BRANCH names, is the verdict's commit.
-  const branch = fieldsOf(kept.text, REPORT_FIELDS).filter((f) => f.name === "BRANCH").flatMap((f) => [f.rest, ...f.lines]).join("\n");
-  // BRANCH names the head: its one full SHA, or the one after the word head when it names more (a base and a head), or
-  // the one that the hook saw. A report with no full SHA from either backs no verdict: it may be of an older head (R1908-1).
-  const full = /(?<![0-9a-f])[0-9a-f]{40}(?![0-9a-f])/gi, named = [...new Set((branch.match(full) ?? []).map((s) => s.toLowerCase()))];
-  const afterHead = /\bhead\b[^\n]{0,40}?(?<![0-9a-f])([0-9a-f]{40})(?![0-9a-f])/i.exec(branch)?.[1]?.toLowerCase();
-  const head = named.length < 2 ? named[0] : afterHead ?? named.find((s) => s === kept.sha);
-  if (named.length > 1 && !head) return `${run.id}'s report names ${named.length} commits in BRANCH and none as its head (the word head before it), so it backs no verdict. ${again}`;
-  const sha = String(opt.sha ?? "").toLowerCase(), seen = kept.sha || head;
+  const { sha: seen, problem } = reportHead(kept, run.id), sha = String(opt.sha ?? "").toLowerCase();
+  if (problem) return `${problem}, so it backs no verdict. ${again}`;
   if (!seen) return `${run.id}'s report names no full 40-character head SHA in BRANCH, and the hook saw none, so it backs no verdict: it may be of an older head. ${again} Its brief asks for the full head SHA in BRANCH.`;
-  if (kept.sha && head && kept.sha !== head) return `${run.id}'s report names ${head.slice(0, 7)} as its head, and the hook saw it review ${kept.sha.slice(0, 7)}: the report and the hook disagree, so it backs no verdict. ${again}`;
-  const other = [kept.sha, head].find((s) => s && s !== sha);
-  if (other) return `${run.id}'s report is on ${other.slice(0, 7)}, not on ${sha.slice(0, 7)}: a verdict names the commit that its helper reviewed. Record it on ${other}, or review ${sha.slice(0, 7)} under a new run.`;
+  if (seen !== sha) return `${run.id}'s report is on ${seen.slice(0, 7)}, not on ${sha.slice(0, 7)}: a verdict names the commit that its helper reviewed. Record it on ${seen}, or review ${sha.slice(0, 7)} under a new run.`;
   const said = `RESULT ${report.result}${report.severities.length ? ` with ${report.severities.join(", ")} findings` : ""}`;
   const clean = cleanReport(report), [cleanKind, problemKind] = BACKS[run.role], found = FOUND.includes(kind);
   if (clean) return found ? `${run.id}'s report is clean (${said}), so it backs only ${cleanKind}.` : undefined;
@@ -3699,7 +3731,11 @@ function act(cmd, pos, opt, dir, env, skip, project) {
         const big = t === "dismiss" && f.status === "open" && f.severity === "low" && roundKeys(taskOf(dir, id).task).includes(f.key)
           ? findings.filter((g) => g.task === id && g.status === "open" && g.severity !== "low").map((g) => g.key) : [];
         if (big.length) refuse(`${f.key} is a low fix of ${id}'s current round, and ${big.join(", ")} is open: ${f.key} joins the next round with it, so it is not dismissed now.`);
-        if (t === "dismiss") Object.assign(f, { reason: need(opt.reason, "--reason for a dismissal"), status: "dismissed" });
+        // A proof check backs the triage (T947): the decision trail keeps its run, its outcome and the head.
+        const proof = opt.proof === undefined ? undefined : proofOf(dir, f, t, opt.proof);
+        const reason = proof && proof.outcome === "not reproduced" ? `not reproduced in ${opt.proof}${opt.reason ? `: ${opt.reason}` : ""}` : opt.reason;
+        if (t === "dismiss") Object.assign(f, { reason: need(reason, "--reason for a dismissal"), status: "dismissed" });
+        if (proof) write(dir, "decisions", [...read(dir, "decisions"), { at: now(), task: id, decision: `${f.key} ${t} --proof ${opt.proof}`, why: `${opt.proof} ${proof.outcome} on ${proof.sha}` }]);
         f.triage = t;
       } else if (sub === "close") {
         if (f.triage !== "fix" && f.triage !== "ask") refuse(`${f.key} is not triaged as fix or ask`);
