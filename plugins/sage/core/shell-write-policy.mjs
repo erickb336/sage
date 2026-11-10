@@ -1,7 +1,7 @@
 // Shared write classification from the existing hook rules. This never executes command text.
 import { shellCommands, programsRun } from "./command-reader.mjs";
-import { outputDispatchWrites } from "./output-writes.mjs";
-import { programName } from "./command-policy.mjs";
+import { ghTargets, outputDispatchWrites } from "./output-writes.mjs";
+import { gitSubcommand, programName } from "./command-policy.mjs";
 import { realpathSync } from "node:fs";
 import { basename, dirname, join, resolve, sep } from "node:path";
 
@@ -95,10 +95,14 @@ export function uniqWrites(words, base) {
 function writesIn({ words }) {
   const low = words.map((w) => w.toLowerCase());
   const base = words.map(programName);
-  const program = base[low.findIndex((w) => !/^\w+=/.test(w))] ?? "";
+  const at = low.findIndex((w) => !/^\w+=/.test(w)), program = base[at] ?? "";
   // gh's words are its own arguments, never a program that it runs: "gh api -X PATCH" or "gh config set pager less"
-  // writes no file (T948). A redirection still counts, and so does gh after a wrapper (xargs gh, env gh).
+  // writes no file (T948). A redirection still counts, and so does gh after a wrapper (xargs gh, env gh). The gh commands
+  // that clone, download or install count by their own words (ghTargets).
   if (READERS.test(program) || program === "gh") return false;
+  // git's words are its own arguments too: of the write names, only git rm and git mv write, so "git worktree add
+  // ../install" or "git commit -m patch" is no write (T960). git diff --output counts by its own rule (outputDispatchWrites).
+  if (program === "git") return /^(?:rm|mv)$/.test(gitSubcommand(words, at + 1));
   const has = (re) => base.some((w) => re.test(w));
   return (
     base.some((w) => WRITE_NAMES.has(w)) || uniqWrites(words, base) ||
@@ -126,8 +130,8 @@ function intoScratch({ target, dir, uncertainDirectory }, cwd, scratch) {
 }
 /**
  * Does one field of a command's text have a write form? A text that the hook cannot read counts as one (fail closed).
- * scratch: absolute folders (such as the temp folder) where a redirection does not count, unless its target is in cwd.
- * Every other write form counts also there.
+ * scratch: absolute folders (such as the temp folder) where a redirection, or a gh clone or download (ghTargets), does
+ * not count, unless its target is in cwd. Every other write form counts also there.
  */
 export function commandWrites(text, cwd, scratch = []) {
   if (typeof text !== "string") return true;
@@ -135,7 +139,11 @@ export function commandWrites(text, cwd, scratch = []) {
     const commands = shellCommands(text);
     if (commands.some(writesIn)) return true;
     const evidence = programsRun(text, cwd, undefined, { contextEvidence: true, redirectParts: true });
-    return evidence.redirects.some(r => toFile(r) && !intoScratch(r, cwd, scratch)) || evidence.programs.some(entry => readerDispatch(entry) || outputDispatchWrites(entry));
+    const ghWrites = ({ run, uncertainDirectory }) => {
+      const targets = programName(run.word) === "gh" ? ghTargets(run.args) : [];
+      return targets === true || targets.some(target => !intoScratch({ target, dir: run.dir, uncertainDirectory }, cwd, scratch));
+    };
+    return evidence.redirects.some(r => toFile(r) && !intoScratch(r, cwd, scratch)) || evidence.programs.some(entry => readerDispatch(entry) || outputDispatchWrites(entry) || ghWrites(entry));
   } catch {
     return true;
   }

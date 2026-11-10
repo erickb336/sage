@@ -66,3 +66,42 @@ export function outputDispatchWrites(entry) {
   }
   return false;
 }
+
+/** The options that take a value in the gh commands that ghTargets reads (gh 2.x help), short and long. */
+const GH_VALUE = /^(?:-[uDOpAnRc]|--(?:upstream-remote-name|dir|output|pattern|archive|name|repo|codespace|profile|repo-owner))$/;
+/**
+ * The paths that a gh command writes, in the folder that it runs in, or true when it changes files at no path that it
+ * names (F-T948-1, F-T948-5). gh repo clone and gh gist clone write the folder that they name, or else a folder named
+ * after the repository; gh run download and gh release download write into the folder of -D, the file of -O (- is the
+ * output) or else the command's folder; gh codespace cp writes its last operand when that is local. gh extension
+ * install, upgrade, remove and create change gh's extensions or make a folder. Every other gh command writes no file of
+ * its own: gh pr checkout changes the work tree as git checkout does, and the rules let git run.
+ */
+export function ghTargets(args) {
+  const [group = "", command = ""] = args;
+  if (/^(?:extension|extensions|ext)$/.test(group)) return /^(?:install|upgrade|remove|rm|create)$/.test(command) || [];
+  const operands = [], values = {};
+  for (let i = 2; i < args.length; i++) {
+    const arg = args[i];
+    if (arg === "--") break; // gh repo clone: git's own options follow
+    if (!arg.startsWith("-") || arg === "-") { operands.push(arg); continue; }
+    const equals = arg.indexOf("="), long = arg.startsWith("--");
+    const name = long ? arg.slice(0, equals < 0 ? undefined : equals) : arg.slice(0, 2);
+    if (!GH_VALUE.test(name)) continue;
+    const value = long ? (equals < 0 ? args[++i] : arg.slice(equals + 1)) : arg.length > 2 ? arg.slice(arg[2] === "=" ? 3 : 2) : args[++i];
+    values[name] = value ?? "";
+  }
+  const option = (short, long) => values[short] ?? values[long];
+  const key = `${group} ${command}`;
+  if (/^(?:repo|gist) clone$/.test(key)) {
+    if (operands.length > 1) return [operands[1]];
+    return operands.length ? [operands[0].replace(/\/+$/, "").split(/[/:]/).pop().replace(/\.git$/, "")] : [];
+  }
+  if (key === "run download") return [option("-D", "--dir") ?? "."];
+  if (key === "release download") {
+    const output = option("-O", "--output");
+    return output === "-" ? [] : [output ?? option("-D", "--dir") ?? "."];
+  }
+  if (/^(?:codespace|cs) cp$/.test(key)) return operands.length > 1 && !operands.at(-1).startsWith("remote:") ? [operands.at(-1)] : [];
+  return [];
+}

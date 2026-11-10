@@ -5,11 +5,12 @@ that can run another program. It parses text without executing it. Non-text or
 unreadable input counts as a write form.
 
 `scratch` is an optional list of absolute folders, such as the temp folder. A
-redirection whose literal target is in one of them, and not in `cwd` (the
-caller's project), does not count. Every other write form counts, also into a
+redirection, or a gh clone or download (`ghTargets`), whose literal target is
+in one of them, and not in `cwd` (the caller's project), does not count. Every other write form counts, also into a
 scratch folder. A target with a variable, a pattern or `~`, or in a folder that
 the reader cannot follow, counts. The Claude hook passes its temp folders for a
-read-only role (T933).
+read-only role (T933), and both providers pass them for the chief in sage mode
+(T948, T960), with core's `CHIEF_SHELL` text.
 
 Executable-name checks ignore case and a trailing `.exe`, using the shared
 normalizer. Reader-option parsing keeps the original arguments and option case.
@@ -18,7 +19,16 @@ The public core entry point exposes the same function in both provider bundles.
 The Codex gate and the Claude hook both call it for a read-only role, with
 core's `roleEditDenied`.
 
-The words of `gh` are its own arguments, so a word such as `PATCH` or `less` after `gh` does not count (`gh api -X PATCH`, T948); a redirection still counts. Ordinary reader arguments remain data. Option values and words after `--`
+The words of `gh` are its own arguments, so a word such as `PATCH` or `less` after `gh` does not count (`gh api -X PATCH`, T948); a redirection still counts.
+`ghTargets` (in `output-writes.mjs`) reads the gh commands that write files
+(F-T948-1, F-T948-5): `gh repo clone` and `gh gist clone` (the folder that they
+name, or one named after the repository), `gh run download` and
+`gh release download` (the folder of `-D`, the file of `-O`, or the command's
+folder) and `gh codespace cp` (a local destination). `gh extension install`,
+`upgrade`, `remove` and `create` count in every folder. `gh pr checkout` does
+not count: it changes the work tree as `git checkout` does.
+The words of `git` are its own arguments too: of the write names, only
+`git rm` and `git mv` count, so `git worktree add ../install` does not (T960). Ordinary reader arguments remain data. Option values and words after `--`
 retain their parser context. Redirections to files count as
 writes; input-only redirections and the listed standard device outputs do not.
 
