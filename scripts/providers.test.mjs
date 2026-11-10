@@ -272,10 +272,11 @@ test("T49: built Claude hook protects the logbook from output writers while pres
     `git show --format='--output=${logbook}/tasks.tsv'`,
     `curl --header '--output=${logbook}/tasks.tsv' https://example.invalid`,
   ];
-  for (const actor of [{}, { agent_id: "fixture-child", agent_type: "sage:implementer" }]) {
+  // In sage mode the chief changes no file from the shell at all (T960), so its writes outside the logbook pass outside sage mode.
+  for (const [actor, sage] of [[{}, false], [{ agent_id: "fixture-child", agent_type: "sage:implementer" }, true]]) {
     for (const command of commands) {
       const result = hook.handle({ hook_event_name: "PreToolUse", tool_name: "Bash", cwd: f.dir,
-        tool_input: { command }, ...actor }, { sage: true }, { touch() {} });
+        tool_input: { command }, ...actor }, { sage }, { touch() {} });
       assert.notEqual(result?.hookSpecificOutput?.permissionDecision, "deny", `${actor.agent_id ?? "chief"}: ${command}: ${JSON.stringify(result)}`);
     }
   }
@@ -293,8 +294,8 @@ test("T49: built Claude hook protects the logbook from output writers while pres
         const result = hook.handle({ hook_event_name: "PreToolUse", tool_name: "Bash", cwd: f.dir,
           tool_input: { command }, ...actor }, { sage: true }, { touch() {} });
         // T815: a broken core refuses every command; a line that the reader cannot read is refused only when it names a
-        // merge, a push or the state tool.
-        assert.equal(result?.hookSpecificOutput?.permissionDecision, broken ? "deny" : undefined, `${broken}: ${JSON.stringify(result)}`);
+        // merge, a push or the state tool, and for the chief in sage mode, whose write rule fails closed as in Codex (T960).
+        assert.equal(result?.hookSpecificOutput?.permissionDecision, broken || !actor.agent_id ? "deny" : undefined, `${broken}: ${JSON.stringify(result)}`);
       }
     } finally { if (previous === undefined) delete process.env.SAGE_HOME; else process.env.SAGE_HOME = previous; }
   }

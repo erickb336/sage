@@ -769,7 +769,7 @@ test("T536: no push reaches the default branch through a remote with another nam
   // are documented limits (standing order 70): GitHub's protection of main is the guard.
   passes("git config push.default upstream && git push github claude/t1");
   passes("git fetch --set-upstream github main && git push github claude/t1");
-  passes("printf x > .git/info/exclude");
+  refused("printf x > .git/info/exclude", CHIEF_SHELL); // the chief's own write rule (T960)
   passes("git ship");
   // A description runs nothing (T386), and names no git command (R2002-1).
   assert.equal(denied(s.send(tool("Bash", { command: "git status", description: "git push --force github main" }, { cwd: dir }))), undefined, "a description runs nothing");
@@ -778,7 +778,7 @@ test("T536: no push reaches the default branch through a remote with another nam
   refused("cd ~ && gh repo sync", /^sage: gh repo sync writes a branch on GitHub/);
   // T909: git or gh behind a wrapper that the reader does not know is a limit too.
   passes("op run -- gh repo sync");
-  passes("cp /usr/bin/git /tmp/git-copy");
+  refused("cp /usr/bin/git /tmp/git-copy", CHIEF_SHELL); // a renamed copy stays a limit; the copy meets the chief's write rule (T960)
   // R1936 F7: GitHub names the default branch, trunk here, and a failed read refuses.
   const trunk = session({ FAKE_DEFAULT_BRANCH: "trunk" });
   trunk.send(prompt("sage mode"));
@@ -1068,7 +1068,7 @@ test("a push command that the hook cannot read is refused with what to do (F-R90
   const s = session();
   s.send(prompt("sage mode"));
   assert.match(denied(s.send(bash("git push origin 'feat"))) ?? "", /^sage: the hook cannot read this command \(an open quote\), so it refuses it\. Close each quote, substitution and heredoc\. Its text names a push\. Push only with git \[-C <dir>\] push/);
-  assert.equal(s.send(bash("echo 'it")), undefined, "a command with no push is not the push rule's");
+  assert.match(denied(s.send(bash("echo 'it"))) ?? "", CHIEF_SHELL, "a command with no push is not the push rule's: the chief's write rule refuses a line that it cannot read (T960)");
 });
 
 test("a merge needs autopilot on, the checked head SHA, and its clean cycles in the ledger", () => {
@@ -1476,7 +1476,7 @@ test("merge text in the text of a harmless command passes: a message, a body, a 
     `grep -rn '${MERGE}' plugins | sort | uniq -c | head -5`,
     `echo '${MERGE}' | wc -l`,
   ];
-  for (const command of text) assert.equal(s.send(bash(command)), undefined, command);
+  for (const command of text) expectPass(s.send(bash(command)), /^cat > notes\.md|^node -e/.test(command), command);
 });
 
 test("a merge passes only as the one merge form; any other command that names a merge is refused (F-R79-1, F-R79-3)", () => {
@@ -1511,7 +1511,7 @@ test("a merge passes only as the one merge form; any other command that names a 
     `env -S '${M} --squash'`, `watch -n 1 '${M} --squash'`, // T910: watch's shell text and env -S's split string
     `git -c alias.m='!${M} --squash' m`, `gh api -X PUT repos/o/r/pulls/41/merge -f sha=${SHA}`, 'curl -X PUT -H "Authorization: Bearer x" https://api.github.com/repos/o/r/pulls/41/merge',
     `gh api graphql -f query='mutation { mergePullRequest(input: {pullRequestId: "x"}) { clientMutationId } }'`, "gh api -X POST repos/o/r/merges -f base=main -f head=t4"];
-  for (const command of limits) assert.equal(denied(off.send(bash(command))), undefined, `${command} (a limit of the hook)`);
+  for (const command of limits) expectPass(off.send(bash(command)), /node -e|> x\.sh/.test(command), `${command} (a limit of the hook)`);
 });
 
 test("T670-MERGETEXT: the word merge in a program's text, or a local git merge-tree in a loop, is no merge (T670)", () => {
@@ -1526,7 +1526,7 @@ test("T670-MERGETEXT: the word merge in a program's text, or a local git merge-t
     "for n in 447 452; do b=$(gh pr view $n --json headRefName -q .headRefName); git -C /x merge-tree --write-tree origin/main origin/$b; done",
     "gh pr checks 41 && if git merge-base --is-ancestor a b; then echo behind; fi",
   ];
-  for (const s of [off, on]) for (const command of text) assert.equal(denied(s.send(bash(command))), undefined, command);
+  for (const s of [off, on]) for (const command of text) expectPass(s.send(bash(command)), /node -e|python3 -c/.test(command), command);
 });
 
 test("T670-KEEP-MERGES: any other merge form, and a merge as a real command, also in a loop, a chain, bash -c, sh -c or eval, is still refused", () => {
@@ -1547,7 +1547,7 @@ test("T670-KEEP-MERGES: any other merge form, and a merge as a real command, als
   // T815: a merge that a variable, a substitution, xargs, a file or code puts together while the line runs is a limit.
   for (const command of ["M=merge; gh pr view 5; gh pr $M 5", "gh pr view 5 && gh pr $(echo merge) 5", "echo merge 5 | xargs gh pr", "gh pr view 5 > x.sh; echo merge >> x.sh; sh x.sh",
     "{ gh pr view 5; echo merge; } | sh", "export G=gh; node -e 'require(\"child_process\").execSync(process.env.G + \" pr merge 5\")'", "gh pr view 5 | node; node -e 'console.log(\"merge\")'"]) {
-    assert.equal(denied(off.send(bash(command))), undefined, `${command} (a limit of the hook)`);
+    expectPass(off.send(bash(command)), /> x\.sh|node -e/.test(command), `${command} (a limit of the hook)`);
   }
 });
 
@@ -1911,7 +1911,7 @@ test("K2 (T336), T337, T815: a logbook file's name outside the roots is no logbo
   s.send(prompt("sage mode"));
   const work = mkdtempSync(join(tmpdir(), "sage-k2-"));
   for (const name of names) {
-    assert.equal(denied(s.send(bash(`echo x >> ${name}`, work))), undefined, `outside the roots: ${name}`);
+    assert.match(denied(s.send(bash(`echo x >> ${name}`, work))) ?? "", CHIEF_SHELL, `outside the roots: ${name} meets the chief's write rule (T960), not the logbook rule`);
     assert.match(denied(s.send(bash(`echo x >> ${join(s.vars.SAGE_HOME, "p", name)}`, work))) ?? "", ONLY_TOOL, `in the sage root: ${name}`);
     assert.match(denied(s.send(bash(`echo x >> ${join(s.vars.SAGE_HOME, "p", name)}`, work, AGENT))) ?? "", ONLY_CHIEF, `an agent, in the sage root: ${name}`);
   }
@@ -2060,7 +2060,7 @@ test("S-CHIEFCASE, T815: the chief's shell writes into the sage root in another 
     assert.match(denied(s.send(bash(command))) ?? "", /the chief never writes, moves or removes a logbook file/, command);
   }
   s.send(prompt("sage mode"));
-  for (const command of ["echo x >> LEDGER.TSV", "cp /tmp/x l*.tsv"]) assert.equal(denied(s.send(bash(command))), undefined, `sage mode, a name outside the roots: ${command}`);
+  for (const command of ["echo x >> LEDGER.TSV", "cp /tmp/x l*.tsv"]) assert.match(denied(s.send(bash(command))) ?? "", CHIEF_SHELL, `sage mode, a name outside the roots meets the chief's write rule (T960): ${command}`);
 });
 
 // T83 round 2: the owner's narrow shell rule (T83-COST-GLOB), and the gaps of the re-check R401 (S-WTLINK, S-FOLD, S-DOTDOT).
@@ -2183,8 +2183,8 @@ test("T386: the chief's harmless command passes with a logbook name or an apostr
     const harmless = [
       ["git status", "Read the chief's ledger.tsv"],
       ["ls", "List the agent's runs.tsv rows"],
-      ["cp a.tsv b.tsv", "Copy it, not $SAGE_HOME/p/ledger.tsv"],
-      ["cp a.tsv b.tsv", `Copy it, not ${join(s.vars.SAGE_HOME, "p", "ledger.tsv")}`],
+      ["diff a.tsv b.tsv", "Compare it, not $SAGE_HOME/p/ledger.tsv"],
+      ["diff a.tsv b.tsv", `Compare it, not ${join(s.vars.SAGE_HOME, "p", "ledger.tsv")}`],
       ["git status", "gh pr merge 41"],
       ["git status", "git push origin main"],
     ];
@@ -2232,6 +2232,13 @@ test("C4: a file tool's path to a sage root that does not exist yet is compared 
 const READ_ONLY_ROLES = ["code-reviewer", "security-reviewer", "ux-reviewer", "qa", "pe", "lead"];
 /** A scratch folder in the temp folder, outside the project (FEATURE). */
 const SCRATCH = realpathSync(mkdtempSync(join(tmpdir(), "sage-scratch-")));
+/** The chief's write rule in sage mode (T960): core's write forms, with the Codex gate's text (core's CHIEF_SHELL). */
+const CHIEF_SHELL = /^sage: sage mode is on, so the chief does not change files, also not from the shell: /;
+/**
+ * The answer to a command that the rule under test lets pass, in sage mode: none, or the chief's own write rule (T960)
+ * when the caller is the chief and the command has a write form (chiefWrite).
+ */
+const expectPass = (answer, chiefWrite, message) => (chiefWrite ? assert.match(denied(answer) ?? "", CHIEF_SHELL, message) : assert.equal(denied(answer), undefined, message));
 const SHELL_WRITES = ["sed -i '' 's/a/b/' README.md", "sed -i.bak s/a/b/ src/app.js", "echo x > README.md", "printf x >> notes.txt",
   "cp README.md README.bak", "mv src/a.js src/b.js", "rm -rf src", "rm README.md", "touch new.txt", "npm test 2>&1 | tee test.log",
   `echo x > ${FEATURE}/notes.txt`, // the project is in the temp folder here, and a redirection into the project still counts
@@ -2370,12 +2377,31 @@ test("T933: the writers, the chief, other agents and every agent outside sage mo
     for (const command of SHELL_WRITES) assert.equal(s.send(bash(command, FEATURE, { agent_id: `w-${role}`, agent_type: `sage:${role}` })), undefined, `${role}: ${command}`);
   }
   for (const command of SHELL_WRITES) {
-    assert.equal(s.send(bash(command)), undefined, `the chief: ${command}`);
-    assert.equal(s.send(bash(command, FEATURE, { agent_type: "sage:chief-of-staff" })), undefined, `the chief as an agent type: ${command}`);
+    // The chief meets its own write rule in sage mode (T960).
+    assert.match(denied(s.send(bash(command))) ?? "", CHIEF_SHELL, `the chief: ${command}`);
+    assert.match(denied(s.send(bash(command, FEATURE, { agent_type: "sage:chief-of-staff" }))) ?? "", CHIEF_SHELL, `the chief as an agent type: ${command}`);
     assert.equal(s.send(bash(command, FEATURE, { agent_id: "gp", agent_type: "general-purpose" })), undefined, `an agent with no sage role: ${command}`);
   }
   const off = session();
   for (const role of READ_ONLY_ROLES) assert.equal(off.send(bash("rm -rf src", FEATURE, { agent_id: `ro-${role}`, agent_type: `sage:${role}` })), undefined, `${role} outside sage mode`);
+});
+
+// T960: the chief's shell writes in sage mode, as in the Codex gate (T948). scripts/codex-gates.test.mjs runs the same
+// commands through both providers and compares their answers.
+test("T960: in sage mode the chief runs no shell write form, as in Codex; reads, git, gh, the state tool and scratch output run; outside sage mode it writes", () => {
+  const s = session(), off = session();
+  s.send(prompt("sage mode"));
+  const writes = [...SHELL_WRITES, "cat > notes.md <<'EOF'\nhi\nEOF", "printf x | tee notes.txt", `printf x | tee ${SCRATCH}/out.txt`,
+    "gh repo clone acme/site", "gh run download 5", "gh codespace cp remote:a.txt a.txt", "gh extension install acme/gh-x"];
+  for (const command of writes) {
+    const why = denied(s.send(bash(command))) ?? "";
+    assert.match(why, CHIEF_SHELL, command);
+    for (const form of ["a redirection or a heredoc into a file", "tee", "cp", "sed -i", "tee, cp and the other forms are refused also there"]) assert.ok(why.includes(form), `${command}: ${form}`);
+    assert.equal(off.send(bash(command)), undefined, `outside sage mode: ${command}`);
+  }
+  const runs = [...SHELL_READS, "git status", "git add -A && git commit -m 'a change'", "gh pr view 41 --json headRefOid", "gh pr checkout 41",
+    `gh repo clone acme/site ${SCRATCH}/site`, `gh run download 5 -D ${SCRATCH}/run`, `node ${TOOL} status --project ${FEATURE}`];
+  for (const command of runs) assert.equal(denied(s.send(bash(command))), undefined, command);
 });
 
 // F-T931-1: the temp folders of the read-only rule come from core (T931). When the hook lost them, every shell command
@@ -2410,8 +2436,8 @@ test("an agent never runs git stash in any form; the chief may, and git status a
   s.send(prompt("sage mode"));
   for (const command of STASHES) {
     assert.match(denied(s.send(bash(command, FEATURE, AGENT))) ?? "", /never runs git stash.*standing order 16.*git worktree add --detach <scratch> <sha>.*git show <sha>:<path>/, command);
-    assert.equal(s.send(bash(command)), undefined, `the chief: ${command}`);
-    assert.equal(s.send(bash(command, FEATURE, { agent_type: "sage:chief-of-staff" })), undefined, `the chief as an agent type: ${command}`);
+    expectPass(s.send(bash(command)), command.startsWith("sh -c"), `the chief: ${command}`);
+    expectPass(s.send(bash(command, FEATURE, { agent_type: "sage:chief-of-staff" })), command.startsWith("sh -c"), `the chief as an agent type: ${command}`);
   }
   for (const command of ["git status", "git log --oneline -5", "git show HEAD:README.md", "git worktree add --detach /tmp/x HEAD", 'git commit -m "no stash here"', "echo git stash"]) {
     assert.equal(s.send(bash(command, FEATURE, AGENT)), undefined, command);
@@ -2428,7 +2454,7 @@ test("an agent never lists or signals the real processes: ps, pgrep, kill and pk
     "launchctl list", "/bin/launchctl bootout gui/501/x"]; // F-T909-7: launchctl stops and starts the owner's services
   for (const command of real) {
     assert.match(denied(s.send(bash(command, FEATURE, AGENT))) ?? "", /never reads or signals the real process list \(standing order 14\).*fake ps.*Sat Jan  1 00:00:00 2000/, command);
-    assert.equal(s.send(bash(command)), undefined, `the chief: ${command}`);
+    expectPass(s.send(bash(command)), /^bash -c|^find /.test(command), `the chief: ${command}`);
   }
   const fakes = [`PATH=${FAKES}:$PATH ps -o lstart= -p 1`, `export PATH=${FAKES}:$PATH; ps -ax`, `PATH=${FAKES}:$PATH pgrep -fl node`, `PATH=${FAKES}:$PATH pkill -f node`, `${FAKES}/ps -ax`, `${FAKES}/kill 1`, `PATH=${FAKES}:$PATH env kill 1`, `cd ${FAKES} && ./pkill node`, `${FAKES}/launchctl list`];
   for (const command of fakes) assert.equal(s.send(bash(command, FEATURE, AGENT)), undefined, command);
@@ -3071,7 +3097,8 @@ const T910_LIMITS = new Set([
 test("R466-REGRESSION, T815: every command that main's reader denies for the main session is still denied, but the documented limits", async () => {
   const { handle } = await import("../plugins/sage/hooks/sage-hook.mjs");
   const slots = { bind() {}, release() {}, drop() {}, touch() {}, reconcile() {} };
-  const allowed = MAIN_DENIES.filter((command) => !denied(handle(bash(command), { sage: true, autopilot: false }, slots)));
+  // A limit that the chief's write rule refuses (T960) still passes the merge and push rules.
+  const allowed = MAIN_DENIES.filter((command) => !/^sage: (?!sage mode is on, so the chief does not change files, also not from the shell: )/.test(denied(handle(bash(command), { sage: true, autopilot: false }, slots)) ?? ""));
   assert.deepEqual(allowed, MAIN_DENIES.filter((command) => MAIN_LIMITS.has(command) || T909_LIMITS.has(command) || T910_LIMITS.has(command)));
 });
 
@@ -3344,7 +3371,9 @@ for (const name of Object.keys(PATH_WORK_SHAPES)) test(`F-T229-20: one-MB parser
     assert.deepEqual(Object.keys(results), ["the chief", "an agent"]);
     for (const [who, measured] of Object.entries(results)) {
       assert.ok(measured.probes > 0, `${name}, ${who}: the hook exercised path checks`);
-      assert.equal(measured.result, null, `${name}, ${who}: the permitted input stays permitted`);
+      // The chief's write rule (T960) refuses a writer's words and code in node -e, after the same path work.
+      if (who === "the chief" && /writer|code of/.test(name)) assert.match(measured.result?.hookSpecificOutput?.permissionDecisionReason ?? "", CHIEF_SHELL, `${name}, ${who}`);
+      else assert.equal(measured.result, null, `${name}, ${who}: the permitted input stays permitted`);
     }
   } finally { rmSync(s.dir, { recursive: true, force: true }); }
 });
@@ -3586,7 +3615,7 @@ test("T670-KEEP-WRITES: uniq IN OUT, an operand that can expand, xargs uniq or a
   }
   // T815: a logbook file's name outside the roots is no write into them, and operands from a pipe are a limit.
   for (const command of ["cp x tasks.ts[v:w]", "cp x ledger.ts?", "python3 -c 'f = open(\"tasks.tsv\")'", `ls ${root}/p | xargs uniq`]) {
-    assert.equal(denied(s.send(bash(command))), undefined, command);
+    assert.match(denied(s.send(bash(command))) ?? "", CHIEF_SHELL, `${command}: the chief's write rule (T960), not the logbook rule`);
   }
 });
 
@@ -3597,7 +3626,7 @@ test("T670-SLICE: a jq slice (.headSha[0:8]) or a Python slice (s[i:j], sha[:8])
     "gh pr list --json number,headSha | jq -r '.[].headSha[0:8]' | tee heads.txt",
     "python3 -c 'import sys; s = sys.stdin.read(); i, j = 0, 8; print(s[i:j])'",
     "python3 -c 'sha = \"abc\"; print(sha[:8])' > short.txt",
-  ]) assert.equal(denied(s.send(bash(command))), undefined, command);
+  ]) assert.match(denied(s.send(bash(command))) ?? "", CHIEF_SHELL, `${command}: the chief's write rule (T960), not the logbook rule`);
 });
 
 test("T670-ROOTVAR, T815: SAGE_HOME set from a variable or to a scratch path passes: an assignment is no write", () => {
@@ -3606,7 +3635,7 @@ test("T670-ROOTVAR, T815: SAGE_HOME set from a variable or to a scratch path pas
   const scratch = realpathSync(mkdtempSync(join(tmpdir(), "sage-scratch-")));
   for (const command of [`S=${scratch}; SAGE_HOME=$S/home/sage node --test a.test.mjs > $S/out.txt 2>&1`, `SAGE_HOME=${scratch}/home/sage node --test a.test.mjs > ${scratch}/out.txt 2>&1`]) {
     assert.equal(denied(s.send(bash(command, FEATURE, AGENT))), undefined, `agent: ${command}`);
-    assert.equal(denied(s.send(bash(command))), undefined, `chief: ${command}`);
+    expectPass(s.send(bash(command)), command.includes("> $S/"), `chief: ${command}`);
   }
 });
 
@@ -6692,7 +6721,7 @@ test("T483 R1956-1, T815: the plain form of the sage's verdict meets the lead's 
   assert.equal(denied(s.send(bash(`env node ${TOOL} verdict ${rest}`, s.dir))), undefined, "a wrapped form is a limit of the hook");
   // A wrapped read command of the state tool, and a read of the file, pass.
   for (const command of [`env node ${TOOL} status`, `bash -c 'node ${TOOL} status'`, `cat ${TOOL}`, `grep -n verdict ${TOOL}`]) {
-    assert.equal(denied(s.send(bash(command, s.dir))), undefined, command);
+    expectPass(s.send(bash(command, s.dir)), command.startsWith("bash -c"), command);
   }
 });
 
@@ -6939,7 +6968,7 @@ test("T621: a read part beside a write part gives no evidence against it: each p
     "cp a b; grep -E '5[0-9]' /tmp/log",
     "cp a b; cat /other/config.json",
   ];
-  for (const command of pass) for (const [who, extra] of AS_BOTH) assert.equal(denied(s.send(bash(command, FEATURE, extra))), undefined, `${who}: ${command}`);
+  for (const command of pass) for (const [who, extra] of AS_BOTH) expectPass(s.send(bash(command, FEATURE, extra)), who === "chief" && /\b(?:touch|rm|cp) |^npm install/.test(command), `${who}: ${command}`);
   // In sage mode the chief's rule counts a pattern that can match a logbook file; an agent's counts it when the line can leave the folder.
   assert.equal(denied(s.send(bash("ls /tmp && rm dist/*", FEATURE, AGENT))), undefined, "the absolute path of a read part does not make the line leave the folder");
 });
@@ -7131,7 +7160,7 @@ test("T621 F-T621-7, T815: a program that the hook does not know is judged by it
     `touch a; echo 'rm ${T}' | csh`, `touch a; cat ${T} | csh`, `tcsh <<'EOF' > /tmp/o\nrm ${T}\nEOF`,
     `printf 'rm ${T}' > y.sh; sh ./y.sh`, `alias x='rm ${T}'\ntouch a\nx`, "ls lnk/p > /tmp/l; xargs rm < /tmp/l",
   ];
-  for (const command of limits) for (const [who, extra] of AS_BOTH) assert.equal(denied(s.send(bash(command, cwd, extra))), undefined, `${who}: ${command} (a limit of the hook)`);
+  for (const command of limits) for (const [who, extra] of AS_BOTH) expectPass(s.send(bash(command, cwd, extra)), who === "chief" && !command.startsWith("tcsh <<"), `${who}: ${command} (a limit of the hook)`);
 });
 
 test("T621 F-T621-9: zsh's clobber forms keep the line whole, so the real target is judged", () => {
@@ -7174,7 +7203,7 @@ test("T621: a command that only reads stays data beside a part that the hook kee
     `grep read /tmp/log; touch a && ${READ_NEAR_LOGBOOK}`,
     `grep a=b /tmp/log; touch a && ${READ_NEAR_LOGBOOK}`,
   ];
-  for (const command of pass) for (const [who, extra] of AS_BOTH) assert.equal(denied(s.send(bash(command, FEATURE, extra))), undefined, `${who}: ${command}`);
+  for (const command of pass) for (const [who, extra] of AS_BOTH) expectPass(s.send(bash(command, FEATURE, extra)), who === "chief" && /\b(?:touch|rm|cp) |^npm install/.test(command), `${who}: ${command}`);
 });
 
 // T815: the agent's gh rule reads gh's own command words. A heredoc in a text flag is text; a substitution that builds

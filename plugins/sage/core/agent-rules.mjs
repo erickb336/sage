@@ -37,6 +37,12 @@ const isProcess = (name = "") => {
 const NO_PROCESS = (word) => `an agent never reads or signals the real process list (standing order 14), so ${quoted(word)} is refused. Put a fake ps in a folder under the temp folder (/tmp, or the folder that TMPDIR names) and put that folder first on PATH: a fake in any other folder is refused. The fake prints a start time in the past (for example "Sat Jan  1 00:00:00 2000"). Run a fake kill by its path: a bare kill is the shell's builtin. Use literal paths: the hook does not expand variables. To stop your own server or background job, run it as a background task and stop that task.`;
 /** The temp folders, as real paths: the system temp folder, /tmp and TMPDIR. A fake process program passes only in one; the Claude hook's read-only rule (T933) lets a redirection into one pass. */
 export const TEMP = [...new Set([tmpdir(), "/tmp", process.env.TMPDIR].filter(Boolean).map((d) => { try { return realpathSync.native(d); } catch { return resolve(d); } }))];
+/**
+ * Why the chief's shell write is refused in sage mode, in both providers (T948, T960): each caller refuses a command when
+ * core's commandWrites(command, cwd, TEMP) finds a write form, so that a redirection or a gh clone or download into the
+ * temp folder, outside the project, passes. The text names each form, and says that the others are refused there too.
+ */
+export const CHIEF_SHELL = 'sage mode is on, so the chief does not change files, also not from the shell: this command has a write form (a redirection or a heredoc into a file, tee, cp, mv, rm, sed -i, code in node -e, or gh repo clone, gh run download or gh extension install). Brief an implementer to make this change. To keep output, redirect it into a scratch folder in the temp folder, outside the project, with a literal path (for example > /tmp/notes/out.txt); a gh clone or download into that folder runs too. tee, cp and the other forms are refused also there. git, gh, the sage tools and reads run as before. The user ends sage mode with the message "sage mode off", alone.';
 const inTemp = (file) => !!file && TEMP.some((t) => file.startsWith(`${t}/`));
 const PROCESS_TEXT = new RegExp(`(?:^|[\\s;&|(\`'"/<>])(?:${UNIX_PROCESS}|${POWERSHELL_PROCESS})(?:\\.exe)?(?=$|[\\s;&|)\`'"<>])`, "im");
 

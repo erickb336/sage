@@ -103,8 +103,8 @@ const ROLES = {
   "codex agent": (command, extra) => run(CODEX_HOOK, { hook_event_name: "PreToolUse", session_id: SESSION.codex, turn_id: "t1", cwd: PROJECT, tool_name: "Bash", tool_use_id: "call_1", tool_input: { command }, agent_id: "agent-1", transcript_path: CODEX_CHILD }, extra),
 };
 const BOTH = Object.keys(ROLES), CHIEFS = ["claude chief", "codex chief"], CLAUDE = ["claude chief", "claude agent"], AGENT = ["claude agent", "codex agent"];
-/** The roles of a plain write: the Codex chief changes no file from the shell in sage mode (T948), so its own test is in codex-gates. */
-const WRITERS = BOTH.filter((role) => role !== "codex chief");
+/** The roles of a plain write: no chief changes a file from the shell in sage mode (T948, T960), so the chiefs' test is in codex-gates. */
+const WRITERS = AGENT;
 /** The words of each family's refusal in the Claude hook, so that no row passes for another rule's reason. */
 const WHY = {
   merge: /merge|reaches main/i, // a mergeBranch into main meets the push rule first, which runs before the merge rule
@@ -228,7 +228,7 @@ const PASSED = [
   ["command -v gh", AGENT],
   ["command -V ps", AGENT],
   ["gh -R acme/project pr view 12", CLAUDE],
-  ["rm -rf build && chmod 644 ~/x.txt", CLAUDE],
+  ["rm -rf build && chmod 644 ~/x.txt", ["claude agent"]],
   ["op run -- npm test"],
   ["arch -arm64 node scripts/build.mjs"],
   ["cd ~/x && git status"],

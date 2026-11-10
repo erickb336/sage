@@ -91,7 +91,7 @@ import { agentPathOf, sageName, sessionMeta, TASK_NAME } from "./report-gate.mjs
 import { modeDirectory } from "./sage-codex-hook.mjs";
 import { autopilotSwitch, callInRecord, NEW_ON, readRecord, RECORD_RANGE, RECORD_VERSION } from "./owner-record.mjs";
 import { markFile } from "./start-mark.mjs";
-import { TEMP } from "sage-core";
+import { CHIEF_SHELL, TEMP } from "sage-core";
 import { mergeCommand, permitFile, permitFolder } from "../skills/sage/merge.mjs";
 
 const ROOT = join(dirname(fileURLToPath(import.meta.url)), "..");
@@ -105,7 +105,6 @@ const UNREADABLE = "sage: the hook could not read this tool call, so it refuses 
 const CODEX_FOLDER = "sage: no agent changes files under a .codex folder, because Codex reads its project settings there. Ask the user to make this change.";
 const CODEX_SETTINGS = "sage: no agent writes Codex's config file or the sage plugin's folder from the shell, because the trust of sage's hooks is there. Ask the user to make this change.";
 const CHIEF = 'sage: sage mode is on, so the chief does not change files. Brief an implementer to make this change. The user ends sage mode with the message "sage mode off", alone.';
-const CHIEF_SHELL = 'sage: sage mode is on, so the chief does not change files, also not from the shell: this command has a write form (a redirection into a file, tee, cp, mv, rm, sed -i, or code in node -e). Brief an implementer to make this change. To keep output, redirect it into a scratch folder in the temp folder, outside the project, with a literal path (for example > /tmp/notes/out.txt). git, gh, the sage tools and reads run as before. The user ends sage mode with the message "sage mode off", alone.';
 const OWNER_MERGE = "sage: in Codex, only sage's merge command merges, on autopilot, as the chief's instructions say. Without autopilot, the owner merges the pull request in GitHub";
 const LOGBOOK_WRITE = (word) => `sage: no agent writes, moves or removes a logbook file from the shell: ${JSON.stringify(word)} is in the Codex sage folder or the shared root, or holds one. Use the sage MCP tools for the logbook.`;
 const LOGBOOK_PATCH = (path) => `sage: no patch changes a logbook file: ${JSON.stringify(path)} is in the Codex sage folder or the shared root. Use the sage MCP tools for the logbook.`;
@@ -808,7 +807,7 @@ export async function gate(input, { mode = readMode, check = checkMerge, env = p
   if (!now.sage) return undefined; // the merge refusal above applies in every mode
   // The chief's shell writes too (T948): core's write forms, as for a read-only role; a redirection into the temp folder,
   // outside the project, passes. A disguised write (a variable, a script's own code) is a documented limit (order 70).
-  if (!thread.child && chiefEditDenied({ sage: true, chief: true }) && (commandWrites(f.command, f.cwd, TEMP) || runsPatch(f.command, f.cwd, env))) return deny(CHIEF_SHELL);
+  if (!thread.child && chiefEditDenied({ sage: true, chief: true }) && (commandWrites(f.command, f.cwd, TEMP) || runsPatch(f.command, f.cwd, env))) return deny(`sage: ${CHIEF_SHELL}`);
   const gh = thread.child ? ghProblem(f.command, f.cwd, env) : undefined;
   if (gh) return refuse(thread, gh);
   // A shared logbook's task branch takes a push only from its owning chief, the chief of the root thread's session (T822).
