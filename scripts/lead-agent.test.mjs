@@ -389,7 +389,7 @@ test("T600: a lead's round from repairing past the limit holds the task for the 
     leadRepeatFix("F-T1-3"), "$ sage finding close T1 F-T1-1", leadRound()], p);
   assert.match(printed, /^T1 held: 1 repair rounds did not make it clean\. Stop and ask the user\.$/);
   assert.match(p.chief("task", "T1"), /^T1 held /);
-  assert.match(p.ask(`node ${TOOL} round T1`) ?? "", /^sage: T1 is held, so its lead records nothing\./, "the lead writes nothing more");
+  assert.match(p.ask(`node ${TOOL} round T1`) ?? "", /^sage: T1 is held, so its lead records nothing and starts no agent\./, "the lead writes nothing more");
   assert.match(p.run("sage", ["task", "T1", "set", "state=building"]).stderr, /T1 needs one approval=<G> with a move from a round hold/, "no move out without the owner's gate");
 });
 

@@ -24,7 +24,7 @@
 //   - A sage agent may finish only with the full report of the sage:report skill.
 //   - Only the chief writes the logbook, in any mode (agentWriteProblem): an agent runs only the state tool's read
 //     commands. The one exception is a lead (agent type sage:lead, in the bound slot of its lead-T<n> spawn): it runs
-//     the commands of LEAD_WRITES on its own task, from Bash, as one plain command, with no --project and no
+//     the commands of core's lead policy on its own task, from Bash, as one plain command, with no --project and no
 //     SAGE_PROJECT (leadProblem, T273). An agent never runs the PR script, never a command outside the sandbox, never
 //     writes under the sage root with a file tool (canonical paths), and never runs a shell write whose literal path is
 //     in the sage root or the shared root, or that removes or moves a folder that holds one (core's logbookWrite,
@@ -362,6 +362,7 @@ export function handle(input, state, slots) {
     if (!LEAD_CHILDREN.has(spawned)) return deny(event, "a lead starts only an implementer, code reviewer, security reviewer, UX reviewer or QA agent. Report to the sage.");
     const why = leadSpawnProblem(lead, spawned, spawnName, slots, ti.prompt);
     if (typeof why === "string") return deny(event, `${why} Report to the sage.`);
+    if (why?.stopped) return deny(event, why.stopped); // core's reason, whole, as for a write and in Codex (F-T928-4)
     helperKey = why?.helper;
   }
   // The chief changes no file while sage mode is on, and a chief agent changes none in any mode (F-R1515-1).
@@ -735,8 +736,6 @@ const leadKey = (lead) => digest(`${lead.logbook}:${lead.run}`);
 const helperOf = (lead, run) => `${leadKey(lead)}.${run}`;
 /** A run that this lead added itself: the hook saw its own run add print the id (F-T289-8, F-T289-16). */
 const ownRun = (ctx, id) => /^R[1-9]\d*$/.test(id) && ctx.slots.helper(helperOf(ctx.lead, id)).owned;
-/** The states in which a lead starts no child: held, replan and the end states (F-T273-12, F-T289-7, F-T289-16). Core's lead policy holds the same states for its writes. */
-const LEAD_STOPS = ["held", "replan", "merged", "concluded", "abandoned"];
 /**
  * The stop of a review or QA agent that the main session started itself (C-T483-1): its report goes to the logbook of its
  * folder for its run, which the hook marked on its slot from the brief's first line, "Run R<n> · task T<n>" (runOf). The
@@ -775,7 +774,8 @@ function headOf(folder, task) {
  * task is not held, in replan or ended. The child's name is a run id (R<n>), and the child is that run's helper: a running
  * run of the task in its current round, of the child's role, that this lead added (F-T301-57). The brief's first line
  * (BRIEF_LINE), when it has one, gives the run too: it names this lead's task, and a name that is a run id agrees with it
- * (T581). The helper keeps the branch's tip at its start (F-T289-14). The reason, or the helper to record ({ helper }).
+ * (T581). The helper keeps the branch's tip at its start (F-T289-14). The reason, core's whole reason for a task that
+ * cannot move ({ stopped }), or the helper to record ({ helper }).
  * It throws when it cannot read the logbook, and the hook refuses the spawn then.
  */
 function leadSpawnProblem(lead, spawned, given, slots, prompt) {
@@ -787,8 +787,9 @@ function leadSpawnProblem(lead, spawned, given, slots, prompt) {
   }
   if (digest(view.dir) !== lead.logbook) return "this lead's folder no longer gives its logbook, so it starts no agent.";
   if (view.leadRun(lead.task)?.id !== lead.run) return `${lead.task}'s lead run ${lead.run} no longer runs, so this lead starts no agent (F-T284-11).`;
-  const task = view.task(lead.task);
-  if (!task || LEAD_STOPS.includes(task.state)) return `${lead.task} is ${task ? task.state : "not in the logbook"}, so this lead starts no agent (F-T284-11, F-T289-7).`;
+  // Held, replan and the end states: core's reason, as for a lead's write and in Codex (F-T284-11, F-T289-7, F-T928-4).
+  const task = view.task(lead.task), stopped = core.leadStopped(lead.task, task);
+  if (stopped) return { stopped };
   const [, lineRun, lineTask] = BRIEF_LINE.exec(String(prompt ?? "").split("\n", 1)[0]) ?? [];
   if (lineTask && lineTask !== lead.task) return `the brief's first line names ${lineTask}, and this lead runs ${lead.task}: a lead helps only with its own task.`;
   if (lineRun && /^R[1-9]\d*$/.test(String(given ?? "")) && given !== lineRun) return `the helper's name ${given} and the brief's first line ${lineRun} name two runs: give both the same run id.`;
@@ -833,19 +834,30 @@ function gap(role, view, task, ctx) {
   return `this lead's ${role} helpers reported medium or high findings on ${task.id} (${found}), and ${task.id} holds ${atLeast(held, ["high", "medium"])} medium or high ${role} finding(s) that this lead run recorded, in any status: add each missing one yourself (finding add), with --source ${role} at its severity or above, one for each finding of each run; a finding that the sage added does not count (F-T289-17, F-T289-18, F-T289-22, F-T289-32, F-T289-43).`;
 }
 /**
- * The gap rule (F2) for a lead's request, which core's lead policy let through: no new run of a review or QA role, no end
- * of such a run whose report was not clean, no verdict of the role and no state move, while this lead's helpers of the
- * role have medium or high findings that this lead run did not record (F-T289-18, F-T289-22). Undefined, or the reason.
+ * The rules of a lead's request from the hook's notes of its helpers, after core's lead policy let it through. The gap
+ * rule (F2): no new run of a review or QA role, no end of such a run whose report was not clean, no verdict of the role
+ * and no state move, while this lead's helpers of the role have medium or high findings that this lead run did not record
+ * (F-T289-18, F-T289-22). And a lead ends only a run that it added, after its helper stopped, so that a run still at work
+ * stays in the merge check's guard of running reviews (F-T928-1). Undefined, or the reason.
  */
 function leadGap(request, view, task, ctx) {
   const run = request.run === undefined ? undefined : view.row(request.run);
   if (request.command === "run add") return gap(request.role, view, task, ctx);
   if (request.command === "verdict") return gap(run.role, view, task, ctx);
-  if (request.command === "task set") return "state" in request.fields ? TEAM.map((role) => gap(role, view, task, ctx)).find(Boolean) : undefined;
+  if (request.command === "task set") return Object.hasOwn(request.fields ?? {}, "state") ? TEAM.map((role) => gap(role, view, task, ctx)).find(Boolean) : undefined;
   if (request.command !== "run done") return undefined;
+  if (!ownRun(ctx, run.id)) return `${run.id} is not a run that this lead added: the chief ends it (F-T289-8, F-T289-16).`;
+  // A run whose helper gave no report (it never started, it left with no stop, or the chief stopped it) ends only as
+  // failed or blocked; a helper that started and did not stop holds its run while its slot holds its lease (F-T284-9,
+  // F-T289-3, F-T289-13, F-T289-20, F-T289-31).
+  const key = helperOf(ctx.lead, run.id), { started, stopped } = ctx.slots.helper(key);
+  if (!Array.isArray(stopped?.severities)) {
+    const left = started && !stopped ? ctx.slots.lease(key) : 0;
+    if (left > 0) return `${run.id}'s helper has not stopped, and its slot holds its lease for about ${Math.ceil(left / 60_000)} more minute(s): wait for its stop, or ask your chief to end ${run.id} (F-T289-31).`;
+    return ["failed", "blocked"].includes(request.status) ? undefined : `${run.id}'s helper gave no report, so ${run.id} ends only as failed or blocked (F-T289-3, F-T289-20).`;
+  }
   // A run whose helper gave a clean report, or whose findings or qa-fail verdict is recorded, ends (F-T289-15, F-T289-22).
-  const { stopped } = ctx.slots.helper(helperOf(ctx.lead, run.id));
-  if (!Array.isArray(stopped?.severities) || core.cleanReport(stopped) || view.verdicts(task.id).some((v) => v.run === run.id && ["findings", "qa-fail"].includes(v.kind))) return undefined;
+  if (core.cleanReport(stopped) || view.verdicts(task.id).some((v) => v.run === run.id && ["findings", "qa-fail"].includes(v.kind))) return undefined;
   return gap(run.role, view, task, ctx);
 }
 /** The roles whose finished run gives each verdict kind; null for a checks verdict, which is the sage's (F-T284-6, T482). */

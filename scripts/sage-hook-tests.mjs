@@ -4911,7 +4911,7 @@ test("F-T273-7: a lead makes only the cycle's next state move, and never moves a
   assert.equal(denied(stateRun(s, "task T1 set state=verifying")), undefined, "a full clean cycle on the head");
   setState(s, "T1", "held");
   for (const args of ["task T1 set state=building", "task T1 set branch=claude/t1", "round T1"]) {
-    assert.match(denied(stateRun(s, args)) ?? "", /T1 is held, so its lead records nothing\./, args);
+    assert.match(denied(stateRun(s, args)) ?? "", /T1 is held, so its lead records nothing and starts no agent\./, args);
   }
   setState(s, "T1", "building");
   assert.match(denied(stateRun(s, "task T1 set state=reviewing state=verifying")) ?? "", NOT_LISTED, "one state= per command");
@@ -5174,7 +5174,7 @@ test("F-T273-12: while its task is held, a lead writes nothing, and a held task 
   setState(s, "T1", "held");
   for (const args of ["run add T1 --role qa", "run done R2 --status done", "finding add T1 --source qa --severity low --summary=x", "finding close T1 F-T1-2", "finding triage T1 F-T1-1 fix",
     `verdict T1 --kind qa-pass --sha ${SHA} --pr 5`, "round T1", "task T1 set state=building"]) {
-    assert.match(denied(stateRun(s, args)) ?? "", /T1 is held, so its lead records nothing\./, args);
+    assert.match(denied(stateRun(s, args)) ?? "", /T1 is held, so its lead records nothing and starts no agent\./, args);
   }
   assert.equal(denied(stateRun(s, "status")), undefined, "reads still pass");
   const merged = autopilotSession(); // T1 has clean cycles on SHA under PR 41
@@ -5329,8 +5329,7 @@ test("F-T284-2: this file calls spawnSync and execFileSync only through bounded(
 test("F-T284-9: a lead's run counts only with a real child of its role, named by the run, that started and stopped", () => {
   const s = leadSession();
   leadAdd(s, "qa"); // R5, no child yet
-  // A run's end is the state tool's: a run with no kept report backs no verdict there (T483), so the hook keeps no rule of it (T928).
-  assert.equal(denied(stateRun(s, "run done R5 --status done")), undefined, "no child: the hook leaves the end to the state tool");
+  assert.match(denied(stateRun(s, "run done R5 --status done")) ?? "", /R5's helper gave no report/, "no child: run done refused (F-T928-1)");
   const child = (name, role = "qa", id = `c-${name}-${role}`) => denied(s.send(tool("Agent", { subagent_type: `sage:${role}`, prompt: BRIEF, name }, { tool_use_id: id, ...LEAD })));
   assert.match(child("R5", "code-reviewer") ?? "", /R5 is not a running code-reviewer run of T1 in its current round/, "the child's role must be the run's");
   assert.match(child("R3") ?? "", /R3 is not a running qa run of T1/, "another task's run");
@@ -5338,7 +5337,7 @@ test("F-T284-9: a lead's run counts only with a real child of its role, named by
   assert.equal(child("R5"), undefined, "the run's child");
   assert.match(child("R5", "qa", "second") ?? "", /R5 already has its helper/, "one child per run");
   s.send(resultOf("c-R5-qa", "kid-R5", LEAD));
-  assert.equal(denied(stateRun(s, "run done R5 --status done")), undefined, "the child still runs: the hook leaves the end to the state tool");
+  assert.match(denied(stateRun(s, "run done R5 --status done")) ?? "", /R5's helper has not stopped/, "the child still runs (F-T928-1)");
   s.send(ended("kid-R5", "sage:qa", { last_assistant_message: cleanOf("qa") }));
   assert.equal(denied(stateRun(s, "run done R5 --status done")), undefined, "after the child's stop");
   assert.match(child("R5", "qa", "third") ?? "", /R5 already has its helper/, "a stopped helper still backs its run");
@@ -5352,7 +5351,7 @@ test("F-T284-9: a lead's run counts only with a real child of its role, named by
   assert.match(denied(stateRun(s, `verdict T1 --kind qa-pass --sha ${HEAD} --pr 5 --run R4`)) ?? "", LEAD_RULE, "R4 is of round 0");
   // The implementer follows the same rule.
   leadAdd(s, "implementer", LEAD, "--branch", "claude/t1"); // R6, round 1
-  assert.equal(denied(stateRun(s, "run done R6 --status done")), undefined, "the hook leaves the end to the state tool");
+  assert.match(denied(stateRun(s, "run done R6 --status done")) ?? "", /R6's helper gave no report/, "the implementer's run too (F-T928-1)");
   helpRun(s, "R6", "implementer");
   assert.equal(denied(stateRun(s, "run done R6 --status done")), undefined);
 });
@@ -5381,10 +5380,41 @@ test("F-T284-11: a bound lead starts no child after its task is held, or after i
   const held = leadSession();
   assert.equal(held.send(namedQa(held, "before")), undefined);
   setState(held, "T1", "held");
-  assert.match(denied(held.send(nested("sage:qa", "after-hold"))) ?? "", /T1 is held, so this lead starts no agent/);
+  assert.match(denied(held.send(nested("sage:qa", "after-hold"))) ?? "", /^sage: T1 is held, so its lead records nothing and starts no agent\. Report to your chief\.$/);
   const ended = leadSession();
   ended.sage("run", "done", "R1", "--status", "failed");
   assert.match(denied(ended.send(nested("sage:qa", "after-end"))) ?? "", /T1's lead run R1 no longer runs, so this lead starts no agent/);
+});
+
+// Repair round 1 of T928 (R3039). Each test fails on b66aa121 and passes after.
+test("F-T928-1: a lead does not end a review run while its helper works, so the run stays in the merge check's guard", () => {
+  const s = leadSession();
+  const run = leadAdd(s, "code-reviewer"); // R5
+  assert.equal(s.send(tool("Agent", { subagent_type: "sage:code-reviewer", prompt: BRIEF, name: run }, { tool_use_id: "busy", ...LEAD })), undefined);
+  s.send(resultOf("busy", "kid-busy", LEAD));
+  for (const status of ["done", "failed"]) {
+    assert.match(denied(stateRun(s, `run done ${run} --status ${status}`)) ?? "", /^sage: R5's helper has not stopped, and its slot holds its lease for about 60 more minute\(s\): wait for its stop, or ask your chief to end R5 \(F-T289-31\)\./, status);
+  }
+  s.send(ended("kid-busy", "sage:code-reviewer", { last_assistant_message: cleanOf("code-reviewer") }));
+  assert.equal(denied(stateRun(s, `run done ${run} --status done`)), undefined, "after the helper's clean report");
+});
+
+test("F-T928-2: a lead's task set with its words in the wrong order gets the policy's plain reason, not a failed check", () => {
+  const s = leadSession();
+  for (const args of ["task set T1 state=building", "task set T1"]) {
+    const why = denied(stateRun(s, args)) ?? "";
+    assert.match(why, /^sage: "task set" is not on a lead's list, or it has other words\. A lead records only its own task/, args);
+    assert.doesNotMatch(why, /could not check/, args);
+  }
+  assert.equal(denied(stateRun(s, "task T1 set state=building")), undefined, "the right order");
+});
+
+test("F-T928-4: a held task gives its lead one reason, for a write and for a start of an agent, as in Codex", () => {
+  const s = leadSession();
+  setState(s, "T1", "held");
+  const HELD = "sage: T1 is held, so its lead records nothing and starts no agent. Report to your chief.";
+  assert.ok((denied(stateRun(s, "round T1")) ?? "").startsWith(`${HELD} `), "a write");
+  assert.equal(denied(s.send(nested("sage:qa", "held-child"))), HELD, "a start of an agent");
 });
 
 // T289: lead honesty before step 4. Each test fails on b4db88c and passes after.
@@ -5453,7 +5483,7 @@ test("F-T289-5: a lead's verdict names the commit that its helper saw at its sto
   assert.match(leadVerdict(s, "qa-pass", lost, later) ?? "", /^sage: R6's report names no full 40-character head SHA in BRANCH, and the hook saw none, so it backs no verdict/);
 });
 
-test("F-T289-8, T928: a new lead never helps with an old lead's runs; their ends and verdicts are the state tool's", () => {
+test("F-T289-8, T928: a new lead never helps with or ends an old lead's runs; their verdicts are the state tool's", () => {
   const s = leadSession(); // lead-a on lead run R1
   const old = leadAdd(s, "qa"); // R5, its helper stops later
   const idle = leadAdd(s, "qa"); // R6, no helper
@@ -5466,8 +5496,7 @@ test("F-T289-8, T928: a new lead never helps with an old lead's runs; their ends
   assert.equal(s.send(leadSpawn("lead-b-call", 1, { cwd: s.dir })), undefined);
   s.send(resultOf("lead-b-call", "lead-b"));
   const B = { agent_id: "lead-b", agent_type: "sage:lead" };
-  // An old run is a run of the lead's own task: the hook leaves its end to the state tool (T928).
-  assert.equal(denied(stateRun(s, `run done ${idle} --status failed`, B)), undefined);
+  assert.match(denied(stateRun(s, `run done ${idle} --status failed`, B)) ?? "", /^sage: R6 is not a run that this lead added: the chief ends it/, "an old lead's run (F-T928-1)");
   assert.match(denied(s.send(tool("Agent", { subagent_type: "sage:qa", prompt: BRIEF, name: idle }, { tool_use_id: "adopt", ...B }))) ?? "", /R6 is not a run that this lead added: a lead helps only with its own runs/);
   s.sage("run", "done", old, "--status", "done", "--tokens", "1"); // the sage ends the old run
   // Its helper's kept report backs its verdict, as the state tool holds it for every caller (T483).
@@ -5498,12 +5527,16 @@ test("F-T289-1: a lead never re-triages a finding triaged ask", () => {
   assert.equal(denied(stateRun(s, "finding triage T1 F-T1-1 dismiss --reason=no")), undefined, "a fix finding");
 });
 
-test("F-T289-3: a run whose helper never started backs no verdict", () => {
+test("F-T289-3, F-T928-1: a lead ends a run whose helper never started as failed or blocked, and that run backs no verdict", () => {
   const s = leadSession();
   const none = leadAdd(s, "qa"); // R5
+  assert.match(denied(stateRun(s, `run done ${none} --status done`)) ?? "", /^sage: R5's helper gave no report, so R5 ends only as failed or blocked \(F-T289-3, F-T289-20\)\./);
   for (const status of ["failed", "blocked"]) assert.equal(denied(stateRun(s, `run done ${none} --status ${status}`)), undefined, status);
   s.sage("run", "done", none, "--status", "failed");
   assert.match(leadVerdict(s, "qa-pass", none) ?? "", /^sage: R5 ended as failed, so it backs no verdict\./, "no helper, no verdict");
+  const live = leadAdd(s, "qa"); // R6: its helper runs
+  assert.equal(s.send(tool("Agent", { subagent_type: "sage:qa", prompt: BRIEF, name: live }, { tool_use_id: "live", ...LEAD })), undefined);
+  assert.match(denied(stateRun(s, `run done ${live} --status failed`)) ?? "", /R6's helper has not stopped/, "a helper that started must stop first");
 });
 
 test("F-T289-6, T909: a lead closes a fix finding of its round while repairing, also before a new commit; the next review cycle checks the repair", () => {
@@ -5520,9 +5553,9 @@ test("F-T289-7: a lead writes nothing and starts no child on an abandoned, merge
     const s = leadSession();
     setState(s, "T1", state);
     for (const args of ["round T1", "run add T1 --role qa", "finding add T1 --source qa --severity low --summary=x"]) {
-      assert.match(denied(stateRun(s, args)) ?? "", new RegExp(`T1 is ${state}, so its lead records nothing\\.`), `${state}: ${args}`);
+      assert.match(denied(stateRun(s, args)) ?? "", new RegExp(`T1 is ${state}, so its lead records nothing and starts no agent\\.`), `${state}: ${args}`);
     }
-    assert.match(denied(s.send(nested("sage:qa", `after-${state}`))) ?? "", new RegExp(`T1 is ${state}, so this lead starts no agent`), state);
+    assert.match(denied(s.send(nested("sage:qa", `after-${state}`))) ?? "", new RegExp(`T1 is ${state}, so its lead records nothing and starts no agent\\.`), state);
   }
 });
 
@@ -5596,9 +5629,10 @@ test("F-T289-13: a helper that left with no stop frees its lead's stop when its 
   assert.equal(s.send(tool("Agent", { subagent_type: "sage:qa", prompt: BRIEF, name: run }, { tool_use_id: "lost", ...LEAD })), undefined);
   s.send(resultOf("lost", "kid-lost", LEAD));
   assert.match(liveHelpers(s), /your helper R5 still runs/, "the helper still holds its slot");
+  assert.match(denied(stateRun(s, `run done ${run} --status failed`)) ?? "", /R5's helper has not stopped/, "the helper still holds its slot (F-T928-1)");
   const dir = join(s.vars.SAGE_HOOKS_STATE, "slots");
   ageSlots(s, 61, readdirSync(dir).filter((slot) => readdirSync(join(dir, slot)).some((m) => m.startsWith("helper-")))); // it died: no stop, its lease ended
-  // Its run backs no verdict with no kept report: the state tool holds that rule (T483), so the hook keeps no copy of it (T928).
+  assert.match(denied(stateRun(s, `run done ${run} --status done`)) ?? "", /R5's helper gave no report/, "never done (F-T928-1)");
   for (const status of ["failed", "blocked"]) assert.equal(denied(stateRun(s, `run done ${run} --status ${status}`)), undefined, status);
   const helpers = join(s.vars.SAGE_HOOKS_STATE, "helpers");
   assert.ok(readdirSync(helpers).length > 0);
@@ -5609,14 +5643,14 @@ test("F-T289-13: a helper that left with no stop frees its lead's stop when its 
   assert.deepEqual(readdirSync(helpers), [], "the ended lead run's notes are gone");
 });
 
-test("F-T289-16: a lead helps only with the runs that it added itself, and writes nothing in replan", () => {
+test("F-T289-16: a lead helps with and ends only the runs that it added itself, and writes nothing in replan", () => {
   const s = leadSession();
   const chiefs = s.sage("run", "add", "T1", "--role", "qa").split(" ")[0]; // R5: the sage's run, after the lead started
   assert.match(denied(s.send(tool("Agent", { subagent_type: "sage:qa", prompt: BRIEF, name: chiefs }, { tool_use_id: "adopt", ...LEAD }))) ?? "", /R5 is not a run that this lead added: a lead helps only with its own runs/);
-  assert.equal(denied(stateRun(s, `run done ${chiefs} --status failed`)), undefined, "a run of its own task: its end is the state tool's (T928)");
+  assert.match(denied(stateRun(s, `run done ${chiefs} --status failed`)) ?? "", /^sage: R5 is not a run that this lead added: the chief ends it/, "a run of its own task that the chief added (F-T928-1)");
   setState(s, "T1", "replan");
-  assert.match(denied(stateRun(s, "finding add T1 --source qa --severity low --summary=x")) ?? "", /T1 is replan, so its lead records nothing\./);
-  assert.match(denied(s.send(nested("sage:qa", "in-replan"))) ?? "", /T1 is replan, so this lead starts no agent/);
+  assert.match(denied(stateRun(s, "finding add T1 --source qa --severity low --summary=x")) ?? "", /T1 is replan, so its lead records nothing and starts no agent\./);
+  assert.match(denied(s.send(nested("sage:qa", "in-replan"))) ?? "", /T1 is replan, so its lead records nothing and starts no agent\./);
 });
 
 test("F-T289-17: two runs' findings need two recorded findings", () => {
@@ -5711,6 +5745,7 @@ test("F-T289-20: a helper that the sage stopped gave no report, so its run backs
   assert.equal(s.send(tool("Agent", { subagent_type: "sage:qa", prompt: BRIEF, name: run }, { tool_use_id: "cut", ...LEAD })), undefined);
   s.send(resultOf("cut", "kid-cut", LEAD));
   s.send(tool("TaskStop", { task_id: "kid-cut" })); // the main session stops the helper: no report
+  assert.match(denied(stateRun(s, `run done ${run} --status done`)) ?? "", /R5's helper gave no report, so R5 ends only as failed or blocked \(F-T289-3, F-T289-20\)/, "F-T928-1");
   assert.equal(denied(stateRun(s, `run done ${run} --status failed`)), undefined);
   s.sage("run", "done", run, "--status", "done", "--tokens", "1");
   assert.match(leadVerdict(s, "qa-pass", run) ?? "", /^sage: R5 has no kept report/, "no report backs no verdict, in the state tool (T483)");
@@ -5915,12 +5950,13 @@ test("F-T289-29: a finding's detail on indented lines under it is part of that f
   for (const file of ["skills/report/SKILL.md", "agents/security-reviewer.md"]) assert.match(readFileSync(join(plugin, file), "utf8"), /on indented lines under/, file);
 });
 
-test("F-T289-31, T928: while a helper's lease is live, the lead does not end, and its run's verdict waits for the helper's kept report", () => {
+test("F-T289-31, T928: while a helper's lease is live, run done says to wait for it, the lead does not end, and its run's verdict waits for the helper's kept report", () => {
   const s = leadSession();
   const run = leadAdd(s, "qa");
   assert.equal(s.send(tool("Agent", { subagent_type: "sage:qa", prompt: BRIEF, name: run }, { tool_use_id: "slow", ...LEAD })), undefined);
   s.send(resultOf("slow", "kid-slow", LEAD));
   assert.match(liveHelpers(s), /your helper R5 still runs/);
+  assert.match(denied(stateRun(s, `run done ${run} --status failed`)) ?? "", /R5's helper has not stopped, and its slot holds its lease for about 60 more minute\(s\): wait for its stop, or ask your chief to end R5 \(F-T289-31\)/, "F-T928-1");
   assert.match(leadVerdict(s, "qa-pass", run) ?? "", /^sage: R5 still runs: end it after its helper's report/);
 });
 

@@ -13,7 +13,7 @@ const LEAD_KINDS = ["review-clean", "security-clean", "ux-clean", "qa-pass", "qa
 const LEAD_FIELDS = ["state", "branch", "pr"];
 /** The state moves of a cycle that a lead makes, by the task's state. Only the chief moves a task from any other state. */
 const LEAD_MOVES = { briefed: ["building"], building: ["reviewing"], reviewing: ["verifying"], repairing: ["reviewing"], verifying: ["verified", "reviewing"], verified: ["reviewing"] };
-/** The states in which a lead records nothing. */
+/** The states in which a lead records nothing and starts no agent. */
 const LEAD_STOPS = ["held", "replan", "merged", "concluded", "abandoned"];
 /** The number of words of each command, so that no word goes past the policy unread. */
 const WORDS = { "run add": 2, "run done": 2, "finding add": 2, "finding close": 3, "finding triage": 4, verdict: 1, round: 1 };
@@ -22,8 +22,8 @@ const TEAM_TEXT = [...TEAM].join(", ");
 
 /**
  * A lead's state tool command, as its words give it, in the form of a Codex tool call: { command, task, run, key,
- * decision, reason, role, branch, kind, pr, sha, fields }. odd: the command has other words than its form, or a task set
- * key twice or with no value.
+ * decision, reason, role, branch, kind, pr, sha, status, fields }. odd: the command has other words than its form (also
+ * task set T1 state=…, with its words in the wrong order), or a task set key twice or with no value.
  */
 export function leadRequest(cmd, pos, opt) {
   const set = cmd === "task" && pos[1] === "set", command = set ? "task set" : [`${cmd} ${pos[0]}`, cmd].find((name) => LEAD_COMMANDS.includes(name)) ?? [cmd, ...pos.slice(0, 1)].join(" ");
@@ -33,9 +33,18 @@ export function leadRequest(cmd, pos, opt) {
     return { command, task: pos[0], fields, odd: !pairs.length || pairs.some((kv) => !kv.includes("=")) || Object.keys(fields).length !== pairs.length };
   }
   const [first, second, third] = command.includes(" ") ? pos.slice(1) : pos;
-  if (command === "run done") return { command, run: first, odd };
+  if (command === "run done") return { command, run: first, status: opt.status, odd };
   if (command === "finding close" || command === "finding triage") return { command, task: first, key: second, decision: third, reason: opt.reason, odd };
-  return { ...opt, command, task: first, odd: odd || (command === "pages" && pos.length > 3) };
+  return { ...opt, command, task: first, odd: odd || command === "task set" || (command === "pages" && pos.length > 3) };
+}
+
+/**
+ * Why the lead of task own records nothing and starts no agent, or undefined: task (its row) is missing, held, in replan
+ * or ended. Both providers give this reason, for a write and for a start of an agent.
+ */
+export function leadStopped(own, task) {
+  if (!task) return `the logbook has no task ${own}, so its lead records nothing and starts no agent. Report to your chief.`;
+  return LEAD_STOPS.includes(task.state) ? `${own} is ${task.state}, so its lead records nothing and starts no agent. Report to your chief.` : undefined;
 }
 
 /**
@@ -53,9 +62,8 @@ export function leadProblem(request, { lead, view, ofTask, branchOfTask, head })
   if (command !== "run done" && request.task !== own) return notOwn(request.task ?? "no task");
   if ((request.run || command === "run done") && run?.task !== own) return notOwn(request.run || "no run");
   if (named && finding?.task !== own) return notOwn(request.key);
-  const task = view.task(own);
-  if (!task) return `the logbook has no task ${own}.`;
-  if (LEAD_STOPS.includes(task.state)) return `${own} is ${task.state}, so its lead records nothing. Report to your chief.`;
+  const task = view.task(own), stopped = leadStopped(own, task);
+  if (stopped) return stopped;
   const roundKeys = String(task.keys ?? "").split(",").filter(Boolean);
   // The round order (F5): a repair goes through round, so the rounds count and a task can reach held. While a medium or
   // high finding is triaged fix and the task is not repairing, a lead closes no finding and records no verdict on a new commit.

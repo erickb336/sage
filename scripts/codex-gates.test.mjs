@@ -717,7 +717,7 @@ test("T551: a lead starts only implementer, reviewer and QA children of its own 
   }
 });
 
-test("F-T552-8: a lead starts its team only while its lead run runs and its task can move; a logbook that it cannot read fails closed", async (t) => {
+test("F-T552-8, F-T928-4: a lead starts its team only while its lead run runs and its task can move; a logbook that it cannot read fails closed", async (t) => {
   const w = world(t), lead = (path) => w.send(leadSpawn(w.child(path), "sage_qa_t1_r9"));
   assert.match(denied(lead("/root/sage_lead_t1_r1")), /^sage: T1 has no running lead run R1, so this lead records nothing and starts no agent/, "no logbook yet");
   leadOnT1(w);
@@ -728,7 +728,8 @@ test("F-T552-8: a lead starts its team only while its lead run runs and its task
   w.sage("run", "add", "T1", "--role", "lead"); // R3
   assert.equal(lead("/root/sage_lead_t1_r3"), undefined);
   assert.equal(w.sage("task", "T1", "set", "state=abandoned").status, 0);
-  assert.match(denied(lead("/root/sage_lead_t1_r3")), /^sage: T1 is abandoned, so its lead records nothing and starts no agent/, "a finished task");
+  // Core's one reason, word for word as the Claude hook gives it; the gate drops the last full stop of each reason (F-T928-4).
+  assert.equal(denied(lead("/root/sage_lead_t1_r3")), "sage: T1 is abandoned, so its lead records nothing and starts no agent. Report to your chief", "a finished task");
   writeFileSync(join(w.env.SAGE_HOME, readdirSync(w.env.SAGE_HOME).find((name) => name.startsWith("project-")), "tasks.tsv"), "not a table\n");
   assert.match(denied(w.send(leadSpawn(w.child("/root/sage_lead_t2_r2"), "sage_qa_t2_r9"))), /^sage: the gate could not read the logbook for this lead/, "a damaged logbook");
 });

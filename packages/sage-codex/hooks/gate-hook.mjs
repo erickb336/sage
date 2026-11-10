@@ -74,7 +74,7 @@ import { accessSync, constants, existsSync, linkSync, mkdirSync, readdirSync, re
 import { homedir } from "node:os";
 import { basename, dirname, isAbsolute, join, relative, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
-import { AGENT_GH, agentCommandProblem, agentGh, boardCommandProblem, boardPathProblem, chiefEditDenied, commandWrites, createCommandPolicy, createPushPolicy, ghRuns, logbookWrite, PR, programName, programsRun, pullRequestHead, readModeFile, roleEditDenied, sharedRoot, shellCommands, shellWriteEvidence, TEAM } from "sage-core";
+import { AGENT_GH, agentCommandProblem, agentGh, boardCommandProblem, boardPathProblem, chiefEditDenied, commandWrites, createCommandPolicy, createPushPolicy, ghRuns, leadStopped as coreLeadStopped, logbookWrite, PR, programName, programsRun, pullRequestHead, readModeFile, roleEditDenied, sharedRoot, shellCommands, shellWriteEvidence, TEAM } from "sage-core";
 import { modeFile, readMode, tool } from "../skills/sage/sage.mjs";
 import { verificationOptions } from "../skills/sage/verify-install.mjs";
 import { privateDirectory, readState } from "./hook-state.mjs";
@@ -162,16 +162,15 @@ function ghProblem(command, cwd, env) {
 }
 const childMayCall = (name, input) => CHILD_READS.has(name) || (name === "pages" && ["record", "run", "text"].every((key) => input[key] === undefined));
 
-/** The states in which a lead records nothing and starts no agent. */
-const LEAD_STOPS = ["held", "replan", "merged", "concluded", "abandoned"];
 /** A lead's brief: only for the team of its own task. The state tool holds every other rule of a lead (core's lead policy, T928). */
 const leadBrief = ({ task_name: name }, own) => (TEAM.has(taskRole(String(name))) && `T${taskNumber(name)}` === own ? undefined : `sage: a lead records a brief only for the team of ${own}, not for ${JSON.stringify(name)}.`);
 const LEAD_SHELL = `sage: a lead records with the sage MCP tools (${[...tool.LEAD_COMMANDS, "brief"].map((command) => command.replaceAll(" ", "_")).join(", ")}), not from the shell. Use one of these, or put what the logbook needs in your report.`;
-/** Why a lead of this task and run neither records nor starts agents now, or undefined: its lead run ended, or its task cannot move. */
+/** Why a lead of this task and run neither records nor starts agents now, or undefined: its lead run ended, or its task cannot move (core's reason, as in Claude). */
 function leadStopped({ task: own, run }, view) {
   const task = view.task(own), lead = view.leadRun(own);
   if (!task || !lead || (run && lead.id !== run)) return `sage: ${own} has no running lead run${run ? ` ${run}` : ""}, so this lead records nothing and starts no agent. Report to the chief.`;
-  return LEAD_STOPS.includes(task.state) ? `sage: ${own} is ${task.state}, so its lead records nothing and starts no agent. Report to the chief.` : undefined;
+  const stopped = coreLeadStopped(own, task);
+  return stopped && `sage: ${stopped}`;
 }
 const UNREAD_LOGBOOK = (error) => `sage: the gate could not read the logbook for this lead (${error?.message ?? error}), so it refuses this call. Tell the chief.`;
 
