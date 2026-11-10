@@ -2,7 +2,7 @@
 id: fix-root-causes
 name: Fix root causes
 applyWhen: debugging a failure or repairing a finding.
-source: pstack principle-fix-root-causes, MIT, Copyright (c) 2026 Lauren Tan, github.com/cursor/plugins at 6b03002, adapted
+source: pstack principle-fix-root-causes, MIT, Copyright (c) 2026 Lauren Tan, github.com/cursor/plugins, adapted; checked against pstack 0.15.36 at commit 0bb6f37
 ---
 
 Fix the fault where it started, not where it surfaced. The root cause is where the system first did something wrong, or missed a state that it should handle.

@@ -10,16 +10,16 @@ import { test } from "node:test";
 import { ROOT } from "./build.mjs";
 import { principleRows } from "./principles-table.mjs";
 
-test("each principle gets its attribution from its source: pstack, adapted; or sage's own", () => {
+test("each principle gets its attribution from its source: from pstack; or sage's own", () => {
   const rows = principleRows([
     { id: "fix-root-causes", applyWhen: "debugging a failure.", source: "pstack principle-fix-root-causes, MIT, Copyright (c) 2026 Lauren Tan, adapted" },
     { id: "contextualize", applyWhen: "writing for a reader.", source: "this kit's own" },
     { id: "build-the-lever", applyWhen: "the work is not trivial: edits, checks.", source: "pstack principle-build-the-lever, MIT, Copyright (c) 2026 Lauren Tan, adapted" },
   ]);
   assert.deepEqual(rows, [
-    { id: "build-the-lever", applyWhen: "the work is not trivial: edits, checks", text: "pstack, adapted" },
+    { id: "build-the-lever", applyWhen: "the work is not trivial: edits, checks", text: "from pstack" },
     { id: "contextualize", applyWhen: "writing for a reader", text: "sage's own" },
-    { id: "fix-root-causes", applyWhen: "debugging a failure", text: "pstack, adapted" },
+    { id: "fix-root-causes", applyWhen: "debugging a failure", text: "from pstack" },
   ]);
 });
 
@@ -42,14 +42,14 @@ test("npm run check fails when a principle's applyWhen changes and the principle
   assert.equal(r.status, 1);
   assert.match(r.stderr, /✗ docs\/guide\/principles\.md: out of date; run npm run build/);
   assert.equal(c.run("build").status, 0);
-  assert.match(c.read("docs/guide/principles.md"), /\n\| fix-root-causes<br>\*pstack, adapted\* \| a test fails for a reason nobody knows \|\n/);
+  assert.match(c.read("docs/guide/principles.md"), /\n\| fix-root-causes<br>\*from pstack\* \| a test fails for a reason nobody knows \|\n/);
   const after = c.run("check");
   assert.equal(after.status, 0, after.stderr);
 });
 
 test("npm run check fails when the principles page's table is edited by hand", (t) => {
   const c = copy(t);
-  c.write("docs/guide/principles.md", c.read("docs/guide/principles.md").replace("| fix-root-causes<br>*pstack, adapted* | debugging a failure or repairing a finding |", "| fix-root-causes<br>*mine* | debugging a failure or repairing a finding |"));
+  c.write("docs/guide/principles.md", c.read("docs/guide/principles.md").replace("| fix-root-causes<br>*from pstack* | debugging a failure or repairing a finding |", "| fix-root-causes<br>*mine* | debugging a failure or repairing a finding |"));
   const r = c.run("check");
   assert.equal(r.status, 1);
   assert.match(r.stderr, /✗ docs\/guide\/principles\.md: out of date; run npm run build/);

@@ -2,10 +2,10 @@
 id: experience-first
 name: Experience first
 applyWhen: a product, UX or scope trade-off comes up.
-source: pstack principle-experience-first, MIT, Copyright (c) 2026 Lauren Tan, github.com/cursor/plugins at 6b03002, adapted
+source: pstack principle-experience-first, MIT, Copyright (c) 2026 Lauren Tan, github.com/cursor/plugins, adapted; checked against pstack 0.15.36 at commit 0bb6f37
 ---
 
-When implementation convenience conflicts with the user's experience, choose the experience.
+When implementation convenience conflicts with the user's delight, choose delight.
 
 - Every feature, control and option has to justify itself.
 - Ship less, ship better: a polished experience with three features beats a rough one with ten.
