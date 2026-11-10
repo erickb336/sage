@@ -2,6 +2,8 @@
 import { shellCommands, programsRun } from "./command-reader.mjs";
 import { outputDispatchWrites } from "./output-writes.mjs";
 import { programName } from "./command-policy.mjs";
+import { realpathSync } from "node:fs";
+import { basename, dirname, join, resolve, sep } from "node:path";
 
 const CODE = /^-(?:[a-z]*[ce]|p|-eval|-print|command)$/;
 /** The commands that write, move, remove or link a file, also in PowerShell (case does not matter there). less -o FILE writes, so less always counts; uniq has its own rule (uniqWrites). */
@@ -105,14 +107,32 @@ function writesIn({ words }) {
     /^(?:eval|source|\.|exec)$/.test(base[low.findIndex((w) => !/^\w+=/.test(w))] ?? "")
   );
 }
-/** Does one field of a command's text have a write form? A text that the hook cannot read counts as one (fail closed). */
-export function commandWrites(text, cwd) {
+/** The real path of a path: the real path of its longest part that exists, then the rest. */
+function realPath(path) {
+  try { return realpathSync.native(path); } catch { return dirname(path) === path ? path : join(realPath(dirname(path)), basename(path)); }
+}
+/**
+ * Is a redirection's target in a scratch folder and outside cwd (the caller's project)? Only a literal target in a known
+ * folder counts: a variable, a pattern or ~ in it, or a folder that the reader cannot follow, does not.
+ */
+function intoScratch({ target, dir, uncertainDirectory }, cwd, scratch) {
+  if (!scratch.length || uncertainDirectory || /[$`*?[\]{}~!]/.test(target)) return false;
+  const path = realPath(resolve(dir ?? cwd, target)), project = realPath(resolve(cwd));
+  const under = (folder) => path.startsWith(folder.endsWith(sep) ? folder : folder + sep);
+  return path !== project && !under(project) && scratch.some((folder) => under(realPath(resolve(folder))));
+}
+/**
+ * Does one field of a command's text have a write form? A text that the hook cannot read counts as one (fail closed).
+ * scratch: absolute folders (such as the temp folder) where a redirection does not count, unless its target is in cwd.
+ * Every other write form counts also there.
+ */
+export function commandWrites(text, cwd, scratch = []) {
   if (typeof text !== "string") return true;
   try {
     const commands = shellCommands(text);
     if (commands.some(writesIn)) return true;
     const evidence = programsRun(text, cwd, undefined, { contextEvidence: true, redirectParts: true });
-    return evidence.redirects.some(toFile) || evidence.programs.some(entry => readerDispatch(entry) || outputDispatchWrites(entry));
+    return evidence.redirects.some(r => toFile(r) && !intoScratch(r, cwd, scratch)) || evidence.programs.some(entry => readerDispatch(entry) || outputDispatchWrites(entry));
   } catch {
     return true;
   }

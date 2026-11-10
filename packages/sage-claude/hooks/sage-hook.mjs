@@ -33,6 +33,9 @@
 //   - Only sage.mjs changes the logbook (chiefProblem): the chief's own file tools and shell writes never change it.
 //   - An agent (a sage agent, or any subagent in sage mode; never the chief) never runs git stash, and never runs a
 //     program that lists or signals processes unless that program is a fake in the temp folder (agentProblem).
+//   - In sage mode, a sage agent of a read-only role (core's roleEditDenied: a reviewer, QA, the PE, the lead) runs no
+//     shell write form (core's commandWrites), as in the Codex gate; only a redirection into the temp folder, outside
+//     the project, passes (readOnlyWrite, T933).
 // SAGE_HOOKS=off turns it off. The hook never breaks a session: on an error it answers nothing, but it refuses a merge,
 // a push, every file change and command of an agent, and a chief's shell write into the sage root or the shared root.
 import { spawnSync } from "node:child_process";
@@ -328,6 +331,8 @@ export function handle(input, state, slots) {
     }
     const problem = commands.map(command => agentProblem(command, cwd)).find(Boolean);
     if (problem) return deny(event, problem);
+    const write = state.sage && ours ? readOnlyWrite(input.agent_type, commands, cwd) : undefined;
+    if (write) return deny(event, write);
   }
   const tool = input.tool_name ?? "";
   const ti = input.tool_input ?? {};
@@ -1519,6 +1524,22 @@ export function agentProblem(command, cwd, path = process.env.PATH ?? "") {
     if ((isProcess(name) || isProcess(file ?? "")) && !inTemp(file)) return NO_PROCESS(word);
   }
   return undefined;
+}
+
+/**
+ * A read-only role's shell write (T933, gap G21). In sage mode, a sage agent whose role core keeps from editing
+ * (roleEditDenied: a reviewer, QA, the PE, the lead) runs no command with a write form (core's commandWrites), as in the
+ * Codex gate. Its agent file already takes away the file tools. A redirection into the temp folder (TEMP), outside the
+ * project, passes, so that the agent keeps its output and probes in its scratch folder. A sage role that core does not
+ * know counts as read-only. A disguised write (a variable, a script's own code) is a limit (standing order 70).
+ * Undefined when the commands pass; else the reason for the refusal.
+ */
+export function readOnlyWrite(agentType, commands, cwd) {
+  const role = String(agentType).replace(/^sage:/i, "").toLowerCase();
+  let denied;
+  try { denied = core.roleEditDenied({ sage: true, role }); } catch { denied = true; }
+  const write = denied ? commands.find((command) => { try { return core.commandWrites(command, cwd, TEMP); } catch { return true; } }) : undefined;
+  return write === undefined ? undefined : `in sage mode, the ${role} agent changes no files, also not from the shell, so ${quoted(bare(write))} is refused: it has a write form (for example sed -i, a redirection to a file, tee, cp, mv, rm, or code in node -e). Report the finding instead. To keep output or a probe, redirect it into your scratch folder in the temp folder, with a literal path (for example > /tmp/<run>/out.txt). To try a changed copy, write the copy the same way: git show <sha>:<path> | sed 's/a/b/' > /tmp/<run>/copy.mjs.`;
 }
 
 /** Shared program resolution; never executes a program. */

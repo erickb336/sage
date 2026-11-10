@@ -314,6 +314,28 @@ test("T45: executable spellings preserve shared writer and reader-option checks"
   }
 });
 
+test("T933: a redirection into a scratch folder outside the project is no write; every other write form still is", async t => {
+  for (const provider of ["claude", "codex"]) {
+    const f = isolated(t, provider);
+    const { commandWrites } = await import(pathToFileURL(join(f.plugin, "core/index.mjs")));
+    const project = join(f.dir, "project"), scratch = join(f.dir, "scratch");
+    mkdirSync(project, { recursive: true });
+    mkdirSync(scratch, { recursive: true });
+    for (const command of [`echo x > ${scratch}/out.txt`, `npm test > ${scratch}/log.txt 2>&1`, `cd ${scratch} && echo x >> out.txt`,
+      `cat > ${scratch}/new/probe.mjs <<'EOF'\nx\nEOF`, "echo x > /dev/null", "npm test"])
+      assert.equal(commandWrites(command, project, [scratch]), false, command);
+    for (const command of ["echo x > out.txt", `echo x > ${project}/out.txt`, `echo x > ${scratch}/../project/out.txt`,
+      "echo x > $TMPDIR/out.txt", `echo x > ${scratch}/*.txt`, `cp a.txt ${scratch}/b.txt`, `tee ${scratch}/out.txt`,
+      `sed -i s/a/b/ ${scratch}/out.txt`, `rm -rf ${scratch}/old`])
+      assert.equal(commandWrites(command, project, [scratch]), true, command);
+    // With no scratch folder, as every caller before T933, a redirection into it counts.
+    assert.equal(commandWrites(`echo x > ${scratch}/out.txt`, project), true);
+    // A project inside the scratch folder stays the project.
+    assert.equal(commandWrites(`echo x > ${scratch}/inner/a.txt`, join(scratch, "inner"), [scratch]), true);
+    assert.equal(commandWrites(`echo x > ${scratch}/other/a.txt`, join(scratch, "inner"), [scratch]), false);
+  }
+});
+
 test("T44: output-file dispatches count as writes in both packaged cores", async t => {
   for (const provider of ["claude", "codex"]) {
     const f = isolated(t, provider);
