@@ -12,7 +12,7 @@ import { fileURLToPath } from "node:url";
 // built hook runs as Codex runs it: JSON on stdin, JSON on stdout, with a scratch CODEX_HOME and logbook.
 const HOOK = fileURLToPath(new URL("../plugins/sage-codex/hooks/brief-hook.mjs", import.meta.url));
 const TOOL = fileURLToPath(new URL("../plugins/sage-codex/skills/sage/sage.mjs", import.meta.url));
-const { recordBrief, readBrief } = await import(HOOK);
+const { recordBrief, readBrief, briefChecked } = await import(HOOK);
 const { missingBriefFields, briefSections } = await import(new URL("../plugins/sage-codex/core/index.mjs", import.meta.url));
 
 const FIELDS = ["GOAL", "SCOPE", "CONTEXT", "DECISIONS", "ACCEPTANCE", "VERIFY", "BUDGET", "FORBIDDEN", "REPORT", "STANDING"];
@@ -113,6 +113,22 @@ test("after a spawn with no checked brief, the chief gets a warning that names t
   assert.deepEqual(w.send(w.spawned("sage_implementer_t1")), {}, "a checked brief");
   assert.deepEqual(w.send(w.spawned("worker_1")), {}, "not a sage role agent");
   assert.deepEqual(w.send({ ...w.spawned("sage_qa_t1"), tool_name: "Bash" }), {}, "another tool");
+});
+
+test("T950: a check with every field keeps its time and counts for 30 minutes, for its exact task name; a check with a missing field counts for none", (t) => {
+  const w = world(t);
+  assert.equal(w.sage("init").status, 0);
+  const before = Date.now();
+  assert.deepEqual(recordBrief(w.project, "sage_qa_t1_r2", brief(), w.env), []);
+  const { checked } = readBrief(w.project, "sage_qa_t1_r2", w.env);
+  assert.ok(checked >= before && checked <= Date.now(), String(checked));
+  assert.equal(briefChecked(w.project, "sage_qa_t1_r2", w.env), true);
+  assert.equal(briefChecked(w.project, "sage_qa_t1_r2", w.env, checked + 30 * 60_000), true, "at 30 minutes");
+  assert.equal(briefChecked(w.project, "sage_qa_t1_r2", w.env, checked + 30 * 60_000 + 1), false, "after 30 minutes");
+  for (const other of ["sage_qa_t1_r3", "sage_qa_t1", "sage_implementer_t1_r2"]) assert.equal(briefChecked(w.project, other, w.env), false, other);
+  assert.deepEqual(recordBrief(w.project, "sage_qa_t1_r2", brief(["VERIFY"]), w.env), ["VERIFY"]);
+  assert.equal(readBrief(w.project, "sage_qa_t1_r2", w.env).checked, undefined);
+  assert.equal(briefChecked(w.project, "sage_qa_t1_r2", w.env), false, "the last check had a missing field");
 });
 
 test("an input that the hook cannot read gives one plain line and no note", (t) => {
