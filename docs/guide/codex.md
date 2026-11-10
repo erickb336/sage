@@ -1,6 +1,6 @@
 # sage in Codex
 
-This page tells you how to install sage in Codex, what it does there today, and what does not work yet. sage installs as a Codex plugin from its own marketplace, with your normal Codex: the terminal CLI, and the Codex desktop app in the ChatGPT app. sage was checked with the CLI and with the desktop app's own Codex (see [What you need](#what-you-need)).
+This page tells you how to install sage in Codex, what it does there today, and its [known limits](#known-limits-in-codex). sage installs as a Codex plugin from its own marketplace, with your normal Codex: the terminal CLI, and the Codex desktop app in the ChatGPT app. sage was checked with the CLI and with the desktop app's own Codex (see [What you need](#what-you-need)).
 
 In Codex, sage mode gives the session the chief's role, its role agents and the logbook tools. Hooks hold the bounded merge and edit rules described below, and autopilot merges verified work with sage's merge command.
 
@@ -17,13 +17,12 @@ The design of the two provider plugins is in [Separate provider packages](../des
 | The logbook and the board | Yes | Yes: the plugin's `sage` MCP tools write the logbook, and the board phrases show the board ([The board in Codex](#the-board-in-codex)) |
 | Programs (one goal, several tasks, a breakdown gate) | Yes | Yes: the `program_propose` tool opens the breakdown gate, and `task_set` with `program=` puts a task in a program or takes it out ([The logbook tools](#the-logbook-tools)) |
 | The settings: cycle counts, `max_leads`, the project's board name and archive | Yes | Yes: the `config` tool, when you ask the chief |
-| The stop check of the chief's turn | Yes | No: sage adds no hook at the end of the chief's turn in Codex. The report check below covers role agents |
 | sage mode: the chief's role | Yes | Yes: the `sage mode` phrase gives it, and it comes back after a compaction |
 | Role agents | Yes: the lead, the implementer, the reviewers, QA, the PE, the designer, the arena judge and the investigation roles | The public helper supports each of these roles and the investigation roles. The chief starts one lead for each task with a build, and the lead starts its team and records its task; other role agents start no agents and record nothing. A pilot on stock Codex ran a lead and its team with a test model, and each thread needs a multi-agent v2 model (see [start a role agent](../../packages/sage-codex/skills/sage/references/roles.md)). |
 | The brief check | Yes: the hook refuses a brief without every field | Yes, as a check, not a block: the chief runs the `brief` tool before each spawn. Each role agent starts with the project's standing orders and its checked brief, and a spawn with no checked brief gives the chief a warning ([The brief check](#the-brief-check)) |
 | The report check | Yes | Yes, for a role agent whose task name starts with `sage_`: a report without every field gets one more turn, then the agent stops with one plain line. A review or QA agent's report goes through the same reader as in Claude Code: a report that the reader cannot read gets one more turn too |
 | sage mode: the push rule in code | Yes | Yes: the same push form as in Claude Code ([The rules in Codex](#the-rules-in-codex)) |
-| sage mode: agent caps in code | Yes | No |
+| sage mode: agent caps in code | Yes | No: Codex's own thread limit is the cap ([Known limits in Codex](#known-limits-in-codex)) |
 | Autopilot | Yes | Yes, in Codex 0.164 to 0.167: autopilot merges verified work with sage's merge command, with no prompt for the merge ([Autopilot in Codex](#autopilot-in-codex)). The hook refuses `gh pr merge` in every mode |
 | The merge rule, the no-edit rules and the `.codex` rule | Yes | Yes, in the plugin's hooks ([The rules in Codex](#the-rules-in-codex)) |
 | The mode phrases (`sage mode`, `sage mode off`, `autopilot on`, `autopilot off`, `sage help`) | Yes | Yes |
@@ -450,13 +449,27 @@ Limits:
   - A finished or interrupted agent frees its thread, and the agent then tries again with the same name.
   - One lead with one helper at a time needs no change. Set `agents.max_concurrent_threads_per_session` to 10 before you run more than one lead, because sage caps no agents in code here.
 - The reviewer's limits above hold for a lead too: its shell write is blocked only in the plain forms. A lead sends the branch and opens the pull request from the shell, under the same push and `gh` rules as the chief, and it never merges. It starts no lead, PE, designer or arena judge.
-- A lead records every finding of a helper's report. Nothing refuses a lead that leaves one out: Claude's hook checks the count of medium and high findings (its gap rule), and the Codex gate does not. The lead's role text gives the rule, and a lead that drops a finding acts against its brief.
+- A lead records every finding of a helper's report. The state tool refuses a review or QA verdict while a medium or high finding of its kept report has no row, in Claude and in Codex. Claude's hook also stops the lead earlier, at its next run, verdict or state move (its gap rule), and the Codex gate does not.
 - The chief's own `resume_agent` is not blocked. The chief's text says to start a fresh agent.
 
 ## Inactive trigger observation
 
 sage no longer has the inactive turn-trigger observer or its sample command. No hook or manifest ran them, so T732 removed them. The change log keeps their earlier entries, which link here.
 
-## What comes next
+## Known limits in Codex
 
-Agent caps come later in the same plugin. Codex draws its own approval prompts in both front ends, so sage adds none.
+These are the differences from Claude Code that stay in sage 1.0, by the owner's choice. Each row says what you see, why, and what to do. The security limits of the hooks are in [The rules in Codex](#the-rules-in-codex).
+
+| What you see | Why | What to do |
+| --- | --- | --- |
+| Each new session starts with sage mode off. | sage in Codex has no setting that starts a session as the chief, as `"agent": "sage:chief-of-staff"` does in Claude Code. | Send `sage mode` alone at the start of each session. |
+| After each sage update, Codex asks you to trust every sage hook again. Until you do, sage records nothing, and the chief says why. | Codex runs a plugin hook only when your trust record matches the hook and the plugin's files, and an update changes them. | Choose **Trust all and continue**, or type `/hooks` and trust each sage hook. Then do the [gate check](#check-that-the-sage-gate-runs). |
+| After Codex updates (the desktop app updates its own Codex), autopilot merges wait, and the refusal says why. | sage merges only in the Codex versions that it tested: 0.164 to 0.167. | Merge the pull request in GitHub until a sage release adds your version ([Autopilot in Codex](#autopilot-in-codex)). |
+| With the default thread limit, a third helper at the same time fails with `collab spawn failed: agent thread limit reached`, then tries again. | sage counts no running agents in Codex, so it caps no agents in code: Codex's own thread limit is the cap, 4 threads by default. The state tool still holds at most 5 running lead runs for a project (`max_leads`). | Set `agents.max_concurrent_threads_per_session` to 10 before you run more than one lead. |
+| Every agent runs on the session's model, also a light role such as the UX review. | Codex children inherit the session's model, so sage sets no model for each role and size. | Choose a multi-agent v2 model for the session, and do not switch it during a run. |
+| The logbook and the board show no token count for a Codex run. | Codex's agent tools give no token count for each run, so the chief records the usage as unavailable. | Nothing in sage. |
+| A spawn with a missing brief field runs, and the chief gets a warning. | Codex sends the spawn message encrypted, so no hook can read it. | Nothing in normal use: the chief checks each brief with the `brief` tool first ([The brief check](#the-brief-check)). |
+| A lead with no running lead run starts, then stops at its first logbook write or agent start, with one line. | Claude Code checks the lead run when the chief starts the lead. The Codex gate checks it at the lead's first write or start. | Nothing: the lead stops safely, and the chief starts a lead on a new lead run. |
+| A lead that leaves out a medium or high finding of a helper learns it only when it records the verdict. | The state tool refuses that verdict in both providers. Claude's hook also checks it earlier, at the lead's next run or state move. | Nothing: the clean cycles stay safe. |
+| The chief can change a repository file with a shell command. | The Codex gate blocks the chief's `apply_patch` edit, not its shell writes. | If the chief edits a file, tell it to brief an implementer. A change still needs a pull request, clean cycles and the merge check. |
+| Nothing directly: each role agent gets its role text in the spawn message. | A Codex plugin cannot ship agent roles with their own tool lists, so the chief prints each role's text with `role.mjs`, and the gate holds the edit rules. | Nothing. |
