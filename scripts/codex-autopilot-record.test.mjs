@@ -49,7 +49,7 @@ const FORM = (detail) => ({ refused: `sage does not know the form of Codex's rec
 const RESUME = "Resume the session, then the owner turns autopilot on again. Or the owner merges the pull request in GitHub";
 const NO_MARK = { refused: `sage saved no note when this session started, so it cannot tell which of the owner's switches are from this start. ${RESUME}` };
 const BAD_MARK = { refused: `sage's note of this session start does not match Codex's record of this session. ${RESUME}` };
-const VERSION = (version) => ({ refused: `this session runs Codex ${version}, and sage reads the records of Codex 0.164 to 0.167 only. A newer Codex waits until sage adds it. Until then, the owner merges the pull request in GitHub` });
+const VERSION = (version) => ({ refused: `this session runs Codex ${version}, and sage reads the records of Codex 0.164 and later only. Start a new session with Codex 0.164 or later, or the owner merges the pull request in GitHub` });
 /** Each sentence of a text for the owner, without its bracketed detail, has 25 words or fewer and no internal name. */
 function assertPlain(text) {
   assert.doesNotMatch(text.replace(/ \([^()]*\)$/, ""), /session_meta|\bline \d|partial|unknown type|ENOENT|EACCES/, text);
@@ -418,15 +418,18 @@ test("the record format fails closed: each unknown or broken record refuses", ()
   for (const { refused } of [FORM("line 6 is not JSON"), unread("ENOENT"), noRecord]) assertPlain(refused);
 });
 
-test("Codex versions: 0.164 to 0.167 in the strict form read; any other version refuses (F-T677-16)", () => {
+test("Codex versions: 0.164 and later in the strict form read, with no upper bound; an older version or another form refuses (T951)", () => {
   const record = withMode(RECORDS["exec-on"]);
-  for (const version of ["0.164.0", "0.165.3", "0.166.0", "0.166.0-alpha.6", "0.166.12", "0.167.0", "0.167.0-alpha.3.2", "0.167.2-beta.1"]) assert.deepEqual(decide([meta(version), ...record.slice(1)]), ON, version);
-  for (const version of ["0.163.9", "0.168.0", "0.168.0-alpha.1", "0.170.0", "1.0.0", "1.164.0", "1.167.0", "0.164", "0.164.0.1", "0.164.01", "v0.164.0", " 0.164.0", "0.164.0-alpha",
-    "0.167.0-alpha.", "0.167.0-alpha..3", "0.167.0-alpha.3.", "0.167.0-alpha.03", "0.167.0-3.2", "0.164.0+build", "0.164.0-alpha.6\n", undefined, 164]) {
+  for (const version of ["0.164.0", "0.165.3", "0.166.0", "0.166.0-alpha.6", "0.166.12", "0.167.0", "0.167.0-alpha.3.2", "0.167.2-beta.1",
+    "0.168.0", "0.168.0-alpha.1", "0.169.0", "0.169.0-alpha.8", "0.170.2", "0.199.0", "0.200.0", "0.1000.0", "1.0.0", "1.0.0-beta.1", "1.164.0", "2.3.4"]) {
+    assert.deepEqual(decide([meta(version), ...record.slice(1)]), ON, version);
+  }
+  for (const version of ["0.163.9", "0.163.0", "0.99.0", "0.16.4", "0.1.0", "0.0.164", "0.0164.0", "01.0.0", "1.00.0", "0.164", "0.164.0.1", "0.164.01", "v0.164.0", " 0.164.0", "0.164.0-alpha",
+    "0.167.0-alpha.", "0.167.0-alpha..3", "0.167.0-alpha.3.", "0.167.0-alpha.03", "0.167.0-3.2", "0.164.0+build", "1.0.0+build", "0.164.0-alpha.6\n", undefined, 164]) {
     assert.deepEqual(decide([meta(version), ...record.slice(1)]), VERSION(version), String(version));
   }
-  assertPlain(VERSION("0.170.0").refused);
-  assert.ok(decide([meta("0.170.0"), ...record.slice(1), META]).refused, "every session_meta line is checked");
+  assertPlain(VERSION("0.163.0").refused);
+  assert.ok(decide([meta("0.163.0"), ...record.slice(1), META]).refused, "every session_meta line is checked");
 });
 
 test("a partial last line is re-read up to 3 times, then refuses", () => {

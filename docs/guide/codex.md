@@ -23,7 +23,7 @@ The design of the two provider plugins is in [Separate provider packages](../des
 | The report check | Yes | Yes, for a role agent whose task name starts with `sage_`: a report without every field gets one more turn, then the agent stops with one plain line. A review or QA agent's report goes through the same reader as in Claude Code: a report that the reader cannot read gets one more turn too |
 | sage mode: the push rule in code | Yes | Yes: the same push form as in Claude Code ([The rules in Codex](#the-rules-in-codex)) |
 | sage mode: agent caps in code | Yes | Yes: the state tool refuses a new run when the project already has its cap of running runs (`max_agents`, 10 by default), as in Claude Code. Codex's own thread limit must hold as many agents ([What you need](#what-you-need)) |
-| Autopilot | Yes | Yes, in Codex 0.164 to 0.167: autopilot merges verified work with sage's merge command, with no prompt for the merge ([Autopilot in Codex](#autopilot-in-codex)). The hook refuses `gh pr merge` in every mode |
+| Autopilot | Yes | Yes, in Codex 0.164 and later: autopilot merges verified work with sage's merge command, with no prompt for the merge ([Autopilot in Codex](#autopilot-in-codex)). The hook refuses `gh pr merge` in every mode |
 | The merge rule, the no-edit rules and the `.codex` rule | Yes | Yes, in the plugin's hooks ([The rules in Codex](#the-rules-in-codex)) |
 | The mode phrases (`sage mode`, `sage mode off`, `autopilot on`, `autopilot off`, `sage help`) | Yes | Yes |
 | The board phrases (`show board`, `show status`) | Yes | Yes: the hook gives the chief the same board note as in Claude Code. The board page starts after you approve one prompt ([The board in Codex](#the-board-in-codex)) |
@@ -34,7 +34,7 @@ The browser board shows every logbook by default, and each card says which provi
 
 ## What you need
 
-- Codex 0.164 to 0.167. sage was checked with the Codex CLI 0.164.0 and 0.166.0 on macOS, with a test model. The desktop app carries its own Codex, which changes with the app: sage was checked with the Codex of desktop 0.166.0-alpha.6 and 0.167.0-alpha.3.2, not with other versions.
+- Codex 0.164 or later. sage was checked with the Codex CLI 0.164.0 and 0.166.0 on macOS, with a test model. The desktop app carries its own Codex, which changes with the app: sage was checked with the Codex of desktop 0.166.0-alpha.6 and 0.167.0-alpha.3.2, not with other versions.
 - The Codex CLI on your PATH, in that range, also when you use only the desktop app: the install commands below are CLI commands. To get it, run `npm install -g @openai/codex@0.164.0`.
 - Node.js 20 or later, on your PATH: the sage hooks are Node scripts.
 - `gh`, logged in (`gh auth login`), and a GitHub remote for the project. sage uses them for pull requests and the merge check; without them, work stops at a verified branch.
@@ -134,7 +134,7 @@ Send each phrase alone, as the whole message, in any letter case.
 | `autopilot on` / `autopilot off` | Autopilot turns on, while sage mode is on, or off. With autopilot on, autopilot merges verified work: the chief runs sage's merge command after the clean cycles and a passing merge check, with no prompt for the merge ([Autopilot in Codex](#autopilot-in-codex)). |
 | `sage help` | Every phrase, and whether sage mode and autopilot are on. |
 
-- To turn on autopilot, send `sage mode`, then `autopilot on`, each alone. Merges also need Codex 0.164 to 0.167, and `node` and `gh` outside the folders that Codex's sandbox can write ([Autopilot in Codex](#autopilot-in-codex)).
+- To turn on autopilot, send `sage mode`, then `autopilot on`, each alone. Merges also need Codex 0.164 or later, and `node` and `gh` outside the folders that Codex's sandbox can write ([Autopilot in Codex](#autopilot-in-codex)).
 - Send the on phrase with no image. A phrase counts only as the whole message, and an image is part of the message. Codex gives the hook only the text, so the chief can confirm the switch, but sage's merge rule reads the whole message in Codex's record: with an image, the on counts for nothing, and merges wait for you.
 - With autopilot off, the chief prepares a reviewed pull request for you to merge in GitHub. It reports the PR link, exact head commit and evidence.
 - Send an on phrase when Codex is idle. An off phrase works at any time: sent with Enter while Codex works, it stops merges from Codex's next step. A phrase that you queue with Tab waits until the turn ends.
@@ -170,7 +170,7 @@ The board phrases work in Codex as in Claude Code, at the start of your message,
 With sage mode and autopilot on, the chief lands a verified pull request itself. After the task's clean cycles, CI on the final head and a passing `merge_check`, the chief runs sage's merge command (`skills/sage/merge.mjs` of the plugin). The sage hook admits it only when all of these hold:
 
 - Sage mode and autopilot are on in the mode file of the session.
-- The Codex that runs is 0.164 to 0.167.
+- The Codex that runs is 0.164 or later.
 - Codex's own record of the session has your on phrase since this start of the session. After a restart, a resume or a fork, send it again.
 - That on phrase is the one that turned autopilot on in the mode file: the latest on phrase that started its own turn.
 - The call comes from the main thread, in the one exact form of the command, and it is in Codex's record.
@@ -200,8 +200,9 @@ To turn autopilot on again, send `autopilot on` in the main thread of a session,
 
 Limits of autopilot in Codex:
 
-- Codex 0.164 to 0.167 only. With another version, merges wait for you: merge the pull request in GitHub. The hook asks the Codex that runs for its version, because a resume by a newer Codex writes no version into its record.
-- After a Codex update (the desktop app updates its own Codex), merges wait until sage adds that version. The refusal says so.
+- Codex 0.164 or later only. With an older version, merges wait for you: merge the pull request in GitHub. The hook asks the Codex that runs for its version, because a resume by a newer Codex writes no version into its record.
+- sage was tested with Codex 0.164 to 0.167, and a newer Codex also merges. When a newer Codex changes the form of its record, sage cannot read it: merges wait for you, and the refusal says so.
+- A newer Codex can also change what a record line means with no change of its form. sage cannot see that change (owner decision of 2026-11-10).
 - Codex puts a folder of its own on the hook's `PATH`, and the hook finds the Codex that runs there. If the hook cannot find it, the merge refuses with "sage cannot tell which Codex runs this session": merge the pull request in GitHub.
 - Codex runs the hook in a login shell. So a login profile (such as `~/.zprofile`) that sets `PATH` without its earlier value drops that folder: keep the earlier value there (`export PATH="<folder>:$PATH"`), then ask for the merge again.
 - An on phrase counts only from a message that you type and send to start a turn: in the terminal UI, in the app, or as the prompt of `codex exec`. As in Claude Code, an on phrase that you send while Codex works joins the running turn and counts for nothing. So does an on phrase that joins a turn that a subagent's report started.
@@ -473,7 +474,6 @@ These are the differences from Claude Code that stay in sage 1.0, by the owner's
 | --- | --- | --- |
 | Each new session starts with sage mode off. | sage in Codex has no setting that starts a session as the chief, as `"agent": "sage:chief-of-staff"` does in Claude Code. | Send `sage mode` alone at the start of each session. |
 | After each sage update, Codex asks you to trust every sage hook again. Until you do, sage records nothing, and the chief says why. | Codex runs a plugin hook only when your trust record matches the hook and the plugin's files, and an update changes them. | Choose **Trust all and continue**, or type `/hooks` and trust each sage hook. Then do the [gate check](#check-that-the-sage-gate-runs). |
-| After Codex updates (the desktop app updates its own Codex), autopilot merges wait, and the refusal says why. | sage merges only in the Codex versions that it tested: 0.164 to 0.167. | Merge the pull request in GitHub until a sage release adds your version ([Autopilot in Codex](#autopilot-in-codex)). |
 | Every agent runs on the session's model, also a light role such as the UX review. | Codex children inherit the session's model, so sage sets no model for each role and size. | Choose a multi-agent v2 model for the session, and do not switch it during a run. |
 | The logbook and the board show no token count for a Codex run. | Codex's agent tools give no token count for each run, so the chief records the usage as unavailable. | Nothing in sage. |
 | A spawn with a missing brief field runs, and the chief gets a warning. | Codex sends the spawn message encrypted, so no hook can read it. | Nothing in normal use: the chief checks each brief with the `brief` tool first ([The brief check](#the-brief-check)). |

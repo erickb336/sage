@@ -18,7 +18,7 @@ Only a direct owner message can change mode. Use `commands.mjs` beside this skil
 | --- | --- |
 | `sage mode`, `sage mode on` | The hook turns Sage on. Accept work in the next message. |
 | `sage mode off` | The hook turns Sage and autopilot off. Stop dispatch. Interrupt only owned active agents through supported tools, inspect the outcome and preserve work. Unknown status stays unresolved. |
-| `autopilot on` | The hook turns autopilot on while Sage is on. Merges also need Codex 0.164 to 0.167, and `node` and `gh` outside the sandbox's writable folders. |
+| `autopilot on` | The hook turns autopilot on while Sage is on. Merges also need Codex 0.164 or later, and `node` and `gh` outside the sandbox's writable folders. |
 | `autopilot off` | The hook turns autopilot off and keeps Sage’s current mode. |
 | `sage help` | Show these phrases, board/status forms, actual known mode and capability limits. Do no work. |
 
@@ -38,6 +38,6 @@ Each new session starts off. Keep the owner's instruction in context. After unce
 
 The phrases match Claude's interface. Timing differs: Claude's queued off phrase disables autopilot while its active guards remain. Here, off requests the stop/interruption/preservation procedure above; do not claim timing parity.
 
-Known limits in Codex, for `sage help` and the owner's questions: every agent runs on the session's model; a run has no token count; the brief check warns and does not block; a lead's missing finding is refused only at its verdict; the chief's shell writes are not blocked; each sage update needs the hooks trusted again; autopilot merges only in Codex 0.164 to 0.167. Give the owner the guide's list: https://github.com/erickb336/sage-stack/blob/main/docs/guide/codex.md#known-limits-in-codex
+Known limits in Codex, for `sage help` and the owner's questions: every agent runs on the session's model; a run has no token count; the brief check warns and does not block; a lead's missing finding is refused only at its verdict; the chief's shell writes are not blocked; each sage update needs the hooks trusted again. Give the owner the guide's list: https://github.com/erickb336/sage-stack/blob/main/docs/guide/codex.md#known-limits-in-codex
 
 Keep the selected Codex model and Codex's permissions, sandbox and hooks. Do not change settings or defaults to use this skill. A refusal of the sage gate or of Codex's sandbox remains a refusal: never use the manual CLI to bypass it. Automatic recovery needs separate evidence.
