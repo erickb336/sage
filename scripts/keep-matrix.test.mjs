@@ -17,7 +17,7 @@ import { stateKey } from "../plugins/sage-codex/hooks/hook-state.mjs";
 
 const at = (path) => fileURLToPath(new URL(path, import.meta.url));
 const CLAUDE_HOOK = at("../plugins/sage/hooks/sage-hook.mjs"), CODEX_HOOK = at("../plugins/sage-codex/hooks/gate-hook.mjs");
-const TOOL = at("../plugins/sage/skills/sage/sage.mjs"), PR_TOOL = at("../plugins/sage/skills/sage/sage-pr.mjs");
+const TOOL = at("../plugins/sage/skills/sage/sage.mjs");
 const SHA = "a".repeat(40);
 const FORM = `gh pr merge 12 --squash --delete-branch --match-head-commit ${SHA}`;
 const gitEnv = { ...process.env, GIT_AUTHOR_NAME: "t", GIT_AUTHOR_EMAIL: "t@example.com", GIT_COMMITTER_NAME: "t", GIT_COMMITTER_EMAIL: "t@example.com" };
@@ -112,7 +112,7 @@ const WHY = {
   process: /process list/,
   stash: /git stash/,
   "agent gh": /an agent runs only these gh commands/,
-  state: /state tool|PR script|writes the logbook/,
+  state: /state tool|writes the logbook/,
 };
 /** The words of a refusal in the Codex gate, where they name the family's own rule (T903); other families take any refusal. */
 const CODEX_WHY = { logbook: /^sage: no agent writes, moves or removes a logbook file from the shell/, board: /^sage: the board password rule/,
@@ -202,9 +202,8 @@ const REFUSED = [
   // An agent's gh: only AGENT_GH, and gh api with GET. -XGET after -t is the template, so gh sends DELETE (F-T815-27).
   ["agent gh", "gh issue close 1", AGENT],
   ["agent gh", "gh api -X DELETE repos/acme/project/git/refs/heads/x -t -XGET", AGENT],
-  // The state tool and the PR script: an agent runs only the tool's read commands.
+  // The state tool: an agent runs only the tool's read commands.
   ["state", `node ${TOOL} task add --title x --size small --priority P2`, AGENT],
-  ["state", `node ${PR_TOOL} create T1`, ["claude agent"]], // the PR script is the Claude plugin's; Codex has none
 ];
 const PASSED = [
   [`echo '${FORM}'`],

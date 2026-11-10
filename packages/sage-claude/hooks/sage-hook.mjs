@@ -25,7 +25,7 @@
 //   - Only the chief writes the logbook, in any mode (agentWriteProblem): an agent runs only the state tool's read
 //     commands. The one exception is a lead (agent type sage:lead, in the bound slot of its lead-T<n> spawn): it runs
 //     the commands of LEAD_WRITES on its own task, from Bash, as one plain command, with no --project and no
-//     SAGE_PROJECT (leadProblem, T273). An agent never runs the PR script, never a command outside the sandbox, never
+//     SAGE_PROJECT (leadProblem, T273). An agent never runs a command outside the sandbox, never
 //     writes under the sage root with a file tool (canonical paths), and never runs a shell write whose literal path is
 //     in the sage root or the shared root, or that removes or moves a folder that holds one (core's logbookWrite,
 //     T815). A forgery by a variable, code or a pattern after its literal part is a limit of the hook: the sandbox
@@ -54,7 +54,6 @@ const filePolicy = await import("./file-policy.mjs").catch((error) => ({ error }
 const ROOT = join(dirname(fileURLToPath(import.meta.url)), "..");
 const commandReader = await import("./command-reader.mjs").catch((error) => ({ error }));
 const TOOL = join(ROOT, "skills/sage/sage.mjs");
-const PR_TOOL = join(ROOT, "skills/sage/sage-pr.mjs");
 /** The board server's command, which the build copies into the plugin from packages/sage-board. */
 const BOARD = join(ROOT, "board/cli.mjs");
 /** The one command that can create main or master (firstUpload). */
@@ -311,7 +310,7 @@ export function handle(input, state, slots) {
   const why = event === "PreToolUse" ? (main ? chiefProblem(input) : agentWriteProblem(input, slots)) : undefined;
   const verdict = event === "PreToolUse" && main && state.sage && !why ? chiefVerdictProblem(input, slots) : undefined;
   if (verdict) return deny(event, verdict);
-  const notChief = event === "PreToolUse" && main && !why ? chiefIdProblem(input) ?? chiefPrProblem(input) : undefined;
+  const notChief = event === "PreToolUse" && main && !why ? chiefIdProblem(input) : undefined;
   if (notChief) return deny(event, notChief);
   if (why && main) return deny(event, `${why} Only sage.mjs changes the logbook: run the state tool's command for this change (node <path to skills/sage/sage.mjs> ...), as a command of its own. If no command does it, ask the user.`);
   if (why && input.agent_type === "sage:lead") return deny(event, `${why} A lead writes the logbook only with ${LEAD_FORM}. Report to the sage what else the logbook needs.`);
@@ -1069,12 +1068,12 @@ function chiefStateWords(input) {
   return words.length && PLAIN.test(words.join(" ")) ? words : undefined;
 }
 /**
- * The words after a sage script's path, as the shell reads them, so a quoted value is one word, and the script's
- * environment: { words, env }. The line is this hook's script as one command, and a substitution in its words does not
- * change that. Before node, it may set variables (NAME=value) and run env with -u <name> and NAME=value, the forms that
- * the PR script's refusals name (SAGE_PROJECT=<folder>, env -u NODE_OPTIONS). Any other line gives undefined.
+ * The words after the state tool's path, as the shell reads them, so a quoted value is one word, and the tool's
+ * environment: { words, env }. The line is this hook's tool as one command, and a substitution in its words does not
+ * change that. Before node, it may set variables (NAME=value, such as SAGE_PROJECT=<folder>) and run env with -u <name>
+ * and NAME=value. Any other line gives undefined.
  */
-function chiefWriteWords(input, tool = TOOL) {
+function chiefWriteWords(input) {
   let commands;
   try {
     commands = core.shellCommands(String(input.tool_input?.command ?? ""));
@@ -1091,7 +1090,7 @@ function chiefWriteWords(input, tool = TOOL) {
     else break;
   }
   const [node, path, ...rest] = words;
-  return node === "node" && /(?:^|\/)skills\/sage\/sage(?:-pr)?\.mjs$/.test(path) && canonical(resolve(input.cwd ?? process.cwd(), path)) === canonical(tool) ? { words: rest, env } : undefined;
+  return node === "node" && /(?:^|\/)skills\/sage\/sage\.mjs$/.test(path) && canonical(resolve(input.cwd ?? process.cwd(), path)) === canonical(TOOL) ? { words: rest, env } : undefined;
 }
 /**
  * A write of a shared logbook names its chief, and the hook knows the session: it adds this session's row at its first
@@ -1112,46 +1111,6 @@ function chiefIdProblem(input) {
   }
   if (!id || opt.chief === id) return undefined;
   return opt.chief === undefined ? `this project's logbook is shared, so each write names its chief: add --chief ${id} to this command.` : `this session is chief ${id}, not ${quoted(opt.chief)}: give --chief ${id}.`;
-}
-/**
- * The PR script reads no session, and writes the task's PR number in the name of the task's chief. So this hook, which
- * knows the session, refuses its create and merge for a chief that does not own the task, in the state tool's own words.
- * create pushes the task's branch, so it takes the push rule of a shared logbook too (T822). It reads the logbook that
- * the script reads (SAGE_PROJECT, else the folder, in the line's environment). A legacy logbook has no chief, and the hook
- * reads none of its tables (as before T822). Anything else that the hook cannot read refuses create and merge (T901):
- * the project's place, a damaged table, an event with no session id, a busy lock. So does a line that names the PR script's
- * create or merge in a form that the hook does not read as one command of the copy that it loads, such as one after cd.
- */
-function chiefPrProblem(input) {
-  if (input.tool_name !== "Bash") return undefined;
-  const { words: [verb, task] = [], env } = chiefWriteWords(input, PR_TOOL) ?? {};
-  if (!env) return unreadPr(String(input.tool_input?.command ?? ""), input.cwd ?? process.cwd()) ? `the hook checks the owning chief of a task before sage-pr create or merge, and it cannot read this line as one command of the PR script that it loads (T901). Run it as a command of its own, with nothing after it and no cd: node ${PR_TOOL} <create or merge> <T>, from the project's main checkout. Only SAGE_PROJECT=<main checkout> and env -u NODE_OPTIONS may come before node.` : undefined;
-  if (!["create", "merge"].includes(verb)) return undefined;
-  const folder = resolve(input.cwd ?? process.cwd(), env.SAGE_PROJECT ?? ".");
-  try {
-    const project = realpathSync.native(folder);
-    if (!stateTool.locate(project, env).shared) return undefined;
-    const bar = stateTool.sessionBar(project, task, input.session_id, env);
-    if (bar || verb !== "create") return bar || undefined;
-    const branch = stateTool.logbookView(project, env).task(task)?.branch;
-    return (branch && stateTool.branchBar(project, branch, input.session_id, env)) || undefined;
-  } catch (e) {
-    return `the hook cannot read the logbook of ${folder} to check the owning chief of ${task} (${e?.message ?? e}), so it refuses sage-pr ${verb}.`;
-  }
-}
-/**
- * Does a line run the PR script's create or merge in a form that chiefWriteWords does not read (T901)? It judges the
- * programs that the line runs (core's stateToolRun, T815): a PR script run whose first word is create or merge, or one
- * from node's code, whose words the hook cannot see. Text that only names the script (an echo, a commit message, a grep)
- * runs nothing (F-T901-7). A line that the reader cannot read counts when its bare text names the script and create or merge.
- */
-function unreadPr(command, cwd) {
-  try {
-    return core.stateToolRun(command, cwd).some((run) => run.tool === "pr" && ["create", "merge"].includes(run.args[0]));
-  } catch {
-    const text = bare(command);
-    return /sage-pr\.mjs/i.test(text) && /\b(?:create|merge)\b/.test(text);
-  }
 }
 /**
  * The sage's review or QA verdict on a task with a running lead run (R1816-2, F3 of T815): no verdict of a role while
@@ -1246,18 +1205,17 @@ function agentCheck(input, file, slots) {
   if (ti.dangerouslyDisableSandbox) return "an agent never runs a command outside the sandbox (dangerouslyDisableSandbox).";
   const cwd = input.cwd ?? process.cwd();
   const texts = runFields(ti);
-  // The runs of the state tool and the PR script (core's stateToolRun, T815): an agent runs the tool's read commands, also
+  // The runs of the state tool (core's stateToolRun, T815): an agent runs the tool's read commands, also
   // in a pipe or a chain; a lead runs its own writes too, as one plain command. Any program may read their files.
   for (const text of texts) {
     let runs;
     try {
       runs = core.stateToolRun(text, cwd);
     } catch (e) {
-      if (/sage(?:-pr)?\.mjs/i.test(bare(text))) return `${core.unreadable(e, "the state tool or the PR script")} ${READ_WAY}`;
+      if (/sage\.mjs/i.test(bare(text))) return `${core.unreadable(e, "the state tool")} ${READ_WAY}`;
       continue;
     }
     for (const run of runs) {
-      if (run.tool === "pr") return "only the chief runs the PR script (sage-pr.mjs).";
       // Another copy (a checkout's, an older plugin's) can write the logbook in another way, also on a read command.
       if (canonical(from(run.dir ?? cwd, run.script)) !== canonical(TOOL)) return `an agent runs only the copy of the state tool that this hook loads, and ${quoted(run.script)} is not that copy. ${READ_WAY}`;
       const [cmd, ...args] = run.args, { pos, opt, twice } = optionsOf(args);
