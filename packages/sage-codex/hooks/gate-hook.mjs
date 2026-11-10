@@ -57,7 +57,7 @@
 //   - A merge (T677): only sage's merge command (skills/sage/merge.mjs) merges, in its one exact form, from the root
 //     thread. A recognized gh merge, and a run of merge.mjs in any other form, is refused in every mode and thread.
 //     The gate admits the exact form only when, in this order: the mode file has sage mode and autopilot on; the Codex
-//     that runs is 0.164 to 0.167 (its own --version: a resume writes no version into the record); the owner record
+//     that runs is 0.164 or later (its own --version: a resume writes no version into the record); the owner record
 //     reader reads Codex's record and finds autopilot on after the session's start mark, from the on whose turn the
 //     mode file saved (F-T677-33), and that mark is of the Codex
 //     process that runs now (its pid, F-T663-22); the call itself is in the record after the mark; node and gh are
@@ -594,7 +594,7 @@ async function admit(f, merge, { env, check, ppid, temporary }) {
   const roots = writableRoots(f.cwd, env, temporary);
   const version = runningCodex(roots, env);
   if (version === undefined) return `sage: sage cannot tell which Codex runs this session, because Codex's own folder is not on the hook's PATH. A login profile, such as ~/.zprofile, that sets PATH without its earlier value drops it: keep the earlier value there (export PATH="<folder>:$PATH"), then ask for the merge again. ${READY}`;
-  if (!RECORD_VERSION.test(version ?? "")) return `sage: ${version ? `this session runs Codex ${version}` : "sage cannot tell which Codex runs this session"}, and autopilot merges only in Codex ${RECORD_RANGE}${version ? ": a newer Codex waits until sage adds it" : ""}. ${READY}`;
+  if (!RECORD_VERSION.test(version ?? "")) return `sage: ${version ? `this session runs Codex ${version}` : "sage cannot tell which Codex runs this session"}, and autopilot merges only in Codex ${RECORD_RANGE}. ${READY}`;
   const codexRecord = readRecord(f.transcript ?? "");
   if (codexRecord.refused) return `sage: ${codexRecord.refused}`;
   let mark;

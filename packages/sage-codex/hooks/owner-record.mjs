@@ -7,7 +7,7 @@
 //   - a last line that is still partial after 3 re-reads (Codex writes the record in the background);
 //   - a line that is not JSON, or not an object with a known top-level type and an object payload, or an
 //     inter_agent_communication_metadata line whose payload is not only { trigger_turn: boolean };
-//   - no session_meta line, or a session_meta whose cli_version is not 0.164 to 0.167 in the strict form;
+//   - no session_meta line, or a session_meta whose cli_version is not 0.164 or later in the strict form;
 //   - no start mark, or a start mark whose line count does not fit the record.
 // The owner's switches replay with core's own mode rules (switchModes), so the reader agrees with core: an on counts
 // only while sage mode is on at that point, and the off form of the mode phrase ends autopilot.
@@ -51,12 +51,14 @@ import { exactPhrase, PHRASES, switchModes } from "sage-core";
 /** The largest record that the reader reads (the proof read 50 MB in 116 to 145 ms). */
 export const RECORD_LIMIT = 64 * 1024 * 1024;
 /**
- * The Codex versions whose record format the reader knows: 0.164 to 0.167, with an optional pre-release of one or more
- * numbers (0.166.0-alpha.6, the desktop app's 0.167.0-alpha.3.2). A later version waits until sage adds it (F-T677-16).
+ * The Codex versions whose record the reader reads: 0.164 or later (0.164 to 0.199, 0.200 and up, or 1.0 and up), with
+ * an optional pre-release of one or more numbers (0.166.0-alpha.6, the desktop app's 0.167.0-alpha.3.2). sage was
+ * tested with 0.164 to 0.167; a later Codex reads too, because the reader refuses any line form that it does not know
+ * (owner decision 2026-11-10, T951; it replaces the upper bound of F-T677-16).
  */
-export const RECORD_VERSION = /^0\.16[4-7]\.(?:0|[1-9]\d*)(?:-[a-z]+(?:\.(?:0|[1-9]\d*))+)?$/;
+export const RECORD_VERSION = /^(?:0\.(?:16[4-9]|1[7-9]\d|[2-9]\d\d|[1-9]\d{3,})|[1-9]\d*\.(?:0|[1-9]\d*))\.(?:0|[1-9]\d*)(?:-[a-z]+(?:\.(?:0|[1-9]\d*))+)?$/;
 /** The same range, for the owner. */
-export const RECORD_RANGE = "0.164 to 0.167";
+export const RECORD_RANGE = "0.164 and later";
 /**
  * The top-level line types of Codex 0.164.0 records. Any other type refuses. A multi-agent v2 message between threads
  * (a subagent's report) comes with an inter_agent_communication_metadata line whose payload is only
@@ -121,7 +123,7 @@ export function readRecord(path, { pause = sleep } = {}) {
     if (!isObject(entry) || !TYPES.has(entry.type) || !isObject(entry.payload)) return FORM(`line ${i + 1} has an unknown type`);
     if (entry.type === "inter_agent_communication_metadata" && !interAgent(entry.payload)) return FORM(`line ${i + 1} has an unknown payload`);
     if (entry.type === "session_meta" && !RECORD_VERSION.test(String(entry.payload.cli_version))) {
-      return refusal(`this session runs Codex ${entry.payload.cli_version}, and sage reads the records of Codex ${RECORD_RANGE} only`, "A newer Codex waits until sage adds it. Until then, the owner merges the pull request in GitHub");
+      return refusal(`this session runs Codex ${entry.payload.cli_version}, and sage reads the records of Codex ${RECORD_RANGE} only`, "Start a new session with Codex 0.164 or later, or the owner merges the pull request in GitHub");
     }
     entries.push(entry);
   }
