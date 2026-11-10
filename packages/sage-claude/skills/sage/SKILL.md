@@ -14,6 +14,8 @@ Each option takes a value: `--name value`, or `--name=value` for a value that st
 
 In a shared logbook, each write names its actor: the chief adds `--chief C<n>`, and a lead adds `--lead R<n>`, its own lead run. The hook names the id at the first write and refuses another chief's id, also when a value is in quotes. It reads a write that is one command of its own: after `cd` or in a pipe, it names no id. A write on a task of another chief refuses and names that chief. So does `sage-pr create` or `merge`, as one command of its own: the hook checks the session's chief, because the script reads no session. A command with no chief only reads. A legacy logbook refuses both options, `claim`, `offer`, `cancel`, `accept`, `release` and `gate replace`.
 
+A reference path in this skill, such as `skills/sage/references/<name>.md` or `core/references/<name>.md`, is a file in the sage plugin's folder: your start text names that folder, and it is also two folders above this skill's own folder. Read a reference only when its trigger holds.
+
 Read `skills/sage/references/hook-rules.md` when the sage hook refuses a command or a file change, and before you tell an agent in a brief which commands it may run: it has the hook's rules for the logbook, for the commands of an agent and the chief, and for program words.
 
 ## Commands
@@ -83,7 +85,7 @@ Read `skills/sage/references/pr-script.md` before you run the PR script, `sage-p
 
 ## References
 
-These rules are in files of the sage plugin's folder, which your start text names. Read a file when its trigger holds:
+These rules have no command row of their own. Read a file when its trigger holds:
 
 - Read `core/references/cycles-and-merges.md` when you need a cycle rule that your start text does not give: a verdict that clears or blocks a SHA, a clean merge of main, two tasks on one pull request, or an abandoned task's verdicts.
 - Read `core/references/round-hold.md` when `round` says held, and before you give an extra round in autopilot.
