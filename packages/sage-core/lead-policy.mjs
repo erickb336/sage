@@ -1,7 +1,8 @@
 // The one lead policy (T928): what a lead may record in the logbook, for both providers. The state tool's guard applies it
 // to every write with --lead, the Claude hook to a lead's Bash command, and the Codex gate and state server to a lead's
 // sage tool call. So a lead's honest mistake gets the same plain reason in Claude and in Codex. The guards keep a lead on
-// its brief; a lead that acts against its brief on purpose is a documented limit (standing orders 49 and 70). Verdict
+// its brief; a lead that acts against its brief on purpose is a documented limit (standing orders 49 and 70). The gap
+// rule (gap) reads the kept reports, so a lead learns a left-out finding at its next step in both providers. Verdict
 // backing (a kept report of a done run), the clean cycles and the merge check are the guards of the merge.
 import { TEAM } from "./role-policy.mjs";
 
@@ -77,9 +78,9 @@ export function leadProblem(request, { lead, view, ofTask, branchOfTask, head })
   switch (command) {
     case "run add":
       if (!TEAM.has(request.role)) return `a lead adds only runs of its team (${TEAM_TEXT}), not ${JSON.stringify(request.role ?? "no role")}.`;
-      return request.branch === undefined ? undefined : runBranch(request.branch, own, task, view, ofTask);
+      return (request.branch === undefined ? undefined : runBranch(request.branch, own, task, view, ofTask)) ?? gap(view, own, (g) => g.role === request.role);
     case "run done":
-      return TEAM.has(run.role) ? undefined : `${run.id} is a ${run.role} run: only the chief ends it.`;
+      return TEAM.has(run.role) ? gap(view, own, (g) => g.run === run.id) : `${run.id} is a ${run.role} run: only the chief ends it.`;
     case "finding add":
       return request.key === undefined ? undefined : "only the chief opens a known finding again: leave out the key.";
     case "finding close":
@@ -103,7 +104,7 @@ export function leadProblem(request, { lead, view, ofTask, branchOfTask, head })
     case "task set":
       for (const [key, value] of Object.entries(request.fields ?? {})) {
         const why = !LEAD_FIELDS.includes(key) ? `a lead sets only ${LEAD_FIELDS.join(", ")} of its task, not ${key}.`
-          : key === "state" ? stateMove(value, own, task, view, head, roundKeys)
+          : key === "state" ? gap(view, own, () => true) ?? stateMove(value, own, task, view, head, roundKeys)
           : key === "branch" ? taskBranch(value, own, task, view, branchOfTask)
           : /^[1-9]\d*$/.test(value) && !task.pr && [...view.prTasks(value)].every((id) => id === own) ? undefined : `a lead gives ${own} one PR, once, that no other task has or had.`;
         if (why) return why;
@@ -112,6 +113,23 @@ export function leadProblem(request, { lead, view, ofTask, branchOfTask, head })
     default:
       return undefined; // round and pages: the state tool's own rules
   }
+}
+
+/**
+ * The gap rule (T956, from the Claude hook's F-T289-17 and F-T289-18): a lead goes on only after it records the findings
+ * of its helpers' reports. Each medium or high finding of a kept review or QA report of the task needs its row with the
+ * run (finding add --run), at its severity or above, in any status; a low finding needs none. The rule holds the lead's
+ * next run add of that role, its run done of that run and its state move (of, the runs that hold this request). A report
+ * that cannot be read holds them while its run runs, until the chief ends it. Any run of the task counts, also one that
+ * the chief or an earlier lead added: a finding of the task is not lost between leads. The reason, or undefined.
+ */
+function gap(view, own, of) {
+  const [first, ...more] = view.unrecorded(own).filter(of);
+  if (!first) return undefined;
+  if (first.problem) return `${first.run}'s report cannot be read (${first.problem}), and ${first.run} still runs: your chief ends it before this lead's next ${first.role} run, its run done or a state move. Name it in FINDINGS of your report.`;
+  const keys = first.missing.map((f) => `${f.key} (${f.severity})`).join(", "), [{ severity }] = first.missing;
+  const one = first.missing.every((f) => f.severity === severity) ? severity : "<its severity>";
+  return `${first.run}'s ${first.role} report has ${first.missing.length === 1 ? "a medium or high finding" : "medium or high findings"} with no row on ${own}: ${keys}. Record each one first, one row for each key, at its severity or above and with the run: sage finding add ${own} --source ${first.role} --severity ${one} --summary=<word> --run ${first.run} --class <class>.${more.length ? ` Then do the same for ${more.map((g) => g.run).join(", ")}.` : ""}`;
 }
 
 /** A run's --branch: a branch named for the task, or the task's branch=, and not one that the chief moved the task off. */

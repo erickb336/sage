@@ -528,7 +528,7 @@ test("T553: role.mjs lead adds the Codex steps to the lead's text, and no other 
   assert.match(r.stdout, /The `checks-pass` and `checks-fail` verdicts are the chief's/);
   // The carried limits, each with what to do.
   assert.match(r.stdout, /record every finding of the report, before you end its run/);
-  assert.match(r.stdout, /Nothing refuses a lead that leaves one out: Claude's hook checks the count of medium and high findings \(its gap rule\), and the Codex gate does not/);
+  assert.match(r.stdout, /the gate refuses your next `run_add` of that role, your `run_done` of that run and a state move \(the gap rule, as in Claude\)/);
   assert.match(r.stdout, /`collab spawn failed: agent thread limit reached` means that no thread is free/);
   assert.doesNotMatch(r.stdout, /\{\{|<role\.mjs>/);
   // Each tool that the steps give a lead exists on v2. The two v1 names are there only as refusals (F-T553-1).
