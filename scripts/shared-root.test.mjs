@@ -987,20 +987,6 @@ test("projects rebuild lists the root of this project's logbook", (t) => {
   assert.match(w.claude("projects", "rebuild", "--accept-listing", "yes"), new RegExp(`${join(w.shared, "projects.tsv")}, the known project list, now names the 1 logbook folder`));
 });
 
-test("the PR script takes a shared logbook, which has no checkout.txt", async (t) => {
-  const w = world(t);
-  w.claude("link", "--separate");
-  w.claude("task", "add", "--title", "x", "--size", "tiny", "--priority", "P2");
-  w.claude("task", "T1", "set", "branch=sage/t1");
-  git(w.project, "remote", "add", "origin", "https://github.com/example/project.git");
-  const { record, remember } = await import("../plugins/sage/skills/sage/sage-pr.mjs");
-  const saved = record("T1", "view", { ...w.env, SAGE_PROJECT: w.project });
-  assert.deepEqual([saved.dir, saved.branch], [join(w.shared, w.name()), "sage/t1"]);
-  // create records the PR number as the task's own chief (T604): the script has no session, and only a chief runs it.
-  remember({ project: w.project, t: tool.read(saved.dir, "tasks")[0] }, { out: "opened", number: "5" }, w.env);
-  assert.match(w.claude("task", "T1"), /· PR 5 /);
-});
-
 test("the worktree root follows the HOME of its env, SAGE_WORKTREES comes first, and it is never relative; a path only, so no folder is made", (t) => {
   processHome(t, "/process-home");
   assert.equal(tool.worktreeRoot({ HOME: "/scratch/home" }), "/scratch/home/sage-worktrees");

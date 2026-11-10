@@ -365,7 +365,7 @@ node <installed-sage-script> task-adopt T42 --project /path/to/project --source-
 | The source had clean verdicts | They stay in the source. Fresh destination runs must supply every required verdict on the final SHA. |
 | The same adoption is retried | Sage returns the existing record without changing the current task state, round count, saved cycle minimum or proof. A different identity refuses. |
 
-The adopted PR and branch stay bound to the destination task. Normal task state changes, runs, reviews, merge checks and `sage-pr` then use that branch.
+The adopted PR and branch stay bound to the destination task. Normal task state changes, runs, reviews and merge checks then use that branch.
 
 An unrelated destination task with the same number owns an adopted branch only by a record, so the merge check does not ask for it on the PR. Ordinary tasks keep their existing branch-name rules.
 

@@ -388,7 +388,7 @@ A moved folder with no Git commits, or that is no Git repository, has no first c
 | Situation | Result |
 | --- | --- |
 | The task belongs to another chief | The write refuses, names the owning chief and changes nothing, on every path. To take the task, a chief opens a takeover gate for you. |
-| A push of a branch that a live task of another chief uses | The hook refuses `git push` and `sage-pr create`, also from the chief's agents, and names the owning chief and the takeover gate. A task uses its `branch=` and the branch of each of its runs. A branch that no task uses, or that only an ended task uses, takes the push. |
+| A push of a branch that a live task of another chief uses | The hook refuses `git push`, also from the chief's agents, and names the owning chief and the takeover gate. A task uses its `branch=` and the branch of each of its runs. A branch that no task uses, or that only an ended task uses, takes the push. |
 | The task has no owning chief | The write refuses and prints the claim that works for that chief. A Claude chief runs `sage claim <T> --version <version> --chief C<n>`. A Codex chief calls the `claim` tool with the task and that version. |
 | A chief abandons a task that has no owning chief | Any chief may do it, with a reason, and needs no claim and no takeover gate: `sage task <T> set state=abandoned --why "<reason>" --chief C<n>`, or `task_set` with that state alone and `why` in Codex. The task keeps no chief, and the decision row keeps the reason and the chief. A change of any other field still needs the claim. |
 | The task changed before the claim, or another chief claimed it first | The claim refuses and changes nothing. |
@@ -416,14 +416,14 @@ A Claude chief adds `--chief C<n>` to each command below. A Codex chief calls th
 - When another worktree of the repository holds the branch, the answer's line names it. Below it, one safe command that frees it, with its files kept, stands alone on a line, with the path quoted for the shell: `git -C '<worktree>' switch --detach`. Then the new chief checks out the branch in its own worktree.
 - Sage never prints `--force`. For a worktree path with a control character, it prints no command.
 - One ledger: a verdict counts on its commit, whichever chief recorded it. A Codex chief that took a Claude task counts the Claude cycles, and merges as for any Codex task: with autopilot on, it merges itself; with autopilot off, you merge in GitHub.
-- A Claude chief that took a task from a Codex chief runs one Claude cycle on a `sage-pr import` of the head first, then merges with `sage-pr merge`. That cycle counts only the verdicts of review and QA runs that started after your answer. The gate's question says so, and the board shows the task in review until that cycle.
+- A Claude chief that took a task from a Codex chief runs one Claude cycle of reviews and QA on the head first, records each verdict, then merges with `gh pr merge`. That cycle counts only the verdicts of review and QA runs that started after your answer. The gate's question says so, and the board shows the task in review until that cycle.
 - A move between two chiefs of one provider needs no new cycle.
 - `merge-check --chief C<n>` judges for that chief, as the hook does: a live task of another chief refuses. A Codex chief's `merge_check` passes its chief by itself.
 - Decline, or your own words, change nothing, and the line says so: the task keeps its chief, no run ended, and the gate is spent. To change the chief later, a chief opens a new gate.
 - One exception: a decline of a gate that an accept opened also ends the offer, in the same write. Its question says so. The board then shows no offer line, so the recipient does not accept again at once.
 - A chief never answers a takeover gate by itself: only your answer counts. This rule is an instruction, not a check. No code ties the answer to your message, as for other gates.
 - A takeover gate refuses your answer approve when the owning chief changed, or when a new run started after it opened. Answer decline, and the chief opens a new gate.
-- The replaced chief gets a refusal that names the new owning chief, also for `sage-pr create`, `sage-pr merge` and `gh pr merge`. Its lead writes nothing, because the lead run ended.
+- The replaced chief gets a refusal that names the new owning chief, also for `gh pr merge`. Its lead writes nothing, because the lead run ended.
 - A run that ended as blocked or failed keeps a late report once, with its arrival time, so no report is lost. `task <T>` prints its path. That report backs no verdict.
 - Claude's stop hook keeps the late report of any role with a known run. Codex keeps it for a child that has the run in its task name.
 
