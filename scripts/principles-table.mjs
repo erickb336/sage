@@ -5,13 +5,13 @@ import { PRINCIPLES_PAGE, withBlock } from "./dictionary.mjs";
 export const PRINCIPLES_START = "<!-- The principles table comes from principles/: edit them there, then run npm run build. -->";
 export const PRINCIPLES_END = "<!-- The end of the principles table. -->";
 
-const ADAPTED = "pstack, adapted", OWN = "sage's own";
+const PSTACK = "from pstack", OWN = "sage's own";
 const cell = (s) => s.replace(/\|/g, "\\|");
 
 /** One row for each principle, by id, from the files of principles/ ({ id, applyWhen, source }). */
 export function principleRows(principles) {
   return principles
-    .map((p) => ({ id: p.id, applyWhen: p.applyWhen.replace(/\.$/, ""), text: /^pstack /.test(p.source) ? ADAPTED : OWN }))
+    .map((p) => ({ id: p.id, applyWhen: p.applyWhen.replace(/\.$/, ""), text: /^pstack /.test(p.source) ? PSTACK : OWN }))
     .sort((a, b) => a.id.localeCompare(b.id));
 }
 
@@ -30,7 +30,7 @@ export function principlesTable(rows) {
     "",
     "Under each name, a note says where its text comes from:",
     "",
-    `- "${ADAPTED}" is sage's text of a pstack principle: it is shorter, and it follows sage's writing standard. Its \`source\` line names the pstack version and commit that its text was checked against.`,
+    `- "${PSTACK}" is sage's text of a pstack principle, in sage's writing standard. Its status against pstack's latest text is in the [baseline](#baseline-against-pstack) below. Its \`source\` line names the pstack version and commit that its text was checked against.`,
     `- "${OWN}" has no pstack source.`,
     "",
     "</details>",

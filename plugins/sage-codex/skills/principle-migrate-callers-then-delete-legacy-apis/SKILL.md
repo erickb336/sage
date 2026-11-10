@@ -20,6 +20,6 @@ When a new internal API is the right design, migrate its callers and remove the 
 
 **Why.** Keeping both paths doubles the ways through the code, slows cleanup, and makes the code feel append-only.
 
-**Where it applies.** Internal code that your change replaced, within this task, when the project can take a coordinated breaking change. An external caller, or a public interface others depend on, is not yours to break: report it and leave it working. A repair stays within its task; a legacy path outside it is reported, not removed.
+**Where it applies.** Internal code that your change replaced, within this task. The change is part of a simplification or a refactor, and the project can take a coordinated breaking change. An external caller, or a public interface others depend on, is not yours to break: report it and leave it working. A repair stays within its task; a legacy path outside it is reported, not removed.
 
 **Stop** when the old API has no callers left and is gone.
