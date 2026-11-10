@@ -256,14 +256,17 @@ Each line of the list gives the path, the branch, the task, the task's state and
 | Reason | Means | The prune |
 | --- | --- | --- |
 | `merged` | The task of the worktree is merged. | Removes it when it is clean. |
+| `concluded` | The task of the worktree is concluded. | Removes it when it is clean. |
 | `abandoned` | The task of the worktree is abandoned. | Removes it when it is clean. |
-| `branch merged` | No task names the branch, and the branch is in origin/main. | Removes it when it is clean. |
-| `open` | The task is in another state, also concluded. | Keeps it. |
-| `unknown` | No task names the branch, and the branch is not in origin/main, or the worktree has no branch. | Keeps it. |
+| `branch merged` | No task names the branch, and a merge brought the branch's own commits into origin/main. | Removes it when it is clean. |
+| `open` | The task is not merged, concluded or abandoned yet, so its work may still need the folder. | Keeps it. |
+| `unknown` | No task names the branch, and the branch is not in origin/main, or it adds no commit to origin/main, or the worktree has no branch. | Keeps it. |
 
 - A worktree matches a task only through the logbook: the branch of the task, or of one of its runs. A number in a branch's name does not count, because older branches carry the numbers of another logbook.
+- A branch that adds no commit to origin/main is `unknown`, not `branch merged`: it is on the main line of origin/main, for example at its tip, where a new run starts before its first commit. A branch that was merged with no merge commit (a fast-forward) reads the same way, so the prune keeps it too.
 - The list uses the origin/main that git has now, and prints its commit. It does not fetch, so fetch first when main moved.
-- The prune also keeps the primary checkout, the worktree that the command runs in, a locked worktree, a worktree that holds another worktree, and a worktree with uncommitted changes, untracked files or unpushed commits. A commit counts as pushed when a remote branch holds it, or when the ledger has a verdict on it or on a later commit of its task: a squash merge deletes the task's branch on GitHub.
+- The prune also keeps the primary checkout, the worktree that the command runs in, a locked worktree, a worktree that holds another worktree, and a worktree with uncommitted changes, untracked files, ignored files or unpushed commits. A commit counts as pushed when a remote branch holds it, or when the ledger has a verdict on it or on a later commit of its task: a squash merge deletes the task's branch on GitHub.
+- An ignored file, such as `.env`, keeps the worktree, because `git worktree remove` deletes ignored files with the folder. The reason names the files. An ignored folder that a pattern names as a whole, such as `node_modules/`, does not keep it: the prune deletes that folder with the worktree, so keep no work of your own there.
 - It prints each path that it removes or keeps, with the reason. It removes the entry of a worktree whose folder is gone, and it deletes no branch.
 - Only the chief runs it. A lead, a reviewer or QA cannot.
 
