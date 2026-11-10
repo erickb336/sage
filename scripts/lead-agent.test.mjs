@@ -692,7 +692,7 @@ test("T591 R2119: the lead's cycle reads its roles from the route, so a tiny are
 });
 
 test("T591 F-T589-1, F-T590-1: the chief's arena steps match the rules: who takes designers and when, and what the owner sees after a judge", () => {
-  const ARENA = JSON.parse(readFileSync(at("../plugins/sage/chief-bindings.json"), "utf8")).ARENA;
+  const ARENA = readFileSync(at("../plugins/sage/skills/sage/references/arena.md"), "utf8"); // the chief reads it before an arena (T934)
   const candidates = stepOf(ARENA, 2), judge = stepOf(ARENA, 5);
   assert.doesNotMatch(candidates, /A large task takes only designers/, "a build arena runs from briefed, and a briefed task cannot move to designing");
   assert.match(candidates, /A large task before briefed takes only designers/);

@@ -1155,7 +1155,9 @@ test("shared chief instructions preserve the packaged agent and every brief fiel
 
 test("T586: the Codex arena steps come in Claude's order, and the Codex steps name only Codex's tools", () => {
   const titles = (text) => [...text.matchAll(/^\d\. \*\*(.+?)\*\*/gm)].map(([, title]) => title.replace(/[.:,]$/, ""));
-  const claude = titles(JSON.parse(source("packages/sage-claude/chief-bindings.json")).ARENA);
+  // Claude's arena steps are in a reference of its sage skill, which the chief's arena binding points to (T934).
+  assert.match(JSON.parse(source("packages/sage-claude/chief-bindings.json")).ARENA, /first read `skills\/sage\/references\/arena\.md`/);
+  const claude = titles(source("packages/sage-claude/skills/sage/references/arena.md"));
   const steps = source("packages/sage-codex/skills/sage/references/arena.md");
   assert.equal(claude.length, 9);
   // Two titles differ by provider: Claude names its agent, and its judge opens the pull request.
