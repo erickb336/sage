@@ -19,7 +19,7 @@ The design of the two provider plugins is in [Separate provider packages](../des
 | The settings: cycle counts, `max_leads`, the project's board name and archive | Yes | Yes: the `config` tool, when you ask the chief |
 | The stop check of the chief's turn | Yes | No: sage adds no hook at the end of the chief's turn in Codex. The report check below covers role agents |
 | sage mode: the chief's role | Yes | Yes: the `sage mode` phrase gives it, and it comes back after a compaction |
-| Role agents | Yes: the lead, the implementer, the reviewers, QA, the PE, the designer and the arena judge | The public helper supports each of these roles and the investigation roles. The chief starts one lead for each task with a build, and the lead starts its team and records its task; other role agents start no agents and record nothing. A pilot on stock Codex ran a lead and its team with a test model, and each thread needs a multi-agent v2 model (see [start a role agent](../../packages/sage-codex/skills/sage/references/roles.md)). |
+| Role agents | Yes: the lead, the implementer, the reviewers, QA, the PE, the designer, the arena judge and the investigation roles | The public helper supports each of these roles and the investigation roles. The chief starts one lead for each task with a build, and the lead starts its team and records its task; other role agents start no agents and record nothing. A pilot on stock Codex ran a lead and its team with a test model, and each thread needs a multi-agent v2 model (see [start a role agent](../../packages/sage-codex/skills/sage/references/roles.md)). |
 | The brief check | Yes: the hook refuses a brief without every field | Yes, as a check, not a block: the chief runs the `brief` tool before each spawn. Each role agent starts with the project's standing orders and its checked brief, and a spawn with no checked brief gives the chief a warning ([The brief check](#the-brief-check)) |
 | The report check | Yes | Yes, for a role agent whose task name starts with `sage_`: a report without every field gets one more turn, then the agent stops with one plain line. A review or QA agent's report goes through the same reader as in Claude Code: a report that the reader cannot read gets one more turn too |
 | sage mode: the push rule in code | Yes | Yes: the same push form as in Claude Code ([The rules in Codex](#the-rules-in-codex)) |
@@ -47,10 +47,10 @@ The browser board shows every logbook by default, and each card says which provi
 1. Add the sage marketplace, in a terminal:
 
    ```sh
-   codex plugin marketplace add https://github.com/erickb336/sage.git
+   codex plugin marketplace add https://github.com/erickb336/sage-stack.git
    ```
 
-   You see ``Added marketplace `sage` ``. To try a local clone instead, give its folder: `codex plugin marketplace add ./sage`.
+   You see ``Added marketplace `sage` ``. To try a local clone instead, give its folder: `codex plugin marketplace add ./sage-stack`.
 
 2. Install the plugin:
 

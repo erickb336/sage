@@ -2,7 +2,7 @@
 name: sage-help
 description: "Help with sage: how to set it up, switch sage mode and autopilot, read the board, answer the chief's questions, pick a skill or a principle, fix a run that went wrong, and find where sage keeps its files. The user types /sage:sage-help (or /sage-help) with a question. Load it only when the user types it; do not load it on your own. Claude Code only."
 license: MIT
-allowed-tools: Read, Bash(curl -fsS https://raw.githubusercontent.com/erickb336/sage/main/README.md), Bash(curl -fsS https://raw.githubusercontent.com/erickb336/sage/main/docs/guide/using-sage.md), Bash(curl -fsS https://raw.githubusercontent.com/erickb336/sage/main/docs/guide/board.md), Bash(curl -fsS https://raw.githubusercontent.com/erickb336/sage/main/docs/guide/learn-sage.md), Bash(curl -fsS https://raw.githubusercontent.com/erickb336/sage/main/docs/guide/how-it-works.md), Bash(curl -fsS https://raw.githubusercontent.com/erickb336/sage/main/docs/guide/principles.md), Bash(curl -fsS https://raw.githubusercontent.com/erickb336/sage/main/docs/guide/faq.md)
+allowed-tools: Read, Bash(curl -fsS https://raw.githubusercontent.com/erickb336/sage-stack/main/README.md), Bash(curl -fsS https://raw.githubusercontent.com/erickb336/sage-stack/main/docs/guide/using-sage.md), Bash(curl -fsS https://raw.githubusercontent.com/erickb336/sage-stack/main/docs/guide/board.md), Bash(curl -fsS https://raw.githubusercontent.com/erickb336/sage-stack/main/docs/guide/learn-sage.md), Bash(curl -fsS https://raw.githubusercontent.com/erickb336/sage-stack/main/docs/guide/how-it-works.md), Bash(curl -fsS https://raw.githubusercontent.com/erickb336/sage-stack/main/docs/guide/principles.md), Bash(curl -fsS https://raw.githubusercontent.com/erickb336/sage-stack/main/docs/guide/faq.md)
 ---
 
 # sage help
@@ -11,7 +11,7 @@ Answer the user's question about sage. Give them at most one prompt that they ca
 
 **A help question starts no work.** Do not start sage mode, an agent, a task or a command that changes anything. The user asked how, and each sage run spends real tokens, so the user sends the prompt.
 
-**A request for work is not a help question.** An example is "/sage:sage-help fix the failing test in foo". Do not do the work, and do not start an agent. Say in one line that sage mode does work, and give the prompt that starts it: the README's [Quick start](https://github.com/erickb336/sage/blob/main/README.md#quick-start) shows its form: the on phrase as a message of its own, then the request.
+**A request for work is not a help question.** An example is "/sage:sage-help fix the failing test in foo". Do not do the work, and do not start an agent. Say in one line that sage mode does work, and give the prompt that starts it: the README's [Quick start](https://github.com/erickb336/sage-stack/blob/main/README.md#quick-start) shows its form: the on phrase as a message of its own, then the request.
 
 The model for this skill is pstack's `poteto-help` skill, by Lauren Tan (poteto): [its source](https://github.com/cursor/plugins/blob/main/pstack/skills/poteto-help/SKILL.md).
 
@@ -30,7 +30,7 @@ Give only the phrases that this map or the source writes, letter for letter: do 
 - **A sage doc** (the README, or a page under `docs/guide/`) is not in the installed plugin. When the session's folder is the sage repository, Read the file there. Otherwise run this one command alone for the file, exactly as written, with the file's path from the **Read** line: no pipe, no `grep`, no redirect and no other argument. Run it once for each file. Find the section in its output yourself. When Claude Code saves a long output to a file, Read that file, with an offset and a limit if it is long; do not run `curl` again, and do not pipe it.
 
   ```
-  curl -fsS https://raw.githubusercontent.com/erickb336/sage/main/<path>
+  curl -fsS https://raw.githubusercontent.com/erickb336/sage-stack/main/<path>
   ```
 
   The paths: `README.md`, `docs/guide/using-sage.md`, `docs/guide/board.md`, `docs/guide/learn-sage.md`, `docs/guide/how-it-works.md`, `docs/guide/principles.md` and `docs/guide/faq.md`.
@@ -39,7 +39,7 @@ Give only the phrases that this map or the source writes, letter for letter: do 
 
 If a read fails, say so in one line, and give only the link.
 
-Give the user the public link, because they may not be able to open the installed plugin: `https://github.com/erickb336/sage/blob/main/` and the path. Link only the pages and the anchors that this map links. A FAQ question has no anchor of its own: link the FAQ page.
+Give the user the public link, because they may not be able to open the installed plugin: `https://github.com/erickb336/sage-stack/blob/main/` and the path. Link only the pages and the anchors that this map links. A FAQ question has no anchor of its own: link the FAQ page.
 
 ## Find out what the user needs
 
@@ -56,25 +56,25 @@ When the picked group has two or more sections, ask a second choice question wit
 
 **Read:** the README, section "Quick start", and `docs/guide/faq.md`.
 
-Install the plugin, then start a new session: a session that is already open does not get the new skills and hooks. The [Quick start](https://github.com/erickb336/sage/blob/main/README.md#quick-start) has the install commands, which the user runs in a terminal. [To update sage](https://github.com/erickb336/sage/blob/main/docs/guide/using-sage.md#to-update-sage) gives the update command. The [FAQ](https://github.com/erickb336/sage/blob/main/docs/guide/faq.md) says which projects fit and what sage costs.
+Install the plugin, then start a new session: a session that is already open does not get the new skills and hooks. The [Quick start](https://github.com/erickb336/sage-stack/blob/main/README.md#quick-start) has the install commands, which the user runs in a terminal. [To update sage](https://github.com/erickb336/sage-stack/blob/main/docs/guide/using-sage.md#to-update-sage) gives the update command. The [FAQ](https://github.com/erickb336/sage-stack/blob/main/docs/guide/faq.md) says which projects fit and what sage costs.
 
 ## Switch sage mode or autopilot
 
 **Read:** `docs/guide/using-sage.md`, section "Every phrase".
 
-sage mode makes the session the user's chief of staff. Autopilot lets verified pull requests merge without the user. Autopilot is off until the user turns it on. A switch needs the exact phrase as the user's whole message, in any letter case, with at most one full stop: "sage mode" or "sage mode on" turns the mode on, "sage mode off" turns it off, and "autopilot on" and "autopilot off" switch autopilot, which needs sage mode on. A message with more words switches nothing, so the request goes in the next message. The message "sage help" lists every phrase. The rules are in [Every phrase](https://github.com/erickb336/sage/blob/main/docs/guide/using-sage.md#every-phrase): link that table, and do not copy it.
+sage mode makes the session the user's chief of staff. Autopilot lets verified pull requests merge without the user. Autopilot is off until the user turns it on. A switch needs the exact phrase as the user's whole message, in any letter case, with at most one full stop: "sage mode" or "sage mode on" turns the mode on, "sage mode off" turns it off, and "autopilot on" and "autopilot off" switch autopilot, which needs sage mode on. A message with more words switches nothing, so the request goes in the next message. The message "sage help" lists every phrase. The rules are in [Every phrase](https://github.com/erickb336/sage-stack/blob/main/docs/guide/using-sage.md#every-phrase): link that table, and do not copy it.
 
 ## Show the board
 
 **Read:** the README, section "The board", and `docs/guide/board.md`.
 
-The board is a short view of every project's logbook: what needs the user, the agents running now, and each active task. A message that starts with "show board" prints it for this project, "show board for all" for every project, and "show board for <project>" for one project. [Ask for the board](https://github.com/erickb336/sage/blob/main/docs/guide/board.md#ask-for-the-board) gives the other forms and what each part shows. “show board T197” and “sage board T197” show that task in this project. “show status” and “sage status” show short status lines. The phrases work at the start of the user's own message, outside quoted text. The board command reads recorded facts; it does not change a task.
+The board is a short view of every project's logbook: what needs the user, the agents running now, and each active task. A message that starts with "show board" prints it for this project, "show board for all" for every project, and "show board for <project>" for one project. [Ask for the board](https://github.com/erickb336/sage-stack/blob/main/docs/guide/board.md#ask-for-the-board) gives the other forms and what each part shows. “show board T197” and “sage board T197” show that task in this project. “show status” and “sage status” show short status lines. The phrases work at the start of the user's own message, outside quoted text. The board command reads recorded facts; it does not change a task.
 
 ## Answer the chief's questions
 
 **Read:** `docs/guide/using-sage.md`, section "When the chief asks you".
 
-The chief asks at most once per task, in one batch of product questions. Each question has options, a recommendation and a default. The user picks an option on the choice card, or answers in their own words, and the chief records the answer as theirs. An open question also shows under "Needs you" on the board. [When the chief asks you](https://github.com/erickb336/sage/blob/main/docs/guide/using-sage.md#when-the-chief-asks-you) gives the exceptions that can ask again.
+The chief asks at most once per task, in one batch of product questions. Each question has options, a recommendation and a default. The user picks an option on the choice card, or answers in their own words, and the chief records the answer as theirs. An open question also shows under "Needs you" on the board. [When the chief asks you](https://github.com/erickb336/sage-stack/blob/main/docs/guide/using-sage.md#when-the-chief-asks-you) gives the exceptions that can ask again.
 
 ## What sage does alone, and what it asks
 
@@ -89,8 +89,8 @@ Every answer from this section carries these two facts, in these words:
 
 This section answers a question; it has no prompt to send. Do not give one. Link these two sources and no other:
 
-- [The chief's instructions](https://github.com/erickb336/sage/blob/main/plugins/sage/agents/chief-of-staff.md): what the chief always asks first, also on autopilot.
-- [FAQ](https://github.com/erickb336/sage/blob/main/docs/guide/faq.md), the question "Is it safe to let it work alone?": what the hook holds, and that the rule above is not yet in code.
+- [The chief's instructions](https://github.com/erickb336/sage-stack/blob/main/plugins/sage/agents/chief-of-staff.md): what the chief always asks first, also on autopilot.
+- [FAQ](https://github.com/erickb336/sage-stack/blob/main/docs/guide/faq.md), the question "Is it safe to let it work alone?": what the hook holds, and that the rule above is not yet in code.
 
 ## Pick a skill or a principle
 
@@ -100,12 +100,12 @@ sage mode is the default answer for real work: the chief runs the agents and the
 
 | The user wants to | Skill |
 | --- | --- |
-| Get work done by a team of agents | sage mode ([Quick start](https://github.com/erickb336/sage/blob/main/README.md#quick-start)) |
-| Follow, steer or start sessions from a phone | [`/sage:remote-control`](https://github.com/erickb336/sage/blob/main/plugins/sage/skills/remote-control/SKILL.md) |
-| Write text that a person reads on the first pass | [`writing-standard`](https://github.com/erickb336/sage/blob/main/plugins/sage/skills/writing-standard/SKILL.md) |
-| Write or review a project README | [`readme-guide`](https://github.com/erickb336/sage/blob/main/plugins/sage/skills/readme-guide/SKILL.md) |
-| Use sage's approved words | [`dictionary`](https://github.com/erickb336/sage/blob/main/plugins/sage/skills/dictionary/SKILL.md) |
-| Apply one working rule, such as "prove it works" | a `principle-<name>` skill ([Principles](https://github.com/erickb336/sage/blob/main/docs/guide/principles.md)) |
+| Get work done by a team of agents | sage mode ([Quick start](https://github.com/erickb336/sage-stack/blob/main/README.md#quick-start)) |
+| Follow, steer or start sessions from a phone | [`/sage:remote-control`](https://github.com/erickb336/sage-stack/blob/main/plugins/sage/skills/remote-control/SKILL.md) |
+| Write text that a person reads on the first pass | [`writing-standard`](https://github.com/erickb336/sage-stack/blob/main/plugins/sage/skills/writing-standard/SKILL.md) |
+| Write or review a project README | [`readme-guide`](https://github.com/erickb336/sage-stack/blob/main/plugins/sage/skills/readme-guide/SKILL.md) |
+| Use sage's approved words | [`dictionary`](https://github.com/erickb336/sage-stack/blob/main/plugins/sage/skills/dictionary/SKILL.md) |
+| Apply one working rule, such as "prove it works" | a `principle-<name>` skill ([Principles](https://github.com/erickb336/sage-stack/blob/main/docs/guide/principles.md)) |
 | Find their way around sage | `/sage:sage-help` |
 
 For a skill that is not in this table, read its description in its `SKILL.md` and route by it. Two skills are for sage itself, not for the user: `sage` (the chief's state tool) and `report` (the end of each agent's run).
@@ -118,13 +118,13 @@ Each role agent of sage mode starts with the principles of its role, so the user
 
 | The user sees | What to do |
 | --- | --- |
-| A mode did not switch | The phrase must be the user's whole message, with no other words. A message sent while Claude works can switch only autopilot off; send any other phrase again when Claude is idle. The message "sage help" lists every phrase. See [Every phrase](https://github.com/erickb336/sage/blob/main/docs/guide/using-sage.md#every-phrase). |
-| Merges must stop now | Send the autopilot off phrase alone ([Every phrase](https://github.com/erickb336/sage/blob/main/docs/guide/using-sage.md#every-phrase)). Pull requests then wait for the user. |
-| The user wants a normal session again | Send the off phrase of sage mode ([Every phrase](https://github.com/erickb336/sage/blob/main/docs/guide/using-sage.md#every-phrase)). It holds for the rest of the session, also in a session that started as the chief. |
-| A task waits and nothing moves | Show the board: an open question under "Needs you" holds the task until the user answers. A task in the held state waits for the user: for an answer to a product question, or, after 3 repair rounds that did not make it clean, for the user to choose what comes next. The chief asks one question with options, a recommendation and a default; the user picks one or answers in their own words. A task in the replan state waits for a new plan. A task of a program waits for the user's approval of the program's breakdown (a question under "Needs you" on its pilot task), then for its pilot to merge; `status` shows what each task waits for. Link [the chief's instructions](https://github.com/erickb336/sage/blob/main/plugins/sage/agents/chief-of-staff.md), step 4 (an escalation when the tool says held or replan). |
-| A pull request does not merge | A merge needs its clean cycles on the exact head commit. A new commit starts again from cycle 1, except a clean merge of main that keeps the pull request's own change the same and passes CI ([A task's life](https://github.com/erickb336/sage/blob/main/docs/guide/how-it-works.md#a-tasks-life)). Tell the chief what to do with it in your own words. |
-| An agent must stop | There is no fixed phrase: the user tells the chief in their own words. Give this example as the prompt, letter for letter: "stop the run on T3" (the user replaces T3 with the task id). The agent's slot frees as soon as the agent ends, fails or is stopped ([Rules held in code](https://github.com/erickb336/sage/blob/main/docs/design/rules-in-code.md)). |
-| A new version of sage has no effect | Start a new session ([To update sage](https://github.com/erickb336/sage/blob/main/docs/guide/using-sage.md#to-update-sage)). |
+| A mode did not switch | The phrase must be the user's whole message, with no other words. A message sent while Claude works can switch only autopilot off; send any other phrase again when Claude is idle. The message "sage help" lists every phrase. See [Every phrase](https://github.com/erickb336/sage-stack/blob/main/docs/guide/using-sage.md#every-phrase). |
+| Merges must stop now | Send the autopilot off phrase alone ([Every phrase](https://github.com/erickb336/sage-stack/blob/main/docs/guide/using-sage.md#every-phrase)). Pull requests then wait for the user. |
+| The user wants a normal session again | Send the off phrase of sage mode ([Every phrase](https://github.com/erickb336/sage-stack/blob/main/docs/guide/using-sage.md#every-phrase)). It holds for the rest of the session, also in a session that started as the chief. |
+| A task waits and nothing moves | Show the board: an open question under "Needs you" holds the task until the user answers. A task in the held state waits for the user: for an answer to a product question, or, after 3 repair rounds that did not make it clean, for the user to choose what comes next. The chief asks one question with options, a recommendation and a default; the user picks one or answers in their own words. A task in the replan state waits for a new plan. A task of a program waits for the user's approval of the program's breakdown (a question under "Needs you" on its pilot task), then for its pilot to merge; `status` shows what each task waits for. Link [the chief's instructions](https://github.com/erickb336/sage-stack/blob/main/plugins/sage/agents/chief-of-staff.md), step 4 (an escalation when the tool says held or replan). |
+| A pull request does not merge | A merge needs its clean cycles on the exact head commit. A new commit starts again from cycle 1, except a clean merge of main that keeps the pull request's own change the same and passes CI ([A task's life](https://github.com/erickb336/sage-stack/blob/main/docs/guide/how-it-works.md#a-tasks-life)). Tell the chief what to do with it in your own words. |
+| An agent must stop | There is no fixed phrase: the user tells the chief in their own words. Give this example as the prompt, letter for letter: "stop the run on T3" (the user replaces T3 with the task id). The agent's slot frees as soon as the agent ends, fails or is stopped ([Rules held in code](https://github.com/erickb336/sage-stack/blob/main/docs/design/rules-in-code.md)). |
+| A new version of sage has no effect | Start a new session ([To update sage](https://github.com/erickb336/sage-stack/blob/main/docs/guide/using-sage.md#to-update-sage)). |
 
 ## Where sage keeps things
 
@@ -141,13 +141,13 @@ To see the exact folders, the user first sends the on phrase of sage mode as a m
 Make the pages folder of T3, and print its path and the path of this project's logbook.
 ```
 
-Link [Where sage keeps things](https://github.com/erickb336/sage/blob/main/docs/guide/using-sage.md#where-sage-keeps-things).
+Link [Where sage keeps things](https://github.com/erickb336/sage-stack/blob/main/docs/guide/using-sage.md#where-sage-keeps-things).
 
 ## Close calls
 
 - **The board or "status":** the board reads every project's logbook; "status" gives the lines of one project.
 - **The off phrase of sage mode, or autopilot off:** autopilot off stops only the merges; the off phrase of sage mode ends the mode, and autopilot goes off with it.
-- **Not in sage:** pstack's own modes, poteto mode, orchestrate and autopilot (sage mode replaces them; see [Credit](https://github.com/erickb336/sage/blob/main/CONTRIBUTING.md#credit)). sage's own autopilot is a different thing: the switch above. sage mode does not run in Codex yet: Codex gets the principles, the writing skills and the manual logbook commands ([sage in Codex](https://github.com/erickb336/sage/blob/main/docs/guide/codex.md)).
+- **Not in sage:** pstack's own modes, poteto mode, orchestrate and autopilot (sage mode replaces them; see [Credit](https://github.com/erickb336/sage-stack/blob/main/CONTRIBUTING.md#credit)). sage's own autopilot is a different thing: the switch above. sage mode does not run in Codex yet: Codex gets the principles, the writing skills and the manual logbook commands ([sage in Codex](https://github.com/erickb336/sage-stack/blob/main/docs/guide/codex.md)).
 
 ## Reply
 

@@ -47,5 +47,5 @@ const tool = createStateTool({
   // The owner's Q2 of T656: a task that Claude takes from another provider's chief merges after one Claude cycle of its own.
   takeoverCycle: () => "run one cycle of its reviews and QA on this SHA, record each verdict, then merge with gh pr merge",
 });
-export const { SIZES, BLOCKS, RISKS, KINDS, STATES, DEFAULTS, PR, sageRoot, locate, chiefFor, sessionBar, branchBar, actorOptions, git, projectRoot, optionsOf, slug, worktreeRoot, BRANCH, ofTask, branchOfTask, branchTip, projectName, storeDir, config, cyclesFor, modelFor, read, mergeCheck, logbookView, sage, withLock, board, answerPaths, keepReport } = tool;
+export const { SIZES, BLOCKS, RISKS, KINDS, STATES, DEFAULTS, PR, sageRoot, locate, chiefFor, sessionBar, branchBar, actorOptions, git, projectRoot, optionsOf, slug, worktreeRoot, pagesRoot, BRANCH, ofTask, branchOfTask, branchTip, projectName, storeDir, config, cyclesFor, modelFor, read, mergeCheck, logbookView, sage, withLock, board, answerPaths, keepReport } = tool;
 if (process.argv[1] === fileURLToPath(import.meta.url)) tool.runCli();

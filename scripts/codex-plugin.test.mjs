@@ -226,7 +226,7 @@ test("T470: the Codex guide, the README and the CHANGELOG carry the owner's copy
       "- Under full access (`danger-full-access`), sage mode gives no guarantee", // F-T470-14: in the guide since the README's limits table went (T521)
     ],
     readme: [
-      "**sage is a Claude Code and Codex plugin for developers who", // F-T470-11
+      "**sage-stack is a multi-agent development stack for Claude Code and Codex", // F-T470-11, T942
       "in Codex (the CLI and the desktop app), sage mode, autopilot, the shared logbook and the board phrases work through the sage plugin ([sage in Codex](docs/guide/codex.md))", // F-T470-11, T905, T921
       "You also need Node.js 20 or later, `gh` logged in, and a GitHub remote for the project (see [What you need](docs/guide/codex.md#what-you-need)).", // F-T470-15, T467
     ],

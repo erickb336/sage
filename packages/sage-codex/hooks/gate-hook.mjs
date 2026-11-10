@@ -329,7 +329,6 @@ function childChange(t, sage) {
   if (above) return BAD_CHAIN(above);
   const role = taskRole(leaf);
   if (role === "lead") return LEAD_EDIT;
-  if (role === "investigate" || role === "evidence-review") return READ_ONLY(role);
   let denied;
   try { denied = role !== null && roleEditDenied({ sage, role }); } catch { denied = undefined; } // core throws for a role that it does not know
   if (denied === undefined || role === null) return BAD_NAME(leaf);

@@ -33,9 +33,10 @@
 //   - Only sage.mjs changes the logbook (chiefProblem): the chief's own file tools and shell writes never change it.
 //   - An agent (a sage agent, or any subagent in sage mode; never the chief) never runs git stash, and never runs a
 //     program that lists or signals processes unless that program is a fake in the temp folder (agentProblem).
-//   - In sage mode, a sage agent of a read-only role (core's roleEditDenied: a reviewer, QA, the PE, the lead) runs no
-//     shell write form (core's commandWrites), as in the Codex gate; only a redirection into the temp folder, outside
-//     the project, passes (readOnlyWrite, T933).
+//   - In sage mode, a sage agent of a read-only role (core's roleEditDenied: a reviewer, QA, the PE, the lead, the
+//     investigate and evidence-review agents) runs no shell write form (core's commandWrites), as in the Codex gate; only
+//     a redirection into the temp folder, outside the project, passes (readOnlyWrite, T933). Its file tools write only
+//     there too (readOnlyFile). The investigate agent may also write in the project's pages folder (scratchOf, T932).
 // SAGE_HOOKS=off turns it off. The hook never breaks a session: on an error it answers nothing, but it refuses a merge,
 // a push, every file change and command of an agent, and a chief's shell write into the sage root or the shared root.
 import { spawnSync } from "node:child_process";
@@ -333,6 +334,8 @@ export function handle(input, state, slots) {
     const write = state.sage && ours ? readOnlyWrite(input.agent_type, commands, cwd) : undefined;
     if (write) return deny(event, write);
   }
+  const file = event === "PreToolUse" && agent && state.sage && ours && FILE_TOOLS.test(input.tool_name ?? "") ? readOnlyFile(input) : undefined;
+  if (file) return deny(event, file);
   const tool = input.tool_name ?? "";
   const ti = input.tool_input ?? {};
   // The spawned type in lower case: a sage type in another letter case meets the same rules (F-T255-5). The caller's type
@@ -710,8 +713,11 @@ const shellWrite = (ti, cwd) => runFields(ti).map((text) => core.logbookWrite(te
  */
 const TASK = /^T[1-9]\d*$/;
 const TEAM = ["implementer", "code-reviewer", "security-reviewer", "ux-reviewer", "qa"];
-/** The roles that review or check a change: their reports back a lead's verdicts and findings. */
-const REVIEWERS = TEAM.slice(1);
+/**
+ * The roles that review or check a change: their reports back verdicts and findings, so the hook reads each one with
+ * core's reader. The evidence review, which the chief starts, backs an investigation's evidence-clean (T932).
+ */
+const REVIEWERS = [...TEAM.slice(1), "evidence-review"];
 /** The state moves of a cycle that a lead may make, by the task's current state (F-T273-7). A held task moves only by the sage. */
 const LEAD_MOVES = { briefed: ["building"], building: ["reviewing"], reviewing: ["verifying"], repairing: ["reviewing"], verifying: ["verified", "reviewing"], verified: ["reviewing"] };
 /**
@@ -1350,20 +1356,57 @@ export function agentProblem(command, cwd, path = process.env.PATH ?? "") {
   return core.agentCommandProblem(command, cwd, path);
 }
 
+/** A sage agent's role from its agent type, and whether core keeps that role from editing (a role that core does not know: yes). */
+function readOnlyRole(agentType) {
+  const role = String(agentType).replace(/^sage:/i, "").toLowerCase();
+  try { return { role, denied: core.roleEditDenied({ sage: true, role }) }; } catch { return { role, denied: true }; }
+}
+/**
+ * The folders where a read-only role writes, outside the project: the temp folder (core.TEMP), and for the investigate agent
+ * also the pages folder of its project's logbook (the state tool's pagesRoot), for its research page (T932).
+ */
+function scratchOf(role, cwd) {
+  if (role !== "investigate") return core.TEMP;
+  try { return [...core.TEMP, stateTool.pagesRoot(realpathSync.native(cwd), process.env)]; } catch { return core.TEMP; }
+}
+const PAGE_NOTE = "The investigate agent writes only its pages, in the task's pages folder that its brief names, and files in its scratch folder.";
 /**
  * A read-only role's shell write (T933, gap G21). In sage mode, a sage agent whose role core keeps from editing
- * (roleEditDenied: a reviewer, QA, the PE, the lead) runs no command with a write form (core's commandWrites), as in the
- * Codex gate. Its agent file already takes away the file tools. A redirection into the temp folder (core.TEMP), outside the
- * project, passes, so that the agent keeps its output and probes in its scratch folder. A sage role that core does not
- * know counts as read-only. A disguised write (a variable, a script's own code) is a limit (standing order 70).
+ * (roleEditDenied: a reviewer, QA, the PE, the lead, the investigate and evidence-review agents) runs no command with a
+ * write form (core's commandWrites), as in the Codex gate. A redirection into its scratch folders (scratchOf), outside
+ * the project, passes, so that the agent keeps its output and probes there. A sage role that core does not know counts
+ * as read-only. A disguised write (a variable, a script's own code) is a limit (standing order 70).
  * Undefined when the commands pass; else the reason for the refusal.
  */
 export function readOnlyWrite(agentType, commands, cwd) {
-  const role = String(agentType).replace(/^sage:/i, "").toLowerCase();
-  let denied;
-  try { denied = core.roleEditDenied({ sage: true, role }); } catch { denied = true; }
-  const write = denied ? commands.find((command) => { try { return core.commandWrites(command, cwd, core.TEMP); } catch { return true; } }) : undefined;
-  return write === undefined ? undefined : `in sage mode, the ${role} agent changes no files, also not from the shell, so ${quoted(bare(write))} is refused: it has a write form (for example sed -i, a redirection to a file, tee, cp, mv, rm, or code in node -e). Report the finding instead. To keep output or a probe, redirect it into your scratch folder in the temp folder, with a literal path (for example > /tmp/<run>/out.txt). To try a changed copy, write the copy the same way: git show <sha>:<path> | sed 's/a/b/' > /tmp/<run>/copy.mjs.`;
+  const { role, denied } = readOnlyRole(agentType), scratch = denied ? scratchOf(role, cwd) : [];
+  const write = denied ? commands.find((command) => { try { return core.commandWrites(command, cwd, scratch); } catch { return true; } }) : undefined;
+  return write === undefined ? undefined : `in sage mode, the ${role} agent changes no files, also not from the shell, so ${quoted(bare(write))} is refused: it has a write form (for example sed -i, a redirection to a file, tee, cp, mv, rm, or code in node -e). ${role === "investigate" ? `${PAGE_NOTE} Redirect a page into its pages folder, with a literal path.` : "Report the finding instead."} To keep output or a probe, redirect it into your scratch folder in the temp folder, with a literal path (for example > /tmp/<run>/out.txt). To try a changed copy, write the copy the same way: git show <sha>:<path> | sed 's/a/b/' > /tmp/<run>/copy.mjs.`;
+}
+/**
+ * A read-only role's file tool (T932): in sage mode it writes only into the role's scratch folders (scratchOf), outside
+ * the project, as its shell does. The other read-only agent files take away the file tools; the investigate agent keeps
+ * them for its pages. Undefined when the write passes; else the reason for the refusal. Any doubt refuses.
+ */
+export function readOnlyFile(input) {
+  const { role, denied } = readOnlyRole(input.agent_type);
+  if (!denied) return undefined;
+  // Each path that the call gives, file_path and notebook_path, is in a scratch folder.
+  const ti = input.tool_input ?? {}, paths = [ti.file_path, ti.notebook_path].filter((p) => p !== undefined);
+  let outside = paths.length ? undefined : "";
+  try {
+    const cwd = input.cwd ?? process.cwd(), project = canonical(cwd), scratch = scratchOf(role, cwd).map(canonical);
+    const inside = (path) => {
+      if (typeof path !== "string" || !path) return false;
+      const file = canonical(from(cwd, path)), under = (folder) => file.startsWith(folder.endsWith(sep) ? folder : folder + sep);
+      return file !== project && !under(project) && scratch.some(under);
+    };
+    outside ??= paths.find((path) => !inside(path));
+  } catch {
+    outside ??= paths[0];
+  }
+  if (outside === undefined) return undefined;
+  return `in sage mode, the ${role} agent changes no project files, so its ${input.tool_name} of ${quoted(outside)} is refused. ${role === "investigate" ? PAGE_NOTE : "Report the finding instead."} A file in your scratch folder in the temp folder passes, with a literal path (for example /tmp/<run>/notes.md).`;
 }
 
 /** Shared program resolution; never executes a program. */
