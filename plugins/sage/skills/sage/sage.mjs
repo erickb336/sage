@@ -3,7 +3,7 @@ import { closeSync, constants, fstatSync, openSync, readFileSync } from "node:fs
 import { homedir } from "node:os";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
-import { createStateTool } from "../../core/index.mjs";
+import { balancedModels, createStateTool } from "../../core/index.mjs";
 
 /**
  * Each provider's legacy logbook root, with its provider's name, for the core's resolver and the move. This function is
@@ -38,12 +38,7 @@ const tool = createStateTool({
   autopilot,
   legacyRoots,
   models: ["opus", "sonnet", "haiku", "fable", "inherit"],
-  modelDefaults: {
-    arena_models: "opus,sonnet,sonnet",
-    ...Object.fromEntries(["pe", "designer", "implementer", "code-reviewer", "security-reviewer", "ux-reviewer", "qa", "arena-judge"].map(role => [`model.${role}`, role === "ux-reviewer" ? "sonnet" : "opus"])),
-    "model.implementer.tiny": "sonnet", "model.code-reviewer.tiny": "sonnet",
-    "model.qa.tiny": "sonnet", "model.qa.small": "sonnet",
-  },
+  modelDefaults: { arena_models: "opus,sonnet,sonnet", ...balancedModels("opus", "sonnet") },
   // The owner's Q2 of T656: a task that Claude takes from another provider's chief merges after one Claude cycle of its own.
   takeoverCycle: () => "run one cycle of its reviews and QA on this SHA, record each verdict, then merge with gh pr merge",
 });

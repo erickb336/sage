@@ -11,6 +11,7 @@ Your task name is `sage_lead_t<n>_r<k>`, where `<n>` is the number of your task.
    - `task_name`: `sage_<role>_t<n>_r<k>`, with `_` for `-` in the role, for example `sage_code_reviewer_t12_r41`. The gate refuses another role, another task and another form. A name with no run still starts, but sage keeps no report for that run, and no verdict can use it, so always give the run.
    - `message`: the whole output of step 2, a blank line, then the brief.
    - `fork_turns: "none"`. Give no agent type and no model.
+   - `reasoning_effort`: the level after `reasoning_effort` in the output of step 1, for example `"medium"`. When step 1 printed none, give no `reasoning_effort`.
 
 **Wait and read.** Do not end your turn while a helper runs: a helper's report starts no turn, so you would never read it.
 

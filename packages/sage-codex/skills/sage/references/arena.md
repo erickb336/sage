@@ -21,7 +21,7 @@ Frame the task with `task_add`, with `add: "arena"` and the reason as `why`.
    - Start at most three at one time. An `arena 4` runs in waves: start the next candidate when a slot is free.
    - A large task before briefed takes only designers: move a framed task first with `task_set`, `state` designing. A large task at briefed, after an approved design, may take implementers.
    - A candidate run opens the step on a task with no arena block, but the state tool refuses a candidate on a route with no code review, such as a tiny task framed with no arena.
-   - For candidate k, call `run_add` with the role, `branch` `sage/t<n>-c<k>` and `candidate` k. The task name is `sage_<role>_t<n>_r<run>`. Give no model: the candidates differ by their angles.
+   - For candidate k, call `run_add` with the role, `branch` `sage/t<n>-c<k>` and `candidate` k. The task name is `sage_<role>_t<n>_r<run>`. Give no model: the candidates differ by their angles. Give `reasoning_effort` only when `run_add` printed one (from `arena_models`).
    - Each brief names its branch, a worktree, the folder that `pages` prints and its page name: `<R>-artifact.html` for a designer, `<R>-artifact.diff` for an implementer. A candidate opens no pull request.
 3. **Record each candidate:** save its report and end its run with its STATUS, then record its page with `pages` and `record`.
    - An artifact that is not committed does not count.

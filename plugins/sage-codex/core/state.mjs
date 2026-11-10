@@ -35,7 +35,19 @@ import { LEAD_COMMANDS, leadProblem as leadPolicy, leadRequest } from "./lead-po
 /** The one line for a saved change that cannot finish: the settle step refuses with it, and `sage logbook repair` is its way out. */
 export const STUCK_WRITE = 'This command changed nothing. This project cannot save changes; other projects work. Tell the owner. There are two ways out. With a backup: the owner restores the folder that `sage logbook` prints; rows newer than the backup are lost. With no backup: after the owner accepts the loss of this saved change, the chief runs `sage logbook repair --accept-change-loss yes --project <the project>`, or the owner runs it in a terminal when the chief cannot; it keeps the file, and a half-published update keeps mixed tables. Do not remove review-pending.json by hand.';
 
-export function createStateTool({ defaultRoot, legacyRoots: namedRoots = () => [], provider, models = ["inherit"], modelDefaults = {}, usageInterfaces = [], claimStep = (task, version, chief) => `run sage claim ${task} --version ${version} --chief ${chief}`, replaceStep = (task, chief) => `run sage gate replace ${task} --to ${chief} --chief ${chief}`, takeoverCycle, autopilot = () => false }) {
+/** The roles that a model key names (MODEL). */
+const MODEL_ROLES = ["pe", "designer", "implementer", "code-reviewer", "security-reviewer", "ux-reviewer", "qa", "arena-judge"];
+
+/**
+ * The Balanced defaults of the model keys, for a provider's strong and light model: the light one for UX review, QA of
+ * tiny and small tasks, and code review and implementation of tiny tasks; the strong one for every other role.
+ */
+export const balancedModels = (strong, light) => ({
+  ...Object.fromEntries(MODEL_ROLES.map((role) => [`model.${role}`, role === "ux-reviewer" ? light : strong])),
+  "model.implementer.tiny": light, "model.code-reviewer.tiny": light, "model.qa.tiny": light, "model.qa.small": light,
+});
+
+export function createStateTool({ defaultRoot, legacyRoots: namedRoots = () => [], provider, models = ["inherit"], modelDefaults = {}, spawnFields = (model) => (model ? { model } : {}), usageInterfaces = [], claimStep = (task, version, chief) => `run sage claim ${task} --version ${version} --chief ${chief}`, replaceStep = (task, chief) => `run sage gate replace ${task} --to ${chief} --chief ${chief}`, takeoverCycle, autopilot = () => false }) {
 if (typeof defaultRoot !== "function") throw new TypeError("defaultRoot must be a function");
 if (typeof namedRoots !== "function") throw new TypeError("legacyRoots must be a function");
 /**
@@ -106,7 +118,7 @@ const COUNTS = { max_agents: "no sage agent could start", max_leads: "no lead co
 /** One project's own agent cap, cap.<project>, with the project's name as projectName gives it. Without one, max_agents is the project's cap. */
 const CAP = /^cap\.[a-z0-9][a-z0-9-]*$/;
 /** Model choice by role, task size or risk flag; provider defaults supply the model names. */
-const MODEL = /^model\.(pe|designer|implementer|code-reviewer|security-reviewer|ux-reviewer|qa|arena-judge)(\.(tiny|small|large|investigate|risk))?$/;
+const MODEL = new RegExp(`^model\\.(${MODEL_ROLES.join("|")})(\\.(tiny|small|large|investigate|risk))?$`);
 const KEYS = "max_agents, max_leads, cycles.small, cycles.large, cycles.risk, max_rounds, arena and cap_total as key=number, cap.<project>=number for one project's cap, model.<role>.<size>=<model>, model.<role>.risk=<model> or model.<role>=<model> for an agent role's model";
 /** The columns that a later version added: an older table without them reads with them empty, and its next write adds them. */
 const FILLED = { runs: ["model", ...USAGE_FIELDS], tasks: ["hold", "extra", "priority", "kind", "waits", "program", "adoption", "approvals"], findings: ["run", "class"] };
@@ -3670,6 +3682,9 @@ function act(cmd, pos, opt, dir, env, skip, project) {
         const branch = opt.branch === undefined ? "" : branchOf(opt.branch);
         const candidate = opt.candidate === undefined ? "" : candidateOf(opt.candidate);
         const run = { ...runFrame(dir, project, task, role, branch, candidate, env), ...chiefTag(opt), ...checkoutTag(dir, project, env) };
+        // The fields of the agent call for the chosen model: Claude's model, or Codex's reasoning effort (T955). The row keeps only a model.
+        const fields = spawnFields(run.model);
+        run.model = fields.model ?? "";
         if (opt["usage-interface"] !== undefined) {
           const entry = USAGE_INTERFACES.get(opt["usage-interface"]);
           if (!entry) refuse("Unknown usage interface. Nothing changed.");
@@ -3682,7 +3697,7 @@ function act(cmd, pos, opt, dir, env, skip, project) {
           const last = runs.filter((r) => r.task === up && ["lead", "investigate"].includes(r.role)).at(-1);
           return `${up} ${last?.report ? `${last.id} ${resolve(dir, last.report)}` : "no report recorded"}`;
         });
-        return `${run.id} running · ${role} on ${task.id}${branch ? ` · ${branch}` : ""}${candidate ? ` · candidate ${candidate}` : ""}${run.model ? ` · model ${run.model}` : ""}${upstream.length ? ` · upstream reports: ${upstream.join(", ")}` : ""}`;
+        return `${run.id} running · ${role} on ${task.id}${branch ? ` · ${branch}` : ""}${candidate ? ` · candidate ${candidate}` : ""}${Object.entries(fields).map(([k, v]) => ` · ${k} ${v}`).join("")}${upstream.length ? ` · upstream reports: ${upstream.join(", ")}` : ""}`;
       }
       if (sub === "usage") return enrichUsage(dir, id, opt);
       if (sub === "done") {

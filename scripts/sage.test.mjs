@@ -4736,7 +4736,7 @@ test("risk model overrides size, inherit restores size, and arena candidates ret
   const { modelFor } = await import(LIB);
   assert.equal(modelFor("qa", "small", "", { "model.qa.small": "sonnet", "model.qa.risk": "opus" }), "sonnet", "four-argument callers retain size selection");
   const { tool } = await import(new URL("../plugins/sage-codex/skills/sage/sage.mjs", import.meta.url));
-  assert.equal(tool.modelFor("qa", "small", "", tool.DEFAULTS, "auth"), "", "Codex still inherits its selected model");
+  assert.equal(tool.modelFor("qa", "small", "", tool.DEFAULTS, "auth"), "sonnet", "Codex makes Claude's choice, and its run add prints the effort of it (T955)");
 });
 
 test("T40: each agent role gets its model by task size; run add prints it and records it; an old runs.tsv gets the column at its next write", () => {
