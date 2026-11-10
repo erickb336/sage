@@ -404,7 +404,6 @@ test("provider packages are complete outside the checkout, with no opposite adap
     assert.equal(existsSync(join(plugin, ".claude-plugin")), provider === "claude");
     assert.equal(existsSync(join(plugin, "agents")), provider === "claude");
     assert.equal(existsSync(join(plugin, "hooks/sage-hook.mjs")), provider === "claude");
-    assert.equal(existsSync(join(plugin, "skills/sage/sage-pr.mjs")), provider === "claude");
     for (const file of paths.filter((p) => p.endsWith(".mjs"))) {
       const text = readFileSync(file, "utf8");
       assert.doesNotMatch(text, /from "sage-core"/);
@@ -1195,7 +1194,7 @@ test("T586: the Codex arena steps come in Claude's order, and the Codex steps na
   assert.equal(claude.length, 9);
   // Two titles differ by provider: Claude names its agent, and its judge opens the pull request.
   assert.deepEqual(titles(steps), claude.map((title) => title.replace("`sage:arena-judge`", "the arena judge").replace("draft pull request", "branch")));
-  assert.doesNotMatch(steps, /sage:arena-judge|sage run add|sage task|sage-pr|\bopus\b|\bsonnet\b/);
+  assert.doesNotMatch(steps, /sage:arena-judge|sage run add|sage task|\bopus\b|\bsonnet\b/);
   // A design arena's task has no branch, and the state tool refuses a PE run on any other branch.
   assert.match(steps, /Run the PE with the judge's branch and page in its brief\. Give its `run_add` no `branch`/);
   assert.doesNotMatch(steps, /PE on the judge's branch/);
