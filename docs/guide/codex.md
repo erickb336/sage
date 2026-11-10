@@ -16,7 +16,7 @@ The design of the two provider plugins is in [Separate provider packages](../des
 | The principles of each role | Yes: each agent file preloads them | Yes: `role.mjs` puts them in each role's text. A lead gets the path of each one to read |
 | The logbook and the board | Yes | Yes: the plugin's `sage` MCP tools write the logbook, and the board phrases show the board ([The board in Codex](#the-board-in-codex)) |
 | Programs (one goal, several tasks, a breakdown gate) | Yes | Yes: the `program_propose` tool opens the breakdown gate, and `task_set` with `program=` puts a task in a program or takes it out ([The logbook tools](#the-logbook-tools)) |
-| The settings: cycle counts, `max_leads`, the project's board name and archive, and its start in sage mode | Yes | Yes: the `config` tool, when you ask the chief |
+| The settings: cycle counts, `max_leads`, the model keys, the project's board name and archive, and its start in sage mode | Yes | Yes: the `config` tool, when you ask the chief. A model key gives a Codex agent a reasoning effort, not a model ([Model keys in Codex](#model-keys-in-codex)) |
 | sage mode: the chief's role | Yes | Yes: the `sage mode` phrase gives it, and it comes back after a compaction |
 | Start every session of a project in sage mode | Yes: `config start=sage-mode`, or the `"agent"` line ([Start every session in sage mode](using-sage.md#start-every-session-in-sage-mode)) | Yes: the same `config start=sage-mode` setting turns sage mode on at each new session (one setting for both, with a shared logbook) |
 | Role agents | Yes: the lead, the implementer, the reviewers, QA, the PE, the designer, the arena judge and the investigation roles | The public helper supports each of these roles and the investigation roles. The chief starts one lead for each task with a build, and the lead starts its team and records its task; other role agents start no agents and record nothing. A pilot on stock Codex ran a lead and its team with a test model, and each thread needs a multi-agent v2 model (see [start a role agent](../../packages/sage-codex/skills/sage/references/roles.md)). |
@@ -307,7 +307,7 @@ The plugin starts a local MCP server, `sage`, in the desktop app and in the CLI.
 | `offer`, `cancel`, `accept`, `release` | `offer <T>`, `cancel <T>`, `accept <T>`, `release <T>`: [hand a task to another chief](using-sage.md#shared-logbooks) |
 | `task_add`, `task_set` | `task add`, `task <T> set` |
 | `program_propose` | `program propose`, `program propose <PG>`: [a program](using-sage.md#waits-and-programs) and its breakdown gate. A task joins or leaves with `task_set` `program=` |
-| `config` | `config key=value ...`: the cycle counts, `max_leads` and the other counts for all projects, the project's board name and archive (`name=`, `archived=`), and its start in sage mode (`start=sage-mode` or `start=normal`) |
+| `config` | `config key=value ...`: the cycle counts, `max_leads`, the other counts and the model keys for all projects, the project's board name and archive (`name=`, `archived=`), and its start in sage mode (`start=sage-mode` or `start=normal`) |
 | `task_adopt` | `task-adopt <T>`: adopt another provider's task and PR from a separate logbook, with fresh destination reviews. In a shared logbook it refuses: use the takeover gate |
 | `run_add`, `run_done` | `run add`, `run done` |
 | `finding_add`, `finding_triage`, `finding_close`, `finding_move` | `finding add`, `triage`, `close`, `move` |
@@ -335,6 +335,27 @@ The plugin starts a local MCP server, `sage`, in the desktop app and in the CLI.
 - When a table fails the logbook check and you have no copy, accept the loss, then run the line that the refusal prints in the same way: `logbook repair --accept-loss <table> --project <project>`. A repair names no chief, also on a shared logbook.
 - To find `<version>`, run `ls ~/.codex/plugins/cache/sage/sage/` and use the current one. When you set `CODEX_HOME`, use that folder in place of `~/.codex`.
 - A saved change of a schema that only the deleted Codex native runtime wrote (2 to 6 and 8) cannot finish. It stops the writes of its logbook until this change-loss repair.
+
+### Model keys in Codex
+
+Codex uses the same model keys as Claude Code (`model.<role>`, `model.<role>.<size>` and `model.<role>.risk`), with the same model names and Balanced defaults. `run_add` makes the same choice as in Claude Code, and prints a reasoning effort in place of the model name. Every agent keeps the session's model.
+
+- For example, `run_add` prints `R40 running · qa on T12 · reasoning_effort medium`.
+- The chief and the lead give that level to `spawn_agent` as `reasoning_effort`.
+
+| Model name in the key | Reasoning effort in Codex | Balanced defaults that use it |
+| --- | --- | --- |
+| `opus` | `high` | the PE, the designer, the arena judge, the security review, the implementation and code review of small and large tasks, and the QA of large tasks |
+| `sonnet` | `medium` | the UX review, the QA of tiny and small tasks, and the implementation and code review of tiny tasks |
+| `haiku` | `low` | none: set a key to `haiku` to give a role a low effort |
+| `fable`, `inherit` | none | none |
+
+- A role with no effort gets no `reasoning_effort` field, so it keeps the session's effort. The lead and the investigation roles have no model key, so they get none too.
+- The levels follow the strength of the Claude model: the strong model gets a high effort and the light one a medium effort.
+- An arena candidate gets the effort of its place in `arena_models`. Codex's default is `inherit,inherit,inherit`, so the candidates get none.
+- Codex reads the keys from its own config, in its logbook root (`~/.codex/sage`, or `SAGE_HOME`), also for a shared logbook. To change a key, ask the Codex chief to call `config`, for example `{"model.qa.small": "haiku"}`.
+- Codex checks the level against the session's model, and a spawn with a level that the model does not have fails with Codex's own line. In the bundled model catalog of Codex 0.164.0, each v2 model has `low`, `medium` and `high`. A real spawn with a level is not checked yet.
+- The run's row in the logbook keeps no model for a Codex run, so the board shows none.
 
 ## Design roles and acceptance
 
@@ -514,8 +535,8 @@ These are the differences from Claude Code that stay in sage 1.0, by the owner's
 
 | Limit | What you see | What to do |
 | --- | --- | --- |
-| **One model for all agents** | Every agent runs on the session's model, also a light role such as the UX review. | Choose a multi-agent v2 model for the session. Do not change it during a run. |
+| **One model for all agents** | Every agent runs on the session's model. Only its reasoning effort changes with its role and size ([Model keys in Codex](#model-keys-in-codex)). | Choose a multi-agent v2 model for the session. Do not change it during a run. |
 
 ### Why each limit stays
 
-- **One model for all agents:** Codex children inherit the session's model, so sage sets no model for each role and size.
+- **One model for all agents:** the model keys hold Claude's model names, and sage never gives a Claude name to Codex. Codex's model list changes with each release, so sage gives no Codex model name either. A spawn that names no model keeps the session's v2 model, so the v2 rule cannot break.

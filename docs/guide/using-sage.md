@@ -176,7 +176,7 @@ sage uses balanced model defaults:
 - Sonnet does the UX review, the implementation of a tiny task, and the QA of a small task.
 - Opus does the other configurable roles and sizes.
 
-When the chief adds a code review or QA to a tiny task, Sonnet does it too. An optional `model.<role>.risk` setting overrides the size choice when the task has a risk flag. In Codex, every agent runs on the session's model.
+When the chief adds a code review or QA to a tiny task, Sonnet does it too. An optional `model.<role>.risk` setting overrides the size choice when the task has a risk flag. In Codex, every agent runs on the session's model, and the same keys give it a reasoning effort ([Model keys in Codex](codex.md#model-keys-in-codex)).
 
 ## Waits and programs
 

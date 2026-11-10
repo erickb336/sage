@@ -202,10 +202,42 @@ const FOUND = CLEAN.replace("RESULT CLEAN", "RESULT FINDINGS").replace("FINDINGS
 /** A done proof check of T1 (T947): a qa run whose kept report gives each finding key its outcome, on SHA. Its id. */
 const proofCheck = (w, outcomes) => reviewed(w, "qa", CLEAN.replace("RESULT CLEAN", "RESULT PASS").replace("EVIDENCE npm test passed", `EVIDENCE\n${Object.entries(outcomes).map(([key, outcome]) => `- ${key} ${outcome}`).join("\n")}`));
 
+test("T955: run_add gives each Codex role and size the reasoning effort of its model key, never a model, and a role with no effort gets none", async (t) => {
+  const s = await connect(t);
+  await s.call("init");
+  await s.call("config", { settings: { max_agents: "50" } }); // the runs stay running, so the agent cap needs room for them
+  for (const size of ["tiny", "small", "large"]) await s.call("task_add", { title: size, size, priority: "P2" });
+  // The Balanced defaults: medium (Claude's sonnet) for the UX review, the QA of tiny and small tasks, and the code review
+  // and implementation of tiny tasks; high (Claude's opus) for the rest.
+  const expected = {
+    T1: { "code-reviewer": "medium", "security-reviewer": "high", "ux-reviewer": "medium", qa: "medium", implementer: "medium", pe: "high", designer: "high" },
+    T2: { "code-reviewer": "high", "security-reviewer": "high", "ux-reviewer": "medium", qa: "medium", implementer: "high", pe: "high", designer: "high" },
+    T3: { "code-reviewer": "high", "security-reviewer": "high", "ux-reviewer": "medium", qa: "high", implementer: "high", pe: "high", designer: "high" },
+  };
+  let r = 0;
+  for (const [task, roles] of Object.entries(expected)) {
+    for (const [role, effort] of Object.entries(roles)) {
+      const branch = { implementer: `sage/${task.toLowerCase()}-a`, designer: `sage/${task.toLowerCase()}-d` }[role];
+      assert.equal(await s.call("run_add", { task, role, ...(branch && { branch }) }), `R${++r} running · ${role} on ${task}${branch ? ` · ${branch}` : ""} · reasoning_effort ${effort}`, `${role} on ${task}`);
+    }
+  }
+  // A role with no model key gets no effort, so its spawn has no reasoning_effort field: the session's effort.
+  assert.equal(await s.call("run_add", { task: "T2", role: "lead" }), `R${++r} running · lead on T2`);
+  // A key with haiku gives low; fable and inherit give no effort (inherit falls to model.qa, high).
+  for (const [value, line] of [["haiku", " · reasoning_effort low"], ["fable", ""], ["inherit", " · reasoning_effort high"]]) {
+    assert.match(await s.call("config", { settings: { "model.qa.small": value } }), new RegExp(` model\\.qa\\.small=${value}(?: |$)`));
+    assert.equal(await s.call("run_add", { task: "T2", role: "qa" }), `R${++r} running · qa on T2${line}`, value);
+  }
+  assert.match((await s.call("config", { settings: { "model.qa.small": "gpt-6-sol" } })).error, /^sage: model\.qa\.small is opus, sonnet, haiku, fable, or inherit/, "a key takes no Codex model name");
+  // The logbook keeps no model for a Codex run, so the board shows none: the agent runs on the session's model.
+  const { tool } = await import(pathToFileURL(join(s.dir, "plugin/skills/sage/sage.mjs")).href);
+  assert.deepEqual([...new Set(tool.read(tool.storeDir(s.project, s.env), "runs").map((run) => run.model))], [""]);
+});
+
 test("T552: a lead records its own task's cycle through the state server, from a build to a repair", async (t) => {
   const w = await leadWorld(t), { lead } = w;
   assert.match(await lead("task_set", { task: "T1", fields: { state: "building" } }), /^T1 building/);
-  assert.equal(await lead("run_add", { task: "T1", role: "implementer", branch: "sage/t1-a" }), "R3 running · implementer on T1 · sage/t1-a");
+  assert.equal(await lead("run_add", { task: "T1", role: "implementer", branch: "sage/t1-a" }), "R3 running · implementer on T1 · sage/t1-a · reasoning_effort high");
   assert.equal(await lead("brief", { task_name: "sage_implementer_t1_r3", brief: BRIEF }), "brief sage_implementer_t1_r3 checked: all 10 fields. Spawn the agent with this task name and this brief.");
   assert.equal(await lead("run_done", { run: "R3", status: "done" }), "R3 done");
   assert.match(await lead("task_set", { task: "T1", fields: { state: "reviewing", pr: "5" } }), /^T1 reviewing .* PR 5/);
@@ -1085,8 +1117,8 @@ test("T506: the chief saves a report with pages, and each run_done example ends 
     await s.call("task_set", { task: `T${n}`, fields: { state: "briefed", branch: `codex/t${n}-a` } });
   }
   // The call of R1765, without source, evidence and report, is refused, and the run stays running.
-  assert.equal(await s.call("run_add", { task: "T1", role: "code-reviewer", "usage-interface": usageInterface }), "R1 running · code-reviewer on T1");
-  assert.equal(await s.call("run_add", { task: "T2", role: "qa" }), "R2 running · qa on T2");
+  assert.equal(await s.call("run_add", { task: "T1", role: "code-reviewer", "usage-interface": usageInterface }), "R1 running · code-reviewer on T1 · reasoning_effort high");
+  assert.equal(await s.call("run_add", { task: "T2", role: "qa" }), "R2 running · qa on T2 · reasoning_effort medium");
   assert.equal((await s.call("run_done", { run: "R1", status: "done", usage: "unavailable" })).error,
     "sage: Unavailable usage needs a running run, its unsupported interface snapshot, a report, source and evidence, without tokens. Nothing changed.");
 
@@ -1103,7 +1135,7 @@ test("T506: the chief saves a report with pages, and each run_done example ends 
   for (const [where, example] of Object.entries(examples)) {
     assert.ok(example, `${where} has an example call`);
     const run = where === "dispatch" ? "R1" : "R3";
-    if (run === "R3") assert.equal(await s.call("run_add", { task: "T1", role: "code-reviewer", "usage-interface": usageInterface }), "R3 running · code-reviewer on T1");
+    if (run === "R3") assert.equal(await s.call("run_add", { task: "T1", role: "code-reviewer", "usage-interface": usageInterface }), "R3 running · code-reviewer on T1 · reasoning_effort high");
     const saved = await s.call("pages", { task: "T1", run, text: `${report}${run}\n` });
     const path = saved.match(/^page (\/.+) · sha256 [0-9a-f]{64}$/)?.[1];
     assert.equal(path, join(folder, `${run}-report.md`), saved);

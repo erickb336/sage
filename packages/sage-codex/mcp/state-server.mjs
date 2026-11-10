@@ -82,7 +82,7 @@ export const TOOLS = {
     pos: ["task"], argv: i => ["task-adopt", i.task],
   },
   run_add: {
-    describe: "Record an agent run of a task before the agent starts. It prints the run id and the model to pass.",
+    describe: "Record an agent run of a task before the agent starts. It prints the run id, and the reasoning_effort to give spawn_agent when the role has one.",
     input: { task, role: z.string().describe("lead, implementer, pe, designer, arena-judge, code-reviewer, security-reviewer, ux-reviewer, qa, investigate or evidence-review"),
       branch: optional("the run's branch"), candidate: count("the arena candidate number"),
       "usage-interface": optional("collaboration-tools, for a Codex agent: its agent tools give no token count, so the report gate keeps the count at the agent's stop") },

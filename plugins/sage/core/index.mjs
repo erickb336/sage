@@ -1,5 +1,5 @@
 // Public API. Providers import this entry point only.
-export { createStateTool } from "./state.mjs";
+export { balancedModels, createStateTool } from "./state.mjs";
 export { sharedRoot } from "./shared-root.mjs";
 export { writerClass } from "./chiefs.mjs";
 export { readLocalGit } from "./local-git.mjs";
