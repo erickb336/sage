@@ -133,10 +133,10 @@ export function sessionStatus(input, { pluginRoot, codexHome, env = process.env 
   const limits = [resetWarning, markWarning].filter(Boolean);
   if (trusted < keys.length) limits.push(`sage: ${keys.length - trusted} of the ${keys.length} sage hooks ${keys.length - trusted === 1 ? "is" : "are"} not trusted yet, so some sage rules do not run. To trust them, type /hooks in the Codex CLI.`);
   if (!inRange) limits.push(`sage: ${version ? `this is Codex ${version}` : "the hook could not read the Codex version"}, and sage is tested only with Codex ${TESTED_CODEX.join(" to ")}. Some sage rules may not run.`);
-  const threads = threadWarning(input, codexHome, env);
-  if (threads) limits.push(threads);
   // Codex trusts a plugin hook only when its record matches the hash of the hook and of the plugin's files. Codex
   // computes both, so the status counts only the records, and says that Codex checks each hash.
+  const threads = threadWarning(input, codexHome, env);
+  if (threads) limits.push(threads);
   const status = [
     `sage ${plugin} is installed. Codex ${version ?? "version unknown"}. sage hooks: ${trusted} of ${keys.length} have a trust record (Codex checks each hash).`,
     sageOn(input, env) ? "sage mode is on in this session." : `To start sage mode, the user sends this message alone: ${ON_PHRASE}`,
