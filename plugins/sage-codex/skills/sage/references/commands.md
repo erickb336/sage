@@ -48,7 +48,7 @@ The JSON output gives the reference commit, tracked and matched counts, and rela
 | `task_add` | `task add` | `title`, `size`, `priority`, and `risk`, `add`, `why`, `kind`, `waits`, `program` |
 | `task_set` | `task <T> set` | `task`, `fields` (for example `{"state": "briefed", "branch": "codex/t7-example"}`); a round hold needs `{"state":"building","approval":"G1"}` with an unused approved repair gate; `why`, the reason, goes only with the state abandoned. Any chief abandons a task with no owning chief with no claim: `fields` `{"state": "abandoned"}` alone, and `why` |
 | `program_propose` | `program propose`, `program propose <PG>` | `name`, `goal`, `pilot`, `tasks` for a new program; `program`, and the fields that change, to propose it again ([Programs](#programs)) |
-| `config` | `config key=value ...` | `settings` (for example `{"cycles.large": "3", "max_leads": "4"}`, or `{"name": "Council Record"}` alone). Only when the owner asks. `name` and `archived` go in a call of their own |
+| `config` | `config key=value ...` | `settings` (for example `{"cycles.large": "3", "max_leads": "4"}`, or `{"name": "Council Record"}` alone). Only when the owner asks. `name`, `archived` and `start` go in a call of their own |
 | `run_add`, `run_done` | `run add <T>`, `run done <R>` | `task` or `run`, and the command's options |
 | `finding_add`, `finding_triage`, `finding_close`, `finding_move` | `finding add`, `triage`, `close`, `move` | `task`, `key`, `decision` (triage), and the options |
 | `verdict`, `round`, `merge_check`, `log` | `verdict <T>`, `round <T>`, `merge-check`, `log <T> <decision>` | the command's options |
@@ -91,11 +91,12 @@ node "$SAGE_CLI" task T7 set priority=P0 --project "$PROJECT"
 node "$SAGE_CLI" task T7 set kind=none --project "$PROJECT"
 node "$SAGE_CLI" config name="Council Record" --project "$PROJECT"
 node "$SAGE_CLI" config archived=yes --project "$PROJECT"
+node "$SAGE_CLI" config start=sage-mode --project "$PROJECT"
 ```
 
 Every task needs a priority: `task_add` refuses without one, with the scale: P0 the owner's current focus and what blocks it; P1 next: function or safety bugs, work in flight, pre-pilot items; P2 later: polish, hardening lows, follow-ups; P3 parked but kept. An open task's priority does not clear. The kind is optional. The board shows both as tags on its card, and "no priority" on an older open task with none; `status` names those tasks. A kind is one of: design, ui, orchestration, optimization, bug-fix, logbook, docs, security, providers, checks. Choose the task's main one. Another value refuses, with the list, and `none` clears a kind, or the priority of an ended task.
 
-`config name=` and `config archived=` set keys of the project's own logbook, never the config for all projects. Set them in a config command of their own, and only when the owner asks. The name is the project's name on the board: 1 to 60 characters, with no space at an end or two together, and no control, format or hidden character. `name=` alone removes it. Without a name, the board shows the repository name of the checkout's `upstream` remote, then of `origin`, then the folder. `archived=yes` folds the project into the board's Archived group, which shows only a count of its tasks and of what needs the owner there; `archived=no` brings it back.
+`config name=`, `config archived=` and `config start=` set keys of the project's own logbook, never the config for all projects. Set them in a config command of their own, and only when the owner asks. The name is the project's name on the board: 1 to 60 characters, with no space at an end or two together, and no control, format or hidden character. `name=` alone removes it. Without a name, the board shows the repository name of the checkout's `upstream` remote, then of `origin`, then the folder. `archived=yes` folds the project into the board's Archived group, which shows only a count of its tasks and of what needs the owner there; `archived=no` brings it back. `start=sage-mode` starts each new session of the project in sage mode, from any checkout of the project, in Codex, and in Claude too when the two share the logbook; `start=normal` (the default) starts it with sage mode off. The off phrase still turns sage mode off for the rest of that session.
 
 ## Waits
 

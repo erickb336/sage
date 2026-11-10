@@ -191,13 +191,25 @@ The board shows each program on its Programs tab: see [Programs on the board](bo
 
 ## Start every session in sage mode
 
-To make every session in a folder start in sage mode, put this in the folder's `.claude/settings.json`:
+By default, each new session starts with sage mode off. To make every new session of a project start in sage mode, ask the chief to set the project's start setting. It runs:
+
+```sh
+sage config start=sage-mode
+```
+
+- The setting is in the project's logbook, so it holds in every checkout of the project.
+- With a [shared logbook](#shared-logbooks), Claude and Codex read the one setting. Else each provider has its own logbook: ask each chief. In Codex, the chief sets it with the `config` tool ([sage in Codex](codex.md#turn-on-sage-mode)).
+- A new session, or `/clear`, in the project then starts in sage mode.
+- `sage mode off` gives a normal session for the rest of the session, as in any other session: the file tools work again.
+- To start sessions with sage mode off again, ask the chief to run `sage config start=normal`.
+
+In Claude Code only, the older way still works: put this in the folder's `.claude/settings.json`.
 
 ```json
 { "agent": "sage:chief-of-staff" }
 ```
 
-In such a session, `sage mode off` gives a normal session for the rest of the session, as in any other session: the file tools work again. A new session, or `/clear`, in that folder starts in sage mode again. To start sessions in that folder without sage mode, remove the line.
+It starts each session in that folder as the chief, and `sage mode off` holds there too. Prefer the setting: it works in both providers. To stop, remove the line.
 
 ## To update sage
 

@@ -1,3 +1,5 @@
+import { closeSync, constants, fstatSync, openSync, readSync } from "node:fs";
+import { join } from "node:path";
 // The fields that the owner sets for the board: per logbook, its display name and its archived flag (the logbook's own
 // config.json); per task, its priority and its kind (two columns of tasks.tsv). The state tool writes them and the board
 // reads them again, both with these rules, so the two never disagree.
@@ -95,13 +97,42 @@ export const TABLES = {
   programs: ["id", "name", "goal", "pilot", "gate", "at"],
 };
 
+/** The value of a logbook's start key that starts each new session of the project in sage mode (T948). */
+export const START_SAGE_MODE = "sage-mode";
+
 /**
- * The owner's settings of one logbook from its parsed config.json: its display name (null for none) and its archived
- * flag. A bad value falls back (no name; not archived) with a warning, so that a hand-edited file never stops the board.
+ * The owner's settings of one logbook from its parsed config.json: its display name (null for none), its archived flag,
+ * and whether each new session of the project starts in sage mode (start, T948). A bad value falls back (no name; not
+ * archived; a normal start) with a warning, so that a hand-edited file never stops the board or a session.
  */
 export function logbookSettings(config) {
-  if (!config || typeof config !== "object" || Array.isArray(config)) return { name: null, archived: false, warnings: ["config: config is not an object"] };
+  if (!config || typeof config !== "object" || Array.isArray(config)) return { name: null, archived: false, sageModeStart: false, warnings: ["config: config is not an object"] };
   const why = config.name === undefined ? null : nameProblem(config.name);
-  const warnings = [...(why ? [`config: the name ${why}`] : []), ...(config.archived !== undefined && typeof config.archived !== "boolean" ? ["config: archived is not true or false"] : [])];
-  return { name: config.name === undefined || why ? null : config.name, archived: config.archived === true, warnings };
+  const warnings = [
+    ...(why ? [`config: the name ${why}`] : []),
+    ...(config.archived !== undefined && typeof config.archived !== "boolean" ? ["config: archived is not true or false"] : []),
+    ...(config.start !== undefined && config.start !== START_SAGE_MODE ? [`config: start is not "${START_SAGE_MODE}"`] : []),
+  ];
+  return { name: config.name === undefined || why ? null : config.name, archived: config.archived === true, sageModeStart: config.start === START_SAGE_MODE, warnings };
+}
+
+/**
+ * Whether each new session of a project starts in sage mode: the start key in the config.json of its logbook folder
+ * (T948), which both providers' hooks read at a session's start. No file, a file that is not a regular file or is over
+ * 64 KiB, and a bad value are a normal start, so a broken file never puts a session into sage mode. It never waits.
+ */
+export function startsInSageMode(logbook) {
+  let fd;
+  try {
+    fd = openSync(join(logbook, "config.json"), constants.O_RDONLY | constants.O_NONBLOCK);
+    const info = fstatSync(fd);
+    if (!info.isFile() || info.size > 64 * 1024) return false;
+    const bytes = Buffer.alloc(info.size);
+    const read = readSync(fd, bytes, 0, info.size, 0);
+    return logbookSettings(JSON.parse(bytes.toString("utf8", 0, read))).sageModeStart;
+  } catch {
+    return false;
+  } finally {
+    if (fd !== undefined) closeSync(fd);
+  }
 }

@@ -10,6 +10,7 @@ import { basename, dirname, join } from "node:path";
 import { test } from "node:test";
 import { fileURLToPath } from "node:url";
 import { keepReport } from "../plugins/sage/skills/sage/sage.mjs";
+import { startsInSageMode } from "../plugins/sage/core/index.mjs";
 import { BACKER, backed, linkFinding, reportFor } from "./verdict-backing.mjs";
 import { TABLES } from "../packages/sage-core/logbook-fields.mjs";
 
@@ -4473,17 +4474,40 @@ test("T305: the first status line names the project as the board does, not by it
 test("T314: config name= and archived= set one logbook's own config.json, never the config for all projects", () => {
   const s = store();
   const own = join(s.dir, "config.json"), all = join(s.home, "config.json");
-  assert.equal(s.ok("config", "name=seacc (Council Record)"), "name=seacc (Council Record) archived=no");
+  assert.equal(s.ok("config", "name=seacc (Council Record)"), "name=seacc (Council Record) archived=no start=normal");
   assert.deepEqual(JSON.parse(readFileSync(own, "utf8")), { name: "seacc (Council Record)" });
   assert.equal(existsSync(all), false, "the config for all projects is not written");
-  assert.equal(s.ok("config", "archived=yes"), "name=seacc (Council Record) archived=yes");
+  assert.equal(s.ok("config", "archived=yes"), "name=seacc (Council Record) archived=yes start=normal");
   writeFileSync(own, JSON.stringify({ ...JSON.parse(readFileSync(own, "utf8")), later: 1 })); // a key of a newer version stays
-  assert.equal(s.ok("config", "name=", "archived=no"), "name= archived=no", "name= alone removes the name");
+  assert.equal(s.ok("config", "name=", "archived=no"), "name= archived=no start=normal", "name= alone removes the name");
   assert.deepEqual(JSON.parse(readFileSync(own, "utf8")), { later: 1 });
   const sixty = "n".repeat(60);
-  assert.equal(s.ok("config", `name=${sixty}`), `name=${sixty} archived=no`, "60 characters is the most");
-  assert.equal(s.ok("config", "name=Café"), "name=Café archived=no", "the name is kept in the composed form");
+  assert.equal(s.ok("config", `name=${sixty}`), `name=${sixty} archived=no start=normal`, "60 characters is the most");
+  assert.equal(s.ok("config", "name=Café"), "name=Café archived=no start=normal", "the name is kept in the composed form");
   assert.equal(s.ok("config"), "max_agents=10 max_leads=5 cycles.small=1 cycles.large=2 cycles.risk=2 max_rounds=3 arena=3 arena_models=opus,sonnet,sonnet cap_total=20 " + MODEL_DEFAULTS, "config alone still prints the config for all projects");
+});
+
+test("T948: config start=sage-mode starts each new session of the project in sage mode; start=normal and a bad file start it off", () => {
+  const s = store();
+  const own = join(s.dir, "config.json"), starts = () => startsInSageMode(s.dir);
+  assert.equal(starts(), false, "the default: no config.json");
+  assert.equal(s.ok("config", "start=sage-mode"), "name= archived=no start=sage-mode");
+  assert.deepEqual(JSON.parse(readFileSync(own, "utf8")), { start: "sage-mode" });
+  assert.equal(starts(), true);
+  assert.equal(s.ok("config", "archived=yes"), "name= archived=yes start=sage-mode", "another key keeps the start");
+  assert.equal(s.ok("config", "start=normal"), "name= archived=yes start=normal");
+  assert.deepEqual(JSON.parse(readFileSync(own, "utf8")), { archived: true }, "normal removes the key");
+  assert.equal(starts(), false);
+  assert.equal(s.no("config", "start=on"), 'sage: start is sage-mode or normal, not "on". Nothing changed.');
+  assert.equal(s.no("config", "start=sage-mode", "max_leads=2"), 'sage: "max_leads" is a key for all projects, and name=, archived= and start= are keys of one logbook: set them in a config command of their own.');
+  for (const text of ['{"start":"on"}', '{"start":true}', "[1]", "not json"]) {
+    writeFileSync(own, text);
+    assert.equal(starts(), false, `${text}: a bad file is a normal start`);
+  }
+  rmSync(own);
+  mkdirSync(own);
+  assert.equal(starts(), false, "a folder in the file's place starts normal");
+  assert.equal(startsInSageMode(join(s.home, "no-such-folder")), false, "no logbook folder starts normal");
 });
 
 test("T314: config refuses a name that is too long, empty of text, spaced at an end, or holds a control, format or hidden character, and a bad archived", () => {
@@ -4499,7 +4523,7 @@ test("T314: config refuses a name that is too long, empty of text, spaced at an 
   assert.equal(s.no("config", "name= seacc"), 'sage: the name " seacc" has a space at its start or end, or two spaces together. Nothing changed.');
   assert.equal(s.no("config", "name=sea  cc"), 'sage: the name "sea  cc" has a space at its start or end, or two spaces together. Nothing changed.');
   assert.equal(s.no("config", "archived=true"), 'sage: archived is yes or no, not "true". Nothing changed.');
-  assert.equal(s.no("config", "name=x", "arena=2"), 'sage: "arena" is a key for all projects, and name= and archived= are keys of one logbook: set them in a config command of their own.');
+  assert.equal(s.no("config", "name=x", "arena=2"), 'sage: "arena" is a key for all projects, and name=, archived= and start= are keys of one logbook: set them in a config command of their own.');
   assert.equal(s.no("config", "name"), "sage: name needs a value: write name=<value>");
   assert.equal(existsSync(own), false, "no refusal wrote the file");
   writeFileSync(own, "[1]");
@@ -4520,15 +4544,15 @@ test("T314 R1044-2 R1041-1: config refuses a name with a line or paragraph separ
   assert.equal(s.no("config", `name=${flood}`), `sage: the name "${flood}" has more than 3 combining marks in a row. Nothing changed.`);
   assert.equal(existsSync(join(s.dir, "config.json")), false, "no refusal wrote the file");
   const three = `x${c(0x300, 0x301, 0x302)}`;
-  assert.equal(s.ok("config", `name=${three}`), `name=${three} archived=no`, "3 marks in a row are good");
+  assert.equal(s.ok("config", `name=${three}`), `name=${three} archived=no start=normal`, "3 marks in a row are good");
 });
 
 test("T314 R1042-1: config keeps a joined family emoji and a Persian name with a non-joiner, where the hidden-character rule keeps the joiner", () => {
   const s = store();
   const c = String.fromCodePoint;
   const family = c(0x1f468, 0x200d, 0x1f469, 0x200d, 0x1f467), persian = `${c(0x645, 0x6cc)}${c(0x200c)}${c(0x62e, 0x648, 0x627, 0x647, 0x645)}`;
-  assert.equal(s.ok("config", `name=${family} Team`), `name=${family} Team archived=no`);
-  assert.equal(s.ok("config", `name=${persian}`), `name=${persian} archived=no`);
+  assert.equal(s.ok("config", `name=${family} Team`), `name=${family} Team archived=no start=normal`);
+  assert.equal(s.ok("config", `name=${persian}`), `name=${persian} archived=no start=normal`);
   assert.deepEqual(JSON.parse(readFileSync(join(s.dir, "config.json"), "utf8")), { name: persian });
   // A joiner where the rule removes it (at the end, or between two digits) is still a hidden character.
   assert.match(s.no("config", `name=ab${c(0x200d)}`), /^sage: the name "ab\\u\{200d\}" has a control, format or hidden character/);

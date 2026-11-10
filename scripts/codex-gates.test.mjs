@@ -51,6 +51,8 @@ const SEND = "sage: agents send no input to another thread, because a message to
 const LEAD_SEND = "sage: a lead sends no message to an agent, because each agent works only from its checked brief. To steer your team, start a new agent on a new run, with a new brief";
 const LEAD_RESUME = "sage: a lead restarts no agent, because each agent works only from its checked brief. To go on with its work, start a new agent on a new run, with a new brief";
 const CODEX_RUN = "sage: no agent runs codex from the shell, except codex --version and codex --help, because a new session runs outside these hooks, and Codex records the prompt of a resumed, forked or queued turn as the user's typed message, also a mode phrase. Ask the user";
+/** The chief's shell write in sage mode (T948). */
+const CHIEF_SHELL = /^sage: sage mode is on, so the chief does not change files, also not from the shell: /;
 const UNREAD_CODEX = "sage: the hook could not read this shell command, and it names codex, so it refuses it. Write the command in a plainer form";
 /** A call of a tool of the plugin's sage MCP server, as Codex gives it to PreToolUse: mcp__sage__<tool>, with the call's arguments. */
 const mcp = (name, args = {}, extra = {}) => ({ ...base, hook_event_name: "PreToolUse", tool_name: `mcp__sage__${name}`, tool_use_id: "call_1", tool_input: { project: CWD, ...args }, ...extra });
@@ -156,6 +158,22 @@ test("in sage mode the chief changes no file, and a child may", async (t) => {
   assert.equal(await fixed({ sage: true }).run(pre("apply_patch", p, { ...CHILD, transcript_path: child })), undefined, "a child edits");
   assert.equal(await fixed({ sage: true }).run(pre("apply_patch", p, { agent_id: "", transcript_path: child })), undefined, "an empty agent_id is a child too");
   assert.equal(await fixed({ sage: false }).run(pre("apply_patch", p)), undefined, "outside sage mode the root edits");
+});
+
+test("T948: in sage mode the chief changes no repository file from the shell either; git, gh, the sage tool, reads and scratch output run", async (t) => {
+  const CHIEF_SHELL = 'sage: sage mode is on, so the chief does not change files, also not from the shell: this command has a write form (a redirection into a file, tee, cp, mv, rm, sed -i, or code in node -e). Brief an implementer to make this change. To keep output, redirect it into a scratch folder in the temp folder, outside the project, with a literal path (for example > /tmp/notes/out.txt). git, gh, the sage tools and reads run as before. The user ends sage mode with the message "sage mode off", alone';
+  const writes = ["echo x > src/a.js", "cat > notes.md <<'EOF'\nhi\nEOF", "printf x | tee src/a.js", "cp src/a.js src/b.js", "mv src/a.js src/b.js", "rm src/a.js",
+    "sed -i '' s/a/b/ src/a.js", "node -e \"require('fs').writeFileSync('a.js', 'b')\"", `echo x > ${CWD}/src/a.js`, "cd src && echo x >> a.js", "rm /tmp/notes/out.txt"];
+  const runs = ["git status", "git add -A && git commit -m 'a change'", "git -C /work/project worktree add /work/wt -b claude/t1", "gh pr view 41", "gh api -X PATCH repos/acme/site -f description=x", "gh api -X PUT repos/o/r/branches/main/protection --input /tmp/notes/p.json", "gh pr create --title T --body \"$(cat <<'EOF'\nbody\nEOF\n)\"",
+    `node ${TOOL} status --project ${CWD}`, "cat src/a.js", "grep -rn x src", "ls -la > /dev/null", "echo x > /tmp/notes/out.txt", "mkdir -p /tmp/notes", "npm test 2>&1"];
+  const on = fixed({ sage: true }), off = fixed({ sage: false });
+  for (const command of writes) {
+    assert.equal(denied(await on.run(pre("Bash", command))), CHIEF_SHELL, command);
+    assert.equal(await off.run(pre("Bash", command)), undefined, `outside sage mode the chief runs it: ${command}`);
+  }
+  for (const command of runs) assert.equal(await on.run(pre("Bash", command)), undefined, command);
+  const child = record(t, { id: "child", session_id: base.session_id, agent_path: "/root/sage_implementer_t1_r1", source: { subagent: { thread_spawn: { depth: 1 } } } });
+  assert.equal(await on.run(pre("Bash", "echo x > src/a.js", { ...CHILD, transcript_path: child })), undefined, "an implementer writes");
 });
 
 test("T931: a sage child, and every child in sage mode, runs no git stash and no real process program; the chief is not held", async (t) => {
@@ -507,7 +525,7 @@ test("T903: a logbook file's name outside the project passes; a shell write by a
   w.mode({ sage: true, autopilot: false });
   for (const name of ["bindings.tsv", "tasks.tsv", "config.json"]) {
     assert.equal(denied(w.send(bash(`cd .. && rm ${name}`))), undefined, name);
-    assert.equal(denied(w.send(bash(`rm ../${name}`, {}))), undefined, `the chief: ${name}`);
+    assert.match(denied(w.send(bash(`rm ../${name}`, {}))) ?? "", CHIEF_SHELL, `the chief: ${name} is no logbook path, but the chief changes no file in sage mode (T948)`);
   }
   assert.equal(denied(w.send(bash("cd $SOMEWHERE && rm tasks.tsv"))), undefined, "no known place: a documented limit");
   // The roots: the Codex sage folder (SAGE_HOME here) and a shared root of its own. A link in the project to the shared
@@ -527,7 +545,14 @@ test("T903: a logbook file's name outside the project passes; a shell write by a
     w.mode(mode);
     for (const [who, extra] of [["the chief", {}], ["an implementer", implementer]]) {
       for (const [command, word] of writes) assert.equal(denied(w.send(bash(command, extra))), refused(word), `${who} ${JSON.stringify(mode)}: ${command}`);
-      for (const command of passes) assert.equal(denied(w.send(bash(command, extra))), undefined, `${who} ${JSON.stringify(mode)}: ${command}`);
+      for (const command of passes) {
+        // The chief's own write in sage mode meets its rule instead (T948): no logbook refusal, and a read still runs. The
+        // project is in the temp folder here, so the redirection into ../notes.txt is scratch output and runs.
+        const chiefWrite = mode.sage && who === "the chief" && /^(?:rm|find) /.test(command);
+        const why = denied(w.send(bash(command, extra)));
+        if (chiefWrite) assert.match(why ?? "", CHIEF_SHELL, `${who} ${JSON.stringify(mode)}: ${command}`);
+        else assert.equal(why, undefined, `${who} ${JSON.stringify(mode)}: ${command}`);
+      }
     }
   }
 });
@@ -1205,7 +1230,7 @@ test("T536: in sage mode no push reaches the default branch, whatever the remote
   // T909: a push beside other commands passes; each push that the reader finds meets the push form.
   const passes = ["git push -u github sage/t1", "git push github sage/t1 2>&1 | tail -3", "git push --delete github sage/t9",
     "git add -A && git commit -m x && git push -u github sage/t1 && gh pr create --draft --title t --body b",
-    "printf x >> notes.txt; git push github sage/t1", "git push github sage/t1 2>&1 | tee push.log", "git fetch -u github main; git push github sage/t1"];
+    "printf x >> /tmp/notes.txt; git push github sage/t1", "git push github sage/t1 > /tmp/push.log 2>&1", "git fetch -u github main; git push github sage/t1"];
   const check = (cases, ok, label) => {
     for (const [command, why] of Object.entries(cases)) assert.match(denied(w.send(pre("Bash", command))) ?? "runs", why, `${label}: ${command}`);
     for (const command of ok) assert.equal(denied(w.send(pre("Bash", command))), undefined, `${label}: ${command}`);
@@ -1554,8 +1579,10 @@ test("no thread writes Codex's config file or the sage plugin's folder from the 
     const g = fixed(mode);
     for (const command of writes) assert.equal(denied(await g.run(pre("Bash", command))), SETTINGS, command);
     // T903: a variable in a path is a documented limit (T815); the sandbox keeps the Codex home read-only.
-    for (const command of [`echo x >> "$CODEX_HOME/config.toml"`, "rm -rf $CODEX_HOME/plugins/cache/sage"]) assert.equal(await g.run(pre("Bash", command)), undefined, command);
-    for (const command of [`cat "$CODEX_HOME/config.toml"`, `ls ${plugin}/hooks`, "echo x > config.toml"]) assert.equal(await g.run(pre("Bash", command)), undefined, command);
+    // In sage mode the chief's rule refuses these writes anyway (T948), with its own line.
+    const passes = (out, command) => (mode.sage && command !== `cat "$CODEX_HOME/config.toml"` && !command.startsWith("ls ") ? assert.match(denied(out) ?? "", CHIEF_SHELL, command) : assert.equal(out, undefined, command));
+    for (const command of [`echo x >> "$CODEX_HOME/config.toml"`, "rm -rf $CODEX_HOME/plugins/cache/sage"]) passes(await g.run(pre("Bash", command)), command);
+    for (const command of [`cat "$CODEX_HOME/config.toml"`, `ls ${plugin}/hooks`, "echo x > config.toml"]) passes(await g.run(pre("Bash", command)), command);
   }
   // A Codex home that is not named .codex: its config file still counts by its path.
   const env = { ...process.env, CODEX_HOME: "/opt/codex-home" };
