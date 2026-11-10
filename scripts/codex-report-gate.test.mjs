@@ -133,7 +133,7 @@ test("T483: the chief's review child keeps its report with the head that the gat
   begin(sub);
   begin(real);
   assert.deepEqual(end(sub, clean.replace("CLEAN", "PASS")), {});
-  assert.deepEqual(end(real, "STATUS done\nRESULT FINDINGS\nEVIDENCE x\nFINDINGS\n- K1 high a.js:1 data loss\nQUESTIONS none\nNOT VERIFIED none\nBRANCH codex/t12-a"), {});
+  assert.deepEqual(end(real, "STATUS done\nRESULT FINDINGS\nEVIDENCE x\nFINDINGS\n- K1 high a.js:1 data loss\n  proof: npm test\n  saw: not ok 1 the row is gone\nQUESTIONS none\nNOT VERIFIED none\nBRANCH codex/t12-a"), {});
   ok("run", "done", nested, "--status", "done", "--tokens", "1");
   assert.match(verdict(nested).stderr, /report has 1 medium or high finding/, "the canned PASS of the sub-child was not kept");
   // Another thread with the same task name: its report is not kept, and the gate says so to the chief.
@@ -348,6 +348,31 @@ test("T560: a review child's unreadable report gets one fix chance at its first 
   assert.equal(gate(stop({ agent_transcript_path: transcript("/root/sage_qa_t12_r40"), last_assistant_message: FULL })).decision, undefined, "a readable report is not blocked");
   assert.deepEqual(gate(stop({ agent_transcript_path: transcript("/root/sage_lead_t12_r40"), last_assistant_message: unreadable })), {}, "a role that backs no verdict is not read");
   for (const role of ["implementer", "arena_judge"]) assert.equal(gate(stop({ agent_transcript_path: transcript(`/root/sage_${role}_t12_r40`), last_assistant_message: unreadable })).decision, undefined, `${role} backs no verdict, so it is not read`);
+});
+
+test("T947: a review or QA child's medium or high finding carries a proof that the proof check can rerun: the first stop without one, or with a refused one, gets one fix chance", () => {
+  const stopOf = (message, again = false, path = "/root/sage_code_reviewer_t12") => gate(stop({ agent_transcript_path: transcript(path), last_assistant_message: message, stop_hook_active: again }));
+  const report = (finding) => FULL.replace("RESULT PASS", "RESULT FINDINGS").replace("FINDINGS none", `FINDINGS\n${finding}`);
+  const RULE = /\. Under each medium or high finding, give its proof on indented lines: proof: <one command, run from the repository root of the head> and saw: <the one output line that shows the problem>, or proof: screenshot <path> and steps: <the url and the actions>\./;
+  for (const [finding, why] of [
+    ["- K1 medium a.js:1 an empty name saves a row", /^sage: K1 is medium and has no proof line\./],
+    ["- K1 high a.js:1 a crash\n  proof: npm test", /^sage: K1's proof has no saw line\./],
+    ["- K1 medium a page\n  proof: screenshot /tmp/r40/a.png", /^sage: K1's proof has no steps line\./],
+    ["- K1 medium a.js:1 a stuck job\n  proof: kill 1\n  saw: done", /^sage: K1's proof "kill 1" is refused: an agent never reads or signals the real process list/],
+    ["- K1 medium a.js:1 a bad file\n  proof: npm test > out.txt\n  saw: not ok 1", /^sage: K1's proof "npm test > out\.txt" is refused: it writes outside the scratch folder\./],
+    ["- K1 low a.js:1 a nit\n- K2 medium a.js:2 a bad value", /^sage: K2 is medium and has no proof line\./],
+  ]) {
+    for (const path of ["/root/sage_code_reviewer_t12", "/root/sage_qa_t12", "/root/sage_ux_reviewer_t12", "/root/sage_security_reviewer_t12"]) {
+      const first = stopOf(report(finding), false, path);
+      assert.equal(first.decision, "block", `${path}: ${finding}`);
+      assert.match(first.reason, why, finding);
+      assert.match(first.reason, RULE, "the gate gives the way to write a proof");
+      assert.equal(stopOf(report(finding), true, path).decision, undefined, `${path}: the second stop goes through`);
+    }
+  }
+  for (const finding of ["- K1 low a.js:1 a nit", "- K1 medium a.js:1 an empty name saves a row\n  proof: node --test test/form.test.mjs > /tmp/r40/out.txt\n  saw: not ok 3 an empty name is refused",
+    "- K1 high a page\n  proof: screenshot /tmp/r40/a.png\n  steps: open http://localhost:5173/form, press Save"]) assert.deepEqual(stopOf(report(finding)), {}, finding);
+  assert.deepEqual(stopOf(report("- K1 medium a.js:1 a bad value"), false, "/root/sage_implementer_t12"), {}, "an implementer's report is not read");
 });
 
 test("T461: a report that the Claude stop gate refuses cannot pass in Codex: the name of a review child does not matter, and a field obeys the one field rule", () => {

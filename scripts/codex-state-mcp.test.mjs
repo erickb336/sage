@@ -192,7 +192,9 @@ async function reviewed(w, role, text) {
   return run;
 }
 const CLEAN = `STATUS done\nRESULT CLEAN\nEVIDENCE npm test passed\nFINDINGS none\nQUESTIONS none\nNOT VERIFIED none\nBRANCH sage/t1-a head ${SHA}`;
-const FOUND = CLEAN.replace("RESULT CLEAN", "RESULT FINDINGS").replace("FINDINGS none", "FINDINGS\n- K1 medium a.js:1 a bad value");
+const FOUND = CLEAN.replace("RESULT CLEAN", "RESULT FINDINGS").replace("FINDINGS none", "FINDINGS\n- K1 medium a.js:1 a bad value\n  proof: npm test\n  saw: not ok 1 a bad value");
+/** A done proof check of T1 (T947): a qa run whose kept report gives each finding key its outcome, on SHA. Its id. */
+const proofCheck = (w, outcomes) => reviewed(w, "qa", CLEAN.replace("RESULT CLEAN", "RESULT PASS").replace("EVIDENCE npm test passed", `EVIDENCE\n${Object.entries(outcomes).map(([key, outcome]) => `- ${key} ${outcome}`).join("\n")}`));
 
 test("T552: a lead records its own task's cycle through the state server, from a build to a repair", async (t) => {
   const w = await leadWorld(t), { lead } = w;
@@ -203,8 +205,10 @@ test("T552: a lead records its own task's cycle through the state server, from a
   assert.match(await lead("task_set", { task: "T1", fields: { state: "reviewing", pr: "5" } }), /^T1 reviewing .* PR 5/);
   const found = await reviewed(w, "code-reviewer", FOUND);
   assert.equal(await lead("finding_add", { task: "T1", source: "code-reviewer", severity: "medium", summary: "a.js:1 a bad value", run: found, class: "state-edge" }), "F-T1-1 open · medium · T1");
+  // T947: the proof check reruns the finding's proof before the verdict and the triage.
+  const proof = await proofCheck(w, { "F-T1-1": "reproduced" });
   assert.match(await lead("verdict", { task: "T1", kind: "findings", sha: SHA, pr: 5, run: found }), /^T1 findings · 1111111/);
-  assert.equal(await lead("finding_triage", { task: "T1", key: "F-T1-1", decision: "fix" }), "F-T1-1 open · fix");
+  assert.equal(await lead("finding_triage", { task: "T1", key: "F-T1-1", decision: "fix", proof }), "F-T1-1 open · fix");
   assert.equal(await lead("round", { task: "T1" }), "T1 repairing · round 1 of 3 · fix F-T1-1 · re-run code-reviewer on the repair's diff");
   assert.equal(await lead("finding_close", { task: "T1", key: "F-T1-1" }), "F-T1-1 closed · fix");
   assert.match(await lead("task_set", { task: "T1", fields: { state: "reviewing" } }), /^T1 reviewing/);
