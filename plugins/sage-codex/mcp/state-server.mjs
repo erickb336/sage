@@ -200,9 +200,9 @@ export function argvFor(name, input) {
 
 export function createStateServer({ env = process.env } = {}) {
   const server = new McpServer({ name: "sage", version: "0.1.0" });
-  // Each tool runs only for a call that sage's gate saw (R1916-2): Codex runs no plugin hook that the user has not
-  // trusted, also after each sage update, and then no sage rule holds. The proof names the caller, whose rule the server
-  // applies itself: a lead serves only its own task (T552).
+  // Each tool runs only for a call that sage's gate saw (R1916-2): Codex runs no hook that the user has not installed
+  // (hooks install, T957) and trusted, and then no sage rule holds; the refusal names the install command. The proof
+  // names the caller, whose rule the server applies itself: a lead serves only its own task (T552).
   const registerTool = (name, spec, run) => server.registerTool(name, spec, async (input, extra) => {
     const caller = takeProof(extra?.mcpReq?._meta, name, env, input);
     const why = caller ? callerRefusal(caller, name, input, env) : NO_GATE;

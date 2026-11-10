@@ -37,7 +37,6 @@ const manifest = (root) => z.object({
   author: z.object({ name: z.string(), email: z.string().optional(), url: z.string().optional() }).strict(),
   license: z.string(),
   repository: z.string().url(),
-  hooks: inside(root).refine((path) => existsSync(join(root, path)), "hooks file is missing"),
   interface: z.object({
     displayName: z.string().min(1),
     shortDescription: z.string().min(1),
@@ -55,20 +54,16 @@ test("the sage marketplace and the Codex manifest match the documented formats",
   assert.equal(market.plugins[0].source.path, "./plugins/sage-codex");
   const parsed = manifest(PLUGIN).parse(json("plugins/sage-codex/.codex-plugin/plugin.json"));
   assert.equal(parsed.name, market.plugins[0].name);
-  // A broken manifest fails: a hooks path outside the plugin and an unknown field.
-  assert.equal(manifest(PLUGIN).safeParse({ ...parsed, hooks: "../hooks.json" }).success, false);
+  // A broken manifest fails: plugin hooks (T957: sage's hooks are the user's entries) and an unknown field.
+  assert.equal(manifest(PLUGIN).safeParse({ ...parsed, hooks: "./hooks/hooks.json" }).success, false);
   assert.equal(manifest(PLUGIN).safeParse({ ...parsed, agents: "./agents" }).success, false);
   assert.equal(marketplace.safeParse({ ...market, plugins: [{ ...market.plugins[0], policy: { installation: "AVAILABLE" } }] }).success, false);
 });
 
-test("each hook command runs a file of the built plugin", () => {
-  const hooks = json("plugins/sage-codex/hooks/hooks.json").hooks;
-  const files = Object.values(hooks).flat().flatMap((group) => group.hooks).map((hook) => /^node "\$\{PLUGIN_ROOT\}\/(.+)"$/.exec(hook.command)?.[1]);
-  assert.deepEqual(files.filter((file) => !file || !existsSync(join(PLUGIN, file))), []);
-  assert.equal(hooks.SessionStart[0].matcher, "startup|resume|clear");
-});
-
-/** An installed copy of the built plugin in a scratch CODEX_HOME, as `codex plugin add sage@sage` makes it. */
+/**
+ * An installed copy of the built plugin in a scratch CODEX_HOME, as `codex plugin add sage@sage` makes it, with sage's
+ * entries from `hooks install` (T957). run sends one event through the installed launcher, as Codex runs the entry.
+ */
 function installed(t, { trust = [], cliVersion, threads = "[agents]\nmax_concurrent_threads_per_session = 10\n" } = {}) {
   const home = realpathSync(mkdtempSync(join(tmpdir(), "sage-codex-home-")));
   t.after(() => rmSync(home, { recursive: true, force: true }));
@@ -76,12 +71,15 @@ function installed(t, { trust = [], cliVersion, threads = "[agents]\nmax_concurr
   mkdirSync(root, { recursive: true });
   cpSync(PLUGIN, root, { recursive: true });
   writeFileSync(join(home, "config.toml"), `${threads}[plugins."sage@sage"]\nenabled = true\n` +
-    trust.map((key) => `\n[hooks.state."sage@sage:hooks/hooks.json:${key}"]\ntrusted_hash = "sha256:00"\n`).join(""));
+    trust.map((key) => `\n[hooks.state."${join(home, "hooks.json")}:${key}"]\ntrusted_hash = "sha256:00"\n`).join(""));
   const transcript = join(home, "rollout.jsonl");
   if (cliVersion) writeFileSync(transcript, JSON.stringify({ type: "session_meta", payload: { cli_version: cliVersion } }) + "\n");
   const { SAGE_HOME, ...inherited } = process.env;
+  const env = { ...inherited, HOME: home, CODEX_HOME: home };
+  const install = spawnSync(process.execPath, [join(root, "skills/sage/sage.mjs"), "hooks", "install"], { encoding: "utf8", env });
+  assert.equal(install.status, 0, install.stderr);
   const run = (input) => {
-    const r = spawnSync("node", [join(root, "hooks/session-start-hook.mjs")], { input: JSON.stringify({ session_id: "s1", cwd: home, transcript_path: transcript, ...input }), encoding: "utf8", env: { ...inherited, CODEX_HOME: home } });
+    const r = spawnSync(process.execPath, [join(home, "sage-hooks/launch.mjs"), input.hook_event_name], { input: JSON.stringify({ session_id: "s1", cwd: home, transcript_path: transcript, ...input }), encoding: "utf8", env });
     assert.equal(r.status, 0, r.stderr);
     return r.stdout ? JSON.parse(r.stdout) : "";
   };
@@ -91,7 +89,7 @@ const { stateKey } = await import(new URL("../plugins/sage-codex/hooks/hook-stat
 
 /** The hook's output: the status for the chief always, and a warning for the user only when there is a limit. */
 const output = (status, warning) => ({ ...(warning ? { systemMessage: warning } : {}), hookSpecificOutput: { hookEventName: "SessionStart", additionalContext: `${status}\nAutopilot is off at each start of a session. To turn it on, the user sends "autopilot on" alone, while sage mode is on.${warning ? `\n${warning}` : ""}` } });
-const ALL = ["session_start:0:0", "session_start:1:0", "user_prompt_submit:0:0", "pre_tool_use:0:0", "permission_request:0:0", "post_tool_use:0:0", "subagent_start:0:0", "subagent_stop:0:0"];
+const ALL = ["session_start:0:0", "user_prompt_submit:0:0", "pre_tool_use:0:0", "permission_request:0:0", "post_tool_use:0:0", "subagent_start:0:0", "subagent_stop:0:0"];
 const START = "To start sage mode, the user sends this message alone: sage mode";
 const RESET = /could not turn autopilot off in the saved mode of this session\. Autopilot still merges nothing until the owner sends "autopilot on" again in this session\./;
 
@@ -149,18 +147,18 @@ test("T677 lifecycle: startup and resume turn autopilot off in the mode file; a 
 test("the SessionStart hook gives a trusted install on a tested Codex no warning: the status goes to the chief only (R1665-3)", (t) => {
   const { run } = installed(t, { trust: ALL, cliVersion: "0.164.0" });
   for (const source of ["startup", "resume", "clear"]) {
-    assert.deepEqual(run({ hook_event_name: "SessionStart", source }), output(`sage 0.1.0 is installed. Codex 0.164.0. sage hooks: 8 of 8 have a trust record (Codex checks each hash).\n${START}`), source);
+    assert.deepEqual(run({ hook_event_name: "SessionStart", source }), output(`sage 0.1.0 is installed. Codex 0.164.0. sage hooks: 7 of 7 have a trust record (Codex checks each hash).\n${START}`), source);
   }
   // F-T677-20: the tested range, 0.164 to 0.167, also holds the desktop app's 0.167.0-alpha.3.2.
   for (const version of ["0.167.0", "0.167.0-alpha.3.2"]) {
-    assert.deepEqual(installed(t, { trust: ALL, cliVersion: version }).run({ hook_event_name: "SessionStart", source: "startup" }), output(`sage 0.1.0 is installed. Codex ${version}. sage hooks: 8 of 8 have a trust record (Codex checks each hash).\n${START}`), version);
+    assert.deepEqual(installed(t, { trust: ALL, cliVersion: version }).run({ hook_event_name: "SessionStart", source: "startup" }), output(`sage 0.1.0 is installed. Codex ${version}. sage hooks: 7 of 7 have a trust record (Codex checks each hash).\n${START}`), version);
   }
 });
 
 test("the SessionStart hook warns the user for hooks without trust and outside the tested Codex range", (t) => {
   const { run } = installed(t, { trust: ["session_start:0:0"], cliVersion: "0.168.0" });
-  assert.deepEqual(run({ hook_event_name: "SessionStart", source: "resume" }), output(`sage 0.1.0 is installed. Codex 0.168.0. sage hooks: 1 of 8 have a trust record (Codex checks each hash).\n${START}`,
-    "sage: 7 of the 8 sage hooks are not trusted yet, so some sage rules do not run. To trust them, type /hooks in the Codex CLI.\n" +
+  assert.deepEqual(run({ hook_event_name: "SessionStart", source: "resume" }), output(`sage 0.1.0 is installed. Codex 0.168.0. sage hooks: 1 of 7 have a trust record (Codex checks each hash).\n${START}`,
+    "sage: 6 of the 7 sage hooks have no trust record yet, so they do not run. To trust them, type /hooks in the Codex CLI.\n" +
     "sage: sage was not tested with Codex 0.168.0, so some sage rules may not run. Autopilot merges in Codex 0.164 and later."));
   assert.match(installed(t, { trust: ALL, cliVersion: "0.163.0" }).run({ hook_event_name: "SessionStart", source: "startup" }).systemMessage, /^sage: sage was not tested with Codex 0\.163\.0, so some sage rules may not run\. Autopilot merges in Codex 0\.164 and later\.$/);
 });
@@ -168,7 +166,7 @@ test("the SessionStart hook warns the user for hooks without trust and outside t
 test("on resume of a session over Node's string limit, the SessionStart hook still reads the Codex version (F-T473-1)", (t) => {
   const { run, home } = installed(t, { trust: ALL, cliVersion: "0.164.0" });
   truncateSync(join(home, "rollout.jsonl"), 600 * 2 ** 20); // sparse: the 600 MiB after the first line cost no disk
-  assert.deepEqual(run({ hook_event_name: "SessionStart", source: "resume" }), output(`sage 0.1.0 is installed. Codex 0.164.0. sage hooks: 8 of 8 have a trust record (Codex checks each hash).\n${START}`));
+  assert.deepEqual(run({ hook_event_name: "SessionStart", source: "resume" }), output(`sage 0.1.0 is installed. Codex 0.164.0. sage hooks: 7 of 7 have a trust record (Codex checks each hash).\n${START}`));
 });
 
 test("T952: the SessionStart hook warns when Codex's thread limit runs fewer agents than the project's agent cap, and names the setting to change", (t) => {
@@ -201,7 +199,7 @@ test("T952: the SessionStart hook warns when Codex's thread limit runs fewer age
 
 test("the SessionStart hook says when it cannot read the Codex version, and ignores other events", (t) => {
   const { run } = installed(t, { trust: ALL });
-  assert.deepEqual(run({ hook_event_name: "SessionStart", source: "startup" }), output(`sage 0.1.0 is installed. Codex version unknown. sage hooks: 8 of 8 have a trust record (Codex checks each hash).\n${START}`,
+  assert.deepEqual(run({ hook_event_name: "SessionStart", source: "startup" }), output(`sage 0.1.0 is installed. Codex version unknown. sage hooks: 7 of 7 have a trust record (Codex checks each hash).\n${START}`,
     "sage: the hook could not read the Codex version, so some sage rules may not run. Autopilot merges in Codex 0.164 and later."));
   assert.equal(run({ hook_event_name: "UserPromptSubmit", prompt: "hello" }), "");
 });
@@ -211,9 +209,9 @@ test("on resume with sage mode on, the status says that sage mode is on, not how
   const folder = join(home, "sage/.hooks/codex");
   mkdirSync(folder, { recursive: true, mode: 0o700 });
   writeFileSync(join(folder, `${stateKey({ session_id: "s1" })}.json`), JSON.stringify({ sage: true, autopilot: false, given: true }), { mode: 0o600 });
-  assert.deepEqual(run({ hook_event_name: "SessionStart", source: "resume" }), output("sage 0.1.0 is installed. Codex 0.164.0. sage hooks: 8 of 8 have a trust record (Codex checks each hash).\nsage mode is on in this session."));
+  assert.deepEqual(run({ hook_event_name: "SessionStart", source: "resume" }), output("sage 0.1.0 is installed. Codex 0.164.0. sage hooks: 7 of 7 have a trust record (Codex checks each hash).\nsage mode is on in this session."));
   writeFileSync(join(folder, `${stateKey({ session_id: "s1" })}.json`), JSON.stringify({ sage: false, autopilot: false }), { mode: 0o600 });
-  assert.deepEqual(run({ hook_event_name: "SessionStart", source: "resume" }), output(`sage 0.1.0 is installed. Codex 0.164.0. sage hooks: 8 of 8 have a trust record (Codex checks each hash).\n${START}`));
+  assert.deepEqual(run({ hook_event_name: "SessionStart", source: "resume" }), output(`sage 0.1.0 is installed. Codex 0.164.0. sage hooks: 7 of 7 have a trust record (Codex checks each hash).\n${START}`));
 });
 
 test("the Codex guide carries the owner's lines for install, trust, removal, the tools and the push limit (R1670, R1671-1, R1671-3, R1665-8)", () => {
@@ -224,6 +222,8 @@ test("the Codex guide carries the owner's lines for install, trust, removal, the
     "A reviewer's commit through these forms can also be pushed to the task's branch. Read the branch's commits before a merge, or keep autopilot off for such a task.", // R1670-6
     "when no sage hook is trusted, no sage hook runs, so you see no sage line at all, also no warning. If sage mode does not start, type `/hooks` in the Codex CLI", // R1671-1
     "Codex keeps the trust records of the sage hooks in your Codex config", // R1671-3
+    "An update needs no new trust. Codex trusts each sage entry of your hooks file by its text and its place, not by sage's files", // T957
+    "It removes the 7 sage entries from your hooks file and the `~/.codex/sage-hooks` folder. Your own hooks stay.", // T957
     "sage: sage was not tested with Codex 0.168.0, so some sage rules may not run. Autopilot merges in Codex 0.164 and later.", // R1670-7, F-T677-20, F-T951-2, F-T951-3
     "Codex 0.164.0 runs no hook for text that an agent types into a shell that still runs (`write_stdin`, for example after `zsh -i`). That text passes every sage rule", // R1675-2
   ]) assert.ok(guide.includes(line), line);

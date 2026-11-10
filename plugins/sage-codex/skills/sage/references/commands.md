@@ -38,6 +38,10 @@ Each regular-file tree entry must reference an actual blob object. A tag that po
 
 The JSON output gives the reference commit, tracked and matched counts, and relative missing, changed or error paths. It prints no file contents. Exit 0 means every tracked file matches; exit 1 means a difference, unsafe file or refused input. Links, special files and unreadable files cannot match. Extra installed files are outside the comparison. This verifies tracked package files, not runtime trust or release readiness. The command writes no logbook, registry, lock, selection or installation files.
 
+## sage's hook entries
+
+sage's hooks run from the owner's Codex hooks file (`<CODEX_HOME>/hooks.json`) through a launcher in `<CODEX_HOME>/sage-hooks`, not from the plugin. The owner runs `node <installed-plugin>/skills/sage/sage.mjs hooks install` once on each computer, then trusts the 7 entries with `/hooks`. `hooks status` shows the entries, their trust records and the launcher; `hooks uninstall` removes only sage's entries and the launcher. When the start status or a refusal names `hooks install`, tell the owner; do not run it or change those files yourself.
+
 ## Logbook command reference
 
 | Tool | Command | Fields besides `project` |

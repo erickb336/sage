@@ -479,13 +479,15 @@ test("core instances isolate provider defaults and validation without changing p
   }
 });
 
-test("manifests point to disjoint plugin roots and only supported Codex hooks", () => {
+test("manifests point to disjoint plugin roots and only supported Codex hooks", async () => {
   assert.equal(json(".claude-plugin/marketplace.json").plugins[0].source, "./plugins/sage");
   assert.equal(json(".agents/plugins/marketplace.json").plugins[0].source.path, "./plugins/sage-codex");
-  const manifest = json("plugins/sage-codex/.codex-plugin/plugin.json");
-  assert.equal(manifest.hooks, "./hooks/hooks.json");
-  const hooks = json("plugins/sage-codex/hooks/hooks.json").hooks;
-  assert.deepEqual(Object.keys(hooks), ["SessionStart", "UserPromptSubmit", "PreToolUse", "PermissionRequest", "PostToolUse", "SubagentStart", "SubagentStop"]);
+  // T957: the Codex plugin declares no hooks, and has no hooks/hooks.json, which Codex loads by default (core-plugins
+  // loader.rs): sage's hooks are the user's entries, so no hook runs twice.
+  assert.equal("hooks" in json("plugins/sage-codex/.codex-plugin/plugin.json"), false);
+  assert.equal(existsSync(join(ROOT, "plugins/sage-codex/hooks/hooks.json")), false);
+  const { EVENTS } = await import(pathToFileURL(join(ROOT, "plugins/sage-codex/hooks/entries.mjs")).href);
+  assert.deepEqual(Object.keys(EVENTS), ["SessionStart", "UserPromptSubmit", "PreToolUse", "PermissionRequest", "PostToolUse", "SubagentStart", "SubagentStop"]);
   assert.deepEqual([...outputs()], [...outputs()], "packaging is deterministic");
 });
 
@@ -1764,11 +1766,13 @@ for (const scenario of ['success', 'exit-error', 'bad-manifest']) test(`Codex pa
   writeFileSync(preload, `import {ChildProcess} from 'node:child_process';\nimport {appendFileSync} from 'node:fs';\nChildProcess.prototype.kill = function(signal) { appendFileSync(${JSON.stringify(signalLog)}, String(signal)+'\\n'); this.stdin?.end(); return true; };\n`);
   const plugin = {
     skills: readdirSync(join(ROOT, 'plugins/sage-codex/skills')).map(name => ({name: `sage:${name}`})),
-    hooks: ['permissionRequest', 'postToolUse', 'preToolUse', 'sessionStart', 'sessionStart', 'subagentStart', 'subagentStop', 'userPromptSubmit'].map(eventName => ({eventName})),
+    hooks: [],
     summary: {source: {path: join(ROOT, 'plugins/sage-codex')}},
   };
-  if (scenario === 'bad-manifest') plugin.hooks = [];
-  writeFileSync(binary, `#!${process.execPath}\nimport {createInterface} from 'node:readline';\nimport {writeFileSync} from 'node:fs';\nif (process.argv.includes('--version')) { console.log('codex-cli 0.160.0'); } else {\nconst reader = createInterface({input: process.stdin});\nreader.on('line', line => { const request = JSON.parse(line); if (request.id) console.log(JSON.stringify({id:request.id,result:request.id===1?{}:{plugin:${JSON.stringify(plugin)}}})); });\nreader.on('close', () => { writeFileSync(${JSON.stringify(closed)}, 'stdin closed'); process.exitCode=${scenario === 'exit-error' ? 7 : 0}; });\n}\n`, {mode: 0o700});
+  if (scenario === 'bad-manifest') plugin.hooks = [{eventName: 'preToolUse'}];
+  // hooks/list: sage's entries of the scratch CODEX_HOME's hooks.json, trusted after config/batchWrite, as Codex lists user hooks.
+  const list = `const hooks = Object.entries(JSON.parse(readFileSync(process.env.CODEX_HOME + '/hooks.json', 'utf8')).hooks).map(([e, [g]]) => ({eventName: e[0].toLowerCase() + e.slice(1), key: process.env.CODEX_HOME + '/hooks.json:' + e + ':0:0', currentHash: 'sha256:1', source: 'user', matcher: null, command: g.hooks[0].command, trustStatus: trusted ? 'trusted' : 'untrusted'}));`;
+  writeFileSync(binary, `#!${process.execPath}\nimport {createInterface} from 'node:readline';\nimport {readFileSync, writeFileSync} from 'node:fs';\nlet trusted = false;\nif (process.argv.includes('--version')) { console.log('codex-cli 0.160.0'); } else {\nconst reader = createInterface({input: process.stdin});\nreader.on('line', line => { const request = JSON.parse(line); if (!request.id) return; let result = {}; if (request.method === 'plugin/read') result = {plugin:${JSON.stringify(plugin)}}; if (request.method === 'config/batchWrite') trusted = true; if (request.method === 'hooks/list') { ${list} result = {data: [{hooks}]}; } console.log(JSON.stringify({id:request.id,result})); });\nreader.on('close', () => { writeFileSync(${JSON.stringify(closed)}, 'stdin closed'); process.exitCode=${scenario === 'exit-error' ? 7 : 0}; });\n}\n`, {mode: 0o700});
   const child = spawn(process.execPath, ['--import', preload, join(ROOT, 'scripts/check-codex.mjs')], {
     env: {...process.env, SAGE_CODEX_BIN: binary}, stdio: ['ignore', 'pipe', 'pipe'],
   });
@@ -1781,7 +1785,7 @@ for (const scenario of ['success', 'exit-error', 'bad-manifest']) test(`Codex pa
   assert.equal(readFileSync(closed, 'utf8'), 'stdin closed', 'the child acknowledged transport closure');
   if (scenario === 'success') {
     assert.equal(result.code, 0, stderr);
-    assert.match(stdout, /discovered \d+ skills and 8 hooks/);
+    assert.match(stdout, /discovered \d+ skills and no plugin hook .* all 7 stay trusted/);
   } else {
     assert.equal(result.code, 1, stdout + stderr);
     assert.doesNotMatch(stdout, /discovered \d+ skills/);

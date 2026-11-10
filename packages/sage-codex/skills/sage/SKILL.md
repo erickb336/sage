@@ -38,6 +38,6 @@ Each new session starts off, unless the project's logbook has `start=sage-mode` 
 
 The phrases match Claude's interface. Timing differs: Claude's queued off phrase disables autopilot while its active guards remain. Here, off requests the stop/interruption/preservation procedure above; do not claim timing parity.
 
-Known limits in Codex, for `sage help` and the owner's questions: every agent runs on the session's model; a run has no token count; a lead's missing finding is refused only at its verdict; each sage update needs the hooks trusted again. Give the owner the guide's list: https://github.com/erickb336/sage-stack/blob/main/docs/guide/codex.md#known-limits-in-codex
+Known limits in Codex, for `sage help` and the owner's questions: every agent runs on the session's model; a run has no token count; a lead's missing finding is refused only at its verdict. Give the owner the guide's list: https://github.com/erickb336/sage-stack/blob/main/docs/guide/codex.md#known-limits-in-codex
 
 Keep the selected Codex model and Codex's permissions, sandbox and hooks. Do not change settings or defaults to use this skill. A refusal of the sage gate or of Codex's sandbox remains a refusal: never use the manual CLI to bypass it. Automatic recovery needs separate evidence.

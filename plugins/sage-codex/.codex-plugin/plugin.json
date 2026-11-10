@@ -7,7 +7,6 @@
   },
   "license": "MIT",
   "repository": "https://github.com/erickb336/sage-stack",
-  "hooks": "./hooks/hooks.json",
   "interface": {
     "displayName": "Sage for Codex",
     "shortDescription": "sage-stack: a multi-agent development stack for Claude Code and Codex",

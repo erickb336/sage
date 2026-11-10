@@ -27,6 +27,7 @@ const { gate, readMode, codexRuns } = await import(HOOK);
 const UNREADABLE = "sage: the hook could not read this tool call, so it refuses it. Codex may have changed its hook input: update the sage plugin, or tell the user";
 const { stateKey } = await import(new URL("../plugins/sage-codex/hooks/hook-state.mjs", import.meta.url));
 const { recordBrief } = await import(new URL("../plugins/sage-codex/hooks/brief-hook.mjs", import.meta.url));
+const { ROUTES } = await import(new URL("../plugins/sage-codex/hooks/dispatch.mjs", import.meta.url));
 const { BRIEF_FIELDS, CHIEF_SHELL: CHIEF_SHELL_TEXT } = await import(new URL("../plugins/sage-codex/core/index.mjs", import.meta.url));
 
 const SHA = "a1b2c3d4e5f60718293a4b5c6d7e8f9012345678";
@@ -699,10 +700,8 @@ test("only the chief records the logbook: a child's sage tool that writes is den
   const w = world(t);
   assert.equal(denied(w.send(mcp("verdict", { task: "T1", kind: "qa-pass", sha: SHA }, w.child("/root/sage_code_reviewer_t1")))), LOGBOOK);
   assert.equal(w.send(mcp("verdict", { task: "T1", kind: "qa-pass", sha: SHA })), undefined);
-  const { hooks } = JSON.parse(readFileSync(new URL("../plugins/sage-codex/hooks/hooks.json", import.meta.url), "utf8"));
-  const gateMatcher = new RegExp(hooks.PreToolUse.find((g) => g.hooks.some((h) => h.command.endsWith('/hooks/gate-hook.mjs"'))).matcher);
   const names = ["mcp__sage__verdict", "mcp__sage__gate_answer", "mcp__sage__brief", "spawn_agent", "collaborationspawn_agent", "Bash", "apply_patch", "mcp__github__create_issue", "exec_command", "wait_agent"];
-  assert.deepEqual(names.filter((name) => gateMatcher.test(name)), names.slice(0, 7));
+  assert.deepEqual(names.filter((name) => gateMatcher().test(name)), names.slice(0, 7));
 });
 
 test("a role agent starts no agents, in any mode, and a thread under a read-only role at any part of its agent path is read-only (R1664-3)", async (t) => {
@@ -1113,7 +1112,7 @@ test("T108: a quoted plugin path in a digest remains a hook false positive, whil
   const implementer = w.child("/root/sage_implementer_t1_r1");
   const digest = text => `${process.execPath} -e "require('node:crypto').createHash('sha256').update('${text}').digest('hex')"`;
   assert.equal(w.send(pre("Bash", digest("sample report"), implementer)), undefined);
-  assert.match(denied(w.send(pre("Bash", digest(TOOL), implementer))), /no agent writes Codex's config file or the sage plugin's folder/);
+  assert.match(denied(w.send(pre("Bash", digest(TOOL), implementer))), /no agent writes Codex's config file, its hooks\.json, sage's hook launcher \(sage-hooks\), the sage plugin's folder or its installed versions/);
   const lead = w.child("/root/sage_lead_t1_r1");
   assert.equal(w.send(pre("Bash", "git config --get user.email", lead)), undefined);
   assert.match(denied(w.send(pre("Bash", `node ${TOOL} task T1 --project ${w.project}`, lead))), /a lead records with the sage MCP tools/);
@@ -1561,7 +1560,7 @@ test("no sage child sends a message to another thread, with v1's send_input or v
       assert.equal(await g.run(send(tool, {})), undefined, `${tool} the chief`);
     }
   }
-  const matcher = new RegExp(JSON.parse(readFileSync(new URL("../plugins/sage-codex/hooks/hooks.json", import.meta.url), "utf8")).hooks.PreToolUse.find((h) => /gate-hook/.test(h.hooks[0].command)).matcher);
+  const matcher = gateMatcher();
   assert.deepEqual(tools.filter((tool) => !matcher.test(tool)), [], "Codex runs the gate for each send tool");
   assert.deepEqual(["mcp__slack__send_input", "collaborationsend_message_x", "xsend_input"].filter((tool) => matcher.test(tool)), [], "and for no other tool");
 });
@@ -1587,8 +1586,8 @@ test("the send rules hold for multi-agent v2's tools under any namespace that Co
   }
 });
 
-/** The gate's matcher in the built manifest, read as Codex reads a matcher with other characters than letters, digits, _ and | (hooks/src/engine/matcher.rs:12-22). */
-const gateMatcher = () => new RegExp(JSON.parse(readFileSync(new URL("../plugins/sage-codex/hooks/hooks.json", import.meta.url), "utf8")).hooks.PreToolUse.find((h) => /gate-hook/.test(h.hooks[0].command)).matcher);
+/** The gate's pattern in the built dispatcher, which runs the gate for a PreToolUse whose tool name it finds (T957). */
+const gateMatcher = () => ROUTES.PreToolUse.find(([, , hook]) => hook.name === "gateAnswer")[1];
 
 test("a tool call inside a code-mode exec cell reaches the gate as a direct call does, and the gate applies its rules (T541)", async (t) => {
   // Codex 0.164.0 runs no PreToolUse for the exec call itself (its input is raw JavaScript, a custom payload:
@@ -1662,8 +1661,8 @@ test("T552: the proof of a lead's call carries its role, task, run and project, 
   assert.deepEqual(JSON.parse(readFileSync(join(w.env.SAGE_HOME, ".hooks", "codex", "proofs", file), "utf8")), { session: base.session_id, tool: "mcp__sage__run_add", caller: { role: "lead", task: "T1", run: "R1", project: w.project } });
 });
 
-test("no thread writes Codex's config file or the sage plugin's folder from the shell, in any mode; reads run (R1916-3)", async () => {
-  const SETTINGS = "sage: no agent writes Codex's config file or the sage plugin's folder from the shell, because the trust of sage's hooks is there. Ask the user to make this change";
+test("no thread writes Codex's config file, its hooks.json, sage's launcher or the sage plugin's folder from the shell, in any mode; reads run (R1916-3, T957)", async () => {
+  const SETTINGS = "sage: no agent writes Codex's config file, its hooks.json, sage's hook launcher (sage-hooks), the sage plugin's folder or its installed versions (plugins/cache/sage/sage) from the shell, because sage's hooks and their trust are there. Ask the user to make this change";
   const plugin = fileURLToPath(new URL("../plugins/sage-codex", import.meta.url));
   const writes = [`cp a.json ${plugin}/hooks/hooks.json`, `rm -rf ${plugin}`];
   for (const mode of [{ sage: false }, { sage: true }]) {
@@ -1675,11 +1674,22 @@ test("no thread writes Codex's config file or the sage plugin's folder from the 
     for (const command of [`echo x >> "$CODEX_HOME/config.toml"`, "rm -rf $CODEX_HOME/plugins/cache/sage"]) passes(await g.run(pre("Bash", command)), command);
     for (const command of [`cat "$CODEX_HOME/config.toml"`, `ls ${plugin}/hooks`, "echo x > config.toml"]) passes(await g.run(pre("Bash", command)), command);
   }
-  // A Codex home that is not named .codex: its config file still counts by its path.
+  // A Codex home that is not named .codex: its config file, its hooks.json and the launcher still count by their paths.
   const env = { ...process.env, CODEX_HOME: "/opt/codex-home" };
-  for (const command of ["echo x > /opt/codex-home/config.toml", "sed -i '' s/a/b/ /opt/codex-home/config.toml", "cd /opt && echo x >> codex-home/config.toml"]) {
+  for (const command of ["echo x > /opt/codex-home/config.toml", "sed -i '' s/a/b/ /opt/codex-home/config.toml", "cd /opt && echo x >> codex-home/config.toml",
+    "echo '{}' > /opt/codex-home/hooks.json", "cp a.mjs /opt/codex-home/sage-hooks/launch.mjs", "rm -rf /opt/codex-home/sage-hooks", "cd /opt && echo x > codex-home/hooks.json"]) {
     assert.equal(denied(await gate(pre("Bash", command), { mode: () => ({ sage: false }), env })), SETTINGS, command);
   }
+  for (const command of ["cat /opt/codex-home/hooks.json", "node /opt/codex-home/sage-hooks/launch.mjs --help"]) assert.equal(await gate(pre("Bash", command), { mode: () => ({ sage: false }), env }), undefined, command);
+});
+
+test("F-T957-7: no thread writes a new version into the folder of sage's installed versions, which the launcher imports, also in a Codex home that is not named .codex; reads run", async () => {
+  const env = { ...process.env, CODEX_HOME: "/opt/codex-home" };
+  const run = (command) => gate(pre("Bash", command), { mode: () => ({ sage: false }), env });
+  for (const command of ["cp -R ./build /opt/codex-home/plugins/cache/sage/sage/9.9.9", "mv /x/build /opt/codex-home/plugins/cache/sage/sage/local", "cd /opt && cp -R /x/build codex-home/plugins/cache/sage/sage/9.9.9"]) {
+    assert.match(denied(await run(command)) ?? "", /^sage: no agent writes Codex's config file, its hooks\.json, sage's hook launcher \(sage-hooks\), the sage plugin's folder or its installed versions \(plugins\/cache\/sage\/sage\) from the shell/, command);
+  }
+  for (const command of ["ls /opt/codex-home/plugins/cache/sage/sage", "cat /opt/codex-home/plugins/cache/sage/sage/0.1.0/.codex-plugin/plugin.json"]) assert.equal(await run(command), undefined, command);
 });
 
 test("no thread sends input to the main thread, in any spelling that Codex reads, and in sage mode no thread uses multi-agent v1 (T534, R1940-1, R1945-1)", async (t) => {

@@ -52,7 +52,7 @@ The plugin's report check (a `SubagentStop` hook) reads each agent whose task na
 
 A field counts only at the start of a line that is not indented, not a list item and not in a code block. The report of a code, security or UX reviewer or of QA also goes through the reader of Claude Code, also when its task name has no run. When the reader cannot read that report, the check continues the agent once with the reason. At the second stop, the agent stops.
 
-The check runs only after you trust the plugin hooks in Codex.
+The check runs only after the owner installs sage's hooks (`hooks install`) and trusts them in Codex.
 
 ## Compare a retained report
 
