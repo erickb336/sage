@@ -26,7 +26,7 @@ export { boardView, landingRule } from "./board-view.mjs";
 export { parseBoardIntent, boardNote, BOARD_PHRASES } from "./board-intent.mjs";
 
 export { REPORT_FIELDS, parseReport } from "./report.mjs";
-export { FINDING_FORM, RESULT_WORDS, cleanReport, fieldsOf, missingFields, PROOF_RULE, proofProblem, proofResults, readReport } from "./report-reader.mjs";
+export { FINDING_FORM, cleanReport, fieldsOf, missingFields, proofResults, readReport, stopReason } from "./report-reader.mjs";
 
 export { roleEditDenied, TEAM } from "./role-policy.mjs";
 export { leadStopped } from "./lead-policy.mjs";

@@ -383,6 +383,22 @@ test("T947: a review or QA child's medium or high finding carries a proof that t
   assert.deepEqual(stopOf(report("- K1 medium a.js:1 a bad value"), false, "/root/sage_implementer_t12"), {}, "an implementer's report is not read");
 });
 
+test("T964: a severity word in a sentence passes the gate; the one stop names both the line that it cannot read and the missing proof", () => {
+  const stopOf = (message, again = false) => gate(stop({ agent_transcript_path: transcript("/root/sage_qa_t12"), last_assistant_message: message, stop_hook_active: again }));
+  const report = (findings) => FULL.replace("RESULT PASS", "RESULT FINDINGS").replace("FINDINGS none", `FINDINGS\n${findings}`);
+  // The lines of three lost runs (R3084, R3062, R2942): each blocked the old reader, and the second stop kept it.
+  for (const findings of [
+    "- F-R3084-1 low proof-check.md:49 a proof that needs a file outside the head can lead a real medium finding to be dropped",
+    "- K2 low sage-hook.mjs:246 the proof gate uses the one stop\n  2. A `saw:` line with real output such as \"not ok 3 a high finding is refused\", under a medium finding, then makes the report unreadable.",
+    "- F1 low state-server.mjs config: a name prints two values\n  - Reproduce with config settings {\"name\": \"x\"}. This is a follow-up note and not a blocker.",
+  ]) assert.deepEqual(stopOf(report(findings)), {}, findings);
+  const both = stopOf(report("- K1 medium a.js:1 a bad value\n- K2 low a log, K3 high a crash"));
+  assert.equal(both.decision, "block");
+  assert.match(both.reason, /^sage: the report check cannot read your report: the line "- K2 low a log, K3 high a crash" under FINDINGS has a severity word above the severity of its finding \(low\)/, "the line that it cannot read");
+  assert.match(both.reason, /\. sage: K1 is medium and has no proof line\. Under each medium or high finding, give its proof/, "and the proof that is missing, in the same stop");
+  assert.equal(stopOf(report("- K1 medium a.js:1 a bad value\n- K2 low a log, K3 high a crash"), true).decision, undefined, "the second stop goes through");
+});
+
 test("T461: a report that the Claude stop gate refuses cannot pass in Codex: the name of a review child does not matter, and a field obeys the one field rule", () => {
   const stopOf = (path, message, again = false) => gate(stop({ agent_transcript_path: transcript(path), last_assistant_message: message, stop_hook_active: again }));
   // A high finding with no list mark: the reader cannot read it. Each name is a review child that the gate cannot bind to a run.

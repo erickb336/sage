@@ -65,11 +65,9 @@ function trimEnd(text) {
 /** The form of a finding in a report's FINDINGS that the report skill gives: the severity right after the key (F-T289-11). */
 export const FINDING_FORM = "- <key> <severity> <summary>";
 /** The words of RESULT that the lead rules read (F-T289-39). */
-export const RESULT_WORDS = ["CLEAN", "PASS", "FINDINGS", "FAIL"];
+const RESULT_WORDS = ["CLEAN", "PASS", "FINDINGS", "FAIL"];
 /** A word that is or starts with a severity word: "high", "Medium", "low-level", "HIGH:" (but not "lower" or "highest"). */
 const SEVERE = /^(?:high|medium|low)(?![a-z])/i;
-/** A severity word as a label, with a colon after it: "high:", "**HIGH**:", "(low):" (F-T289-54). */
-const LABEL = /\b(?:high|medium|low)[*_)\]]*:/i;
 /** A word without the marks around it: brackets, parentheses, bold, code and a colon or a trailing dash. A loop, so a word of many marks costs time in proportion to its length (F-T289-34). */
 function unmarked(word = "") {
   let start = 0, end = word.length;
@@ -81,31 +79,39 @@ function unmarked(word = "") {
  * One line under FINDINGS, without its indent, read by the narrow form of the report skill (F-T289-47, F-T289-58):
  *   - finding: a list item (-, *, + or 1. or 1)) whose first word is a key (with a digit: K1, F-T1-3, R966-1) and whose
  *     next word is the severity, high, medium or low in any case, with only marks around it: "- K1 medium:",
- *     "* K1 (High)", "1. K1 - low -", "- `K1` **medium**". Its summary has no severity label ("also high:").
- *   - severe: any other line whose first or second word is or starts with a severity word ("- High: low-privilege",
- *     "- high K1", "- K1 low-level", "- Confirmed medium load", "Severity: high"), or that has a severity label: a line
- *     that may hold a finding that the reader cannot read, so it is never detail and never clean.
+ *     "* K1 (High)", "1. K1 - low -", "- `K1` **medium**". Its severity is that word only; levelIn reads the rest.
  *   - other: any other line.
  */
 function lineOf(text) {
   const item = /^(?:[-*+]|\d+[.)])[ \t]+/.exec(text);
   const [key, ...rest] = (item ? text.slice(item[0].length) : text).split(/[ \t]+/);
-  const at = rest.findIndex((w) => !/^[-–—:|]+$/.test(w)), word = unmarked(rest[at]);
-  if (item && /\d/.test(unmarked(key)) && !SEVERE.test(unmarked(key)) && /^(?:high|medium|low)$/i.test(word) && !LABEL.test(rest.slice(at + 1).join(" "))) return { severity: word.toLowerCase(), key: unmarked(key) };
-  return { severe: SEVERE.test(unmarked(key)) || SEVERE.test(word) || LABEL.test(text) };
+  const word = unmarked(rest.find((w) => !/^[-–—:|]+$/.test(w)));
+  return item && /\d/.test(unmarked(key)) && !SEVERE.test(unmarked(key)) && /^(?:high|medium|low)$/i.test(word) ? { severity: word.toLowerCase(), key: unmarked(key) } : {};
 }
 /** The levels of the severities, and the words that the report reader looks for in all of FINDINGS: critical, severe and blocker are high. */
 const LEVELS = ["none", "low", "medium", "high"];
 const LEVEL = { low: 1, medium: 2, high: 3, critical: 3, severe: 3, blocker: 3 };
 const LEVEL_WORD = /(?<![\p{L}\p{N}])(?:low|medium|high|critical|severe|blocker)(?![\p{L}\p{N}])/gu;
+/** An ordinary word of a sentence: letters, with an inner apostrophe or hyphen, and not a severity word (T964). */
+const ordinary = (word = "") => /^\p{L}+(?:['’-]\p{L}+)*$/u.test(word) && !Object.hasOwn(LEVEL, word.toLowerCase());
 /**
- * The level of the highest severity word in a line, as a whole word in any case, after NFKC and with no zero-width or
- * other format character (F-T289-60, F-T289-62). 0 when it has none. A severity word in look-alike letters of another
- * script is a limit of the reader (standing order 70).
+ * The level of the highest severity that a line states, or 0 (F-T289-60, F-T289-62). It reads each severity word as a
+ * whole word in any case, after NFKC and with no zero-width or other format character, also inside a word such as
+ * "high-risk" or "(high)". A severity word in a sentence is text and states nothing (T964): a lower-case word that comes
+ * after a, an or the, also with a comma, period or semicolon after it ("not a blocker.", "a high finding is refused"), or
+ * with nothing after it between two ordinary words ("a real medium finding"). So "K2 high", "(raise to medium)",
+ * "high:", "Severity: high", "is HIGH", "rated high" at the end of a line and a line that starts with a severity word
+ * state it. A severity word in look-alike letters of another script is a limit of the reader (standing order 70).
  */
 function levelIn(line) {
-  const text = line.normalize("NFKC").toLowerCase().replace(/\p{Cf}/gu, "");
-  return Math.max(0, ...[...text.matchAll(LEVEL_WORD)].map(([word]) => LEVEL[word]));
+  const words = line.normalize("NFKC").replace(/\p{Cf}/gu, "").split(/\s+/);
+  let level = 0;
+  for (const [k, word] of words.entries()) {
+    const [, bare, stop] = /^(\p{Ll}+)([,.;]?)$/u.exec(word) ?? [];
+    const text = Object.hasOwn(LEVEL, bare ?? "") && (/^(?:a|an|the)$/i.test(words[k - 1] ?? "") || (!stop && ordinary(words[k - 1]) && ordinary(words[k + 1]?.replace(/[,.;]$/, ""))));
+    if (!text) for (const [said] of word.toLowerCase().matchAll(LEVEL_WORD)) level = Math.max(level, LEVEL[said]);
+  }
+  return level;
 }
 /** None alone, in any case, also as a list item or with a period: the one clean form of FINDINGS (F-T289-48, F-T289-51). */
 const NONE_LINE = /^(?:[-*+][ \t]+)?none\.?$/i;
@@ -124,13 +130,14 @@ const findingsLine = (line) => FINDINGS_AT.test(line.trimStart().replace(/^(?:[-
  * item outside a code block (F-T289-52); when RESULT or FINDINGS is missing; when RESULT does not start with one of
  * RESULT_WORDS; when FINDINGS is empty, has none and findings, or none with RESULT FINDINGS or FAIL (F-T289-48); or when
  * a line under FINDINGS is longer than LINE_MAX, or is not none, a finding or detail: an unindented line, an indented
- * one with no finding above it (F-T289-25), or an indented line that is severe (F-T289-46, F-T289-54).
- * The severity rule (F-T289-60, F-T289-62, F-T289-63, F-T298-1): it is unreadable too when a line of FINDINGS has a
- * severity word (levelIn) above the severity of its own finding: a finding line and the lines under it compare with
- * that finding. (A line above the first finding is none or makes the report unreadable before this rule.) So a raised
- * word under a low finding counts also when a high finding is in the report, and an honest detail line such as "a high
- * row count" under a low finding blocks once, and the helper writes it again. A lower word under a higher finding is
- * detail. At verdict acceptance, requireComplete also requires text in every REPORT_FIELDS field. Other callers can
+ * one with no finding above it (F-T289-25), or an indented line in the shape of a finding (F-T289-33).
+ * The severity rule (F-T289-60, F-T289-62, F-T289-63, F-T298-1, T964): a finding's severity is the word after its key,
+ * and the rest of its line and its detail lines are text. It is unreadable too when a line of FINDINGS states a severity
+ * (levelIn) above the severity of its own finding: a finding line and the lines under it compare with that finding. (A
+ * line above the first finding is none or makes the report unreadable before this rule.) So "K2 high" or "(raise to
+ * medium)" under a low finding counts also when a high finding is in the report, while a severity word in a sentence,
+ * such as "a high row count" or a quoted test name "not ok 3 a high finding is refused", is detail. A lower word under a
+ * higher finding is detail. At verdict acceptance, requireComplete also requires text in every REPORT_FIELDS field. Other callers can
  * read a partial stop to give correction feedback; retaining that stop does not make it eligible to back a verdict.
  */
 export function readReport(text, { requireComplete = false } = {}) {
@@ -145,11 +152,11 @@ export function readReport(text, { requireComplete = false } = {}) {
   let none = false, long = false, odd;
   for (const line of f ? [f.rest, ...f.lines] : []) {
     if (line.length > LINE_MAX) { long = true; continue; }
-    const text = line.trim(), indented = /^\s/.test(line), { severity, severe, key } = lineOf(text);
+    const text = line.trim(), indented = /^\s/.test(line), { severity, key } = lineOf(text);
     if (!text) continue;
     if (severity && !indented) severities.push(severity), findings.push({ key, severity });
     else if (NONE_LINE.test(text)) none = true;
-    else if (!(indented && severities.length && !severity && !severe)) odd ??= text;
+    else if (!(indented && severities.length && !severity)) odd ??= text;
     else proofLine(findings.at(-1), text);
     if (severities.length) owned.push([text, LEVEL[severities.at(-1)]]);
   }
@@ -198,7 +205,7 @@ function gitProblem(proof, cwd) {
  * outside the scratch folders (commandWrites).
  * A low finding needs no proof, and an unreadable report gets the reader's own reason.
  */
-export function proofProblem(text, cwd, scratch = TEMP) {
+function proofProblem(text, cwd, scratch = TEMP) {
   const { findings = [] } = readReport(text);
   for (const { key, severity, proof, saw, steps } of findings.filter((f) => f.severity !== "low")) {
     if (!proof) return `${key} is ${severity} and has no proof line`;
@@ -212,7 +219,18 @@ export function proofProblem(text, cwd, scratch = TEMP) {
   return undefined;
 }
 /** The way to give a proof, for the stop gates of both providers (T947). */
-export const PROOF_RULE = "Under each medium or high finding, give its proof on indented lines: proof: <one command, run from the repository root of the head> and saw: <the one output line that shows the problem>, or proof: screenshot <path> and steps: <the url and the actions>. The command only reads, or writes only into your scratch folder in the temp folder; it runs no process program, no inline code and git only to read (status, log, show, diff, rev-parse, ls-files, grep, cat-file or blame). It runs from a fresh copy of the head after the project's dependency install (such as npm ci --ignore-scripts). Put long output in a scratch file, and name its path. A low finding needs no proof. A proof, saw or steps line has no severity word. This stop gate stops you once.";
+const PROOF_RULE = "Under each medium or high finding, give its proof on indented lines: proof: <one command, run from the repository root of the head> and saw: <the one output line that shows the problem>, or proof: screenshot <path> and steps: <the url and the actions>. The command only reads, or writes only into your scratch folder in the temp folder; it runs no process program, no inline code and git only to read (status, log, show, diff, rev-parse, ls-files, grep, cat-file or blame). It runs from a fresh copy of the head after the project's dependency install (such as npm ci --ignore-scripts). Put long output in a scratch file, and name its path. A low finding needs no proof. A proof, saw or steps line states no severity above its finding's, as in K2 high; a severity word inside a sentence of quoted output is text. This stop gate stops you once.";
+/** How to write a report that the one reader reads, for the stop gates of both providers (T964). */
+const READ_RULE = `Give each field once, at the start of a line that is not in a list or a code block. Start RESULT with ${RESULT_WORDS.join(", ")}. Under FINDINGS write none alone, or one line for each finding in the form ${FINDING_FORM}, where the key has a digit (K1) and the severity is high, medium or low, with any detail on indented lines under it. A finding's severity is the word after its key. No line under FINDINGS states a severity above the severity of the finding that it is under, as in K2 high, (high), high: or a line that starts with a severity word; a lower-case severity word inside a sentence, such as "a high row count", is text. RESULT FINDINGS or FAIL needs a finding.`;
+/**
+ * Why a stop gate stops a review's or QA's report, or undefined (T964): the reader's problem (readReport) and, when proof
+ * is on, the proof's problem (proofProblem), both in the one stop, so that the one fix chance covers each of them and a
+ * fix of one cannot leave the other unchecked. who names the gate.
+ */
+export function stopReason(text, cwd, { who, proof = true }) {
+  const { problem } = readReport(text), unproved = proof ? proofProblem(text, cwd) : undefined;
+  return [problem && `sage: ${who} cannot read your report: ${problem}. ${READ_RULE}`, unproved && `sage: ${unproved}. ${PROOF_RULE}`].filter(Boolean).join(" ") || undefined;
+}
 /**
  * The outcome of a proof check (T947) on one line of its EVIDENCE: a key with a digit, then reproduced, not reproduced or
  * could not run, and any note after it. Near forms count too (F-T947-1): an indent (a nested list), a list mark (-, *, +,

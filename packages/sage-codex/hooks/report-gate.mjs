@@ -9,7 +9,7 @@ import { spawnSync } from "node:child_process";
 import { closeSync, mkdirSync, openSync, readFileSync, readSync, realpathSync, writeFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
-import { FINDING_FORM, PROOF_RULE, REPORT_FIELDS, RESULT_WORDS, TEAM, missingFields, proofProblem, readReport } from "sage-core";
+import { REPORT_FIELDS, TEAM, missingFields, stopReason } from "sage-core";
 import { tool } from "../skills/sage/sage.mjs";
 
 const UNREAD = "sage: the report check could not read this agent's stop, so it did not check its report.";
@@ -116,12 +116,10 @@ export function reportGate(input, env = process.env) {
   try { meta = sessionMeta(input.agent_transcript_path); task = agentPathOf(meta).at(-1) ?? ""; } catch { return { systemMessage: UNREAD }; }
   const missing = sageName(task) ? missingFields(REPORT_FIELDS, message ?? "") : [];
   // A review or QA child's report is read with the one reader at its first stop, as the Claude stop gate does: an unreadable
-  // report gets one fix chance, and the second stop keeps it (T560).
-  const problem = !missing.length && !input.stop_hook_active && REVIEW_NAME.test(task) ? readReport(message).problem : undefined;
-  if (problem) return { decision: "block", reason: `sage: the report check cannot read your report: ${problem}. Give each field once, at the start of a line that is not in a list or a code block. Start RESULT with ${RESULT_WORDS.join(", ")}. Under FINDINGS write none alone, or one line for each finding in the form ${FINDING_FORM}, where the key has a digit (K1) and the severity is high, medium or low, with any detail on indented lines under it that do not start with a severity word. No line under FINDINGS has a severity word above the severity of the finding that it is under. RESULT FINDINGS or FAIL needs a finding.` };
-  // Proof by run (T947): each medium or high finding of a review or QA carries a proof that the proof check can rerun.
-  const unproved = !missing.length && !input.stop_hook_active && REVIEW_NAME.test(task) ? proofProblem(message, typeof input.cwd === "string" ? input.cwd : process.cwd()) : undefined;
-  if (unproved) return { decision: "block", reason: `sage: ${unproved}. ${PROOF_RULE}` };
+  // report, or a medium or high finding without a proof that the proof check can rerun (T947), gets one fix chance, and the
+  // second stop keeps it (T560). One stop names both problems (T964).
+  const reason = !missing.length && !input.stop_hook_active && REVIEW_NAME.test(task) ? stopReason(message, typeof input.cwd === "string" ? input.cwd : process.cwd(), { who: "the report check" }) : undefined;
+  if (reason) return { decision: "block", reason };
   // A stop that goes through retains the bound child's exact report; the chief decides the outcome separately.
   const unkept = !missing.length || input.stop_hook_active ? keep(meta, message, input.cwd, env) : undefined;
   if (!missing.length) return unkept ? { systemMessage: unkept } : {};
