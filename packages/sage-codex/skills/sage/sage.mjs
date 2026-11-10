@@ -3,7 +3,7 @@ import { realpathSync } from "node:fs";
 import { homedir } from "node:os";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
-import { createStateTool, readModeFile } from "sage-core";
+import { balancedModels, createStateTool, readModeFile } from "sage-core";
 import { modeDirectory, readState, stateKey } from "../../hooks/hook-state.mjs";
 import { claimStep, legacyRoots, replaceStep } from "../../runtime/logbook-env.mjs";
 import { verifyInstall } from "./verify-install.mjs";
@@ -22,8 +22,16 @@ export function readMode({ session }, env = process.env) {
   return { sage, autopilot: sage && state.autopilot === true };
 }
 
-// Codex inherits the selected model. A project without a shared logbook keeps its own, unless SAGE_HOME is explicit.
-export const tool = createStateTool({ provider: "codex", claimStep, replaceStep, legacyRoots, autopilot: (session, env) => readMode({ session }, env).autopilot, usageInterfaces: [
+/**
+ * The reasoning effort of a Codex agent for each model name of the model keys (T955). The keys are Claude's, with Claude's
+ * names, so that one config reads the same in both providers. Codex keeps the session's model and gets only an effort.
+ * A name with no effort here (fable, inherit) passes none: the agent keeps the session's effort.
+ */
+export const EFFORTS = { opus: "high", sonnet: "medium", haiku: "low" };
+// A project without a shared logbook keeps its own, unless SAGE_HOME is explicit.
+export const tool = createStateTool({ provider: "codex", claimStep, replaceStep, legacyRoots, autopilot: (session, env) => readMode({ session }, env).autopilot,
+  models: ["opus", "sonnet", "haiku", "fable", "inherit"], modelDefaults: balancedModels("opus", "sonnet"),
+  spawnFields: (model) => (Object.hasOwn(EFFORTS, model) ? { reasoning_effort: EFFORTS[model] } : {}), usageInterfaces: [
   { provider: "codex", interface: "collaboration-tools", capability: "unavailable", reason: "The collaboration tools expose no authoritative per-run token count; the report gate reads the agent's own count from its session record at its stop, when the record has one.", source: "Codex collaboration tool schema; chief-declared execution interface, not host attestation" },
   { provider: "codex", interface: "app-server", capability: "measured", reason: "The app-server protocol exposes thread and turn token usage events.", source: "Codex app-server thread/tokenUsage/updated" },
 ], defaultRoot: (env) => join(env.CODEX_HOME ?? join(env.HOME ?? homedir(), ".codex"), "sage") });
