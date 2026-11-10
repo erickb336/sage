@@ -884,7 +884,9 @@ test("brief checks a brief's fields, keeps it by task name in the logbook, and t
     assert.equal(await s.call("brief", { task_name: "sage_implementer_t2", brief }), "brief sage_implementer_t2 checked: all 10 fields. Spawn the agent with this task name and this brief.", form);
   }
   assert.equal(await s.call("brief", { task_name: "sage_implementer_t1", brief: text() }), "brief sage_implementer_t1 checked: all 10 fields. Spawn the agent with this task name and this brief.");
-  assert.deepEqual(JSON.parse(readFileSync(join(logbook, "briefs", "sage_implementer_t1.json"), "utf8")), { task: "sage_implementer_t1", text: text() });
+  // The record keeps the time of the check, which the gate reads before the spawn (T950).
+  const kept = JSON.parse(readFileSync(join(logbook, "briefs", "sage_implementer_t1.json"), "utf8"));
+  assert.deepEqual({ ...kept, checked: typeof kept.checked }, { task: "sage_implementer_t1", text: text(), checked: "number" });
   assert.match((await s.call("brief", { task_name: "../x", brief: text() })).error, /^Input validation error: .*sage_, the role with _ for -/);
   assert.match((await s.call("brief", { task_name: "sage_qa_t1", brief: "x".repeat(32 * 1024 + 1) })).error, /^Input validation error: /);
   // A second run of a role on the same task: the run id after the task gives it a new name (R1663-2).
@@ -1148,6 +1150,7 @@ test("T586 SYNTHETIC: candidates, a judge and the landing play through the Codex
   const play = async (role, branch, candidate, work) => {
     const added = await s.call("run_add", { task: "T1", role, branch, "usage-interface": "collaboration-tools", ...(candidate ? { candidate } : {}) });
     const run = /^R\d+/.exec(added)[0], name = `sage_${role.replaceAll("-", "_")}_t1_${run.toLowerCase()}`;
+    assert.match(await s.call("brief", { task_name: name, brief: BRIEF }), /checked: all 10 fields/, "the chief checks the brief before the spawn (T950)");
     assert.equal(await gate(hookEvent("collaborationspawn_agent", { task_name: name, fork_turns: "none", message: "SAMPLE" }, null), sageOn), undefined, "the chief spawns it");
     // The logbook records this run on its own branch, which differs from the task's.
     const row = tool.logbookView(s.project, s.env).row(run);
