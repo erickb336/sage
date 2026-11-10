@@ -75,7 +75,7 @@ import { accessSync, constants, existsSync, linkSync, mkdirSync, readdirSync, re
 import { homedir } from "node:os";
 import { basename, dirname, isAbsolute, join, relative, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
-import { AGENT_GH, agentCommandProblem, agentGh, boardCommandProblem, boardPathProblem, chiefEditDenied, commandWrites, createCommandPolicy, createPushPolicy, ghRuns, logbookWrite, PR, programName, programsRun, pullRequestHead, readModeFile, roleEditDenied, sharedRoot, shellCommands, shellWriteEvidence, TEAM, TEMP } from "../core/index.mjs";
+import { AGENT_GH, agentCommandProblem, agentGh, boardCommandProblem, boardPathProblem, chiefEditDenied, commandWrites, createCommandPolicy, createPushPolicy, ghRuns, logbookWrite, PR, programName, programsRun, pullRequestHead, readModeFile, roleEditDenied, sharedRoot, shellCommands, shellWriteEvidence, TEAM } from "../core/index.mjs";
 import { modeFile, readMode, tool } from "../skills/sage/sage.mjs";
 import { verificationOptions } from "../skills/sage/verify-install.mjs";
 import { privateDirectory, readState } from "./hook-state.mjs";
@@ -85,6 +85,7 @@ import { agentPathOf, sageName, sessionMeta, TASK_NAME } from "./report-gate.mjs
 import { modeDirectory } from "./sage-codex-hook.mjs";
 import { autopilotSwitch, callInRecord, NEW_ON, readRecord, RECORD_RANGE, RECORD_VERSION } from "./owner-record.mjs";
 import { markFile } from "./start-mark.mjs";
+import { TEMP } from "../core/index.mjs";
 import { mergeCommand, permitFile, permitFolder } from "../skills/sage/merge.mjs";
 
 const ROOT = join(dirname(fileURLToPath(import.meta.url)), "..");
