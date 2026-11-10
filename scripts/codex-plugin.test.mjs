@@ -185,7 +185,8 @@ test("T952: the SessionStart hook warns when Codex's thread limit runs fewer age
     assert.match(warning(threads)[0], /^sage: Codex runs at most 6 agents at once in this session \(agents\.max_concurrent_threads_per_session = 6\), and this project's agent cap is 10 .* set max_concurrent_threads_per_session = 10 under \[agents\] in /, threads);
   }
   // The features.multi_agent_v2 key wins over the agents key, and counts the chief's own thread: 10 threads hold 9 agents.
-  for (const threads of ["[agents]\nmax_concurrent_threads_per_session = 20\n[features.multi_agent_v2]\nenabled = true\nmax_concurrent_threads_per_session = 10\n", "[agents]\nmax_concurrent_threads_per_session = 20\n[features]\nmulti_agent_v2 = { enabled = true, max_concurrent_threads_per_session = 10 }\n"]) {
+  for (const threads of ["[agents]\nmax_concurrent_threads_per_session = 20\n[features.multi_agent_v2]\nenabled = true\nmax_concurrent_threads_per_session = 10\n", "[agents]\nmax_concurrent_threads_per_session = 20\n[features]\nmulti_agent_v2 = { enabled = true, max_concurrent_threads_per_session = 10 }\n",
+    "agents = { max_concurrent_threads_per_session = 20 }\nfeatures = { multi_agent_v2 = { enabled = true, max_concurrent_threads_per_session = 10 } }\n"]) { // an inline table in an inline table (F-T952-3)
     assert.match(warning(threads)[0], /^sage: Codex runs at most 9 agents at once in this session \(features\.multi_agent_v2\.max_concurrent_threads_per_session = 10, which counts the chief's own thread\), and this project's agent cap is 10 .* set max_concurrent_threads_per_session = 11 under \[features\.multi_agent_v2\] in /, threads);
   }
   // A high enough value: no warning, and the status goes to the chief only.

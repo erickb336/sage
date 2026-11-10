@@ -56,21 +56,34 @@ function trustedCount(keys, codexHome) {
   return keys.filter((key) => trusted.has(key)).length;
 }
 
-/** The numbers of a config.toml by their dotted key: plain key = value lines, under [table] headers, and inline tables. */
+/** The numbers of a config.toml by their dotted key: plain key = value lines, under [table] headers, and inline tables, also nested ones. */
 function tomlNumbers(text) {
   const path = (key) => key.split(".").map((part) => part.trim().replace(/^"(.*)"$|^'(.*)'$/, "$1$2"));
+  const pair = (text) => /^([^=]+?)\s*=\s*(.+)$/.exec(text.trim());
   const numbers = new Map();
+  // One value by its key: an inline table gives each of its pairs, split at the commas outside a nested { } or [ ].
+  const read = (key, value) => {
+    const inline = /^\{(.*)\}$/.exec(value.trim());
+    if (!inline) return void (/^\d+$/.test(value.trim()) && numbers.set(key.join("."), Number(value)));
+    let depth = 0, start = 0;
+    for (let i = 0; i <= inline[1].length; i++) {
+      const c = inline[1][i];
+      if (c === "{" || c === "[") depth++;
+      else if (c === "}" || c === "]") depth--;
+      else if (i === inline[1].length || (c === "," && !depth)) {
+        const p = pair(inline[1].slice(start, i));
+        if (p) read([...key, ...path(p[1])], p[2]);
+        start = i + 1;
+      }
+    }
+  };
   let table = [];
   for (const raw of text.split(/\r?\n/)) {
     const line = raw.replace(/(^|\s)#.*$/, "").trim();
-    const header = /^\[\s*([^[\]]+?)\s*\]$/.exec(line), pair = /^([^=]+?)\s*=\s*(.+)$/.exec(line);
+    const header = /^\[\s*([^[\]]+?)\s*\]$/.exec(line), p = pair(line);
     if (header) table = path(header[1]);
     else if (line.startsWith("[")) table = null; // an array of tables: no key of sage's is in one
-    else if (table && pair) {
-      const key = [...table, ...path(pair[1])], inline = /^\{(.*)\}$/.exec(pair[2]);
-      const pairs = inline ? inline[1].split(",").map((p) => /^([^=]+?)\s*=\s*(.+)$/.exec(p.trim())).filter(Boolean).map((p) => [[...key, ...path(p[1])], p[2]]) : [[key, pair[2]]];
-      for (const [k, v] of pairs) if (/^\d+$/.test(v.trim())) numbers.set(k.join("."), Number(v));
-    }
+    else if (table && p) read([...table, ...path(p[1])], p[2]);
   }
   return numbers;
 }
