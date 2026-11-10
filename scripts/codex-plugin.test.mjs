@@ -170,14 +170,14 @@ test("on resume of a session over Node's string limit, the SessionStart hook sti
 });
 
 test("T952: the SessionStart hook warns when Codex's thread limit runs fewer agents than the project's agent cap, and names the setting to change", (t) => {
-  const warning = (threads, files = {}) => {
+  const warning = (threads, files = {}, folder = "") => {
     const { run, home } = installed(t, { trust: ALL, cliVersion: "0.164.0", threads });
     for (const [path, text] of Object.entries(typeof files === "function" ? files(basename(home).toLowerCase().replace(/[^a-z0-9]+/g, "-")) : files)) { mkdirSync(join(home, path, ".."), { recursive: true }); writeFileSync(join(home, path), text); }
-    return [run({ hook_event_name: "SessionStart", source: "startup" }).systemMessage, join(home, "config.toml")];
+    return [run({ hook_event_name: "SessionStart", source: "startup", cwd: join(home, folder) }).systemMessage, join(home, "config.toml"), home];
   };
   // No setting: Codex's default of 4 threads holds the chief and 3 agents, below the default cap of 10.
   const [none, file] = warning("");
-  assert.equal(none, `sage: Codex runs at most 3 agents at once in this session (Codex's default of 4 threads, the chief's own included), and this project's agent cap is 10 (max_agents, or cap.<project>). An agent over Codex's limit fails to start with "agent thread limit reached". To raise it, set max_concurrent_threads_per_session = 10 under [agents] in ${file}, then start a new session.`);
+  assert.equal(none, `sage: Codex runs at most 3 agents at once in this session (Codex's default of 4 threads, the chief's own included), and this project's agent cap is 10 (max_agents, or cap.<project>). An agent over Codex's limit fails to start with "agent thread limit reached". To raise it, set max_concurrent_threads_per_session = 10 under [agents] in ${file}, then start a new session. sage reads only ${file} and the project's .codex/config.toml (it counts that file only where it lowers the limit, because Codex skips it in a project that Codex does not trust), not a -c override, a profile or a managed config.`);
   // Only the agents key: it counts the agents alone, and its alias max_threads reads the same.
   for (const threads of ["[agents]\nmax_concurrent_threads_per_session = 6\n", "[agents]\nmax_threads = 6 # an alias\n", "agents.max_concurrent_threads_per_session = 6\n", "agents = { max_concurrent_threads_per_session = 6 }\n"]) {
     assert.match(warning(threads)[0], /^sage: Codex runs at most 6 agents at once in this session \(agents\.max_concurrent_threads_per_session = 6\), and this project's agent cap is 10 .* set max_concurrent_threads_per_session = 10 under \[agents\] in /, threads);
@@ -188,13 +188,48 @@ test("T952: the SessionStart hook warns when Codex's thread limit runs fewer age
     assert.match(warning(threads)[0], /^sage: Codex runs at most 9 agents at once in this session \(features\.multi_agent_v2\.max_concurrent_threads_per_session = 10, which counts the chief's own thread\), and this project's agent cap is 10 .* set max_concurrent_threads_per_session = 11 under \[features\.multi_agent_v2\] in /, threads);
   }
   // A high enough value: no warning, and the status goes to the chief only.
-  for (const threads of ["[agents]\nmax_concurrent_threads_per_session = 10\n", "[agents]\nmax_concurrent_threads_per_session = 2\n[features.multi_agent_v2]\nmax_concurrent_threads_per_session = 11\n", "[features]\nmulti_agent_v2 = true\n[agents]\nmax_concurrent_threads_per_session = 12\n"]) {
+  for (const threads of ["[agents]\nmax_concurrent_threads_per_session = 10\n", "[agents]\nmax_concurrent_threads_per_session = 2\n[features.multi_agent_v2]\nenabled = true\nmax_concurrent_threads_per_session = 11\n", "[features]\nmulti_agent_v2 = true\n[agents]\nmax_concurrent_threads_per_session = 12\n"]) {
     assert.equal(warning(threads)[0], undefined, threads);
   }
   // The cap is sage's own: a lower max_agents needs fewer agents, and the project's cap.<project> wins over it.
   assert.equal(warning("", { "sage/config.json": JSON.stringify({ max_agents: 3 }) })[0], undefined, "3 agents fit in Codex's default");
   const project = (name) => ({ "sage/config.json": JSON.stringify({ max_agents: 3, [`cap.${name}`]: 5 }) }); // the project is the session's folder
   assert.match(warning("[agents]\nmax_concurrent_threads_per_session = 4\n", project)[0] ?? "", /at most 4 agents .* this project's agent cap is 5 /);
+
+  // TOML's other integer forms read as their number (F-T952-5): 1_0 and +10 are 10.
+  for (const value of ["1_0", "+10", "+1_0"]) assert.equal(warning(`[agents]\nmax_concurrent_threads_per_session = ${value}\n`)[0], undefined, value);
+  for (const value of ["1__0", "10_", "_10", "0_6"]) assert.match(warning(`[agents]\nmax_concurrent_threads_per_session = ${value}\n`)[0] ?? "", /at most 3 agents /, `${value} is not a TOML integer`);
+
+  // Codex runs multi-agent v2 for sure only when features.multi_agent_v2 is turned on (F-T952-10). Else the model may run
+  // v1, whose limit is the agents key or 6 agents, so the lower limit counts, and the line to change is the agents key.
+  for (const off of ["enabled = false\n", ""]) {
+    assert.match(warning(`[features.multi_agent_v2]\n${off}max_concurrent_threads_per_session = 11\n`)[0] ?? "", /^sage: Codex runs at most 6 agents at once in this session \(Codex's default of 6 agents in multi-agent v1, .* set max_concurrent_threads_per_session = 10 under \[agents\] in /, off);
+    assert.equal(warning(`[features.multi_agent_v2]\n${off}max_concurrent_threads_per_session = 11\n[agents]\nmax_concurrent_threads_per_session = 10\n`)[0], undefined, `${off}: both limits hold 10 agents`);
+    assert.match(warning(`[agents]\nmax_concurrent_threads_per_session = 20\n[features.multi_agent_v2]\n${off}max_concurrent_threads_per_session = 5\n`)[0] ?? "", /at most 4 agents .*features\.multi_agent_v2\.max_concurrent_threads_per_session = 5/, `${off}: the v2 limit still counts when it is the lower`);
+  }
+  for (const on of ["[features.multi_agent_v2]\nenabled = true\nmax_concurrent_threads_per_session = 11\n", "[features]\nmulti_agent_v2 = { enabled = true, max_concurrent_threads_per_session = 11 }\n"]) assert.equal(warning(on)[0], undefined, on);
+});
+
+test("F-T952-2: the thread warning also reads the project's .codex/config.toml, from the project root to the session's folder, and counts it only where it lowers the limit", (t) => {
+  const warning = (threads, files, folder = "") => {
+    const { run, home } = installed(t, { trust: ALL, cliVersion: "0.164.0", threads });
+    for (const [path, text] of Object.entries(files)) { mkdirSync(join(home, path, ".."), { recursive: true }); writeFileSync(join(home, path), text); }
+    return { said: run({ hook_event_name: "SessionStart", source: "startup", cwd: join(home, folder) }).systemMessage, home };
+  };
+  const TEN = "[agents]\nmax_concurrent_threads_per_session = 10\n", FOUR = "[agents]\nmax_concurrent_threads_per_session = 4\n";
+  // A project's file that lowers the limit warns, and names that file as the place to change.
+  const lower = warning(TEN, { ".codex/config.toml": FOUR });
+  assert.match(lower.said ?? "", /^sage: Codex runs at most 4 agents .* under \[agents\] in /);
+  assert.ok(lower.said.includes(`in ${join(lower.home, ".codex/config.toml")}, then`), lower.said);
+  assert.match(lower.said, /not a -c override, a profile or a managed config\.$/, "the warning says what it does not see");
+  // In a git project, each .codex folder from the project root down to the session's folder counts, the nearest last.
+  assert.match(warning(TEN, { "repo/.git/HEAD": "ref: refs/heads/main\n", "repo/.codex/config.toml": FOUR }, "repo/src").said ?? "", /at most 4 agents /, "the project root's file");
+  assert.match(warning(TEN, { "repo/.git/HEAD": "ref: refs/heads/main\n", "repo/.codex/config.toml": TEN, "repo/src/.codex/config.toml": FOUR }, "repo/src").said ?? "", /at most 4 agents /, "a nearer file wins");
+  assert.equal(warning(TEN, { "repo/.git/HEAD": "ref: refs/heads/main\n", ".codex/config.toml": FOUR }, "repo/src").said, undefined, "a .codex folder above the project root is not the project's");
+  // A project's file that raises the limit does not hide the user's lower one: Codex skips it in an untrusted project.
+  const raise = warning(FOUR, { ".codex/config.toml": TEN });
+  assert.match(raise.said ?? "", /at most 4 agents /);
+  assert.ok(raise.said.includes(`in ${join(raise.home, "config.toml")}, then`), raise.said);
 });
 
 test("the SessionStart hook says when it cannot read the Codex version, and ignores other events", (t) => {

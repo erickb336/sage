@@ -5,11 +5,10 @@
 // runs it for the sources startup, resume and clear (T957); the start status follows oh-my-codex (MIT, github.com/Yeachan-Heo/oh-my-codex). Startup and clear also turn sage mode on when the project's
 // logbook has start=sage-mode (core's startsInSageMode, T948), as in Claude; the start mark keeps that start, so that the
 // owner record reader starts its replay with sage mode on.
-import { readFileSync } from "node:fs";
-import { agentCaps } from "sage-core";
-import { dirname, join } from "node:path";
+import { existsSync, readFileSync } from "node:fs";
+import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
-import { PHRASES, readModeFile, startsInSageMode } from "sage-core";
+import { agentCaps, PHRASES, readModeFile, startsInSageMode } from "sage-core";
 import { privateDirectory, readState, saveState, stateKey } from "./hook-state.mjs";
 import { sessionMeta } from "./report-gate.mjs";
 import { RECORD_RANGE } from "./owner-record.mjs";
@@ -33,15 +32,18 @@ function codexVersion(transcriptPath) {
   } catch { return null; }
 }
 
-/** The numbers of a config.toml by their dotted key: plain key = value lines, under [table] headers, and inline tables, also nested ones. */
-function tomlNumbers(text) {
+/** A TOML integer (with + and _, F-T952-5) or boolean, or undefined for any other value. */
+const scalar = (value) => (/^\+?(?:0|[1-9](?:_?\d)*)$/.test(value) ? Number(value.replace(/[+_]/g, "")) : { true: true, false: false }[value]);
+
+/** The integers and booleans of a config.toml by their dotted key: plain key = value lines, under [table] headers, and inline tables, also nested ones. */
+function tomlValues(text) {
   const path = (key) => key.split(".").map((part) => part.trim().replace(/^"(.*)"$|^'(.*)'$/, "$1$2"));
   const pair = (text) => /^([^=]+?)\s*=\s*(.+)$/.exec(text.trim());
-  const numbers = new Map();
+  const values = new Map();
   // One value by its key: an inline table gives each of its pairs, split at the commas outside a nested { } or [ ].
   const read = (key, value) => {
-    const inline = /^\{(.*)\}$/.exec(value.trim());
-    if (!inline) return void (/^\d+$/.test(value.trim()) && numbers.set(key.join("."), Number(value)));
+    const inline = /^\{(.*)\}$/.exec(value.trim()), one = scalar(value.trim());
+    if (!inline) return void (one !== undefined && values.set(key.join("."), one));
     let depth = 0, start = 0;
     for (let i = 0; i <= inline[1].length; i++) {
       const c = inline[1][i];
@@ -62,26 +64,58 @@ function tomlNumbers(text) {
     else if (line.startsWith("[")) table = null; // an array of tables: no key of sage's is in one
     else if (table && p) read([...table, ...path(p[1])], p[2]);
   }
-  return numbers;
+  return values;
 }
 
 /**
- * The warning when Codex runs fewer agents at once than the project's agent cap (T952), or undefined. Codex counts the
- * threads of one session: features.multi_agent_v2.max_concurrent_threads_per_session wins and counts the chief's own
- * thread; else agents.max_concurrent_threads_per_session (or max_threads) counts only the agents; else Codex allows 4
- * threads, so 3 agents (codex-rs/core/src/config/mod.rs, resolve_multi_agent_v2_config). A plugin cannot set this value.
+ * The config files that Codex reads for a session's folder, lowest first: $CODEX_HOME/config.toml, then each
+ * .codex/config.toml from the project root (the nearest folder with .git, else the folder itself) down to the folder
+ * (codex-rs/config/src/loader/mod.rs, discover_project_layers, F-T952-2).
+ */
+function configFiles(codexHome, cwd) {
+  const user = join(codexHome, "config.toml"), up = [];
+  for (let dir = resolve(cwd); ; dir = dirname(dir)) {
+    up.push(dir);
+    if (existsSync(join(dir, ".git"))) break;
+    if (dir === dirname(dir)) { up.length = 1; break; }
+  }
+  return [user, ...up.reverse().map((dir) => join(dir, ".codex", "config.toml")).filter((file) => file !== user)];
+}
+
+/**
+ * How many agents Codex runs at once by one set of config layers, with the value's source and the line to change.
+ * Multi-agent v2 counts features.multi_agent_v2.max_concurrent_threads_per_session (the chief's own thread included,
+ * whatever its enabled says), else agents.max_concurrent_threads_per_session (or max_threads), else 4 threads: 3 agents
+ * (resolve_multi_agent_v2_config). Codex runs v2 for sure only when features.multi_agent_v2 is turned on; else the model
+ * may run v1, which counts the agents key, else 6 agents (effective_agent_max_threads). Then the lower of the two counts
+ * (F-T952-10). values: each dotted key with its value and its file.
+ */
+function agentLimit(values, need, user) {
+  const V2 = "features.multi_agent_v2.max_concurrent_threads_per_session", get = (key) => values.get(key)?.value;
+  const agentsKey = ["agents.max_concurrent_threads_per_session", "agents.max_threads"].find((key) => get(key) !== undefined);
+  const agentsFix = `max_concurrent_threads_per_session = ${need} under [agents]`;
+  const agents = agentsKey && { allowed: get(agentsKey), from: `agents.max_concurrent_threads_per_session = ${get(agentsKey)}`, fix: agentsFix, file: values.get(agentsKey).file };
+  const v2 = get(V2) !== undefined ? { allowed: Math.max(get(V2) - 1, 0), from: `${V2} = ${get(V2)}, which counts the chief's own thread`, fix: `max_concurrent_threads_per_session = ${need + 1} under [features.multi_agent_v2]`, file: values.get(V2).file }
+    : agents ?? { allowed: 3, from: "Codex's default of 4 threads, the chief's own included", fix: agentsFix, file: user };
+  if (get("features.multi_agent_v2") === true || get("features.multi_agent_v2.enabled") === true) return v2;
+  const v1 = agents ?? { allowed: 6, from: "Codex's default of 6 agents in multi-agent v1, which the model may run while features.multi_agent_v2 is not turned on", fix: agentsFix, file: user };
+  return v1.allowed < v2.allowed ? v1 : v2;
+}
+
+/**
+ * The warning when Codex runs fewer agents at once than the project's agent cap (T952), or undefined. It reads the
+ * user's config and the project's .codex/config.toml files (configFiles). Codex skips a project's file in a project that
+ * it does not trust, so a project's file counts only where it lowers the limit. A -c override, a profile and a managed
+ * config are not seen. A plugin cannot set this value.
  */
 function threadWarning(input, codexHome, env) {
-  let numbers = new Map();
-  try { numbers = tomlNumbers(readFileSync(join(codexHome, "config.toml"), "utf8")); } catch { /* No config yet: Codex's default. */ }
-  const need = agentCaps(tool.config(env)).cap(tool.projectName(input.cwd ?? process.cwd()));
-  const v2 = "features.multi_agent_v2.max_concurrent_threads_per_session", own = numbers.get(v2);
-  const agents = numbers.get("agents.max_concurrent_threads_per_session") ?? numbers.get("agents.max_threads");
-  const [allowed, from, fix] = own !== undefined ? [Math.max(own - 1, 0), `${v2} = ${own}, which counts the chief's own thread`, `max_concurrent_threads_per_session = ${need + 1} under [features.multi_agent_v2]`]
-    : agents !== undefined ? [agents, `agents.max_concurrent_threads_per_session = ${agents}`, `max_concurrent_threads_per_session = ${need} under [agents]`]
-    : [3, "Codex's default of 4 threads, the chief's own included", `max_concurrent_threads_per_session = ${need} under [agents]`];
+  const cwd = input.cwd ?? process.cwd(), [user, ...project] = configFiles(codexHome, cwd);
+  const layer = (file) => { try { return [...tomlValues(readFileSync(file, "utf8"))].map(([key, value]) => [key, { value, file }]); } catch { return []; } }; // no file: no layer
+  const own = layer(user), need = agentCaps(tool.config(env)).cap(tool.projectName(cwd));
+  const [all, alone] = [new Map([...own, ...project.flatMap(layer)]), new Map(own)].map((values) => agentLimit(values, need, user));
+  const { allowed, from, fix, file } = alone.allowed < all.allowed ? alone : all;
   if (allowed >= need) return undefined;
-  return `sage: Codex runs at most ${allowed} agents at once in this session (${from}), and this project's agent cap is ${need} (max_agents, or cap.<project>). An agent over Codex's limit fails to start with "agent thread limit reached". To raise it, set ${fix} in ${join(codexHome, "config.toml")}, then start a new session.`;
+  return `sage: Codex runs at most ${allowed} agents at once in this session (${from}), and this project's agent cap is ${need} (max_agents, or cap.<project>). An agent over Codex's limit fails to start with "agent thread limit reached". To raise it, set ${fix} in ${file}, then start a new session. sage reads only ${user} and the project's .codex/config.toml (it counts that file only where it lowers the limit, because Codex skips it in a project that Codex does not trust), not a -c override, a profile or a managed config.`;
 }
 
 /** Whether sage mode is on in the session, from the mode hook's file (a resumed session keeps it). */
