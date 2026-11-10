@@ -2258,6 +2258,17 @@ test("T933: the writers, the chief, other agents and every agent outside sage mo
   for (const role of READ_ONLY_ROLES) assert.equal(off.send(bash("rm -rf src", FEATURE, { agent_id: `ro-${role}`, agent_type: `sage:${role}` })), undefined, `${role} outside sage mode`);
 });
 
+// F-T931-1: the temp folders of the read-only rule come from core (T931). When the hook lost them, every shell command
+// of a read-only role was refused, also the lead's own state-tool command.
+test("T931: in sage mode a lead's state-tool command and a reviewer's reads pass; a reviewer's shell write is refused", () => {
+  const s = session();
+  s.send(prompt("sage mode"));
+  const lead = { agent_id: "t931-lead", agent_type: "sage:lead" }, reviewer = { agent_id: "t931-cr", agent_type: "sage:code-reviewer" };
+  assert.equal(s.send(bash(`node ${TOOL} standing --project ${FEATURE}`, FEATURE, lead)), undefined, "the lead's state-tool command");
+  for (const command of ["git log --oneline -5", `npm test > ${SCRATCH}/out.txt 2>&1`]) assert.equal(s.send(bash(command, FEATURE, reviewer)), undefined, command);
+  assert.match(denied(s.send(bash("echo x > README.md", FEATURE, reviewer))) ?? "", /the code-reviewer agent changes no files, also not from the shell/);
+});
+
 // T100: two lessons sealed for agents. The hook only reads these commands; nothing here runs ps or kill.
 /** The hook's own PATH: node, then /usr/bin and /bin, so a bare ps resolves to the real one even when the run has a fake ps first on PATH. */
 const SYSTEM_PATH = { PATH: `${dirname(process.execPath)}:/usr/bin:/bin` };
