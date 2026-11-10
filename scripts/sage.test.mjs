@@ -613,7 +613,7 @@ test("T584: a large arena is a design arena: candidates, a judge's page, the PE,
   s.ok("verdict", "T1", "--sha", SHA, "--kind", "checks-pass", "--cycle", "1", "--pr", "41");
   for (const cycle of ["1", "2"]) for (const k of ["review-clean", "security-clean", "ux-clean", "qa-pass"]) s.ok("verdict", "T1", "--sha", SHA, "--kind", k, "--cycle", cycle, "--pr", "41");
   s.ok("task", "T1", "set", "state=verifying");
-  s.ok("run", "done", "R5", "--status", "done");
+  s.ok("run", "done", "R5", "--status", "done", "--tokens", "90000");
   s.ok("task", "T1", "set", "state=verified");
   const check = (head) => s.run("merge-check", "--sha", SHA, "--pr", "41", "--head", head);
   assert.equal(check("sage/t1").status, 0, check("sage/t1").stderr);
@@ -653,7 +653,7 @@ test("T584: a full arena: two candidates, a judge on a third branch, the verdict
   s.ok("run", "done", "R5", "--status", "done");
   for (const k of ["review-clean", "qa-pass"]) s.ok("verdict", "T1", "--sha", SHA, "--kind", k, "--cycle", "1", "--pr", "41");
   s.ok("task", "T1", "set", "state=verifying");
-  s.ok("run", "done", "R4", "--status", "done");
+  s.ok("run", "done", "R4", "--status", "done", "--tokens", "90000");
   s.ok("verdict", "T1", "--sha", SHA, "--kind", "checks-pass", "--cycle", "1", "--pr", "41");
   s.ok("task", "T1", "set", "state=verified");
   const check = (...head) => s.run("merge-check", "--sha", SHA, "--pr", "41", ...head);
@@ -751,7 +751,7 @@ test("T609-LEAD-DEFAULT: with no key, a project holds 5 running lead runs; the r
   for (const t of ["T1", "T2", "T3", "T4", "T5"]) s.ok("run", "add", t, "--role", "lead");
   assert.equal(s.no("run", "add", "T6", "--role", "lead"), "sage: the project has 5 running lead runs, the most it holds: R1 on T1, R2 on T2, R3 on T3, R4 on T4, R5 on T5. Finish one of them first (sage run done <R> --status done, blocked, question or failed).");
   assert.equal(rows(s.dir, "runs").length, 5);
-  s.ok("run", "done", "R2", "--status", "done");
+  s.ok("run", "done", "R2", "--status", "done", "--tokens", "90000");
   assert.equal(s.ok("run", "add", "T6", "--role", "lead"), "R6 running · lead on T6", "a finished lead frees its place");
   const other = store(); // another project counts its own leads
   other.ok("task", "add", "--priority", "P2", "--title", "t", "--size", "small");
@@ -878,7 +878,7 @@ test("T266-LEAD-RACE: lead runs started at once by separate processes keep the l
   assert.equal(ten.filter((r) => r.status === 0).length, 5, ten.map((r) => r.stdout + r.stderr).join(""));
   for (const r of ten.filter((r) => r.status !== 0)) assert.match(r.stderr, /^sage: the project has 5 running lead runs, the most it holds: /, "each other one is refused by the limit, not by a busy lock");
   assert.equal(rows(s.dir, "runs").filter((r) => r.role === "lead" && r.status === "running").length, 5);
-  for (const r of rows(s.dir, "runs")) s.ok("run", "done", r.id, "--status", "done");
+  for (const r of rows(s.dir, "runs")) s.ok("run", "done", r.id, "--status", "done", "--tokens", "90000");
   const two = await Promise.all([1, 2].map(() => s.go("run", "add", "T11", "--role", "lead")));
   assert.equal(two.filter((r) => r.status === 0).length, 1, two.map((r) => r.stdout + r.stderr).join(""));
   assert.match(two.find((r) => r.status !== 0).stderr, /^sage: R\d+ is the running lead run of T11, and a task has one running lead\./);
@@ -3504,7 +3504,7 @@ test("T336: a wait is met only when its task is merged or concluded; an abandone
     stateIs(s, "T1", state);
     const run = s.ok("run", "add", "T2", "--role", "lead");
     assert.match(run, /^R\d+ running · lead on T2/, state);
-    s.ok("run", "done", run.split(" ")[0], "--status", "done");
+    s.ok("run", "done", run.split(" ")[0], "--status", "done", "--tokens", "90000");
     assert.equal(s.ok("status").split("\n").length, 6, `${state}: two usage lines, no waits line when no task waits`);
   }
   byHand(s.dir, "tasks", 0, "T1", () => null); // a hand edit loses the upstream row: the wait is never met
@@ -4274,7 +4274,7 @@ test("T337: a lead run of a task that waits prints the report of the last lead o
   propose(s, "T1", "Codex support", "T3");
   s.ok("gate", "answer", "G1", "--option", "1");
   assert.equal(s.ok("run", "add", "T1", "--role", "lead"), "R1 running · lead on T1", "a task that waits for nothing prints no reports");
-  s.ok("run", "done", "R1", "--status", "done", "--report", "reports/R1.md");
+  s.ok("run", "done", "R1", "--status", "done", "--tokens", "90000", "--report", "reports/R1.md");
   stateIs(s, "T1", "merged");
   stateIs(s, "T2", "concluded");
   assert.equal(s.ok("run", "add", "T3", "--role", "lead"), `R2 running · lead on T3 · upstream reports: T2 no report recorded, T1 R1 ${join(s.dir, "reports", "R1.md")}`);
@@ -4288,7 +4288,7 @@ test("R1216-1: the upstream reports of a lead run come from the latest lead or i
   s.ok("gate", "answer", "G1", "--option", "1");
   for (const r of ["R1", "R2"]) {
     s.ok("run", "add", "T1", "--role", "lead");
-    s.ok("run", "done", r, "--status", "done", "--report", `reports/${r}.md`);
+    s.ok("run", "done", r, "--status", "done", "--tokens", "90000", "--report", `reports/${r}.md`);
   }
   stateIs(s, "T1", "merged");
   assert.equal(s.ok("run", "add", "T2", "--role", "lead"), `R3 running · lead on T2 · upstream reports: T1 R2 ${join(s.dir, "reports", "R2.md")}`);

@@ -680,3 +680,94 @@ for (const role of ["investigate", "evidence-review", "pe", "designer"]) {
     assert.equal(ledger(), before, "identity failures and incomplete reports grant no verdict");
   });
 }
+
+// T954: a Codex run's tokens. The fixture is a child's session record in the form of Codex b514f638 (TokenUsageRecord in
+// protocol/src/protocol.rs, written after each model response by core/src/session/mod.rs): sample values, two token lines.
+const RECORD = join(ROOT, "scripts/fixtures/codex-token-usage.jsonl");
+const recordLines = () => readFileSync(RECORD, "utf8").trimEnd().split("\n").map((line) => JSON.parse(line));
+test("T954: at its stop, a Codex run's own token total from its session record becomes the run's tokens, on the board too; a record with no total leaves the usage unavailable, with the reason", async () => {
+  const project = realpathSync(mkdtempSync(join(dir, "tokens-")));
+  spawnSync("git", ["-C", project, "init", "-q", "-b", "codex/t12-a"]);
+  const sage = (...args) => spawnSync("node", [TOOL, ...args, "--project", project], { encoding: "utf8", env: ENV });
+  const ok = (...args) => { const r = sage(...args); assert.equal(r.status, 0, r.stderr); return r.stdout.trim(); };
+  ok("init");
+  for (let k = 1; k <= 12; k++) ok("task", "add", "--priority", "P2", "--title", `t${k}`, "--size", "small");
+  ok("task", "T12", "set", "state=briefed", "branch=codex/t12-a");
+  const book = ok("logbook");
+  const row = (id) => {
+    const [head, ...lines] = readFileSync(join(book, "runs.tsv"), "utf8").trimEnd().split("\n");
+    const cells = lines.map((line) => line.split("\t")).find((c) => c[0] === id);
+    return Object.fromEntries(head.split("\t").map((key, i) => [key, cells[i] ?? ""]));
+  };
+  // A child of the chief (or a lead), with the run in its task name and the record lines that edit gives.
+  const record = (role, id, edit = (lines) => lines) => {
+    const lines = recordLines(), thread = lines[0].payload.id, path = `/root/sage_${role}_t12_${id.toLowerCase()}`;
+    Object.assign(lines[0].payload, { agent_path: path });
+    const file = join(dir, `tokens-${id}.jsonl`);
+    writeFileSync(file, edit(lines, thread).map((line) => typeof line === "string" ? line : JSON.stringify(line)).join("\n") + "\n");
+    // A review child starts as the brief hook binds it, so that the gate also keeps its report (T483); a lead binds nothing.
+    if (role !== "lead") assert.equal(spawnSync("node", [BRIEF_HOOK], { input: JSON.stringify({ hook_event_name: "SubagentStart", session_id: "s", transcript_path: file, cwd: project }), encoding: "utf8", env: ENV }).status, 0);
+    return file;
+  };
+  // The chief's run_done of the Codex dispatch text: usage unavailable is its fallback for a run that kept no count.
+  const fallback = ["--usage", "unavailable", "--usage-source", "codex collaboration-tools", "--usage-evidence", "wait_agent gives no token count", "--report", "pages/report.md"];
+  const add = (role) => ok("run", "add", "T12", "--role", role, "--usage-interface", "collaboration-tools").split(" ")[0];
+
+  // A lead and a QA child: the last token line's thread total, 25811, is the run's tokens, as a Claude run records them.
+  const lead = add("lead");
+  assert.deepEqual(gate(stop({ agent_transcript_path: record("lead", lead), cwd: project, last_assistant_message: FULL })), {});
+  ok("run", "done", lead, "--status", "done", ...fallback);
+  const qa = add("qa");
+  assert.deepEqual(gate(stop({ agent_transcript_path: record("qa", qa), cwd: project, last_assistant_message: FULL })), {});
+  ok("run", "done", qa, "--status", "done", ...fallback);
+  for (const id of [lead, qa]) {
+    const r = row(id);
+    assert.deepEqual([r.status, r.tokens, r.usage_status, r.usage_source], ["done", "25811", "measured", "Codex session record: thread_token_usage.total_tokens of the agent's last token_usage_record line"], id);
+    assert.match(r.usage_evidence, /^the record of thread 01a1b6ff-0000-7000-8000-000000000954, read at SubagentStop$/);
+    assert.equal(r.usage_interface, "collaboration-tools", "the declared interface stays the run's basis");
+  }
+  assert.match(ok("status"), /about 52k tokens · 2 measured, 0 unavailable, 0 legacy-unrecorded/);
+  assert.match(ok("board", "T12", "--view", "task"), new RegExp(`${lead} [^\\n]*· lead · done · [^\\n]*· tokens 25811\\n${qa} [^\\n]*· qa · done · [^\\n]*· tokens 25811`));
+  // A blocked lead with a kept count needs no fallback; a later stop of the same agent replaces its count, which only grows.
+  const blocked = add("lead"), file = record("lead", blocked);
+  gate(stop({ agent_transcript_path: file, cwd: project, last_assistant_message: FULL }));
+  writeFileSync(file, readFileSync(file, "utf8") + JSON.stringify({ ...recordLines()[5], payload: { ...recordLines()[5].payload, thread_token_usage: { ...recordLines()[5].payload.thread_token_usage, total_tokens: 30000 } } }) + "\n");
+  gate(stop({ agent_transcript_path: file, cwd: project, last_assistant_message: FULL }));
+  ok("run", "done", blocked, "--status", "blocked", "--report", "pages/report.md");
+  assert.deepEqual([row(blocked).tokens, row(blocked).usage_status], ["30000", "measured"]);
+
+  // A record with no total for the agent: the usage is unavailable with the gate's reason, and the gate never stops the agent.
+  const total = (value) => (lines) => lines.map((line) => line.type === "token_usage_record" ? { ...line, payload: { ...line.payload, thread_token_usage: { ...line.payload.thread_token_usage, total_tokens: value } } } : line);
+  for (const [why, edit, reason] of [
+    ["no token line", (lines) => lines.filter((line) => line.type !== "token_usage_record"), /^unavailable: the session record has no token_usage_record line of this agent in its last 8 MiB$/],
+    ["a line that is not JSON", (lines) => [...lines, '{"type":"event_msg",'], /^unavailable: a line of the session record is not JSON$/],
+    ["a negative total", total(-5), /^unavailable: the last token_usage_record of the session record has no total_tokens of 1 to 12 digits \(-5\)$/],
+    ["a total that is not whole", total(12.5), /\(12\.5\)$/],
+    ["a total of the wrong type", total("25811"), /\("25811"\)$/],
+    ["a total of 0", total(0), /\(0\)$/],
+    ["no thread total", (lines) => lines.map((line) => line.type === "token_usage_record" ? { ...line, payload: { ...line.payload, thread_token_usage: undefined } } : line), /\(none\)$/],
+    // A record that holds only another thread's token lines: only the agent's own thread counts.
+    ["only another thread's token lines", (lines) => lines.map((line) => line.type === "token_usage_record" ? { ...line, payload: { ...line.payload, thread_id: "01a1b6ff-0000-7000-8000-000000000001" } } : line), /no token_usage_record line of this agent/],
+  ]) {
+    const id = add("qa");
+    assert.deepEqual(gate(stop({ agent_transcript_path: record("qa", id, edit), cwd: project, last_assistant_message: FULL })), {}, why);
+    ok("run", "done", id, "--status", "done", ...fallback);
+    const r = row(id);
+    assert.deepEqual([r.tokens, r.usage_status, r.usage_source], ["", "unavailable", "Codex session record: thread_token_usage.total_tokens of the agent's last token_usage_record line"], why);
+    assert.match(r.usage_evidence, reason, why);
+  }
+  // Another thread's line after the agent's own last token line: the agent's own line still counts.
+  const mixed = add("qa");
+  gate(stop({ agent_transcript_path: record("qa", mixed, (lines) => [...lines, { ...lines[5], payload: { ...lines[5].payload, thread_id: "01a1b6ff-0000-7000-8000-000000000001", thread_token_usage: { total_tokens: 999999 } } }]), cwd: project, last_assistant_message: FULL }));
+  ok("run", "done", mixed, "--status", "done", ...fallback);
+  assert.equal(row(mixed).tokens, "25811");
+  // No record that the gate can read: no count is kept, and the chief's fallback stands, with its own reason.
+  const none = add("qa");
+  assert.deepEqual(gate(stop({ agent_transcript_path: join(dir, "no-such-record.jsonl"), cwd: project, last_assistant_message: FULL })), UNREAD);
+  ok("run", "done", none, "--status", "done", ...fallback);
+  assert.deepEqual([row(none).tokens, row(none).usage_status, row(none).usage_evidence], ["", "unavailable", "wait_agent gives no token count"]);
+  // The reader alone: a file that it cannot open gives its reason, and never a number.
+  const { tokenTotal } = await import(pathToFileURL(GATE).href);
+  assert.deepEqual(tokenTotal(join(dir, "no-such-record.jsonl"), "x"), { reason: "the session record cannot be read (ENOENT)" });
+  assert.deepEqual(tokenTotal(RECORD, recordLines()[0].payload.id), { tokens: "25811" });
+});

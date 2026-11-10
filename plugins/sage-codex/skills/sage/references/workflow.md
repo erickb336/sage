@@ -84,6 +84,8 @@ The chief can declare `--usage-interface collaboration-tools` when adding a manu
 
 For the declared unsupported interface, end the run with `--usage unavailable`, `--usage-source`, `--usage-evidence` and `--report`. Give the actual capability evidence. Do not put zero or a word in `--tokens`. The exception changes no report, review or ownership check.
 
+At the stop of an agent whose task name has its run, the report gate reads the agent's own token total from its session record (`total_tokens` of the last `token_usage_record` line of its thread) and keeps it for the run. `run done` without `--tokens` records that count, also over `--usage unavailable`. When the record has no such line, or the gate cannot read it, the gate keeps the reason, and `run done` records the usage as unavailable with that reason.
+
 If a measurement arrives later, use `run usage <R> --tokens <n> --usage-source <source> --usage-evidence <reference>`. This command records an audited enrichment. It preserves the terminal status, timestamp and report. An exact retry adds nothing. A conflicting count or source refuses. Previously blocked runs remain blocked.
 
 Status and stats show measured, unavailable and legacy-unrecorded completed runs. A partial total does not establish that one task costs less than another.

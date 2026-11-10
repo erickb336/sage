@@ -325,6 +325,8 @@ The plugin starts a local MCP server, `sage`, in the desktop app and in the CLI.
 - A write on a task of another chief refuses and names the owning chief, as in Claude. A task with no owning chief refuses and prints its version: call `claim` with the task and that version.
 - To abandon a task with no owning chief, any chief needs no claim: call `task_set` with `fields` `{"state": "abandoned"}` alone and `why`, the reason. The task keeps no chief.
 - A review or QA `verdict` on a task with a build needs `run`: a done run of the task whose child had the run in its task name (`sage_qa_t12_r40`) and ended with its full report. At that stop, the report check keeps the report in the logbook, and `verdict` refuses a verdict that no kept report backs. A report that `pages` saved backs no verdict, because the chief gives its text.
+- Token counts: at the stop of a child that has the run in its task name (also a lead, `sage_lead_t12_r40`), the report check reads the child's own token total from its Codex session record. That is `total_tokens` of the last `token_usage_record` line of the child's own thread, not of its children. `run_done` records it as the run's tokens, and the logbook and the board show it, as for a Claude run.
+- When the record has no such line, or the check cannot read it, the run's usage is unavailable, with the reason.
 - Codex starts the server outside the shell sandbox. Under `workspace-write`, the logbook is not a writable folder of an agent's shell, so only the server writes it.
 - Under full access (`danger-full-access`), an agent's shell can write any file, also the logbook, the mode files and Codex's record of your messages. So sage mode gives no guarantee there.
 - The plugin approves its own tools, so the logbook writes do not ask you each time. To be asked, set `default_tools_approval_mode = "prompt"` under `[plugins."sage@sage".mcp_servers.sage]` in your Codex config.
@@ -513,11 +515,9 @@ These are the differences from Claude Code that stay in sage 1.0, by the owner's
 | Limit | What you see | What to do |
 | --- | --- | --- |
 | **One model for all agents** | Every agent runs on the session's model, also a light role such as the UX review. | Choose a multi-agent v2 model for the session. Do not change it during a run. |
-| **No token counts** | The logbook and the board show no token count for a Codex run. | Nothing. |
 | **Late check of a left-out finding** | A lead that leaves out a medium or high finding of a helper learns it only when it records the verdict. | Nothing. The state tool refuses that verdict, so the clean cycles stay safe. |
 
 ### Why each limit stays
 
 - **One model for all agents:** Codex children inherit the session's model, so sage sets no model for each role and size.
-- **No token counts:** Codex's agent tools give no token count for each run, so the chief records the usage as unavailable.
 - **Late check of a left-out finding:** the state tool refuses that verdict in both providers. Claude's hook also checks it earlier, at the lead's next run or state move.

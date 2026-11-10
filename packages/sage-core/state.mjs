@@ -749,6 +749,35 @@ function keepReport(project, { task, run, role, sha = "", text } = {}, env = pro
   return file;
 }
 
+/** A run's token count from its agent's stop (T954): one file for each run, beside its kept report, that only a provider's stop hook writes. */
+const usageFile = (dir, run) => join(dir, "kept", `${run}.usage.json`);
+/**
+ * Keep a running run's usage at its agent's stop (T954): its token count (tokens, a whole number as text) or, when the
+ * provider's record gives none, no tokens and the reason as evidence. The source names where the count came from. A later
+ * stop of the same agent replaces it, as its count only grows. `run done` takes it when the chief gives no --tokens.
+ */
+function keepUsage(project, { task, run, role, tokens, source, evidence } = {}, env = process.env) {
+  const dir = storeDir(project, env);
+  if (!existsSync(join(dir, "tasks.tsv")) || lstatSync(join(dir, "moved.json"), { throwIfNoEntry: false })) refuse(`no logbook takes usage for the project ${visible(project)}.`);
+  if (!/^R[1-9]\d*$/.test(String(run)) || !(tokens === undefined || tokenCount(tokens)) || !usageText(source) || !usageText(evidence)) refuse("kept usage needs its run id, a source, evidence and tokens of 1 to 12 digits or none. No usage is kept.");
+  const row = read(dir, "runs").find((r) => r.id === run);
+  if (row?.task !== task || row.role !== role || row.status !== "running") refuse(`${run} is not a running ${role} run of ${task}, so no usage is kept.`);
+  const folder = join(dir, "kept"), temporary = join(folder, `.usage-${randomUUID()}`);
+  mkdirSync(folder, { recursive: true, mode: 0o700 });
+  writeFileSync(temporary, JSON.stringify({ task, run, role, ...(tokens === undefined ? {} : { tokens }), source, evidence, at: now() }), { flag: "wx", mode: 0o600 });
+  renameSync(temporary, usageFile(dir, run));
+  return usageFile(dir, run);
+}
+/** A run's kept usage as run done records it, or undefined when none is kept or the file does not read as one. */
+function keptUsage(dir, run) {
+  try {
+    const kept = JSON.parse(readRegular(usageFile(dir, run.id), { link: false, max: 16384 }) ?? "null");
+    if (kept?.run !== run.id || kept.task !== run.task || kept.role !== run.role || !usageText(kept.source) || !usageText(kept.evidence)
+      || !(kept.tokens === undefined || tokenCount(kept.tokens))) return undefined;
+    return { tokens: kept.tokens ?? "", usage_status: kept.tokens ? "measured" : "unavailable", usage_source: kept.source, usage_evidence: kept.evidence };
+  } catch { return undefined; }
+}
+
 /** A run's kept report, or undefined when none is kept. A kept file that does not read as one is damaged. */
 function keptOf(dir, run) {
   const text = readRegular(keptFile(dir, run), { link: false, max: 6 * KEPT_MAX + 4096 }); // JSON writes a control character as 6 bytes
@@ -3685,9 +3714,15 @@ function act(cmd, pos, opt, dir, env, skip, project) {
           write(dir, "runs", runs);
           return `${run.id} ${st} · added ${adds.join(" and ")}`;
         }
+        // The usage that the agent's stop kept (T954) stands for --tokens, and it wins over a declared unavailable.
+        const kept = opt.tokens === undefined ? keptUsage(dir, run) : undefined;
+        const counted = opt.tokens !== undefined || unavailable || kept;
         // A done review or QA run gives its tokens, so that sage stats counts every review's cost (T346).
-        if (st === "done" && CHECKERS.includes(run.role) && opt.tokens === undefined && !unavailable) refuse(`${run.id} is a ${run.role} run, so run done --status done needs --tokens with its tokens as a whole number, for example --tokens 52000. Nothing changed.`);
-        if (unavailable) Object.assign(run, { usage_status: "unavailable", usage_source: opt["usage-source"], usage_evidence: opt["usage-evidence"] });
+        if (st === "done" && CHECKERS.includes(run.role) && !counted) refuse(`${run.id} is a ${run.role} run, so run done --status done needs --tokens with its tokens as a whole number, for example --tokens 52000. Nothing changed.`);
+        // A lead with a report gives its tokens too (T954): its own count, from its usage. A declared interface counts at the stop.
+        if (run.role === "lead" && st !== "failed" && !run.usage_interface && !counted) refuse(`${run.id} is a lead run, so run done --status ${st} needs --tokens with the lead's own tokens from its usage, as a whole number, for example --tokens 120000. Only --status failed, for a lead that gave no report, leaves them out. Nothing changed.`);
+        if (kept) Object.assign(run, kept);
+        else if (unavailable) Object.assign(run, { usage_status: "unavailable", usage_source: opt["usage-source"], usage_evidence: opt["usage-evidence"] });
         else if (opt.tokens !== undefined) Object.assign(run, { usage_status: "measured", usage_source: opt["usage-source"] ?? "", usage_evidence: opt["usage-evidence"] ?? "" });
         Object.assign(run, { status: st, tokens: opt.tokens ?? run.tokens, report: opt.report ?? run.report, ended: now() });
         write(dir, "runs", runs);
@@ -4154,5 +4189,5 @@ const { bindings, fillCommits, folderOf, link, locate, movePlans, notePlugin, pl
   listed: (root) => known(root, undefined, undefined, true),
   enroll });
 const { chiefs, chiefRow, rowOf } = createChiefs({ now, provider, readRegular, refuse, rowsOf, sheetText, swap });
-return { SIZES, BLOCKS, RISKS, KINDS, STATES, DEFAULTS, PR, LEAD_COMMANDS, leadProblem, leadRequest, sageRoot, locate, chiefFor, sessionBar, branchBar, actorOptions, git, projectRoot, roleReadProject, optionsOf, slug, worktreeRoot, pagesRoot, BRANCH, ofTask, branchOfTask, branchTip, projectName, storeDir, config, cyclesFor, modelFor, read, mergeCheck, boardLandingCheck, logbookView, sage, keepReport, compareRetainedReport, withLock, board, answerPaths, command, runCli, waitingPlugins, writeIdFloors };
+return { SIZES, BLOCKS, RISKS, KINDS, STATES, DEFAULTS, PR, LEAD_COMMANDS, leadProblem, leadRequest, sageRoot, locate, chiefFor, sessionBar, branchBar, actorOptions, git, projectRoot, roleReadProject, optionsOf, slug, worktreeRoot, pagesRoot, BRANCH, ofTask, branchOfTask, branchTip, projectName, storeDir, config, cyclesFor, modelFor, read, mergeCheck, boardLandingCheck, logbookView, sage, keepReport, keepUsage, compareRetainedReport, withLock, board, answerPaths, command, runCli, waitingPlugins, writeIdFloors };
 }

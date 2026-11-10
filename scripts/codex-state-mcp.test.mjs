@@ -823,7 +823,7 @@ test("each tool writes the Codex logbook in CODEX_HOME/sage, and returns each re
 
   assert.match((await call("run_add", { task: "T1", role: "boss" })).error, /^sage: "boss" is not a role of a run\./);
   assert.equal(await call("run_add", { task: "T1", role: "lead", branch: "codex/t1-a" }), "R1 running · lead on T1 · codex/t1-a");
-  assert.equal(await call("run_done", { run: "R1", status: "done" }), "R1 done");
+  assert.equal(await call("run_done", { run: "R1", status: "done", tokens: "90000" }), "R1 done");
   assert.match((await call("run_done", { run: "R1", status: "failed" })).error, /^sage: R1 already ended as done: a run ends once\./);
   assert.match(readFileSync(join(logbook, "runs.tsv"), "utf8"), /\nR1\tT1\tlead\t/);
 
@@ -1054,7 +1054,7 @@ test("T506: the chief saves a report with pages, and each run_done example ends 
   assert.equal(usageInterface, "collaboration-tools");
   // Step 6 sends a run without a token count to the dispatch step (R1798-2).
   assert.match(chief, /`sage run done` with `--tokens` from the agent's usage \(where the host gives no token count, as \*\*Run the route\*\* says\)/);
-  assert.match(chief, /\*\*Run the route\.\*\* [^*]*Codex gives no token count:/);
+  assert.match(chief, /\*\*Run the route\.\*\* [^*]*Codex's agent tools give no token count, so at each child's stop the report gate reads it from the child's session record, and `run_done` records it:/);
 
   const logbook = (await s.call("init")).replace(/^logbook /, "");
   for (const n of [1, 2]) {
