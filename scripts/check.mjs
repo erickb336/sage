@@ -16,6 +16,7 @@ import { packageBoundaryProblems } from "./package-boundaries.mjs";
 import { docFiles, linkProblems, paragraphProblems, readmeProblems } from "./readme-checks.mjs";
 import { SHOTS, SHOTS_RECORD, sampleHash } from "./board-shots.mjs";
 import { unrunTestFiles } from "./test-commands.mjs";
+import { startTextProblems } from "./start-text.mjs";
 
 const problems = [];
 try { problems.push(...packageBoundaryProblems(ROOT)); }
@@ -213,6 +214,9 @@ try {
   const role = Buffer.byteLength(codexModeHook({ hook_event_name: "UserPromptSubmit", session_id: "check", prompt: "sage mode" }, {}).hookSpecificOutput.additionalContext);
   if (role > limit) problems.push(`Codex chief role: the sage hook gives ${role} bytes, ${role - limit} bytes over its limit of ${limit} bytes (0 bytes left; additionalContextLimit ${tokens} tokens at 4 bytes each, in packages/sage-codex/hooks/hooks.json), so Codex would cut the rules. Shorten the chief text (packages/sage-core/roles/chief-of-staff.md) or raise the limit`);
 } catch (e) { problems.push(`Codex chief role: ${e.message} (packages/sage-core/roles/chief-of-staff.md)`); }
+// T934: the Claude chief's and lead's start texts stay under their limits, and each reference that they name exists
+// and has its trigger. node scripts/start-text.mjs prints the bytes of each part.
+try { problems.push(...await startTextProblems()); } catch (e) { problems.push(`start texts: ${e.message} (scripts/start-text.mjs)`); }
 
 // A test must not hold wall-clock or CPU time under a tight fixed bound: load and machine differences can fail a
 // correct test (T53, T188). A name takes the clock when it is set from a clock reading or from a
