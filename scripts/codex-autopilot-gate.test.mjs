@@ -314,8 +314,8 @@ test("F-T677-1: gh runs with the name gh, so a shared launcher that picks its to
   clearPermits();
   const w = world();
   const gh = loggingGh("launcher");
-  assert.equal(spawnSync(join(gh.dir, "gh"), ["pr", "x"], { encoding: "utf8", env: { ...gh.env, PATH: gh.dir } }).stdout, "FAKE-gh T677 launcher\n", "the launcher runs gh by the link's name");
-  assert.match(spawnSync(realpathSync(join(gh.dir, "gh")), ["pr", "x"], { encoding: "utf8", env: gh.env }).stderr, /^launcher: no tool named node/, "by its real file's name it refuses");
+  assert.equal(spawnSync(join(gh.dir, "gh"), ["pr", "x"], { encoding: "utf8", env: { ...gh.env, PATH: gh.dir, HOME: SCRATCH } }).stdout, "FAKE-gh T677 launcher\n", "the launcher runs gh by the link's name");
+  assert.match(spawnSync(realpathSync(join(gh.dir, "gh")), ["pr", "x"], { encoding: "utf8", env: { ...gh.env, HOME: SCRATCH } }).stderr, /^launcher: no tool named node/, "by its real file's name it refuses");
   rmSync(join(gh.dir, "calls.log"));
   const env = { ...w.env, ...gh.env, PATH: `${ARG0}:${gh.dir}` };
   assert.equal(denied(await w.run(w.input(), { env })), undefined, "the gate admits the call");
