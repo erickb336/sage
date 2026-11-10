@@ -113,12 +113,14 @@ const WHY = {
   board: /board password rule/,
   process: /process list/,
   stash: /git stash/,
+  "chief git": /^sage: sage mode is on, so the chief does not throw away uncommitted work/,
   "agent gh": /an agent runs only these gh commands/,
   state: /state tool|writes the logbook/,
 };
 /** The words of a refusal in the Codex gate, where they name the family's own rule (T903); other families take any refusal. */
 const CODEX_WHY = { logbook: /^sage: no agent writes, moves or removes a logbook file from the shell/, board: /^sage: the board password rule/,
-  process: /^sage: an agent never reads or signals the real process list/, stash: /^sage: an agent never runs git stash/ };
+  process: /^sage: an agent never reads or signals the real process list/, stash: /^sage: an agent never runs git stash/,
+  "chief git": /^sage: sage mode is on, so the chief does not throw away uncommitted work/ };
 
 /**
  * The table: [family, command, roles, extra env]. A command is a string for every role, or { claude, codex } when the two
@@ -201,6 +203,11 @@ const REFUSED = [
   ["stash", `git -C ${T} stash`, AGENT],
   ["stash", `git -C ${T} stash list`, AGENT],
   ["stash", `git -C ${T} stash pop`, AGENT],
+  // The chief's git that throws away uncommitted work in the project's main checkout (T968); the agents' git is their own.
+  ["chief git", "git reset --hard", CHIEFS],
+  ["chief git", `git -C ${PROJECT} checkout -- .`, CHIEFS],
+  ["chief git", "git clean -fd", CHIEFS],
+  ["chief git", "git restore .", CHIEFS],
   // An agent's gh: only AGENT_GH, and gh api with GET. -XGET after -t is the template, so gh sends DELETE (F-T815-27).
   ["agent gh", "gh issue close 1", AGENT],
   ["agent gh", "gh api -X DELETE repos/acme/project/git/refs/heads/x -t -XGET", AGENT],
@@ -256,6 +263,17 @@ const PASSED = [
   ["chmod -R u+w ~"],
   // rm of a project link to the shared root removes the link, not the root (F-T903-10).
   [`rm ${LINK}`, WRITERS],
+  // The same git in a worktree outside the project's main checkout, and the chief's merge steps (T968).
+  [`git -C ${T} reset --hard`],
+  [`git -C ${T} checkout -- .`],
+  [`git -C ${T} clean -fd`],
+  [`git -C ${T} restore .`],
+  [`git worktree add --detach ${BASE}/merge main`],
+  ["git merge-tree --write-tree main sage/t9-free"],
+  ["git commit-tree HEAD^{tree} -p main -m 'the merge'"],
+  [`git worktree remove --force ${BASE}/merge`],
+  ["git fetch origin"],
+  ["git checkout sage/t9-free"],
 ];
 
 /** Runs a table's rows as each of their roles; returns the rows whose answer is not the expected one, and the counts. */

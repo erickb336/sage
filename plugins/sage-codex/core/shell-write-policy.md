@@ -17,7 +17,9 @@ where the command runs that program, also through a wrapper that the reader
 knows (`xargs rm`, `env rm`, `find -exec rm`). As an argument it is data, so
 `npm install`, `man tee` and a state-tool note with `--why rm` write nothing
 (F-T960-3). awk code counts when it prints into a file or a command, or runs
-`system()` or a command into `getline` (F-T932-4). `chmod`, `chown`, `chgrp`
+`system()` or a command into `getline` (F-T932-4); a print into `/dev/stdout`,
+`/dev/stderr` or `/dev/null`, and a `>` in parentheses (`print ($1 > 3)`), do
+not (F-T936-1). `chmod`, `chown`, `chgrp`
 and `chflags` count only for a path in `cwd` (F-T933-1), so `chmod +x` of a
 fake in scratch, or `chmod -R u+w ~`, does not.
 
@@ -32,6 +34,20 @@ change at the work tree (`--global` or `--system` in every folder); and
 `cwd`, they do not count, so `git worktree add --detach /tmp/r/head <sha>` and
 git inside that worktree run. `--git-dir` and `--work-tree` count in every
 folder. The chief's rule leaves `readOnly` out, so the chief's git runs (T960).
+
+A scratch folder's target counts only outside the project: the main checkout of
+the repository that holds `cwd` (the nearest `.git` entry; a linked worktree's
+`.git` file names its main checkout). So a worktree in the temp folder is
+scratch also when it is `cwd` (F-T936-5).
+
+`gitDestroysWork(text, cwd, scratch)` is the chief's git rule (T968): true for
+a git form that throws away uncommitted work at a work tree outside the scratch
+folders: `reset --hard`, `checkout` with paths (after `--`, or `.`) or
+`--force`, `switch --force` or `--discard-changes`, `clean` with `-f` (not a
+dry run) and `restore` of the work tree (not `--staged` alone). A line that the
+reader cannot read is false here; `commandWrites` counts it. Core's
+`chiefShellProblem` (in `agent-rules.mjs`) calls both, and both providers call
+it for the chief in sage mode, with core's `CHIEF_GIT` or `CHIEF_SHELL` text.
 
 Executable-name checks ignore case and a trailing `.exe`, using the shared
 normalizer. Reader-option parsing keeps the original arguments and option case.

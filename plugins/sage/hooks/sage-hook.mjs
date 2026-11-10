@@ -455,11 +455,11 @@ export function handle(input, state, slots) {
       if (result?.hookSpecificOutput?.permissionDecision === "deny") return result;
       answer ??= result;
     }
-    // The chief's shell writes in sage mode (T960), as in the Codex gate (T948): core's write forms, with the same text; a
-    // redirection, or a gh clone or download, into the temp folder, outside the project, passes. A disguised write is a limit (order 70).
-    if (main && runFields(ti).some((command) => { try { return core.commandWrites(command, cwd, core.TEMP); } catch { return true; } })) {
-      return deny(event, core.CHIEF_SHELL ?? "the sage core cannot load, so the hook refuses this shell command of the chief. Reinstall or update the sage plugin.");
-    }
+    // The chief's shell writes in sage mode (T960), as in the Codex gate (T948): core's write forms and the git forms that
+    // throw away uncommitted work (T968), with the same text; a redirection, a gh clone or download, or such git, into the
+    // temp folder, outside the project, passes. A disguised write is a limit (order 70).
+    const chief = main ? runFields(ti).map((command) => { try { return core.chiefShellProblem(command, cwd); } catch { return "the sage core cannot load, so the hook refuses this shell command of the chief. Reinstall or update the sage plugin."; } }).find(Boolean) : undefined;
+    if (chief) return deny(event, chief);
     return answer;
   }
   return undefined;
@@ -1266,7 +1266,7 @@ const PAGE_NOTE = "The investigate agent writes only its pages, in the task's pa
 export function readOnlyWrite(agentType, commands, cwd) {
   const { role, denied } = readOnlyRole(agentType), scratch = denied ? scratchOf(role, cwd) : [];
   const write = denied ? commands.find((command) => { try { return core.commandWrites(command, cwd, scratch, { readOnly: true }); } catch { return true; } }) : undefined;
-  return write === undefined ? undefined : `in sage mode, the ${role} agent changes no files, also not from the shell, so ${quoted(bare(write))} is refused: it has a write form (for example sed -i, a redirection to a file, tee, cp, mv, rm, code in node -e, or a git command that changes the checkout, such as git checkout, reset, commit or branch -D). ${role === "investigate" ? `${PAGE_NOTE} Redirect a page into its pages folder, with a literal path.` : "Report the finding instead."} To keep output or a probe, redirect it into your scratch folder in the temp folder, with a literal path (for example > /tmp/<run>/out.txt). To try a changed copy, write the copy the same way: git show <sha>:<path> | sed 's/a/b/' > /tmp/<run>/copy.mjs. To check out a head, make a worktree in your scratch folder: git worktree add --detach /tmp/<run>/head <sha>; git commands run there.`;
+  return write === undefined ? undefined : `in sage mode, the ${role} agent changes no files, also not from the shell, so ${quoted(bare(write))} is refused: it has a write form (for example sed -i, a redirection to a file, tee, cp, mv, rm, code in node -e, or a git command that changes the checkout, such as git checkout, reset, commit or branch -D). ${role === "investigate" ? `${PAGE_NOTE} Redirect a page into its pages folder, with a literal path.` : "Report the finding instead."} ${core.READ_ONLY_SHELL_WAY ?? ""}`;
 }
 /**
  * A read-only role's file tool (T932): in sage mode it writes only into the role's scratch folders (scratchOf), outside

@@ -2,7 +2,7 @@
 import { shellCommands, programsRun } from "./command-reader.mjs";
 import { ghTargets, outputDispatchWrites } from "./output-writes.mjs";
 import { GIT_VALUE, gitSubcommand, programName } from "./command-policy.mjs";
-import { realpathSync } from "node:fs";
+import { readFileSync, realpathSync, statSync } from "node:fs";
 import { basename, dirname, isAbsolute, join, resolve, sep } from "node:path";
 
 const CODE = /^-(?:[a-z]*[ce]|p|-eval|-print|command)$/;
@@ -130,10 +130,21 @@ function writesIn({ words }, runs) {
     /^(?:eval|source|\.|exec)$/.test(base[low.findIndex((w) => !/^\w+=/.test(w))] ?? "")
   );
 }
-/** awk code that writes a file or runs a command: print or printf into > FILE, >> FILE or | "cmd", "cmd" | getline, or system() (F-T932-4). */
-const AWK_WRITES = /\bprintf?\b[^;{}\n]*[>|]|\|&?\s*getline\b|\bsystem\s*\(/;
-/** A word of awk code that writes (AWK_WRITES), with the text of its strings left out: print "a|b" only prints. */
-const awkWrites = (word) => AWK_WRITES.test(word.replace(/"(?:[^"\\]|\\.)*"/g, '""'));
+/** awk code that runs a command: "cmd" | getline, or system() (F-T932-4). */
+const AWK_RUNS = /\|&?\s*getline\b|\bsystem\s*\(/;
+/** awk code that prints into > FILE, >> FILE or | "cmd" (F-T932-4). */
+const AWK_PRINTS = /\bprintf?\b[^;{}\n]*[>|]/;
+/**
+ * A word of awk code that writes (AWK_RUNS, AWK_PRINTS), with the text of its strings left out: print "a|b" only
+ * prints. A print into /dev/stdout, /dev/stderr or /dev/null writes no file, and a > in parentheses is a comparison:
+ * print ($1 > 3) prints 0 or 1 (F-T936-1).
+ */
+const awkWrites = (word) => {
+  const code = word.replace(/>>?\s*"\/dev\/(?:stdout|stderr|null)"/g, "").replace(/"(?:[^"\\]|\\.)*"/g, '""');
+  let printed = code;
+  for (let last; last !== printed;) [last, printed] = [printed, printed.replace(/\([^()]*\)/g, "")];
+  return AWK_RUNS.test(code) || AWK_PRINTS.test(printed);
+};
 /** The operands of chmod, chown, chgrp and chflags that they change: every operand after the mode or the owner (none with --reference). */
 function modeTargets(name, args) {
   const operands = [];
@@ -163,20 +174,52 @@ const CONFIG_CHANGES = /^(?:--(?:unset|unset-all|add|replace-all|rename-section|
 const CONFIG_VALUE = /^(?:-f|--file|--blob|--type|--default|--comment|--value)$/;
 const CONFIG_READS = /^--(?:get|get-all|get-regexp|get-urlmatch|get-color|get-colorbool|list|show-origin|show-scope|name-only|null)$|^-[lz]$/;
 /**
+ * The git forms that throw away uncommitted work in the work tree that they run in (T968): reset --hard, checkout with
+ * paths (after --, or .) or --force, switch --force or --discard-changes, clean with --force (not a dry run), and restore
+ * of the work tree (not --staged alone).
+ */
+function gitDestroys(sub, rest) {
+  const options = rest.slice(0, rest.includes("--") ? rest.indexOf("--") : undefined), paths = rest.length - options.length > 1;
+  if (sub === "reset") return options.includes("--hard");
+  if (sub === "checkout") return paths || options.some((a) => a === "." || /^(?:-f|--force)$/.test(a));
+  if (sub === "switch") return options.some((a) => /^(?:-f|--force|--discard-changes)$/.test(a));
+  if (sub === "clean") return !options.some((a) => GIT_DRY.clean.test(a)) && options.some((a) => /^(?:-[a-zA-Z]*f[a-zA-Z]*|--force)$/.test(a));
+  if (sub !== "restore") return false;
+  let staged = false, worktree = false;
+  for (let i = 0; i < options.length; i++) {
+    const a = options[i];
+    if (a === "--staged") staged = true;
+    else if (a === "--worktree") worktree = true;
+    else if (a === "--source") i++;
+    else if (/^-[^-]/.test(a)) {
+      for (const c of a.slice(1)) {
+        if (c === "S") staged = true;
+        if (c === "W") worktree = true;
+        // -s takes its value: the rest of the word, or the next word.
+        if (c === "s") { if (a.endsWith("s") && a.indexOf("s") === a.length - 1) i++; break; }
+      }
+    }
+  }
+  return worktree || !staged;
+}
+/**
  * The folders and paths where a git command changes the project, for a read-only role (T936, F-T933-1, F-T932-4), or
  * true when the hook cannot tell where. A command of GIT_CHANGES changes the work tree that it runs in (its -C folder, or
  * the command's folder), except a dry run; git branch with a delete, move, copy or force option, and git config with a
  * change, change the checkout's branches or settings; git worktree add, move and remove change their paths. Every other git
  * command, such as fetch, log, worktree list or branch --list, changes no file of the project. git --git-dir or
- * --work-tree names another checkout: true.
+ * --work-tree names another checkout: true. With destroys (the chief, T968), only the forms of gitDestroys count, at their
+ * work tree.
  */
-function gitTargets(args) {
-  let tree = ".", k = 0;
+function gitTargets(args, destroys = false) {
+  let tree = ".", k = 0, other = false;
   for (; args[k]?.startsWith("-"); k++) {
-    if (/^--(?:git-dir|work-tree)(?:=|$)/.test(args[k])) return true;
+    if (/^--(?:git-dir|work-tree)(?:=|$)/.test(args[k])) other = true;
     if (args[k] === "-C") tree = isAbsolute(args[k + 1] ?? "") ? args[k + 1] : join(tree, args[k + 1] ?? "");
     if (GIT_VALUE.test(args[k])) k++;
   }
+  if (destroys) return !gitDestroys(args[k] ?? "", args.slice(k + 1)) ? [] : other || [tree];
+  if (other) return true;
   const sub = args[k] ?? "", rest = args.slice(k + 1);
   if (GIT_CHANGES.test(sub)) return Object.hasOwn(GIT_DRY, sub) && rest.some((a) => GIT_DRY[sub].test(a)) ? [] : [tree];
   if (sub === "branch") {
@@ -221,9 +264,25 @@ function realPath(path) {
  */
 function intoScratch({ target, dir, uncertainDirectory }, cwd, scratch) {
   if (!scratch.length || uncertainDirectory || /[$`*?[\]{}~!]/.test(target)) return false;
-  const path = realPath(resolve(dir ?? cwd, target)), project = realPath(resolve(cwd));
+  const path = realPath(resolve(dir ?? cwd, target)), project = mainCheckout(realPath(resolve(cwd)));
   const under = (folder) => path.startsWith(folder.endsWith(sep) ? folder : folder + sep);
   return path !== project && !under(project) && scratch.some((folder) => under(realPath(resolve(folder))));
+}
+/**
+ * The project of a folder: the main checkout of the repository that holds it, so that a worktree in a scratch folder is
+ * not the project, also as the working folder (F-T936-5). It is the nearest folder above with a .git entry; a linked
+ * worktree's .git file (gitdir: <main>/.git/worktrees/<name>) names its main checkout. Without a .git entry: the folder.
+ */
+function mainCheckout(folder) {
+  for (let dir = folder; ; dir = dirname(dir)) {
+    const marker = join(dir, ".git"), stat = statSync(marker, { throwIfNoEntry: false });
+    if (stat?.isFile()) {
+      const gitdir = /^gitdir: (.+)$/m.exec(readFileSync(marker, "utf8"))?.[1].trim(), worktrees = gitdir && dirname(resolve(dir, gitdir));
+      return worktrees && basename(worktrees) === "worktrees" && basename(dirname(worktrees)) === ".git" ? realPath(dirname(dirname(worktrees))) : dir;
+    }
+    if (stat) return dir;
+    if (dirname(dir) === dir) return folder;
+  }
 }
 /**
  * Is a target of chmod, chown, chgrp or chflags in the project (cwd), or a place that the reader cannot tell (a variable,
@@ -252,15 +311,30 @@ export function commandWrites(text, cwd, scratch = [], { readOnly = false } = {}
     const evidence = programsRun(text, cwd, undefined, { contextEvidence: true, redirectParts: true });
     const runs = new Set(evidence.programs.map(({ run }) => programName(run.word)));
     if (commands.some((command) => writesIn(command, runs))) return true;
-    const placeWrites = ({ run, uncertainDirectory }) => {
-      const name = programName(run.word), at = (target) => ({ target, dir: run.dir, uncertainDirectory });
-      if (/^(?:chmod|chown|chgrp|chflags)$/.test(name)) return modeTargets(name, run.args).some((target) => inProject(at(target), cwd));
-      const targets = name === "gh" ? ghTargets(run.args) : readOnly && name === "git" ? gitTargets(run.args) : [];
-      return targets === true || targets.some((target) => !intoScratch(at(target), cwd, scratch));
+    const placeWrites = (entry) => {
+      const name = programName(entry.run.word);
+      if (/^(?:chmod|chown|chgrp|chflags)$/.test(name)) return modeTargets(name, entry.run.args).some((target) => inProject(at(entry, target), cwd));
+      return outsideScratch(name === "gh" ? ghTargets(entry.run.args) : readOnly && name === "git" ? gitTargets(entry.run.args) : [], entry, cwd, scratch);
     };
     return evidence.redirects.some(r => toFile(r) && !intoScratch(r, cwd, scratch)) || evidence.programs.some(entry => readerDispatch(entry) || outputDispatchWrites(entry) || placeWrites(entry));
   } catch {
     return true;
+  }
+}
+/** A target of a program's entry, in the program's folder. */
+const at = ({ run, uncertainDirectory }, target) => ({ target, dir: run.dir, uncertainDirectory });
+/** Is one of the targets (or true: a place that the hook cannot tell) outside the scratch folders (intoScratch)? */
+const outsideScratch = (targets, entry, cwd, scratch) => targets === true || targets.some((target) => !intoScratch(at(entry, target), cwd, scratch));
+/**
+ * Does a command line run a git form that throws away uncommitted work (gitDestroys) in a work tree outside the scratch
+ * folders, such as git reset --hard in the project (T968)? A line that the reader cannot read does not: commandWrites
+ * counts it as a write.
+ */
+export function gitDestroysWork(text, cwd, scratch = []) {
+  try {
+    return programsRun(text, cwd, undefined, { contextEvidence: true }).programs.some((entry) => programName(entry.run.word) === "git" && outsideScratch(gitTargets(entry.run.args, true), entry, cwd, scratch));
+  } catch {
+    return false;
   }
 }
 

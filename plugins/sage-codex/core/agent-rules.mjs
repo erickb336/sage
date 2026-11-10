@@ -8,6 +8,7 @@ import { basename, dirname, isAbsolute, join, resolve } from "node:path";
 import { programsRun } from "./command-reader.mjs";
 import { gitSubcommand, programName, unreadable } from "./command-policy.mjs";
 import { canonical } from "./protected-paths.mjs";
+import { commandWrites, gitDestroysWork } from "./shell-write-policy.mjs";
 
 const fold = (text) => text.normalize("NFKC").toLowerCase();
 /** A command line without quotes, backslashes and line joins: the text that a rule tests when the reader cannot read the line (fail closed). */
@@ -42,7 +43,20 @@ export const TEMP = [...new Set([tmpdir(), "/tmp", process.env.TMPDIR].filter(Bo
  * core's commandWrites(command, cwd, TEMP) finds a write form, so that a redirection or a gh clone or download into the
  * temp folder, outside the project, passes. The text names each form, and says that the others are refused there too.
  */
-export const CHIEF_SHELL = 'sage mode is on, so the chief does not change files, also not from the shell: this command has a write form (a redirection or a heredoc into a file, tee, cp, mv, rm, sed -i, code in node -e, or gh repo clone, gh run download or gh extension install). Brief an implementer to make this change. To keep output, redirect it into a scratch folder in the temp folder, outside the project, with a literal path (for example > /tmp/notes/out.txt); a gh clone or download into that folder runs too. tee, cp and the other forms are refused also there. git, gh, the sage tools and reads run as before. The user ends sage mode with the message "sage mode off", alone.';
+export const CHIEF_SHELL = 'sage mode is on, so the chief does not change files, also not from the shell: this command has a write form (a redirection or a heredoc into a file, tee, cp, mv, rm, sed -i, code in node -e, or gh repo clone, gh run download or gh extension install). Brief an implementer to make this change. To keep output, redirect it into a scratch folder in the temp folder, outside the project, with a literal path (for example > /tmp/notes/out.txt); a gh clone or download into that folder runs too. tee, cp and the other forms are refused also there. gh, the sage tools, reads and git run as before, except git rm, git mv and the git forms that throw away uncommitted work. The user ends sage mode with the message "sage mode off", alone.';
+/** Why the chief's git that throws away uncommitted work is refused in sage mode, in both providers (T968). */
+export const CHIEF_GIT = 'sage mode is on, so the chief does not throw away uncommitted work: git reset --hard, git checkout -- <path> (or ., or --force), git clean -f and git restore of the work tree can destroy changes in the owner\'s checkout. Make a scratch worktree in the temp folder and run the command there (for example git worktree add --detach /tmp/<name>/wt <sha>, then git -C /tmp/<name>/wt reset --hard), or ask the owner. git commit, git checkout <branch>, git fetch, git merge-tree, git commit-tree, git worktree add and remove, and reads run as before.';
+/**
+ * Why the chief's shell command is refused in sage mode, or undefined, in both providers: a git form that throws away
+ * uncommitted work outside a scratch worktree (CHIEF_GIT, T968), or a write form (CHIEF_SHELL, T948, T960). A command
+ * into the temp folder, outside the project's main checkout, passes.
+ */
+export const chiefShellProblem = (command, cwd) => (gitDestroysWork(command, cwd, TEMP) ? CHIEF_GIT : commandWrites(command, cwd, TEMP) ? CHIEF_SHELL : undefined);
+/**
+ * The way forward of a read-only role's shell refusal, in both providers (T936, F-T936-3): output, a changed copy and a
+ * head go into a scratch folder in the temp folder.
+ */
+export const READ_ONLY_SHELL_WAY = "To keep output or a probe, redirect it into your scratch folder in the temp folder, with a literal path (for example > /tmp/<run>/out.txt). To try a changed copy, write the copy the same way: git show <sha>:<path> | sed 's/a/b/' > /tmp/<run>/copy.mjs. To check out a head, make a worktree in your scratch folder: git worktree add --detach /tmp/<run>/head <sha>; git commands run there.";
 const inTemp = (file) => !!file && TEMP.some((t) => file.startsWith(`${t}/`));
 const PROCESS_TEXT = new RegExp(`(?:^|[\\s;&|(\`'"/<>])(?:${UNIX_PROCESS}|${POWERSHELL_PROCESS})(?:\\.exe)?(?=$|[\\s;&|)\`'"<>])`, "im");
 
