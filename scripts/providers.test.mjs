@@ -426,7 +426,7 @@ test("provider packages are complete outside the checkout, with no opposite adap
     assert.match(board.stdout, /Shared behavior/);
     const mod = await import(pathToFileURL(join(plugin, "skills/sage/sage.mjs")).href);
     const tool = provider === "codex" ? mod.tool : mod;
-    assert.match(tool.sageRoot({}), new RegExp(`\\.${provider}/sage$`));
+    assert.equal(tool.sageRoot({ HOME: join(dir, "home") }), join(dir, "home", `.${provider}`, "sage"));
     const config = run("config");
     assert.equal(config.status, 0, config.stderr);
     assert.match(config.stdout, provider === "codex" ? /inherit,inherit,inherit/ : /opus,sonnet,sonnet/);
@@ -467,13 +467,15 @@ test("core instances isolate provider defaults and validation without changing p
   t.after(() => rmSync(dir, { recursive: true, force: true }));
   const a = createStateTool({ defaultRoot: () => join(dir, "a"), models: ["a", "inherit"], modelDefaults: { arena_models: "a" } });
   const b = createStateTool({ defaultRoot: () => join(dir, "b") });
-  assert.equal(a.config({}).arena_models, "a");
-  assert.equal(b.config({}).arena_models, "inherit,inherit,inherit");
-  assert.throws(() => b.sage(["config", "model.qa=opus"], {}), /inherit/);
+  // T944: an env of its own, with a scratch HOME: with no HOME, the shared root of the config command is the real ~/.sage.
+  const env = { HOME: join(dir, "home") };
+  assert.equal(a.config(env).arena_models, "a");
+  assert.equal(b.config(env).arena_models, "inherit,inherit,inherit");
+  assert.throws(() => b.sage(["config", "model.qa=opus"], env), /inherit/);
   assert.equal(b.sageRoot({ SAGE_HOME: dir }), dir);
-  a.sage(["config", "model.qa=a"], {});
-  assert.equal(a.config({})["model.qa"], "a");
-  assert.equal(b.config({})["model.qa"], undefined);
+  a.sage(["config", "model.qa=a"], env);
+  assert.equal(a.config(env)["model.qa"], "a");
+  assert.equal(b.config(env)["model.qa"], undefined);
   for (const file of filesUnder(join(ROOT, "packages/sage-core"))) {
     assert.doesNotMatch(readFileSync(file, "utf8"), /CLAUDE_|CODEX_|sage-claude|sage-codex|"(?:opus|sonnet|haiku|fable)"/);
   }
