@@ -42,6 +42,8 @@ const BAD_NAME = (name) => `sage: "${name}" starts with sage_ but is not a sage 
 const RO = (role) => `sage: in sage mode, the ${role} agent changes no files. Report the finding instead`;
 const LOGBOOK = "sage: role agents report; only the chief records the logbook. Put this in your report";
 const LEAD_EDIT = "sage: a lead changes no files. Start an implementer of your task to make this change";
+/** The one refusal of a lead's call off its list, from core's lead policy, as Claude gives it too (T928). */
+const OFF_LIST = (name) => `sage: "${name.replaceAll("_", " ")}" is not on a lead's list. A lead records only its own task, with run add, run done, finding add, finding close, finding triage, verdict, round, pages, and task set of state, branch, pr. Put what else the logbook needs in your report`;
 const SPAWN = "sage: role agents start no agents; only the chief and a lead do. Put what you need in your report";
 const LEAD_SPAWN = (task, name) => `sage: a lead starts only the team of its own task: sage_<role>_t${task}_r<k>, where the role is implementer, code_reviewer, security_reviewer, ux_reviewer or qa. ${name} is not one of these. Put what else you need in your report`;
 const BAD_CHAIN = (name) => `sage: "${name}" is above this agent in its agent path, and only a lead (sage_lead_t<n>) has sage agents under it, so this agent changes no files. Report instead`;
@@ -734,7 +736,7 @@ test("F-T552-8: a lead starts its team only while its lead run runs and its task
 test("F-T552-15: a lead's shell write of the state tool names the sage MCP tools; a role agent's keeps its own line", (t) => {
   const w = world(t), command = `node ${TOOL} verdict T1 --kind qa-pass`;
   assert.equal(denied(w.send(pre("Bash", command, w.child("/root/sage_lead_t1_r1")))),
-    "sage: a lead records with the sage MCP tools (run_add, run_done, finding_add, finding_triage, finding_close, verdict, round, pages, task_set, brief), not from the shell. Use one of these, or put what the logbook needs in your report");
+    "sage: a lead records with the sage MCP tools (run_add, run_done, finding_add, finding_close, finding_triage, verdict, round, task_set, pages, brief), not from the shell. Use one of these, or put what the logbook needs in your report");
   assert.equal(denied(w.send(pre("Bash", command, w.child("/root/sage_lead_t1_r1/sage_qa_t1_r2")))), LOGBOOK);
   assert.equal(denied(w.send(pre("Bash", command, w.child("/root/sage_pe_t1/sage_lead_t1")))), LOGBOOK, "a lead's name below another sage name is no lead");
 });
@@ -934,7 +936,7 @@ test("T658: the gate treats move as a write: only the chief calls the move tool 
   const w = world(t);
   const shell = [`node ${TOOL} move --preview`, `node ${TOOL} move --preview --project ${w.project}`, `node ${TOOL} move --plan 7c41e09a`, `node ${TOOL} move --gate G1`];
   const calls = [["move", { preview: true }], ["move", { plan: "7c41e09a" }], ["move", { gate: "G1" }]];
-  const LEAD_MOVE = "sage: a lead records only its own task, and move is not one of its tools. Put what the logbook needs in your report";
+  const LEAD_MOVE = OFF_LIST("move");
   for (const mode of [{ sage: false, autopilot: false }, { sage: true, autopilot: false }]) {
     w.mode(mode);
     for (const path of ["/root/sage_implementer_t1_r1", "/root/sage_code_reviewer_t1_r1", "/root/worker_1"]) {
@@ -955,7 +957,7 @@ test("T927: only the chief calls the worktrees tool or runs worktrees from the s
   const w = world(t);
   const shell = [`node ${TOOL} worktrees`, `node ${TOOL} worktrees prune --yes --project ${w.project}`];
   const calls = [["worktrees", {}], ["worktrees", { prune: true }]];
-  const LEAD = "sage: a lead records only its own task, and worktrees is not one of its tools. Put what the logbook needs in your report";
+  const LEAD = OFF_LIST("worktrees");
   for (const mode of [{ sage: false, autopilot: false }, { sage: true, autopilot: false }]) {
     w.mode(mode);
     for (const path of ["/root/sage_implementer_t1_r1", "/root/sage_qa_t1_r1", "/root/sage_lead_t1_r1"]) {

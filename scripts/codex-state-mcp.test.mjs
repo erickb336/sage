@@ -168,6 +168,8 @@ test("the transfer commands through the server: offer, accept, cancel, release a
   assert.match((await s.call("merge_check", { sha: SHA })).error, /^sage: T1: 0 of 1 clean cycles on this SHA/, "the owning chief gets the cycle rule");
 });
 
+/** The one refusal of a lead's call off its list, from core's lead policy, as Claude gives it too (T928). */
+const OFF_LIST = (name) => `sage: "${name.replaceAll("_", " ")}" is not on a lead's list. A lead records only its own task, with run add, run done, finding add, finding close, finding triage, verdict, round, pages, and task set of state, branch, pr. Put what else the logbook needs in your report`;
 const BRIEF = ["GOAL", "SCOPE", "CONTEXT", "DECISIONS", "ACCEPTANCE", "VERIFY", "BUDGET", "FORBIDDEN", "REPORT", "STANDING"].map((field) => `${field}: the ${field.toLowerCase()}.`).join("\n");
 const LEAD = "/root/sage_lead_t1_r1";
 /** A project with T1 and T2, each briefed on its branch with a running lead run: R1 on T1, R2 on T2. */
@@ -250,7 +252,7 @@ test("T552: a lead's own task keeps the rules of the flow: its team, a kept repo
   await refused("finding_add", { task: "T1", source: "qa", severity: "low", summary: "x", key: "F-T1-1" }, /^sage: only the chief opens a known finding again/);
   for (const [name, args] of Object.entries({ task_add: { title: "x", size: "small", priority: "P2" }, gate_add: { task: "T1", question: "q", options: "a|b", recommend: "a" }, gate_answer: { gate: "G1", option: 1 },
     log: { task: "T1", decision: "d", why: "w" }, standing_add: { order: "o" }, report_compare: { task: "T1", run: "R1", sha256: "0".repeat(64) }, finding_move: { task: "T1", key: "F-T1-1", to: "later" } })) {
-    assert.equal((await lead(name, args)).denied, `sage: a lead records only its own task, and ${name} is not one of its tools. Put what the logbook needs in your report`, name);
+    assert.equal((await lead(name, args)).denied, OFF_LIST(name), name);
   }
   await refused("task_set", { task: "T1", fields: { title: "x" } }, /^sage: a lead sets only state, branch, pr of its task, not title/);
   await refused("task_set", { task: "T1", fields: { state: "merged" } }, /^sage: T1 is briefed: a lead moves it only to building/);
@@ -279,9 +281,9 @@ test("T552: a lead's own task keeps the rules of the flow: its team, a kept repo
   await refused("finding_triage", { task: "T1", key: "F-T1-1", decision: "fix" }, /^sage: F-T1-1 is triaged ask: only the chief changes it/);
   await w.call("finding_triage", { task: "T1", key: "F-T1-1", decision: "fix" });
   // A repair goes through round: no close and no verdict on a new commit before it.
-  await refused("finding_close", { task: "T1", key: "F-T1-1" }, /^sage: T1 has a medium or high finding triaged fix and is not repairing: run round first/);
+  await refused("finding_close", { task: "T1", key: "F-T1-1" }, /^sage: T1 has a medium or high finding triaged fix and is not repairing: run round T1 first/);
   const newer = await reviewed(w, "code-reviewer", CLEAN.replaceAll(SHA, "2".repeat(40)));
-  await refused("verdict", { task: "T1", kind: "review-clean", sha: "2".repeat(40), pr: 5, run: newer }, /run round first/);
+  await refused("verdict", { task: "T1", kind: "review-clean", sha: "2".repeat(40), pr: 5, run: newer }, /run round T1 first/);
   // Round rules: a key that joined after the round waits; a verdict names a run of the current round; a chief's dismissal stays.
   assert.match(await lead("round", { task: "T1" }), /^T1 repairing · round 1/);
   await lead("finding_add", { task: "T1", source: "qa", severity: "low", summary: "b", run: qa, class: "other" }); // F-T1-2
@@ -338,7 +340,7 @@ test("F-T552-1: a lead leaves repairing only after it closed each fix key of the
   await triage(w, "F-T1-1");
   await triage(w, "F-T1-2");
   assert.match(await lead("round", { task: "T1" }), /^T1 repairing · round 1/);
-  const OPEN = "sage: T1 has an open fix finding of its round: close each one after the repair's commit (finding_close), then move it to reviewing";
+  const OPEN = "sage: T1 has an open fix finding of its round: close each one after the repair's commit (finding close), then move it to reviewing. When the re-check did not confirm one, run round T1: it starts the next round";
   assert.equal((await lead("task_set", { task: "T1", fields: { state: "reviewing" } })).denied, OPEN);
   assert.equal(await lead("finding_close", { task: "T1", key: "F-T1-1" }), "F-T1-1 closed · fix");
   assert.equal((await lead("task_set", { task: "T1", fields: { state: "reviewing" } })).denied, OPEN, "a low fix key of the round counts too");
@@ -354,9 +356,9 @@ test("F-T552-1: the refusal of finding_close gives a step that the lead can take
   await triage(w, "F-T1-1");
   assert.match((await lead("round", { task: "T1" })).error, /^sage: T1 is building\. A repair starts from reviewing, verifying or repairing/, "so round is no step from here");
   const close = async () => (await lead("finding_close", { task: "T1", key: "F-T1-1" })).denied;
-  assert.equal(await close(), "sage: T1 has a medium or high finding triaged fix and is not repairing: move it to reviewing, run round, then repair");
+  assert.equal(await close(), "sage: T1 has a medium or high finding triaged fix and is not repairing: move T1 to reviewing first (task T1 set state=reviewing), then run round T1, then repair");
   await lead("task_set", { task: "T1", fields: { state: "reviewing" } });
-  assert.equal(await close(), "sage: T1 has a medium or high finding triaged fix and is not repairing: run round first, then repair");
+  assert.equal(await close(), "sage: T1 has a medium or high finding triaged fix and is not repairing: run round T1 first, then repair");
   assert.match(await lead("round", { task: "T1" }), /^T1 repairing · round 1/);
   assert.equal(await lead("finding_close", { task: "T1", key: "F-T1-1" }), "F-T1-1 closed · fix");
 });
@@ -385,7 +387,7 @@ test("F-T552-2: a lead moves no task off a branch that another task shares", asy
   const w = await leadWorld(t), { lead } = w;
   assert.match(await lead("task_set", { task: "T1", fields: { branch: "sage/t1-b" } }), /^T1 briefed/, "a free branch of its task");
   assert.match(await w.call("task_set", { task: "T2", fields: { branch: "sage/t1-b" } }), /^T2 briefed/);
-  assert.equal((await lead("task_set", { task: "T1", fields: { branch: "sage/t1-c" } })).denied, "sage: sage/t1-b is shared with another task: only the chief moves a task onto a shared branch or off it");
+  assert.equal((await lead("task_set", { task: "T1", fields: { branch: "sage/t1-c" } })).denied, "sage: sage/t1-b is shared with T2: only the chief moves a task onto a shared branch or off it");
 });
 
 test("F-T552-2: a task on a branch of another task keeps it for a lead: no move off it, and a run on it", async (t) => {
@@ -634,7 +636,7 @@ test("T594 with T552: a lead's rules read the shared logbook, and only the chief
   assert.match(await s.call("run_add", { task: "T1", role: "qa" }, { agent: LEAD }), /^R2 running/);
   assert.match(readFileSync(join(folder, "runs.tsv"), "utf8"), /\nR2\tT1\tqa\t/);
   const bindings = readFileSync(join(shared, "bindings.tsv"), "utf8");
-  const LINK_LEAD = "sage: a lead records only its own task, and link is not one of its tools. Put what the logbook needs in your report";
+  const LINK_LEAD = OFF_LIST("link");
   const LINK_CHILD = "sage: role agents report; only the chief records the logbook. Put this in your report";
   for (const [agent, reason, caller] of [[LEAD, LINK_LEAD, { role: "lead", task: "T1", run: "R1", project: s.project }], ["/root/sage_qa_t1_r2", LINK_CHILD, { role: "child" }]]) {
     assert.equal((await s.call("link", { separate: true }, { agent })).denied, reason, `the gate, ${agent}`);
@@ -979,7 +981,7 @@ test("T930: only the chief calls program_propose and config, and a lead sets no 
   const LOGBOOK = "sage: role agents report; only the chief records the logbook. Put this in your report";
   const before = readFileSync(join(w.env.CODEX_HOME, "sage", readdirSync(join(w.env.CODEX_HOME, "sage")).find((name) => name.startsWith("project-")), "tasks.tsv"), "utf8");
   for (const [name, args] of calls) {
-    const notLead = `sage: a lead records only its own task, and ${name} is not one of its tools. Put what the logbook needs in your report`;
+    const notLead = OFF_LIST(name);
     assert.equal((await lead(name, args)).denied, notLead, `the gate: lead ${name}`);
     assert.equal((await w.call(name, args, { agent: `${LEAD}/sage_qa_t1_r5` })).denied, LOGBOOK, `the gate: child ${name}`);
     for (const [who, caller, why] of [["lead", { role: "lead", task: "T1", run: "R1", project: w.project }, `${notLead}.`], ["child", { role: "child" }, `${LOGBOOK}.`]]) {

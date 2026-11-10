@@ -277,19 +277,20 @@ for (const [name, own, other] of pairs) {
     assert.match(w.lead("R1", "task", "T1", "set", "state=building"), /^T1 building/);
     assert.match(w.lead("R1", "run", "add", "T1", "--role", "qa"), /^R3 running/);
     assert.equal(row(w.cells("runs"), "R3").chief, "C1", "the lead's run names its chief");
-    const acts = /is not a write on T1, and a lead acts only on the task of its lead run/;
-    assert.throws(() => w.lead("R1", "task", "T2", "set", "title=x"), acts);
-    assert.throws(() => w.lead("R1", "task", "T3", "set", "title=x"), acts);
-    assert.throws(() => w.lead("R1", "run", "done", "R2", "--status", "failed"), acts);
-    assert.throws(() => w.lead("R1", "task", "add", "--title", "d", ...ADD), acts);
-    assert.throws(() => w.lead("R1", "standing", "add", "an order"), acts);
+    // Core's one lead policy (T928): its own task, and its list.
+    const acts = (id) => ({ message: `${id} is not of T1, and a lead records only its own task. Report to your chief what ${id} needs. Nothing changed.` });
+    assert.throws(() => w.lead("R1", "task", "T2", "set", "state=building"), acts("T2"));
+    assert.throws(() => w.lead("R1", "task", "T3", "set", "state=building"), acts("T3"));
+    assert.throws(() => w.lead("R1", "run", "done", "R2", "--status", "failed"), acts("R2"));
+    assert.throws(() => w.lead("R1", "task", "add", "--title", "d", ...ADD), /"task add" is not on a lead's list\./);
+    assert.throws(() => w.lead("R1", "standing", "add", "an order"), /"standing add" is not on a lead's list\./);
     assert.throws(() => w.lead("R2", "task", "T2", "set", "title=x"), /R2 is not a running lead run/, "another role is no lead");
     assert.throws(() => own.sage(["task", "T1", "set", "title=x", "--project", w.project, "--lead", "R1", "--chief", "C1"], w.env), /takes --chief or --lead, not both/);
     const tasks = w.cells("tasks");
     writeFileSync(join(w.dir, "tasks.tsv"), tasks.replace(/^(T1\t.*)\tC1$/m, "$1\tC2")); // as a task that moved under a running lead
-    assert.throws(() => w.lead("R1", "task", "T1", "set", "title=x"), { message: `T1 belongs to chief C2 (${name === "Claude" ? "codex" : "claude"}), not to C1. Nothing changed. Report this to your chief: a lead writes only while its chief owns the task.` }, "F-T604-27: a lead opens no gate");
+    assert.throws(() => w.lead("R1", "round", "T1"), { message: `T1 belongs to chief C2 (${name === "Claude" ? "codex" : "claude"}), not to C1. Nothing changed. Report this to your chief: a lead writes only while its chief owns the task.` }, "F-T604-27: a lead opens no gate");
     writeFileSync(join(w.dir, "tasks.tsv"), tasks.replace(/^(T1\t.*)\tC1$/m, "$1\t"));
-    assert.throws(() => w.lead("R1", "task", "T1", "set", "title=x"), { message: "T1 has no owning chief, so C1 cannot change it. Nothing changed. Report this to your chief: a lead writes only while its chief owns the task." }, "F-T604-27: a lead claims nothing");
+    assert.throws(() => w.lead("R1", "round", "T1"), { message: "T1 has no owning chief, so C1 cannot change it. Nothing changed. Report this to your chief: a lead writes only while its chief owns the task." }, "F-T604-27: a lead claims nothing");
     writeFileSync(join(w.dir, "tasks.tsv"), tasks);
     w.owner("run", "done", "R1", "--status", "failed");
     assert.throws(() => w.lead("R1", "task", "T1", "set", "title=x"), /R1 is not a running lead run, so this lead writes nothing/, "a lead whose run ended writes nothing");
@@ -1164,6 +1165,43 @@ test("the Claude hook keeps a lead on its lead run in a shared logbook, and a he
   assert.match(w.bash("task T1 set state=building", "s1", { agent_id: "qa-1", agent_type: "sage:qa" }), /writes the logbook, or is not a read command/);
 });
 
+test("T928: one lead policy in core: a lead's write to another task, a command off its list and a wrong state move get the same plain reason from the state tool of each provider, the Claude hook and the Codex gate", async (t) => {
+  const w = hookWorld(t);
+  const { callerRefusal } = await import(at("../plugins/sage-codex/hooks/gate-hook.mjs"));
+  const sage = (...args) => claude.sage([...args, "--project", w.project], w.env);
+  sage("link", "--separate");
+  w.send({ hook_event_name: "UserPromptSubmit", prompt: "sage mode" });
+  const chief = claude.chiefFor(w.project, "s1", w.env);
+  for (const title of ["mine", "theirs"]) sage("task", "add", "--title", title, ...ADD, "--chief", chief);
+  sage("task", "T1", "set", "state=briefed", "--chief", chief);
+  sage("run", "add", "T1", "--role", "lead", "--chief", chief); // R1
+  const start = { subagent_type: "sage:lead", name: "lead-T1", description: "lead-T1", prompt: "GOAL a\nSCOPE b\nCONTEXT c\nDECISIONS d\nACCEPTANCE e\nVERIFY f\nBUDGET 1 hour of agent time\nFORBIDDEN g\nREPORT h\nSTANDING i", run_in_background: true };
+  assert.equal(w.denied(w.send({ hook_event_name: "PreToolUse", tool_name: "Agent", tool_input: start, tool_use_id: "start-1" })), undefined);
+  w.send({ hook_event_name: "PostToolUse", tool_name: "Agent", tool_use_id: "start-1", tool_response: { status: "async_launched", agentId: "lead-1" } });
+  w.send({ hook_event_name: "SubagentStart", agent_id: "lead-1", agent_type: "sage:lead" });
+  const lead = { agent_id: "lead-1", agent_type: "sage:lead" }, caller = { role: "lead", task: "T1", run: "R1", project: realpathSync(w.project) };
+  const before = readFileSync(join(claude.storeDir(w.project, w.env), "tasks.tsv"), "utf8");
+  // Each mistake: the state tool's words, the Codex tool and its input, and the one reason.
+  for (const [words, name, input, reason] of [
+    [["round", "T2"], "round", { task: "T2" }, "T2 is not of T1, and a lead records only its own task. Report to your chief what T2 needs."],
+    [["gate", "add", "T1", "--question", "q", "--options", "a|b", "--recommend", "a"], "gate_add", { task: "T1", question: "q", options: "a|b", recommend: "a" },
+      '"gate add" is not on a lead\'s list. A lead records only its own task, with run add, run done, finding add, finding close, finding triage, verdict, round, pages, and task set of state, branch, pr. Put what else the logbook needs in your report.'],
+    [["task", "T1", "set", "state=verified"], "task_set", { task: "T1", fields: { state: "verified" } }, "T1 is briefed: a lead moves it only to building."],
+  ]) {
+    for (const [provider, tool] of [["Claude", claude], ["Codex", codex]]) {
+      assert.throws(() => tool.sage([...words, "--project", w.project, "--lead", "R1"], w.env), { message: `${reason} Nothing changed.` }, `the ${provider} state tool: ${words.join(" ")}`);
+    }
+    const hook = w.bash([...words.map((word) => (word.includes("|") ? "a,b" : word)), "--lead", "R1"].join(" "), "s1", lead) ?? "";
+    assert.ok(hook.startsWith(`sage: ${reason} A lead writes the logbook only with`), `the Claude hook: ${words.join(" ")}: ${hook}`);
+    assert.equal(callerRefusal(caller, name, { project: w.project, ...input }, w.env), `sage: ${reason}`, `the Codex gate and server: ${name}`);
+  }
+  assert.equal(readFileSync(join(claude.storeDir(w.project, w.env), "tasks.tsv"), "utf8"), before, "nothing changed");
+  // The same lead's own move passes in each place.
+  assert.equal(w.bash("task T1 set state=building --lead R1", "s1", lead), undefined);
+  assert.equal(callerRefusal(caller, "task_set", { project: w.project, task: "T1", fields: { state: "building" } }, w.env), undefined);
+  assert.match(codex.sage(["task", "T1", "set", "state=building", "--project", w.project, "--lead", "R1"], w.env), /^T1 building/);
+});
+
 test("T927: the Claude chief runs worktrees and its prune with no --chief in a shared logbook; a lead and a helper run neither", (t) => {
   const w = hookWorld(t);
   const sage = (...args) => claude.sage([...args, "--project", w.project], w.env);
@@ -1180,7 +1218,7 @@ test("T927: the Claude chief runs worktrees and its prune with no --chief in a s
   for (const line of ["worktrees", "worktrees prune --yes"]) {
     assert.equal(w.bash(line), undefined, `the chief: ${line}`);
     assert.match(w.bash(line, "s1", { agent_id: "qa-1", agent_type: "sage:qa" }), new RegExp(`"${line.replace(" --yes", "")}" writes the logbook, or is not a read command of the state tool\\.`), `a helper: ${line}`);
-    assert.match(w.bash(`${line} --lead R1`, "s1", { agent_id: "lead-1", agent_type: "sage:lead" }), /is not on the lead's list/, `a lead: ${line}`);
+    assert.match(w.bash(`${line} --lead R1`, "s1", { agent_id: "lead-1", agent_type: "sage:lead" }), /is not on a lead's list/, `a lead: ${line}`);
   }
 });
 
