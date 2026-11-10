@@ -147,18 +147,18 @@ test("T677 lifecycle: startup and resume turn autopilot off in the mode file; a 
 test("the SessionStart hook gives a trusted install on a tested Codex no warning: the status goes to the chief only (R1665-3)", (t) => {
   const { run } = installed(t, { trust: ALL, cliVersion: "0.164.0" });
   for (const source of ["startup", "resume", "clear"]) {
-    assert.deepEqual(run({ hook_event_name: "SessionStart", source }), output(`sage 0.1.0 is installed. Codex 0.164.0. sage hooks: 7 of 7 have a trust record (Codex checks each hash).\n${START}`), source);
+    assert.deepEqual(run({ hook_event_name: "SessionStart", source }), output(`sage 0.1.0 is installed. Codex 0.164.0. sage hooks: 7 of 7 are trusted (by their trust records; Codex checks each hash).\n${START}`), source);
   }
   // F-T677-20: the tested range, 0.164 to 0.167, also holds the desktop app's 0.167.0-alpha.3.2.
   for (const version of ["0.167.0", "0.167.0-alpha.3.2"]) {
-    assert.deepEqual(installed(t, { trust: ALL, cliVersion: version }).run({ hook_event_name: "SessionStart", source: "startup" }), output(`sage 0.1.0 is installed. Codex ${version}. sage hooks: 7 of 7 have a trust record (Codex checks each hash).\n${START}`), version);
+    assert.deepEqual(installed(t, { trust: ALL, cliVersion: version }).run({ hook_event_name: "SessionStart", source: "startup" }), output(`sage 0.1.0 is installed. Codex ${version}. sage hooks: 7 of 7 are trusted (by their trust records; Codex checks each hash).\n${START}`), version);
   }
 });
 
 test("the SessionStart hook warns the user for hooks without trust and outside the tested Codex range", (t) => {
   const { run } = installed(t, { trust: ["session_start:0:0"], cliVersion: "0.168.0" });
-  assert.deepEqual(run({ hook_event_name: "SessionStart", source: "resume" }), output(`sage 0.1.0 is installed. Codex 0.168.0. sage hooks: 1 of 7 have a trust record (Codex checks each hash).\n${START}`,
-    "sage: 6 of the 7 sage hooks have no trust record yet, so they do not run. To trust them, type /hooks in the Codex CLI.\n" +
+  assert.deepEqual(run({ hook_event_name: "SessionStart", source: "resume" }), output(`sage 0.1.0 is installed. Codex 0.168.0. sage hooks: 1 of 7 are trusted (by their trust records; Codex checks each hash).\n${START}`,
+    "sage: 6 of the 7 sage hooks are not trusted or turned off, so they do not run. To trust them or turn them on, type /hooks in the Codex CLI.\n" +
     "sage: sage was not tested with Codex 0.168.0, so some sage rules may not run. Autopilot merges in Codex 0.164 and later."));
   assert.match(installed(t, { trust: ALL, cliVersion: "0.163.0" }).run({ hook_event_name: "SessionStart", source: "startup" }).systemMessage, /^sage: sage was not tested with Codex 0\.163\.0, so some sage rules may not run\. Autopilot merges in Codex 0\.164 and later\.$/);
 });
@@ -166,7 +166,7 @@ test("the SessionStart hook warns the user for hooks without trust and outside t
 test("on resume of a session over Node's string limit, the SessionStart hook still reads the Codex version (F-T473-1)", (t) => {
   const { run, home } = installed(t, { trust: ALL, cliVersion: "0.164.0" });
   truncateSync(join(home, "rollout.jsonl"), 600 * 2 ** 20); // sparse: the 600 MiB after the first line cost no disk
-  assert.deepEqual(run({ hook_event_name: "SessionStart", source: "resume" }), output(`sage 0.1.0 is installed. Codex 0.164.0. sage hooks: 7 of 7 have a trust record (Codex checks each hash).\n${START}`));
+  assert.deepEqual(run({ hook_event_name: "SessionStart", source: "resume" }), output(`sage 0.1.0 is installed. Codex 0.164.0. sage hooks: 7 of 7 are trusted (by their trust records; Codex checks each hash).\n${START}`));
 });
 
 test("T952: the SessionStart hook warns when Codex's thread limit runs fewer agents than the project's agent cap, and names the setting to change", (t) => {
@@ -199,7 +199,7 @@ test("T952: the SessionStart hook warns when Codex's thread limit runs fewer age
 
 test("the SessionStart hook says when it cannot read the Codex version, and ignores other events", (t) => {
   const { run } = installed(t, { trust: ALL });
-  assert.deepEqual(run({ hook_event_name: "SessionStart", source: "startup" }), output(`sage 0.1.0 is installed. Codex version unknown. sage hooks: 7 of 7 have a trust record (Codex checks each hash).\n${START}`,
+  assert.deepEqual(run({ hook_event_name: "SessionStart", source: "startup" }), output(`sage 0.1.0 is installed. Codex version unknown. sage hooks: 7 of 7 are trusted (by their trust records; Codex checks each hash).\n${START}`,
     "sage: the hook could not read the Codex version, so some sage rules may not run. Autopilot merges in Codex 0.164 and later."));
   assert.equal(run({ hook_event_name: "UserPromptSubmit", prompt: "hello" }), "");
 });
@@ -209,9 +209,9 @@ test("on resume with sage mode on, the status says that sage mode is on, not how
   const folder = join(home, "sage/.hooks/codex");
   mkdirSync(folder, { recursive: true, mode: 0o700 });
   writeFileSync(join(folder, `${stateKey({ session_id: "s1" })}.json`), JSON.stringify({ sage: true, autopilot: false, given: true }), { mode: 0o600 });
-  assert.deepEqual(run({ hook_event_name: "SessionStart", source: "resume" }), output("sage 0.1.0 is installed. Codex 0.164.0. sage hooks: 7 of 7 have a trust record (Codex checks each hash).\nsage mode is on in this session."));
+  assert.deepEqual(run({ hook_event_name: "SessionStart", source: "resume" }), output("sage 0.1.0 is installed. Codex 0.164.0. sage hooks: 7 of 7 are trusted (by their trust records; Codex checks each hash).\nsage mode is on in this session."));
   writeFileSync(join(folder, `${stateKey({ session_id: "s1" })}.json`), JSON.stringify({ sage: false, autopilot: false }), { mode: 0o600 });
-  assert.deepEqual(run({ hook_event_name: "SessionStart", source: "resume" }), output(`sage 0.1.0 is installed. Codex 0.164.0. sage hooks: 7 of 7 have a trust record (Codex checks each hash).\n${START}`));
+  assert.deepEqual(run({ hook_event_name: "SessionStart", source: "resume" }), output(`sage 0.1.0 is installed. Codex 0.164.0. sage hooks: 7 of 7 are trusted (by their trust records; Codex checks each hash).\n${START}`));
 });
 
 test("the Codex guide carries the owner's lines for install, trust, removal, the tools and the push limit (R1670, R1671-1, R1671-3, R1665-8)", () => {

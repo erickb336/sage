@@ -40,7 +40,7 @@ The JSON output gives the reference commit, tracked and matched counts, and rela
 
 ## sage's hook entries
 
-sage's hooks run from the owner's Codex hooks file (`<CODEX_HOME>/hooks.json`) through a launcher in `<CODEX_HOME>/sage-hooks`, not from the plugin. The owner runs `node <installed-plugin>/skills/sage/sage.mjs hooks install` once on each computer, then trusts the 7 entries with `/hooks`. `hooks status` shows the entries, their trust records and the launcher; `hooks uninstall` removes only sage's entries and the launcher. When the start status or a refusal names `hooks install`, tell the owner; do not run it or change those files yourself.
+sage's hooks run from the owner's Codex hooks file (`<CODEX_HOME>/hooks.json`) through a launcher in `<CODEX_HOME>/sage-hooks`, not from the plugin. The owner runs `node <installed-plugin>/skills/sage/sage.mjs hooks install` once on each computer, then trusts the 7 entries with `/hooks`. `hooks status` shows the entries, their trust records and the launcher; `hooks uninstall` removes only sage's entries and the launcher. When the start status or a refusal names `hooks install`, tell the owner and give the command. Run it only after the owner says yes, and never change those files yourself.
 
 ## Logbook command reference
 

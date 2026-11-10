@@ -92,7 +92,7 @@ import { modeDirectory } from "./sage-codex-hook.mjs";
 import { autopilotSwitch, callInRecord, NEW_ON, readRecord, RECORD_RANGE, RECORD_VERSION } from "./owner-record.mjs";
 import { markFile } from "./start-mark.mjs";
 import { launcherFolder, versionsFolder } from "./launch.mjs";
-import { INSTALL } from "./entries.mjs";
+import { ASK_INSTALL } from "./entries.mjs";
 import { CHIEF_SHELL, TEMP } from "../core/index.mjs";
 import { mergeCommand, permitFile, permitFolder } from "../skills/sage/merge.mjs";
 
@@ -497,7 +497,7 @@ export function takeProof(meta, name, env = process.env, input) {
     && (name !== "report_compare" || proof.comparison === comparisonHash(input));
   return seen && callerForm(proof.caller) ? proof.caller : null;
 }
-export const NO_GATE = `sage's gate is not running. If sage's hooks are not installed yet, run: ${INSTALL}. Then trust them with /hooks in the Codex CLI (or the app's hook review), and try again.`;
+export const NO_GATE = `sage's gate is not running. If sage's hooks are not installed yet, tell the user. To install them, ${ASK_INSTALL}. Then the user trusts them with /hooks in the Codex CLI (or the app's hook review), and you try again.`;
 
 /** The merge check for one merge form: the pull request's head branch from gh, then the state tool's ledger check. */
 export async function checkMerge({ pr, sha }, cwd, env = process.env, session) {
