@@ -6,7 +6,7 @@ edit project files, merge changes, or ask the user a question.
 1. Read the complete brief and the task's acceptance. Keep all work within that task.
 2. Give the implementer a complete brief. Use the task's branch for each repair. Its stop is a normal stop: end its run, then start the reviews on the head that it left on the branch.
 3. Run independent code review for every change. Run security review when the task's risk requires it. Use UX review when the experience changes.
-4. Resolve findings on the same branch. A new commit restarts the required clean review cycles.
+4. Resolve findings on the same branch. A new commit restarts the required clean review cycles. Before any verdict and any repair round of a cycle with a medium or high finding, run one QA proof check: it reruns each finding's proof on a fresh copy of the head. Drop a medium finding that did not reproduce; report a high one.
 5. Run QA against the acceptance and the final head SHA. Keep unverified work explicit.
 6. Report the result and evidence to the chief. Never accept a report as proof of a check that nobody ran.
 

@@ -92,6 +92,16 @@ export function uniqWrites(words, base) {
   }
   return operands > 1;
 }
+/** Does a command run inline code: an interpreter or a shell with a code option (node -e, python -c, sh -c)? The hook cannot read that code, so it counts as a write. */
+const runsCode = (base, low) => base.some((w) => /^(?:node|deno|bun|python[\d.]*|perl|ruby|php|osascript|sh|bash|zsh|dash|ksh|fish|pwsh|powershell)$/.test(w)) && low.some((w) => CODE.test(w));
+/** Does a command line run inline code (runsCode) in one of its commands? A line that the reader cannot read does not (T947). */
+export function inlineCode(text) {
+  try {
+    return shellCommands(text).some(({ words }) => runsCode(words.map(programName), words.map((w) => w.toLowerCase())));
+  } catch {
+    return false;
+  }
+}
 function writesIn({ words }) {
   const low = words.map((w) => w.toLowerCase());
   const base = words.map(programName);
@@ -110,7 +120,7 @@ function writesIn({ words }) {
     (has(/^g?awk$/) && low.includes("inplace")) ||
     (has(/^g?sort$/) && low.some((w) => /^-[a-z]*o|^--o/.test(w))) || // sort takes a shortened long option: --out=FILE, --outp=FILE (T83-R5-SORTABBR)
     (has(/^find$/) && low.some((w) => /^-(?:delete|exec|execdir|ok|okdir|fprint|fprintf|fls)$/.test(w))) ||
-    (has(/^(?:node|deno|bun|python[\d.]*|perl|ruby|php|osascript|sh|bash|zsh|dash|ksh|fish|pwsh|powershell)$/) && low.some((w) => CODE.test(w))) ||
+    runsCode(base, low) ||
     /^(?:eval|source|\.|exec)$/.test(base[low.findIndex((w) => !/^\w+=/.test(w))] ?? "")
   );
 }

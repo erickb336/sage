@@ -2351,6 +2351,51 @@ test("T932: the investigate and evidence-review agents get the brief check and t
   assert.equal(stop("sage:evidence-review", report("CLEAN")), undefined, "a clean review");
 });
 
+test("T947: a review's or QA's medium or high finding carries a proof that the proof check can rerun: the first stop without one, or with a refused one, is blocked once; a low one needs none", () => {
+  const s = session();
+  s.send(prompt("sage mode"));
+  const stop = (type, message, again = false) => s.send({ hook_event_name: "SubagentStop", agent_id: `proof-${type}`, agent_type: type, cwd: FEATURE, stop_hook_active: again, last_assistant_message: message });
+  const RULE = /\. Under each medium or high finding, give its proof on indented lines: proof: <one command, run from the repository root of the head> and saw: <the one output line that shows the problem>, or proof: screenshot <path> and steps: <the url and the actions>\./;
+  for (const [finding, why] of [
+    ["- K1 medium a.js:1 an empty name saves a row", /^sage: K1 is medium and has no proof line\./],
+    ["- K1 high a.js:1 a crash\n  proof: npm test", /^sage: K1's proof has no saw line\./],
+    ["- K1 medium a page\n  proof: screenshot /tmp/r40/a.png", /^sage: K1's proof has no steps line\./],
+    ["- K1 medium a.js:1 a stuck job\n  proof: kill 1\n  saw: done", /^sage: K1's proof "kill 1" is refused: an agent never reads or signals the real process list/],
+    ["- K1 medium a.js:1 a bad file\n  proof: npm test > out.txt\n  saw: not ok 1", /^sage: K1's proof "npm test > out\.txt" is refused: it writes outside the scratch folder\./],
+    ["- K1 low a.js:1 a nit\n- K2 medium a.js:2 a bad value", /^sage: K2 is medium and has no proof line\./],
+    // F-T947-2: git only reads; F-T947-8: inline code has its own reason; F-T947-5: one pair of backticks is a mark.
+    ...["git reset --hard", "git clean -fdx", "git -C /Users/x/repo log", "npm test && git branch -D claude/t12", "git worktree add /tmp/w HEAD"].map((proof) =>
+      [`- K1 medium a.js:1 a bad value\n  proof: ${proof}\n  saw: not ok 1`, /^sage: K1's proof ".*" is refused: a proof runs git only to read its own working copy: git status, log, show, diff, rev-parse, ls-files, grep, cat-file, blame, with no -C, -c, --git-dir, --work-tree or --output\./]),
+    ["- K1 medium a.js:1 a bad value\n  proof: node -e \"console.log(1)\"\n  saw: 1", /^sage: K1's proof "node -e \\"console\.log\(1\)\\"" is refused: it runs inline code \(such as node -e or sh -c\), which the gate cannot check: put the script in a file in your scratch folder, and run that file\./],
+    ["- K1 medium a.js:1 a bad file\n  proof: `npm test > out.txt`\n  saw: not ok 1", /^sage: K1's proof "npm test > out\.txt" is refused: it writes outside the scratch folder\./],
+  ]) {
+    for (const type of ["sage:code-reviewer", "sage:security-reviewer", "sage:ux-reviewer", "sage:qa"]) {
+      const first = stop(type, report("FINDINGS", `\n${finding}`));
+      assert.equal(first?.decision, "block", `${type}: ${finding}`);
+      assert.match(first.reason, why, finding);
+      assert.match(first.reason, RULE, "the stop gate gives the way to write a proof");
+      assert.equal(stop(type, report("FINDINGS", `\n${finding}`), true), undefined, `${type}: the second stop goes through`);
+    }
+  }
+  for (const finding of ["- K1 low a.js:1 a nit", "- K1 medium a.js:1 an empty name saves a row\n  proof: node --test test/form.test.mjs > /tmp/r40/out.txt\n  saw: not ok 3 an empty name is refused",
+    "- K1 high a page\n  proof: screenshot /tmp/r40/a.png\n  steps: open http://localhost:5173/form, press Save",
+    "- K1 medium a.js:1 a bad value\n  proof: `git --no-pager diff HEAD~1 -- a.js`\n  saw: +const a = 1", "- K1 medium a.js:1 a bad value\n  proof: git grep -n TODO a.js\n  saw: a.js:1:TODO"]) assert.equal(stop("sage:code-reviewer", report("FINDINGS", `\n${finding}`)), undefined, finding);
+  for (const type of ["sage:implementer", "sage:evidence-review"]) assert.equal(stop(type, report("FINDINGS", "\n- K1 medium a.js:1 a bad value")), undefined, `${type} gives no finding that a proof check reruns`);
+});
+
+test("T947: in a cycle, a lead triages a medium or high finding fix, or drops a medium one, only with --proof; a high one is never its to drop", () => {
+  const s = leadSession();
+  for (const state of ["building", "reviewing"]) s.sage("task", "T1", "set", `state=${state}`);
+  s.sage("finding", "add", "T1", "--source", "qa", "--severity", "high", "--summary", "c", "--run", "R1", "--class", "other"); // F-T1-3
+  const refused = (args, why) => assert.match(denied(stateRun(s, args)) ?? "", why, args);
+  refused("finding triage T1 F-T1-2 fix", /^sage: F-T1-2 is medium: in a cycle, a lead triages it fix only with --proof R<n>, the done proof check whose report says F-T1-2 reproduced or could not run\./);
+  refused("finding triage T1 F-T1-3 fix", /^sage: F-T1-3 is high: in a cycle, a lead triages it fix only with --proof R<n>/);
+  refused("finding triage T1 F-T1-2 dismiss --reason=x", /^sage: F-T1-2 is medium: a lead dismisses it only with --proof R<n>, the done proof check whose report says F-T1-2 not reproduced\./);
+  refused("finding triage T1 F-T1-3 dismiss --proof R4", /^sage: F-T1-3 is high: a lead never dismisses it, also when the proof check did not reproduce it\. Report it, or triage it fix: the chief decides\./);
+  // With --proof, the hook lets the triage through: the state tool then checks the proof check itself.
+  for (const args of ["finding triage T1 F-T1-2 dismiss --proof R4", "finding triage T1 F-T1-2 fix --proof R4", "finding triage T1 F-T1-3 fix --proof=R4", "finding triage T1 F-T1-1 fix"]) assert.equal(denied(stateRun(s, args)), undefined, args);
+});
+
 test("T932: the evidence review that the sage starts keeps its report for its run, and the evidence-clean verdict follows", () => {
   const s = session();
   investigation(s);
@@ -4674,7 +4719,7 @@ function linkedSession(env) {
 const stateRun = (s, args, actor = LEAD, extra = {}) => s.send(tool("Bash", { command: `node ${TOOL} ${args}` }, { cwd: s.dir, ...actor, ...extra }));
 const LEAD_TAIL = /A lead writes the logbook only with .* Report to the sage what else the logbook needs\.$/;
 /** A reason of core's one lead policy (T928), which the hook gives as the state tool's guard and the Codex gate do. */
-const LEAD_RULE = /is not of T1, and a lead records only its own task\.|a lead adds only runs of its team|is not a branch of T1|a lead gives T1 one PR|is not a branch named for T1|is not triaged fix|is not a fix of T1's round|is triaged ask: only the chief|a lead asks the owner nothing|a lead dismisses only a low finding|is a fix key of a round: only the chief|verdict is the chief's|a lead's verdict names|a lead sets only state, branch, pr|a lead moves it only to|only the chief moves it from there|only the chief ends it|only the chief opens a known finding again|is shared with/;
+const LEAD_RULE = /is not of T1, and a lead records only its own task\.|a lead adds only runs of its team|is not a branch of T1|a lead gives T1 one PR|is not a branch named for T1|is not triaged fix|is not a fix of T1's round|is triaged ask: only the chief|a lead asks the owner nothing|a lead dismisses it only with --proof|a lead never dismisses it|a lead triages it fix only with --proof|is a fix key of a round: only the chief|verdict is the chief's|a lead's verdict names|a lead sets only state, branch, pr|a lead moves it only to|only the chief moves it from there|only the chief ends it|only the chief opens a known finding again|is shared with/;
 const NOT_LISTED = /is not on a lead's list(?:, or it has other words)?\. A lead records only its own task, with run add, run done, finding add, finding close, finding triage, verdict, round, pages, and task set of state, branch, pr\./;
 const LEAD_ALLOWED = [
   ...["implementer --branch claude/t1", "code-reviewer", "security-reviewer", "ux-reviewer", "qa", "qa --branch=claude/t1"].map((role) => `run add T1 --role ${role}`),
@@ -6076,7 +6121,7 @@ test("F-T289-38: honest forms of a finding, of none alone and of EVIDENCE read a
   const stop = (message, id) => s.send({ hook_event_name: "SubagentStop", agent_id: id, agent_type: "sage:code-reviewer", last_assistant_message: message });
   const MEDIUM = ["- K1 medium: empty input crashes", "- K1 (medium) empty input crashes", "- K1 - medium - empty input crashes", "* K1 Medium empty input crashes", "1. K1 medium empty input crashes", "- K1 [MEDIUM] empty input crashes"];
   for (const [k, line] of MEDIUM.entries()) {
-    const message = report("FINDINGS", `\n${line}`);
+    const message = report("FINDINGS", `\n${line}\n  proof: npm test\n  saw: not ok 1`); // with its proof (T947)
     assert.equal(stop(message, `medium-${k}`), undefined, line);
     assert.match(cleanVerdictOf(s, message) ?? "", /helpers reported medium or high findings on T1 \(.*R\d+ medium\)/, line);
     leadFind(s, "code-reviewer", "medium");
@@ -6183,7 +6228,7 @@ test("F-T289-50: a lead slot of the old form, with a floor and no recorded keys,
 
 test("F-T289-46: an indented step line with a severity word in its prose, not above its finding's, is detail of its finding", () => {
   const s = leadSession();
-  const message = report("FINDINGS", lines("", "- K1 high the form loses text", "  - steps: load a high row count, then save", "  - expected: no loss at low memory"));
+  const message = report("FINDINGS", lines("", "- K1 high the form loses text", "  - steps: load a high row count, then save", "  - expected: no loss at low memory", "  proof: npm test", "  saw: not ok 1"));
   assert.equal(s.send({ hook_event_name: "SubagentStop", agent_id: "steps", agent_type: "sage:code-reviewer", last_assistant_message: message }), undefined, "the stop gate reads it");
   assert.match(cleanVerdictOf(s, message) ?? "", /helpers reported medium or high findings on T1 \(R5 high\)/);
 });
@@ -6860,7 +6905,7 @@ test("T581: a helper's stop reports its medium finding to its lead, and a branch
   const s = leadSession();
   s.sage("run", "done", "R2", "--status", "done", "--tokens", "1");
   const found = leadAdd(s, "qa");
-  foregroundHelper(s, found, "qa", report("FAIL", "- K1 medium src/a.js:1 an empty name saves a row"));
+  foregroundHelper(s, found, "qa", report("FAIL", "- K1 medium src/a.js:1 an empty name saves a row\n  proof: npm test\n  saw: not ok 1"));
   assert.match(waitOut(s), new RegExp(`^${found} stopped · qa · FAIL · findings medium`), "the wait gives the lead the kept result");
   assert.match(denied(stateRun(s, `run done ${found} --status done --tokens 1`)) ?? "", /this lead's qa helpers reported medium or high findings on T1/, "the lead records the finding first");
   const moved = leadAdd(s, "code-reviewer");

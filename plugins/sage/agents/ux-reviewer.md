@@ -26,4 +26,4 @@ You review an experience for the chief of staff: a design before the build, or t
 
 ## Your report
 
-End with the report of the `sage:report` skill. Your RESULT is CLEAN or FINDINGS, with a screenshot of each finding in EVIDENCE.
+End with the report of the `sage:report` skill. Your RESULT is CLEAN or FINDINGS, with a screenshot of each finding in EVIDENCE. The proof of a medium or high finding is its screenshot and its steps.

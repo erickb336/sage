@@ -11,6 +11,7 @@ import { fileURLToPath } from "node:url";
 import { keepReport } from "../plugins/sage/skills/sage/sage.mjs";
 import { reportFor } from "./verdict-backing.mjs";
 import { REPORT_FIELDS } from "../packages/sage-core/report.mjs";
+import { readReport } from "../packages/sage-core/report-reader.mjs";
 
 const TOOL = fileURLToPath(new URL("../plugins/sage/skills/sage/sage.mjs", import.meta.url));
 const PLUGIN = fileURLToPath(new URL("../plugins/sage", import.meta.url));
@@ -222,4 +223,80 @@ test("T483: a kept report stays as it was first kept, and only a run of its task
   s.ok("run", "done", late, "--status", "done", "--tokens", "1");
   assert.throws(() => keepReport(s.project, { task: "T1", run: late, role: "qa", sha: SHA, text: reportFor("qa-pass") }, s.env), new RegExp(`${late} ended as done before this stop, so no report is kept`));
   assert.match(s.no("verdict", "T1", "--kind", "review-clean", "--sha", SHA, "--run", run), /report has 1 medium or high finding/);
+});
+
+/** A code review with one finding line for each of these, each with its proof (T947). */
+const proven = (...lines) => reportFor("findings", { findings: lines.map((line) => `\n- ${line}\n  proof: npm test\n  saw: not ok 1`).join("") });
+/** A proof check's report: EVIDENCE lists each finding key with its outcome; BRANCH names the head that it checked. */
+const proofCheck = (lines, sha = SHA) => ["STATUS done", "RESULT PASS", "EVIDENCE", ...lines, "FINDINGS none", "QUESTIONS none", "NOT VERIFIED none", `BRANCH b · head ${sha}`].join("\n");
+/** Adds a finding of run to T1, as a lead records a review's finding. */
+const found = (s, run, severity, summary) => s.ok("finding", "add", "T1", "--source", "code-reviewer", "--severity", severity, "--summary", summary, "--run", run, "--class", "other").split(" ")[0];
+
+test("T947: a triage with --proof needs a done proof check of the task, on the head of the finding's report, that lists the finding with an outcome that fits", () => {
+  const s = logbook();
+  s.ok("task", "add", "--priority", "P2", "--title", "a", "--size", "small"); // T1
+  s.ok("task", "add", "--priority", "P2", "--title", "b", "--size", "small"); // T2
+  const review = s.reviewed("T1", "code-reviewer", proven("K1 medium a", "K2 medium b", "K3 high c", "K4 medium d"));
+  const [gone, real, high, skipped] = [found(s, review, "medium", "a"), found(s, review, "medium", "b"), found(s, review, "high", "c"), found(s, review, "medium", "d")];
+  const lines = [`- ${gone} not reproduced`, "  npm test", "  ok 1", `- ${real} reproduced`, `- ${high} could not run`];
+  const other = s.reviewed("T2", "qa", proofCheck(lines));
+  const running = s.ok("run", "add", "T1", "--role", "qa").split(" ")[0];
+  keepReport(s.project, { task: "T1", run: running, role: "qa", sha: SHA, text: proofCheck(lines) }, s.env);
+  const moved = s.reviewed("T1", "qa", proofCheck(lines, OTHER), OTHER);
+  const check = s.reviewed("T1", "qa", proofCheck(lines));
+  const before = readFileSync(join(s.dir, "findings.tsv"), "utf8");
+  assert.match(s.no("finding", "triage", "T1", gone, "dismiss", "--proof", other), new RegExp(`^sage: ${other} is a run of T2, not of T1\\. A proof check is the done qa run`));
+  assert.match(s.no("finding", "triage", "T1", gone, "dismiss", "--proof", running), new RegExp(`^sage: ${running} still runs, and only a done proof check backs a triage`));
+  assert.match(s.no("finding", "triage", "T1", gone, "dismiss", "--proof", review), new RegExp(`^sage: ${review} is a code-reviewer run, not a qa run`));
+  assert.match(s.no("finding", "triage", "T1", gone, "dismiss", "--proof", moved), new RegExp(`^sage: ${moved} checked 0123456, and ${gone}'s report \\(${review}\\) is on a1b2c3d: a proof check reruns the proof on that head`));
+  assert.match(s.no("finding", "triage", "T1", skipped, "fix", "--proof", check), new RegExp(`^sage: ${check}'s kept report does not list ${skipped}`));
+  assert.match(s.no("finding", "triage", "T1", real, "dismiss", "--proof", check), new RegExp(`^sage: ${check} says ${real} reproduced, so it is not dismissed: triage it fix`));
+  assert.match(s.no("finding", "triage", "T1", high, "dismiss", "--proof", check), new RegExp(`^sage: ${check} says ${high} could not run, so it is not dismissed`), "could not run keeps the finding");
+  assert.match(s.no("finding", "triage", "T1", gone, "fix", "--proof", check), new RegExp(`^sage: ${check} says ${gone} not reproduced, so triage it dismiss`));
+  assert.match(s.no("finding", "triage", "T1", gone, "ask", "--proof", check), /--proof goes with fix or dismiss, not with ask/);
+  assert.equal(readFileSync(join(s.dir, "findings.tsv"), "utf8"), before, "a refused triage changes no finding");
+  assert.equal(s.ok("finding", "triage", "T1", gone, "dismiss", "--proof", check), `${gone} dismissed · dismiss`);
+  assert.equal(s.ok("finding", "triage", "T1", real, "fix", "--proof", check), `${real} open · fix`);
+  assert.equal(s.ok("finding", "triage", "T1", high, "fix", "--proof", check), `${high} open · fix`);
+  const rows = readFileSync(join(s.dir, "findings.tsv"), "utf8"), decisions = readFileSync(join(s.dir, "decisions.tsv"), "utf8");
+  assert.match(rows, new RegExp(`\\t${gone}\\t.*\\tnot reproduced in ${check}(?:\\t|$)`, "m"), "the dismissal's reason names the proof check");
+  assert.match(decisions, new RegExp(`\\t${gone} dismiss --proof ${check}\\t${check} not reproduced on ${SHA}`), "the decision trail keeps the proof check, its outcome and the head");
+  assert.match(decisions, new RegExp(`\\t${high} fix --proof ${check}\\t${check} could not run on ${SHA}`));
+});
+
+test("T947: a proof check's report backs no verdict, and a run whose medium findings were all dropped by it backs review-clean", () => {
+  const s = logbook();
+  s.ok("task", "add", "--priority", "P2", "--title", "a", "--size", "small");
+  const review = s.reviewed("T1", "code-reviewer", proven("K1 medium a", "K2 medium b"));
+  const keys = [found(s, review, "medium", "a"), found(s, review, "medium", "b")];
+  const check = s.reviewed("T1", "qa", proofCheck(keys.map((key) => `- ${key} not reproduced`)));
+  const before = s.ledger();
+  assert.match(s.no("verdict", "T1", "--kind", "qa-pass", "--sha", SHA, "--run", check), new RegExp(`^sage: ${check}'s report is a proof check \\(its EVIDENCE lists findings as reproduced or not\\), so it backs no verdict`));
+  assert.match(s.no("verdict", "T1", "--kind", "review-clean", "--sha", SHA, "--run", review), /still open/, "while a medium finding of the run is open, the run backs no clean verdict");
+  s.ok("finding", "triage", "T1", keys[0], "dismiss", "--proof", check);
+  assert.match(s.no("verdict", "T1", "--kind", "review-clean", "--sha", SHA, "--run", review), new RegExp(`${keys[1]} \\(medium\\) is still open`));
+  s.ok("finding", "triage", "T1", keys[1], "dismiss", "--proof", check);
+  assert.equal(s.ledger(), before, "the refusals add no ledger row");
+  assert.equal(s.ok("verdict", "T1", "--kind", "review-clean", "--sha", SHA, "--run", review), "T1 review-clean · a1b2c3d · cycle 1");
+});
+
+test("F-T947-1: a proof check that gives its first outcome on the EVIDENCE line, or a near form, is read: it backs its --proof triage and no verdict", () => {
+  const s = logbook();
+  s.ok("task", "add", "--priority", "P2", "--title", "a", "--size", "small");
+  const review = s.reviewed("T1", "code-reviewer", proven("K1 medium a", "K2 medium b"));
+  const [gone, real] = [found(s, review, "medium", "a"), found(s, review, "medium", "b")];
+  // The report skill's template style: the first item on the field's own line, then a numbered item with a bold key and a note.
+  const check = s.reviewed("T1", "qa", proofCheck([]).replace("EVIDENCE", `EVIDENCE      - ${gone} not reproduced\n1. **${real}**: reproduced (saw not ok 1)`));
+  assert.match(s.no("verdict", "T1", "--kind", "qa-pass", "--sha", SHA, "--run", check), new RegExp(`^sage: ${check}'s report is a proof check`));
+  assert.equal(s.ok("finding", "triage", "T1", gone, "dismiss", "--proof", check), `${gone} dismissed · dismiss`);
+  assert.equal(s.ok("finding", "triage", "T1", real, "fix", "--proof", check), `${real} open · fix`);
+  for (const line of [`- ${gone}: not reproduced`, `- \`${gone}\` — could not run`, `- a\n  - ${gone} reproduced (saw not ok 1)`, `| ${gone} | not reproduced |`]) {
+    const near = s.reviewed("T1", "qa", proofCheck([line]));
+    assert.match(s.no("verdict", "T1", "--kind", "qa-pass", "--sha", SHA, "--run", near), new RegExp(`^sage: ${near}'s report is a proof check`), line);
+  }
+});
+
+test("F-T947-5: one pair of backticks around a proof or saw value is a Markdown mark, so the proof check runs the command itself", () => {
+  const text = reportFor("findings", { findings: "\n- K1 medium a\n  proof: `npm test`\n  saw: `not ok 1 a`\n- K2 medium b\n  proof: `a` and `b`\n  saw: x" });
+  assert.deepEqual(readReport(text).findings, [{ key: "K1", severity: "medium", proof: "npm test", saw: "not ok 1 a" }, { key: "K2", severity: "medium", proof: "`a` and `b`", saw: "x" }]);
 });

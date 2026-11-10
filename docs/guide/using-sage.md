@@ -137,8 +137,17 @@ A tiny task has no review and no QA in its route, so its lead runs only the impl
 
 | A finding of a helper | What the lead does |
 | --- | --- |
-| Medium or high | It sends the finding to a repair round. |
+| Medium or high | After the proof check, it sends the finding to a repair round. |
+| Medium, and the proof check did not show it again | It drops the finding (`dismiss --proof`) and lists it in its report. |
+| High, and the proof check did not show it again, or it has no proof | It gives the finding to the chief, which decides. |
 | Low | It leaves the finding open on the task's polish list, dismisses it with a reason, adds it to a round, or gives it to the chief to move to a follow-up task. |
+
+**Proof by run.** Each medium or high finding of a review or QA carries its proof:
+
+- one command and the output line that shows the problem, or a screenshot and its steps;
+- the hook stops the agent once when a proof is missing, or when the command stops a process, uses git stash, runs inline code, runs git that does more than read, or writes outside the scratch folder.
+
+Before any verdict and any repair round of a cycle with such a finding, one QA run, the proof check, reruns each proof on a fresh copy of the head, after the project's dependency install. `finding triage --proof R<n>` names that run, and the state tool checks it. Its report backs no verdict, and a run whose medium findings were all dropped gives its clean verdict.
 
 An open low finding never blocks a merge; it stays on the task's polish list. The board shows that list on the task's card and page. An open medium or high finding blocks the move to verifying and the merge.
 

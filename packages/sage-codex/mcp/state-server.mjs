@@ -108,8 +108,9 @@ export const TOOLS = {
     pos: ["task"], argv: (i) => ["finding", "add", i.task],
   },
   finding_triage: {
-    describe: "Triage a finding: fix, dismiss (needs a reason) or ask the owner.",
-    input: { task, key: z.string().describe("the finding key, for example F-T7-1"), decision: z.enum(["fix", "dismiss", "ask"]), reason: optional("the reason, needed to dismiss") },
+    describe: "Triage a finding: fix, dismiss (needs a reason, or proof) or ask the owner. proof names the done proof check (a qa run) whose report reran the finding's proof on its head: reproduced or could not run backs fix, not reproduced backs dismiss.",
+    input: { task, key: z.string().describe("the finding key, for example F-T7-1"), decision: z.enum(["fix", "dismiss", "ask"]), reason: optional("the reason, needed to dismiss without proof"),
+      proof: id("R", "the run id of the proof check").optional() },
     pos: ["task", "key", "decision"], argv: (i) => ["finding", "triage", i.task, i.key, i.decision],
   },
   finding_close: {

@@ -39,7 +39,7 @@ In this file, `sage` stands for `node <path to skills/sage/sage.mjs>`, the absol
 
 - reads: `sage status`, `sage standing`, `sage logbook`;
 - runs: `sage run add <T> --role <role> --branch <branch>` (the branch only for the implementer) and `sage run done <R> --status done --tokens <n>`, for the five roles above; `sage run done <R> --status failed` for a helper that gave no report;
-- findings: `sage finding add <T> --source <role> --severity <severity> --summary=<word> --run <R> --class <class>`, `sage finding triage <T> <K> fix`, `sage finding triage <T> <K> dismiss --reason=<word>` (a low finding that is no fix key of the round or of an earlier one) and `sage finding close <T> <K>`;
+- findings: `sage finding add <T> --source <role> --severity <severity> --summary=<word> --run <R> --class <class>`, `sage finding triage <T> <K> fix` (in a cycle, a medium or high one: `sage finding triage <T> <K> fix --proof <R>`), `sage finding triage <T> <K> dismiss --reason=<word>` (a low finding that is no fix key of the round or of an earlier one), `sage finding triage <T> <K> dismiss --proof <R>` (a medium finding that the proof check did not reproduce) and `sage finding close <T> <K>`;
 - verdicts: `sage verdict <T> --sha <sha> --kind <kind> --cycle <n> --pr <n> --run <R>`, for a review or QA only;
 - the round: `sage round <T>`;
 - the task: `sage task <T> set state=<state>`, with `branch=<branch>` and `pr=<n>`.
@@ -69,7 +69,7 @@ The hook lets you move the task only one step of the cycle at a time:
 | verifying | reviewing |
 | verified | reviewing |
 
-You move from repairing to reviewing only after you close each fix key of the round, also a low one. You move from verifying or verified to reviewing only when the head of the branch has no full clean cycle (one cycle with the clean verdict of each review and QA of the route): the head moved past the clean cycles. You move from reviewing to verifying only when the head has a full clean cycle. The move to verified needs a checks verdict on the head, so it is the sage's unless the ledger already has one there. You set `pr=` once, while the task has none. You never clear the branch. Everything else is the sage's: the checks verdicts, `finding move`, a dismissal of a medium or high finding, a dismissal of a fix key of the round or of an earlier one (a finding triaged fix from before the round), a triage `ask`, gates, the decision trail, the pages record, other states and the merge. A held, replan, merged, concluded or abandoned task takes no write from you and no helper. When your lead run ends (for example, the sage moved the task back to briefed), you write nothing more.
+You move from repairing to reviewing only after you close each fix key of the round, also a low one. You move from verifying or verified to reviewing only when the head of the branch has no full clean cycle (one cycle with the clean verdict of each review and QA of the route): the head moved past the clean cycles. You move from reviewing to verifying only when the head has a full clean cycle. The move to verified needs a checks verdict on the head, so it is the sage's unless the ledger already has one there. You set `pr=` once, while the task has none. You never clear the branch. Everything else is the sage's: the checks verdicts, `finding move`, a dismissal of a high finding or of a medium one without the proof check, a dismissal of a fix key of the round or of an earlier one (a finding triaged fix from before the round), a triage `ask`, gates, the decision trail, the pages record, other states and the merge. A held, replan, merged, concluded or abandoned task takes no write from you and no helper. When your lead run ends (for example, the sage moved the task back to briefed), you write nothing more.
 
 ## The wait
 
@@ -96,7 +96,7 @@ The hook blocks your stop while a helper of yours runs, and its line gives this 
 
    An open medium or high finding blocks the move to verifying and the merge. An open low finding never blocks a merge; it stays on the task's polish list.
 5. `sage run done <R> --status done --tokens <n>`, with the tokens from the notice. When no notice reached you, leave out `--tokens`.
-6. For a review or QA, the verdict: `sage verdict <T> --sha <sha> --kind <kind> --cycle <n> --pr <n> --run <R>`. The SHA is the head of the task's branch when the helper started (`git rev-parse <branch>`, the full 40 characters). The kind says what the helper reported:
+6. For a review or QA, the verdict (when the cycle has a medium or high finding, after the proof check of step 4): `sage verdict <T> --sha <sha> --kind <kind> --cycle <n> --pr <n> --run <R>`. The SHA is the head of the task's branch when the helper started (`git rev-parse <branch>`, the full 40 characters). The kind says what the helper reported:
 
 | Report | Kind |
 | --- | --- |
@@ -104,6 +104,8 @@ The hook blocks your stop while a helper of yours runs, and its line gives this 
 | PASS, or FAIL with only low findings | qa-pass |
 | FINDINGS with a medium or high finding | findings |
 | FAIL with a medium or high finding | qa-fail |
+
+A medium finding that the proof check dropped does not count.
 
 The hook reads each helper's report at its stop. It refuses a verdict that says something else, a SHA other than the one that the helper saw, and a run that already backs a verdict. So no commit lands on the branch while a review or QA runs.
 
@@ -128,7 +130,7 @@ A helper that ends with no report (the sage stopped it, or it died) ends as `sag
    In any state, or after any answer, that this file does not name, end at once with STATUS blocked, RESULT `blocked`, the task row you read from tasks.tsv, and what you saw. Do not work around it. The sage decides from the logbook.
 2. **Build.** At briefed: `sage task <T> set state=building branch=<branch>`. When tasks.tsv gives the task a branch that is not named for it, or that another task also uses (the sage shared it), keep it: set only `state=building`, and use that branch. At building, a lead before you made that move: skip it. When runs.tsv has a done implementer run of the task and the PR exists (in tasks.tsv or in your brief), go on to `sage task <T> set state=reviewing pr=<n>` below (without `pr=` when tasks.tsv has the PR), then go on from step 1's list. Else the implementer's run: `sage run add <T> --role implementer --branch <branch>`, and a brief with the sage's brief for the task. Its SCOPE names the branch and a worktree of the project's own repository, so that the hook can read the head of the branch. At its stop: `sage run done <R> --status done --tokens <n>`, then `sage task <T> set state=reviewing pr=<n>`. A route with no review or QA has no cycle: go to the checks in step 6.
 3. **Cycle.** On the head SHA, add one run for each review and QA role of the route, and no other: tasks.tsv gives the route. A route has code-reviewer for `code-review`, security-reviewer for `security-review`, ux-reviewer for `ux-review` and qa for `qa`. Start them in one message. A large task has 4 such roles: start all 4. A tiny arena has only the code review, so it gets no QA run. Record each report as above. Wait for every helper of the cycle before the next step. A cycle is one full set on one SHA; a new commit starts again at cycle 1.
-4. **Triage.** Triage each medium or high finding fix. A medium or high finding that you think is wrong: do not dismiss it; put it in FINDINGS for the sage, and end blocked. When no finding is triaged fix, go to step 6.
+4. **Triage.** When the cycle has a medium or high finding, read the proof-check reference before its verdicts: the path of your state tool with `skills/sage/sage.mjs` replaced by `core/references/proof-check.md`. Run its proof check, drop each medium finding that did not reproduce, record the verdicts, then triage each one that reproduced or could not run fix with `--proof`. A high finding that did not reproduce, and a finding that you think is wrong: do not dismiss it; put it in FINDINGS for the sage, and end blocked. When no finding is triaged fix, go to step 6.
 5. **Repair round.** `sage round <T>`. It names the findings to fix and the roles to re-run. Give the repair to a fresh implementer: the original brief, the findings and the earlier reports. Then re-run each role that `round` named, on the repair's commit; a re-check gets no verdict. Wait for each re-check. Close each finding that the re-check confirms fixed with `sage finding close <T> <K>`. Once every fix key of the round is closed, run `sage task <T> set state=reviewing` before anything else, also before you end blocked. Then go back to step 3 on the new SHA.
    - A fix that the re-check does not confirm stays open, and the task stays repairing. The re-check reports its problem again: record it as a finding (the hook asks for it), and triage it fix (`sage finding triage <T> <K> fix`), at any severity, so that it joins the next round with the fix key. Close the fixes that the re-check confirms, then run `sage round <T>` from repairing, and go on with this step in the new round. It is the same round command, with the same limit: it says held when the rounds are spent, and replan when the round fixed none of its keys, and then step 7 holds.
    - An unconfirmed low fix gets the next round like any unconfirmed fix, also with no medium or high finding open. Do not dismiss a fix key, also one of an earlier round; only the sage does.
@@ -152,7 +154,7 @@ The sage decides from the logbook, then starts a fresh lead, which goes on from 
 
 ## A worked example
 
-Task T1 (small: build, code review, QA), its lead run R1, branch `sage/t1-example`, PR 12, 1 clean cycle. A line that starts with `$` is a command that you run; `→` is what that command prints. `>` starts a helper; `<` is a report at its agent's stop. `!` is what the sage does: `! sage …` is its state tool command, and `! stop R<n>` stops a helper with no report. `<sha>` is the full head SHA of the branch at that point.
+Task T1 (small: build, code review, QA), its lead run R1, branch `sage/t1-example`, PR 12, 1 clean cycle. A line that starts with `$` is a command that you run; `→` is what that command prints. `>` starts a helper; `<` is a report at its agent's stop, with its indented lines. `!` is what the sage does: `! sage …` is its state tool command, and `! stop R<n>` stops a helper with no report. `<sha>` is the full head SHA of the branch at that point.
 
 ```text
 $ sage status
@@ -175,61 +177,76 @@ $ sage run add T1 --role qa
 > R3 sage:code-reviewer
 > R4 sage:qa
 < R3 FINDINGS: - K1 medium src/form.js:12 an empty name saves a blank row
-< R4 PASS: - Q1 low src/form.js:30 the error text has a typo
+    proof: node --test test/form.test.mjs
+    saw: not ok 3 - an empty name is refused
+< R4 FAIL: - Q1 low src/form.js:30 the error text has a typo
+    - Q2 medium src/form.js:41 a long name is cut
+      proof: node --test test/name.test.mjs
+      saw: not ok 2 - a long name is kept
 $ wait T1
 → R3 stopped · code-reviewer · FINDINGS · findings medium
 $ sage finding add T1 --source code-reviewer --severity medium --summary=empty-name-saves-a-row --run R3 --class state-edge
 → F-T1-1 open · medium · T1
 $ sage run done R3 --status done --tokens 52000
-$ sage verdict T1 --sha <sha> --kind findings --cycle 1 --pr 12 --run R3
 $ sage finding add T1 --source qa --severity low --summary=typo-in-error-text --run R4 --class copy
 → F-T1-2 open · low · T1
+$ sage finding add T1 --source qa --severity medium --summary=long-name-is-cut --run R4 --class state-edge
+→ F-T1-3 open · medium · T1
 $ sage run done R4 --status done --tokens 38000
+$ sage run add T1 --role qa
+→ R5 running · qa on T1
+> R5 sage:qa
+< R5 PASS: none
+    - F-T1-1 reproduced
+    - F-T1-3 not reproduced
+$ sage run done R5 --status done --tokens 21000
+$ sage finding triage T1 F-T1-3 dismiss --proof R5
+$ sage verdict T1 --sha <sha> --kind findings --cycle 1 --pr 12 --run R3
 $ sage verdict T1 --sha <sha> --kind qa-pass --cycle 1 --pr 12 --run R4
-$ sage finding triage T1 F-T1-1 fix
+$ sage finding triage T1 F-T1-1 fix --proof R5
 $ sage finding triage T1 F-T1-2 fix
 $ sage round T1
 → T1 repairing · round 1 of 3 · fix F-T1-1,F-T1-2 · re-run code-reviewer,qa on the repair's diff
 $ sage run add T1 --role implementer --branch sage/t1-example
-→ R5 running · implementer on T1
-> R5 sage:implementer
-< R5 done: none
-$ sage run done R5 --status done --tokens 30000
+→ R6 running · implementer on T1
+> R6 sage:implementer
+< R6 done: none
+$ sage run done R6 --status done --tokens 30000
 $ sage run add T1 --role code-reviewer
-→ R6 running · code-reviewer on T1
+→ R7 running · code-reviewer on T1
 $ sage run add T1 --role qa
-→ R7 running · qa on T1
-> R6 sage:code-reviewer
-> R7 sage:qa
-< R6 CLEAN: none
-< R7 PASS: none
-$ sage run done R6 --status done --tokens 20000
-$ sage run done R7 --status done --tokens 18000
+→ R8 running · qa on T1
+> R7 sage:code-reviewer
+> R8 sage:qa
+< R7 CLEAN: none
+< R8 PASS: none
+$ sage run done R7 --status done --tokens 20000
+$ sage run done R8 --status done --tokens 18000
 $ sage finding close T1 F-T1-1
 $ sage finding close T1 F-T1-2
 $ sage task T1 set state=reviewing
 $ git rev-parse sage/t1-example
 → <sha>
 $ sage run add T1 --role code-reviewer
-→ R8 running · code-reviewer on T1
-$ sage run add T1 --role qa
-→ R9 running · qa on T1
-> R8 sage:code-reviewer
-> R9 sage:qa
-< R8 CLEAN: none
-! stop R9
-$ sage run done R8 --status done --tokens 50000
-$ sage verdict T1 --sha <sha> --kind review-clean --cycle 1 --pr 12 --run R8
-$ sage run done R9 --status failed
+→ R9 running · code-reviewer on T1
 $ sage run add T1 --role qa
 → R10 running · qa on T1
+> R9 sage:code-reviewer
 > R10 sage:qa
-< R10 PASS: - Q2 low README.md:40 a sentence of 31 words
-$ sage finding add T1 --source qa --severity low --summary=long-sentence --run R10 --class copy
-→ F-T1-3 open · low · T1
-$ sage finding triage T1 F-T1-3 dismiss --reason=style-only
-$ sage run done R10 --status done --tokens 36000
-$ sage verdict T1 --sha <sha> --kind qa-pass --cycle 1 --pr 12 --run R10
+< R9 CLEAN: none
+! stop R10
+$ sage run done R9 --status done --tokens 50000
+$ sage verdict T1 --sha <sha> --kind review-clean --cycle 1 --pr 12 --run R9
+$ sage run done R10 --status failed
+$ sage run add T1 --role qa
+→ R11 running · qa on T1
+> R11 sage:qa
+< R11 PASS: - Q3 low README.md:40 a sentence of 31 words
+$ sage finding add T1 --source qa --severity low --summary=long-sentence --run R11 --class copy
+→ F-T1-4 open · low · T1
+$ sage finding triage T1 F-T1-4 dismiss --reason=style-only
+$ sage run done R11 --status done --tokens 36000
+$ sage verdict T1 --sha <sha> --kind qa-pass --cycle 1 --pr 12 --run R11
 $ gh pr checks 12
 → build pass
 $ sage task T1 set state=verifying
