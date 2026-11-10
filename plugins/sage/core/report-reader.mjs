@@ -2,6 +2,8 @@
 // tool's verdict check read a review's or QA's report with it, so that each of them reads the same RESULT and severities.
 // Both stop gates ask for missing fields by its one field rule too (T461).
 import { REPORT_FIELDS } from "./report.mjs";
+import { agentCommandProblem, TEMP } from "./agent-rules.mjs";
+import { commandWrites } from "./shell-write-policy.mjs";
 
 const SP = String.raw`[^\S\r\n  ]`; // a space, a tab or an NBSP, never a line break
 /** A line end, kept by a split: LF, CRLF, and each other break that a reader sees as one: CR, VT, FF, NEL, U+2028 and U+2029 (F-T289-26). */
@@ -87,7 +89,7 @@ function lineOf(text) {
   const item = /^(?:[-*+]|\d+[.)])[ \t]+/.exec(text);
   const [key, ...rest] = (item ? text.slice(item[0].length) : text).split(/[ \t]+/);
   const at = rest.findIndex((w) => !/^[-–—:|]+$/.test(w)), word = unmarked(rest[at]);
-  if (item && /\d/.test(unmarked(key)) && !SEVERE.test(unmarked(key)) && /^(?:high|medium|low)$/i.test(word) && !LABEL.test(rest.slice(at + 1).join(" "))) return { severity: word.toLowerCase() };
+  if (item && /\d/.test(unmarked(key)) && !SEVERE.test(unmarked(key)) && /^(?:high|medium|low)$/i.test(word) && !LABEL.test(rest.slice(at + 1).join(" "))) return { severity: word.toLowerCase(), key: unmarked(key) };
   return { severe: SEVERE.test(unmarked(key)) || SEVERE.test(word) || LABEL.test(text) };
 }
 /** The levels of the severities, and the words that the report reader looks for in all of FINDINGS: critical, severe and blocker are high. */
@@ -137,15 +139,16 @@ export function readReport(text, { requireComplete = false } = {}) {
   const twice = REPORT_FIELDS.find((name) => of(name).length > 1) ?? (another === undefined ? undefined : "FINDINGS");
   const said = r && [r.rest, ...r.lines].map((line) => line.trimStart().slice(0, LINE_MAX).trim()).find(Boolean);
   const result = (/^[^A-Za-z]*([A-Za-z]+)/.exec(said ?? "")?.[1] ?? "").toUpperCase();
-  const severities = [], owned = []; // owned: each line under a finding, with the level of that finding
+  const severities = [], findings = [], owned = []; // owned: each line under a finding, with the level of that finding
   let none = false, long = false, odd;
   for (const line of f ? [f.rest, ...f.lines] : []) {
     if (line.length > LINE_MAX) { long = true; continue; }
-    const text = line.trim(), indented = /^\s/.test(line), { severity, severe } = lineOf(text);
+    const text = line.trim(), indented = /^\s/.test(line), { severity, severe, key } = lineOf(text);
     if (!text) continue;
-    if (severity && !indented) severities.push(severity);
+    if (severity && !indented) severities.push(severity), findings.push({ key, severity });
     else if (NONE_LINE.test(text)) none = true;
     else if (!(indented && severities.length && !severity && !severe)) odd ??= text;
+    else proofLine(findings.at(-1), text);
     if (severities.length) owned.push([text, LEVEL[severities.at(-1)]]);
   }
   const seen = owned.find(([text, own]) => levelIn(text) > own);
@@ -155,7 +158,50 @@ export function readReport(text, { requireComplete = false } = {}) {
     none && severities.length ? "FINDINGS has none and findings" : !none && !severities.length ? "FINDINGS is empty" :
     none && ["FINDINGS", "FAIL"].includes(result) ? `RESULT is ${result}, but FINDINGS is none` :
     seen ? `the line ${JSON.stringify(seen[0].slice(0, 80))} under FINDINGS has a severity word above the severity of its finding (${LEVELS[seen[1]]}): write that finding as its own line ${FINDING_FORM}` : undefined;
-  return { result, severities, unreadable: Boolean(problem), ...(problem && { problem }) };
+  return { result, severities, findings, unreadable: Boolean(problem), ...(problem && { problem }) };
+}
+
+/**
+ * The proof of a finding (T947): its first detail line of each name, "proof: <one command>", "saw: <the one output line>"
+ * and, for a screenshot ("proof: screenshot <path>"), "steps: <the url and the actions>", also as a list item.
+ */
+function proofLine(finding, text) {
+  const [, name, value] = /^(?:[-*+][ \t]+)?(proof|saw|steps):[ \t]*(\S.*)$/i.exec(text) ?? [];
+  if (name && !Object.hasOwn(finding, name.toLowerCase())) finding[name.toLowerCase()] = value.trim();
+}
+/**
+ * Why a review's or QA's report does not carry the proof of each medium or high finding, or undefined (T947). A finding
+ * carries one command and the output line that shows the problem (proof: and saw:), or a screenshot and its steps (proof:
+ * screenshot and steps:). The proof check reruns the command on a fresh copy of the head, so it is one that an agent may
+ * run there: no stash or process program (agentCommandProblem), and no write outside the scratch folders (commandWrites).
+ * A low finding needs no proof, and an unreadable report gets the reader's own reason.
+ */
+export function proofProblem(text, cwd, scratch = TEMP) {
+  const { findings = [] } = readReport(text);
+  for (const { key, severity, proof, saw, steps } of findings.filter((f) => f.severity !== "low")) {
+    if (!proof) return `${key} is ${severity} and has no proof line`;
+    const shot = /^screenshot[ \t]+\S/i.test(proof);
+    if (shot ? !steps : !saw) return `${key}'s proof has no ${shot ? "steps" : "saw"} line`;
+    const refused = !shot && (agentCommandProblem(proof, cwd) ?? (commandWrites(proof, cwd, scratch) ? "it writes outside the scratch folder" : undefined));
+    if (refused) return `${key}'s proof ${JSON.stringify(proof.slice(0, 80))} is refused: ${refused}`;
+  }
+  return undefined;
+}
+/** The way to give a proof, for the stop gates of both providers (T947). */
+export const PROOF_RULE = "Under each medium or high finding, give its proof on indented lines: proof: <one command, run from the repository root of the head> and saw: <the one output line that shows the problem>, or proof: screenshot <path> and steps: <the url and the actions>. The command only reads, or writes only into your scratch folder in the temp folder, and runs no process program and no git stash. Put long output in a scratch file, and name its path. A low finding needs no proof. A proof, saw or steps line has no severity word. This stop gate stops you once.";
+/** The outcomes of a proof check (T947), as its EVIDENCE gives each finding on a list line of its own. */
+const PROOF_LINE = /^[-*+][ \t]+`?([^\s`]+)`?[ \t]+(reproduced|not reproduced|could not run)\.?[ \t]*$/i;
+/**
+ * The results of a proof check's report: each finding key that EVIDENCE lists, with its outcome (reproduced, not
+ * reproduced or could not run), in a Map. The first line of a key counts. An empty Map for any other report.
+ */
+export function proofResults(text) {
+  const results = new Map();
+  for (const line of fieldsOf(text, REPORT_FIELDS).filter((f) => f.name === "EVIDENCE").flatMap((f) => f.lines)) {
+    const [, key, outcome] = PROOF_LINE.exec(line) ?? [];
+    if (key && !results.has(key)) results.set(key, outcome.toLowerCase());
+  }
+  return results;
 }
 /**
  * Is a helper's report clean? RESULT CLEAN or PASS with no medium or high finding, or FINDINGS or FAIL with only low
