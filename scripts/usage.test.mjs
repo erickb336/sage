@@ -164,3 +164,30 @@ test('T954 a Claude lead run that ends with a report needs its tokens; a lead wi
   assert.deepEqual(tokens(),['108973','108973','108973','']);
   assert.match(run('status'),/about 109k tokens · 1 measured, 0 unavailable, 0 legacy-unrecorded/); // the totals count done runs only
 });
+// T969 (F-T954-2): a Claude lead that ends with a report, but whose notice gave no usage (for example after a restart), could
+// end only as failed. It now ends with its status and usage unavailable, with the reason; a lead with no report gets none.
+test('T969 a Claude lead with a report and no usage in its notice ends as unavailable, with its reason',async t=>{
+  const claude=await import('../plugins/sage/skills/sage/sage.mjs');
+  const base=realpathSync(mkdtempSync(join(tmpdir(),'sage-usage-lead-')));t.after(()=>rmSync(base,{recursive:true,force:true}));
+  const env={...process.env,SAGE_HOME:join(base,'home'),HOME:join(base,'home'),SAGE_TEST_PIDS:'{}'},project=join(base,'project');
+  const run=(...args)=>claude.sage([...args,'--project',project],env);
+  const dir=run('init').replace(/^logbook /,'');
+  run('task','add','--priority','P2','--title','Lead tokens','--size','small');run('task','T1','set','state=briefed');
+  const rows=()=>{const [head,...lines]=readFileSync(join(dir,'runs.tsv'),'utf8').trimEnd().split('\n');return lines.map(line=>Object.fromEntries(head.split('\t').map((k,i)=>[k,line.split('\t')[i]??''])));};
+  const why=['--usage','unavailable','--usage-source','claude task notice','--usage-evidence','the notice had no usage after a restart','--report','pages/lead.md'];
+  const ids=[];
+  for(const status of ['done','blocked','question']){
+    const id=run('run','add','T1','--role','lead').split(' ')[0];ids.push(id);
+    assert.throws(()=>run('run','done',id,'--status',status),/When its usage gave no count, add --usage unavailable with --usage-source, --usage-evidence \(the reason\) and --report/);
+    assert.throws(()=>run('run','done',id,'--status',status,...why.slice(0,-2)),/Unavailable usage needs/,'a report is needed');
+    assert.equal(run('run','done',id,'--status',status,...why),`${id} ${status}`);
+  }
+  // A lead with no report ends as failed, with no usage claim; and a review run still needs its tokens.
+  const failed=run('run','add','T1','--role','lead').split(' ')[0];
+  assert.throws(()=>run('run','done',failed,'--status','failed',...why),/Unavailable usage needs/);
+  const qa=run('run','add','T1','--role','qa').split(' ')[0];
+  assert.throws(()=>run('run','done',qa,'--status','done',...why),/Unavailable usage needs/);
+  assert.deepEqual(rows().filter(r=>ids.includes(r.id)).map(r=>[r.status,r.tokens,r.usage_status,r.usage_source,r.usage_evidence,r.report]),
+    ['done','blocked','question'].map(status=>[status,'','unavailable','claude task notice','the notice had no usage after a restart','pages/lead.md']));
+  assert.match(run('status'),/partial measured total; 0 measured, 1 unavailable, 0 legacy-unrecorded/); // the totals count done runs only
+});

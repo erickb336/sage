@@ -771,3 +771,29 @@ test("T954: at its stop, a Codex run's own token total from its session record b
   assert.deepEqual(tokenTotal(join(dir, "no-such-record.jsonl"), "x"), { reason: "the session record cannot be read (ENOENT)" });
   assert.deepEqual(tokenTotal(RECORD, recordLines()[0].payload.id), { tokens: "25811" });
 });
+
+// T969 (F-T954-6): at a later stop of the same agent, a half-written last line of its record gave no count, and that
+// unavailable replaced the count of the earlier stop. A stop that reads no count now keeps the measured one.
+test("T969: a later stop whose record ends in a half-written line keeps the count of the earlier stop", () => {
+  const project = realpathSync(mkdtempSync(join(dir, "tokens-later-")));
+  spawnSync("git", ["-C", project, "init", "-q", "-b", "codex/t1-a"]);
+  const ok = (...args) => { const r = spawnSync("node", [TOOL, ...args, "--project", project], { encoding: "utf8", env: ENV }); assert.equal(r.status, 0, r.stderr); return r.stdout.trim(); };
+  ok("init");
+  ok("task", "add", "--priority", "P2", "--title", "t1", "--size", "small");
+  ok("task", "T1", "set", "state=briefed", "branch=codex/t1-a");
+  const tokensOf = (id) => {
+    const [head, ...lines] = readFileSync(join(ok("logbook"), "runs.tsv"), "utf8").trimEnd().split("\n");
+    const cells = lines.map((line) => line.split("\t")).find((c) => c[0] === id);
+    return ["tokens", "usage_status"].map((key) => cells[head.split("\t").indexOf(key)]);
+  };
+  const lead = ok("run", "add", "T1", "--role", "lead", "--usage-interface", "collaboration-tools").split(" ")[0];
+  const lines = recordLines();
+  Object.assign(lines[0].payload, { agent_path: `/root/sage_lead_t1_${lead.toLowerCase()}` });
+  const file = join(dir, `tokens-later-${lead}.jsonl`);
+  writeFileSync(file, lines.map((line) => JSON.stringify(line)).join("\n") + "\n");
+  gate(stop({ agent_transcript_path: file, cwd: project, last_assistant_message: FULL }));
+  writeFileSync(file, readFileSync(file, "utf8") + '{"timestamp":"2026-11-10T17:07:00.000Z","type":"token_usage_rec'); // a line that Codex still writes
+  assert.deepEqual(gate(stop({ agent_transcript_path: file, cwd: project, last_assistant_message: FULL })), {});
+  ok("run", "done", lead, "--status", "blocked", "--report", "pages/report.md");
+  assert.deepEqual(tokensOf(lead), ["25811", "measured"]);
+});
