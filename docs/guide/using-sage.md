@@ -141,9 +141,9 @@ A tiny task has no review and no QA in its route, so its lead runs only the impl
 **Proof by run.** Each medium or high finding of a review or QA carries its proof:
 
 - one command and the output line that shows the problem, or a screenshot and its steps;
-- the hook stops the agent once when a proof is missing, or when the command stops a process, uses git stash or writes outside the scratch folder.
+- the hook stops the agent once when a proof is missing, or when the command stops a process, uses git stash, runs inline code, runs git that does more than read, or writes outside the scratch folder.
 
-Before any verdict and any repair round of a cycle with such a finding, one QA run, the proof check, reruns each proof on a fresh copy of the head. `finding triage --proof R<n>` names that run, and the state tool checks it. Its report backs no verdict, and a run whose medium findings were all dropped gives its clean verdict.
+Before any verdict and any repair round of a cycle with such a finding, one QA run, the proof check, reruns each proof on a fresh copy of the head, after the project's dependency install. `finding triage --proof R<n>` names that run, and the state tool checks it. Its report backs no verdict, and a run whose medium findings were all dropped gives its clean verdict.
 
 An open low finding never blocks a merge; it stays on the task's polish list. The board shows that list on the task's card and page. An open medium or high finding blocks the move to verifying and the merge.
 

@@ -9,7 +9,9 @@ A review or QA agent gives each medium or high finding its proof, on indented li
 - `proof: <one command, run from the repository root of the head>` and `saw: <the one output line that shows the problem>`;
 - for a screen: `proof: screenshot <path>` and `steps: <the url and the actions>`.
 
-The stop gate stops the agent once when a medium or high finding has no proof, or when the command runs a process program, a git stash or a write outside the scratch folder. The second stop goes through. A low finding needs no proof.
+The command runs from the repository root of a fresh copy of the head, after the project's dependency install (for example `npm ci --ignore-scripts`). It only reads, or writes only into the agent's scratch folder.
+
+The stop gate stops the agent once when a medium or high finding has no proof, or when the command runs a process program, a git stash, inline code (`node -e`, `sh -c`), a write outside the scratch folder, or git other than status, log, show, diff, rev-parse, ls-files, grep, cat-file or blame (also any `git -C`, `-c`, `--git-dir`, `--work-tree` or `--output`). The second stop goes through. A low finding needs no proof.
 
 ## When
 
@@ -38,14 +40,17 @@ Use the ten fields. Put these in them:
 The QA agent's own text gives it the steps. In short:
 
 1. Make a detached worktree of the head in your scratch folder: `git -C <project> worktree add --detach <scratch>/<run>/head <sha>`.
-2. Run each proof there as written, with `HOME`, `SAGE_HOME` and the home setting of each agent tool set to folders in your scratch folder, and `DO_NOT_TRACK=1`. Run nothing else.
-3. Compare the output with the `saw` line, or the screen with the screenshot:
+2. Run the project's dependency install there, if its proofs need it (for example `npm ci --ignore-scripts`). Set `HOME`, `SAGE_HOME` and the home setting of each agent tool to folders in your scratch folder, and `DO_NOT_TRACK=1`, for the install and for each proof.
+3. Read each proof first. Refuse a proof that writes outside your scratch folder, or runs a git command that the stop gate refuses (above): do not run it, and give it could not run.
+4. Run each other proof there as written. Run nothing but the install and the proofs.
+5. Compare the output with the `saw` line, or the screen with the screenshot:
    - reproduced: the problem shows again;
    - not reproduced: the command ran, and the problem does not show; also a finding with no proof;
-   - could not run: the command did not run (a refusal, a missing tool, a setup step that the proof does not give).
-4. Remove the worktree.
+   - could not run: the command did not run (a refusal, yours or a hook's, a missing tool, a setup step that the proof does not give).
+6. Remove the worktree.
 
 ## Limits
 
 - The scratch homes are a rule of the text only: the hook does not check the environment of a proof (standing order 70).
+- The stop gate reads the command as written. A disguised form, such as a variable or text piped into a shell, is a documented limit (standing order 70): the proof check reads each proof before it runs it.
 - A real problem that no command can show yet, such as a gap in a design, can be dropped. The drop is in the decision trail and in your report, and the chief can open the finding again.
