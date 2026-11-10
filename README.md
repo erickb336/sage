@@ -65,7 +65,7 @@ claude plugin update sage@sage
 
 ### In Codex
 
-Use Codex 0.164 or later, in the CLI or the desktop app, and a multi-agent v2 model. The install commands need the Codex CLI, also for the desktop app (`npm install -g @openai/codex@0.164.0`), and a lead with more than 2 helpers at once needs `agents.max_concurrent_threads_per_session` set to 10 in your Codex config. You also need Node.js 20 or later, `gh` logged in, and a GitHub remote for the project (see [What you need](docs/guide/codex.md#what-you-need)).
+Use Codex 0.164 or later, in the CLI or the desktop app, and a multi-agent v2 model. The install commands need the Codex CLI, also for the desktop app (`npm install -g @openai/codex@0.164.0`), and a lead with more than 2 helpers at once needs `max_concurrent_threads_per_session = 10` under `[agents]` in your Codex config file, `$CODEX_HOME/config.toml` (by default `~/.codex/config.toml`). You also need Node.js 20 or later, `gh` logged in, and a GitHub remote for the project (see [What you need](docs/guide/codex.md#what-you-need)).
 
 1. Add the sage marketplace and install sage, in a terminal:
    ```sh

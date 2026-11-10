@@ -28,7 +28,7 @@
 import { readdirSync, readFileSync, realpathSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
-import { boardNote, exactPhrase, MODE_DAMAGED, parseBoardIntent, PHRASES, protectionNote, readModeFile, renderChiefInstructions, switchModes } from "sage-core";
+import { boardNote, exactPhrase, MODE_DAMAGED, parseBoardIntent, PHRASES, protectionNote, readModeFile, renderChiefInstructions, ROLE_PRINCIPLES, switchModes } from "sage-core";
 import { NEW_ON, onCanCount, readRecord } from "./owner-record.mjs";
 import { modeDirectory, privateDirectory, readState, saveState, stateKey } from "./hook-state.mjs";
 import { sessionMeta } from "./report-gate.mjs";
@@ -88,12 +88,17 @@ function joins(input, state) {
   return onCanCount(record, input.turn_id) ? undefined : JOINED;
 }
 
-/** The chief role: the switch line, the state tool's command, and the shared chief instructions with Codex's bindings. */
+/**
+ * The chief role: the switch line, the state tool's command, the paths of the chief's principles (core's ROLE_PRINCIPLES,
+ * as a lead gets them from role.mjs), and the shared chief instructions with Codex's bindings.
+ */
 export function chiefText() {
   const bindings = JSON.parse(readFileSync(join(ROOT, "chief-bindings.json"), "utf8"));
+  const principles = ROLE_PRINCIPLES["chief-of-staff"].map((name) => `\`${join(ROOT, "skills", `principle-${name}`, "SKILL.md")}\``);
   return [
     'sage: sage mode is on. You are the user\'s chief of staff until the user sends the message "sage mode off", alone.',
     `The state tool, for reads only: node "${TOOL}" <command> --project <path>. Write the logbook only with the sage MCP tools.`,
+    `The principles of your role: read ${principles.join(" and ")} before you start.`,
     renderChiefInstructions(bindings),
   ].join("\n\n");
 }

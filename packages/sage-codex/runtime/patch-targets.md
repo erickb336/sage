@@ -8,8 +8,7 @@ The parser accepts LF and CRLF line endings. Missing patch markers, unknown
 records, misplaced moves, control characters or trailing whitespace in targets, and oversized input
 throw a fixed error. It never applies a patch or writes a file.
 
-This component is separate from the advice hook's loose header reader. A caller
-must check every returned target against its path and role rules. Parsing alone
+A caller must check every returned target against its path and role rules. Parsing alone
 grants no edit permission. Codex still validates the complete patch when it
 applies it; this reader does not replace that validation.
 
