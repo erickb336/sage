@@ -479,7 +479,7 @@ test("T462: the guide, the README and the CHANGELOG say what is checked in Codex
     "guide: checked on 0.164.0": /Codex 0\.164 or later\. sage was checked with the Codex CLI 0\.164\.0 and 0\.166\.0/.test(guide),
     "CHANGELOG: the desktop app should work the same way, not checked yet": /The Codex desktop app should work the same way, but it is not checked yet\./.test(entry) && !/in the CLI and the desktop app/.test(entry),
     "README: no claim that the desktop app is checked": !/the CLI or the desktop app: run/.test(readme),
-    "guide: the reviewer writes that the hook does not block": /A write through `git apply`, `git commit`, a script file that `node` or `python` runs, or `make` is not blocked\./.test(guide),
+    "guide: the reviewer writes that the hook does not block": /A write through a script file that `node` or `python` runs, or `make`, is not blocked/.test(guide),
     "guide: full access gives no mode guarantee": /Under full access \(`danger-full-access`\), sage mode gives no guarantee/.test(guide),
     "guide: the logbook write rule": /writes into the Codex sage folder or the shared root/.test(guide),
   }, Object.fromEntries(["guide: the Codex CLI on PATH, also for a desktop app user", "guide: the app's own plugin list is not checked", "guide: checked on 0.164.0", "CHANGELOG: the desktop app should work the same way, not checked yet",
