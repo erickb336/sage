@@ -9,7 +9,8 @@
 //     thread, guardian) shares the session id and has no agent_id, but its record names a subagent source or another
 //     thread id: it counts as a read-only role agent. A child whose record cannot be read is read-only and starts nothing.
 //   - The chief: in sage mode the root thread changes no file with apply_patch, nor with a shell write form (core's
-//     commandWrites, or Codex's own apply_patch program), except a redirection into the temp folder (T948). A child may.
+//     chiefShellProblem, or Codex's own apply_patch program), except a redirection into the temp folder (T948), and runs
+//     no git form that throws away uncommitted work, such as git reset --hard, outside a scratch worktree (T968). A child may.
 //   - A read-only role: in sage mode the leaf sage name (the last part of the agent path that starts with sage_) decides
 //     the edit rule. Under a role that core keeps from editing (a reviewer, QA, the PE, the lead), a child changes no
 //     file, with apply_patch or with a shell write form (core's commandWrites with readOnly, also git that changes the
@@ -94,7 +95,7 @@ import { autopilotSwitch, callInRecord, NEW_ON, readRecord, RECORD_RANGE, RECORD
 import { markFile } from "./start-mark.mjs";
 import { launcherFolder, versionsFolder } from "./launch.mjs";
 import { ASK_INSTALL } from "./entries.mjs";
-import { CHIEF_SHELL, TEMP } from "sage-core";
+import { CHIEF_SHELL, chiefShellProblem, READ_ONLY_SHELL_WAY, TEMP } from "sage-core";
 import { mergeCommand, permitFile, permitFolder } from "../skills/sage/merge.mjs";
 
 const ROOT = join(dirname(fileURLToPath(import.meta.url)), "..");
@@ -112,7 +113,8 @@ const OWNER_MERGE = "sage: in Codex, only sage's merge command merges, on autopi
 const LOGBOOK_WRITE = (word) => `sage: no agent writes, moves or removes a logbook file from the shell: ${JSON.stringify(word)} is in the Codex sage folder or the shared root, or holds one. Use the sage MCP tools for the logbook.`;
 const LOGBOOK_PATCH = (path) => `sage: no patch changes a logbook file: ${JSON.stringify(path)} is in the Codex sage folder or the shared root. Use the sage MCP tools for the logbook.`;
 const CODEX_RUN = "sage: no agent runs codex from the shell, except codex --version and codex --help, because a new session runs outside these hooks, and Codex records the prompt of a resumed, forked or queued turn as the user's typed message, also a mode phrase. Ask the user.";
-const READ_ONLY = (role) => `sage: in sage mode, the ${role} agent changes no files. Report the finding instead.`;
+/** A read-only role's refusal; a shell refusal also gives the way forward (core's READ_ONLY_SHELL_WAY, F-T936-3). */
+const READ_ONLY = (role, way) => `sage: in sage mode, the ${role} agent changes no files. Report the finding instead.${way ? ` ${way}` : ""}`;
 const LEAD_EDIT = "sage: a lead changes no files. Start an implementer of your task to make this change.";
 const BAD_NAME = (name) => `sage: "${name}" starts with sage_ but is not a sage task name (sage_<role>_t<n>_r<k>), so this agent counts as a read-only role: it changes no files. Report instead.`;
 const BAD_CHAIN = (name) => `sage: "${name}" is above this agent in its agent path, and only a lead (sage_lead_t<n>) has sage agents under it, so this agent changes no files. Report instead.`;
@@ -260,10 +262,10 @@ const notLeadAbove = (parts) => parts.filter(sageName).slice(0, -1).find((name) 
 /** A lead with only leads above it. */
 const realLead = (t) => isLead(t.parts?.at(-1)) && !notLeadAbove(t.parts);
 
-/** Why the gate refuses a child's change of files in sage mode, or undefined: the leaf sage name decides. */
-function childChange(t, sage) {
+/** Why the gate refuses a child's change of files in sage mode, or undefined: the leaf sage name decides. way: the way forward of a read-only role. */
+function childChange(t, sage, way) {
   if (!sage || !t.child) return undefined;
-  if (t.codex) return READ_ONLY(`Codex ${CODEX_THREADS[t.codex] ?? t.codex}`);
+  if (t.codex) return READ_ONLY(`Codex ${CODEX_THREADS[t.codex] ?? t.codex}`, way);
   if (!t.parts) return UNREAD_ROLE;
   const leaf = t.parts.findLast(sageName);
   if (leaf === undefined) return undefined;
@@ -274,7 +276,7 @@ function childChange(t, sage) {
   let denied;
   try { denied = role !== null && roleEditDenied({ sage, role }); } catch { denied = undefined; } // core throws for a role that it does not know
   if (denied === undefined || role === null) return BAD_NAME(leaf);
-  return denied ? READ_ONLY(role) : undefined;
+  return denied ? READ_ONLY(role, way) : undefined;
 }
 
 /** The task number and the run number (or undefined) of a sage task name. */
@@ -804,7 +806,7 @@ export async function gate(input, { mode = readMode, check = checkMerge, env = p
     if (stateToolWrites(f.command, f.cwd, env) && !(knownThread && scopedStateRead(f.command, f.cwd, env))) return refuse(thread, recordsAsLead(thread) ? LEAD_SHELL : CHILD_LOGBOOK);
     // A read-only role's redirection into the temp folder, outside the project, and its git in a worktree there run, as in
     // Claude (T933, T936); childChange lets a writer's every write run.
-    const why = commandWrites(f.command, f.cwd, TEMP, { readOnly: true }) || runsPatch(f.command, f.cwd, env) ? childChange(thread, mode(f, env).sage) : undefined;
+    const why = commandWrites(f.command, f.cwd, TEMP, { readOnly: true }) || runsPatch(f.command, f.cwd, env) ? childChange(thread, mode(f, env).sage, READ_ONLY_SHELL_WAY) : undefined;
     if (why) return refuse(thread, why);
     const agent = underSage(thread) !== false || mode(f, env).sage ? agentCommandProblem(f.command, f.cwd, env.PATH ?? "") : undefined;
     if (agent) return refuse(thread, `sage: ${agent}`);
@@ -814,7 +816,10 @@ export async function gate(input, { mode = readMode, check = checkMerge, env = p
   if (!now.sage) return undefined; // the merge refusal above applies in every mode
   // The chief's shell writes too (T948): core's write forms, as for a read-only role; a redirection into the temp folder,
   // outside the project, passes. A disguised write (a variable, a script's own code) is a documented limit (order 70).
-  if (!thread.child && chiefEditDenied({ sage: true, chief: true }) && (commandWrites(f.command, f.cwd, TEMP) || runsPatch(f.command, f.cwd, env))) return deny(`sage: ${CHIEF_SHELL}`);
+  if (!thread.child && chiefEditDenied({ sage: true, chief: true })) {
+    const why = chiefShellProblem(f.command, f.cwd) ?? (runsPatch(f.command, f.cwd, env) ? CHIEF_SHELL : undefined);
+    if (why) return deny(`sage: ${why}`);
+  }
   const gh = thread.child ? ghProblem(f.command, f.cwd, env) : undefined;
   if (gh) return refuse(thread, gh);
   // A shared logbook's task branch takes a push only from its owning chief, the chief of the root thread's session (T822).

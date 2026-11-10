@@ -28,7 +28,7 @@ const UNREADABLE = "sage: the hook could not read this tool call, so it refuses 
 const { stateKey } = await import(new URL("../plugins/sage-codex/hooks/hook-state.mjs", import.meta.url));
 const { recordBrief } = await import(new URL("../plugins/sage-codex/hooks/brief-hook.mjs", import.meta.url));
 const { ROUTES } = await import(new URL("../plugins/sage-codex/hooks/dispatch.mjs", import.meta.url));
-const { BRIEF_FIELDS, CHIEF_SHELL: CHIEF_SHELL_TEXT } = await import(new URL("../plugins/sage-codex/core/index.mjs", import.meta.url));
+const { BRIEF_FIELDS, CHIEF_GIT: CHIEF_GIT_TEXT, CHIEF_SHELL: CHIEF_SHELL_TEXT, READ_ONLY_SHELL_WAY } = await import(new URL("../plugins/sage-codex/core/index.mjs", import.meta.url));
 
 const SHA = "a1b2c3d4e5f60718293a4b5c6d7e8f9012345678";
 const MERGE = `gh pr merge 41 --squash --delete-branch --match-head-commit ${SHA}`;
@@ -43,6 +43,8 @@ const denied = (out) => (out?.hookSpecificOutput?.permissionDecision === "deny" 
 const OWNER_MERGE = "sage: in Codex, only sage's merge command merges, on autopilot, as the chief's instructions say. Without autopilot, the owner merges the pull request in GitHub";
 const BAD_NAME = (name) => `sage: "${name}" starts with sage_ but is not a sage task name (sage_<role>_t<n>_r<k>), so this agent counts as a read-only role: it changes no files. Report instead`;
 const RO = (role) => `sage: in sage mode, the ${role} agent changes no files. Report the finding instead`;
+/** A read-only role's shell refusal: it also names the way forward, a scratch folder and a scratch worktree (F-T936-3). */
+const RO_SHELL = (role) => `${RO(role)}. ${READ_ONLY_SHELL_WAY}`.replace(/\.$/, "");
 const LOGBOOK = "sage: role agents report; only the chief records the logbook. Put this in your report";
 const LEAD_EDIT = "sage: a lead changes no files. Start an implementer of your task to make this change";
 /** The one refusal of a lead's call off its list, from core's lead policy, as Claude gives it too (T928). */
@@ -194,7 +196,7 @@ const CHIEF_WRITES = ["cat > notes.md <<'EOF'\nhi\nEOF", "echo x > src/a.js", "p
   // T936: gh's options before its command words; the clones of a fork or a new repository; an attestation download; awk's
   // own redirection or command; a chmod in the project (F-T960-2, F-T932-4, F-T933-1).
   "gh -R acme/site release download v1", "gh release -R acme/site download v1", "gh repo fork acme/site --clone", "gh repo create acme/new --clone", "gh repo create acme/new -c --private",
-  "gh attestation download site.tgz -o acme", `awk '{print > "out.txt"}' a.txt`, `awk '{print $1 | "sort"}' a.txt`, `awk 'BEGIN { system("rm a.txt") }'`, "chmod +x src/a.sh", "chmod -R u+w ."];
+  "gh attestation download site.tgz -o acme", `awk '{print > "out.txt"}' a.txt`, `awk '{ print > ("out" NR) }' a.txt`, `awk '{ print ($1 > 3) > "out.txt" }' a.txt`, `awk '{print $1 | "sort"}' a.txt`, `awk 'BEGIN { system("rm a.txt") }'`, "chmod +x src/a.sh", "chmod -R u+w ."];
 const CHIEF_RUNS = ["git status", "git add -A && git commit -m 'a change'", "git -C /work/project worktree add /work/wt -b claude/t1", "git worktree add /work/wt/install -b claude/t2", "git commit -m patch", "gh pr view 41",
   "gh api -X PATCH repos/acme/site -f description=x", "gh pr create --title T --body \"$(cat <<'EOF'\nbody\nEOF\n)\"", "gh pr checkout 41", "gh extension list",
   "gh repo clone acme/site /tmp/notes/site", "gh run download 5 -D /tmp/notes/run", "gh release download v1 -O -", "gh codespace cp a.txt remote:a.txt",
@@ -204,7 +206,9 @@ const CHIEF_RUNS = ["git status", "git add -A && git commit -m 'a change'", "git
   // A fork without --clone, a download into the temp folder, an awk comparison, a chmod outside the project, and git:
   // the chief's git runs (T960); only a read-only role's git that changes the checkout is refused (T936).
   "gh repo fork acme/site", "gh repo fork acme/site --clone=false", "gh -R acme/site release download v1 -D /tmp/notes/rel", `awk '$3 > 100 { print "a|b" }' a.txt`,
-  "chmod +x /tmp/notes/fake/ps", "chmod -R u+w ~", "git checkout main", "git worktree add .claude/worktrees/t1 -b claude/t1"];
+  "chmod +x /tmp/notes/fake/ps", "chmod -R u+w ~", "git checkout main", "git worktree add .claude/worktrees/t1 -b claude/t1",
+  // F-T936-1: a > in parentheses is awk's comparison, and a print into /dev/stderr writes no file.
+  `awk '{ print ($1 > 3) }' a.txt`, `awk '{ print "bad row" > "/dev/stderr" }' a.txt`, `awk '{ printf("%d", ($2 > $3)) }' a.txt`];
 test("T960: the Claude hook and the Codex gate give the chief the same answer to each command, in sage mode and out of it", async () => {
   const { handle } = await import(new URL("../plugins/sage/hooks/sage-hook.mjs", import.meta.url));
   const slots = { bind() {}, release() {}, drop() {}, touch() {}, reconcile() {} };
@@ -235,7 +239,8 @@ const RO_RUNS = [`git worktree add --detach /tmp/notes/head ${SHA}`, `git -C /wo
   "git -C /tmp/notes/head reset --hard HEAD~1", "git -C /tmp/notes/head apply /tmp/notes/fix.patch", "git worktree remove /tmp/notes/head", "git worktree list", "git worktree prune",
   "git fetch origin", "git log --oneline -5", "git diff main...HEAD", "git show HEAD:src/a.js", "git status", "git branch -a", "git branch --sort -committerdate", "git branch --show-current",
   "git config --get user.email", "git config user.email", "git config --list", "git apply --check fix.patch", "git apply --stat fix.patch", "git clean -n", "git add -n .", "git commit --dry-run",
-  "echo x > /tmp/notes/out.txt", "npm test > /tmp/notes/test.txt 2>&1", "chmod +x /tmp/notes/fake/ps", `awk '$3 > 100' a.txt`, "npm test"];
+  "echo x > /tmp/notes/out.txt", "npm test > /tmp/notes/test.txt 2>&1", "chmod +x /tmp/notes/fake/ps", `awk '$3 > 100' a.txt`, "npm test",
+  `awk '{ print ($1 > 3) }' a.txt`, `awk '{ print "bad row" > "/dev/stderr" }' a.txt`];
 test("T936: a read-only role's git that changes the checkout is refused in both providers, and runs in a scratch worktree; the implementer runs it", async (t) => {
   const { handle } = await import(new URL("../plugins/sage/hooks/sage-hook.mjs", import.meta.url));
   const slots = { bind() {}, release() {}, drop() {}, touch() {}, reconcile() {} };
@@ -248,13 +253,63 @@ test("T936: a read-only role's git that changes the checkout is refused in both 
     for (const command of [...RO_REFUSED, ...RO_RUNS]) {
       const refused = role !== "implementer" && RO_REFUSED.includes(command);
       const c = claude(command, `sage:${role}`), x = denied(await g.run(pre("Bash", command, who)));
-      assert.deepEqual({ claude: c === undefined ? "runs" : c.includes(`the ${role} agent changes no files, also not from the shell`) ? "refused" : c, codex: x === undefined ? "runs" : x === RO(role) ? "refused" : x },
+      assert.deepEqual({ claude: c === undefined ? "runs" : c.includes(`the ${role} agent changes no files, also not from the shell`) ? "refused" : c, codex: x === undefined ? "runs" : x === RO_SHELL(role) ? "refused" : x },
         refused ? { claude: "refused", codex: "refused" } : { claude: "runs", codex: "runs" }, `${role}: ${command}`);
     }
   }
-  // The Claude line names the git forms and the way to check out a head.
+  // The Claude line names the git forms and the way to check out a head; the Codex line names that way too (F-T936-3).
   const why = claude("git reset --hard", "sage:code-reviewer");
   for (const part of ["a git command that changes the checkout, such as git checkout, reset, commit or branch -D", "git worktree add --detach /tmp/<run>/head <sha>"]) assert.ok(why.includes(part), part);
+  const codexWhy = denied(await g.run(pre("Bash", "git checkout claude/t1", child("sage_code_reviewer_t1_r2")))) ?? "";
+  assert.ok(codexWhy.includes("To check out a head, make a worktree in your scratch folder: git worktree add --detach /tmp/<run>/head <sha>; git commands run there"), codexWhy);
+  // F-T936-5: a reviewer whose folder is its own scratch worktree runs git there, in both providers.
+  const wt = scratchWorktree(t);
+  for (const command of ["git checkout main", "git checkout -- .", "git reset --hard HEAD~1", "echo x > out.txt"]) {
+    const c = denied(handle({ hook_event_name: "PreToolUse", tool_name: "Bash", tool_input: { command }, cwd: wt, session_id: "s1", agent_id: "a1", agent_type: "sage:code-reviewer" }, { sage: true, autopilot: false, start: false }, slots));
+    assert.deepEqual({ claude: c, codex: denied(await g.run(pre("Bash", command, { ...child("sage_code_reviewer_t1_r2"), cwd: wt }))) }, { claude: undefined, codex: undefined }, `in a scratch worktree: ${command}`);
+  }
+});
+
+/** A scratch worktree of CWD in the temp folder: its .git file names the project's git folder, as git worktree add writes it. */
+function scratchWorktree(t) {
+  const wt = realpathSync(mkdtempSync(join(tmpdir(), "sage-t968-wt-")));
+  t.after(() => rmSync(wt, { recursive: true, force: true }));
+  writeFileSync(join(wt, ".git"), `gitdir: ${CWD}/.git/worktrees/head\n`);
+  return wt;
+}
+
+/**
+ * T968: in sage mode the chief's git that throws away uncommitted work (reset --hard, checkout with paths, clean -f,
+ * restore of the work tree) is refused in the project, in both providers, with core's CHIEF_GIT. The same git in a
+ * scratch worktree runs, also when the chief's folder is that worktree, and so do the chief's merge steps and its other
+ * git. Outside sage mode all of it runs. The hooks only read these.
+ */
+const CHIEF_DESTROYS = ["git reset --hard", "git reset --hard HEAD~1", "git checkout -- .", "git checkout -- src/a.js", "git checkout main -- src/a.js", "git checkout .",
+  "git checkout -f main", "git switch --discard-changes main", "git clean -f", "git clean -fd", "git clean -xdf", "git clean --force -d", "git restore .", "git restore src/a.js",
+  "git restore --staged --worktree src/a.js", "git restore -SW src/a.js", `git -C ${CWD} reset --hard`, "git status && git reset --hard origin/main"];
+const CHIEF_GIT_RUNS = ["git -C /tmp/notes/head reset --hard", "git -C /tmp/notes/head checkout -- .", "git -C /tmp/notes/head clean -fd", "git -C /tmp/notes/head restore .",
+  `git worktree add --detach /tmp/notes/merge ${SHA}`, "git merge-tree --write-tree main claude/t1", `git commit-tree ${SHA} -p main -m 'the merge'`,
+  "git worktree remove --force /tmp/notes/merge", "git commit -m 'a change'", "git checkout claude/t1", "git checkout -b claude/t2", "git switch main", "git fetch origin",
+  "git log --oneline -5", "git diff main...HEAD", "git reset HEAD~1", "git reset --soft HEAD~1", "git restore --staged src/a.js", "git restore -S src/a.js", "git clean -n", "git clean -fn"];
+test("T968: the chief's git that throws away uncommitted work is refused in the project in both providers, and runs in a scratch worktree", async (t) => {
+  const { handle } = await import(new URL("../plugins/sage/hooks/sage-hook.mjs", import.meta.url));
+  const slots = { bind() {}, release() {}, drop() {}, touch() {}, reconcile() {} };
+  const claude = (command, sage, cwd = CWD) => denied(handle({ hook_event_name: "PreToolUse", tool_name: "Bash", tool_input: { command }, cwd, session_id: "s1" }, { sage, autopilot: false, start: false }, slots))?.replace(/\.$/, "");
+  const CHIEF_GIT = `sage: ${CHIEF_GIT_TEXT}`.replace(/\.$/, "");
+  for (const sage of [true, false]) {
+    const codex = fixed({ sage });
+    for (const command of [...CHIEF_DESTROYS, ...CHIEF_GIT_RUNS]) {
+      const expected = sage && CHIEF_DESTROYS.includes(command) ? CHIEF_GIT : undefined;
+      assert.deepEqual({ claude: claude(command, sage), codex: denied(await codex.run(pre("Bash", command))) }, { claude: expected, codex: expected }, `sage mode ${sage}: ${command}`);
+    }
+  }
+  // The chief's folder is a scratch worktree: the forms run there.
+  const wt = scratchWorktree(t), codex = fixed({ sage: true });
+  for (const command of ["git reset --hard", "git checkout -- .", "git clean -fd", "git restore ."]) {
+    assert.deepEqual({ claude: claude(command, true, wt), codex: denied(await codex.run(pre("Bash", command, { cwd: wt }))) }, { claude: undefined, codex: undefined }, `in a scratch worktree: ${command}`);
+  }
+  // The text says why, and names the safe way.
+  for (const part of ["can destroy changes in the owner's checkout", "Make a scratch worktree in the temp folder", "git worktree add --detach /tmp/<name>/wt <sha>", "or ask the owner"]) assert.ok(CHIEF_GIT.includes(part), part);
 });
 
 /** T936 (F-T960-9): the push form names the branch, so git push origin HEAD is refused for each role, with the form. */
@@ -728,9 +783,8 @@ test("in sage mode a read-only role writes no file from the shell either; it sti
   w.mode({ sage: true, autopilot: false });
   const writes = ["echo x > notes.txt", "printf 'a' >> src/a.js", "sed -i '' s/a/b/ src/a.js", "cp a.js b.js", "tee review.md < /dev/null", `node -e "require('fs').writeFileSync('x','y')"`, `bash -c "rm -f src/a.js"`];
   const reads = ["cat src/a.js", "git diff main", "npm test", "grep -rn codex src", "ls -la", "echo done"];
-  const ro = (role) => `sage: in sage mode, the ${role} agent changes no files. Report the finding instead`;
   for (const [name, role] of [["sage_code_reviewer_t3", "code-reviewer"], ["sage_qa_t3", "qa"], ["sage_pe_t3", "pe"]]) {
-    assert.deepEqual(writes.map((c) => denied(w.send(pre("Bash", c, w.child(`/root/${name}`))))), writes.map(() => ro(role)), name);
+    assert.deepEqual(writes.map((c) => denied(w.send(pre("Bash", c, w.child(`/root/${name}`))))), writes.map(() => RO_SHELL(role)), name);
     assert.deepEqual(reads.map((c) => denied(w.send(pre("Bash", c, w.child(`/root/${name}`))))), reads.map(() => undefined), name);
   }
   for (const name of ["sage_implementer_t3", "worker_1"]) assert.equal(denied(w.send(pre("Bash", writes[0], w.child(`/root/${name}`)))), undefined, name);
@@ -780,8 +834,8 @@ test("a role agent starts no agents, in any mode, and a thread under a read-only
   const p = patch("*** Update File: src/a.js", "@@", "-a", "+b");
   const got = ["/root/sage_code_reviewer_t1/helper", "/root/sage_qa_t1/worker_2/helper", "/root/worker_1/sage_pe_t2", "/root/sage_implementer_t1/helper", "/root/worker_1/helper"]
     .map((path) => [path, denied(w.send(pre("apply_patch", p, w.child(path)))) ?? "edits", denied(w.send(pre("Bash", "echo x > notes.txt", w.child(path)))) ?? "writes"]);
-  assert.deepEqual(got, [["/root/sage_code_reviewer_t1/helper", RO("code-reviewer"), RO("code-reviewer")], ["/root/sage_qa_t1/worker_2/helper", RO("qa"), RO("qa")],
-    ["/root/worker_1/sage_pe_t2", RO("pe"), RO("pe")], ["/root/sage_implementer_t1/helper", "edits", "writes"], ["/root/worker_1/helper", "edits", "writes"]]);
+  assert.deepEqual(got, [["/root/sage_code_reviewer_t1/helper", RO("code-reviewer"), RO_SHELL("code-reviewer")], ["/root/sage_qa_t1/worker_2/helper", RO("qa"), RO_SHELL("qa")],
+    ["/root/worker_1/sage_pe_t2", RO("pe"), RO_SHELL("pe")], ["/root/sage_implementer_t1/helper", "edits", "writes"], ["/root/worker_1/helper", "edits", "writes"]]);
   assert.equal(denied(w.send(pre("Bash", "codex exec hi", w.child("/root/worker_1/sage_implementer_t1/helper")))), CODEX_RUN, "a helper under a sage agent starts no Codex either");
 });
 
@@ -809,7 +863,7 @@ test("T551: under a lead the leaf sage name decides the edit rule: an implemente
   assert.deepEqual(edits(`${LEAD}/sage_implementer_t12_r2`), ["edits", "writes"]);
   assert.deepEqual(edits(`${LEAD}/sage_implementer_t12`), ["edits", "writes"], "a name with no run");
   for (const [name, role] of [["sage_code_reviewer_t12_r3", "code-reviewer"], ["sage_security_reviewer_t12_r4", "security-reviewer"], ["sage_ux_reviewer_t12_r5", "ux-reviewer"], ["sage_qa_t12_r6", "qa"]]) {
-    assert.deepEqual(edits(`${LEAD}/${name}`), [RO(role), RO(role)], name);
+    assert.deepEqual(edits(`${LEAD}/${name}`), [RO(role), RO_SHELL(role)], name);
   }
   assert.deepEqual(edits(LEAD), [LEAD_EDIT, LEAD_EDIT], "the lead itself");
   assert.deepEqual(edits(`${LEAD}/helper`), [LEAD_EDIT, LEAD_EDIT], "a thread under a lead with no sage name of its own has the lead's rule");
@@ -1055,7 +1109,7 @@ test("Codex's own rg in codex-path, first on PATH, is not Codex: a role agent's 
     const r = spawnSync(process.execPath, [HOOK], { input: JSON.stringify({ ...pre("Bash", command, w.child(path)), cwd: w.project }), encoding: "utf8", env, timeout: 60_000 });
     return r.stdout ? denied(JSON.parse(r.stdout)) : undefined;
   };
-  assert.equal(send("apply_patch < change.patch", "/root/sage_code_reviewer_t1"), RO("code-reviewer"));
+  assert.equal(send("apply_patch < change.patch", "/root/sage_code_reviewer_t1"), RO_SHELL("code-reviewer"));
   assert.equal(send("apply_patch < change.patch", "/root/sage_implementer_t1"), undefined);
 });
 
@@ -1525,7 +1579,7 @@ test("T114: source redirects do not inherit protected reader inputs or literal b
     assert.equal(denied(await g.run(pre("Bash", command, child))), undefined, command);
   }
   assert.equal(denied(await g.run(pre("Bash", "cat .codex/AGENTS.md; echo x > src/a.mjs",
-    sageChild(t, "/root/sage_code_reviewer_t1_r2")))), RO("code-reviewer"));
+    sageChild(t, "/root/sage_code_reviewer_t1_r2")))), RO_SHELL("code-reviewer"));
 });
 
 test("F-T114-3: a shell's own heredoc is read as its commands: a write into .codex there refuses (T909: code on stdin is a limit)", async t => {
@@ -2138,7 +2192,7 @@ for (const role of ["investigate", "evidence-review", "pe", "designer"]) {
     }
     const editDenial = role === "designer" ? undefined : RO(role);
     assert.equal(denied(w.send(pre("apply_patch", patch("*** Add File: design/T1/index.html", "+<p>SAMPLE DATA</p>"), child))), editDenial);
-    assert.equal(denied(w.send(pre("Bash", "echo sample > design/T1/screen.svg", child))), editDenial);
+    assert.equal(denied(w.send(pre("Bash", "echo sample > design/T1/screen.svg", child))), editDenial && RO_SHELL(role));
     assert.match(denied(w.send(pre("Bash", "echo bad > .codex/config.toml", child))), /no agent changes files under a \.codex folder/);
     for (const command of [`${cli} config max_agents=20 ${project}`, `${cli} task T1 set state=concluded ${project}`,
       `${cli} pages T1 record --run R1 --text bad ${project}`, `${cli} task T1 --project '${other}'`, `${cli} config --project '${other}'`,

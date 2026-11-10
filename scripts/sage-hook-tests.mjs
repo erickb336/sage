@@ -2461,10 +2461,38 @@ test("T936: in sage mode a reviewer's git that changes the checkout is refused a
   for (const command of [`git worktree add --detach ${SCRATCH}/head HEAD`, `git -C ${SCRATCH}/head reset --hard HEAD~1`, `cd ${SCRATCH} && git -C head checkout main`, "git fetch origin", "git apply --check fix.patch", `chmod +x ${SCRATCH}/ps`]) {
     assert.equal(s.send(bash(command, FEATURE, reviewer)), undefined, command);
   }
-  for (const command of [`node ${TOOL} log T1 "rm of the old files" --why rm`, `node ${TOOL} log - "tee the log" --why "cp, mv and rm"`, "npm install", "man tee", "git reset --hard"]) {
+  for (const command of [`node ${TOOL} log T1 "rm of the old files" --why rm`, `node ${TOOL} log - "tee the log" --why "cp, mv and rm"`, "npm install", "man tee", "git checkout main"]) {
     assert.equal(denied(s.send(bash(command))), undefined, `the chief: ${command}`);
   }
   assert.match(denied(s.send(bash("chmod +x scripts/a.sh"))) ?? "", CHIEF_SHELL, "the chief's chmod in the project");
+});
+
+// T968: the hook process, as Claude Code runs it, with a real linked worktree in scratch. scripts/codex-gates.test.mjs
+// compares the two providers on each case; the hook only reads these commands.
+test("T968: in sage mode the chief's git that throws away uncommitted work is refused in the project and runs in a scratch worktree; a reviewer's git runs in its own", () => {
+  const s = session(), off = session();
+  s.send(prompt("sage mode"));
+  const wt = join(SCRATCH, "t968-wt");
+  spawnSync("git", ["-C", FEATURE, "worktree", "add", "-q", "--detach", wt, "HEAD"]);
+  assert.ok(existsSync(join(wt, ".git")), "the scratch worktree");
+  const CHIEF_GIT = /^sage: sage mode is on, so the chief does not throw away uncommitted work: .*can destroy changes in the owner's checkout\. Make a scratch worktree in the temp folder .*or ask the owner/;
+  for (const command of ["git reset --hard", "git checkout -- .", "git checkout -- README.md", "git clean -fd", "git restore .", `git -C ${FEATURE} reset --hard HEAD`]) {
+    assert.match(denied(s.send(bash(command))) ?? "", CHIEF_GIT, command);
+    // From the scratch worktree, git -C names the project again, so it stays refused.
+    if (command.includes(" -C ")) assert.match(denied(s.send(bash(command, wt))) ?? "", CHIEF_GIT, `from the scratch worktree: ${command}`);
+    else assert.equal(denied(s.send(bash(command, wt))), undefined, `in the scratch worktree: ${command}`);
+    assert.equal(off.send(bash(command)), undefined, `outside sage mode: ${command}`);
+  }
+  for (const command of [`git -C ${wt} reset --hard`, `cd ${wt} && git clean -fd`, `git worktree add --detach ${SCRATCH}/t968-merge HEAD`, "git merge-tree --write-tree HEAD HEAD",
+    "git commit-tree HEAD^{tree} -p HEAD -m merge", `git worktree remove --force ${SCRATCH}/t968-merge`, "git commit -m 'a change'", "git checkout main", "git fetch origin", "git restore --staged README.md"]) {
+    assert.equal(denied(s.send(bash(command))), undefined, `the chief: ${command}`);
+  }
+  // F-T936-5: a reviewer whose folder is its own scratch worktree runs git there; in the project it stays refused.
+  const reviewer = { agent_id: "t968-cr", agent_type: "sage:code-reviewer" };
+  for (const command of ["git checkout main", "git checkout -- .", "git reset --hard HEAD"]) {
+    assert.equal(denied(s.send(bash(command, wt, reviewer))), undefined, `the reviewer in its worktree: ${command}`);
+    assert.match(denied(s.send(bash(command, FEATURE, reviewer))) ?? "", /the code-reviewer agent changes no files, also not from the shell/, `the reviewer in the project: ${command}`);
+  }
 });
 
 // F-T931-1: the temp folders of the read-only rule come from core (T931). When the hook lost them, every shell command
