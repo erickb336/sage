@@ -161,21 +161,31 @@ test("F-T663-21: the gate treats every run of merge.mjs as a merge: only the exa
 
 test("F-T663-1: the gate checks the version of the Codex that runs, also when the record is from an older Codex (a resume by a newer one)", async () => {
   // R2690's proof: Codex 0.166.0-alpha.6 resumed a record of 0.164.0 and wrote no session_meta and no version into it.
-  // F-T677-16: 0.167 reads; any later version, which sage has not checked, refuses.
+  // T951: 0.164 and later admit, with no upper bound; an older Codex refuses.
   try {
-    for (const version of ["0.168.0", "0.168.0-alpha.1", "0.170.2", "1.0.0"]) {
+    for (const version of ["0.163.0", "0.163.9-alpha.1", "0.99.0"]) {
       clearPermits();
       writeFileSync(VERSION, `${version}\n`);
       const w = world();
-      // F-T677-26: the refusal says that merges wait until sage adds that version.
-      assert.equal(denied(await w.run(w.input())), `sage: this session runs Codex ${version}, and autopilot merges only in Codex 0.164 to 0.167: a newer Codex waits until sage adds it. ${READY}`, version);
+      assert.equal(denied(await w.run(w.input())), `sage: this session runs Codex ${version}, and autopilot merges only in Codex 0.164 and later. ${READY}`, version);
       assert.deepEqual(permits(), []);
     }
-    for (const version of ["0.166.0-alpha.6", "0.167.0"]) {
+    for (const version of ["0.166.0-alpha.6", "0.167.0", "0.168.0", "0.168.0-alpha.1", "0.169.0", "0.169.0-alpha.8", "0.170.2", "1.0.0"]) {
       writeFileSync(VERSION, `${version}\n`);
       clearPermits();
-      const desktop = world();
-      assert.equal(await desktop.run(desktop.input()), undefined, version);
+      const resumed = world();
+      assert.equal(await resumed.run(resumed.input()), undefined, version);
+      assert.equal(permits().length, 1, version);
+      rmSync(GH_LOG);
+    }
+    // A new session of a newer Codex: its record names that version too.
+    for (const version of ["0.168.0", "0.169.0", "1.0.0"]) {
+      writeFileSync(VERSION, `${version}\n`);
+      clearPermits();
+      const [meta, ...rest] = withMode(RECORDS["exec-on"]);
+      const fresh = world({ lines: [{ ...meta, payload: { ...meta.payload, cli_version: version } }, ...rest] });
+      assert.equal(await fresh.run(fresh.input()), undefined, `a new session of ${version}`);
+      assert.equal(permits().length, 1, version);
       rmSync(GH_LOG);
     }
     // The desktop app's Codex today, with its own record (R2721, scrubbed): the on phrase starts a turn, then the call.
@@ -249,7 +259,7 @@ test("R2611: node and gh never come from a folder that Codex's sandbox can write
   rmSync(GH_LOG);
   // A fixed temporary folder of the sandbox (here the folder that holds the fakes): gh and the Codex binary there do not count.
   const temporary = world();
-  assert.equal(denied(await temporary.run(temporary.input(), { temporary: [SCRATCH] })), `sage: sage cannot tell which Codex runs this session, and autopilot merges only in Codex 0.164 to 0.167. ${READY}`);
+  assert.equal(denied(await temporary.run(temporary.input(), { temporary: [SCRATCH] })), `sage: sage cannot tell which Codex runs this session, and autopilot merges only in Codex 0.164 and later. ${READY}`);
   assert.deepEqual(permits(), []);
   // node: the gate's own node, which must be outside those folders too (here the temporary folder names node's folder).
   const node = world();

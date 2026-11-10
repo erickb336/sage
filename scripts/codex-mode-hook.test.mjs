@@ -473,7 +473,7 @@ test("T462: the guide, the README and the CHANGELOG say what is checked in Codex
   assert.deepEqual({
     "guide: the Codex CLI on PATH, also for a desktop app user": /The Codex CLI on your PATH, in that range, also when you use only the desktop app: .*`npm install -g @openai\/codex@0\.164\.0`/.test(guide),
     "guide: the app's own plugin list is not checked": /An install from the app's own plugin list is not checked yet\./.test(guide),
-    "guide: checked on 0.164.0": /Codex 0\.164 to 0\.167\. sage was checked with the Codex CLI 0\.164\.0 and 0\.166\.0/.test(guide),
+    "guide: checked on 0.164.0": /Codex 0\.164 or later\. sage was checked with the Codex CLI 0\.164\.0 and 0\.166\.0/.test(guide),
     "CHANGELOG: the desktop app should work the same way, not checked yet": /The Codex desktop app should work the same way, but it is not checked yet\./.test(entry) && !/in the CLI and the desktop app/.test(entry),
     "README: no claim that the desktop app is checked": !/the CLI or the desktop app: run/.test(readme),
     "guide: the reviewer writes that the hook does not block": /A write through `git apply`, `git commit`, a script file that `node` or `python` runs, or `make` is not blocked\./.test(guide),
