@@ -49,3 +49,5 @@ const tool = createStateTool({
 });
 export const { SIZES, BLOCKS, RISKS, KINDS, STATES, DEFAULTS, PR, sageRoot, locate, chiefFor, sessionBar, branchBar, actorOptions, git, projectRoot, optionsOf, slug, worktreeRoot, pagesRoot, BRANCH, ofTask, branchOfTask, branchTip, projectName, storeDir, config, cyclesFor, modelFor, read, mergeCheck, logbookView, sage, withLock, board, answerPaths, keepReport } = tool;
 if (process.argv[1] === fileURLToPath(import.meta.url)) tool.runCli();
+/** Core's one lead policy (T928), which the hook applies to a lead's write. */
+export const { leadProblem, leadRequest } = tool;

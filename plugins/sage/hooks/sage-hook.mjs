@@ -24,7 +24,7 @@
 //   - A sage agent may finish only with the full report of the sage:report skill.
 //   - Only the chief writes the logbook, in any mode (agentWriteProblem): an agent runs only the state tool's read
 //     commands. The one exception is a lead (agent type sage:lead, in the bound slot of its lead-T<n> spawn): it runs
-//     the commands of LEAD_WRITES on its own task, from Bash, as one plain command, with no --project and no
+//     the commands of core's lead policy on its own task, from Bash, as one plain command, with no --project and no
 //     SAGE_PROJECT (leadProblem, T273). An agent never runs a command outside the sandbox, never
 //     writes under the sage root with a file tool (canonical paths), and never runs a shell write whose literal path is
 //     in the sage root or the shared root, or that removes or moves a folder that holds one (core's logbookWrite,
@@ -361,6 +361,7 @@ export function handle(input, state, slots) {
     if (!LEAD_CHILDREN.has(spawned)) return deny(event, "a lead starts only an implementer, code reviewer, security reviewer, UX reviewer or QA agent. Report to the sage.");
     const why = leadSpawnProblem(lead, spawned, spawnName, slots, ti.prompt);
     if (typeof why === "string") return deny(event, `${why} Report to the sage.`);
+    if (why?.stopped) return deny(event, why.stopped); // core's reason, whole, as for a write and in Codex (F-T928-4)
     helperKey = why?.helper;
   }
   // The chief changes no file while sage mode is on, and a chief agent changes none in any mode (F-R1515-1).
@@ -702,14 +703,14 @@ function chiefProblem(input) {
 /** The word with which a command tool's input writes into the sage root or the shared root, or undefined. */
 const shellWrite = (ti, cwd) => runFields(ti).map((text) => core.logbookWrite(text, cwd, rootsOf(false))).find((word) => word !== undefined);
 /**
- * A lead's own writes (T273, #62 section 8). A state tool write by an agent passes only when the event's agent_type is
- * exactly sage:lead (Claude Code sets it), the agent holds a bound lead slot, and the command is on LEAD_WRITES for the
- * slot's task. The slot keeps what the chief's spawn of lead-T<n> found: the task, its logbook folder and its running lead
- * run (leadSpawnProblem). The command's folder must give that logbook, and that lead run must still run. Each task word
- * must be the lead's task; a run id or a finding key must be a row of that task, and a row that the logbook does not
- * have, or cannot give, refuses. The hook reads the logbook of the command's folder, as the state tool does without
- * --project and SAGE_PROJECT; so a lead's write takes neither, and runs only from Bash, whose folder is the event's cwd.
- * Undefined, or the reason.
+ * A lead's own writes (T273, #62 section 8, T928). A state tool write by an agent passes only when the event's agent_type
+ * is exactly sage:lead (Claude Code sets it), and the agent holds a bound lead slot: the hook keeps the slot's task, its
+ * logbook folder and its running lead run from the chief's spawn of lead-T<n> (leadSpawnProblem). The command's folder
+ * must give that logbook, and that lead run must still run. Then core's one lead policy, which the state tool's guard and
+ * Codex apply too, judges the command for the slot's task: its list, its own task, the round order and the values. The
+ * hook keeps the gap rule, which needs its notes of the lead's helpers. The hook reads the logbook of the command's
+ * folder, as the state tool does without --project and SAGE_PROJECT; so a lead's write takes neither, and runs only from
+ * Bash, whose folder is the event's cwd. Undefined, or the reason.
  */
 const TASK = /^T[1-9]\d*$/;
 const TEAM = ["implementer", "code-reviewer", "security-reviewer", "ux-reviewer", "qa"];
@@ -718,8 +719,6 @@ const TEAM = ["implementer", "code-reviewer", "security-reviewer", "ux-reviewer"
  * core's reader. The evidence review, which the chief starts, backs an investigation's evidence-clean (T932).
  */
 const REVIEWERS = [...TEAM.slice(1), "evidence-review"];
-/** The state moves of a cycle that a lead may make, by the task's current state (F-T273-7). A held task moves only by the sage. */
-const LEAD_MOVES = { briefed: ["building"], building: ["reviewing"], reviewing: ["verifying"], repairing: ["reviewing"], verifying: ["verified", "reviewing"], verified: ["reviewing"] };
 /**
  * The most bytes of one logbook table that the hook reads for a lead: 4 MiB, the state tool's own limit for its
  * observations file. The largest real table on 2026-10-11 was 0.35 MB (sage's own decisions.tsv), so a real logbook
@@ -727,46 +726,7 @@ const LEAD_MOVES = { briefed: ["building"], building: ["reviewing"], reviewing: 
  */
 const LEAD_READ_MAX = 4 * 1024 * 1024;
 const digest = (text) => createHash("sha256").update(text).digest("hex");
-const LEAD_FORM = "node <path to skills/sage/sage.mjs> and one of: run add <its task> --role <implementer, code-reviewer, security-reviewer, ux-reviewer or qa> (--branch of its task, or its task's branch=); run done <a run of these roles on its task>; finding add <its task> (no --key; --run only of a run that it added, and --class); finding close <its task> <key>; finding triage <its task> <key> fix, or dismiss --reason <why> for a low finding that is no fix key of its round or of an earlier one; verdict <its task> --pr <its task's PR> (and --run <a run of its task>); round <its task>; task <its task> set with one state= of the next cycle move (building, reviewing, verifying or verified, never from held), branch= of a branch named for its task that no other task names or ran on, while no other task uses its branch, or pr= of a PR that no other task has or had, while its task has none; as one plain command from Bash in the project's folder, with no --project and no SAGE_PROJECT, and on a shared logbook with --lead <its lead run>, while its lead run runs";
-/** Each key=value of task set: a key at most once, and each value as the lead may set it on this task (F-T273-2, F-T273-7). */
-const LEAD_PAIRS = {
-  // Only a branch named for its task: a lead never clears it (T275), and only the sage puts a task on another task's branch
-  // (T439) or takes it off one, so a lead cannot move its task off a shared branch after its runs pushed there (R1709-1).
-  // A branch that another task uses, by its branch= or by a run on it, is shared too, also when it carries this task's
-  // name: only the sage moves a task off it or onto it, so no lead brings another task's commits to its own PR (R1740-1).
-  branch: (branch, task, view, own) => {
-    if (!(branch !== "" && stateTool.branchOfTask(task, branch) && (!task.branch || stateTool.branchOfTask(task, task.branch)))) return false;
-    if (branch === task.branch) return true; // no move: the lead's build step names the branch that it has
-    const shared = [task.branch, branch].find((name) => name && [...view.branchTasks(name)].some((id) => id !== own));
-    return !shared || `${shared} is shared with ${[...view.branchTasks(shared)].filter((id) => id !== own).join(", ")}: only the sage moves a task onto a shared branch or off it.`;
-  },
-  pr: (pr, task, view, own) => /^[1-9]\d*$/.test(pr) && !task.pr && [...view.prTasks(pr)].every((id) => id === own),
-  // Option A (F-T284-12): the lead closes the round's fix findings while repairing, and leaves repairing only after.
-  // A refused move says which moves there are (F-T289-36).
-  state: (state, task, view, own, ctx) => {
-    const next = LEAD_MOVES[task.state] ?? [];
-    if (!next.includes(state)) return `${task.id} is ${task.state}: ${next.length ? `a lead moves it only to ${next.join(" or ")}` : "only the sage moves it from there"}.`;
-    // Back from verifying or verified only when the head of the branch moved past the clean cycles: the head has no full
-    // clean cycle, as the merge check counts one (F-T301-49, F-T301-67, F-T301-75).
-    if (["verifying", "verified"].includes(task.state) && state === "reviewing") {
-      const head = headOf(ctx.lead.folder, task.id);
-      if (!head) return `the head of ${task.id}'s branch cannot be read, so ${task.id} stays at ${task.state}.`;
-      if (view.cleanCycles(task.id, head) > 0) return `${task.id}'s head ${head.slice(0, 7)} has a full clean cycle, so ${task.id} stays at ${task.state}: a lead moves it back to reviewing only after the head moved (F-T301-49).`;
-    }
-    // To verifying only with a full clean cycle on the head: every clean review and QA verdict of its route (R1836-3, R1846-1).
-    // A route with no review or QA (null) needs no cycle, as the merge check counts it (R1991-1).
-    if (state === "verifying") {
-      const head = headOf(ctx.lead.folder, task.id);
-      if (!head) return `the head of ${task.id}'s branch cannot be read, so ${task.id} stays at ${task.state}.`;
-      if (view.cleanCycles(task.id, head) === 0) return `${task.id}'s head ${head.slice(0, 7)} has no full clean cycle yet (a clean verdict of each review and QA of its route on it), so ${task.id} stays at ${task.state}: record them first (R1836-3, R1846-1).`;
-    }
-    return !(task.state === "repairing" && roundFixOpen(task, view)) || `${task.id} has an open fix finding of its round: close each one after the repair's commit (finding close), then move it to reviewing. When the re-check did not confirm one, run round ${task.id}: it starts the next round.`;
-  },
-};
-/** The keys of the task's current round: round sets them to its fix findings. */
-const roundKeys = (task) => String(task.keys ?? "").split(",").filter(Boolean);
-/** An open, fix-triaged finding of the task's current round, at any severity (F-T301-73). */
-const roundFixOpen = (task, view) => view.findings(task.id).some((f) => f.status === "open" && f.triage === "fix" && roundKeys(task).includes(f.key));
+const LEAD_FORM = "node <path to skills/sage/sage.mjs> and a command of a lead's list on its own task, as one plain command from Bash in the project's folder, with no --project and no SAGE_PROJECT, and on a shared logbook with --lead <its lead run>, while its lead run runs";
 /**
  * The key of a run's helper: its logbook, the lead run that added it and its id, so that one child backs one run, and a
  * new lead never ends or uses an old lead's runs (F-T284-9, F-T289-8). The first part is the key of the lead's helpers.
@@ -775,8 +735,6 @@ const leadKey = (lead) => digest(`${lead.logbook}:${lead.run}`);
 const helperOf = (lead, run) => `${leadKey(lead)}.${run}`;
 /** A run that this lead added itself: the hook saw its own run add print the id (F-T289-8, F-T289-16). */
 const ownRun = (ctx, id) => /^R[1-9]\d*$/.test(id) && ctx.slots.helper(helperOf(ctx.lead, id)).owned;
-/** The states in which a lead writes nothing and starts no child: held, replan and the end states (F-T273-12, F-T289-7, F-T289-16). */
-const LEAD_STOPS = ["held", "replan", "merged", "concluded", "abandoned"];
 /**
  * The stop of a review or QA agent that the main session started itself (C-T483-1): its report goes to the logbook of its
  * folder for its run, which the hook marked on its slot from the brief's first line, "Run R<n> · task T<n>" (runOf). The
@@ -815,7 +773,8 @@ function headOf(folder, task) {
  * task is not held, in replan or ended. The child's name is a run id (R<n>), and the child is that run's helper: a running
  * run of the task in its current round, of the child's role, that this lead added (F-T301-57). The brief's first line
  * (BRIEF_LINE), when it has one, gives the run too: it names this lead's task, and a name that is a run id agrees with it
- * (T581). The helper keeps the branch's tip at its start (F-T289-14). The reason, or the helper to record ({ helper }).
+ * (T581). The helper keeps the branch's tip at its start (F-T289-14). The reason, core's whole reason for a task that
+ * cannot move ({ stopped }), or the helper to record ({ helper }).
  * It throws when it cannot read the logbook, and the hook refuses the spawn then.
  */
 function leadSpawnProblem(lead, spawned, given, slots, prompt) {
@@ -827,8 +786,9 @@ function leadSpawnProblem(lead, spawned, given, slots, prompt) {
   }
   if (digest(view.dir) !== lead.logbook) return "this lead's folder no longer gives its logbook, so it starts no agent.";
   if (view.leadRun(lead.task)?.id !== lead.run) return `${lead.task}'s lead run ${lead.run} no longer runs, so this lead starts no agent (F-T284-11).`;
-  const task = view.task(lead.task);
-  if (!task || LEAD_STOPS.includes(task.state)) return `${lead.task} is ${task ? task.state : "not in the logbook"}, so this lead starts no agent (F-T284-11, F-T289-7).`;
+  // Held, replan and the end states: core's reason, as for a lead's write and in Codex (F-T284-11, F-T289-7, F-T928-4).
+  const task = view.task(lead.task), stopped = core.leadStopped(lead.task, task);
+  if (stopped) return { stopped };
   const [, lineRun, lineTask] = BRIEF_LINE.exec(String(prompt ?? "").split("\n", 1)[0]) ?? [];
   if (lineTask && lineTask !== lead.task) return `the brief's first line names ${lineTask}, and this lead runs ${lead.task}: a lead helps only with its own task.`;
   if (lineRun && /^R[1-9]\d*$/.test(String(given ?? "")) && given !== lineRun) return `the helper's name ${given} and the brief's first line ${lineRun} name two runs: give both the same run id.`;
@@ -864,7 +824,7 @@ function gap(role, view, task, ctx) {
   if (!REVIEWERS.includes(role)) return undefined;
   const stops = ctx.slots.stops(leadKey(ctx.lead)).filter((r) => r?.role === role && view.row(r.run)?.task === task.id);
   const odd = stops.find((r) => r.unreadable && view.row(r.run).status === "running");
-  if (odd) return `${odd.run}'s helper gave a report that the hook cannot read, and ${odd.run} still runs: the sage ends it before this lead's next ${role} run, verdict or move (F-T289-18).`;
+  if (odd) return `${odd.run}'s helper gave a report that the hook cannot read (${odd.problem ?? "an old record"}), and ${odd.run} still runs: the sage ends it before this lead's next ${role} run, verdict or move (F-T289-18).`;
   const wanted = stops.filter((r) => !r.unreadable).flatMap((r) => (r.severities ?? []).map((v) => [r.run, v]));
   const held = ctx.slots.findings(leadKey(ctx.lead)).map(({ key, was }) => [view.traced(key), was]).filter(([f, was]) => f?.source === role && kept(f, was)).map(([f]) => f.severity);
   const atLeast = (list, levels) => list.filter((v) => levels.includes(v)).length;
@@ -872,109 +832,35 @@ function gap(role, view, task, ctx) {
   const found = wanted.filter(([, v]) => v !== "low").map(([run, v]) => `${run} ${v}`).join(", ");
   return `this lead's ${role} helpers reported medium or high findings on ${task.id} (${found}), and ${task.id} holds ${atLeast(held, ["high", "medium"])} medium or high ${role} finding(s) that this lead run recorded, in any status: add each missing one yourself (finding add), with --source ${role} at its severity or above, one for each finding of each run; a finding that the sage added does not count (F-T289-17, F-T289-18, F-T289-22, F-T289-32, F-T289-43).`;
 }
-const LEAD_WRITES = {
-  // No new run of a role while the findings of its round's reports are not all recorded (F-T289-18).
-  // --branch: a branch named for its task, or its task's branch= that the sage shares with another task (T439). Not a
-  // branch that another task uses when its task's branch= names another: the sage moved its task off it (R1759-2).
-  "run add": ([, t], opt, own, view, task, ctx) => {
-    if (!(t === own && TEAM.includes(opt.role) && (opt.branch === undefined || Boolean(stateTool.ofTask(own, opt.branch)) || opt.branch === task.branch))) return false;
-    const others = opt.branch === undefined || opt.branch.toLowerCase() === String(task.branch).toLowerCase() ? [] : [...view.branchTasks(opt.branch)].filter((id) => id !== own);
-    if (others.length) return `${opt.branch} is shared with ${others.join(", ")}, and the sage moved ${own} off it ${task.branch ? `to ${task.branch}: add the run on ${task.branch}` : `and cleared its branch=: add the run on a branch named for ${own} that no other task uses`}, or ask the sage to move ${own} back.`;
-    return gap(opt.role, view, task, ctx) ?? true;
-  },
-  // A run of the team ends only after its child, named by the run's id, stopped (F-T284-9). A run whose child gave no
-  // report (it never started, it left with no stop, or the sage stopped it) ends as failed or blocked and backs no
-  // verdict (F-T289-3, F-T289-13, F-T289-20). A review or QA run whose report was not clean ends only after the findings
-  // of its role's reports are recorded, or after its findings or qa-fail verdict (F-T289-15, F-T289-22). Only runs that
-  // this lead added (F-T289-8, F-T289-16).
-  "run done": ([, id], opt, own, view, task, ctx) => {
-    const run = view.row(id);
-    if (run?.task !== own || !TEAM.includes(run.role)) return false;
-    if (!ownRun(ctx, id)) return `${id} is not a run that this lead added: the sage ends it (F-T289-8, F-T289-16).`;
-    const key = helperOf(ctx.lead, id), { started, stopped } = ctx.slots.helper(key);
-    if (!Array.isArray(stopped?.severities)) {
-      const left = started && !stopped ? ctx.slots.lease(key) : 0;
-      if (left > 0) return `${id}'s helper has not stopped, and its slot holds its lease for about ${Math.ceil(left / 60_000)} more minute(s): wait for its stop, or ask the sage to end ${id} (F-T289-31).`;
-      return ["failed", "blocked"].includes(opt.status) || `${id}'s helper gave no report, so ${id} ends only as failed or blocked (F-T289-3, F-T289-20).`;
-    }
-    if (run.role === "implementer" || core.cleanReport(stopped) || view.verdicts(own).some((v) => v.run === id && ["findings", "qa-fail"].includes(v.kind))) return true;
-    if (stopped.unreadable) return `${id}'s helper gave a report that the hook cannot read (${stopped.problem ?? "an old record"}): the sage ends this run (F-T289-15, F-T289-23).`;
-    return gap(run.role, view, task, ctx) ?? true;
-  },
-  // --run names the run whose report holds the finding: a run that this lead added (T346).
-  "finding add": ([, t], opt, own, view, task, ctx) => t === own && opt.key === undefined && (opt.run === undefined || ownRun(ctx, opt.run)),
-  // Never a finding triaged ask (F-T284-10); while repairing, only a fix finding of the round: a new one waits for the
-  // next round (F-T284-8, F-T284-12).
-  "finding close": ([, t, key], opt, own, view, task) => t === own && view.row(key)?.task === own && view.row(key).triage === "fix" && (task.state !== "repairing" || roundKeys(task).includes(key)),
-  // Never a finding triaged ask: only the sage changes it (F-T289-1).
-  "finding triage": ([, t, key, how], opt, own, view, task) => {
-    if (!(t === own && view.row(key)?.task === own)) return false;
-    if (view.row(key).triage === "ask") return `${key} is triaged ask: only the sage changes it, with the owner's answer (F-T289-1).`;
-    // A fix key of the round stays for the sage: the next round, a replan or the sage's own dismissal (F-T301-60). So does a
-    // key of an earlier round, also after a replan cleared the keys: a finding triaged fix from before the round, because
-    // round makes every open fix finding a key (F-T301-72).
-    const older = view.row(key).triage === "fix" && Number(view.row(key).round) < Number(task.round);
-    if (how === "dismiss" && (roundKeys(task).includes(key) || older)) return `${key} is ${roundKeys(task).includes(key) ? `a fix of ${own}'s current round` : `a fix key of an earlier round of ${own}`}: only the sage dismisses it. End blocked and list it (F-T301-60).`;
-    return how === "fix" || (how === "dismiss" && view.row(key).severity === "low" && Boolean(opt.reason));
-  },
-  // A verdict names its task's own PR, so a lead's verdicts never count for another PR's merge check (F-T273-2, F-T273-6),
-  // and the finished run of its task whose role gives that kind (F-T284-6). A checks verdict is the sage's (T482, T302).
-  // The run backs one verdict: its own run, in the task's current round, and in no verdict yet (F-T284-9, F-T289-8), that
-  // backs the kind by its helper's kept report (backingProblem); the state tool checks it again (T483).
-  verdict: ([t], opt, own, view, task, ctx) => {
-    const roles = VERDICT_ROLES[opt.kind], run = opt.run === undefined ? undefined : view.row(opt.run);
-    if (!(t === own && Boolean(task.pr) && opt.pr === task.pr)) return false;
-    if (roles === null) return "a checks verdict (checks-pass or checks-fail) is the sage's: give the result of gh pr checks <n> in your report (T482).";
-    if (!(Array.isArray(roles) && run && String(run.round) === String(task.round))) return false;
-    if (!ownRun(ctx, run.id)) return `${run.id} is not a run that this lead added, so it backs no verdict of this lead (F-T289-8, F-T289-16).`;
-    const backed = view.verdicts(own).find((v) => v.run === run.id);
-    if (backed) return `${run.id} already backs the ${backed.kind} verdict on ${String(backed.sha).slice(0, 7)}, and one run backs one verdict: for another verdict, add a new ${run.role} run and start its helper (F-T284-9, R1817-2).`;
-    // The way out of a run that still runs (F-T289-36). When run done would be refused too, the refusal gives its reason,
-    // which names the real next step (F-T289-55).
-    const stillRuns = () => {
-      const end = LEAD_WRITES["run done"]([, run.id], { status: "done" }, own, view, task, ctx);
-      return typeof end === "string" ? `${run.id} still runs, and run done ${run.id} is refused now too: ${end}` : `${run.id} still runs: end it with run done ${run.id} first, then record its verdict (F-T289-36).`;
-    };
-    // A clean verdict too: no verdict of a role while another run of that role in the round has findings not recorded (F-T289-18).
-    return backingProblem(run, own, opt, ctx.slots.helper(helperOf(ctx.lead, run.id)).stopped, stillRuns) ?? gap(run.role, view, task, ctx) ?? true;
-  },
-  round: ([t], opt, own) => t === own,
-  task: ([t, set, ...pairs], opt, own, view, task, ctx) => {
-    const keys = pairs.map((kv) => kv.slice(0, kv.indexOf("=")));
-    if (!(t === own && set === "set" && pairs.length > 0 && new Set(keys).size === keys.length && keys.every((key) => Object.hasOwn(LEAD_PAIRS, key)))) return false;
-    for (const [k, kv] of pairs.entries()) {
-      const ok = LEAD_PAIRS[keys[k]](kv.slice(kv.indexOf("=") + 1), task, view, own, ctx);
-      if (ok !== true) return ok;
-    }
-    // No state move while a role's findings are not all recorded (F-T289-18).
-    return !keys.includes("state") || (TEAM.map((role) => gap(role, view, task, ctx)).find(Boolean) ?? true);
-  },
-};
 /**
- * Does this run back a verdict of opt.kind on this task? A lead's verdict, early, with the lead's ways out; the state tool
- * holds the same rule for every verdict (T482, T483): a run of the task, of a role that gives the kind (F-T284-6), that ended done (F-T289-36), whose helper's
- * kept report the hook read, on the commit of --sha, clean or not clean as the kind is (F-T289-4, F-T289-5). A run with
- * no report, or one that the hook cannot read, backs none: the sage reads it (F-T289-20, F-T289-23). stillRuns gives a
- * lead's way out of a run that still runs; without it the reason is for the sage. The reason, or undefined.
+ * The rules of a lead's request from the hook's notes of its helpers, after core's lead policy let it through. The gap
+ * rule (F2): no new run of a review or QA role, no end of such a run whose report was not clean, no verdict of the role
+ * and no state move, while this lead's helpers of the role have medium or high findings that this lead run did not record
+ * (F-T289-18, F-T289-22). And a lead ends only a run that it added, after its helper stopped, so that a run still at work
+ * stays in the merge check's guard of running reviews (F-T928-1). Undefined, or the reason.
  */
-function backingProblem(run, task, opt, report, stillRuns) {
-  const id = opt.run, roles = VERDICT_ROLES[opt.kind], lead = Boolean(stillRuns);
-  const role = roles.length > 1 ? `${roles.slice(0, -1).join(", ")} or ${roles.at(-1)}` : roles[0];
-  if (run?.task !== task) return `${id} is not a run of ${task}, so it backs no verdict on ${task}: name the ${role} run of ${task} whose report backs it.`;
-  if (!roles.includes(run.role)) return `${id} is a ${run.role} run, so it backs no ${opt.kind} verdict: only a ${role} run does (F-T284-6).`;
-  if (run.status === "running") return lead ? stillRuns() : `${id} still runs, so it backs no verdict yet: its lead ends it and records its verdict, or the sage does after the lead run ends.`;
-  if (run.status !== "done") return `${id} ended as ${run.status}, so it backs no verdict: add a new ${run.role} run${lead ? ", or ask the sage" : ""} (F-T289-36).`;
-  if (!report) return `${id}'s helper gave no report, so ${id} backs no verdict ${lead ? "of this lead: ask the sage" : "of the sage"} (F-T289-36).`;
-  if (!Array.isArray(report.severities) || report.unreadable) return `${id}'s helper gave ${report.unreadable ? `a report that the hook cannot read (${report.problem ?? "an old record"})` : "no report"}, so ${id} backs no verdict ${lead ? "of this lead: the sage reads it" : "of the sage"} (F-T289-20, F-T289-23).`;
-  if (!report.sha || String(opt.sha ?? "").toLowerCase() !== report.sha) return `${id}'s helper reviewed ${report.sha ? report.sha.slice(0, 7) : "no one commit (the branch moved during its run, or the hook could not read it)"}, not this --sha: a verdict names the commit that its helper saw (F-T289-5, F-T289-14).${report.sha ? "" : ` So ${id} backs no verdict: start a new ${run.role} run on the current head of the branch (git rev-parse <branch>), and record its verdict on that head (R1836-2).`}`;
-  const clean = core.cleanReport(report), wants = ["findings", "qa-fail"].includes(opt.kind) ? "not clean" : "clean";
-  if (clean !== (wants === "clean")) return `${id}'s helper reported ${report.result || "no readable RESULT"}${report.severities.length ? ` with ${report.severities.join(", ")} findings` : ""}, so its verdict is ${clean ? "clean" : "findings or qa-fail"}, not ${opt.kind} (F-T289-4).`;
-  return undefined;
+function leadGap(request, view, task, ctx) {
+  const run = request.run === undefined ? undefined : view.row(request.run);
+  if (request.command === "run add") return gap(request.role, view, task, ctx);
+  if (request.command === "verdict") return gap(run.role, view, task, ctx);
+  if (request.command === "task set") return Object.hasOwn(request.fields ?? {}, "state") ? TEAM.map((role) => gap(role, view, task, ctx)).find(Boolean) : undefined;
+  if (request.command !== "run done") return undefined;
+  if (!ownRun(ctx, run.id)) return `${run.id} is not a run that this lead added: the chief ends it (F-T289-8, F-T289-16).`;
+  // A run whose helper gave no report (it never started, it left with no stop, or the chief stopped it) ends only as
+  // failed or blocked; a helper that started and did not stop holds its run while its slot holds its lease (F-T284-9,
+  // F-T289-3, F-T289-13, F-T289-20, F-T289-31).
+  const key = helperOf(ctx.lead, run.id), { started, stopped } = ctx.slots.helper(key);
+  if (!Array.isArray(stopped?.severities)) {
+    const left = started && !stopped ? ctx.slots.lease(key) : 0;
+    if (left > 0) return `${run.id}'s helper has not stopped, and its slot holds its lease for about ${Math.ceil(left / 60_000)} more minute(s): wait for its stop, or ask your chief to end ${run.id} (F-T289-31).`;
+    return ["failed", "blocked"].includes(request.status) ? undefined : `${run.id}'s helper gave no report, so ${run.id} ends only as failed or blocked (F-T289-3, F-T289-20).`;
+  }
+  // A run whose helper gave a clean report, or whose findings or qa-fail verdict is recorded, ends (F-T289-15, F-T289-22).
+  if (core.cleanReport(stopped) || view.verdicts(task.id).some((v) => v.run === run.id && ["findings", "qa-fail"].includes(v.kind))) return undefined;
+  return gap(run.role, view, task, ctx);
 }
 /** The roles whose finished run gives each verdict kind; null for a checks verdict, which is the sage's (F-T284-6, T482). */
 const VERDICT_ROLES = { "checks-pass": null, "checks-fail": null, "review-clean": ["code-reviewer"], "security-clean": ["security-reviewer"], "ux-clean": ["ux-reviewer"], "qa-pass": ["qa"], "qa-fail": ["qa"], findings: ["code-reviewer", "security-reviewer", "ux-reviewer"] };
-/** The number of words of each lead write, so that no word goes past the hook unread. */
-const LEAD_WORDS = { "run add": 2, "run done": 2, "finding add": 2, "finding close": 3, "finding triage": 4, verdict: 1, round: 1 };
 /** The logbook of a folder, as the state tool finds it from process.cwd(): the physical path. realpath throws on a missing folder. */
 const logbookOf = (cwd) => stateTool.logbookView(realpathSync.native(cwd), process.env, { max: LEAD_READ_MAX });
 /**
@@ -1011,32 +897,17 @@ function leadProblem(input, cmd, pos, opt, slots) {
   if (input.tool_name !== "Bash") return "a lead writes the logbook only from Bash, because the hook knows the folder of a Bash command.";
   if (opt.project !== undefined || process.env.SAGE_PROJECT !== undefined) return "a lead's write takes no --project and no SAGE_PROJECT: the state tool then finds the logbook from the command's folder, as the hook does.";
   if (typeof input.cwd !== "string" || !isAbsolute(input.cwd)) return "the event has no absolute folder, so the hook cannot find the logbook that this write changes.";
-  const name = Object.hasOwn(LEAD_WRITES, `${cmd} ${pos[0]}`) ? `${cmd} ${pos[0]}` : cmd;
-  const shown = `"${[cmd, ...pos.slice(0, 1)].join(" ")}"`;
-  if (!Object.hasOwn(LEAD_WRITES, name ?? "") || (Object.hasOwn(LEAD_WORDS, name) && pos.length !== LEAD_WORDS[name])) return `${shown} is not on the lead's list, or has other words.`;
   // The view throws on a damaged or oversized logbook, and agentWriteProblem refuses then.
   const view = logbookOf(input.cwd);
   if (digest(view.dir) !== lead.logbook) return `this command's folder gives another logbook than the one of ${own}'s lead (F-T273-1). Run it in the project's folder or one of its worktrees.`;
   if (view.leadRun(own)?.id !== lead.run) return `${own}'s lead run ${lead.run} no longer runs, so this lead writes nothing (F-T273-4).`;
+  // Core's one lead policy, as the state tool's guard and Codex apply it (T928).
+  const request = stateTool.leadRequest(cmd, pos, opt), why = stateTool.leadProblem(view, { id: lead.run, task: own }, request, input.cwd);
+  if (why) return why;
   // A lead acts for the chief of its lead run: on a shared logbook its write names that run, and the state tool's guard reads it.
   if (view.shared && (opt.lead !== lead.run || opt.chief !== undefined)) return `this project's logbook is shared, so a lead's write names its lead run: add --lead ${lead.run}, with no --chief.`;
-  const task = view.task(own);
-  if (!task) return `the logbook has no task ${own}.`;
-  // A held or ended task takes no lead write at all: no run, finding, verdict or move (F-T273-7, F-T273-12, F-T289-7).
-  if (task.state === "held") return `${own} is held, and only the sage moves a held task (F-T273-7, F-T273-12).`;
-  if (LEAD_STOPS.includes(task.state)) return `${own} is ${task.state}, so its lead writes nothing (F-T289-7).`;
-  // A repair goes through round, so the rounds count and a task can reach held or replan (F-T284-5): while a medium or
-  // high finding is triaged fix and the task is not repairing, a lead closes no finding and records no verdict on a new SHA.
-  const repair = name === "finding close" || (name === "verdict" && !view.shas(own).has(String(opt.sha ?? "").toLowerCase()));
-  if (repair && task.state !== "repairing" && view.findings(own).some((f) => f.status === "open" && f.triage === "fix" && f.severity !== "low")) {
-    // round starts only from reviewing or verifying: from another state, the way out is the lead's moves to reviewing first (F-T289-59).
-    const moves = [];
-    for (let at = task.state; !["reviewing", "verifying"].includes(at) && LEAD_MOVES[at] && moves.length < 3; ) moves.push((at = LEAD_MOVES[at].includes("reviewing") ? "reviewing" : LEAD_MOVES[at][0]));
-    const first = ["reviewing", "verifying"].includes(task.state) ? `run round ${own} first` : moves.at(-1) === "reviewing" ? `move ${own} to ${moves.join(", then to ")} first (task ${own} set state=${moves.join(", then state=")}), then run round ${own}` : `ask the sage to move ${own} to reviewing, then run round ${own}`;
-    return `${own} has a medium or high finding triaged fix and is not repairing: ${first}, then repair (F-T284-5, F-T289-59).`;
-  }
-  const ok = LEAD_WRITES[name](pos, opt, own, view, task, { lead, slots });
-  return ok === true ? undefined : typeof ok === "string" ? ok : `${shown} is on the lead's list, but not as it is written here, or not on its own task ${own}.`;
+  // The gap rule, from the hook's notes of the lead's helpers.
+  return leadGap(request, view, view.task(own), { lead, slots });
 }
 const READ_WAY = "To run a read command of the state tool, run node <path to skills/sage/sage.mjs> status (or merge-check, logbook, standing, config), with the path of the copy that this hook loads; to read the file, use cat <path> or git show <sha>:<path>.";
 /** The words and the options of a state tool command after its path, read as the state tool reads them (sage.mjs parse): --name value or --name=value. */
