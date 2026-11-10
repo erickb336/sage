@@ -1,12 +1,17 @@
 // Shared write classification from the existing hook rules. This never executes command text.
 import { shellCommands, programsRun } from "./command-reader.mjs";
 import { ghTargets, outputDispatchWrites } from "./output-writes.mjs";
-import { gitSubcommand, programName } from "./command-policy.mjs";
+import { GIT_VALUE, gitSubcommand, programName } from "./command-policy.mjs";
 import { realpathSync } from "node:fs";
-import { basename, dirname, join, resolve, sep } from "node:path";
+import { basename, dirname, isAbsolute, join, resolve, sep } from "node:path";
 
 const CODE = /^-(?:[a-z]*[ce]|p|-eval|-print|command)$/;
-/** The commands that write, move, remove or link a file, also in PowerShell (case does not matter there). less -o FILE writes, so less always counts; uniq has its own rule (uniqWrites). */
+/**
+ * The commands that write, move, remove or link a file, also in PowerShell (case does not matter there). less -o FILE
+ * writes, so less always counts; uniq has its own rule (uniqWrites). A name counts only as a program that the command
+ * runs, also through a wrapper (xargs rm, env rm): as an argument it is data, so "npm install", "man tee" and a state-tool
+ * note "--why rm" write nothing (F-T960-3).
+ */
 const WRITE_NAMES = new Set(["less", "tee", "cp", "mv", "rm", "rmdir", "ln", "link", "install", "touch", "dd", "truncate", "rsync", "sponge", "patch", "unlink", "shred", "tar", "unzip", "set-content", "out-file", "add-content", "copy-item", "move-item", "remove-item", "rename-item", "new-item", "ni", "sc", "ac", "del"]);
 /** The commands that only read: their words name no command to run, so only a redirection makes them write. */
 const READERS = /^(?:cat|grep|egrep|fgrep|rg|head|tail|wc|echo|printf|ls|diff|cut|stat|file|jq|cd|pushd)$/;
@@ -102,7 +107,7 @@ export function inlineCode(text) {
     return false;
   }
 }
-function writesIn({ words }) {
+function writesIn({ words }, runs) {
   const low = words.map((w) => w.toLowerCase());
   const base = words.map(programName);
   const at = low.findIndex((w) => !/^\w+=/.test(w)), program = base[at] ?? "";
@@ -113,16 +118,98 @@ function writesIn({ words }) {
   // git's words are its own arguments too: of the write names, only git rm and git mv write, so "git worktree add
   // ../install" or "git commit -m patch" is no write (T960). git diff --output counts by its own rule (outputDispatchWrites).
   if (program === "git") return /^(?:rm|mv)$/.test(gitSubcommand(words, at + 1));
-  const has = (re) => base.some((w) => re.test(w));
+  // A program of this command that runs: a word that only names one (man sed, --why rm) is data.
+  const has = (re) => base.some((w) => re.test(w) && runs.has(w));
   return (
-    base.some((w) => WRITE_NAMES.has(w)) || uniqWrites(words, base) ||
+    base.some((w) => WRITE_NAMES.has(w) && runs.has(w)) || (runs.has("uniq") && uniqWrites(words, base)) ||
     (has(/^g?sed$|^perl$|^ruby$/) && low.some((w) => /^-[a-z]*i|^--in-place/.test(w))) ||
-    (has(/^g?awk$/) && low.includes("inplace")) ||
+    (has(/^[gmn]?awk$/) && (low.includes("inplace") || words.some(awkWrites))) ||
     (has(/^g?sort$/) && low.some((w) => /^-[a-z]*o|^--o/.test(w))) || // sort takes a shortened long option: --out=FILE, --outp=FILE (T83-R5-SORTABBR)
     (has(/^find$/) && low.some((w) => /^-(?:delete|exec|execdir|ok|okdir|fprint|fprintf|fls)$/.test(w))) ||
     runsCode(base, low) ||
     /^(?:eval|source|\.|exec)$/.test(base[low.findIndex((w) => !/^\w+=/.test(w))] ?? "")
   );
+}
+/** awk code that writes a file or runs a command: print or printf into > FILE, >> FILE or | "cmd", "cmd" | getline, or system() (F-T932-4). */
+const AWK_WRITES = /\bprintf?\b[^;{}\n]*[>|]|\|&?\s*getline\b|\bsystem\s*\(/;
+/** A word of awk code that writes (AWK_WRITES), with the text of its strings left out: print "a|b" only prints. */
+const awkWrites = (word) => AWK_WRITES.test(word.replace(/"(?:[^"\\]|\\.)*"/g, '""'));
+/** The operands of chmod, chown, chgrp and chflags that they change: every operand after the mode or the owner (none with --reference). */
+function modeTargets(name, args) {
+  const operands = [];
+  let reference = false;
+  for (let k = 0; k < args.length; k++) {
+    const arg = args[k];
+    // chmod -x FILE: -x, -w, -rwx and the like are modes, not options.
+    if (arg.startsWith("-") && arg !== "-" && !(name === "chmod" && /^-[rwxXst]+$/.test(arg) && !operands.length && !reference)) {
+      if (arg === "--") { operands.push(...args.slice(k + 1)); break; }
+      if (/^--reference(?:=|$)/.test(arg)) { reference = true; if (!arg.includes("=")) k++; }
+      continue;
+    }
+    operands.push(arg);
+  }
+  return reference ? operands : operands.slice(1);
+}
+/** The git subcommands that change a checkout's files, its index or its history (T936): each changes the work tree it runs in. */
+const GIT_CHANGES = /^(?:checkout|switch|restore|reset|clean|apply|am|merge|pull|rebase|cherry-pick|revert|commit|add|rm|mv)$/;
+/** The options of git clean, add, commit and apply that only show what the command would do. */
+const GIT_DRY = { clean: /^(?:-[a-zA-Z]*n[a-zA-Z]*|--dry-run)$/, add: /^(?:-[a-zA-Z]*n[a-zA-Z]*|--dry-run)$/, commit: /^--dry-run$/, apply: /^--(?:check|stat|numstat|summary)$/ };
+/** git branch options that delete, move, copy or force a branch, or change its upstream. */
+const BRANCH_CHANGES = /^(?:-[a-zA-Z]*[dDmMcCfu][a-zA-Z]*|--(?:delete|move|copy|force|set-upstream-to|unset-upstream|edit-description)(?:=.*)?)$/;
+/** git branch options that take the next word as their value. */
+const BRANCH_VALUE = /^--(?:sort|format|contains|no-contains|merged|no-merged|points-at)$/;
+/** git config options that change a setting, and its subcommands that change one (git 2.46 and later). */
+const CONFIG_CHANGES = /^(?:--(?:unset|unset-all|add|replace-all|rename-section|remove-section|edit)|-e)$/;
+const CONFIG_VALUE = /^(?:-f|--file|--blob|--type|--default|--comment|--value)$/;
+const CONFIG_READS = /^--(?:get|get-all|get-regexp|get-urlmatch|get-color|get-colorbool|list|show-origin|show-scope|name-only|null)$|^-[lz]$/;
+/**
+ * The folders and paths where a git command changes the project, for a read-only role (T936, F-T933-1, F-T932-4), or
+ * true when the hook cannot tell where. A command of GIT_CHANGES changes the work tree that it runs in (its -C folder, or
+ * the command's folder), except a dry run; git branch with a delete, move, copy or force option, and git config with a
+ * change, change the checkout's branches or settings; git worktree add, move and remove change their paths. Every other git
+ * command, such as fetch, log, worktree list or branch --list, changes no file of the project. git --git-dir or
+ * --work-tree names another checkout: true.
+ */
+function gitTargets(args) {
+  let tree = ".", k = 0;
+  for (; args[k]?.startsWith("-"); k++) {
+    if (/^--(?:git-dir|work-tree)(?:=|$)/.test(args[k])) return true;
+    if (args[k] === "-C") tree = isAbsolute(args[k + 1] ?? "") ? args[k + 1] : join(tree, args[k + 1] ?? "");
+    if (GIT_VALUE.test(args[k])) k++;
+  }
+  const sub = args[k] ?? "", rest = args.slice(k + 1);
+  if (GIT_CHANGES.test(sub)) return Object.hasOwn(GIT_DRY, sub) && rest.some((a) => GIT_DRY[sub].test(a)) ? [] : [tree];
+  if (sub === "branch") {
+    for (let i = 0; i < rest.length; i++) {
+      if (BRANCH_VALUE.test(rest[i])) i++;
+      else if (BRANCH_CHANGES.test(rest[i])) return [tree];
+    }
+    return [];
+  }
+  if (sub === "config") {
+    const operands = [];
+    let change = false;
+    for (let i = 0; i < rest.length; i++) {
+      if (CONFIG_CHANGES.test(rest[i])) change = true;
+      else if (CONFIG_READS.test(rest[i])) return [];
+      else if (CONFIG_VALUE.test(rest[i])) i++;
+      else if (!rest[i].startsWith("-")) operands.push(rest[i]);
+    }
+    change ||= /^(?:set|unset|rename-section|remove-section|edit)$/.test(operands[0] ?? "") || (operands.length > 1 && !/^(?:get|list)$/.test(operands[0]));
+    // --global and --system change a file outside every checkout.
+    return !change ? [] : rest.some((a) => /^--(?:global|system)$/.test(a)) ? true : [tree];
+  }
+  if (sub === "worktree" && /^(?:add|move|remove)$/.test(rest[0] ?? "")) {
+    const paths = [];
+    for (let i = 1; i < rest.length; i++) {
+      if (/^(?:-b|-B|--reason)$/.test(rest[i])) i++;
+      else if (!rest[i].startsWith("-")) paths.push(rest[i]);
+    }
+    // add: its path (then a commit); move: both paths; remove: its path.
+    const changed = rest[0] === "move" ? paths.slice(0, 2) : paths.slice(0, 1);
+    return changed.length ? changed.map((p) => (isAbsolute(p) ? p : join(tree, p))) : true;
+  }
+  return [];
 }
 /** The real path of a path: the real path of its longest part that exists, then the rest. */
 function realPath(path) {
@@ -139,21 +226,39 @@ function intoScratch({ target, dir, uncertainDirectory }, cwd, scratch) {
   return path !== project && !under(project) && scratch.some((folder) => under(realPath(resolve(folder))));
 }
 /**
- * Does one field of a command's text have a write form? A text that the hook cannot read counts as one (fail closed).
- * scratch: absolute folders (such as the temp folder) where a redirection, or a gh clone or download (ghTargets), does
- * not count, unless its target is in cwd. Every other write form counts also there.
+ * Is a target of chmod, chown, chgrp or chflags in the project (cwd), or a place that the reader cannot tell (a variable,
+ * a folder after a cd that it cannot follow)? A pattern counts by the folder of its literal part; ~ is outside.
  */
-export function commandWrites(text, cwd, scratch = []) {
+function inProject({ target, dir, uncertainDirectory }, cwd) {
+  if (/^~(?:\/|$)/.test(target)) return false;
+  if (/[$`]/.test(target) || (uncertainDirectory && !isAbsolute(target))) return true;
+  const cut = target.search(/[*?[{]/), literal = cut < 0 ? target : target.slice(0, target.lastIndexOf("/", cut) + 1);
+  const path = realPath(resolve(dir ?? cwd, literal || ".")), project = realPath(resolve(cwd));
+  return path === project || path.startsWith(project.endsWith(sep) ? project : project + sep);
+}
+/**
+ * Does one field of a command's text have a write form? A text that the hook cannot read counts as one (fail closed).
+ * scratch: absolute folders (such as the temp folder) where a redirection or a gh clone or download (ghTargets) does
+ * not count, unless its target is in cwd. Every other write form counts also there. A chmod, chown, chgrp or chflags
+ * counts only in cwd (modeTargets, inProject, F-T933-1): chmod +x of a fake in scratch, or chmod -R u+w ~, runs. readOnly: also
+ * the git commands that change the project's work tree, index, history, branches or settings (gitTargets), for a role
+ * that changes no files (T936); a git command in a scratch folder, such as a worktree of the head, does not count. The
+ * chief's rule leaves it out, so the chief's git runs (T960).
+ */
+export function commandWrites(text, cwd, scratch = [], { readOnly = false } = {}) {
   if (typeof text !== "string") return true;
   try {
     const commands = shellCommands(text);
-    if (commands.some(writesIn)) return true;
     const evidence = programsRun(text, cwd, undefined, { contextEvidence: true, redirectParts: true });
-    const ghWrites = ({ run, uncertainDirectory }) => {
-      const targets = programName(run.word) === "gh" ? ghTargets(run.args) : [];
-      return targets === true || targets.some(target => !intoScratch({ target, dir: run.dir, uncertainDirectory }, cwd, scratch));
+    const runs = new Set(evidence.programs.map(({ run }) => programName(run.word)));
+    if (commands.some((command) => writesIn(command, runs))) return true;
+    const placeWrites = ({ run, uncertainDirectory }) => {
+      const name = programName(run.word), at = (target) => ({ target, dir: run.dir, uncertainDirectory });
+      if (/^(?:chmod|chown|chgrp|chflags)$/.test(name)) return modeTargets(name, run.args).some((target) => inProject(at(target), cwd));
+      const targets = name === "gh" ? ghTargets(run.args) : readOnly && name === "git" ? gitTargets(run.args) : [];
+      return targets === true || targets.some((target) => !intoScratch(at(target), cwd, scratch));
     };
-    return evidence.redirects.some(r => toFile(r) && !intoScratch(r, cwd, scratch)) || evidence.programs.some(entry => readerDispatch(entry) || outputDispatchWrites(entry) || ghWrites(entry));
+    return evidence.redirects.some(r => toFile(r) && !intoScratch(r, cwd, scratch)) || evidence.programs.some(entry => readerDispatch(entry) || outputDispatchWrites(entry) || placeWrites(entry));
   } catch {
     return true;
   }

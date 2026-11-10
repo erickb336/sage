@@ -1511,7 +1511,7 @@ test("a merge passes only as the one merge form; any other command that names a 
     `env -S '${M} --squash'`, `watch -n 1 '${M} --squash'`, // T910: watch's shell text and env -S's split string
     `git -c alias.m='!${M} --squash' m`, `gh api -X PUT repos/o/r/pulls/41/merge -f sha=${SHA}`, 'curl -X PUT -H "Authorization: Bearer x" https://api.github.com/repos/o/r/pulls/41/merge',
     `gh api graphql -f query='mutation { mergePullRequest(input: {pullRequestId: "x"}) { clientMutationId } }'`, "gh api -X POST repos/o/r/merges -f base=main -f head=t4"];
-  for (const command of limits) expectPass(off.send(bash(command)), /node -e|> x\.sh/.test(command), `${command} (a limit of the hook)`);
+  for (const command of limits) expectPass(off.send(bash(command)), /node -e|> x\.sh|^awk /.test(command), `${command} (a limit of the hook)`); // awk's system() is a write form (T936)
 });
 
 test("T670-MERGETEXT: the word merge in a program's text, or a local git merge-tree in a loop, is no merge (T670)", () => {
@@ -2447,6 +2447,24 @@ test("T960: in sage mode the chief runs no shell write form, as in Codex; reads,
   const runs = [...SHELL_READS, "git status", "git add -A && git commit -m 'a change'", "gh pr view 41 --json headRefOid", "gh pr checkout 41",
     `gh repo clone acme/site ${SCRATCH}/site`, `gh run download 5 -D ${SCRATCH}/run`, `node ${TOOL} status --project ${FEATURE}`];
   for (const command of runs) assert.equal(denied(s.send(bash(command))), undefined, command);
+});
+
+// T936: the hook process, as Claude Code runs it. scripts/codex-gates.test.mjs compares the two providers on each case.
+test("T936: in sage mode a reviewer's git that changes the checkout is refused and runs in a scratch worktree; the chief's note with rm runs", () => {
+  const s = session();
+  s.send(prompt("sage mode"));
+  const reviewer = { agent_id: "t936-cr", agent_type: "sage:code-reviewer" }, implementer = { agent_id: "t936-imp", agent_type: "sage:implementer" };
+  for (const command of ["git reset --hard", "git checkout -- .", "git commit -am 'a fix'", "git add -A", "git clean -fd", "git restore .", "git branch -D claude/t1", "git config user.email a@b.example", "git apply fix.patch", "git worktree add /sage-t936-not-created/wt claude/t1", `awk '{print > "out.txt"}' a.txt`]) {
+    assert.match(denied(s.send(bash(command, FEATURE, reviewer))) ?? "", /the code-reviewer agent changes no files, also not from the shell.*a git command that changes the checkout.*git worktree add --detach \/tmp\/<run>\/head <sha>/, command);
+    assert.equal(s.send(bash(command, FEATURE, implementer)), undefined, `the implementer: ${command}`);
+  }
+  for (const command of [`git worktree add --detach ${SCRATCH}/head HEAD`, `git -C ${SCRATCH}/head reset --hard HEAD~1`, `cd ${SCRATCH} && git -C head checkout main`, "git fetch origin", "git apply --check fix.patch", `chmod +x ${SCRATCH}/ps`]) {
+    assert.equal(s.send(bash(command, FEATURE, reviewer)), undefined, command);
+  }
+  for (const command of [`node ${TOOL} log T1 "rm of the old files" --why rm`, `node ${TOOL} log - "tee the log" --why "cp, mv and rm"`, "npm install", "man tee", "git reset --hard"]) {
+    assert.equal(denied(s.send(bash(command))), undefined, `the chief: ${command}`);
+  }
+  assert.match(denied(s.send(bash("chmod +x scripts/a.sh"))) ?? "", CHIEF_SHELL, "the chief's chmod in the project");
 });
 
 // F-T931-1: the temp folders of the read-only rule come from core (T931). When the hook lost them, every shell command
@@ -7117,7 +7135,7 @@ test("T621: a read part beside a write part gives no evidence against it: each p
     "cp a b; grep -E '5[0-9]' /tmp/log",
     "cp a b; cat /other/config.json",
   ];
-  for (const command of pass) for (const [who, extra] of AS_BOTH) expectPass(s.send(bash(command, FEATURE, extra)), who === "chief" && /\b(?:touch|rm|cp) |^npm install/.test(command), `${who}: ${command}`);
+  for (const command of pass) for (const [who, extra] of AS_BOTH) expectPass(s.send(bash(command, FEATURE, extra)), who === "chief" && /\b(?:touch|rm|cp) /.test(command), `${who}: ${command}`); // npm install runs: its words name no program (T936)
   // In sage mode the chief's rule counts a pattern that can match a logbook file; an agent's counts it when the line can leave the folder.
   assert.equal(denied(s.send(bash("ls /tmp && rm dist/*", FEATURE, AGENT))), undefined, "the absolute path of a read part does not make the line leave the folder");
 });
@@ -7352,7 +7370,7 @@ test("T621: a command that only reads stays data beside a part that the hook kee
     `grep read /tmp/log; touch a && ${READ_NEAR_LOGBOOK}`,
     `grep a=b /tmp/log; touch a && ${READ_NEAR_LOGBOOK}`,
   ];
-  for (const command of pass) for (const [who, extra] of AS_BOTH) expectPass(s.send(bash(command, FEATURE, extra)), who === "chief" && /\b(?:touch|rm|cp) |^npm install/.test(command), `${who}: ${command}`);
+  for (const command of pass) for (const [who, extra] of AS_BOTH) expectPass(s.send(bash(command, FEATURE, extra)), who === "chief" && /\b(?:touch|rm|cp) /.test(command), `${who}: ${command}`); // npm install runs: its words name no program (T936)
 });
 
 // T815: the agent's gh rule reads gh's own command words. A heredoc in a text flag is text; a substitution that builds

@@ -1,6 +1,6 @@
 # Shared shell-write classification
 
-`commandWrites(text, cwd, scratch)` identifies known shell write forms and reader options
+`commandWrites(text, cwd, scratch, { readOnly })` identifies known shell write forms and reader options
 that can run another program. It parses text without executing it. Non-text or
 unreadable input counts as a write form.
 
@@ -8,27 +8,52 @@ unreadable input counts as a write form.
 redirection, or a gh clone or download (`ghTargets`), whose literal target is
 in one of them, and not in `cwd` (the caller's project), does not count. Every other write form counts, also into a
 scratch folder. A target with a variable, a pattern or `~`, or in a folder that
-the reader cannot follow, counts. The Claude hook passes its temp folders for a
-read-only role (T933), and both providers pass them for the chief in sage mode
-(T948, T960), with core's `CHIEF_SHELL` text.
+the reader cannot follow, counts. Both providers pass the temp folders for a
+read-only role (T933, T936) and for the chief in sage mode (T948, T960), with
+core's `CHIEF_SHELL` text.
+
+A write program's name (`rm`, `tee`, `install`, `sed -i`, `uniq`) counts only
+where the command runs that program, also through a wrapper that the reader
+knows (`xargs rm`, `env rm`, `find -exec rm`). As an argument it is data, so
+`npm install`, `man tee` and a state-tool note with `--why rm` write nothing
+(F-T960-3). awk code counts when it prints into a file or a command, or runs
+`system()` or a command into `getline` (F-T932-4). `chmod`, `chown`, `chgrp`
+and `chflags` count only for a path in `cwd` (F-T933-1), so `chmod +x` of a
+fake in scratch, or `chmod -R u+w ~`, does not.
+
+`readOnly: true` is for a role that changes no files (T936). It adds the git
+commands that change the checkout (`gitTargets`): `checkout`, `switch`,
+`restore`, `reset`, `clean`, `apply`, `am`, `merge`, `pull`, `rebase`,
+`cherry-pick`, `revert`, `commit` and `add` at their work tree (the `-C` folder
+or the command's folder), except a dry run, `git apply --check` and `--stat`;
+`branch` with a delete, move, copy, force or upstream option and `config` with a
+change at the work tree (`--global` or `--system` in every folder); and
+`worktree add`, `move` and `remove` at their paths. In a scratch folder, outside
+`cwd`, they do not count, so `git worktree add --detach /tmp/r/head <sha>` and
+git inside that worktree run. `--git-dir` and `--work-tree` count in every
+folder. The chief's rule leaves `readOnly` out, so the chief's git runs (T960).
 
 Executable-name checks ignore case and a trailing `.exe`, using the shared
 normalizer. Reader-option parsing keeps the original arguments and option case.
 
 The public core entry point exposes the same function in both provider bundles.
 The Codex gate and the Claude hook both call it for a read-only role, with
-core's `roleEditDenied`.
+core's `roleEditDenied`, the temp folders and `readOnly: true`.
 
 The words of `gh` are its own arguments, so a word such as `PATCH` or `less` after `gh` does not count (`gh api -X PATCH`, T948); a redirection still counts.
 `ghTargets` (in `output-writes.mjs`) reads the gh commands that write files
-(F-T948-1, F-T948-5): `gh repo clone` and `gh gist clone` (the folder that they
-name, or one named after the repository), `gh run download` and
-`gh release download` (the folder of `-D`, the file of `-O`, or the command's
-folder) and `gh codespace cp` (a local destination). `gh extension install`,
+(F-T948-1, F-T948-5, F-T960-2), with gh's options before, between or after its
+command words (`gh -R o/r release download`): `gh repo clone` and
+`gh gist clone` (the folder that they name, or one named after the repository),
+`gh repo fork --clone` and `gh repo create --clone` (a folder named after the
+repository), `gh run download` and `gh release download` (the folder of `-D`,
+the file of `-O`, or the command's folder), `gh attestation download` (the
+command's folder) and `gh codespace cp` (a local destination). `gh extension install`,
 `upgrade`, `remove` and `create` count in every folder. `gh pr checkout` does
 not count: it changes the work tree as `git checkout` does.
 The words of `git` are its own arguments too: of the write names, only
-`git rm` and `git mv` count, so `git worktree add ../install` does not (T960). Ordinary reader arguments remain data. Option values and words after `--`
+`git rm` and `git mv` count, so `git worktree add ../install` does not (T960);
+the other git forms count only with `readOnly`. Ordinary reader arguments remain data. Option values and words after `--`
 retain their parser context. Redirections to files count as
 writes; input-only redirections and the listed standard device outputs do not.
 
