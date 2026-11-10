@@ -25,8 +25,19 @@ const TEXT = readFileSync(LEAD_FILE, "utf8");
 const spawnSync = (command, args, options) => rawSpawnSync(command, args, { timeout: 60_000, killSignal: "SIGKILL", encoding: "utf8", ...options });
 const BRIEF = ["GOAL build the form", "SCOPE src/", "CONTEXT none", "DECISIONS none", "ACCEPTANCE it works", "VERIFY npm test", "BUDGET 1 hour of agent time",
   "FORBIDDEN no merge", "REPORT the report of the sage:report skill", "STANDING The standing orders apply in full: read them with `sage standing` before you start, and put the same pointer in every helper brief."].join("\n");
-const report = (result, findings) => ["STATUS        done", `RESULT        ${result}`, "EVIDENCE      npm test: pass", `FINDINGS      ${findings}`,
-  "QUESTIONS     none", "NOT VERIFIED  none", "BRANCH        sage/t1-example"].join("\n");
+/**
+ * A helper's report from an example's < line: its RESULT, its FINDINGS, and the lines under it (T947). With FINDINGS
+ * none, those lines go into EVIDENCE: a proof check's "- <key> reproduced". Else they are the detail of its findings. Each
+ * medium or high finding carries its proof, as the role texts teach: one that has no proof line gets a stock one.
+ */
+const report = (result, findings) => {
+  // An indented line is a finding when it has a key and a severity, else the detail of the finding above it.
+  const [first, ...more] = findings.split("\n").map((line) => line.trim()), none = first === "none";
+  const lines = none ? [first] : [first, ...more.map((line) => (/^- \S+ (?:low|medium|high) /.test(line) ? line : `  ${line}`))];
+  const proven = lines.flatMap((line, k) => (/^- \S+ (?:medium|high) /.test(line) && !/^\s+proof:/.test(lines[k + 1] ?? "") ? [line, "  proof: npm test", "  saw: not ok 1"] : [line]));
+  return ["STATUS        done", `RESULT        ${result}`, "EVIDENCE      npm test: pass", ...(none ? more : []), `FINDINGS      ${proven.join("\n")}`,
+    "QUESTIONS     none", "NOT VERIFIED  none", "BRANCH        sage/t1-example"].join("\n");
+};
 const denied = (out) => out?.hookSpecificOutput?.permissionDecision === "deny" ? out.hookSpecificOutput.permissionDecisionReason : undefined;
 const words = (text) => text.trim().split(/\s+/).join(" ");
 // The fake gh: it answers only "gh pr checks <n>" as CI with one check does, and "gh pr view <n> --json headRefOid" with
@@ -95,7 +106,8 @@ const RUN_ADD = (() => {
 function block(heading) {
   const m = new RegExp(`^## ${heading}\\n[\\s\\S]*?^\`\`\`text\\n([\\s\\S]*?)^\`\`\`$`, "m").exec(TEXT);
   assert.ok(m, `agents/lead.md has a text block under "## ${heading}"`);
-  return m[1].split("\n").filter(Boolean);
+  // An indented line continues the line above it: the detail of a report at a < line (T947).
+  return m[1].split("\n").filter(Boolean).reduce((lines, line) => (/^\s/.test(line) && lines.length ? lines.with(-1, `${lines.at(-1)}\n${line}`) : [...lines, line]), []);
 }
 /** A table of the file: its rows after the header line that starts with `| <first> |`, as arrays of cells. */
 function table(first) {

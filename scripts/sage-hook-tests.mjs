@@ -2344,6 +2344,32 @@ test("T932: the investigate and evidence-review agents get the brief check and t
   assert.equal(stop("sage:evidence-review", report("CLEAN")), undefined, "a clean review");
 });
 
+test("T947: a review's or QA's medium or high finding carries a proof that the proof check can rerun: the first stop without one, or with a refused one, is blocked once; a low one needs none", () => {
+  const s = session();
+  s.send(prompt("sage mode"));
+  const stop = (type, message, again = false) => s.send({ hook_event_name: "SubagentStop", agent_id: `proof-${type}`, agent_type: type, cwd: FEATURE, stop_hook_active: again, last_assistant_message: message });
+  const RULE = /\. Under each medium or high finding, give its proof on indented lines: proof: <one command, run from the repository root of the head> and saw: <the one output line that shows the problem>, or proof: screenshot <path> and steps: <the url and the actions>\./;
+  for (const [finding, why] of [
+    ["- K1 medium a.js:1 an empty name saves a row", /^sage: K1 is medium and has no proof line\./],
+    ["- K1 high a.js:1 a crash\n  proof: npm test", /^sage: K1's proof has no saw line\./],
+    ["- K1 medium a page\n  proof: screenshot /tmp/r40/a.png", /^sage: K1's proof has no steps line\./],
+    ["- K1 medium a.js:1 a stuck job\n  proof: kill 1\n  saw: done", /^sage: K1's proof "kill 1" is refused: an agent never reads or signals the real process list/],
+    ["- K1 medium a.js:1 a bad file\n  proof: npm test > out.txt\n  saw: not ok 1", /^sage: K1's proof "npm test > out\.txt" is refused: it writes outside the scratch folder\./],
+    ["- K1 low a.js:1 a nit\n- K2 medium a.js:2 a bad value", /^sage: K2 is medium and has no proof line\./],
+  ]) {
+    for (const type of ["sage:code-reviewer", "sage:security-reviewer", "sage:ux-reviewer", "sage:qa"]) {
+      const first = stop(type, report("FINDINGS", `\n${finding}`));
+      assert.equal(first?.decision, "block", `${type}: ${finding}`);
+      assert.match(first.reason, why, finding);
+      assert.match(first.reason, RULE, "the stop gate gives the way to write a proof");
+      assert.equal(stop(type, report("FINDINGS", `\n${finding}`), true), undefined, `${type}: the second stop goes through`);
+    }
+  }
+  for (const finding of ["- K1 low a.js:1 a nit", "- K1 medium a.js:1 an empty name saves a row\n  proof: node --test test/form.test.mjs > /tmp/r40/out.txt\n  saw: not ok 3 an empty name is refused",
+    "- K1 high a page\n  proof: screenshot /tmp/r40/a.png\n  steps: open http://localhost:5173/form, press Save"]) assert.equal(stop("sage:code-reviewer", report("FINDINGS", `\n${finding}`)), undefined, finding);
+  for (const type of ["sage:implementer", "sage:evidence-review"]) assert.equal(stop(type, report("FINDINGS", "\n- K1 medium a.js:1 a bad value")), undefined, `${type} gives no finding that a proof check reruns`);
+});
+
 test("T932: the evidence review that the sage starts keeps its report for its run, and the evidence-clean verdict follows", () => {
   const s = session();
   investigation(s);
@@ -6047,7 +6073,7 @@ test("F-T289-38: honest forms of a finding, of none alone and of EVIDENCE read a
   const stop = (message, id) => s.send({ hook_event_name: "SubagentStop", agent_id: id, agent_type: "sage:code-reviewer", last_assistant_message: message });
   const MEDIUM = ["- K1 medium: empty input crashes", "- K1 (medium) empty input crashes", "- K1 - medium - empty input crashes", "* K1 Medium empty input crashes", "1. K1 medium empty input crashes", "- K1 [MEDIUM] empty input crashes"];
   for (const [k, line] of MEDIUM.entries()) {
-    const message = report("FINDINGS", `\n${line}`);
+    const message = report("FINDINGS", `\n${line}\n  proof: npm test\n  saw: not ok 1`); // with its proof (T947)
     assert.equal(stop(message, `medium-${k}`), undefined, line);
     assert.match(cleanVerdictOf(s, message) ?? "", /helpers reported medium or high findings on T1 \(.*R\d+ medium\)/, line);
     leadFind(s, "code-reviewer", "medium");
@@ -6154,7 +6180,7 @@ test("F-T289-50: a lead slot of the old form, with a floor and no recorded keys,
 
 test("F-T289-46: an indented step line with a severity word in its prose, not above its finding's, is detail of its finding", () => {
   const s = leadSession();
-  const message = report("FINDINGS", lines("", "- K1 high the form loses text", "  - steps: load a high row count, then save", "  - expected: no loss at low memory"));
+  const message = report("FINDINGS", lines("", "- K1 high the form loses text", "  - steps: load a high row count, then save", "  - expected: no loss at low memory", "  proof: npm test", "  saw: not ok 1"));
   assert.equal(s.send({ hook_event_name: "SubagentStop", agent_id: "steps", agent_type: "sage:code-reviewer", last_assistant_message: message }), undefined, "the stop gate reads it");
   assert.match(cleanVerdictOf(s, message) ?? "", /helpers reported medium or high findings on T1 \(R5 high\)/);
 });
@@ -6830,7 +6856,7 @@ test("T581: a helper's stop reports its medium finding to its lead, and a branch
   const s = leadSession();
   s.sage("run", "done", "R2", "--status", "done", "--tokens", "1");
   const found = leadAdd(s, "qa");
-  foregroundHelper(s, found, "qa", report("FAIL", "- K1 medium src/a.js:1 an empty name saves a row"));
+  foregroundHelper(s, found, "qa", report("FAIL", "- K1 medium src/a.js:1 an empty name saves a row\n  proof: npm test\n  saw: not ok 1"));
   assert.match(waitOut(s), new RegExp(`^${found} stopped · qa · FAIL · findings medium`), "the wait gives the lead the kept result");
   assert.match(denied(stateRun(s, `run done ${found} --status done --tokens 1`)) ?? "", /this lead's qa helpers reported medium or high findings on T1/, "the lead records the finding first");
   const moved = leadAdd(s, "code-reviewer");

@@ -243,8 +243,11 @@ export function handle(input, state, slots) {
       // The stop gate and the lead rules read a review's or QA's report with one reader, so a report that passes here is
       // one they read (F-T289-24, F-T289-39). The lead rules read no other role's report, so its FINDINGS may list what it
       // fixed or needs (F-T289-40).
-      const { problem } = REVIEWERS.includes(input.agent_type.slice("sage:".length).toLowerCase()) ? core.readReport(input.last_assistant_message) : {};
+      const role = input.agent_type.slice("sage:".length).toLowerCase(), { problem } = REVIEWERS.includes(role) ? core.readReport(input.last_assistant_message) : {};
       if (problem) return { decision: "block", reason: `sage: the hook cannot read your report: ${problem}. Give each field once, at the start of a line that is not in a list or a code block. Start RESULT with ${core.RESULT_WORDS.join(", ")}. Under FINDINGS write none alone, or one line for each finding in the form ${core.FINDING_FORM}, where the key has a digit (K1) and the severity is high, medium or low, with any detail on indented lines under it that do not start with a severity word. No line under FINDINGS has a severity word above the severity of the finding that it is under. RESULT FINDINGS or FAIL needs a finding.` };
+      // Proof by run (T947): each medium or high finding of a review or QA carries a proof that the proof check can rerun.
+      const unproved = TEAM.slice(1).includes(role) && core.proofProblem(input.last_assistant_message, input.cwd ?? process.cwd());
+      if (unproved) return { decision: "block", reason: `sage: ${unproved}. ${core.PROOF_RULE}` };
     }
   }
   if (!main && ours && input.agent_id) slots.touch(input.agent_id, input.agent_type); // the agent's lease: a slot that no event touched for an hour expires
