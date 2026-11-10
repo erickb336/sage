@@ -12,7 +12,7 @@ This is the index of sage's documentation, by reader. Start with the [README](..
 
 ## If you use sage
 
-- [Concepts](guide/concepts.md) and [Principles](guide/principles.md): sage's words, and the rules that every session gets.
+- [Concepts](guide/concepts.md) and [Principles](guide/principles.md): sage's words, and the rules that each role agent starts with.
 - [Using sage](guide/using-sage.md): the switch phrases, when the chief asks you, how to update, stop and uninstall sage, and troubleshooting.
 - [The board](guide/board.md): the columns, the cards, Needs you, the Agents page and programs.
 - [Remote Control](guide/remote-control.md): follow and start sessions from your phone.

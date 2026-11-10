@@ -40,7 +40,7 @@ The browser board shows every logbook by default, and each card says which provi
 - Node.js 20 or later, on your PATH: the sage hooks are Node scripts.
 - `gh`, logged in (`gh auth login`), and a GitHub remote for the project. sage uses them for pull requests and the merge check; without them, work stops at a verified branch.
 - A multi-agent v2 model for the chief and each child. In Codex 0.164.0's bundled catalog, the `gpt-6-sol` models are v2, and `gpt-5.6-luna` is not ([limits](#the-rules-in-codex)).
-- Codex's thread limit at sage's agent cap (`max_agents`, 10 by default). A sage plugin cannot set it, so add these lines to your Codex config (`~/.codex/config.toml`):
+- Codex's thread limit at sage's agent cap (`max_agents`, 10 by default). A sage plugin cannot set it, so add these lines to your Codex config file, `config.toml` in your Codex home (`$CODEX_HOME/config.toml`, by default `~/.codex/config.toml`):
 
   ```toml
   [agents]
@@ -493,7 +493,6 @@ These are the differences from Claude Code that stay in sage 1.0, by the owner's
 | **One model for all agents** | Every agent runs on the session's model, also a light role such as the UX review. | Choose a multi-agent v2 model for the session. Do not change it during a run. |
 | **No token counts** | The logbook and the board show no token count for a Codex run. | Nothing. |
 | **Late check of a left-out finding** | A lead that leaves out a medium or high finding of a helper learns it only when it records the verdict. | Nothing. The state tool refuses that verdict, so the clean cycles stay safe. |
-| **Shell writes in other forms** | The chief can still change a file from the shell in a form that the gate does not read ([examples](#why-each-limit-stays)). | Tell the chief to brief an implementer. A change still needs a pull request, clean cycles and the merge check. |
 
 ### Why each limit stays
 
@@ -501,4 +500,3 @@ These are the differences from Claude Code that stay in sage 1.0, by the owner's
 - **One model for all agents:** Codex children inherit the session's model, so sage sets no model for each role and size.
 - **No token counts:** Codex's agent tools give no token count for each run, so the chief records the usage as unavailable.
 - **Late check of a left-out finding:** the state tool refuses that verdict in both providers. Claude's hook also checks it earlier, at the lead's next run or state move.
-- **Shell writes in other forms:** the gate refuses the plain write forms only, as for a reviewer (standing order 70). It does not read a variable in a path, a script file or `git apply`.

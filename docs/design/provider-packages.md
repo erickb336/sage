@@ -68,7 +68,7 @@ The native `.codex-plugin/plugin.json` is intentional. In release `rust-v0.159.2
 
 ## Verification and release gates
 
-Run `npm run build`, `npm run check` and `npm test`. The existing suite exercises Claude's runtime paths. New tests execute both assembled plugins from isolated copies, run their logbook/board commands, check model and data-root separation, exercise Codex hooks as subprocesses, and cover multi-file/move advice, unknown input, disabled hooks and child-state isolation. Package checks reject stale or unexpected files. CI runs the check before the tests, without rebuilding first. A regression test changes only the generated Claude hook and verifies that the check fails.
+Run `npm run build`, `npm run check` and `npm test`. The existing suite exercises Claude's runtime paths. New tests execute both assembled plugins from isolated copies, run their logbook/board commands, check model and data-root separation, exercise Codex hooks as subprocesses, and cover multi-file and move patches, unknown input, disabled hooks and child-state isolation. Package checks reject stale or unexpected files. CI runs the check before the tests, without rebuilding first. A regression test changes only the generated Claude hook and verifies that the check fails.
 
 When merging changes authored before this extraction, carry each change into its new source before building. Claude hook and skill changes belong under `packages/sage-claude/`; shared state and board changes belong under `packages/sage-core/`. Building from old package sources would overwrite a change made only under `plugins/sage/`. This branch includes the main-branch mode fixes through PR #54 and the earlier PR #33 hook fix.
 
