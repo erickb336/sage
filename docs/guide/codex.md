@@ -11,7 +11,7 @@ The design of the two provider plugins is in [Separate provider packages](../des
 | Part of sage | Claude Code | Codex today |
 | --- | --- | --- |
 | Install from the sage marketplace | Yes | Yes: `codex plugin marketplace add`, then `codex plugin add sage@sage` |
-| A status at the start of each session | No | Yes: the chief gets the sage version, the Codex version, how many sage hooks are trusted and the on phrase. You see a warning only when a sage hook entry is missing or changed, a sage hook is not trusted or turned off, the hook launcher is old, or your Codex is outside the tested range |
+| A status at the start of each session | No | Yes: the chief gets the sage version, the Codex version, how many sage hooks are trusted and the on phrase. You see a warning only when a sage hook entry is missing or changed, a sage hook is not trusted or turned off, the hook launcher is old, the sage marketplace is pinned to one commit, or your Codex is outside the tested range |
 | Principles and the writing skills | Yes | Yes: the same skills, including the `sage` skill for manual logbook commands |
 | The principles of each role | Yes: each agent file preloads them | Yes: `role.mjs` puts them in each role's text. A lead gets the path of each one to read |
 | The logbook and the board | Yes | Yes: the plugin's `sage` MCP tools write the logbook, and the board phrases show the board ([The board in Codex](#the-board-in-codex)) |
@@ -80,6 +80,8 @@ The browser board shows every logbook by default, and each card says which provi
       node ~/.codex/plugins/cache/sage/sage/0.1.0/skills/sage/sage.mjs hooks install
       ```
 
+      > **Note:** when the command stops with `unknown command "hooks"`, the installed copy is from before T957, and it has no `hooks` command. This happens when your Codex config pins the sage marketplace to an old commit. Run the 3 commands of [Update and remove](#update-and-remove) (remove the marketplace, add it again, add the plugin), then do this step again.
+
       It writes the Codex home that holds the plugin, also when `CODEX_HOME` is not set; it refuses when `CODEX_HOME` names another home. It puts 7 sage entries at the end of your Codex hooks file (`~/.codex/hooks.json`), and copies sage's hook launcher to `~/.codex/sage-hooks`. When you have no hooks file yet, it makes one. When you have one, your own hooks in it stay as they were (also a hook that you put in a sage group), and a copy of the old file stays in `~/.codex/hooks.json.sage-backup`. A second run changes nothing. The command refuses a hooks file that it cannot read, and changes nothing then.
    3. Run `codex` in a project folder. At the "Hooks need review" screen, choose **Trust all and continue**. Codex runs the sage hooks only after this step.
 
@@ -91,7 +93,7 @@ The browser board shows every logbook by default, and each card says which provi
    sage: 3 of the 7 sage hooks are not trusted or turned off, so they do not run. To trust them or turn them on, type /hooks in the Codex CLI.
    ```
 
-   When a sage entry of your hooks file is missing or changed, or the launcher is older than the installed sage, the warning names the command that fixes it (`hooks install`). Run it yourself in a terminal, or tell the chief yes, and then the chief runs it. The chief does not run it without your yes, because it writes your hooks file. The other limit is a Codex version outside the tested range (0.164 to 0.167), for example:
+   When a sage entry of your hooks file is missing or changed, or the launcher is older than the installed sage, the warning names the command that fixes it (`hooks install`). Run it yourself in a terminal, or tell the chief yes, and then the chief runs it. The chief does not run it without your yes, because it writes your hooks file. When your Codex config pins the sage marketplace to one commit, the warning gives the 3 commands that end the pin (see [Update and remove](#update-and-remove)). The other limit is a Codex version outside the tested range (0.164 to 0.167), for example:
 
    ```text
    sage: sage was not tested with Codex 0.168.0, so some sage rules may not run. Autopilot merges in Codex 0.164 and later.
@@ -112,9 +114,27 @@ The desktop app puts its worktree threads under `~/.codex/worktrees`. sage's `.c
 ## Update and remove
 
 - To update, run `codex plugin marketplace upgrade sage`, then `codex plugin add sage@sage` again. For a local clone, run `git pull` in the clone instead of the upgrade command.
+- When your Codex config pins the sage marketplace to one commit, an update gets no newer sage. The pin is a `ref = "<commit>"` line under `[marketplaces.sage]` in `~/.codex/config.toml`, from `codex plugin marketplace add --ref`. The upgrade then fetches the same commit, and `codex plugin add sage@sage` keeps the old copy. To end the pin and install the newest sage, run these 3 commands in a terminal:
+
+  ```sh
+  codex plugin marketplace remove sage
+  ```
+  ```sh
+  codex plugin marketplace add https://github.com/erickb336/sage-stack.git
+  ```
+  ```sh
+  codex plugin add sage@sage
+  ```
+
+  These commands also move an old marketplace URL (`https://github.com/erickb336/sage.git`) to the new one. Your hooks file, and the trust records in your Codex config, stay as they were. Then start a new session. From T971 on, the start status and `hooks status` tell you when the sage marketplace is pinned to a commit, and give these 3 commands. A `ref` that names a branch, such as `main`, follows that branch, so it gets no warning.
 - An update needs no new trust. Codex trusts each sage entry of your hooks file by its text and its place, not by sage's files, and an update does not change the entries. The launcher runs the hooks of the sage version that Codex uses, so a new version runs at once, with no new review of its code, as in Claude Code.
 - When an update changes the entries or the launcher, the start status says so and names the `hooks install` command. Run it, then trust the changed entries with `/hooks`.
-- The first update to a version with the launcher (T957): sage's hooks move from the plugin to your hooks file. Do step 3 of the [install](#install) once, then do the [gate check](#check-that-the-sage-gate-runs). Until then, no sage hook runs, and sage's logbook tools refuse every call with a line that names the install command.
+- The first update to a version with the launcher (T957): sage's hooks move from the plugin to your hooks file. An install from before T957 has no `hooks` command, and its start status does not show a pin. So do these steps once:
+  1. Run the 3 commands above (remove the marketplace, add it again, add the plugin). An upgrade of a pinned marketplace keeps the old copy, and then `hooks install` stops with `unknown command "hooks"`.
+  2. Check that the new copy is installed: `ls ~/.codex/plugins/cache/sage/sage/*/hooks` shows `launch.mjs` and `dispatch.mjs`. If they are not there, check that the `[marketplaces.sage]` table in `~/.codex/config.toml` has no `ref` line.
+  3. Do step 3 of the [install](#install), then do the [gate check](#check-that-the-sage-gate-runs).
+
+  Until then, no sage hook runs, and sage's logbook tools refuse every call with a line that names the install command.
 - To turn sage off, turn the plugin off in your Codex config file (`enabled = false` for `plugins."sage@sage"`, in its own table or in any other TOML form). The launcher then does nothing. The launcher reads only that file: a `-c` option, a profile or a managed policy that turns the plugin off does not stop sage's hooks (a documented limit).
 - To remove sage (with `CODEX_HOME` set, use that folder in place of `~/.codex`):
   1. Run `node ~/.codex/sage-hooks/launch.mjs --uninstall`. It removes the 7 sage entries from your hooks file and the `~/.codex/sage-hooks` folder. Your own hooks stay.
