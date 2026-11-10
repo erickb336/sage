@@ -981,7 +981,10 @@ test("T952: run_add holds the project's agent cap in Codex as in Claude: the 11t
     assert.match(s.claude("run", "add", task, "--role", "qa"), new RegExp(`^R${n} running · qa on ${task}`));
   }
   const refused = await both("run_add", { task: "T1", role: "code-reviewer" }, ["run", "add", "T1", "--role", "code-reviewer"]);
-  assert.equal(refused.error, "sage: the project has 10 running runs, its agent cap (max_agents, or cap.<project>): R1 qa on T2, R2 qa on T3, R3 qa on T1, R4 qa on T2, R5 qa on T3, R6 qa on T1, R7 qa on T2, R8 qa on T3, R9 qa on T1, R10 qa on T2. Finish one of them first (sage run done <R> --status done, blocked, question or failed). Nothing changed.");
+  assert.equal(refused.error, "sage: the project has 10 running runs, its agent cap (max_agents, or cap.<project>): R1 qa on T2, R2 qa on T3, R3 qa on T1, R4 qa on T2, R5 qa on T3, R6 qa on T1, R7 qa on T2, R8 qa on T3, R9 qa on T1, R10 qa on T2. Wait for one of them to end, or end a run whose agent has stopped (sage run done <R> --status done, blocked, question or failed). Nothing changed.");
+  // The lead's steps name this refusal, and say to wait for a helper's report, as the refusal does (F-T952-1).
+  const steps = readFileSync(new URL("../plugins/sage-codex/skills/sage/references/lead-steps.md", import.meta.url), "utf8");
+  assert.match(steps, /\*\*Agent cap\.\*\* When `run_add` says that the project is at its agent cap, wait for a helper's report with `wait_agent`, end its run, then call `run_add` again\. Never end the run of a helper that still works\./);
   assert.equal(await both("run_done", { run: "R4", status: "failed" }, ["run", "done", "R4", "--status", "failed"]), "R4 failed");
   assert.match(await s.call("run_add", { task: "T1", role: "code-reviewer" }), /^R11 running · code-reviewer on T1/);
   assert.match(s.claude("run", "add", "T1", "--role", "code-reviewer"), /^R11 running · code-reviewer on T1/);

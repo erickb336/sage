@@ -783,7 +783,7 @@ test("T952-AGENT-CAP: run add holds max_agents running runs of every role in a p
   s.ok("run", "done", "R10", "--status", "failed"); // an ended run holds no place
   s.ok("run", "add", "T6", "--role", "pe");
   assert.equal(rows(s.dir, "runs").filter((r) => r.status === "running").length, 10);
-  assert.equal(s.no("run", "add", "T2", "--role", "qa"), "sage: the project has 10 running runs, its agent cap (max_agents, or cap.<project>): R1 lead on T1, R2 lead on T2, R3 lead on T3, R4 lead on T4, R5 lead on T5, R6 implementer on T1, R7 implementer on T2, R8 implementer on T3, R9 code-reviewer on T1, R11 pe on T6. Finish one of them first (sage run done <R> --status done, blocked, question or failed). Nothing changed.");
+  assert.equal(s.no("run", "add", "T2", "--role", "qa"), "sage: the project has 10 running runs, its agent cap (max_agents, or cap.<project>): R1 lead on T1, R2 lead on T2, R3 lead on T3, R4 lead on T4, R5 lead on T5, R6 implementer on T1, R7 implementer on T2, R8 implementer on T3, R9 code-reviewer on T1, R11 pe on T6. Wait for one of them to end, or end a run whose agent has stopped (sage run done <R> --status done, blocked, question or failed). Nothing changed.");
   assert.equal(rows(s.dir, "runs").length, 11, "the refused run is not recorded");
   s.ok("run", "done", "R9", "--status", "failed"); // the chief ends a stuck run to free a place
   assert.match(s.ok("run", "add", "T2", "--role", "qa"), /^R12 running · qa on T2/);

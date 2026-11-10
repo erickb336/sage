@@ -40,6 +40,8 @@ Use `status` for a logbook read, or the trusted literal command form in [command
 
 **Thread limit.** `collab spawn failed: agent thread limit reached` means that no thread is free. Codex allows 4 threads by default: the chief, you and 2 helpers, so a third helper at the same time fails. A finished or interrupted helper frees its thread. Call `list_agents`, wait for a helper that runs, then call `spawn_agent` again with the same task name. When no helper runs and it still fails, end the run as blocked, and report STATUS blocked: the chief asks the owner to raise `agents.max_concurrent_threads_per_session`.
 
+**Agent cap.** When `run_add` says that the project is at its agent cap, wait for a helper's report with `wait_agent`, end its run, then call `run_add` again. Never end the run of a helper that still works. When no helper of yours runs, report STATUS blocked: the chief frees a place.
+
 **No spawn tools.** sage on Codex needs a multi-agent v2 model for the chief and each child. When your tools have no `spawn_agent` in the `collaboration` namespace, start nothing, and report STATUS blocked at once with the reason that you have no spawn tools. The chief tells the owner the fix.
 
 **End.** Stop at verifying with a ready report, or report blocked and name what is left. The chief records final-head CI and both required risk cycles, runs `merge_check`, and merges with autopilot on, or gives the owner the PR link, exact head SHA and evidence. A lead never merges.

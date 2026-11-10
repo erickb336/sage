@@ -665,7 +665,7 @@ function runFrame(dir, project, task, role, branch, candidate, env) {
   // the only agent cap, and in Claude the hook also counts the live agents against the same value.
   const cap = agentCaps(config(env, dir)).cap(projectName(project));
   const running = read(dir, "runs").filter((r) => r.status === "running");
-  if (running.length >= cap) refuse(`the project has ${running.length} running runs, its agent cap (max_agents, or cap.<project>): ${running.map((r) => `${r.id} ${r.role} on ${r.task}`).join(", ")}. Finish one of them first (sage run done <R> --status done, blocked, question or failed). Nothing changed.`);
+  if (running.length >= cap) refuse(`the project has ${running.length} running runs, its agent cap (max_agents, or cap.<project>): ${running.map((r) => `${r.id} ${r.role} on ${r.task}`).join(", ")}. Wait for one of them to end, or end a run whose agent has stopped (sage run done <R> --status done, blocked, question or failed). Nothing changed.`);
   return { id: nextId(dir, "R"), task: task.id, role, round: task.round, candidate, branch,
     status: "running", started: now(), model: modelFor(role, task.size, candidate, config(env), task.risk) };
 }
