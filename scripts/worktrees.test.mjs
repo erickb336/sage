@@ -4,7 +4,7 @@
 import "./test-env.mjs"; // first: no variable of the developer's shell changes a result
 import assert from "node:assert/strict";
 import { execFileSync, spawnSync } from "node:child_process";
-import { existsSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, writeFileSync } from "node:fs";
+import { existsSync, lstatSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { test } from "node:test";
@@ -253,9 +253,53 @@ test("T937: the prune removes a clean worktree of a concluded task and of a bran
     "kept <base>/wt/t2 · ignored files that the prune would delete: .env",
     "kept <base>/wt/t3 · ignored files that the prune would delete: .env, a.log, b.log and 1 more",
     "removed <base>/wt/merged · branch merged",
-    "removed <base>/wt/t1 · concluded",
+    "removed <base>/wt/t1 · concluded · also deleted ignored node_modules/",
   ]);
   assert.deepEqual(["t1", "merged"].map((n) => existsSync(join(base, "wt", n))), [false, false]);
   assert.equal(readFileSync(join(wt.T2, ".env"), "utf8"), "TOKEN=local");
   assert.ok(existsSync(fresh));
+});
+
+test("T937: a whole ignored folder keeps the worktree, by any pattern; only node_modules and dist, folders or links, go with it, and the removed line names them", (t) => {
+  const w = world(t), { base, project } = w;
+  writeFileSync(join(project, ".gitignore"), ".env\nsecrets/\nbuild\nout/**\nnode_modules\ndist/\n");
+  git(project, "add", ".gitignore");
+  git(project, "commit", "-q", "-m", "ignore");
+  git(project, "push", "-q", "-u", "origin", "main");
+  w.ok(["init"]);
+  const names = { T1: "secrets", T2: "build", T3: "out", T4: "rebuilt", T5: "link" }, wt = {};
+  for (const [id, name] of Object.entries(names)) {
+    w.ok(["task", "add", "--title", name, "--size", "small", "--priority", "P2"]);
+    wt[id] = w.add(name, `claude/${id.toLowerCase()}-${name}`);
+    w.ok(["task", id, "set", "state=briefed", `branch=claude/${id.toLowerCase()}-${name}`]);
+    w.cell(id, "state", "merged");
+  }
+  const put = (file, text = file) => { mkdirSync(join(file, ".."), { recursive: true }); writeFileSync(file, text); };
+  put(join(wt.T1, "secrets", ".env"), "TOKEN=local");
+  put(join(wt.T1, ".env"), "PORT=1");
+  put(join(wt.T2, "build", "app.bin"));
+  put(join(wt.T3, "out", "a", "report.txt"));
+  put(join(wt.T4, "node_modules", "pkg", "index.js"));
+  put(join(wt.T4, "dist", "app.js"));
+  put(join(wt.T4, "packages", "x", "dist", "x.js"));
+  const shared = join(base, "shared-modules");
+  put(join(shared, "pkg", "index.js"), "shared");
+  symlinkSync(shared, join(wt.T5, "node_modules"));
+
+  const pruned = w.ok(["worktrees", "prune", "--yes"]);
+  t.diagnostic(`sage worktrees prune --yes\n${pruned}`);
+  assert.deepEqual(pruned.split("\n").slice(1).sort(), [
+    "Removed 2, kept 4, pruned 0 entries with no folder. No branch was deleted.",
+    "kept <base>/project · the primary checkout",
+    "kept <base>/wt/build · ignored files that the prune would delete: build/",
+    "kept <base>/wt/out · ignored files that the prune would delete: out/a/",
+    "kept <base>/wt/secrets · ignored files that the prune would delete: .env, secrets/",
+    "removed <base>/wt/link · merged · also deleted ignored node_modules",
+    "removed <base>/wt/rebuilt · merged · also deleted ignored dist/, node_modules/, packages/x/dist/",
+  ]);
+  assert.equal(readFileSync(join(wt.T1, "secrets", ".env"), "utf8"), "TOKEN=local");
+  assert.deepEqual([wt.T2, wt.T3].map((p) => existsSync(p)), [true, true]);
+  assert.deepEqual([wt.T4, wt.T5].map((p) => existsSync(p)), [false, false]);
+  assert.equal(readFileSync(join(shared, "pkg", "index.js"), "utf8"), "shared", "the prune deletes the link, not the folder it points to");
+  assert.ok(lstatSync(shared).isDirectory());
 });

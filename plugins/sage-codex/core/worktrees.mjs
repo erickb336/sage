@@ -3,7 +3,8 @@
 // into origin/main (T937). The idea
 // comes from pstack's worktree audit playbook (worktree-audit.sh: audit, then prune only what is merged and clean).
 // The listing reads the local git data and the logbook only: it does not fetch. The prune runs git worktree remove with
-// no --force, so git also refuses a worktree with changes, and it deletes no branch.
+// no --force, so git also refuses a worktree with changes; it keeps a worktree with ignored files, except REBUILT
+// folders, and it deletes no branch.
 import { realpathSync } from "node:fs";
 import { sep } from "node:path";
 
@@ -12,6 +13,16 @@ const OVER = ["merged", "concluded", "abandoned"];
 /** The reasons of a row: the ones that the prune may remove come first. */
 const REASONS = [...OVER, "branch merged", "open", "unknown"];
 const REMOVABLE = REASONS.slice(0, 4);
+/**
+ * The ignored folders that a package install or a build makes again, by the last name of the path, at any depth. Such a
+ * folder, or a link with such a name, keeps no worktree: the prune deletes it with the worktree and names it on the
+ * removed line. Every other ignored entry, also a whole folder such as secrets/, keeps the worktree (F-T937-1). The
+ * guide's "Clean up worktrees" lists the same names.
+ */
+const REBUILT = ["node_modules", "dist"];
+const rebuilt = (entry) => REBUILT.includes(entry.replace(/\/$/, "").split("/").at(-1));
+/** At most three items, then a count of the rest. */
+const some = (items) => (items.length > 3 ? `${items.slice(0, 3).join(", ")} and ${items.length - 3} more` : items.join(", "));
 const real = (path) => { try { return realpathSync(path); } catch { return path; } };
 const short = (sha) => String(sha ?? "").slice(0, 7);
 
@@ -84,23 +95,23 @@ function kept(w, here, all) {
 }
 
 /**
- * Why a clean-looking worktree must stay: uncommitted changes, untracked files, ignored files or unpushed commits, or "".
- * git worktree remove deletes ignored files, such as .env, with the worktree, so an ignored file keeps it (F-T927-2). An
- * ignored folder that an ignore pattern names as a whole, such as node_modules/, does not: a build makes it again. A commit is
- * pushed when a remote-tracking ref holds it, or when it is a reviewed head of the worktree's task (a verdict SHA of the
- * task in the ledger) or an ancestor of one: a squash merge leaves the task's commits out of origin/main, and
- * gh pr merge --delete-branch deletes its remote branch.
+ * Why a clean-looking worktree must stay (uncommitted changes, untracked files, ignored files or unpushed commits, or ""),
+ * and the REBUILT folders that the prune would delete with it. git worktree remove deletes ignored entries, such as .env or
+ * a whole ignored folder such as secrets/, with the worktree, so each one keeps it (F-T927-2, F-T937-1), except a REBUILT
+ * folder or link. A commit is pushed when a remote-tracking ref holds it, or when it is a reviewed head of the worktree's
+ * task (a verdict SHA of the task in the ledger) or an ancestor of one: a squash merge leaves the task's commits out of
+ * origin/main, and gh pr merge --delete-branch deletes its remote branch.
  */
 function changed(git, root, w, ledger) {
   const status = git(["-C", w.path, "status", "--porcelain", "-z", "--untracked-files=all", "--ignored=matching"]).split("\0").filter(Boolean);
   const untracked = status.filter((s) => s.startsWith("?? ")).length, edits = status.filter((s) => !/^(\?\?|!!) /.test(s)).length;
-  const ignored = status.filter((s) => s.startsWith("!! ") && !s.endsWith("/")).map((s) => s.slice(3));
-  const files = ignored.length > 3 ? `${ignored.slice(0, 3).join(", ")} and ${ignored.length - 3} more` : ignored.join(", ");
-  const why = [edits && "uncommitted changes", untracked && "untracked files", ignored.length && `ignored files that the prune would delete: ${files}`].filter(Boolean);
-  if (why.length) return why.join(" and ");
+  const ignored = status.filter((s) => s.startsWith("!! ")).map((s) => s.slice(3));
+  const lost = ignored.filter((s) => !rebuilt(s)), again = ignored.filter(rebuilt);
+  const why = [edits && "uncommitted changes", untracked && "untracked files", lost.length && `ignored files that the prune would delete: ${some(lost)}`].filter(Boolean);
+  if (why.length) return { why: why.join(" and "), again };
   const ids = w.tasks.map((t) => t.id), reviewed = [...new Set(ledger.filter((l) => ids.includes(l.task) && /^[0-9a-f]{40}$/i.test(l.sha ?? "")).map((l) => l.sha))];
   const ahead = Number(git(["-C", root, "rev-list", "--count", "--ignore-missing", w.head, "--not", "--remotes", ...reviewed]).trim());
-  return ahead ? `${ahead} unpushed commit${ahead === 1 ? "" : "s"}` : "";
+  return { why: ahead ? `${ahead} unpushed commit${ahead === 1 ? "" : "s"}` : "", again };
 }
 
 /**
@@ -123,13 +134,13 @@ export function worktrees({ git, root, tasks, runs, ledger, here, prune = false 
   let removed = 0;
   const gone = all.filter((w) => w.gone && !w.locked);
   for (const w of all.filter((x) => !gone.includes(x))) {
-    let why = kept(w, homes, all);
+    let why = kept(w, homes, all), again = [];
     try {
-      why ||= changed(git, root, w, ledger);
+      if (!why) ({ why, again } = changed(git, root, w, ledger));
       if (!why) {
         git(["-C", root, "worktree", "remove", w.path]);
         removed++;
-        out.push(`removed ${w.path} · ${w.reason}`);
+        out.push(`removed ${w.path} · ${w.reason}${again.length ? ` · also deleted ignored ${some(again)}` : ""}`);
         continue;
       }
     } catch (e) {
