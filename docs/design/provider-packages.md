@@ -4,7 +4,7 @@ Sage has one shared implementation of its principles, logbook rules and board, w
 
 > **Note:** this page is the design of the first Codex milestone, and it keeps that milestone's scope. Since then, sage mode, the chief, role agents, the push and merge rules, autopilot and the shared logbook work in Codex. For what works in Codex today, see [sage in Codex](../guide/codex.md).
 
-This change implements the first Codex milestone: skills, advice hooks and manual logbook commands. T925 later removed the advice hooks of both providers: each role agent now gets its principles from its role. It does **not** enable Sage's chief workflow in Codex. The lifecycle investigation remains in [draft PR #55](https://github.com/erickb336/sage/pull/55).
+This change implements the first Codex milestone: skills, advice hooks and manual logbook commands. T925 later removed the advice hooks of both providers: each role agent now gets its principles from its role. It does **not** enable Sage's chief workflow in Codex. The lifecycle investigation remains in [draft PR #55](https://github.com/erickb336/sage-stack/pull/55).
 
 ## Source and install boundaries
 

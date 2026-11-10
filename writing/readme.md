@@ -2,10 +2,10 @@
 id: readme
 name: Write a project README
 applyWhen: you write, change or review a README of any project, in any language.
-source: this kit's own words, from sage's README (github.com/erickb336/sage) as the worked example, the READMEs that its Examples table credits by link, and the owner's working preferences
+source: this kit's own words, from sage-stack's README (github.com/erickb336/sage-stack) as the worked example, the READMEs that its Examples table credits by link, and the owner's working preferences
 ---
 
-A README is the front door of a project. A reader arrives cold and decides in a few seconds to stay or leave. Write it so that the first screen answers their questions, and the rest lets them start and go deeper. sage's own [README](https://github.com/erickb336/sage#readme) is the worked example.
+A README is the front door of a project. A reader arrives cold and decides in a few seconds to stay or leave. Write it so that the first screen answers their questions, and the rest lets them start and go deeper. sage-stack's own [README](https://github.com/erickb336/sage-stack#readme) is the worked example.
 
 **The first screen answers five questions**
 
@@ -86,7 +86,7 @@ Each of these READMEs does one thing especially well. Read the raw file, and tak
 
 | README | Kind | The lesson |
 | --- | --- | --- |
-| [sage](https://github.com/erickb336/sage#readme) | agent plugin | Graphics drawn by a script in light and dark, checked in CI; a word table for the project's own words |
+| [sage-stack](https://github.com/erickb336/sage-stack#readme) | multi-agent development stack | Graphics drawn by a script in light and dark, checked in CI; a word table for the project's own words |
 | [ripgrep](https://github.com/BurntSushi/ripgrep#readme) | CLI tool | A timing table against other tools, with the exact commands |
 | [uv](https://github.com/astral-sh/uv#readme) | package manager | A one-line pitch, then a benchmark chart in light and dark with an alt text and a caption that says what it measured |
 | [fzf](https://github.com/junegunn/fzf#readme) | CLI tool | A table of install commands, one row for each package manager |
