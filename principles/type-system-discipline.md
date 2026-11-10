@@ -2,11 +2,16 @@
 id: type-system-discipline
 name: Type system discipline
 applyWhen: you design types, review a function signature or write code in a statically typed language.
-source: pstack principle-type-system-discipline, MIT, Copyright (c) 2026 Lauren Tan, github.com/cursor/plugins at 6b03002, adapted
+source: pstack principle-type-system-discipline, MIT, Copyright (c) 2026 Lauren Tan, github.com/cursor/plugins, adapted; checked against pstack 0.15.36 at commit 0bb6f37
 ---
 
 Make the compiler reject impossible states, mixed-up primitives and unhandled variants. Define errors and special cases out of existence instead of adding more handlers.
 
-- **Brand semantic primitives.** `UserId` and `OrderId` are strings underneath, but they must not be interchangeable. Give each one its own type: a branded intersection in TypeScript, or a newtype in other languages. Validate once when you create the value, then trust the type downstream. When two arguments share a primitive type but mean different things, brand them.
-- **External data has no type until you parse it.** This includes RPC payloads, JSON, IPC messages, CLI arguments, configuration files, environment variables and database rows. Put a parse function at each boundary that turns the input into the typed model. "Boundary discipline" says where the validation goes.
-- **Derive types from the authoritative schema.** When a protocol buffer, an OpenAPI spec, a GraphQL schema, a database migration, a design-token file or another file owns a shape, derive the type from it. Do not write a parallel type by hand (see "encode lessons in structure").
+- **Make illegal states unrepresentable.** Model variants as a tagged union, not as optional fields whose contradictory combinations compile.
+- **Build shapes that cannot hold the illegal value:** a non-empty list is a head plus a rest.
+- **Strengthen a type only where partiality appears:** where the loose type forces a cast, a null check or a "should never happen" throw.
+- **Brand semantic primitives** that share a type but mean different things, such as a `UserId` and an `OrderId` string. Give each its own type (a brand or a newtype), validate it once at creation, and trust it downstream.
+- **Parse external data at each boundary** into the typed model: JSON, messages, arguments, configuration, environment variables, database rows (see "boundary discipline").
+- **Do not lie to the compiler.** A cast is a latent crash: cast only after validation.
+- **Make every match exhaustive:** a new variant without a case must fail to compile.
+- **Derive types from the schema that owns the shape,** such as an OpenAPI spec, not a parallel type by hand.

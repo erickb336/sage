@@ -4,7 +4,7 @@ import test from "node:test";
 import assert from "node:assert/strict";
 import { createHash } from "node:crypto";
 import { spawnSync } from "node:child_process";
-import { mkdirSync, mkdtempSync, readFileSync, readdirSync, realpathSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, realpathSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -226,4 +226,35 @@ test("T205 acceptance: existing Claude hook dispatches owner board/task/status p
   }
   assert.equal(send("show status"), send("sage status"));
   assert.match(send("sage board for all"), /board all .*--view chat/);
+});
+
+// T922 (F-T922-1): Codex runs the board note's chat board in its sandbox, where a write outside the workspace fails with
+// EPERM. The chat board writes nothing (no board.json, no lock): what is done comes from the logbook's completion records
+// (Done, last 7 days). So in the sandbox, a second board shows a task that merged after the first one, as in Claude Code.
+test("T922: in a sandbox that blocks every write, as Codex's does, the note's chat board shows a merge after the first board, and writes nothing", { skip: process.platform !== "darwin" && "macOS sandbox-exec only" }, t => {
+  const f = fixture(t), home = join(f.dir, "home"), hour = new Date(Date.now() - 3600000).toISOString();
+  mkdirSync(home);
+  const done = (id, at) => ({ task: id, kind: "completion", observedAt: at, recordedAt: at, data: { state: "merged", at } });
+  table(f.book, "tasks", [task("T1", "merged", { title: "First merge" }), task("T2", "reviewing", { title: "Second merge" })]);
+  records(f.book, [done("T1", hour)]);
+  const cli = fileURLToPath(new URL("../plugins/sage-codex/skills/sage/sage.mjs", import.meta.url));
+  const env = { PATH: process.env.PATH, HOME: home, SAGE_HOME: f.root };
+  const sandboxed = args => spawnSync("/usr/bin/sandbox-exec", ["-p", `(version 1)(allow default)(deny network*)(deny file-write* (subpath "${f.dir}"))`, process.execPath, ...args], { env, encoding: "utf8" });
+  assert.match(sandboxed(["-e", `require("fs").writeFileSync(${JSON.stringify(join(f.root, "board.json"))}, "{}")`]).stderr, /EPERM/, "the profile blocks the write of board.json at the sage root");
+  // The command of the Codex hook's note for "show board for all".
+  const board = () => {
+    const before = snapshot(f.dir), run = sandboxed([cli, "board", "all", "--project", f.project, "--view", "chat"]);
+    assert.equal(run.status, 0, run.stderr);
+    assert.deepEqual(snapshot(f.dir), before, "the chat board writes nothing");
+    return run.stdout;
+  };
+  const first = board();
+  assert.ok(first.includes("### 🏁 Done, last 7 days (1)\n**T1 First merge**"), first);
+  table(f.book, "tasks", [task("T1", "merged", { title: "First merge" }), task("T2", "merged", { title: "Second merge" })]);
+  records(f.book, [done("T1", hour), done("T2", new Date().toISOString())]);
+  const second = board();
+  const shown = second.slice(second.indexOf("### 🏁 Done, last 7 days (2)\n"));
+  assert.ok(shown.includes("**T2 Second merge**"), second);
+  assert.ok(shown.includes("**T1 First merge**"), "the list is the last 7 days, not since the last board");
+  assert.equal(existsSync(join(f.root, "board.json")), false);
 });
