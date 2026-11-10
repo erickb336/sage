@@ -383,18 +383,23 @@ test("T947: a review or QA child's medium or high finding carries a proof that t
   assert.deepEqual(stopOf(report("- K1 medium a.js:1 a bad value"), false, "/root/sage_implementer_t12"), {}, "an implementer's report is not read");
 });
 
-test("T964: a severity word in a sentence passes the gate; the one stop names both the line that it cannot read and the missing proof", () => {
+test("T964: the gate reads a quoted name and a word after not as text, stops a higher word in a sentence once, and names both problems in one stop", () => {
   const stopOf = (message, again = false) => gate(stop({ agent_transcript_path: transcript("/root/sage_qa_t12"), last_assistant_message: message, stop_hook_active: again }));
   const report = (findings) => FULL.replace("RESULT PASS", "RESULT FINDINGS").replace("FINDINGS none", `FINDINGS\n${findings}`);
-  // The lines of three lost runs (R3084, R3062, R2942): each blocked the old reader, and the second stop kept it.
+  // The lines of three lost runs (R3084, R3062, R2942), without local paths: a quoted test name and a word after not are text.
   for (const findings of [
-    "- F-R3084-1 low proof-check.md:49 a proof that needs a file outside the head can lead a real medium finding to be dropped",
-    "- K2 low sage-hook.mjs:246 the proof gate uses the one stop\n  2. A `saw:` line with real output such as \"not ok 3 a high finding is refused\", under a medium finding, then makes the report unreadable.",
+    "- K2 low sage-hook.mjs:246 the proof gate uses the one stop\n  2. A `saw:` line with real output such as \"not ok 3 a high finding is refused\" then makes the report unreadable.",
     "- F1 low state-server.mjs config: a name prints two values\n  - Reproduce with config settings {\"name\": \"x\"}. This is a follow-up note and not a blocker.",
   ]) assert.deepEqual(stopOf(report(findings)), {}, findings);
+  // A higher word in a plain sentence under a low finding stops once with the line and the word named (F-T964-1).
+  const plain = report("- F-R3084-1 low proof-check.md:49 a real medium finding can be dropped");
+  assert.match(stopOf(plain).reason, /^sage: the report check cannot read your report: the line "- F-R3084-1 low proof-check\.md:49 a real medium finding can be dropped" under FINDINGS has the severity word "medium" above the severity of its finding \(low\): write that finding as its own line - <key> <severity> <summary>, or put quoted output in backticks\./);
+  assert.equal(stopOf(plain, true).decision, undefined, "the second stop goes through");
+  // An indented second finding line without a list mark is caught (F-T964-2).
+  assert.match(stopOf(report("- K1 low a log\n  K2 low a second log")).reason, /a line under FINDINGS is not none alone and not a finding in the form - <key> <severity> <summary>: "K2 low a second log"/);
   const both = stopOf(report("- K1 medium a.js:1 a bad value\n- K2 low a log, K3 high a crash"));
   assert.equal(both.decision, "block");
-  assert.match(both.reason, /^sage: the report check cannot read your report: the line "- K2 low a log, K3 high a crash" under FINDINGS has a severity word above the severity of its finding \(low\)/, "the line that it cannot read");
+  assert.match(both.reason, /^sage: the report check cannot read your report: the line "- K2 low a log, K3 high a crash" under FINDINGS has the severity word "high" above the severity of its finding \(low\)/, "the line that it cannot read");
   assert.match(both.reason, /\. sage: K1 is medium and has no proof line\. Under each medium or high finding, give its proof/, "and the proof that is missing, in the same stop");
   assert.equal(stopOf(report("- K1 medium a.js:1 a bad value\n- K2 low a log, K3 high a crash"), true).decision, undefined, "the second stop goes through");
 });
