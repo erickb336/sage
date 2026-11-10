@@ -115,7 +115,7 @@ You talk only to the chief. The chief frames each task and asks you the product 
 </picture>
 </a>
 
-- **Two loops.** The inner loop turns a request into a verified pull request; findings and a QA fail go back to the build. The outer loop [seals the lesson](docs/guide/concepts.md): a mistake that comes back twice gets a lasting fix, a test or a check in code first.
+- **Two loops.** The inner loop turns a request into a verified pull request; findings and a QA fail go back to the build. The outer loop [seals the lesson](docs/guide/concepts.md): a mistake that comes back twice gets a lasting fix at the highest level that works.
 - **The chief** changes no files. It runs the design and the PE check (principal engineer), keeps the logbook, and merges when autopilot is on.
 - **One lead for each pull request** runs the build, the reviews, QA and the repairs, with up to 9 helpers at once, and reports to the chief once. In Claude Code, a project runs at most 10 agents at once by default (`max_agents`), so one lead and its 9 helpers fit, and all projects 20 (`cap_total`). A project runs at most 5 leads by default (`max_leads`).
 - **One writer for each branch.** Only one agent writes on a branch at a time: the designer, the implementer or the arena judge, each in its own git worktree. Reviewers start fresh.
