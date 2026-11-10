@@ -173,7 +173,7 @@ test("T174: fail closed: a new commit without verdicts, a missing branch, a bran
   assert.ok(!existsSync(join(w.home, "projects.tsv")), "the board made no project list");
 });
 
-test("T174 R650: the reviewed head is the last ledger SHA, as sage-pr merge takes it; a stale origin never waits for your merge", () => {
+test("T174 R650: the reviewed head is the last ledger SHA; a stale origin never waits for your merge", () => {
   const w = world();
   const line = (id) => w.show("this").split("\n").find((l) => l.startsWith(`- ${id} `));
   const A = w.heads.T2; // 2 clean cycles

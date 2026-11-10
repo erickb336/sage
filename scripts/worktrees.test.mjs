@@ -48,7 +48,7 @@ function world(t) {
     git(project, "worktree", "add", "-q", ...(branch ? ["-b", branch] : ["--detach"]), path, start);
     return path;
   };
-  /** Sets one cell of a task's row, as a later state of the task would (the PR script marks a task merged). */
+  /** Sets one cell of a task's row, as a later state of the task would (a merge marks a task merged). */
   const cell = (id, column, value) => {
     const file = join(ok(["logbook"]).replace("<base>", base), "tasks.tsv");
     const [head, ...lines] = readFileSync(file, "utf8").split("\n"), at = head.split("\t").indexOf(column);

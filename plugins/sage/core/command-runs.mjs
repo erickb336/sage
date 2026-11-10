@@ -130,13 +130,12 @@ export function logbookWrite(command, cwd, roots, home = process.env.HOME) {
 }
 /** Node's options that take the next word as a value, not as the program. */
 const NODE_VALUE = /^(?:-e|--eval|-p|--print|-r|--require|--import|--loader|--experimental-loader|-C|--conditions|--input-type|--title)$/;
-const TOOL_FILE = /(?:^|[/\\])(sage(?:-pr)?)\.mjs$/i;
+const TOOL_FILE = /(?:^|[/\\])sage\.mjs$/i;
 /**
- * The runs of the state tool (sage.mjs) or the PR script (sage-pr.mjs) in a command line, at any depth that the reader
- * sees: node or nodejs with the script as its program, or the script run directly, each as { tool: "state" | "pr",
- * script, args, dir } (dir: the folder it runs in). A program that only reads the file (cat, grep, git show) is no run,
- * and so is code that loads the script (node -e, -r or --import): a limit of the hook. It throws when the reader cannot
- * read the line.
+ * The runs of the state tool (sage.mjs) in a command line, at any depth that the reader sees: node or nodejs with the
+ * script as its program, or the script run directly, each as { script, args, dir } (dir: the folder it runs in). A
+ * program that only reads the file (cat, grep, git show) is no run, and so is code that loads the script (node -e, -r or
+ * --import): a limit of the hook. It throws when the reader cannot read the line.
  */
 export function stateToolRun(command, cwd) {
   const { programs } = programsRun(command, cwd, undefined, { contextEvidence: true });
@@ -155,8 +154,7 @@ export function stateToolRun(command, cwd) {
       if (TOOL_FILE.test(run.args[j] ?? "")) k = j;
       [script, ...args] = run.args.slice(k);
     }
-    const tool = TOOL_FILE.exec(script ?? "");
-    if (tool) found.push({ tool: tool[1].toLowerCase() === "sage-pr" ? "pr" : "state", script, args, dir: uncertainDirectory ? undefined : run.dir });
+    if (TOOL_FILE.test(script ?? "")) found.push({ script, args, dir: uncertainDirectory ? undefined : run.dir });
   }
   return found;
 }

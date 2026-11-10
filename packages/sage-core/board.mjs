@@ -65,8 +65,7 @@ function tips(path) {
 }
 
 /**
- * May the pull request of a verified task merge now? The reviewed head is the task's last ledger SHA, as sage-pr merge
- * takes it. It may merge only when the task's branch in the logbook's checkout, local and at origin (as of the last
+ * May the pull request of a verified task merge now? The reviewed head is the task's last ledger SHA. It may merge only when the task's branch in the logbook's checkout, local and at origin (as of the last
  * fetch), is at that head, and the merge check passes on it. The check is read-only: no lock, no write. It fails closed:
  * the reason says what is missing.
  */
