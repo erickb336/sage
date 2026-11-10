@@ -245,9 +245,10 @@ export function createStateServer({ env = process.env } = {}) {
     try { return { content: [{ type: "text", text: JSON.stringify(tool.compareRetainedReport(input, env)) }] }; }
     catch (error) { return { isError: true, content: [{ type: "text", text: `sage: ${error.message}` }] }; }
   });
-  // The brief check (T462): no state-tool command, because the hooks read the record by task name.
+  // The brief check (T462): no state-tool command, because the hooks read the record by task name, and the gate refuses a
+  // sage spawn without a check of the last 30 minutes (T950).
   registerTool("brief", {
-    description: `Check a role agent's brief before you spawn it: it names each missing field of ${BRIEF_FIELDS.join(", ")}, and keeps the brief for the agent's start note. Fix the brief and run it again until no field is missing, then spawn the agent with the same task name and brief.`,
+    description: `Check a role agent's brief before you spawn it: it names each missing field of ${BRIEF_FIELDS.join(", ")}, and keeps the brief for the agent's start note. Fix the brief and run it again until no field is missing, then spawn the agent with the same task name and brief. The gate starts a sage_ agent only in the 30 minutes after its brief is checked.`,
     inputSchema: z.object({ project, task_name: z.string().regex(TASK_NAME, NAME_RULE).describe("the task_name of the spawn"),
       brief: z.string().max(BRIEF_LIMIT).describe("the whole brief, each field at the start of a line") }).strict(),
     annotations: { readOnlyHint: false, destructiveHint: false },

@@ -22,6 +22,11 @@
 //   - Only a lead starts agents: a child under a sage_ name, in any mode, gets no spawn_agent. The one exception is a
 //     lead (sage_lead_t<n>, with only leads above it), which starts core's TEAM roles with its own t<n>, while its lead
 //     run runs and its task can move.
+//   - A sage spawn (T950): a spawn with a sage_ task name, from a lead in any mode and from the chief in sage mode,
+//     starts only when the brief tool checked the brief of that exact task name, with its run id, in the last 30
+//     minutes (the brief hook's briefChecked). The spawn message is encrypted, but its task_name is plain. The chief's
+//     spawn of a lead (sage_lead_t<n>_r<k>) starts only while that lead run runs and its task can move. A spawn with no
+//     sage_ task name is not judged.
 //   - No sage child, in any mode, sends a message to another thread (multi-agent v1's send_input, v2's send_message
 //     and followup_task): its message to the root thread would start a root turn as if the user typed it. No thread,
 //     in any mode, also the root, sends to the root thread: Codex records it as the user's typed message (R1940-1).
@@ -79,6 +84,7 @@ import { AGENT_GH, agentCommandProblem, agentGh, boardCommandProblem, boardPathP
 import { modeFile, readMode, tool } from "../skills/sage/sage.mjs";
 import { verificationOptions } from "../skills/sage/verify-install.mjs";
 import { privateDirectory, readState } from "./hook-state.mjs";
+import { briefChecked } from "./brief-hook.mjs";
 import { patchTargets } from "../runtime/patch-targets.mjs";
 import { managedPatchPath } from "../runtime/managed-worktree.mjs";
 import { agentPathOf, sageName, sessionMeta, TASK_NAME } from "./report-gate.mjs";
@@ -114,6 +120,7 @@ const CHILD_LOGBOOK = "sage: role agents report; only the chief records the logb
 const CHILD_SPAWN = "sage: role agents start no agents; only the chief and a lead do. Put what you need in your report.";
 const TEAM_NAMES = [...TEAM].map((role) => role.replaceAll("-", "_")).join(", ").replace(/, (?=[^,]*$)/, " or ");
 const LEAD_SPAWN = (task, name) => `sage: a lead starts only the team of its own task: sage_<role>_t${task}_r<k>, where the role is ${TEAM_NAMES}. ${JSON.stringify(name ?? "no task_name")} is not one of these. Put what else you need in your report.`;
+const NO_BRIEF = (name) => `sage: ${name} does not start, because no brief for it was checked in the last 30 minutes. Run the sage tool brief with this task name and the whole brief until it says checked, then spawn the agent again.`;
 const LEAD_RESUME = "sage: a lead restarts no agent, because each agent works only from its checked brief. To go on with its work, start a new agent on a new run, with a new brief.";
 const CHILD_SEND = "sage: agents send no input to another thread, because a message to the chief's thread would count as the user's. Put it in your report.";
 const LEAD_SEND = "sage: a lead sends no message to an agent, because each agent works only from its checked brief. To steer your team, start a new agent on a new run, with a new brief.";
@@ -168,12 +175,16 @@ const childMayCall = (name, input) => CHILD_READS.has(name) || (name === "pages"
 /** A lead's brief: only for the team of its own task. The state tool holds every other rule of a lead (core's lead policy, T928). */
 const leadBrief = ({ task_name: name }, own) => (TEAM.has(taskRole(String(name))) && `T${taskNumber(name)}` === own ? undefined : `sage: a lead records a brief only for the team of ${own}, not for ${JSON.stringify(name)}.`);
 const LEAD_SHELL = `sage: a lead records with the sage MCP tools (${[...tool.LEAD_COMMANDS, "brief"].map((command) => command.replaceAll(" ", "_")).join(", ")}), not from the shell. Use one of these, or put what the logbook needs in your report.`;
-/** Why a lead of this task and run neither records nor starts agents now, or undefined: its lead run ended, or its task cannot move (core's reason, as in Claude). */
-function leadStopped({ task: own, run }, view) {
+/**
+ * Why a lead of this task and run neither records nor starts agents now, or undefined: its lead run ended, or its task
+ * cannot move (core's reason, as in Claude). For the chief's spawn of the lead (start), the reason says that the lead
+ * does not start.
+ */
+function leadStopped({ task: own, run }, view, start = false) {
   const task = view.task(own), lead = view.leadRun(own);
-  if (!task || !lead || (run && lead.id !== run)) return `sage: ${own} has no running lead run${run ? ` ${run}` : ""}, so this lead records nothing and starts no agent. Report to the chief.`;
+  if (!task || !lead || (run && lead.id !== run)) return `sage: ${own} has no running lead run${run ? ` ${run}` : ""}, so ${start ? "this lead does not start. Add the lead run with the sage tool run_add, then spawn the lead with that run's id in its task name" : "this lead records nothing and starts no agent. Report to the chief"}.`;
   const stopped = coreLeadStopped(own, task);
-  return stopped && `sage: ${stopped}`;
+  return stopped && (start ? `sage: ${own} is ${task.state}, so no lead starts for it.` : `sage: ${stopped}`);
 }
 const UNREAD_LOGBOOK = (error) => `sage: the gate could not read the logbook for this lead (${error?.message ?? error}), so it refuses this call. Tell the chief.`;
 
@@ -292,7 +303,23 @@ function childSpawn(t, name, cwd, env) {
   if (!isLead(self) || notLeadAbove(t.parts)) return CHILD_SPAWN;
   const fits = typeof name === "string" && TEAM.has(taskRole(name)) && taskNumber(name) === taskNumber(self);
   if (!fits) return LEAD_SPAWN(taskNumber(self), name);
-  try { return leadStopped(leadOf(self), tool.logbookView(cwd, env)); } catch (error) { return UNREAD_LOGBOOK(error); }
+  try { return leadStopped(leadOf(self), tool.logbookView(cwd, env)) ?? unbriefed(name, cwd, env); } catch (error) { return UNREAD_LOGBOOK(error); }
+}
+/** Why a sage spawn does not start for want of a checked brief of its exact task name, or undefined (T950). */
+const unbriefed = (name, cwd, env) => (briefChecked(cwd, name, env) ? undefined : NO_BRIEF(name));
+/**
+ * Why the gate refuses the chief's spawn in sage mode, or undefined (T950): a sage_ task name needs its checked brief,
+ * and a lead's name also needs its running lead run, so that no lead starts only to stop at its first write. Any other
+ * name is not judged.
+ */
+function chiefSpawn(name, cwd, env) {
+  if (typeof name !== "string" || !sageName(name)) return undefined;
+  if (isLead(name)) {
+    let why;
+    try { why = leadStopped(leadOf(name), tool.logbookView(cwd, env), true); } catch (error) { return `sage: the gate could not read the logbook (${error?.message ?? error}), so no lead starts. Tell the user.`; }
+    if (why) return why;
+  }
+  return unbriefed(name, cwd, env);
 }
 
 const escape = (text) => text.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
@@ -722,7 +749,10 @@ export async function gate(input, { mode = readMode, check = checkMerge, env = p
   if (SPAWN.test(f.tool)) {
     const under = thread.child && underSage(thread);
     if (under && realLead(thread) && f.tool.endsWith("resume_agent")) return refuse(thread, LEAD_RESUME);
-    if (under === false) return undefined;
+    if (under === false) {
+      const why = !thread.child && mode(f, env).sage ? chiefSpawn(f.input.task_name, f.cwd, env) : undefined;
+      return why ? deny(why) : undefined;
+    }
     const why = under ? childSpawn(thread, f.input.task_name, f.cwd, env) : UNREAD_ROLE;
     return why ? refuse(thread, why) : undefined;
   }

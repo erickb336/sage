@@ -26,6 +26,8 @@ const { gate, readMode, codexRuns } = await import(HOOK);
 // Codex adds ". Command: <the command>" after a refusal reason, so no reason ends with a period (F-T470-6).
 const UNREADABLE = "sage: the hook could not read this tool call, so it refuses it. Codex may have changed its hook input: update the sage plugin, or tell the user";
 const { stateKey } = await import(new URL("../plugins/sage-codex/hooks/hook-state.mjs", import.meta.url));
+const { recordBrief } = await import(new URL("../plugins/sage-codex/hooks/brief-hook.mjs", import.meta.url));
+const { BRIEF_FIELDS } = await import(new URL("../plugins/sage-codex/core/index.mjs", import.meta.url));
 
 const SHA = "a1b2c3d4e5f60718293a4b5c6d7e8f9012345678";
 const MERGE = `gh pr merge 41 --squash --delete-branch --match-head-commit ${SHA}`;
@@ -45,6 +47,8 @@ const LEAD_EDIT = "sage: a lead changes no files. Start an implementer of your t
 /** The one refusal of a lead's call off its list, from core's lead policy, as Claude gives it too (T928). */
 const OFF_LIST = (name) => `sage: "${name.replaceAll("_", " ")}" is not on a lead's list. A lead records only its own task, with run add, run done, finding add, finding close, finding triage, verdict, round, pages, and task set of state, branch, pr. Put what else the logbook needs in your report`;
 const SPAWN = "sage: role agents start no agents; only the chief and a lead do. Put what you need in your report";
+/** The refusal of a sage spawn with no brief checked in the last 30 minutes (T950). */
+const NO_BRIEF = (name) => `sage: ${name} does not start, because no brief for it was checked in the last 30 minutes. Run the sage tool brief with this task name and the whole brief until it says checked, then spawn the agent again`;
 const LEAD_SPAWN = (task, name) => `sage: a lead starts only the team of its own task: sage_<role>_t${task}_r<k>, where the role is implementer, code_reviewer, security_reviewer, ux_reviewer or qa. ${name} is not one of these. Put what else you need in your report`;
 const BAD_CHAIN = (name) => `sage: "${name}" is above this agent in its agent path, and only a lead (sage_lead_t<n>) has sage agents under it, so this agent changes no files. Report instead`;
 const SEND = "sage: agents send no input to another thread, because a message to the chief's thread would count as the user's. Put it in your report";
@@ -694,6 +698,10 @@ test("a role agent starts no agents, in any mode, and a thread under a read-only
 
 const LEAD = "/root/sage_lead_t12_r1";
 const leadSpawn = (extra, task_name, tool_name = "collaborationspawn_agent") => ({ ...base, hook_event_name: "PreToolUse", tool_name, tool_use_id: "call_1", tool_input: { task_name, message: "go", fork_turns: "none" }, ...extra });
+/** A brief with every field, checked by the brief tool's own function for each task name (T950). */
+const briefed = (w, ...names) => {
+  for (const name of names) assert.deepEqual(recordBrief(w.project, name, BRIEF_FIELDS.map((field) => `${field}: the ${field.toLowerCase()}.`).join("\n"), w.env), [], name);
+};
 /** A world's logbook with T1 and T2, each briefed with its running lead run: R1 on T1, R2 on T2. */
 const leadOnT1 = (w) => {
   w.sage("init");
@@ -718,6 +726,7 @@ test("T551: under a lead the leaf sage name decides the edit rule: an implemente
   assert.deepEqual(edits(`${LEAD}/helper`), [LEAD_EDIT, LEAD_EDIT], "a thread under a lead with no sage name of its own has the lead's rule");
   assert.equal(denied(w.send(pre("apply_patch", p, w.child(`${LEAD}/sage_unknown_t12`)))), BAD_NAME("sage_unknown_t12"), "an unknown role under a lead fails closed");
   leadOnT1(w);
+  briefed(w, "sage_qa_t1_r7");
   assert.equal(w.send(leadSpawn(w.child("/root/sage_lead_t1_r1"), "sage_qa_t1_r7")), undefined, "the hook process lets a lead start its team");
   assert.equal(denied(w.send(leadSpawn(w.child("/root/sage_lead_t1_r1"), "sage_pe_t1_r7"))), LEAD_SPAWN(1, `"sage_pe_t1_r7"`), "and refuses any other role");
   w.mode({ sage: false, autopilot: false });
@@ -727,6 +736,7 @@ test("T551: under a lead the leaf sage name decides the edit rule: an implemente
 test("T551: a lead starts only implementer, reviewer and QA children of its own task, in any mode", async (t) => {
   const w = world(t);
   leadOnT1(w);
+  briefed(w, "sage_implementer_t1_r2", "sage_code_reviewer_t1_r3", "sage_security_reviewer_t1_r4", "sage_ux_reviewer_t1_r5", "sage_qa_t1_r6", "sage_qa_t1", "sage_qa_t2_r1");
   for (const sage of [false, true]) {
     const g = fixed({ sage }), lead = sageChild(t, LEAD);
     const started = (input) => gate({ ...input, cwd: w.project }, { mode: () => ({ sage }), env: w.env });
@@ -746,6 +756,8 @@ test("F-T552-8, F-T928-4: a lead starts its team only while its lead run runs an
   const w = world(t), lead = (path) => w.send(leadSpawn(w.child(path), "sage_qa_t1_r9"));
   assert.match(denied(lead("/root/sage_lead_t1_r1")), /^sage: T1 has no running lead run R1, so this lead records nothing and starts no agent/, "no logbook yet");
   leadOnT1(w);
+  assert.equal(denied(lead("/root/sage_lead_t1_r1")), NO_BRIEF("sage_qa_t1_r9"), "a running lead run, and no checked brief (T950)");
+  briefed(w, "sage_qa_t1_r9");
   assert.equal(lead("/root/sage_lead_t1_r1"), undefined);
   assert.match(denied(lead("/root/sage_lead_t1_r9")), /^sage: T1 has no running lead run R9, so this lead records nothing and starts no agent/, "another lead run's name");
   w.sage("run", "done", "R1", "--status", "failed");
@@ -757,6 +769,55 @@ test("F-T552-8, F-T928-4: a lead starts its team only while its lead run runs an
   assert.equal(denied(lead("/root/sage_lead_t1_r3")), "sage: T1 is abandoned, so its lead records nothing and starts no agent. Report to your chief", "a finished task");
   writeFileSync(join(w.env.SAGE_HOME, readdirSync(w.env.SAGE_HOME).find((name) => name.startsWith("project-")), "tasks.tsv"), "not a table\n");
   assert.match(denied(w.send(leadSpawn(w.child("/root/sage_lead_t2_r2"), "sage_qa_t2_r9"))), /^sage: the gate could not read the logbook for this lead/, "a damaged logbook");
+});
+
+test("T950: in sage mode the chief's sage spawn starts only with a brief of its exact task name, checked in the last 30 minutes; any other name is not judged", (t) => {
+  const w = world(t), spawn = (name, tool) => w.send(leadSpawn({}, name, tool));
+  w.sage("init");
+  w.mode({ sage: true, autopilot: false });
+  for (const tool of ["collaborationspawn_agent", "spawn_agent"]) assert.equal(denied(spawn("sage_implementer_t1_r3", tool)), NO_BRIEF("sage_implementer_t1_r3"), tool);
+  assert.doesNotMatch(NO_BRIEF("x"), /\n/, "one plain line");
+  briefed(w, "sage_implementer_t1_r4", "sage_implementer_t1");
+  assert.equal(denied(spawn("sage_implementer_t1_r3")), NO_BRIEF("sage_implementer_t1_r3"), "a brief of another run, or of the task name with no run, is not this run's");
+  briefed(w, "sage_implementer_t1_r3");
+  assert.equal(spawn("sage_implementer_t1_r3"), undefined, "a checked brief");
+  assert.equal(spawn("sage_implementer_t1_r3"), undefined, "again, as after Codex's thread limit");
+  assert.equal(recordBrief(w.project, "sage_implementer_t1_r3", "GOAL: a brief with one field.", w.env).length, BRIEF_FIELDS.length - 1);
+  assert.equal(denied(spawn("sage_implementer_t1_r3")), NO_BRIEF("sage_implementer_t1_r3"), "a later check with a missing field");
+  briefed(w, "sage_implementer_t1_r3");
+  const file = join(codexTool.storeDir(w.project, w.env), "briefs", "sage_implementer_t1_r3.json"), age = (minutes) => {
+    writeFileSync(file, JSON.stringify({ ...JSON.parse(readFileSync(file, "utf8")), checked: Date.now() - minutes * 60_000 }));
+  };
+  age(29);
+  assert.equal(spawn("sage_implementer_t1_r3"), undefined, "a check of 29 minutes ago");
+  age(31);
+  assert.equal(denied(spawn("sage_implementer_t1_r3")), NO_BRIEF("sage_implementer_t1_r3"), "a check of 31 minutes ago");
+  writeFileSync(file, JSON.stringify({ task: "sage_implementer_t1_r3", text: JSON.parse(readFileSync(file, "utf8")).text }));
+  assert.equal(denied(spawn("sage_implementer_t1_r3")), NO_BRIEF("sage_implementer_t1_r3"), "a record with no time of its check");
+  for (const name of ["helper", "worker_1", undefined]) assert.equal(spawn(name), undefined, `${name}: not sage's spawn, so not judged`);
+  assert.equal(denied(spawn("sage_qa")), NO_BRIEF("sage_qa"), "a sage_ name in another form has no checked brief");
+  w.mode({ sage: false, autopilot: false });
+  assert.equal(spawn("sage_qa_t1_r9"), undefined, "outside sage mode the chief's spawn is not judged");
+});
+
+test("T950: in sage mode the chief's spawn of a lead starts only while that lead run runs and its task can move", (t) => {
+  const w = world(t), spawn = (name) => w.send(leadSpawn({}, name));
+  w.mode({ sage: true, autopilot: false });
+  const NO_RUN = (task, run) => `sage: ${task} has no running lead run ${run}, so this lead does not start. Add the lead run with the sage tool run_add, then spawn the lead with that run's id in its task name`;
+  assert.equal(denied(spawn("sage_lead_t1_r1")), NO_RUN("T1", "R1"), "no logbook yet");
+  leadOnT1(w);
+  briefed(w, "sage_lead_t1_r1", "sage_lead_t1_r9", "sage_lead_t1_r3");
+  assert.equal(spawn("sage_lead_t1_r1"), undefined, "its lead run runs, with a checked brief");
+  assert.equal(denied(spawn("sage_lead_t2_r2")), NO_BRIEF("sage_lead_t2_r2"), "its lead run runs, with no checked brief");
+  assert.equal(denied(spawn("sage_lead_t1_r9")), NO_RUN("T1", "R9"), "a run id that is not the running lead run");
+  w.sage("run", "done", "R1", "--status", "failed");
+  assert.equal(denied(spawn("sage_lead_t1_r1")), NO_RUN("T1", "R1"), "a lead run that ended");
+  w.sage("run", "add", "T1", "--role", "lead"); // R3
+  assert.equal(spawn("sage_lead_t1_r3"), undefined);
+  assert.equal(w.sage("task", "T1", "set", "state=abandoned").status, 0);
+  assert.equal(denied(spawn("sage_lead_t1_r3")), "sage: T1 is abandoned, so no lead starts for it", "a finished task");
+  writeFileSync(join(w.env.SAGE_HOME, readdirSync(w.env.SAGE_HOME).find((name) => name.startsWith("project-")), "tasks.tsv"), "not a table\n");
+  assert.match(denied(spawn("sage_lead_t2_r2")) ?? "", /^sage: the gate could not read the logbook \(.*\), so no lead starts\. Tell the user$/, "a damaged logbook");
 });
 
 test("F-T552-15: a lead's shell write of the state tool names the sage MCP tools; a role agent's keeps its own line", (t) => {
@@ -785,7 +846,7 @@ test("T551: a sage name that is not a lead above the leaf is refused; the team u
   assert.equal(denied(await g.run(leadSpawn(sageChild(t, "/root/sage_implementer_t1_r2"), "sage_qa_t1_r3"))), SPAWN);
   assert.equal(await g.run(pre("apply_patch", p, sageChild(t, "/root/worker_1/helper"))), undefined);
   assert.equal(await g.run(leadSpawn(sageChild(t, "/root/worker_1"), "helper")), undefined);
-  assert.equal(await g.run(leadSpawn({}, "sage_pe_t1_r1")), undefined, "the chief starts any role");
+  assert.equal(denied(await g.run(leadSpawn({}, "sage_pe_t1_r1"))), NO_BRIEF("sage_pe_t1_r1"), "the chief starts a role only with its checked brief (T950)");
   // Sends stay refused, for the lead and for its team, each with its own reason and step (F-T597-1).
   for (const [path, why] of [[LEAD, LEAD_SEND], [`${LEAD}/sage_implementer_t12_r2`, SEND], ["/root/sage_pe_t1/sage_lead_t1", SEND], ["/root/sage_qa_t12_r2", SEND]]) {
     for (const tool of ["collaborationsend_message", "collaborationfollowup_task"]) {
