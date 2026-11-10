@@ -564,7 +564,7 @@ function loop(t, id) {
     line(`M1064 160 L 1072 160 Q 1080 160 1080 170 L 1080 770 Q 1080 780 1070 780 L 340 780 Q 330 780 330 770 L 330 756`, t.loop, "loop", { dash: "8 8", sw: 2.5 }),
     label(W / 2, 828, "a mistake that comes back twice → seal the lesson", { fill: t.loop, weight: 700 }),
   ].join("\n");
-  return worldSvg(W, H, id, defs, body, "How sage works: you send a request to the chief of staff, the hooded toad sage, which briefs the team and keeps the logbook. The chief runs the design and the PE check. For each pull request, one lead runs the build, the reviews and QA, and findings and QA failures go back to the build. A clean result becomes a pull request. In the outer loop, the chief seals the lesson: a mistake that comes back twice gets a lasting fix, a test or a check in code first, a principle or a standing order only when code cannot hold it.", { rx: 24, bg: t.bg, border: t.border });
+  return worldSvg(W, H, id, defs, body, "How sage works: you send a request to the chief of staff, the hooded toad sage, which briefs the team and keeps the logbook. The chief runs the design and the PE check. For each pull request, one lead runs the build, the reviews and QA, and findings and QA failures go back to the build. A clean result becomes a pull request. In the outer loop, the chief seals the lesson: a mistake that comes back twice gets a lasting fix at the highest level that works, from the architecture down to a test, and a written rule last.", { rx: 24, bg: t.bg, border: t.border });
 }
 
 /** A world panel in the reader's theme, with the world's defs and arrowheads. */
@@ -697,7 +697,7 @@ const GRAPHICS = {
   hero, loop, routes, lifecycle, arena,
   "tip-start": tip(["Send “sage mode” alone to switch it on,", "and “sage mode off” alone to switch it off.", "With any other words, it does nothing."], "The toad sage's tip: send sage mode alone to switch it on, and sage mode off alone to switch it off. With any other words, it does nothing."),
   "tip-try": tip(["Try it on one small, real bug, from your phone.", "Then look at the result, not the code."], "The toad sage's tip: try it on one small, real bug from your phone, then look at the result, not the code."),
-  "tip-seal": tip(["Seal the lesson: give a mistake that comes back twice", "a lasting fix. A test or a check in code first; a principle", "or a standing order only when code cannot hold it.", "That's how the dojo gets stronger."], "The toad sage's tip: seal the lesson. Give a mistake that comes back twice a lasting fix: a test or a check in code first; a principle or a standing order only when code cannot hold it. That is how the dojo gets stronger."),
+  "tip-seal": tip(["Seal the lesson: give a mistake that comes back twice", "a lasting fix, at the highest level that works: the", "architecture, a type, a check whose error names the fix,", "a test, and a written rule last. Prove that each new", "check fails on the past mistake. That's how the dojo", "gets stronger."], "The toad sage's tip: seal the lesson. Give a mistake that comes back twice a lasting fix, at the highest level that works: the architecture, a type, a check whose error names the fix, a test, and a written rule last. Prove that each new check fails on the past mistake. That is how the dojo gets stronger."),
 };
 
 /** Every graphic in both themes, as [file name, SVG]. The ids in a file start with its own name and theme, so that
