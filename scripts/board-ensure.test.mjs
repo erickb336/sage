@@ -576,6 +576,23 @@ test("T921: in a sandbox with no network, as in Codex, ensure says that the sand
   assert.equal(existsSync(join(dir, "home", ".config", "sage-board", "board.pid")), false);
 });
 
+// T922: Codex's sandbox also refuses a write in the home folder with EPERM. On the first run, the board config folder
+// does not exist yet, so ensure fails at its mkdir, before the probe. This profile denies the scratch home as Codex does.
+test("T922: on the first run in a sandbox, as in Codex, ensure gives one plain line about the board config folder, and makes nothing", { skip: process.platform !== "darwin" && "macOS sandbox-exec only" }, async (t) => {
+  const { dir, env } = scratch(t), home = join(dir, "home");
+  mkdirSync(join(home, ".config"), { recursive: true });
+  const port = await freePort(), cli = fileURLToPath(new URL("../plugins/sage-codex/board/cli.mjs", import.meta.url));
+  const sandboxed = args => spawnSync("/usr/bin/sandbox-exec", ["-p", `(version 1)(allow default)(deny network*)(deny file-write* (subpath "${home}"))`, process.execPath, ...args], { env, encoding: "utf8" });
+  // The profile is the proof's base: a plain write in the home folder fails with EPERM under it.
+  assert.match(sandboxed(["-e", `require("fs").writeFileSync(${JSON.stringify(join(home, "probe"))}, "")`]).stderr, /EPERM/);
+  const run = sandboxed([cli, "board", "--ensure", "--port", String(port)]);
+  assert.equal(run.stderr, `sage board: this command cannot write ${join(home, ".config", "sage-board")}: a sandbox blocks writes there (EPERM). In Codex, run it escalated (outside the sandbox), or in Terminal on the Mac.\n`);
+  assert.equal(run.status, 1);
+  assert.equal(run.stdout, "");
+  assert.deepEqual(readdirSync(home), [".config"]);
+  assert.deepEqual(readdirSync(join(home, ".config")), [], "no config folder, no config and no server");
+});
+
 test("T216: the plugin carries the board command that the hook's note names, and it runs outside the checkout layout", async (t) => {
   const { env } = scratch(t);
   const made = await board(PLUGIN_CLI, ["--setup"], env);

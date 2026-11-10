@@ -150,10 +150,10 @@ The board phrases work in Codex as in Claude Code, at the start of your message,
 1. The chief runs `board --ensure` from the plugin's `board` folder. This command starts the board page: it writes the board config the first time, starts the board server in the background and opens a local port.
 2. Codex's sandbox blocks the write in your home folder and the local port. The default `workspace-write` sandbox lets a command write only "inside the active workspace roots and system temp directories", and it "keeps network access turned off" ([Codex: Permissions](https://learn.chatgpt.com/docs/permissions), [Codex: Agent approvals & security](https://learn.chatgpt.com/docs/agent-approvals-security)). In the sandbox of Codex 0.164.0, a local port gives `EPERM`.
 3. So the chief runs `board --ensure` escalated, and Codex asks you to approve it: one prompt each time that you ask for the board. Approve it, and the chief shows the board page's address, as in Claude Code.
-4. Then the chief runs the chat board in the sandbox, with no prompt: it only reads the logbooks.
+4. Then the chief runs the chat board in the sandbox, with no prompt: it only reads the logbooks and writes nothing, so it shows the same board as in Claude Code.
 
 - If you decline the prompt, or your approval policy is `never`, the chief still shows the chat board, and gives you the `board --ensure` command to run in Terminal on the Mac.
-- If the command runs in the sandbox by mistake, it prints that a sandbox blocks the local network, not that another program holds the port.
+- If the command runs in the sandbox by mistake, it prints one line that says to run it escalated or in Terminal. While the board config does not exist yet (before the first board start), the line says that the sandbox blocks the write of the board config folder (`~/.config/sage-board`). When the config exists, it says that the sandbox blocks the local network, not that another program holds the port.
 - **Yes, and don't ask again** for the prefix of this command saves a rule (see [the approval prompts](#the-approval-prompts-of-each-task)): later board starts then run outside the sandbox with no prompt.
 - A restart after an update works in the same way: the chief gives you the `board --stop` command, and runs it escalated only when you ask.
 
