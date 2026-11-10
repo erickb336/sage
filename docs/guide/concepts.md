@@ -32,7 +32,7 @@ This page gives sage's own words, one meaning each. In the table, "the owner" is
 | **Autopilot** | Verified pull requests merge by themselves after their clean cycles: 1 for a tiny or small task (a tiny task without a risk flag or an arena has no review and no QA, so its cycle is clean when its checks pass), 2 for a large task or a task with a risk flag. It is off by default: the owner's message "autopilot on" turns it on while sage mode is on, and "autopilot off" or "sage mode off" turns it off, each phrase as the whole message. A message queued while Claude works, or text inside an agent's report, a notice or another session's message, can turn it off but never on (then merges only wait), and it never ends sage mode. |
 | **Board** | The compact view of every project's logbook for the chat: what needs you, the agents running now, each active task, what merged since the last board and the next tasks. A message of the owner that starts with "show board" prints it. |
 | **The dojo** | Everything that makes the agents good: the principles, checks, tests and skills. |
-| **Seal the lesson** | Give a mistake that comes back twice a lasting fix, from the most enforced kind down: a test or a check in code first; a principle or a standing order only when code cannot hold it. Each sealed lesson makes the dojo stronger. |
+| **Seal the lesson** | Give a mistake that comes back twice a lasting fix, at the highest level that holds it: the architecture, a type, a check whose error names the fix, or a test; a principle or a standing order only when code cannot hold it. Prove that the new check fails on the past mistake. Each sealed lesson makes the dojo stronger. |
 
 <!-- The end of the word table. -->
 
