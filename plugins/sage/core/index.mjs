@@ -15,7 +15,7 @@ export { commandWrites, shellWriteEvidence } from "./shell-write-policy.mjs";
 export { chiefEditDenied } from "./file-policy.mjs";
 export { PHRASES, exactPhrase, hasPhrase, phrasesNear, phraseHelp, switchModes, readModeFile, MODE_DAMAGED } from "./mode-policy.mjs";
 export { BRIEF_FIELDS, briefSections, missingBriefFields } from "./brief.mjs";
-export { renderRoleInstructions, renderReportInstructions, renderChiefInstructions } from "./roles.mjs";
+export { renderRoleInstructions, renderReportInstructions, renderChiefInstructions, ROLE_PRINCIPLES } from "./roles.mjs";
 export { PRIORITIES, PRIORITY_SCALE } from "./logbook-fields.mjs";
 export { readBoardSources } from "./board-reader.mjs";
 export { buildBoardModel } from "./board-model.mjs";

@@ -425,6 +425,32 @@ test("role.mjs prints the role text and the sage report, and refuses an unknown 
   assert.equal(bad.stderr, "sage: Unknown child role. Give one role from references/roles.md.\n");
 });
 
+test("T925: role.mjs gives each role the principles of core's role map, and no other principle", async () => {
+  const { ROLE_PRINCIPLES } = await import(pathToFileURL(join(ROOT, "plugins/sage-codex/core/index.mjs")).href);
+  const title = (name) => /^name: (.+)$/m.exec(readFileSync(join(ROOT, "principles", `${name}.md`), "utf8"))[1];
+  const role = (name) => {
+    const r = spawnSync("node", [ROLE, name], { encoding: "utf8" });
+    assert.equal(r.status, 0, r.stderr);
+    return r.stdout;
+  };
+  // One role in full: its three principles, in the map's order, between the role text and the approvals line.
+  const qa = role("qa");
+  const part = qa.slice(qa.indexOf("\n# The principles of your role\n"), qa.indexOf("\n# The sage report\n"));
+  assert.deepEqual([...part.matchAll(/^## (.+)$/gm)].map(([, t]) => t), ["Prove it works", "Test behaviour, not implementation", "Explain the number"]);
+  assert.match(part, /^\n# The principles of your role\n\n## Prove it works\n\nVerify the result by checking the real thing directly\./);
+  const all = [...new Set(Object.values(ROLE_PRINCIPLES).flat())];
+  for (const [name, principles] of Object.entries(ROLE_PRINCIPLES)) {
+    if (name === "chief-of-staff") continue; // the Codex chief's text comes from the mode hook, not from role.mjs
+    const text = role(name);
+    for (const p of all) {
+      const has = name === "lead" ? text.includes(`/skills/principle-${p}/SKILL.md\``) : text.includes(`\n## ${title(p)}\n`);
+      assert.equal(has, principles.includes(p), `${name} ${p}`);
+    }
+  }
+  // The lead reads its principles from the plugin's own skills: each path is a file.
+  for (const [, path] of role("lead").matchAll(/`(\/[^`]+\/principle-[a-z-]+\/SKILL\.md)`/g)) assert.ok(existsSync(path), path);
+});
+
 test("T553: role.mjs lead adds the Codex steps to the lead's text, and no other role gets them", () => {
   const r = spawnSync("node", [ROLE, "lead"], { encoding: "utf8" });
   assert.equal(r.status, 0, r.stderr);

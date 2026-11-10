@@ -9,6 +9,7 @@
   - The board (`packages/sage-board`) is a cross-provider reader like core: each plugin bundles it, and it may name each provider's logbook settings (`CLAUDE_CONFIG_DIR`, `CODEX_HOME`, `SAGE_HOME`). It imports only Node built-ins and core; `scripts/providers.test.mjs` checks the bundled copies.
   - Run `npm run build`, then `npm run check` and `npm test`. CI runs the check and the tests.
 - **Principles:**
+  - `ROLE_PRINCIPLES` in `packages/sage-core/roles.mjs` is the one map of each role's principles. Change it and each Claude agent's `skills:` list together; `npm run check` compares them.
   - The body is 200 words or fewer. The frontmatter has `id`, `name`, `applyWhen` and `source`.
   - A principle adapted from pstack names the pstack principle and commit in its `source`. sage keeps its own text and does not sync pstack.
   - Credit the source.

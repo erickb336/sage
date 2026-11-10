@@ -5,7 +5,7 @@ import { dirname, join, relative } from "node:path";
 import { GENERATED, ROOT, outputs, filesUnder, parseSource } from "./build.mjs";
 import { changelog } from "./changelog.mjs";
 import { checkWords, flaggedWords, yamlText } from "./dictionary.mjs";
-import { BRIEF_FIELDS as CORE_BRIEF_FIELDS, FINDING_FORM } from "../packages/sage-core/index.mjs";
+import { BRIEF_FIELDS as CORE_BRIEF_FIELDS, FINDING_FORM, ROLE_PRINCIPLES } from "../packages/sage-core/index.mjs";
 import { TASK_KINDS } from "../packages/sage-core/logbook-fields.mjs";
 import { BRIEF_FIELDS, REPORT_FIELDS } from "../plugins/sage/hooks/sage-hook.mjs";
 import { handle as codexModeHook } from "../plugins/sage-codex/hooks/sage-codex-hook.mjs";
@@ -69,7 +69,16 @@ for (const f of agents) {
   }
   // Every agent writes for a person, in sage's words; every agent but the chief ends with the report.
   for (const skill of f === "chief-of-staff.md" ? ["dictionary"] : ["report", "dictionary"]) if (!new RegExp(`^  - sage:${skill}$`, "m").test(m[1])) problems.push(`agents/${f}: must preload sage:${skill}`);
+  // Each agent preloads exactly the principles that core's role map gives its role.
+  const preloaded = [...m[1].matchAll(/^  - sage:principle-(\S+)$/gm)].map(([, p]) => p).sort().join(", ");
+  const mapped = [...(ROLE_PRINCIPLES[f.slice(0, -3)] ?? [])].sort().join(", ");
+  if (preloaded !== mapped) problems.push(`agents/${f}: preloads the principles [${preloaded}], but ROLE_PRINCIPLES in packages/sage-core/roles.mjs gives [${mapped}]`);
 }
+// Every principle has a role, and the role map names only principles that exist.
+const principleNames = readdirSync(join(ROOT, "principles")).filter((f) => f.endsWith(".md") && f !== "README.md").map((f) => f.slice(0, -3));
+const mappedPrinciples = new Set(Object.values(ROLE_PRINCIPLES).flat());
+for (const p of principleNames) if (!mappedPrinciples.has(p)) problems.push(`principles/${p}.md: no role in ROLE_PRINCIPLES (packages/sage-core/roles.mjs) gets it`);
+for (const p of mappedPrinciples) if (!principleNames.includes(p)) problems.push(`ROLE_PRINCIPLES names ${p}, which is not a file of principles/`);
 // The chief's brief template and the report skill list the same fields as the hook's gates, in the same order.
 const template = /## The brief[\s\S]*?```\n([\s\S]*?)```/.exec(frontmatter(join(PLUGIN, "agents/chief-of-staff.md"))?.[2] ?? "")?.[1] ?? "";
 const briefFields = template.split("\n").map((l) => l.split(/\s+/)[0]).filter(Boolean);

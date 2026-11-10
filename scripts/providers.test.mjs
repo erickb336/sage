@@ -2087,7 +2087,9 @@ test("T85 isolated public PE and designer helpers render shared contracts and tr
     assert.equal(result.status, 0, result.stderr);
     // T603: the designer writes git, so it gets the approval line; the PE gets the short line.
     const approvals = readFileSync(join(f.plugin, `skills/sage/references/${role === "designer" ? "approvals" : "sandbox-refusal"}.md`), "utf8").trim();
-    assert.equal(result.stdout, `${f.api.renderRoleInstructions(role, f.bindings[role])}\n\n${approvals}\n\n${f.api.renderReportInstructions(f.bindings.report)}\n`);
+    // T925: the principles of the role go between the role text and that line.
+    assert.ok(result.stdout.startsWith(`${f.api.renderRoleInstructions(role, f.bindings[role])}\n\n# The principles of your role\n\n## `));
+    assert.ok(result.stdout.endsWith(`\n\n${approvals}\n\n${f.api.renderReportInstructions(f.bindings.report)}\n`));
     for (const field of f.api.REPORT_FIELDS) assert.match(result.stdout, new RegExp(`^${field} +`, "m"));
     assert.match(result.stdout, role === "pe" ? /You change nothing/ : /Use sample data, and label it as sample data/);
     assert.doesNotMatch(result.stdout, /\{\{|sage:report|CLAUDE_CONFIG_DIR/);
