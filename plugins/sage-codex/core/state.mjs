@@ -30,6 +30,7 @@ import { MOVES, PLAN_MAX, checkoutGone, createSharedRoot, sharedRoot, unreadable
 import { changedText, countsOf, endText, gateQuestion, gateText, localTime, mapHtml, mismatchText, previewText, providersOf, reconciliationText, startText, stepText, stoppedText, title } from "./move-text.mjs";
 import { worktrees } from "./worktrees.mjs";
 import { CHIEF, TAKEOVER_OPTIONS, chiefOnly, createChiefs, crossed, offerOf, replaceOf, replaceQuestion, writerClass } from "./chiefs.mjs";
+import { LEAD_COMMANDS, leadProblem as leadPolicy, leadRequest } from "./lead-policy.mjs";
 
 /** The one line for a saved change that cannot finish: the settle step refuses with it, and `sage logbook repair` is its way out. */
 export const STUCK_WRITE = 'This command changed nothing. This project cannot save changes; other projects work. Tell the owner. There are two ways out. With a backup: the owner restores the folder that `sage logbook` prints; rows newer than the backup are lost. With no backup: after the owner accepts the loss of this saved change, the chief runs `sage logbook repair --accept-change-loss yes --project <the project>`, or the owner runs it in a terminal when the chief cannot; it keeps the file, and a half-published update keeps mixed tables. Do not remove review-pending.json by hand.';
@@ -2845,7 +2846,7 @@ function sage(argv, env = process.env) {
     } catch (error) { refuse(error.message); }
   }
   if (!readOnly && statSync(root, { throwIfNoEntry: false })?.isDirectory() && ["projects.tsv", "projects.made"].every((f) => !lstatSync(join(root, f), { throwIfNoEntry: false }))) known(root); // the first writing command of this version lists today's logbooks
-  if (cmd === "projects" && isShared(storeDir(project, env), env)) guard(storeDir(project, env), cmd, pos, opt);
+  if (cmd === "projects" && isShared(storeDir(project, env), env)) guard(storeDir(project, env), cmd, pos, opt, project, env);
   if (cmd === "projects") return pos.join(" ") === "rebuild" && opt["accept-listing"] === "yes" ? rebuild(dirname(storeDir(project, env))) : refuse(`projects takes only: ${REBUILD.slice(5)}. It lists each logbook folder that is in ${root} now as a known project, so that its verdicts count in the merge check. Run it only when the user asks for it, and show the user the folders that it prints.`);
   if (cmd === "link") {
     if (pos.length) refuse("link takes one of --to <folder> or --separate, and no other words.");
@@ -2871,7 +2872,7 @@ function sage(argv, env = process.env) {
       set[k] = (count ? typed(k, v) : valid(k, v)) ?? refuse(`config takes ${KEYS}, and arena_models as a list of ${MODELS.join(", ")}`);
     }
     if (pos.length) {
-      if (isShared(home, env)) guard(home, cmd, pos, opt);
+      if (isShared(home, env)) guard(home, cmd, pos, opt, project, env);
       notePlugin(env);
       // A shared project has one home for its cycle counts: a value that it writes never lands in a provider root.
       const common = isShared(home, env) ? pick(set, SHARED_KEYS) : {}, own = Object.fromEntries(Object.entries(set).filter(([k]) => !Object.hasOwn(common, k)));
@@ -2908,7 +2909,7 @@ function sage(argv, env = process.env) {
   if (place.row && !place.row.commits && fillCommits(place.checkout, env)) locate(project, env); // the filled row may show a folder of another project
   const run = () => change(cmd, pos, opt, dir, env, skip, project, place.shared);
   if (cmd !== "init") return run();
-  if (place.shared) guard(dir, cmd, pos, opt);
+  if (place.shared) guard(dir, cmd, pos, opt, project, env);
   // A logbook that locate sees in a provider root (also through a link, which the move does not take) wins (F-T642-5).
   else if (!existsSync(dir) && !place.legacy && startsShared(place.checkout, env)) return `${link(project, { separate: true }, env)}. Every plugin is ready, so the project starts there.`;
   // init takes the root's lock and checks the known project list first, so a refusal there makes no logbook.
@@ -2968,7 +2969,7 @@ function change(cmd, pos, opt, dir, env, skip, project, guarded) {
   return withLock(dir, () => {
     // A stuck saved change stops ready and status, so its repair runs them itself, after the marker moves.
     if (!changeLoss) ready(dir, env, skip);
-    if (guarded) opt.chief = guard(dir, cmd, pos, opt);
+    if (guarded) opt.chief = guard(dir, cmd, pos, opt, project, env);
     const out = act(cmd, pos, opt, dir, env, skip, project);
     if (!changeLoss) status(dir, true);
     return out;
@@ -3137,17 +3138,30 @@ function abandonsUnclaimed(task, [, set, ...changes], opt, lead) {
 }
 
 /**
+ * The one lead policy (lead-policy.mjs) on this logbook: why the lead of lead run lead ({ id, task }) may not make this
+ * request, or undefined. view is the logbook's view (logbookView); project is the folder whose checkout gives the head of
+ * the task's branch. The state tool's guard, the Claude hook and the Codex gate and server each call it (T928).
+ */
+function leadProblem(view, lead, request, project, env = process.env) {
+  const head = () => { const branch = view.task(lead.task)?.branch; return branch ? branchTip(project, branch, env) : ""; };
+  return leadPolicy(request, { lead, view, ofTask, branchOfTask, head });
+}
+
+/**
  * The one guard of a shared logbook: step 5 of every writer. It gives the chief that this command acts for, or refuses.
  * The check prevents mistakes by normal agents; it does not stop an agent that gives another chief's id (F4). A lead acts
  * for the chief of its lead run, while that run runs, on the task of that run only (P4). A command with no chief only reads.
  */
-function guard(dir, cmd, pos, opt) {
+function guard(dir, cmd, pos, opt, project, env) {
   const need = writerClass(cmd, pos);
-  if (["read", "owner"].includes(need.kind)) return undefined;
+  if (need.kind === "read" || (need.kind === "owner" && opt.lead === undefined)) return undefined;
   const name = [cmd, ...pos.slice(0, 1)].join(" ");
   if (opt.chief !== undefined && opt.lead !== undefined) refuse(`${name} takes --chief or --lead, not both. Nothing changed.`);
   const lead = opt.lead === undefined ? undefined : read(dir, "runs").find((r) => r.id === opt.lead && r.role === "lead" && r.status === "running")
     ?? refuse(`${visible(opt.lead)} is not a running lead run, so this lead writes nothing. Report to your chief. Nothing changed.`);
+  // The one lead policy (T928): its list, its own task, the round order and the values of each command.
+  const why = lead && leadProblem(logbookView(project, env), lead, leadRequest(cmd, pos, opt), project, env);
+  if (why) refuse(`${why} Nothing changed.`);
   const chief = lead?.chief ?? opt.chief ?? refuse(`this logbook is shared, and a command with no chief only reads: add --chief <your C id> to ${name}. Nothing changed. Only a chief's session writes here. In a Claude session, run this write again as one command of its own, and the hook names your id. A Codex chief writes through the sage tools, which add its id. A terminal with no chief session only reads.`);
   if (!lead && !chiefs(dir).some((r) => r.id === chief)) refuse(`${visible(chief)} is not a chief of this logbook (${join(dir, "chiefs.tsv")}). Nothing changed.`);
   const tasks = need.kind === "any" ? [] : read(dir, "tasks");
@@ -3156,7 +3170,6 @@ function guard(dir, cmd, pos, opt) {
     ? [opt.pilot ?? old?.pilot, ...(opt.tasks === undefined ? tasks.filter((t) => old && t.program === old.id).map((t) => t.id) : opt.tasks === "none" ? [] : waitWords(opt.tasks))]
     : [need.task ?? (need.run && read(dir, "runs").find((r) => r.id === need.run)?.task)];
   const named = ids.filter(Boolean); // a task or a run that the logbook lacks gets the command's own refusal
-  if (lead && (!named.length || named.some((id) => id !== lead.task))) refuse(`${name} is not a write on ${lead.task}, and a lead acts only on the task of its lead run. Report what else the logbook needs. Nothing changed.`);
   if (need.kind !== "any") for (const id of new Set(named)) {
     const task = tasks.find((t) => t.id === id), declines = need.recipient && !lead && offerOf(task ?? {})?.to === chief; // the recipient declines an offer to it
     const bar = task && !declines && !(cmd === "task" && abandonsUnclaimed(task, pos, opt, lead)) && ownerBar(dir, task, chief, !!lead);
@@ -4102,5 +4115,5 @@ const { bindings, fillCommits, folderOf, link, locate, movePlans, notePlugin, pl
   listed: (root) => known(root, undefined, undefined, true),
   enroll });
 const { chiefs, chiefRow, rowOf } = createChiefs({ now, provider, readRegular, refuse, rowsOf, sheetText, swap });
-return { SIZES, BLOCKS, RISKS, KINDS, STATES, DEFAULTS, PR, sageRoot, locate, chiefFor, sessionBar, branchBar, actorOptions, git, projectRoot, roleReadProject, optionsOf, slug, worktreeRoot, pagesRoot, BRANCH, ofTask, branchOfTask, branchTip, projectName, storeDir, config, cyclesFor, modelFor, read, mergeCheck, boardLandingCheck, logbookView, sage, keepReport, compareRetainedReport, withLock, board, answerPaths, command, runCli, waitingPlugins, writeIdFloors };
+return { SIZES, BLOCKS, RISKS, KINDS, STATES, DEFAULTS, PR, LEAD_COMMANDS, leadProblem, leadRequest, sageRoot, locate, chiefFor, sessionBar, branchBar, actorOptions, git, projectRoot, roleReadProject, optionsOf, slug, worktreeRoot, pagesRoot, BRANCH, ofTask, branchOfTask, branchTip, projectName, storeDir, config, cyclesFor, modelFor, read, mergeCheck, boardLandingCheck, logbookView, sage, keepReport, compareRetainedReport, withLock, board, answerPaths, command, runCli, waitingPlugins, writeIdFloors };
 }

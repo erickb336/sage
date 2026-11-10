@@ -29,5 +29,6 @@ export { REPORT_FIELDS, parseReport } from "./report.mjs";
 export { FINDING_FORM, RESULT_WORDS, cleanReport, fieldsOf, missingFields, readReport } from "./report-reader.mjs";
 
 export { roleEditDenied, TEAM } from "./role-policy.mjs";
+export { leadStopped } from "./lead-policy.mjs";
 
 export { REVIEW_ROLES, parseReviewTarget, parseReviewReport } from "./review.mjs";

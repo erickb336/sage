@@ -15,9 +15,9 @@
 //     Each sage name above the leaf must be a lead's, or the child changes no file. A part that starts with sage_ but
 //     is not a sage task name counts as a read-only role.
 //   - The logbook: the chief records it, and a lead (a child of the root thread named sage_lead_t<n>, while its task's lead
-//     run runs) records its own task with the sage MCP tools of LEAD_RULES. Any other child, in any mode, calls only the
-//     tools that read, also a child named like a chief: only the root thread is the chief. No child writes with the
-//     plugin's state tool from the shell (never its MCP server).
+//     run runs) records its own task with the sage MCP tools, as core's one lead policy allows (T928). Any other child, in
+//     any mode, calls only the tools that read, also a child named like a chief: only the root thread is the chief. No
+//     child writes with the plugin's state tool from the shell (never its MCP server).
 //   - Only a lead starts agents: a child under a sage_ name, in any mode, gets no spawn_agent. The one exception is a
 //     lead (sage_lead_t<n>, with only leads above it), which starts core's TEAM roles with its own t<n>, while its lead
 //     run runs and its task can move.
@@ -74,7 +74,7 @@ import { accessSync, constants, existsSync, linkSync, mkdirSync, readdirSync, re
 import { homedir } from "node:os";
 import { basename, dirname, isAbsolute, join, relative, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
-import { AGENT_GH, agentCommandProblem, agentGh, boardCommandProblem, boardPathProblem, chiefEditDenied, commandWrites, createCommandPolicy, createPushPolicy, ghRuns, logbookWrite, PR, programName, programsRun, pullRequestHead, readModeFile, roleEditDenied, sharedRoot, shellCommands, shellWriteEvidence, TEAM } from "../core/index.mjs";
+import { AGENT_GH, agentCommandProblem, agentGh, boardCommandProblem, boardPathProblem, chiefEditDenied, commandWrites, createCommandPolicy, createPushPolicy, ghRuns, leadStopped as coreLeadStopped, logbookWrite, PR, programName, programsRun, pullRequestHead, readModeFile, roleEditDenied, sharedRoot, shellCommands, shellWriteEvidence, TEAM } from "../core/index.mjs";
 import { modeFile, readMode, tool } from "../skills/sage/sage.mjs";
 import { verificationOptions } from "../skills/sage/verify-install.mjs";
 import { privateDirectory, readState } from "./hook-state.mjs";
@@ -108,7 +108,6 @@ const BAD_CHAIN = (name) => `sage: "${name}" is above this agent in its agent pa
 const UNREAD_ROLE = "sage: the hook could not read this agent's task name from Codex's record of its thread, so it refuses this call. Tell the user.";
 const UNREAD_CODEX = "sage: the hook could not read this shell command, and it names codex, so it refuses it. Write the command in a plainer form.";
 const CHILD_LOGBOOK = "sage: role agents report; only the chief records the logbook. Put this in your report.";
-const LEAD_LOGBOOK = (name) => `sage: a lead records only its own task, and ${name} is not one of its tools. Put what the logbook needs in your report.`;
 const CHILD_SPAWN = "sage: role agents start no agents; only the chief and a lead do. Put what you need in your report.";
 const TEAM_NAMES = [...TEAM].map((role) => role.replaceAll("-", "_")).join(", ").replace(/, (?=[^,]*$)/, " or ");
 const LEAD_SPAWN = (task, name) => `sage: a lead starts only the team of its own task: sage_<role>_t${task}_r<k>, where the role is ${TEAM_NAMES}. ${JSON.stringify(name ?? "no task_name")} is not one of these. Put what else you need in your report.`;
@@ -163,111 +162,38 @@ function ghProblem(command, cwd, env) {
 }
 const childMayCall = (name, input) => CHILD_READS.has(name) || (name === "pages" && ["record", "run", "text"].every((key) => input[key] === undefined));
 
-/** The verdict kinds that a lead records: each has a kept report behind it. A checks verdict is the chief's. */
-const LEAD_KINDS = new Set(["review-clean", "security-clean", "ux-clean", "qa-pass", "qa-fail", "findings"]);
-/** The state moves of a cycle that a lead makes, by the task's state, as in the Claude hook. A held task moves only by the chief. */
-const LEAD_MOVES = { briefed: ["building"], building: ["reviewing"], reviewing: ["verifying"], repairing: ["reviewing"], verifying: ["verified", "reviewing"], verified: ["reviewing"] };
-/** The states in which a lead records nothing. */
-const LEAD_STOPS = ["held", "replan", "merged", "concluded", "abandoned"];
-const roundKeys = (task) => String(task.keys ?? "").split(",").filter(Boolean);
-/** An open fix finding of the task's current round, at any severity, as the Claude hook's roundFixOpen. */
-const roundFixOpen = ({ own, task, view }) => view.findings(own).some((f) => f.status === "open" && f.triage === "fix" && roundKeys(task).includes(f.key));
-const notOwn = (id, own) => `${id} is not of ${own}, and a lead records only its own task`;
-/** A repair goes through round, so the rounds count and a task can reach held: no close and no verdict on a new commit before it. */
-const roundFirst = ({ own, task, view }) => (task.state !== "repairing" && view.findings(own).some((f) => f.status === "open" && f.triage === "fix" && f.severity !== "low")
-  ? `${own} has a medium or high finding triaged fix and is not repairing: ${["reviewing", "verifying"].includes(task.state) ? "run round first" : "move it to reviewing, run round"}, then repair` : undefined);
-/** The fields that a lead sets with task_set. A lead sets a branch or a PR only of its own task, and moves no task onto a shared branch. */
-const LEAD_FIELDS = {
-  state: (state, context) => {
-    const { own, task } = context;
-    if (!(LEAD_MOVES[task.state] ?? []).includes(state)) return `${own} is ${task.state}: ${LEAD_MOVES[task.state] ? `a lead moves it only to ${LEAD_MOVES[task.state].join(" or ")}` : "only the chief moves it from there"}`;
-    return task.state === "repairing" && roundFixOpen(context) ? `${own} has an open fix finding of its round: close each one after the repair's commit (finding_close), then move it to reviewing` : undefined;
-  },
-  branch: (branch, { own, task, view }) => {
-    if (!tool.branchOfTask(task, branch) || (task.branch && !tool.branchOfTask(task, task.branch))) return `${JSON.stringify(branch)} is not a branch named for ${own}, or ${own} is on a branch of another task: only the chief sets that`;
-    const shared = branch !== task.branch && [task.branch, branch].find((name) => name && [...view.branchTasks(name)].some((id) => id !== own));
-    return shared ? `${shared} is shared with another task: only the chief moves a task onto a shared branch or off it` : undefined;
-  },
-  pr: (pr, { own, task, view }) => (/^[1-9]\d*$/.test(pr) && !task.pr && [...view.prTasks(pr)].every((id) => id === own) ? undefined : `a lead gives ${own} one PR, once, that no other task has or had`),
-};
-/**
- * What a lead may record, by sage tool, as the Claude hook's LEAD_WRITES, with fewer rules (the owner's rule of
- * 2026-10-26: the flow and the clean cycles must hold; trust agents otherwise). Each rule takes the call's input and
- * { own, task, view }, and gives the reason for a refusal, or undefined. callerRefusal checks the input's task first.
- * The state tool holds the rest for every caller: a verdict needs a kept report of its run, and one run backs one verdict.
- */
-const LEAD_RULES = {
-  run_add: ({ role, branch }, { own, task }) => {
-    if (!TEAM.has(role)) return `a lead adds only runs of its team (${[...TEAM].join(", ")}), not ${JSON.stringify(role)}`;
-    return branch === undefined || tool.ofTask(own, branch) || branch === task.branch ? undefined : `${branch} is not a branch of ${own}`;
-  },
-  run_done: ({ run }, { own, view }) => {
-    const row = view.row(run);
-    if (row?.task !== own) return notOwn(run, own);
-    return TEAM.has(row.role) ? undefined : `${run} is a ${row.role} run: only the chief ends it`;
-  },
-  finding_add: ({ key }) => (key === undefined ? undefined : "only the chief opens a known finding again: leave out key"),
-  finding_triage: ({ key, decision }, { own, task, view }) => {
-    const row = view.row(key);
-    if (row?.task !== own) return notOwn(key, own);
-    if (row.triage === "ask") return `${key} is triaged ask: only the chief changes it, with the owner's answer`;
-    if (decision === "fix") return undefined;
-    if (decision === "ask") return "a lead asks the owner nothing: report the question";
-    if (row.severity !== "low") return `${key} is ${row.severity}: a lead dismisses only a low finding. Report it, or triage it fix`;
-    return row.triage === "fix" && (roundKeys(task).includes(key) || Number(row.round) < Number(task.round)) ? `${key} is a fix key of a round: only the chief dismisses it` : undefined;
-  },
-  finding_close: ({ key }, context) => {
-    const { own, task, view } = context, row = view.row(key);
-    if (row?.task !== own) return notOwn(key, own);
-    if (row.triage !== "fix") return `${key} is not triaged fix, so a lead does not close it`;
-    if (task.state === "repairing" && !roundKeys(task).includes(key)) return `${key} is not a fix of ${own}'s round: it waits for the next round`;
-    return roundFirst(context);
-  },
-  verdict: ({ kind, pr, run, sha }, context) => {
-    const { own, task, view } = context, row = view.row(run);
-    if (!LEAD_KINDS.has(kind)) return `the ${kind} verdict is the chief's: give what it needs in your report`;
-    if (!task.pr || String(pr) !== task.pr) return `a lead's verdict names its task's PR (${task.pr ? `pr ${task.pr}` : `${own} has none yet: set it with task_set`})`;
-    if (row?.task !== own || row.round !== task.round) return `a lead's verdict names a run of ${own} in its current round ${task.round}, whose kept report backs it; ${JSON.stringify(run ?? "no run")} is not one`;
-    return view.shas(own).has(String(sha ?? "").toLowerCase()) ? undefined : roundFirst(context);
-  },
-  round: () => undefined,
-  pages: () => undefined,
-  task_set: ({ fields }, context) => {
-    for (const [key, value] of Object.entries(fields ?? {})) {
-      const why = Object.hasOwn(LEAD_FIELDS, key) ? LEAD_FIELDS[key](value, context) : `a lead sets only ${Object.keys(LEAD_FIELDS).join(", ")} of its task, not ${key}`;
-      if (why) return why;
-    }
-    return undefined;
-  },
-  brief: ({ task_name: name }, { own }) => (TEAM.has(taskRole(String(name))) && `T${taskNumber(name)}` === own ? undefined : `a lead records a brief only for the team of ${own}, not for ${JSON.stringify(name)}`),
-};
-const LEAD_SHELL = `sage: a lead records with the sage MCP tools (${Object.keys(LEAD_RULES).join(", ")}), not from the shell. Use one of these, or put what the logbook needs in your report.`;
-/** Why a lead of this task and run neither records nor starts agents now, or undefined: its lead run ended, or its task cannot move. */
+/** A lead's brief: only for the team of its own task. The state tool holds every other rule of a lead (core's lead policy, T928). */
+const leadBrief = ({ task_name: name }, own) => (TEAM.has(taskRole(String(name))) && `T${taskNumber(name)}` === own ? undefined : `sage: a lead records a brief only for the team of ${own}, not for ${JSON.stringify(name)}.`);
+const LEAD_SHELL = `sage: a lead records with the sage MCP tools (${[...tool.LEAD_COMMANDS, "brief"].map((command) => command.replaceAll(" ", "_")).join(", ")}), not from the shell. Use one of these, or put what the logbook needs in your report.`;
+/** Why a lead of this task and run neither records nor starts agents now, or undefined: its lead run ended, or its task cannot move (core's reason, as in Claude). */
 function leadStopped({ task: own, run }, view) {
   const task = view.task(own), lead = view.leadRun(own);
   if (!task || !lead || (run && lead.id !== run)) return `sage: ${own} has no running lead run${run ? ` ${run}` : ""}, so this lead records nothing and starts no agent. Report to the chief.`;
-  return LEAD_STOPS.includes(task.state) ? `sage: ${own} is ${task.state}, so its lead records nothing and starts no agent. Report to the chief.` : undefined;
+  const stopped = coreLeadStopped(own, task);
+  return stopped && `sage: ${stopped}`;
 }
 const UNREAD_LOGBOOK = (error) => `sage: the gate could not read the logbook for this lead (${error?.message ?? error}), so it refuses this call. Tell the chief.`;
 
 /**
  * Why a caller may not make this sage tool call, or undefined. The gate asks it before it saves its proof, and the server
  * asks it again with the proof's caller, because the logbook can change between the two. The chief makes every call. A
- * lead's call must name its project and its task, while its lead run runs and its task can move. Any other child reads.
- * A logbook that the rule cannot read refuses.
+ * lead's call must name its project, while its lead run runs and its task can move; then core's one lead policy judges
+ * it, as the state tool's guard and the Claude hook do (T928): its list, its own task, the round order and the values. A
+ * tool's name is the command's words joined by _. Any other child reads. A logbook that the rule cannot read refuses.
  */
 export function callerRefusal(caller, name, input, env = process.env) {
   if (caller.role === "chief") return undefined;
-  const rule = caller.role === "lead" && Object.hasOwn(LEAD_RULES, name) ? LEAD_RULES[name] : undefined;
-  if (!rule) return childMayCall(name, input) ? undefined : caller.role === "lead" ? LEAD_LOGBOOK(name) : CHILD_LOGBOOK;
-  const own = caller.task;
-  if (input.task !== undefined && input.task !== own) return `sage: ${notOwn(input.task, own)}. Report to the chief what ${input.task} needs.`;
+  if (caller.role !== "lead" || CHILD_READS.has(name)) return childMayCall(name, input) ? undefined : CHILD_LOGBOOK;
+  const own = caller.task, request = { ...input, command: name.replaceAll("_", " ") };
+  // A tool off the lead's list is refused before the gate reads the logbook: the policy's first rule needs no logbook.
+  if (name !== "brief" && !tool.LEAD_COMMANDS.includes(request.command)) return `sage: ${tool.leadProblem(undefined, { task: own }, request, input.project, env)}`;
   try {
     if (!caller.project || real(tool.projectRoot(input.project)) !== caller.project) return `sage: a lead records only the logbook of its own project, and ${JSON.stringify(input.project)} is not that project.`;
     const view = tool.logbookView(input.project, env), stopped = leadStopped(caller, view);
     if (stopped) return stopped;
-    const why = rule(input, { own, task: view.task(own), view });
-    return why && `sage: ${why}.`;
+    if (name === "brief") return leadBrief(input, own);
+    const why = tool.leadProblem(view, { id: view.leadRun(own).id, task: own }, request, input.project, env);
+    return why && `sage: ${why}`;
   } catch (error) {
     return UNREAD_LOGBOOK(error);
   }

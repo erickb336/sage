@@ -376,8 +376,8 @@ test("T600: a lead's round from repairing acts only on its own task: another tas
   p.chief("finding", "add", "T2", "--source", "qa", "--severity", "medium", "--summary", "other", "--run", run, "--class", "other");
   p.chief("finding", "triage", "T2", "F-T2-1", "fix");
   assert.match(p.chief("round", "T2"), /^T2 repairing · round 1 of 3 · fix F-T2-1 /, "T2 sits at repairing with an open fix key, as T1 does");
-  assert.match(p.ask(`node ${TOOL} round T2`) ?? "", /^sage: .*not on its own task T1/, "lead-T1's round of T2");
-  assert.match(p.ask(`node ${TOOL} task T2 set state=reviewing`) ?? "", /^sage: .*not on its own task T1/, "lead-T1's move of T2");
+  assert.match(p.ask(`node ${TOOL} round T2`) ?? "", /^sage: T2 is not of T1, and a lead records only its own task\./, "lead-T1's round of T2");
+  assert.match(p.ask(`node ${TOOL} task T2 set state=reviewing`) ?? "", /^sage: T2 is not of T1, and a lead records only its own task\./, "lead-T1's move of T2");
   assert.equal(p.ask(`node ${TOOL} round T1`), undefined, "its own round passes");
   assert.match(p.chief("task", "T2"), /^T2 repairing /, "T2 stays");
 });
@@ -389,7 +389,7 @@ test("T600: a lead's round from repairing past the limit holds the task for the 
     leadRepeatFix("F-T1-3"), "$ sage finding close T1 F-T1-1", leadRound()], p);
   assert.match(printed, /^T1 held: 1 repair rounds did not make it clean\. Stop and ask the user\.$/);
   assert.match(p.chief("task", "T1"), /^T1 held /);
-  assert.match(p.ask(`node ${TOOL} round T1`) ?? "", /^sage: T1 is held, and only the sage moves a held task/, "the lead writes nothing more");
+  assert.match(p.ask(`node ${TOOL} round T1`) ?? "", /^sage: T1 is held, so its lead records nothing and starts no agent\./, "the lead writes nothing more");
   assert.match(p.run("sage", ["task", "T1", "set", "state=building"]).stderr, /T1 needs one approval=<G> with a move from a round hold/, "no move out without the owner's gate");
 });
 
@@ -587,12 +587,12 @@ test("T301: the lead file's state table is the hook's: each move in it passes, a
   assert.deepEqual(wrong, [], "the file's state table and the hook differ");
   assert.ok(moves.includes(clean), "the file has the move to verifying");
   p.setState("reviewing");
-  assert.match(p.ask(`node ${TOOL} task T1 set state=verifying`) ?? "", /^sage: T1's head [0-9a-f]{7} has no full clean cycle yet .* so T1 stays at reviewing: record them first \(R1836-3, R1846-1\)\. /, "no clean cycle on the head");
+  assert.match(p.ask(`node ${TOOL} task T1 set state=verifying`) ?? "", /^sage: T1's head [0-9a-f]{7} has no full clean cycle yet .* so T1 stays at reviewing: record them first\. /, "no clean cycle on the head");
   for (const kind of ["review-clean", "qa-pass"]) p.chief("verdict", "T1", "--sha", p.head(), "--kind", kind, "--cycle", "1");
   assert.equal(p.ask(`node ${TOOL} task T1 set state=verifying`), undefined, "a full clean cycle on the head");
 });
 
-test("T301: the lead file's verdict table is the hook's: each report gives only the kind that the table names", () => {
+test("T301: the lead file's verdict table is the rule of the hook and the state tool: each report gives only the kind that the table names", () => {
   const rows = table("Report");
   assert.equal(rows.length, 4, "the file has its verdict table");
   const kinds = (report) => rows.find(([said]) => said === report)?.[1].split(/, | or /) ?? assert.fail(`the verdict table has no row "${report}"`);
@@ -611,21 +611,25 @@ test("T301: the lead file's verdict table is the hook's: each report gives only 
   const p = project({ size: "large", config: ["max_agents=20"] });
   play(["$ sage task T1 set state=building branch=sage/t1-example", "$ sage run add T1 --role implementer --branch sage/t1-example", "> R2 sage:implementer", "< R2 done: none",
     "$ sage run done R2 --status done --tokens 1", "$ sage task T1 set state=reviewing pr=12"], p);
-  const wrong = [], passed = new Map(rows.map(([said]) => [said, new Set()])); // passed: each row's kinds that the hook let pass in its cases
+  const wrong = [], passed = new Map(rows.map(([said]) => [said, new Set()])); // passed: each row's kinds that the hook and the state tool let pass in its cases
   let keys = 0;
   CASES.forEach(([role, said, row], i) => {
     const run = `R${i + 3}`, [, severity] = / (low|medium|high) /.exec(said) ?? [];
     const lines = [`$ sage run add T1 --role ${role}`, `> ${run} sage:${role}`, `< ${run} ${said}`];
     if (severity) lines.push(`$ sage finding add T1 --source ${role} --severity ${severity} --summary=case-${i} --run ${run} --class copy`);
     play([...lines, `$ sage run done ${run} --status done --tokens 1`], p);
-    const passes = ALL.filter((kind) => p.ask(`node ${TOOL} verdict T1 --sha ${p.head()} --kind ${kind} --cycle 1 --pr 12 --run ${run}`) === undefined);
-    if (passes.length !== 1 || !kinds(row).includes(passes[0])) wrong.push(`${role} "${said}": the hook passes ${passes.join(", ") || "no kind"}; the table names ${kinds(row).join(", ")}`);
+    // The hook lets the lead's verdict through, and the state tool records it only when the run's kept report backs that kind (T483, T928).
+    const passes = ALL.filter((kind) => {
+      const args = ["verdict", "T1", "--sha", p.head(), "--kind", kind, "--cycle", "1", "--pr", "12", "--run", run];
+      return p.ask(`node ${TOOL} ${args.join(" ")}`) === undefined && p.run("sage", args).status === 0;
+    });
+    if (passes.length !== 1 || !kinds(row).includes(passes[0])) wrong.push(`${role} "${said}": the hook and the state tool pass ${passes.join(", ") || "no kind"}; the table names ${kinds(row).join(", ")}`);
     passes.forEach((kind) => passed.get(row)?.add(kind));
     if (severity) p.chief("finding", "triage", "T1", `F-T1-${++keys}`, "dismiss", "--reason", "a-fixture"); // the next case starts with no open finding
   });
   // A row also names no kind that the hook refuses for each of its cases (F-T301-26).
-  for (const [said, kindsOf] of rows) for (const kind of kindsOf.split(/, | or /)) if (!passed.get(said).has(kind)) wrong.push(`the row "${said}" names ${kind}, which the hook passes for none of its reports`);
-  assert.deepEqual(wrong, [], "the file's verdict table and the hook differ");
+  for (const [said, kindsOf] of rows) for (const kind of kindsOf.split(/, | or /)) if (!passed.get(said).has(kind)) wrong.push(`the row "${said}" names ${kind}, which the hook and the state tool pass for none of its reports`);
+  assert.deepEqual(wrong, [], "the file's verdict table and the rule differ");
 });
 
 test("T301: the lead file's helper cap is the hook's, and with the default agent cap one lead and its helpers fill the project", () => {
