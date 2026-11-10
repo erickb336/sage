@@ -4746,7 +4746,7 @@ test("T40: each agent role gets its model by task size; run add prints it and re
   assert.equal(s.no("config", "model.qa.small=gpt-5"), `sage: model.qa.small is opus, sonnet, haiku, fable, or inherit for the agent's own model; not "gpt-5"`);
   assert.equal(s.no("config", "model.qa.small="), `sage: model.qa.small is opus, sonnet, haiku, fable, or inherit for the agent's own model; not ""`);
   for (const key of ["model.qa.huge", "model.chief.small", "model"]) assert.match(s.no("config", `${key}=opus`), /config takes .*model\.<role>\.<size>=<model>/);
-  writeFileSync(join(s.home, "config.json"), '{"model.code-reviewer.tiny": "gpt-5", "model.qa": 3, "model.pe": "haiku", "model.pe.huge": "opus"}');
+  writeFileSync(join(s.home, "config.json"), '{"max_agents": 50, "model.code-reviewer.tiny": "gpt-5", "model.qa": 3, "model.pe": "haiku", "model.pe.huge": "opus"}'); // max_agents: the runs still run (T952)
   const read = s.ok("config");
   assert.match(read, / model\.code-reviewer\.tiny=sonnet /, "a bad value in config.json reads as the default");
   assert.match(read, /model\.qa\.small=sonnet/);
