@@ -1,15 +1,22 @@
 # Shared shell-write classification
 
-`commandWrites(text, cwd)` identifies known shell write forms and reader options
+`commandWrites(text, cwd, scratch)` identifies known shell write forms and reader options
 that can run another program. It parses text without executing it. Non-text or
 unreadable input counts as a write form.
+
+`scratch` is an optional list of absolute folders, such as the temp folder. A
+redirection whose literal target is in one of them, and not in `cwd` (the
+caller's project), does not count. Every other write form counts, also into a
+scratch folder. A target with a variable, a pattern or `~`, or in a folder that
+the reader cannot follow, counts. The Claude hook passes its temp folders for a
+read-only role (T933).
 
 Executable-name checks ignore case and a trailing `.exe`, using the shared
 normalizer. Reader-option parsing keeps the original arguments and option case.
 
 The public core entry point exposes the same function in both provider bundles.
-This component prepares shared rules for the Codex runtime. It does not change
-the active Claude hook or install a Codex hook.
+The Codex gate and the Claude hook both call it for a read-only role, with
+core's `roleEditDenied`.
 
 Ordinary reader arguments remain data. Option values and words after `--`
 retain their parser context. Redirections to files count as

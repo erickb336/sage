@@ -2209,6 +2209,55 @@ test("C4: a file tool's path to a sage root that does not exist yet is compared 
   assert.equal(denied(s.send({ ...tool("Write", { file_path: join(at, "CASE-STS", "x") }, { cwd: s.dir }), ...AGENT })), undefined, "a folder next to the root");
 });
 
+// T933 (gap G21): a read-only role changes no files from the shell either. The hook only reads these commands; none runs.
+const READ_ONLY_ROLES = ["code-reviewer", "security-reviewer", "ux-reviewer", "qa", "pe", "lead"];
+/** A scratch folder in the temp folder, outside the project (FEATURE). */
+const SCRATCH = realpathSync(mkdtempSync(join(tmpdir(), "sage-scratch-")));
+const SHELL_WRITES = ["sed -i '' 's/a/b/' README.md", "sed -i.bak s/a/b/ src/app.js", "echo x > README.md", "printf x >> notes.txt",
+  "cp README.md README.bak", "mv src/a.js src/b.js", "rm -rf src", "rm README.md", "touch new.txt", "npm test 2>&1 | tee test.log",
+  `echo x > ${FEATURE}/notes.txt`, // the project is in the temp folder here, and a redirection into the project still counts
+  "echo x > $TMPDIR/out.txt", // a variable: the hook does not expand it, so the target is not a known scratch folder
+  `cp README.md ${SCRATCH}/copy.md`, `sed -i '' s/a/b/ ${SCRATCH}/copy.md`, // only a redirection passes into scratch
+  `node -e "require('fs').writeFileSync('a.txt', 'x')"`, "git diff --output=out.patch"];
+const SHELL_READS = ["npm test", "node --test scripts/sage-hook-1.test.mjs", `npm test > ${SCRATCH}/out.txt 2>&1`,
+  `cat > ${SCRATCH}/probe.mjs <<'EOF'\nconsole.log(1)\nEOF`, `node ${SCRATCH}/probe.mjs`, `cd ${SCRATCH} && echo x > out.txt`,
+  `git show HEAD:README.md | sed 's/a/b/' > ${SCRATCH}/copy.md`, "npm test > /dev/null 2>&1", "cat README.md", "grep -n sage README.md",
+  "git diff main...HEAD", "git log --oneline -5", "mkdir -p /tmp/sage-t933-probe", `git worktree add --detach ${SCRATCH}/old HEAD`];
+
+test("T933: in sage mode a reviewer, QA, the PE and the lead change no files from the shell; a redirection into scratch passes", () => {
+  const s = session();
+  s.send(prompt("sage mode"));
+  for (const role of READ_ONLY_ROLES) {
+    const who = { agent_id: `ro-${role}`, agent_type: `sage:${role}` };
+    for (const command of SHELL_WRITES) {
+      assert.match(denied(s.send(bash(command, FEATURE, who))) ?? "", new RegExp(`the ${role} agent changes no files, also not from the shell.*write form.*Report the finding instead.*scratch folder`), `${role}: ${command}`);
+    }
+    for (const command of SHELL_READS) assert.equal(s.send(bash(command, FEATURE, who)), undefined, `${role}: ${command}`);
+  }
+  // Every command tool, also when the agent type has another letter case.
+  const qa = { agent_id: "ro-qa", agent_type: "Sage:QA" };
+  for (const name of ["Monitor", "PowerShell", "mcp__terminal__run_in_terminal"]) {
+    assert.match(denied(s.send(tool(name, { command: "rm -rf src", description: "d" }, { cwd: FEATURE, ...qa }))) ?? "", /the qa agent changes no files/, name);
+  }
+  // A sage role that core does not know counts as read-only.
+  assert.match(denied(s.send(bash("rm -rf src", FEATURE, { agent_id: "x1", agent_type: "sage:investigate" }))) ?? "", /the investigate agent changes no files/);
+});
+
+test("T933: the writers, the chief, other agents and every agent outside sage mode keep their shell writes", () => {
+  const s = session();
+  s.send(prompt("sage mode"));
+  for (const role of ["implementer", "designer", "arena-judge"]) {
+    for (const command of SHELL_WRITES) assert.equal(s.send(bash(command, FEATURE, { agent_id: `w-${role}`, agent_type: `sage:${role}` })), undefined, `${role}: ${command}`);
+  }
+  for (const command of SHELL_WRITES) {
+    assert.equal(s.send(bash(command)), undefined, `the chief: ${command}`);
+    assert.equal(s.send(bash(command, FEATURE, { agent_type: "sage:chief-of-staff" })), undefined, `the chief as an agent type: ${command}`);
+    assert.equal(s.send(bash(command, FEATURE, { agent_id: "gp", agent_type: "general-purpose" })), undefined, `an agent with no sage role: ${command}`);
+  }
+  const off = session();
+  for (const role of READ_ONLY_ROLES) assert.equal(off.send(bash("rm -rf src", FEATURE, { agent_id: `ro-${role}`, agent_type: `sage:${role}` })), undefined, `${role} outside sage mode`);
+});
+
 // T100: two lessons sealed for agents. The hook only reads these commands; nothing here runs ps or kill.
 /** The hook's own PATH: node, then /usr/bin and /bin, so a bare ps resolves to the real one even when the run has a fake ps first on PATH. */
 const SYSTEM_PATH = { PATH: `${dirname(process.execPath)}:/usr/bin:/bin` };
@@ -3529,15 +3578,13 @@ test("T594, T815: a project's own .sage folder is free; the home's .sage, when i
   }
 });
 
-test("T529: a reviewer writes a fake with \"$*\", a heredoc with braces, and runs node -e with spawnSync, all in its own scratch subfolder", () => {
+test("T529: a reviewer writes a fake with \"$*\", a heredoc with braces, and runs a probe file with spawnSync, all in its own scratch subfolder", () => {
   const { s, own, reviewer } = scratchSession();
   const allowed = [
     // R1873: a fake script with "$*"
     `mkdir -p ${own}/bin && cat > ${own}/bin/gh <<'EOF'\n#!/bin/sh\necho "fake gh $*" >&2\nexit 1\nEOF\nchmod +x ${own}/bin/gh`,
     // R1873: a proof file with braces, run by node, with $? after it (R1871)
     `cat > ${own}/proof.mjs <<'EOF'\nconst cp = await import("node:child_process");\nconst r = cp.spawnSync("${own}/bin/gh", ["pr", "view"]);\nif (r.status !== 1) { throw new Error([r.status].join()); }\nEOF\nnode ${own}/proof.mjs; echo $?`,
-    // R1873: node -e with {spawnSync}
-    `node -e 'const {spawnSync}=require("node:child_process"); console.log(spawnSync("${own}/bin/gh", ["x"]).status)'`,
     // R1871: a variable and a bracket list in a fake, with output into the folder
     `cat > ${own}/bin/ps <<'EOF'\n#!/bin/sh\nfor a in "$@"; do [ "$a" = "-o" ] && echo "Sat Jan  1 00:00:00 2000"; done\nEOF\nchmod 755 ${own}/bin/ps && node ${own}/proof.mjs > ${own}/out.txt 2>&1 || echo FAIL`,
     // R1859: a scratch home, config and PATH for the run's own script
@@ -3547,6 +3594,8 @@ test("T529: a reviewer writes a fake with \"$*\", a heredoc with braces, and run
     `printf '%s\\n' 'kill -9 1' 'sage.mjs verdict T1' > ${own}/more.txt`,
   ];
   for (const command of allowed) assert.equal(denied(s.send(bash(command, FEATURE, reviewer))), undefined, command);
+  // R1873's node -e is code that can write, so a read-only role runs it from a probe file in scratch instead (T933).
+  assert.match(denied(s.send(bash(`node -e 'const {spawnSync}=require("node:child_process"); console.log(spawnSync("${own}/bin/gh", ["x"]).status)'`, FEATURE, reviewer))) ?? "", /the code-reviewer agent changes no files, also not from the shell/);
   for (const role of ["sage:security-reviewer", "sage:ux-reviewer", "sage:qa"]) {
     const n = role.length; // a distinct run for each role
     const other = scratchSession(), who = other.agent(`a${n}`, role, `Run R${n} · task T521`);
@@ -3559,6 +3608,8 @@ test("T529: a reviewer writes a fake with \"$*\", a heredoc with braces, and run
 // T815: the scratch rule (T529) is gone: scratch work passes by the usual rules, and they still hold in the folder.
 test("T529, T815: in its scratch subfolder a reviewer still writes no logbook file, runs no write of the state tool and no process program", () => {
   const { s, own, reviewer } = scratchSession();
+  // The reviewer made its folder in an earlier call: the hook follows a cd only into a folder that exists (T933).
+  mkdirSync(own, { recursive: true });
   const fake = (to) => `cat > ${to} <<'EOF'\necho "$*" {a}\nEOF`;
   assert.match(denied(s.send(bash(fake(join(s.vars.SAGE_HOME, "p", "tasks.tsv")), FEATURE, reviewer))) ?? "", LOGBOOK_SHELL, "the logbook");
   assert.equal(denied(s.send(bash(`${fake(join(own, "x.sh"))}\ncd ${own} && echo "$*" > y.sh; echo $?`, FEATURE, reviewer))), undefined, "work in the folder");
