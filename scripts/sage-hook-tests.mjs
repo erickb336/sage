@@ -2401,7 +2401,7 @@ test("T932: the evidence review that the sage starts keeps its report for its ru
   investigation(s);
   s.send(prompt("sage mode"));
   s.sage("run", "add", "T1", "--role", "investigate");
-  s.sage("run", "done", "R1", "--status", "done");
+  s.sage("run", "done", "R1", "--status", "done", "--tokens", "1");
   s.sage("task", "T1", "set", "state=reviewing");
   const run = s.sage("run", "add", "T1", "--role", "evidence-review").split(" ")[0];
   assert.equal(run, "R2");
@@ -6704,7 +6704,7 @@ test("T482 F2, T483, T815: the state tool refuses a review or QA verdict that no
   assert.match(chief("findings", findings) ?? "", /this lead's code-reviewer helpers reported medium or high findings on T1/, "the lead records its findings first (R1816-2)");
   assert.equal(chief("qa-pass", "R4"), undefined, "R4's kept PASS backs qa-pass");
   assert.equal(chief("checks-pass"), undefined, "the checks verdict stays the sage's");
-  s.sage("run", "done", "R1", "--status", "blocked");
+  s.sage("run", "done", "R1", "--status", "blocked", "--tokens", "1");
   assert.equal(chief("findings", findings), undefined, "with no running lead run, no gap rule");
   assert.match(toolVerdict(s, "review-clean", findings) ?? "", /so it backs findings, or review-clean after each one is dismissed with a reason, moved or closed/, "the report decides (R1795-3)");
 });
@@ -6894,7 +6894,7 @@ test("T483 R1956-1, T815: the plain form of the sage's verdict meets the lead's 
 
 test("T483 C-T483-1: a review that the sage starts itself keeps its report by the brief's run line, and backs the sage's verdict; with no run line, none is kept", () => {
   const s = leadSession();
-  s.sage("run", "done", "R1", "--status", "blocked"); // no running lead run: the sage runs the review itself
+  s.sage("run", "done", "R1", "--status", "blocked", "--tokens", "1"); // no running lead run: the sage runs the review itself
   const review = (id, line) => {
     const run = s.sage("run", "add", "T1", "--role", "code-reviewer").split(" ")[0];
     assert.equal(denied(s.send(spawnAgent("sage:code-reviewer", line ? `${line(run)}\n${BRIEF}` : BRIEF, `tu-${id}`, { cwd: s.dir }))), undefined, "the spawn");
@@ -6913,7 +6913,7 @@ test("T483 C-T483-1: a review that the sage starts itself keeps its report by th
 
 test("T483 full report: Claude's second incomplete stop keeps the text but backs no verdict", () => {
   const s = leadSession({ SAGE_TEST_PIDS: "{}" });
-  s.sage("run", "done", "R1", "--status", "blocked");
+  s.sage("run", "done", "R1", "--status", "blocked", "--tokens", "1");
   for (const field of REPORT_FIELDS) {
     const run = s.sage("run", "add", "T1", "--role", "code-reviewer").split(" ")[0];
     const id = `incomplete-${run}`, message = cleanOf("code-reviewer").split("\n").filter(line => !line.startsWith(`${field} `)).join("\n");
@@ -6954,7 +6954,7 @@ test("T483 R1932-1 R1933-1: the sage's own review keeps a report only for its ow
   assert.equal(kept(leads), false, "a run that the lead added");
   done(leads);
   assert.match(toolVerdict(s, "review-clean", leads) ?? "", new RegExp(`${leads} has no kept report: sage keeps a helper's report at its stop only when it knows the helper's run, by the first line of its brief, "Run ${leads} · task T1"`), "so the sage's verdict on it is refused (R1965-1)");
-  s.sage("run", "done", "R1", "--status", "blocked"); // the sage runs the reviews itself from here
+  s.sage("run", "done", "R1", "--status", "blocked", "--tokens", "1"); // the sage runs the reviews itself from here
   // A first line with a suffix still names the run.
   const suffix = add("code-reviewer");
   stop(spawn("code-reviewer", `Run ${suffix} · task T1 (PR 5, P0): review the head`), "code-reviewer");
