@@ -1,11 +1,11 @@
 import "./test-env.mjs";
 import assert from "node:assert/strict";
-import { execFileSync, spawn } from "node:child_process";
+import { execFileSync, spawn, spawnSync } from "node:child_process";
 import { chmodSync, cpSync, existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, realpathSync, renameSync, rmSync, statSync, symlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { basename, dirname, join, resolve } from "node:path";
 import { test } from "node:test";
-import { fileURLToPath } from "node:url";
+import { fileURLToPath, pathToFileURL } from "node:url";
 import { actorOptions, locate as claudeLocate, sage as claudeRun, sageRoot as claudeRootOf } from "../plugins/sage/skills/sage/sage.mjs";
 import { tool } from "../plugins/sage-codex/skills/sage/sage.mjs";
 import { buildBoardModel, createStateTool, readBoardSources, renderBoardHtml, renderBoardText, renderTaskText, sharedRoot } from "../packages/sage-core/index.mjs";
@@ -90,6 +90,23 @@ test("each default root reads the HOME of the env that the caller gives, and the
   assert.equal(modeDirectory({ HOME: "/h", CODEX_HOME: "/c" }), "/c/sage/.hooks/codex");
   assert.equal(claudeRootOf({ HOME: "/h", CLAUDE_CONFIG_DIR: "/c", SAGE_HOME: "/s" }), "/s");
   assert.equal(tool.sageRoot({ HOME: "/h", CODEX_HOME: "/c", SAGE_HOME: "/s" }), "/s");
+});
+
+test("T944: in a test, sage code that falls back to the home folder of the test's start throws, and the file fails also when sage code catches it", (t) => {
+  const home = realpathSync(mkdtempSync(join(tmpdir(), "sage-guard-home-")));
+  t.after(() => rmSync(home, { recursive: true, force: true }));
+  const href = (path) => JSON.stringify(pathToFileURL(join(REPO, path)).href);
+  // A test file of its own: it calls the shared root as the provider test called config({}), and catches the throw.
+  const run = (env) => spawnSync(process.execPath, ["--input-type=module", "-e", `import ${href("scripts/test-env.mjs")};
+import { sharedRoot } from ${href("packages/sage-core/shared-root.mjs")};
+try { console.log(sharedRoot(${env})); } catch (e) { console.log(e.message); }`], { encoding: "utf8", env: { ...process.env, HOME: home } });
+  const old = run("{}");
+  assert.equal(old.status, 1);
+  assert.match(old.stdout, /^a test reached the real home folder: os\.homedir\(\) at sharedRoot \(file:.*shared-root\.mjs:\d+:\d+\)\. Give that env a scratch HOME\.\n$/);
+  assert.match(old.stderr, /^A test reached the real home folder through os\.homedir\(\) \(T944\)\. Give each env a scratch HOME:\nat sharedRoot /);
+  const fixed = run('{ HOME: "/scratch/home" }');
+  assert.equal(fixed.status, 0, fixed.stderr);
+  assert.equal(fixed.stdout, "/scratch/home/.sage\n");
 });
 
 test("a run with SAGE_HOME removed and HOME in scratch writes under that HOME, and the old fault lands in a scratch decoy, never the real root", (t) => {

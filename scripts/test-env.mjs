@@ -18,3 +18,23 @@ process.env.GIT_CONFIG_NOSYSTEM = "1";
 
 // State-tool fixtures use a made-up stable identity; no test reads the real machine identity.
 process.env.SAGE_TEST_MACHINE_ID = "test-machine";
+
+// T944: every sage root falls back to os.homedir() when the env that it gets has no HOME, so a call such as config({})
+// reached the real ~/.sage. In a test, os.homedir() never gives the home that the test started with to sage code or a
+// test: it throws, and the file fails at exit also when sage code caught the throw. A test that sets process.env.HOME
+// to a fixture gets the fixture, and a package under node_modules (Playwright's browser cache) still gets the real home.
+import os from "node:os";
+import { syncBuiltinESMExports } from "node:module";
+const homedir = os.homedir, startHome = homedir(), reached = [];
+os.homedir = () => {
+  const home = homedir(), caller = (new Error().stack.split("\n")[2] ?? "").trim();
+  if (home !== startHome || caller.includes("/node_modules/")) return home;
+  reached.push(caller);
+  throw new Error(`a test reached the real home folder: os.homedir() ${caller}. Give that env a scratch HOME.`);
+};
+syncBuiltinESMExports();
+process.on("exit", () => {
+  if (!reached.length) return;
+  console.error(`A test reached the real home folder through os.homedir() (T944). Give each env a scratch HOME:\n${reached.join("\n")}`);
+  process.exitCode = 1;
+});

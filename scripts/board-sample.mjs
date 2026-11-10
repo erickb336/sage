@@ -12,7 +12,7 @@
 // hook's agent slots and helper notes for the Agents page (T308).
 import { createHash } from "node:crypto";
 import { existsSync, lstatSync, mkdirSync, readFileSync, readdirSync, realpathSync, utimesSync, writeFileSync } from "node:fs";
-import { homedir, userInfo } from "node:os";
+import { userInfo } from "node:os";
 import { basename, dirname, isAbsolute, join, relative, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 
@@ -33,7 +33,8 @@ const sha = seed => createHash("sha1").update(String(seed)).digest("hex");
  * home is both $HOME and the account's home, so a changed HOME does not hide the real one.
  */
 const realRoots = env => {
-  const homes = [env.HOME, homedir(), userInfo().homedir].filter(Boolean);
+  // The two homes that os.homedir() reads: in a test, os.homedir() throws for the home of the start (T944, test-env.mjs).
+  const homes = [env.HOME, process.env.HOME, userInfo().homedir].filter(Boolean);
   return [env.SAGE_HOME, env.CLAUDE_CONFIG_DIR && join(env.CLAUDE_CONFIG_DIR, "sage"), env.CODEX_HOME,
     ...homes.flatMap(home => [join(home, ".claude", "sage"), join(home, ".codex"), join(home, ".config", "sage-board")])]
     .filter(Boolean).map(root => resolve(root)).flatMap(root => { try { return [root, realpathSync(root)]; } catch { return [root]; } });
