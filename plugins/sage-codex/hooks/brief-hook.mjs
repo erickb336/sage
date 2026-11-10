@@ -100,8 +100,13 @@ export function briefHook(input, env = process.env) {
   return unread();
 }
 
+/** The hook's answer to one parsed event (undefined for an input that is not JSON), also when the hook fails. */
+export function briefAnswer(input) {
+  try { return briefHook(input); } catch { return unread(); }
+}
+
 if (process.argv[1] && realpathSync(process.argv[1]) === realpathSync(fileURLToPath(import.meta.url))) {
-  let output;
-  try { output = briefHook(JSON.parse(readFileSync(0, "utf8"))); } catch { output = unread(); }
-  process.stdout.write(JSON.stringify(output));
+  let input;
+  try { input = JSON.parse(readFileSync(0, "utf8")); } catch { /* unread */ }
+  process.stdout.write(JSON.stringify(briefAnswer(input)));
 }

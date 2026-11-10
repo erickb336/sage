@@ -9,6 +9,7 @@ import { BRIEF_FIELDS as CORE_BRIEF_FIELDS, FINDING_FORM, ROLE_PRINCIPLES } from
 import { TASK_KINDS } from "../packages/sage-core/logbook-fields.mjs";
 import { BRIEF_FIELDS, REPORT_FIELDS } from "../plugins/sage/hooks/sage-hook.mjs";
 import { handle as codexModeHook } from "../plugins/sage-codex/hooks/sage-codex-hook.mjs";
+import { EVENTS as CODEX_EVENTS } from "../plugins/sage-codex/hooks/entries.mjs";
 import { withoutPrinciplesTable } from "./principles-table.mjs";
 import { PRINCIPLES_PAGE } from "./dictionary.mjs";
 import { files as graphics } from "./graphics.mjs";
@@ -211,12 +212,10 @@ if (Buffer.byteLength(core) > 8 * 1024) problems.push(`instructions/core.md: ${B
 // T494: the chief in Codex must get every rule. Codex counts hook context at 4 bytes a token
 // (codex-rs utils/string/src/truncate.rs) and cuts a text above the hook's limit (hooks/src/output_spill.rs).
 try {
-  const codexHooks = JSON.parse(readFileSync(join(ROOT, "plugins/sage-codex/hooks/hooks.json"), "utf8")).hooks;
-  const tokens = Math.min(...["UserPromptSubmit", "SessionStart"].flatMap((e) => codexHooks[e].flatMap((g) => g.hooks))
-    .filter((h) => h.command.endsWith('/hooks/sage-codex-hook.mjs"')).map((h) => h.additionalContextLimit ?? 2500));
+  const tokens = Math.min(...["UserPromptSubmit", "SessionStart"].map((e) => CODEX_EVENTS[e].additionalContextLimit ?? 2500));
   const limit = tokens * 4;
   const role = Buffer.byteLength(codexModeHook({ hook_event_name: "UserPromptSubmit", session_id: "check", prompt: "sage mode" }, {}).hookSpecificOutput.additionalContext);
-  if (role > limit) problems.push(`Codex chief role: the sage hook gives ${role} bytes, ${role - limit} bytes over its limit of ${limit} bytes (0 bytes left; additionalContextLimit ${tokens} tokens at 4 bytes each, in packages/sage-codex/hooks/hooks.json), so Codex would cut the rules. Shorten the chief text (packages/sage-core/roles/chief-of-staff.md) or raise the limit`);
+  if (role > limit) problems.push(`Codex chief role: the sage hook gives ${role} bytes, ${role - limit} bytes over its limit of ${limit} bytes (0 bytes left; additionalContextLimit ${tokens} tokens at 4 bytes each, in packages/sage-codex/hooks/entries.mjs), so Codex would cut the rules. Shorten the chief text (packages/sage-core/roles/chief-of-staff.md) or raise the limit`);
 } catch (e) { problems.push(`Codex chief role: ${e.message} (packages/sage-core/roles/chief-of-staff.md)`); }
 // T934: the Claude chief's and lead's start texts stay under their limits, and each reference that they name exists
 // and has its trigger. node scripts/start-text.mjs prints the bytes of each part.

@@ -1,7 +1,7 @@
 import "./test-env.mjs"; // first: no variable of the developer's shell changes a result
 import assert from "node:assert/strict";
 import { spawnSync } from "node:child_process";
-import { appendFileSync, chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, truncateSync, writeFileSync } from "node:fs";
+import { appendFileSync, chmodSync, cpSync, existsSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, truncateSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { test } from "node:test";
@@ -16,6 +16,7 @@ const { exactPhrase, switchModes } = await import(join(PLUGIN, "core/index.mjs")
 const { markFile } = await import(join(PLUGIN, "hooks/start-mark.mjs"));
 const { modeDirectory } = await import(join(PLUGIN, "hooks/sage-codex-hook.mjs"));
 const { stateKey } = await import(join(PLUGIN, "hooks/hook-state.mjs"));
+const { install: installHooks } = await import(join(PLUGIN, "hooks/entries.mjs"));
 const RECORDS = JSON.parse(readFileSync(fileURLToPath(new URL("./fixtures/codex-owner-records.json", import.meta.url)), "utf8"));
 
 const SCRATCH = realpathSync(mkdtempSync(join(tmpdir(), "sage-autopilot-record-")));
@@ -467,7 +468,8 @@ test("turnAborted finds Codex's turn_aborted event of that turn only (Esc)", () 
   assert.equal(turnAborted(read(RECORDS["exec-on"]), RECORDS["exec-on"][1].payload.turn_id), false);
 });
 
-// Start marks: the SessionStart hooks of the built plugin, run as Codex runs them (one node process, JSON on stdin).
+// Start marks: the SessionStart hooks of the built plugin, run as Codex runs them: through sage's entry, the launcher in
+// the Codex home (T957), one node process, JSON on stdin.
 const SESSION = "019a0000-0000-7000-8000-00000000c0de";
 /** The record of the session's root thread: a proof record whose session_meta names the session, with sage mode and an on. */
 const ROOT_RECORD = withMode([{ ...META, payload: { ...META.payload, id: SESSION } }, ...RECORDS["exec-on"].slice(1)]);
@@ -477,6 +479,8 @@ function hookHome() {
   const env = { PATH: process.env.PATH, HOME: home, CODEX_HOME: join(home, "codex"), SAGE_HOME: join(home, "sage"), SAGE_SHARED_HOME: process.env.SAGE_SHARED_HOME };
   const transcript = join(home, `rollout-2026-11-07T09-00-00-${SESSION}.jsonl`);
   writeFileSync(transcript, ROOT_RECORD.map((line) => JSON.stringify(line)).join("\n") + "\n");
+  cpSync(PLUGIN, join(env.CODEX_HOME, "plugins/cache/sage/sage/0.1.0"), { recursive: true });
+  installHooks(env.CODEX_HOME);
   return { env, transcript, dir: modeDirectory(env) };
 }
 /**
@@ -486,20 +490,19 @@ function hookHome() {
 const RECORD_LINE = (detail) => `sage: the sage hook could not read Codex's record of this session, so autopilot merges nothing in this session for now. Start or resume the session again${detail ? ` (${detail})` : ""}, then send "autopilot on" again.`;
 const FOLDER_LINE = (folder, code) => `sage: the sage hook could not save its note of this session start, so autopilot merges nothing in this session for now. Check that sage can write to the folder ${folder} (${code}), then start or resume the session again, then send "autopilot on" again.`;
 const limits = (output) => (output?.systemMessage ?? "").split("\n").filter((line) => /note of this session start|record of this session/.test(line));
-/** Run one built hook on a SessionStart event of the session; its output object, or undefined. */
-function start(h, script, source, extra = {}) {
-  const r = spawnSync(process.execPath, [join(PLUGIN, "hooks", script)], { env: h.env, encoding: "utf8",
+/** Run sage's SessionStart entry on an event of the session: the start status for startup, resume and clear, the sage hook for fork and compact. Its output object, or undefined. */
+function start(h, source, extra = {}) {
+  const r = spawnSync(process.execPath, [join(h.env.CODEX_HOME, "sage-hooks/launch.mjs"), "SessionStart"], { env: h.env, encoding: "utf8",
     input: JSON.stringify({ hook_event_name: "SessionStart", session_id: SESSION, cwd: h.env.HOME, transcript_path: h.transcript, source, ...extra }) });
   assert.equal(r.status, 0, r.stderr);
   return r.stdout ? JSON.parse(r.stdout) : undefined;
 }
 const markOf = (h) => (existsSync(markFile(h.dir, SESSION)) ? JSON.parse(readFileSync(markFile(h.dir, SESSION), "utf8")) : undefined);
-const HOOK_OF = { startup: "session-start-hook.mjs", resume: "session-start-hook.mjs", clear: "session-start-hook.mjs", fork: "sage-codex-hook.mjs", compact: "sage-codex-hook.mjs" };
 
 test("startup, resume and clear (session-start-hook) and fork (sage-codex-hook) each save a start mark", () => {
   for (const source of ["startup", "resume", "clear", "fork"]) {
     const h = hookHome();
-    const output = start(h, HOOK_OF[source], source);
+    const output = start(h, source);
     assert.deepEqual(limits(output), [], source);
     // pid: the hook's parent, which is Codex when Codex runs the hook (here, this test process).
     assert.deepEqual(markOf(h), { session: SESSION, source, lines: ROOT_RECORD.length, pid: process.pid }, source);
@@ -515,28 +518,28 @@ test("T948: a project with start=sage-mode starts each new session in sage mode:
   const status = (output) => output.hookSpecificOutput.additionalContext.split("\n")[1];
   cli("init");
   // The default: a normal start, as before.
-  assert.equal(status(start(h, HOOK_OF.startup, "startup", { cwd: project })), 'To start sage mode, the user sends this message alone: sage mode');
+  assert.equal(status(start(h, "startup", { cwd: project })), 'To start sage mode, the user sends this message alone: sage mode');
   assert.equal(markOf(h).sage, undefined);
   assert.equal(cli("config", "start=sage-mode"), "name= archived=no start=sage-mode");
   for (const source of ["startup", "clear"]) {
     rmSync(join(h.dir, `${stateKey({ session_id: SESSION })}.json`), { force: true }); // a new session has no mode file yet
-    assert.equal(status(start(h, HOOK_OF[source], source, { cwd: project })), "sage mode is on in this session, because this project starts each session in sage mode.", source);
+    assert.equal(status(start(h, source, { cwd: project })), "sage mode is on in this session, because this project starts each session in sage mode.", source);
     assert.equal(modeOf().sage, true, source);
     assert.equal(markOf(h).sage, true, `${source}: the mark keeps the start in sage mode`);
   }
-  start(h, HOOK_OF.resume, "resume", { cwd: project });
+  start(h, "resume", { cwd: project });
   assert.equal(markOf(h).sage, true, "a resume keeps the start of its record");
   // The chief's role comes at the first prompt; the off phrase turns sage mode off, and a later start does not undo it.
   const say = (text) => { const r = spawnSync(process.execPath, [join(PLUGIN, "hooks/sage-codex-hook.mjs")], { env: h.env, encoding: "utf8", input: JSON.stringify({ hook_event_name: "UserPromptSubmit", session_id: SESSION, cwd: project, transcript_path: h.transcript, turn_id: `t-${text}`, prompt: text }) }); assert.equal(r.status, 0, r.stderr); return r.stdout ? JSON.parse(r.stdout).hookSpecificOutput?.additionalContext ?? "" : ""; };
   assert.match(say("what is open?"), /sage mode is on\. You are the user's chief of staff/);
   assert.match(say("sage mode off"), /sage mode is off/);
   assert.equal(modeOf().sage, false);
-  start(h, HOOK_OF.clear, "clear", { cwd: project });
+  start(h, "clear", { cwd: project });
   assert.equal(modeOf().sage, false, "a start in the same session keeps the owner's off");
   // A child's start, and a fork, never turn sage mode on by the setting.
   const child = hookHome();
-  start(child, HOOK_OF.startup, "startup", { cwd: project, agent_id: "agent-1" });
-  start(child, HOOK_OF.fork, "fork", { cwd: project });
+  start(child, "startup", { cwd: project, agent_id: "agent-1" });
+  start(child, "fork", { cwd: project });
   assert.equal(existsSync(join(child.dir, `${stateKey({ session_id: SESSION })}.json`)) && JSON.parse(readFileSync(join(child.dir, `${stateKey({ session_id: SESSION })}.json`), "utf8")).sage === true, false);
 });
 
@@ -551,17 +554,17 @@ test("T948: the owner record reader replays from sage mode on when the mark says
 
 test("a later start replaces the mark; compact saves none and keeps the earlier one; a child's start saves none", () => {
   const h = hookHome();
-  start(h, HOOK_OF.compact, "compact");
+  start(h, "compact");
   assert.equal(markOf(h), undefined, "compact alone saves none");
-  start(h, HOOK_OF.startup, "startup");
+  start(h, "startup");
   appendFileSync(h.transcript, `${JSON.stringify(RECORDS["exec-on"][2])}\n`);
-  start(h, HOOK_OF.compact, "compact");
+  start(h, "compact");
   assert.deepEqual(markOf(h), { session: SESSION, source: "startup", lines: ROOT_RECORD.length, pid: process.pid });
-  start(h, HOOK_OF.resume, "resume");
+  start(h, "resume");
   assert.deepEqual(markOf(h), { session: SESSION, source: "resume", lines: ROOT_RECORD.length + 1, pid: process.pid });
   const child = hookHome();
-  start(child, HOOK_OF.startup, "startup", { agent_id: "agent-1" });
-  start(child, HOOK_OF.fork, "fork", { agent_id: "agent-1" });
+  start(child, "startup", { agent_id: "agent-1" });
+  start(child, "fork", { agent_id: "agent-1" });
   assert.equal(markOf(child), undefined);
 });
 
@@ -580,11 +583,11 @@ test("a start whose record is another thread's saves no mark and keeps the root 
   for (const [name, fields] of Object.entries(threads)) {
     for (const source of ["startup", "resume", "clear", "fork"]) {
       const h = hookHome();
-      start(h, HOOK_OF.resume, "resume");
+      start(h, "resume");
       const root = markOf(h);
       assert.equal(root.lines, ROOT_RECORD.length);
       const childRecord = recordFile([{ ...META, payload: { ...META.payload, ...fields } }]);
-      const output = start(h, HOOK_OF[source], source, { transcript_path: childRecord });
+      const output = start(h, source, { transcript_path: childRecord });
       assert.deepEqual(markOf(h), root, `${name}, ${source}: the root thread's mark stays`);
       assert.deepEqual(limits(output), [], `${name}, ${source}: no limit line`);
       // The reader with the kept mark: the on of the earlier start does not count. With the child's line count it would.
@@ -601,10 +604,10 @@ test("a start of the root thread's new record before Codex writes it marks line 
   for (const source of ["startup", "clear", "fork"]) {
     const h = hookHome();
     rmSync(h.transcript);
-    assert.deepEqual(limits(start(h, HOOK_OF[source], source)), [], source);
+    assert.deepEqual(limits(start(h, source)), [], source);
     assert.equal(markOf(h).lines, 0, source);
     writeFileSync(h.transcript, `${JSON.stringify(ROOT_RECORD[0])}\n{"type":"event_m`);
-    start(h, HOOK_OF[source], source);
+    start(h, source);
     assert.equal(markOf(h).lines, 2, `${source}: a partial last line counts as a line`);
   }
 });
@@ -617,11 +620,11 @@ test("F-T663-19, F-T663-25: another thread's start before its record exists, or 
   for (const source of ["startup", "clear", "fork"]) {
     for (const [name, path] of [["a record not written yet", join(SCRATCH, "rollout-2026-11-07T09-00-01-019a0000-0000-7000-8000-0000000c41d0.jsonl")], ["no record path", undefined], ["an empty path", ""]]) {
       const h = hookHome();
-      start(h, HOOK_OF.resume, "resume");
+      start(h, "resume");
       const root = markOf(h);
       assert.equal(root.lines, ROOT_RECORD.length);
       for (let i = 0; i < 2; i++) {
-        assert.deepEqual(limits(start(h, HOOK_OF[source], source, { transcript_path: path })), [], `${source}, ${name}: no limit line`);
+        assert.deepEqual(limits(start(h, source, { transcript_path: path })), [], `${source}, ${name}: no limit line`);
         assert.deepEqual(markOf(h), root, `${source}, ${name}: the root thread's mark stays (start ${i + 1})`);
       }
       assert.deepEqual(sw(readRecord(h.transcript), markOf(h)), NONE, `${source}, ${name}: the on from before the resume does not count`);
@@ -629,12 +632,12 @@ test("F-T663-19, F-T663-25: another thread's start before its record exists, or 
   }
   // And after a resume whose record could not be read: no mark, and another thread's start saves none (R2682 variant 2).
   const h = hookHome();
-  start(h, HOOK_OF.resume, "resume");
+  start(h, "resume");
   chmodSync(h.transcript, 0o000);
-  try { assert.deepEqual(limits(start(h, HOOK_OF.resume, "resume")), [RECORD_LINE("EACCES")]); } finally { chmodSync(h.transcript, 0o600); }
+  try { assert.deepEqual(limits(start(h, "resume")), [RECORD_LINE("EACCES")]); } finally { chmodSync(h.transcript, 0o600); }
   assert.equal(markOf(h), undefined);
-  start(h, HOOK_OF.startup, "startup", { transcript_path: join(SCRATCH, "rollout-2026-11-07T09-00-02-019a0000-0000-7000-8000-0000000c41d1.jsonl") });
-  start(h, HOOK_OF.clear, "clear", { transcript_path: undefined });
+  start(h, "startup", { transcript_path: join(SCRATCH, "rollout-2026-11-07T09-00-02-019a0000-0000-7000-8000-0000000c41d1.jsonl") });
+  start(h, "clear", { transcript_path: undefined });
   assert.equal(markOf(h), undefined, "no mark: the reader refuses until the session starts again");
 });
 
@@ -642,14 +645,14 @@ test("a resume whose record cannot be counted saves no mark, removes the earlier
   // A resume continues a record that holds the earlier starts: line 0 would let an on from before the resume count.
   for (const [name, path, code] of [["a record that is not found", join(SCRATCH, "missing.jsonl"), "ENOENT"], ["no record path", undefined], ["an empty path", ""]]) {
     const h = hookHome();
-    start(h, HOOK_OF.startup, "startup");
+    start(h, "startup");
     assert.ok(markOf(h), name);
-    const output = start(h, HOOK_OF.resume, "resume", { transcript_path: path });
+    const output = start(h, "resume", { transcript_path: path });
     assert.deepEqual(limits(output), [RECORD_LINE(code)], name);
     assert.equal(output.hookSpecificOutput.hookEventName, "SessionStart", `${name}: the event's own answer stays`);
     assert.equal(markOf(h), undefined, `${name}: no mark, so the reader refuses`);
     const fresh = hookHome();
-    assert.deepEqual(limits(start(fresh, HOOK_OF.resume, "resume", { transcript_path: path })), [RECORD_LINE(code)], `${name}, no earlier mark`);
+    assert.deepEqual(limits(start(fresh, "resume", { transcript_path: path })), [RECORD_LINE(code)], `${name}, no earlier mark`);
     assert.equal(markOf(fresh), undefined, name);
   }
 });
@@ -658,11 +661,11 @@ test("a failed mark save gives the user a plain limit line with its next step, n
   for (const sentence of [...RECORD_LINE("EACCES").split(/(?<=\.) /), ...FOLDER_LINE("X", "EACCES").split(/(?<=\.) /)]) assert.ok(sentence.split(" ").length <= 25, sentence);
   for (const source of ["resume", "fork"]) {
     const h = hookHome();
-    start(h, HOOK_OF[source], source);
+    start(h, source);
     assert.ok(markOf(h), source);
     chmodSync(h.transcript, 0o000); // the record cannot be read, so the hook cannot count its lines
     try {
-      const output = start(h, HOOK_OF[source], source);
+      const output = start(h, source);
       assert.deepEqual(limits(output), [RECORD_LINE("EACCES")], source);
       assert.equal(output.hookSpecificOutput.hookEventName, "SessionStart", "the event's own answer stays");
       assert.equal(markOf(h), undefined, `${source}: no stale mark stays`);
@@ -670,14 +673,14 @@ test("a failed mark save gives the user a plain limit line with its next step, n
     // F-T663-16: the line names the folder that cannot change, here the marks folder.
     chmodSync(join(h.dir, "marks"), 0o500);
     try {
-      assert.deepEqual(limits(start(h, HOOK_OF[source], source)), [FOLDER_LINE(join(h.dir, "marks"), "EACCES")], source);
+      assert.deepEqual(limits(start(h, source)), [FOLDER_LINE(join(h.dir, "marks"), "EACCES")], source);
     } finally { chmodSync(join(h.dir, "marks"), 0o700); }
     // And here the mode folder, which sage cannot make.
     const blocked = hookHome();
     mkdirSync(blocked.env.SAGE_HOME);
     mkdirSync(dirname(blocked.dir), { mode: 0o500 });
     try {
-      assert.ok(limits(start(blocked, HOOK_OF[source], source)).includes(FOLDER_LINE(blocked.dir, "EACCES")), source);
+      assert.ok(limits(start(blocked, source)).includes(FOLDER_LINE(blocked.dir, "EACCES")), source);
       assert.equal(markOf(blocked), undefined);
     } finally { chmodSync(dirname(blocked.dir), 0o700); }
   }
@@ -689,7 +692,7 @@ test("F-T663-20: when the mode folder cannot change and has no marks folder, the
     mkdirSync(h.dir, { recursive: true, mode: 0o700 });
     chmodSync(h.dir, 0o500);
     try {
-      assert.deepEqual(limits(start(h, HOOK_OF[source], source)).filter((line) => line.includes("note of this session start")), [FOLDER_LINE(h.dir, "EACCES")], source);
+      assert.deepEqual(limits(start(h, source)).filter((line) => line.includes("note of this session start")), [FOLDER_LINE(h.dir, "EACCES")], source);
     } finally { chmodSync(h.dir, 0o700); }
     assert.equal(existsSync(join(h.dir, "marks")), false);
   }

@@ -403,12 +403,15 @@ test("T453: SAGE_HOOKS=off switches nothing, and an exact phrase gets one line t
   assert.equal(existsSync(modeFile(s)), false, "the session has no mode file: no mode switched");
 });
 
-test("T453: hooks.json runs the sage hook on UserPromptSubmit and on SessionStart with source compact or fork, with room for the role", () => {
-  const { hooks } = JSON.parse(readFileSync(new URL("../plugins/sage-codex/hooks/hooks.json", import.meta.url), "utf8"));
-  const sage = (groups) => groups.flatMap((g) => g.hooks.filter((h) => h.command.endsWith('/hooks/sage-codex-hook.mjs"')).map((h) => ({ matcher: g.matcher, limit: h.additionalContextLimit })));
-  assert.deepEqual(sage(hooks.UserPromptSubmit), [{ matcher: undefined, limit: 6000 }]);
-  assert.deepEqual(sage(hooks.SessionStart), [{ matcher: "compact|fork", limit: 6000 }]);
-  assert.deepEqual(hooks.SessionStart.map((g) => g.matcher), ["startup|resume|clear", "compact|fork"], "the start status keeps its own group");
+test("T453, T957: the entries run the sage hook on UserPromptSubmit and on SessionStart with source compact or fork, with room for the role", async () => {
+  const { entries } = await import(new URL("../plugins/sage-codex/hooks/entries.mjs", import.meta.url));
+  const { ROUTES } = await import(new URL("../plugins/sage-codex/hooks/dispatch.mjs", import.meta.url));
+  const list = entries("/h");
+  assert.deepEqual([list.UserPromptSubmit.hooks[0].additionalContextLimit, list.SessionStart.hooks[0].additionalContextLimit], [6000, 6000]);
+  // The start status keeps its own route; the sage hook gets compact and fork, which keep sage mode's role.
+  const route = (source) => ROUTES.SessionStart.find(([, pattern]) => pattern.test(source))?.[2].name;
+  assert.deepEqual(["startup", "resume", "clear", "compact", "fork", "other"].map(route), ["startStatus", "startStatus", "startStatus", "mode", "mode", undefined]);
+  assert.equal(ROUTES.UserPromptSubmit[0][2].name, "mode");
 });
 
 function assertMergePolicyMatches(guide, help) {

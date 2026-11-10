@@ -1,15 +1,13 @@
-#!/usr/bin/env node
 // Codex SessionStart hook: one short sage status at the start of a session, for the owner (systemMessage) and the
 // model (additionalContext). Startup and resume turn autopilot off in the mode file before status, as a new start does
 // in Claude; the owner record reader needs a new on after the start mark anyway. Startup, resume and clear save the
-// session's start mark (start-mark.mjs); a failed save is a limit line and never blocks. One script for each event, after
-// oh-my-codex (MIT, github.com/Yeachan-Heo/oh-my-codex). Startup and clear also turn sage mode on when the project's
+// session's start mark (start-mark.mjs); a failed save is a limit line and never blocks. The dispatcher (dispatch.mjs)
+// runs it for the sources startup, resume and clear (T957); the start status follows oh-my-codex (MIT, github.com/Yeachan-Heo/oh-my-codex). Startup and clear also turn sage mode on when the project's
 // logbook has start=sage-mode (core's startsInSageMode, T948), as in Claude; the start mark keeps that start, so that the
 // owner record reader starts its replay with sage mode on.
-import { readFileSync, realpathSync } from "node:fs";
-import { homedir } from "node:os";
+import { readFileSync } from "node:fs";
 import { agentCaps } from "../core/index.mjs";
-import { basename, dirname, join } from "node:path";
+import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { PHRASES, readModeFile, startsInSageMode } from "../core/index.mjs";
 import { privateDirectory, readState, saveState, stateKey } from "./hook-state.mjs";
@@ -17,6 +15,8 @@ import { sessionMeta } from "./report-gate.mjs";
 import { RECORD_RANGE } from "./owner-record.mjs";
 import { modeDirectory, TESTED_CODEX } from "./sage-codex-hook.mjs";
 import { saveStartMark } from "./start-mark.mjs";
+import { hookState, INSTALL } from "./entries.mjs";
+import { LAUNCHER_VERSION, launcherFolder } from "./launch.mjs";
 import { tool } from "../skills/sage/sage.mjs";
 
 const ON_PHRASE = Object.keys(PHRASES).find((phrase) => PHRASES[phrase].sage === true);
@@ -31,32 +31,6 @@ function codexVersion(transcriptPath) {
     const version = sessionMeta(transcriptPath).cli_version;
     return typeof version === "string" && minor(version) ? version : null;
   } catch { return null; }
-}
-
-/**
- * The trust keys of this plugin's hooks, in Codex's form <plugin>@<marketplace>:hooks/hooks.json:<event>:<group>:<handler>.
- * The installed root is <CODEX_HOME>/plugins/cache/<marketplace>/<plugin>/<version>.
- */
-function hookKeys(pluginRoot) {
-  const id = `${basename(dirname(pluginRoot))}@${basename(dirname(dirname(pluginRoot)))}`;
-  const snake = (event) => event.replace(/(?<!^)([A-Z])/g, "_$1").toLowerCase();
-  return Object.entries(readJson(join(pluginRoot, "hooks/hooks.json")).hooks).flatMap(([event, groups]) =>
-    groups.flatMap((group, g) => group.hooks.map((_, h) => `${id}:hooks/hooks.json:${snake(event)}:${g}:${h}`)));
-}
-
-/** How many of the keys have a trust record in the owner's config.toml. Codex itself checks each hash. */
-function trustedCount(keys, codexHome) {
-  let config = "";
-  try { config = readFileSync(join(codexHome, "config.toml"), "utf8"); } catch { /* No config yet. */ }
-  const trusted = new Set();
-  let table = null;
-  for (const line of config.split("\n")) {
-    const header = /^\s*\[hooks\.state\."([^"]+)"\]\s*$/.exec(line);
-    if (header) table = header[1];
-    else if (/^\s*\[/.test(line)) table = null;
-    else if (table && /^\s*trusted_hash\s*=\s*"sha256:/.test(line)) trusted.add(table);
-  }
-  return keys.filter((key) => trusted.has(key)).length;
 }
 
 /** The numbers of a config.toml by their dotted key: plain key = value lines, under [table] headers, and inline tables, also nested ones. */
@@ -155,30 +129,33 @@ function resetAutopilot(input, env) {
 
 /**
  * The hook's output JSON for one SessionStart input, or undefined for any other event. The chief always gets the
- * status. The user gets a warning (a systemMessage) only for a limit: a sage hook without a trust record, or a Codex
- * outside the tested range.
+ * status. The user gets a warning (a systemMessage) only for a limit: a sage entry of hooks.json that is missing or
+ * changed, a sage hook without a trust record, a launcher older than this version's, or a Codex outside the tested
+ * range. codexHome is the launcher's (its real path), and launcherVersion its LAUNCHER_VERSION (T957).
  */
-export function sessionStatus(input, { pluginRoot, codexHome, env = process.env }) {
+export function sessionStatus(input, { pluginRoot, codexHome, launcherVersion, env = process.env }) {
   if (input?.hook_event_name !== "SessionStart") return undefined;
   const resetWarning = resetAutopilot(input, env);
   const start = startMode(input, env);
   const markWarning = ["startup", "resume", "clear"].includes(input.source) ? saveStartMark(modeDirectory(env), input, start.on === true) : undefined;
   const plugin = readJson(join(pluginRoot, ".codex-plugin/plugin.json")).version;
   const version = codexVersion(input.transcript_path);
-  const keys = hookKeys(pluginRoot);
-  const trusted = trustedCount(keys, codexHome);
+  const hooks = hookState(codexHome, env), total = hooks.events.length;
   const [low, high] = TESTED_CODEX.map(minor);
   const at = version && minor(version);
   const inRange = at && (at[0] - low[0] || at[1] - low[1]) >= 0 && (at[0] - high[0] || at[1] - high[1]) <= 0;
   const limits = [resetWarning, start.warning, markWarning].filter(Boolean);
-  if (trusted < keys.length) limits.push(`sage: ${keys.length - trusted} of the ${keys.length} sage hooks ${keys.length - trusted === 1 ? "is" : "are"} not trusted yet, so some sage rules do not run. To trust them, type /hooks in the Codex CLI.`);
+  const stale = hooks.events.filter((e) => e.state !== "ok").length, untrusted = hooks.present - hooks.trusted;
+  if (stale) limits.push(`sage: ${stale} of the ${total} sage hook entries in ${hooks.file} ${stale === 1 ? "is" : "are"} missing or changed, so some sage rules do not run. To fix them, run: ${INSTALL}`);
+  if (untrusted) limits.push(`sage: ${untrusted} of the ${total} sage hooks ${untrusted === 1 ? "has" : "have"} no trust record yet, so ${untrusted === 1 ? "it does" : "they do"} not run. To trust them, type /hooks in the Codex CLI.`);
+  if (!(launcherVersion >= LAUNCHER_VERSION)) limits.push(`sage: the sage hook launcher in ${launcherFolder(codexHome)} is older than this sage version. To update it, run: ${INSTALL}`);
   if (!inRange) limits.push(`sage: ${version ? `sage was not tested with Codex ${version}` : "the hook could not read the Codex version"}, so some sage rules may not run. Autopilot merges in Codex ${RECORD_RANGE}.`);
-  // Codex trusts a plugin hook only when its record matches the hash of the hook and of the plugin's files. Codex
-  // computes both, so the status counts only the records, and says that Codex checks each hash.
+  // Codex trusts a user hook only when its record matches the hash of the entry. Codex computes it, so the status counts
+  // only the records, and says that Codex checks each hash.
   const threads = threadWarning(input, codexHome, env);
   if (threads) limits.push(threads);
   const status = [
-    `sage ${plugin} is installed. Codex ${version ?? "version unknown"}. sage hooks: ${trusted} of ${keys.length} have a trust record (Codex checks each hash).`,
+    `sage ${plugin} is installed. Codex ${version ?? "version unknown"}. sage hooks: ${hooks.trusted} of ${total} have a trust record (Codex checks each hash).`,
     sageOn(input, env) ? `sage mode is on in this session${start.on ? ", because this project starts each session in sage mode" : ""}.` : `To start sage mode, the user sends this message alone: ${ON_PHRASE}`,
     'Autopilot is off at each start of a session. To turn it on, the user sends "autopilot on" alone, while sage mode is on.',
     ...limits,
@@ -186,12 +163,7 @@ export function sessionStatus(input, { pluginRoot, codexHome, env = process.env 
   return { ...(limits.length ? { systemMessage: limits.join("\n") } : {}), hookSpecificOutput: { hookEventName: "SessionStart", additionalContext: status } };
 }
 
-if (process.argv[1] && realpathSync(process.argv[1]) === fileURLToPath(import.meta.url)) {
-  try {
-    const output = sessionStatus(JSON.parse(readFileSync(0, "utf8")), {
-      pluginRoot: join(dirname(fileURLToPath(import.meta.url)), ".."),
-      codexHome: process.env.CODEX_HOME || join(homedir(), ".codex"),
-    });
-    if (output) process.stdout.write(JSON.stringify(output));
-  } catch { /* A status line must not break a coding session. */ }
+/** The start status for the dispatcher (dispatch.mjs): nothing when it fails, because a status line must not break a session. */
+export function startStatus(input, { codexHome, launcherVersion }) {
+  try { return sessionStatus(input, { pluginRoot: join(dirname(fileURLToPath(import.meta.url)), ".."), codexHome, launcherVersion }); } catch { return undefined; }
 }

@@ -7,6 +7,7 @@ import { createStateTool, readModeFile } from "../../core/index.mjs";
 import { modeDirectory, readState, stateKey } from "../../hooks/hook-state.mjs";
 import { claimStep, legacyRoots, replaceStep } from "../../runtime/logbook-env.mjs";
 import { verifyInstall } from "./verify-install.mjs";
+import { hooksCommand } from "../../hooks/entries.mjs";
 
 /** The mode file of the session's root thread. */
 export const modeFile = (session, env) => join(modeDirectory(env), `${stateKey({ session_id: session })}.json`);
@@ -39,5 +40,10 @@ if (entryPath === fileURLToPath(import.meta.url)) {
       console.log(JSON.stringify(result, null, 2));
       process.exitCode = result.result === "match" ? 0 : 1;
     } catch (error) { console.error(`sage: ${error.message}`); process.exitCode = 1; }
+  } else if (process.argv[2] === "hooks") {
+    // sage's entries in the user's Codex hooks.json and the launcher (T957): install, uninstall or status.
+    const { code, text } = hooksCommand(process.argv.slice(3));
+    (code ? console.error : console.log)(text);
+    process.exitCode = code;
   } else tool.runCli();
 }

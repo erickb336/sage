@@ -53,8 +53,8 @@
 //   - The gate's proof: for each sage MCP call that it lets through, the gate saves a proof by the call's id, with the
 //     caller's role and task, and the sage MCP server serves no call without one, so sage does not work while Codex runs
 //     no sage hook. The server applies the caller's rule again (callerRefusal).
-//   - Codex's settings: no thread, in any mode, writes Codex's config file (the hook trust) or this plugin's folder
-//     from the shell.
+//   - Codex's settings: no thread, in any mode, writes Codex's config file (the hook trust), its hooks.json and the
+//     launcher's folder (sage's entries, T957) or this plugin's folder from the shell.
 //   - Code mode: Codex runs no hook for its exec tool, but each tool call inside the code comes here with its own name,
 //     as a direct call does (T541). The js tool of Codex's REPL servers (mcp__node_repl__js, mcp__cua_repl__js, by the
 //     MCP hook name of Codex 0.164.0 handlers/mcp.rs:139-161) runs
@@ -91,6 +91,8 @@ import { agentPathOf, sageName, sessionMeta, TASK_NAME } from "./report-gate.mjs
 import { modeDirectory } from "./sage-codex-hook.mjs";
 import { autopilotSwitch, callInRecord, NEW_ON, readRecord, RECORD_RANGE, RECORD_VERSION } from "./owner-record.mjs";
 import { markFile } from "./start-mark.mjs";
+import { launcherFolder } from "./launch.mjs";
+import { INSTALL } from "./entries.mjs";
 import { TEMP } from "sage-core";
 import { mergeCommand, permitFile, permitFolder } from "../skills/sage/merge.mjs";
 
@@ -103,7 +105,7 @@ const pushes = createPushPolicy();
 
 const UNREADABLE = "sage: the hook could not read this tool call, so it refuses it. Codex may have changed its hook input: update the sage plugin, or tell the user.";
 const CODEX_FOLDER = "sage: no agent changes files under a .codex folder, because Codex reads its project settings there. Ask the user to make this change.";
-const CODEX_SETTINGS = "sage: no agent writes Codex's config file or the sage plugin's folder from the shell, because the trust of sage's hooks is there. Ask the user to make this change.";
+const CODEX_SETTINGS = "sage: no agent writes Codex's config file, its hooks.json, sage's hook launcher (sage-hooks) or the sage plugin's folder from the shell, because sage's hooks and their trust are there. Ask the user to make this change.";
 const CHIEF = 'sage: sage mode is on, so the chief does not change files. Brief an implementer to make this change. The user ends sage mode with the message "sage mode off", alone.';
 const CHIEF_SHELL = 'sage: sage mode is on, so the chief does not change files, also not from the shell: this command has a write form (a redirection into a file, tee, cp, mv, rm, sed -i, or code in node -e). Brief an implementer to make this change. To keep output, redirect it into a scratch folder in the temp folder, outside the project, with a literal path (for example > /tmp/notes/out.txt). git, gh, the sage tools and reads run as before. The user ends sage mode with the message "sage mode off", alone.';
 const OWNER_MERGE = "sage: in Codex, only sage's merge command merges, on autopilot, as the chief's instructions say. Without autopilot, the owner merges the pull request in GitHub";
@@ -351,10 +353,12 @@ const asWord = (path) => `: '${path.replaceAll("'", "'\\''")}'`;
 /** A patch's path as a shell write of that path, for core's logbookWrite. */
 const asWrite = (path) => `: > '${path.replaceAll("'", "'\\''")}'`;
 /**
- * Whether a shell command names Codex's config file, which keeps the trust records of the hooks, or the folder of this
- * installed plugin, whose hooks are the gate (R1916-2): the same literal forms as the sage folder.
+ * Whether a shell command names Codex's config file, which keeps the trust records of the hooks, its hooks.json and the
+ * launcher's folder, which hold sage's entries (T957), or the folder of this installed plugin, whose hooks are the gate
+ * (R1916-2): the same literal forms as the sage folder.
  */
-export const namesCodexSettings = (command, env = process.env, cwd = "/") => names(command, env, cwd, [join(codexHome(env), "config.toml"), ROOT], []);
+export const namesCodexSettings = (command, env = process.env, cwd = "/") =>
+  names(command, env, cwd, [join(codexHome(env), "config.toml"), join(codexHome(env), "hooks.json"), launcherFolder(codexHome(env)), ROOT], []);
 
 /**
  * Whether a shell command names one of these paths, or matches one of these patterns: in its text, or in a word as the
@@ -470,8 +474,7 @@ export function stateToolWrites(command, cwd = "/", env = process.env) {
  * The gate's proof of one sage tool call that it let through (R1916-2). Codex gives the hook the call's id as
  * tool_use_id and the sage MCP server the same id as _meta.callId, with the session id in both (Codex 0.164.0
  * registry.rs:701-706, hook_runtime.rs:195-206, mcp_tool_call.rs:542-553 and 1323-1334). So the server serves a call
- * only when the gate saw it: when Codex runs no sage hook (a sage update makes every hook Modified until the user trusts
- * it again), the server refuses. The proofs live in the mode folder, which no agent writes from the shell (logbookWrite). A
+ * only when the gate saw it: when Codex runs no sage hook (no entries installed, or none trusted), the server refuses. The proofs live in the mode folder, which no agent writes from the shell (logbookWrite). A
  * proof also carries the caller (callerOf): the hook knows the thread, and the server does not.
  */
 const proofFile = (env, id) => join(modeDirectory(env), "proofs", `${createHash("sha256").update(id).digest("hex")}.json`);
@@ -494,7 +497,7 @@ export function takeProof(meta, name, env = process.env, input) {
     && (name !== "report_compare" || proof.comparison === comparisonHash(input));
   return seen && callerForm(proof.caller) ? proof.caller : null;
 }
-export const NO_GATE = "sage's gate is not running: trust sage's hooks with /hooks in the Codex CLI (or the app's hook review), then try again.";
+export const NO_GATE = `sage's gate is not running. If sage's hooks are not installed yet, run: ${INSTALL}. Then trust them with /hooks in the Codex CLI (or the app's hook review), and try again.`;
 
 /** The merge check for one merge form: the pull request's head branch from gh, then the state tool's ledger check. */
 export async function checkMerge({ pr, sha }, cwd, env = process.env, session) {
@@ -817,17 +820,21 @@ export async function gate(input, { mode = readMode, check = checkMerge, env = p
   return undefined;
 }
 
+/** The gate's answer to one parsed event (undefined for an input that is not JSON), also when the gate fails. */
+export async function gateAnswer(input) {
+  try {
+    return await gate(input);
+  } catch {
+    // Never let a merge or an edit through because the gate failed.
+    return input?.hook_event_name === "PermissionRequest" ? UNREAD_REQUEST : deny(UNREADABLE);
+  }
+}
+
 if (process.argv[1] && realpathSync(process.argv[1]) === fileURLToPath(import.meta.url)) {
   let input;
   try {
     input = JSON.parse(readFileSync(0, "utf8"));
   } catch {}
-  let output;
-  try {
-    output = await gate(input);
-  } catch {
-    // Never let a merge or an edit through because the gate failed.
-    output = input?.hook_event_name === "PermissionRequest" ? UNREAD_REQUEST : deny(UNREADABLE);
-  }
+  const output = await gateAnswer(input);
   if (output) process.stdout.write(JSON.stringify(output));
 }

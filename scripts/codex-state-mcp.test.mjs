@@ -66,7 +66,8 @@ async function connect(t, overrides = {}) {
 
 test("the state server serves only a call that sage's gate saw: with no hook running, sage records nothing and says why (R1916-2)", async (t) => {
   const s = await connect(t);
-  const NO_GATE = "sage's gate is not running: trust sage's hooks with /hooks in the Codex CLI (or the app's hook review), then try again.";
+  // T957: the line names the install command of the server's own plugin, because no hook runs before the install.
+  const NO_GATE = `sage's gate is not running. If sage's hooks are not installed yet, run: node "${join(s.dir, "plugin/skills/sage/sage.mjs")}" hooks install. Then trust them with /hooks in the Codex CLI (or the app's hook review), and try again.`;
   assert.deepEqual(await s.call("init", {}, { gate: false }), { error: NO_GATE }, "no proof");
   assert.deepEqual(await s.call("status", {}, { gate: false }), { error: NO_GATE }, "a read too");
   assert.equal(existsSync(join(s.env.CODEX_HOME, "sage")), false, "nothing written");
