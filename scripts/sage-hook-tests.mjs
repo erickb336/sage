@@ -5840,7 +5840,7 @@ test("F-T289-22, T956: each run's findings need their own recorded findings, als
   const a = leadAdd(s, "code-reviewer"), b = leadAdd(s, "code-reviewer"); // R5, R6
   helpRun(s, a, "code-reviewer", LEAD, report("FINDINGS", "- Y1 medium a.mjs:1 one"));
   helpRun(s, b, "code-reviewer", LEAD, report("FINDINGS", "- Z1 medium b.mjs:2 two"));
-  assert.match(denied(stateRun(s, "run add T1 --role code-reviewer")) ?? "", /Record each one first.*--run R5 --class <class>\. Then do the same for R6\./, "the refusal names each run");
+  assert.match(denied(stateRun(s, "run add T1 --role code-reviewer")) ?? "", /Record each one first.*run R5, its class and a summary\. Then do the same for R6\./, "the refusal names each run");
   leadFind(s, "code-reviewer", "medium", LEAD, b);
   assert.match(denied(stateRun(s, `run done ${a} --status done`)) ?? "", GAP("R5", "Y1 \\(medium\\)"), "R6's row does not stand for R5's finding");
   assert.equal(denied(stateRun(s, `run done ${b} --status done`)), undefined, "R6 has its row");
@@ -6109,9 +6109,9 @@ test("F-T289-32: a round does not drop the findings of an earlier round: the hig
   const run = leadAdd(s, "code-reviewer"); // R5: its helper finds a high in round 0
   helpRun(s, run, "code-reviewer", LEAD, HIGH_ONE);
   s.sage("finding", "triage", "T1", "F-T1-2", "fix"); // a decoy medium of another role, triaged fix
-  assert.equal(denied(stateRun(s, "round T1")), undefined);
-  s.sage("round", "T1"); // round 1: R5 is a run of round 0
   const HELD = GAP("R5", "Y1 \\(high\\)");
+  assert.match(denied(stateRun(s, "round T1")) ?? "", HELD, "the lead's round waits for the high's row too (T970)");
+  s.sage("round", "T1"); // the chief's round 1: R5 is a run of round 0
   assert.match(denied(stateRun(s, `run done ${run} --status done`)) ?? "", HELD, "run done of the high run after the round");
   assert.match(denied(stateRun(s, "run add T1 --role code-reviewer")) ?? "", HELD, "a re-roll in the next round");
   leadFind(s, "code-reviewer", "high");
@@ -6515,12 +6515,12 @@ test("F-T289-64, T956: a row below the severity of a helper's finding does not c
   assert.equal(denied(stateRun(s, `run done ${run} --status done`)), undefined, "a high row does");
 });
 
-test("T956: in Claude, core's gap rule holds the lead's next run add of the role, its run done and its state move until K1 has its row; a low K2 needs none", () => {
+test("T956, T970: in Claude, core's gap rule holds the lead's next run add of the role, its run done, its state move and its round until K1 has its row; a low K2 needs none", () => {
   const s = leadSession();
   const run = leadAdd(s, "code-reviewer"); // R5
   helpRun(s, run, "code-reviewer", LEAD, report("FINDINGS", lines("", "- K2 low b.js:2 a typo", "- K1 medium a.js:1 a bad value", "  proof: npm test", "  saw: not ok 1")));
-  const steps = ["run add T1 --role code-reviewer", "task T1 set state=building", `run done ${run} --status done`];
-  const GAP_K1 = "sage: R5's code-reviewer report has a medium or high finding with no row on T1: K1 (medium). Record each one first, one row for each key, at its severity or above and with the run: sage finding add T1 --source code-reviewer --severity medium --summary=<word> --run R5 --class <class>. ";
+  const steps = ["run add T1 --role code-reviewer", "task T1 set state=building", `run done ${run} --status done`, "round T1"];
+  const GAP_K1 = "sage: R5's code-reviewer report has a medium or high finding with no row on T1: K1 (medium). Record each one first with finding add, one row for each key: task T1, source code-reviewer, severity medium or above, run R5, its class and a summary. ";
   for (const step of steps) {
     const why = denied(stateRun(s, step)) ?? "";
     assert.ok(why.startsWith(GAP_K1), `${step}: ${why}`);
@@ -6656,15 +6656,17 @@ test("T504: a slot stays held after the sage's run done while the helper still r
   assert.match(overCap(s, "over-cap") ?? "", CAP_FULL, "the cap counts the lead and the helper");
 });
 
-test("T504, T956: the helper's later stop frees the slot, and the ended run stays as it ended; a legacy logbook keeps no late report, so it holds no gap", () => {
+test("T504, T970: the helper's later stop frees the slot, and the ended run stays as it ended; a legacy logbook keeps its late report too, so its finding holds the lead", () => {
   const { s, run } = endedHelper("code-reviewer");
   assert.equal(helperSlots(s).length, 1, "the slot holds until the stop");
   s.send(ended(`child-${run}`, "sage:code-reviewer", { last_assistant_message: report("FINDINGS", "- K1 medium src/a.js:1 an empty name saves a row") }));
   assert.deepEqual(helperSlots(s), [], "the stop freed the slot");
   assert.equal(overCap(s, "after-stop"), undefined, "the cap has room again");
   assert.ok(endedFailed(s, run), "the run still ended as failed");
-  // Only a shared logbook keeps the late report of a run that ended (keepReport): the gap rule reads kept reports only.
-  assert.equal(denied(stateRun(s, "run add T1 --role code-reviewer")), undefined, "the chief ended the run before its report");
+  // A run that ended as failed keeps its late report in every logbook (keepReport), and the gap rule reads it (T970 F3).
+  assert.match(denied(stateRun(s, "run add T1 --role code-reviewer")) ?? "", GAP(run, "K1 \\(medium\\)"), "the late report holds the lead");
+  leadFind(s, "code-reviewer", "medium", LEAD, run);
+  assert.equal(denied(stateRun(s, "run add T1 --role code-reviewer")), undefined, "the row frees it");
 });
 
 test("T504: an implementer's later stop frees its slot too", () => {

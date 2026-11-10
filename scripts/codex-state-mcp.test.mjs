@@ -481,14 +481,14 @@ test("F-T552-2: a lead's verdict on a commit of the ledger passes while a repair
   assert.match(await lead("verdict", { task: "T1", kind: "findings", sha: SHA, pr: 5, run: other }), /^T1 findings · 1111111/);
 });
 
-test("T956: the gap rule holds a Codex lead at its next step: a medium finding of a kept report needs its row with the run; a low one does not", async (t) => {
+test("T956, T970: the gap rule holds a Codex lead at its next step, also its round: a medium finding of a kept report needs its row with the run; a low one does not", async (t) => {
   const w = await leadWorld(t), { lead } = w;
   await lead("task_set", { task: "T1", fields: { state: "building" } });
   await lead("task_set", { task: "T1", fields: { state: "reviewing", pr: "5" } });
   const run = (await lead("run_add", { task: "T1", role: "code-reviewer" })).split(" ")[0];
   w.tool.keepReport(w.project, { task: "T1", run, role: "code-reviewer", sha: SHA, text: FOUND.replace("- K1 medium", "- K2 low b.js:2 a typo\n- K1 medium") }, w.env);
-  const GAP = `sage: ${run}'s code-reviewer report has a medium or high finding with no row on T1: K1 (medium). Record each one first, one row for each key, at its severity or above and with the run: sage finding add T1 --source code-reviewer --severity medium --summary=<word> --run ${run} --class <class>`;
-  const calls = [["run_add", { task: "T1", role: "code-reviewer" }], ["run_done", { run, status: "done", tokens: 1 }], ["task_set", { task: "T1", fields: { state: "verifying" } }]];
+  const GAP = `sage: ${run}'s code-reviewer report has a medium or high finding with no row on T1: K1 (medium). Record each one first with finding add, one row for each key: task T1, source code-reviewer, severity medium or above, run ${run}, its class and a summary`;
+  const calls = [["run_add", { task: "T1", role: "code-reviewer" }], ["run_done", { run, status: "done", tokens: 1 }], ["task_set", { task: "T1", fields: { state: "verifying" } }], ["round", { task: "T1" }]];
   for (const [name, args] of calls) {
     assert.equal((await lead(name, args)).denied, GAP, `the gate: ${name}`);
     // A proof of the lead for this call, as if the gate had let it through: the server holds the rule itself.

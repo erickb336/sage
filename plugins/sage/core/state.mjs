@@ -736,8 +736,9 @@ const keptFile = (dir, run) => join(dir, "kept", `${run}.json`);
  * Keep a helper's report at its stop, for the verdict that it backs (T483). A provider's stop hook calls it with the
  * report as the helper gave it, and the commit that the hook saw the helper review ("" when it saw none). No command of the
  * state tool keeps a report, so a chief cannot make one. The first report of a run stays: a later one never replaces it.
- * In a shared logbook, a run that ended as blocked or failed keeps a report that arrives late, with its arrival time, so a
- * transfer or Replace loses no report. Such a run backs no verdict (backingProblem). The path of the kept report, or a refusal.
+ * A run that ended as blocked or failed keeps a report that arrives late, with its arrival time, in every logbook: so a
+ * transfer or Replace loses no report, and its findings hold the lead (the gap rule) as a report in time does (T970). Such
+ * a run backs no verdict (backingProblem). The path of the kept report, or a refusal.
  */
 function keepReport(project, { task, run, role, sha = "", text } = {}, env = process.env) {
   const dir = storeDir(project, env);
@@ -749,7 +750,7 @@ function keepReport(project, { task, run, role, sha = "", text } = {}, env = pro
   }
   const row = read(dir, "runs").find((r) => r.id === run);
   if (row?.task !== task || row.role !== role) refuse(`${run} is not a ${role} run of ${task}, so no report is kept.`);
-  if (row.status !== "running" && !(["blocked", "failed"].includes(row.status) && isShared(dir, env))) refuse(`${run} ended as ${row.status} before this stop, so no report is kept.`);
+  if (!["running", "blocked", "failed"].includes(row.status)) refuse(`${run} ended as ${row.status} before this stop, so no report is kept.`);
   const folder = join(dir, "kept"), file = keptFile(dir, run), temporary = join(folder, `.kept-${randomUUID()}`);
   mkdirSync(folder, { recursive: true, mode: 0o700 });
   // The whole file appears at once, by a link of a full temporary file, and never over a kept one.
@@ -3549,7 +3550,7 @@ function act(cmd, pos, opt, dir, env, skip, project) {
         Object.assign(task, planned.task);
         note = planned.note;
       }
-      return `${task.id} ${task.state} · ${task.size} · round ${task.round} · route ${task.route}${task.branch ? ` · ${task.branch}` : ""}${task.pr ? ` · PR ${task.pr}` : ""}${tagsOf(task)}${waitsText(task, shownOf(dir, tasks))}${note}${isShared(dir, env) ? keptLines(dir, task.id) : ""}`;
+      return `${task.id} ${task.state} · ${task.size} · round ${task.round} · route ${task.route}${task.branch ? ` · ${task.branch}` : ""}${task.pr ? ` · PR ${task.pr}` : ""}${tagsOf(task)}${waitsText(task, shownOf(dir, tasks))}${note}${keptLines(dir, task.id)}`;
     }
     case "program": {
       // program propose writes a program, puts its pilot and its other tasks in it, and opens its breakdown gate on the

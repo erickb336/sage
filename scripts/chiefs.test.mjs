@@ -140,17 +140,50 @@ test("a legacy project has no transfer: each command refuses, and a replace gate
   assert.equal(before.split("\f")[1].split("\n")[0], "id\ttask\tquestion\toptions\trecommendation\tdefault\tanswer\tat", "a legacy gates table has no kind column");
 });
 
-test("a legacy run that ended keeps no late report, as before", (t) => {
+test("T970 F3: a legacy run that ended as failed keeps its late report, as in a shared logbook; a done run keeps none", (t) => {
   const w = scratch(t);
   const run = (...args) => claude.sage([...args, "--project", w.project], w.env);
   run("init");
   run("task", "add", "--title", "a", ...ADD);
   run("run", "add", "T1", "--role", "qa");
+  run("run", "add", "T1", "--role", "pe");
   run("run", "done", "R1", "--status", "failed");
-  assert.throws(() => claude.keepReport(w.project, { task: "T1", run: "R1", role: "qa", text: "late" }, w.env), /R1 ended as failed before this stop, so no report is kept/);
+  run("run", "done", "R2", "--status", "done");
+  const file = claude.keepReport(w.project, { task: "T1", run: "R1", role: "qa", text: "late" }, w.env);
+  assert.equal(JSON.parse(readFileSync(file, "utf8")).text, "late");
+  assert.match(run("task", "T1"), new RegExp(`\\nR1 failed · report kept \\S+ · backs no verdict · ${file}$`), "the chief reads it from the task line");
+  assert.throws(() => claude.keepReport(w.project, { task: "T1", run: "R2", role: "pe", text: "late" }, w.env), /R2 ended as done before this stop, so no report is kept/);
 });
 
 for (const [name, own, other] of pairs) {
+  test(`${name}: T970: on a shared logbook the state tool's guard holds a lead by the gap rule (its run of the role, the run's end, its state move and its round), also for a late report of a failed run, until a row with the run, whoever adds it`, (t) => {
+    const w = world(t, own, other);
+    w.owner("task", "add", "--title", "a", ...ADD);
+    w.owner("task", "T1", "set", "state=briefed");
+    w.owner("run", "add", "T1", "--role", "lead"); // R1
+    w.lead("R1", "task", "T1", "set", "state=building");
+    w.lead("R1", "task", "T1", "set", "state=reviewing");
+    const id = (line) => line.split(" ")[0], review = id(w.lead("R1", "run", "add", "T1", "--role", "code-reviewer"));
+    const keep = (run, role, kind, findings) => own.keepReport(w.project, { task: "T1", run, role, sha: SHA, text: reportFor(kind, { findings }) }, w.env);
+    keep(review, "code-reviewer", "findings", "\n- K2 low b.js:2 a typo\n- K1 medium a.js:1 a bad value");
+    // One reason in each provider's words: the command and its fields, not one form of it (F-T956-3).
+    const gap = (run, role, key) => `${run}'s ${role} report has a medium or high finding with no row on T1: K1 (${key}). Record each one first with finding add, one row for each key: task T1, source ${role}, severity ${key} or above, run ${run}, its class and a summary. Nothing changed.`;
+    const held = [["run", "add", "T1", "--role", "code-reviewer"], ["run", "done", review, "--status", "done", "--tokens", "1"], ["task", "T1", "set", "state=verifying"], ["round", "T1"]];
+    const before = w.tables();
+    for (const words of held) assert.throws(() => w.lead("R1", ...words), { message: gap(review, "code-reviewer", "medium") }, words.join(" "));
+    assert.equal(w.tables(), before, "nothing changed");
+    // A row of the run counts whoever adds it: here the chief's (F2). The low K2 needs none.
+    w.owner("finding", "add", "T1", "--source", "code-reviewer", "--severity", "medium", "--summary", "a bad value", "--run", review, "--class", "other");
+    assert.equal(w.lead("R1", ...held[1]), `${review} done`);
+    // A qa run that the chief ended as failed keeps its late report, and its high finding holds the round (F-T956-1).
+    const qa = id(w.lead("R1", "run", "add", "T1", "--role", "qa"));
+    w.owner("run", "done", qa, "--status", "failed");
+    keep(qa, "qa", "qa-fail", "\n- K1 high a.js:1 a crash");
+    assert.throws(() => w.lead("R1", "round", "T1"), { message: gap(qa, "qa", "high") });
+    w.lead("R1", "finding", "add", "T1", "--source", "qa", "--severity", "high", "--summary", "a crash", "--run", qa, "--class", "other");
+    for (const words of [held[0], ["run", "add", "T1", "--role", "qa"]]) assert.match(w.lead("R1", ...words), /^R\d+ running · /, words.join(" "));
+  });
+
   test(`${name}: a session is one chief: chiefs.tsv holds its row once, and a second write of the session is the same chief`, (t) => {
     const w = world(t, own, other);
     assert.equal(w.chief, "C1");
