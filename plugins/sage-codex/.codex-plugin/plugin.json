@@ -1,7 +1,7 @@
 {
   "name": "sage",
   "version": "0.1.0",
-  "description": "sage for Codex, in the desktop app and the CLI: sage mode with the chief and its role agents, the logbook tools, the merge and edit rules, autopilot, principles and writing skills.",
+  "description": "sage-stack: a multi-agent development stack for Claude Code and Codex. Your session becomes a chief of staff, and a team of agents designs, builds, reviews and tests each change, with the rules held in code.",
   "author": {
     "name": "Erick Benitez-Ramos"
   },
@@ -10,7 +10,7 @@
   "hooks": "./hooks/hooks.json",
   "interface": {
     "displayName": "Sage for Codex",
-    "shortDescription": "Principles, task tracking and guided agent workflows",
+    "shortDescription": "sage-stack: a multi-agent development stack for Claude Code and Codex",
     "developerName": "Erick Benitez-Ramos",
     "category": "Productivity",
     "websiteURL": "https://github.com/erickb336/sage-stack"
