@@ -4,7 +4,6 @@ description: "Runs one task's pull request for the sage, from the build to its c
 tools: Bash, Read, Grep, Glob, Agent, SendMessage
 skills:
   - sage:report
-  - sage:sage
   - sage:principle-never-block-on-the-human
   - sage:principle-prove-it-works
   - sage:dictionary

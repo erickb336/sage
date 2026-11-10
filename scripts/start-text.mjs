@@ -8,7 +8,7 @@ import { ROOT } from "./build.mjs";
 
 const PLUGIN = join(ROOT, "plugins/sage");
 /** The most bytes that each start text may have. Lower a limit when a change makes its text smaller. */
-export const START_LIMITS = Object.freeze({ "chief-of-staff": 113_400, lead: 110_100 });
+export const START_LIMITS = Object.freeze({ "chief-of-staff": 113_400, lead: 45_000 });
 /** The folders of the built plugin that hold references, from the plugin's folder. */
 export const REFERENCE_FOLDERS = Object.freeze(["skills/sage/references", "core/references"]);
 
