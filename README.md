@@ -8,7 +8,7 @@ Its plugin and its commands say "sage": you turn on sage mode, and the chief of 
   <a href="LICENSE"><img alt="licence" src="https://img.shields.io/github/license/erickb336/sage-stack"></a>
 </p>
 
-**Status:** early, used every day by its author to build sage-stack itself. Claude Code is supported; in Codex (the CLI and the desktop app), sage mode, autopilot, the shared logbook and the board phrases work through the sage plugin ([sage in Codex](docs/guide/codex.md)). Tested on macOS, and in CI on Ubuntu (Linux); Windows is not supported.
+**Status:** early, used every day by its author to build sage-stack itself. Claude Code is supported; in Codex (the CLI and the desktop app), sage mode, autopilot, the shared logbook and the board phrases work through the sage plugin ([sage in Codex](docs/guide/codex.md)), with some [known limits](docs/guide/codex.md#known-limits-in-codex). Tested on macOS, and in CI on Ubuntu (Linux); Windows is not supported.
 
 Start with the [Quick start](#quick-start). Then follow one task from start to merge in [Learn sage in 5 minutes](docs/guide/learn-sage.md).
 
@@ -65,7 +65,7 @@ claude plugin update sage@sage
 
 ### In Codex
 
-Use Codex 0.164 to 0.167, in the CLI or the desktop app, and a multi-agent v2 model. The install commands are CLI commands, also for the desktop app. You also need Node.js 20 or later, `gh` logged in, and a GitHub remote for the project (see [What you need](docs/guide/codex.md#what-you-need)).
+Use Codex 0.164 to 0.167, in the CLI or the desktop app, and a multi-agent v2 model. The install commands need the Codex CLI, also for the desktop app (`npm install -g @openai/codex@0.164.0`), and a lead with more than 2 helpers at once needs `agents.max_concurrent_threads_per_session` set to 10 in your Codex config. You also need Node.js 20 or later, `gh` logged in, and a GitHub remote for the project (see [What you need](docs/guide/codex.md#what-you-need)).
 
 1. Add the sage marketplace and install sage, in a terminal:
    ```sh
@@ -74,13 +74,13 @@ Use Codex 0.164 to 0.167, in the CLI or the desktop app, and a multi-agent v2 mo
    ```sh
    codex plugin add sage@sage
    ```
-2. Run `codex` in a project folder, choose **Trust all and continue** at the "Hooks need review" screen, and send `sage mode` alone ([sage in Codex](docs/guide/codex.md)). The chief starts one lead for each task, and the lead starts the implementer, the reviewers and QA. Each report goes in the task's pages folder.
+2. Run `codex` in a project folder, choose **Trust all and continue** at the "Hooks need review" screen, and send `sage mode` alone ([sage in Codex](docs/guide/codex.md)). Without that trust, no sage hook runs and you see no warning, so do the [gate check](docs/guide/codex.md#check-that-the-sage-gate-runs) after each install and update. The chief starts one lead for each task, and each report goes in the task's pages folder.
 3. Codex asks you at least 5 times in each small task (the worktree, the add, the commit, the push and the pull request): read the choices, then approve ([The approval prompts of each task](docs/guide/codex.md#the-approval-prompts-of-each-task)).
 4. To let sage merge verified work itself, send `autopilot on` alone after `sage mode`, while Codex is idle (if it is busy, press Esc, then send). Merges need `node` and `gh` outside the sandbox's writable folders, and they wait after a Codex update until sage tests that version. Esc stops a merge, and `autopilot off` counts at any time, from any thread ([Autopilot in Codex](docs/guide/codex.md#autopilot-in-codex)).
 
 ## The board
 
-Send `show board` to see what needs you, the agents at work, and each task in its column. On the Mac, it also starts the board page and gives its address. The board server, and [Remote Control](docs/guide/remote-control.md) (sessions from your phone), need macOS.
+Send `show board` to see what needs you, the agents at work, and each task in its column. On the Mac, it also starts the board page and gives its address; in Codex, after you approve one prompt ([The board in Codex](docs/guide/codex.md#the-board-in-codex)). The board server, and [Remote Control](docs/guide/remote-control.md) (sessions from your phone), need macOS.
 
 <picture>
   <source media="(prefers-color-scheme: dark)" srcset="docs/assets/board-dark.png">
@@ -95,14 +95,14 @@ Send `show board` to see what needs you, the agents at work, and each task in it
 | --- | --- |
 | `sage mode` | The session becomes your chief of staff. Send your request next. |
 | `show status` | Where each task is: running, waiting for you, verified. It names each open task with no priority. |
-| Tell either chief to take over a task of another chief, with its PR | In a shared logbook, the chief opens a [takeover gate](docs/guide/using-sage.md#shared-logbooks), and only your answer, in either chat, gives the task to another chief. The branch and the verdicts stay, and then only the new owning chief and its agents push to the branch; a Claude chief that takes a task from Codex runs one fresh Claude cycle first. In separate logbooks, the chief uses [task adoption](docs/guide/codex.md#task-adoption), and reviews and QA start fresh. |
+| Tell either chief to take over a task of another chief, with its PR | In a shared logbook, the chief opens a [takeover gate](docs/guide/using-sage.md#shared-logbooks) for you to answer in either chat: its instructions say never to answer it itself, but no code ties the answer to your message. The branch and the verdicts stay, and then only the new owning chief and its agents push to the branch; a Claude chief that takes a task from Codex runs one fresh Claude cycle first. Any chief may abandon a task with no owning chief, with a reason; in separate logbooks, the chief uses [task adoption](docs/guide/codex.md#task-adoption), and reviews and QA start fresh. |
 | Tell the chief that a checkout joins a shared logbook, or starts its own, or ask it to move this project there | The chief runs [`sage link`](docs/guide/using-sage.md#shared-logbooks) after your answer, and two linked clones are one project on the board. Each task there has one owning chief, who can offer it to another chief, and you answer a takeover gate for each change of owning chief. [`sage move`](docs/guide/using-sage.md#move-an-existing-project) shows a preview and one gate, then takes the open tasks of the Claude and Codex logbooks into one shared logbook, with an end check and the steps to restore by hand; a new project starts in a shared logbook when both plugins are updated ([`sage init`](docs/guide/using-sage.md#shared-logbooks)). |
 | `show board` | The board in the chat, and the address of the board page. |
 | `autopilot on` / `autopilot off` | Verified pull requests merge by themselves, or wait for you again. Off by default. |
 | `sage mode off` | A normal session again, for the rest of the session. Autopilot goes off too. |
 | `sage help` | Every phrase, and whether sage mode and autopilot are on. |
 
-Send each phrase alone, as the whole message: `autopilot on` counts only from a message that starts a turn, so send it while the session is idle, and `autopilot off` counts at any time. Every phrase, also the board forms, and the exact rules: [Every phrase](docs/guide/using-sage.md#every-phrase); in Codex, the board page starts after you approve one prompt ([The board in Codex](docs/guide/codex.md#the-board-in-codex)).
+Send each phrase alone, as the whole message: `autopilot on` counts only from a message that starts a turn, so send it while the session is idle, and `autopilot off` counts at any time. Every phrase, also the board forms, and the exact rules: [Every phrase](docs/guide/using-sage.md#every-phrase).
 
 ## How sage works
 

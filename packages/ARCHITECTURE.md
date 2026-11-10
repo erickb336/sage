@@ -10,12 +10,12 @@ flowchart LR
   Codex[Codex events and tools] --> SX[sage-codex]
   SC --> Core[sage-core public API]
   SX --> Core
-  Core --> State[Task state, admission and shared rules]
+  Core --> State[Task state, logbook and shared rules]
 ```
 
 | Package | Owns | Must not own |
 | --- | --- | --- |
-| `sage-core` | Task states, board data, assignments, admission, role rules, briefs, shared instructions, principles, command reading and shared policy | Native tool names, host event formats, model names, host configuration paths, installation or hook responses |
+| `sage-core` | Task states and the state tool, the logbook, board data, role rules and role text, the principles of each role, briefs and reports, the chief's text, command reading and shared policy | Native tool names, host event formats, model names, host configuration paths, installation or hook responses |
 | `sage-claude` | Claude identity and events, command fields, native responses, model defaults, hook manifests, launcher and installation | A second implementation of shared task or role rules; Codex code |
 | `sage-codex` | Codex transport, identity evidence, event records, command fields, native responses, configuration, hook manifests and installation | A second implementation of shared task or role rules; Claude code |
 
@@ -23,13 +23,15 @@ flowchart LR
 
 A provider verifies the native actor and event before calling core. Model text
 cannot select an actor or provide authority. Core receives explicit project,
-session, assignment, role, and operation data. Its decisions never depend on a
-native event name. Core owns durable admission records; a provider owns the
-native evidence used to bind an actual child to an assignment.
+session, task, run, role, and operation data. Its decisions never depend on a
+native event name. Core owns the logbook; a provider owns the native evidence
+that ties an actual child to its task and run (the run line of a Claude brief,
+or the task name of a Codex child).
 
 Provider settings supply storage roots and supported model defaults. Core does
-not read a host's profile or import a host adapter. The board and task logbook
-remain shared, with separate provider storage selected by configuration.
+not read a host's profile or import a host adapter. A project uses one shared
+logbook for both providers, or a logbook in each provider's root. The board
+reads every provider's logbook.
 
 Shared role and chief text belongs in core. Provider bindings supply commands,
 setup, and delivery details. Instructions describe the rules; executable policy
@@ -55,11 +57,14 @@ The build creates `plugins/sage/` from core plus the Claude adapter, and
 `plugins/sage-codex/` from core plus the Codex adapter. Those folders are output,
 not another source layer. Tests run each bundle outside the checkout.
 
-## Current migration
+## What core holds
 
-Task state, the board, assignments, admission, role rules, brief validation,
-principles, shared role text, command reading, merge-command classification, and push rules already live in core. The
-command reader is the existing implementation; this move changes no shell grammar.
+Task state, the state tool, the board, role rules and role text, the principles
+of each role, brief and report reading, the command reader and the shared
+policies live in core. The shared policies are the merge-command reading, the
+push rule, the logbook-write rule, the agent `gh` list, the stash, process and
+board password rules, the edit rules of the chief and of the read-only roles,
+and the mode phrases. Both providers call them.
 
 The shared command policy takes a trusted state-tool path from each provider.
 A recognized merge is only a candidate; mode, role and ledger checks still decide
@@ -70,16 +75,11 @@ Claude retains its Git invocation and first-upload confirmation flow. Core does
 not grant that exception. Missing branch evidence keeps the existing Claude
 behavior; Codex must use a reader that throws when it cannot verify the branch.
 
-The Claude hook still combines native handling with other command, logbook-write,
-and workflow policies. Extract those rules into core behind explicit operation
-contracts, then change each provider to call them. Keep native identity and event
-correlation in each provider. Do not move native transport code into core merely
-to reduce adapter size.
+The Claude hook still holds rules that only Claude can run, such as the agent
+caps and the lead's early gap check. Move such a rule into core behind an explicit
+operation contract when the other provider needs it. Keep native identity and
+event correlation in each provider. Do not move native transport code into core
+merely to reduce adapter size.
 
-The Codex composition currently joins capture, admission, and child delivery.
-It still requires a complete tool-policy callback, lifecycle recovery, chief
-activation, installation, and a real-project pilot. Its automatic implementation
-is not installed. Package separation does not establish runtime readiness.
-
-Keep the queued issue order and one PR per issue. Migrate a rule with its callers
-and tests; do not maintain two copies or claim that moving it fixes an open issue.
+Migrate a rule with its callers and tests in one pull request; do not keep two
+copies, or claim that moving it fixes an open finding.

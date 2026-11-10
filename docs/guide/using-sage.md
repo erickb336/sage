@@ -123,7 +123,7 @@ The lead does these things:
 - It records each finding of its helpers.
 - It leaves the task at verifying and gives the chief one report. So the chat shows a few lines for each pull request, not every report.
 
-The lead and each helper take a slot of the project's agent cap (`max_agents`, 10 by default), and all agents together take slots of the total cap (`cap_total`, 20 by default). One lead with its 9 helpers fills the default cap of a project.
+The lead and each helper take a slot of the project's agent cap (`max_agents`, 10 by default), and all agents together take slots of the total cap (`cap_total`, 20 by default). One lead with its 9 helpers fills the default cap of a project. In Codex, sage caps no agents: see [Known limits in Codex](codex.md#known-limits-in-codex).
 
 At most 5 leads run for a project by default. To change this, ask the chief in the chat, and it runs `sage config max_leads=<n>` with a whole number from 1. A value below the running count ends no lead: it only refuses the next lead.
 
@@ -163,7 +163,7 @@ sage uses balanced model defaults:
 - Sonnet does the UX review, the implementation of a tiny task, and the QA of a small task.
 - Opus does the other configurable roles and sizes.
 
-When the chief adds a code review or QA to a tiny task, Sonnet does it too. An optional `model.<role>.risk` setting overrides the size choice when the task has a risk flag.
+When the chief adds a code review or QA to a tiny task, Sonnet does it too. An optional `model.<role>.risk` setting overrides the size choice when the task has a risk flag. In Codex, every agent runs on the session's model.
 
 ## Waits and programs
 
@@ -403,7 +403,7 @@ A Claude chief adds `--chief C<n>` to each command below. A Codex chief calls th
 | `sage release <T>` | The owning chief. The task has no open offer and no active or unknown run. | The task has no owning chief. Only that chief claims it back; another chief takes it through a takeover gate. Its work and reports stay. |
 | `sage gate replace <T> --to C<n>` | Any chief: for a task of another chief, for a task with no owning chief that it may not claim, or for an owning chief that stopped. | The takeover gate for you, with the options approve and decline, or the gate that is open already for the same task and chiefs. It asks "Hand T331 and PR 92 from C2 (codex) to C1 (claude)?", names each run that will end as failed, with its role, and the task's title. It says what each answer does, and that the branch keeps its name, the PR its number and the verdicts stay. |
 
-- `offer` and `task <T>` print the offer's id and the version that `accept` needs. A Codex chief reads them with the `task <T>` command of the bundled CLI, which only reads the logbook.
+- `offer` and `task <T>` print the offer's id and the version that `accept` needs. A Codex chief runs that read in its shell, with the CLI of the installed plugin: `node ~/.codex/plugins/cache/sage/sage/<version>/skills/sage/sage.mjs task <T> --project <project>`. It only reads the logbook, so it runs in Codex's sandbox.
 - An accept or a release that waits for a run names the takeover gate too: a run of unknown status may never end, and only a takeover ends it.
 - A run that ends does not advance a transfer: the recipient still accepts. A transfer changes no run: each run keeps the chief that dispatched it.
 - Sage cannot see that a chief ended, so a stopped chief stays the owning chief until you answer. A takeover gate is the only way to take a task with no consent from its chief.
