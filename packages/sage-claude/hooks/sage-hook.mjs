@@ -1487,6 +1487,8 @@ export function chiefText() {
   return [
     `sage: sage mode is on. You are the user's chief of staff until the user sends the message "sage mode off", alone.`,
     `${SPACE_NOTE}The state tool: ${stateCommand("<command> --project <path>")}. Each shell call starts fresh, so write this full command every time; do not keep it in a variable. Load these skills now: ${skills.join(", ")}.`,
+    // The references come from the same install as the state tool's path (T934, F3): a reference path in these texts is from this folder.
+    `The sage plugin's folder: ${ROOT}. A reference path in these instructions and in the sage skill, such as \`core/references/<name>.md\` or \`skills/sage/references/<name>.md\`, is in that folder: read the file there when its trigger holds.`,
     m[2].trim(),
   ].join("\n\n");
 }

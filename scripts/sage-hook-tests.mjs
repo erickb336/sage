@@ -1019,7 +1019,11 @@ test("the prompt counts files, not folders, and lists the top-level names apart 
 
 test("the chief's lock step, branch protection and its read-back for main or master, is in sage mode's context and the hook lets it run (T24 G15, T29 LOCK-MASTER, READBACK-FIELDS)", () => {
   const s = session();
-  const on = context(s.send(prompt("sage mode")));
+  const text = context(s.send(prompt("sage mode")));
+  // The lock's steps are a reference of the plugin's folder that the chief's text names (T934): follow the pointer.
+  const folder = /^The sage plugin's folder: (.+?)\. A reference path/m.exec(text)?.[1] ?? assert.fail("the chief's text names the plugin's folder");
+  const pointer = /Lock the default branch\*\* once it first exists on GitHub[^\n]*first read `(skills\/sage\/references\/[\w-]+\.md)`/i.exec(text)?.[1] ?? assert.fail("the chief's text points to the lock's steps");
+  const on = readFileSync(join(folder, pointer), "utf8");
   const put = /^ *(gh api --hostname github\.com -X PUT repos\/<owner>\/<repo>\/branches\/<branch>\/protection --input - <<'EOF'\n[\s\S]*?\n *EOF)$/m.exec(on)?.[1];
   const get = /`(gh api --hostname github\.com repos\/<owner>\/<repo>\/branches\/<branch>\/protection)`/.exec(on)?.[1];
   assert.ok(put && get, "the chief's instructions give the protection command and its read-back");
