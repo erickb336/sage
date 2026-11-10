@@ -12,7 +12,8 @@
 //     commandWrites, or Codex's own apply_patch program), except a redirection into the temp folder (T948). A child may.
 //   - A read-only role: in sage mode the leaf sage name (the last part of the agent path that starts with sage_) decides
 //     the edit rule. Under a role that core keeps from editing (a reviewer, QA, the PE, the lead), a child changes no
-//     file, with apply_patch or with a shell write form (core's commandWrites, or Codex's own apply_patch program).
+//     file, with apply_patch or with a shell write form (core's commandWrites with readOnly, also git that changes the
+//     checkout, or Codex's own apply_patch program), except a redirection, or git in a worktree, in the temp folder (T936).
 //     Each sage name above the leaf must be a lead's, or the child changes no file. A part that starts with sage_ but
 //     is not a sage task name counts as a read-only role.
 //   - The logbook: the chief records it, and a lead (a child of the root thread named sage_lead_t<n>, while its task's lead
@@ -801,7 +802,9 @@ export async function gate(input, { mode = readMode, check = checkMerge, env = p
   if (thread.child) {
     const knownThread = thread.codex || thread.parts?.length;
     if (stateToolWrites(f.command, f.cwd, env) && !(knownThread && scopedStateRead(f.command, f.cwd, env))) return refuse(thread, recordsAsLead(thread) ? LEAD_SHELL : CHILD_LOGBOOK);
-    const why = commandWrites(f.command, f.cwd) || runsPatch(f.command, f.cwd, env) ? childChange(thread, mode(f, env).sage) : undefined;
+    // A read-only role's redirection into the temp folder, outside the project, and its git in a worktree there run, as in
+    // Claude (T933, T936); childChange lets a writer's every write run.
+    const why = commandWrites(f.command, f.cwd, TEMP, { readOnly: true }) || runsPatch(f.command, f.cwd, env) ? childChange(thread, mode(f, env).sage) : undefined;
     if (why) return refuse(thread, why);
     const agent = underSage(thread) !== false || mode(f, env).sage ? agentCommandProblem(f.command, f.cwd, env.PATH ?? "") : undefined;
     if (agent) return refuse(thread, `sage: ${agent}`);

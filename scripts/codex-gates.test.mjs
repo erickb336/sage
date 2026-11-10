@@ -190,11 +190,21 @@ test("T948: in sage mode the chief changes no repository file from the shell eit
 const CHIEF_WRITES = ["cat > notes.md <<'EOF'\nhi\nEOF", "echo x > src/a.js", "printf x | tee src/a.js", "cp src/a.js src/b.js", "sed -i '' s/a/b/ src/a.js",
   "mv src/a.js src/b.js", "rm src/a.js", "node -e \"require('fs').writeFileSync('a.js', 'b')\"", "printf x | tee /tmp/notes/out.txt", "cp src/a.js /tmp/notes/a.js",
   "gh repo clone acme/site", "gh repo clone acme/site src/site", "gh run download 5", "gh run download 5 -D src", "gh release download v1", "gh release download v1 -O site.tgz",
-  "gh codespace cp remote:a.txt a.txt", "gh extension install acme/gh-x", "gh ext upgrade --all", "git rm src/a.js"];
+  "gh codespace cp remote:a.txt a.txt", "gh extension install acme/gh-x", "gh ext upgrade --all", "git rm src/a.js",
+  // T936: gh's options before its command words; the clones of a fork or a new repository; an attestation download; awk's
+  // own redirection or command; a chmod in the project (F-T960-2, F-T932-4, F-T933-1).
+  "gh -R acme/site release download v1", "gh release -R acme/site download v1", "gh repo fork acme/site --clone", "gh repo create acme/new --clone", "gh repo create acme/new -c --private",
+  "gh attestation download site.tgz -o acme", `awk '{print > "out.txt"}' a.txt`, `awk '{print $1 | "sort"}' a.txt`, `awk 'BEGIN { system("rm a.txt") }'`, "chmod +x src/a.sh", "chmod -R u+w ."];
 const CHIEF_RUNS = ["git status", "git add -A && git commit -m 'a change'", "git -C /work/project worktree add /work/wt -b claude/t1", "git worktree add /work/wt/install -b claude/t2", "git commit -m patch", "gh pr view 41",
   "gh api -X PATCH repos/acme/site -f description=x", "gh pr create --title T --body \"$(cat <<'EOF'\nbody\nEOF\n)\"", "gh pr checkout 41", "gh extension list",
   "gh repo clone acme/site /tmp/notes/site", "gh run download 5 -D /tmp/notes/run", "gh release download v1 -O -", "gh codespace cp a.txt remote:a.txt",
-  `node ${TOOL} status --project ${CWD}`, "cat src/a.js", "grep -rn x src", "ls -la > /dev/null", "echo x > /tmp/notes/out.txt", "mkdir -p /tmp/notes", "npm test 2>&1"];
+  `node ${TOOL} status --project ${CWD}`, "cat src/a.js", "grep -rn x src", "ls -la > /dev/null", "echo x > /tmp/notes/out.txt", "mkdir -p /tmp/notes", "npm test 2>&1",
+  // T936 (F-T960-3): a word that names a write program is data unless it runs, so the chief's notes and installs run.
+  `node ${TOOL} log T1 "rm of the old files" --why rm --chief C1`, `node ${TOOL} task add --title "tee the log" --why "cp, mv and rm"`, "npm install", "npm ci", "man tee", "which rm",
+  // A fork without --clone, a download into the temp folder, an awk comparison, a chmod outside the project, and git:
+  // the chief's git runs (T960); only a read-only role's git that changes the checkout is refused (T936).
+  "gh repo fork acme/site", "gh repo fork acme/site --clone=false", "gh -R acme/site release download v1 -D /tmp/notes/rel", `awk '$3 > 100 { print "a|b" }' a.txt`,
+  "chmod +x /tmp/notes/fake/ps", "chmod -R u+w ~", "git checkout main", "git worktree add .claude/worktrees/t1 -b claude/t1"];
 test("T960: the Claude hook and the Codex gate give the chief the same answer to each command, in sage mode and out of it", async () => {
   const { handle } = await import(new URL("../plugins/sage/hooks/sage-hook.mjs", import.meta.url));
   const slots = { bind() {}, release() {}, drop() {}, touch() {}, reconcile() {} };
@@ -209,6 +219,56 @@ test("T960: the Claude hook and the Codex gate give the chief the same answer to
   }
   // The text names each write form, and says that only a redirection, a clone or a download runs into the temp folder (F-T948-4).
   for (const form of ["a redirection or a heredoc into a file", "tee", "cp", "sed -i", "gh repo clone", "tee, cp and the other forms are refused also there"]) assert.ok(CHIEF_SHELL.includes(form), form);
+});
+
+/**
+ * T936 (F-T933-1, F-T932-4, F-T932-5): a read-only role's git that changes the checkout (its files, index, history,
+ * branches or settings) is refused in both providers, from core's commandWrites with readOnly; the same git in a worktree
+ * in the temp folder runs, so a reviewer checks out a head there. The implementer runs each. The hooks only read these.
+ */
+const RO_REFUSED = ["git reset --hard", "git reset --hard HEAD~1", "git checkout -- .", "git checkout claude/t1", "git switch main", "git restore .", "git restore --staged src/a.js",
+  "git clean -fd", "git apply fix.patch", "git am fix.mbox", "git merge main", "git pull", "git rebase main", "git cherry-pick abc1234", "git revert HEAD", "git commit -am 'a fix'",
+  "git add -A", "git branch -D claude/t1", "git branch -m old new", "git branch --set-upstream-to=origin/main", "git config user.email a@b.example", "git config --unset core.hooksPath",
+  "git config --global user.name x", "git -C /work/project reset --hard", "cd /tmp && git checkout main", "git worktree add ../wt claude/t1", "git worktree add .claude/worktrees/x",
+  "git worktree remove .claude/worktrees/x", "git -C $WT reset --hard", "git --work-tree=/tmp/notes/head checkout .", `awk '{print > "out.txt"}' a.txt`, "chmod +x src/a.sh"];
+const RO_RUNS = [`git worktree add --detach /tmp/notes/head ${SHA}`, `git -C /work/project worktree add --detach /tmp/notes/head ${SHA}`, "git -C /tmp/notes/head checkout main",
+  "git -C /tmp/notes/head reset --hard HEAD~1", "git -C /tmp/notes/head apply /tmp/notes/fix.patch", "git worktree remove /tmp/notes/head", "git worktree list", "git worktree prune",
+  "git fetch origin", "git log --oneline -5", "git diff main...HEAD", "git show HEAD:src/a.js", "git status", "git branch -a", "git branch --sort -committerdate", "git branch --show-current",
+  "git config --get user.email", "git config user.email", "git config --list", "git apply --check fix.patch", "git apply --stat fix.patch", "git clean -n", "git add -n .", "git commit --dry-run",
+  "echo x > /tmp/notes/out.txt", "npm test > /tmp/notes/test.txt 2>&1", "chmod +x /tmp/notes/fake/ps", `awk '$3 > 100' a.txt`, "npm test"];
+test("T936: a read-only role's git that changes the checkout is refused in both providers, and runs in a scratch worktree; the implementer runs it", async (t) => {
+  const { handle } = await import(new URL("../plugins/sage/hooks/sage-hook.mjs", import.meta.url));
+  const slots = { bind() {}, release() {}, drop() {}, touch() {}, reconcile() {} };
+  const claude = (command, agent_type) => denied(handle({ hook_event_name: "PreToolUse", tool_name: "Bash", tool_input: { command }, cwd: CWD, session_id: "s1", agent_id: "a1", agent_type }, { sage: true, autopilot: false, start: false }, slots));
+  const g = fixed({ sage: true });
+  const child = (name) => ({ ...CHILD, transcript_path: record(t, { id: "child", session_id: base.session_id, agent_path: `/root/${name}`, source: { subagent: { thread_spawn: { depth: 1 } } } }) });
+  const roles = [["code-reviewer", "sage_code_reviewer_t1_r2"], ["qa", "sage_qa_t1_r3"], ["implementer", "sage_implementer_t1_r1"]];
+  for (const [role, name] of roles) {
+    const who = child(name);
+    for (const command of [...RO_REFUSED, ...RO_RUNS]) {
+      const refused = role !== "implementer" && RO_REFUSED.includes(command);
+      const c = claude(command, `sage:${role}`), x = denied(await g.run(pre("Bash", command, who)));
+      assert.deepEqual({ claude: c === undefined ? "runs" : c.includes(`the ${role} agent changes no files, also not from the shell`) ? "refused" : c, codex: x === undefined ? "runs" : x === RO(role) ? "refused" : x },
+        refused ? { claude: "refused", codex: "refused" } : { claude: "runs", codex: "runs" }, `${role}: ${command}`);
+    }
+  }
+  // The Claude line names the git forms and the way to check out a head.
+  const why = claude("git reset --hard", "sage:code-reviewer");
+  for (const part of ["a git command that changes the checkout, such as git checkout, reset, commit or branch -D", "git worktree add --detach /tmp/<run>/head <sha>"]) assert.ok(why.includes(part), part);
+});
+
+/** T936 (F-T960-9): the push form names the branch, so git push origin HEAD is refused for each role, with the form. */
+test("T936: git push origin HEAD is refused in both providers, and the refusal names the push form", async (t) => {
+  const { handle } = await import(new URL("../plugins/sage/hooks/sage-hook.mjs", import.meta.url));
+  const slots = { bind() {}, release() {}, drop() {}, touch() {}, reconcile() {} };
+  const implementer = { ...CHILD, transcript_path: record(t, { id: "child", session_id: base.session_id, agent_path: "/root/sage_implementer_t1_r1", source: { subagent: { thread_spawn: { depth: 1 } } } }) };
+  const form = /^sage: "HEAD" is not part of the push form\. Push only with git \[-C <dir>\] push .*not the default branch, main or master, HEAD, @/;
+  for (const command of ["git push origin HEAD", "git push -u origin HEAD"]) {
+    for (const agent of [{}, { agent_id: "a1", agent_type: "sage:implementer" }]) {
+      assert.match(denied(handle({ hook_event_name: "PreToolUse", tool_name: "Bash", tool_input: { command }, cwd: CWD, session_id: "s1", ...agent }, { sage: true, autopilot: false, start: false }, slots)) ?? "", form, `claude ${agent.agent_type ?? "chief"}: ${command}`);
+    }
+    for (const extra of [{}, implementer]) assert.match(denied(await fixed({ sage: true }).run(pre("Bash", command, extra))) ?? "", form, `codex ${extra.transcript_path ? "implementer" : "chief"}: ${command}`);
+  }
 });
 
 test("T931: a sage child, and every child in sage mode, runs no git stash and no real process program; the chief is not held", async (t) => {
@@ -630,7 +690,7 @@ test("no thread, in any mode, runs codex from the shell except --version and --h
     "cd /p && env codex exec --json resume --last hi", `bash -c "codex queue --thread X --message 'autopilot on'"`, "timeout 5 codex fork abc", "npx codex queue --thread X --message hi",
     "codex --version queue --thread X", "codex exec --help hi", "npm test && codex queue --thread X --message hi"];
   const prints = ["codex --version", "codex -V", "codex --help", "codex -h", "/usr/local/bin/codex --version", "codex --version && npm test"];
-  const others = ["git commit -m 'codex queue notes'", "echo codex queue", "grep -rn codex src", "ls packages/sage-codex"];
+  const others = ["git log --grep 'codex queue notes'", "echo codex queue", "grep -rn codex src", "ls packages/sage-codex"];
   const workers = [{}, w.child("/root/worker_1"), w.child("/root/sage_implementer_t1"), w.child("/root/sage_code_reviewer_t1"), { ...CHILD, transcript_path: join(w.dir, "none.jsonl") }];
   for (const mode of [{ sage: false, autopilot: false }, { sage: true, autopilot: false }, { sage: true, autopilot: true }]) {
     w.mode(mode);

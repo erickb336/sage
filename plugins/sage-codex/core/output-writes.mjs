@@ -68,40 +68,51 @@ export function outputDispatchWrites(entry) {
 }
 
 /** The options that take a value in the gh commands that ghTargets reads (gh 2.x help), short and long. */
-const GH_VALUE = /^(?:-[uDOpAnRc]|--(?:upstream-remote-name|dir|output|pattern|archive|name|repo|codespace|profile|repo-owner))$/;
+const GH_VALUE = /^(?:-[uDOpAnRc]|--(?:upstream-remote-name|dir|output|pattern|archive|name|repo|codespace|profile|repo-owner|fork-name|remote-name|org|hostname))$/;
+/** The folder that a clone of a repository makes: its last name, without .git. */
+const cloneFolder = (repo) => repo.replace(/\/+$/, "").split(/[/:]/).pop().replace(/\.git$/, "");
 /**
  * The paths that a gh command writes, in the folder that it runs in, or true when it changes files at no path that it
- * names (F-T948-1, F-T948-5). gh repo clone and gh gist clone write the folder that they name, or else a folder named
- * after the repository; gh run download and gh release download write into the folder of -D, the file of -O (- is the
- * output) or else the command's folder; gh codespace cp writes its last operand when that is local. gh extension
+ * names (F-T948-1, F-T948-5, F-T960-2). gh's options come before, between or after its two command words, so
+ * "gh -R o/r release download" is a release download. gh repo clone and gh gist clone write the folder that they name, or
+ * else a folder named after the repository; gh repo fork --clone and gh repo create --clone write a folder named after
+ * the repository (a fork with no repository changes the checkout's remotes: its folder). gh run download and gh release
+ * download write into the folder of -D, the file of -O (- is the output) or else the command's folder; gh attestation
+ * download writes into the command's folder; gh codespace cp writes its last operand when that is local. gh extension
  * install, upgrade, remove and create change gh's extensions or make a folder. Every other gh command writes no file of
  * its own: gh pr checkout changes the work tree as git checkout does, and the rules let git run.
  */
 export function ghTargets(args) {
-  const [group = "", command = ""] = args;
-  if (/^(?:extension|extensions|ext)$/.test(group)) return /^(?:install|upgrade|remove|rm|create)$/.test(command) || [];
-  const operands = [], values = {};
-  for (let i = 2; i < args.length; i++) {
+  const words = [], values = {};
+  let clone = false;
+  for (let i = 0; i < args.length; i++) {
     const arg = args[i];
     if (arg === "--") break; // gh repo clone: git's own options follow
-    if (!arg.startsWith("-") || arg === "-") { operands.push(arg); continue; }
+    if (!arg.startsWith("-") || arg === "-") { words.push(arg); continue; }
     const equals = arg.indexOf("="), long = arg.startsWith("--");
     const name = long ? arg.slice(0, equals < 0 ? undefined : equals) : arg.slice(0, 2);
+    // --clone and gh repo create's -c are flags; --clone=false clones nothing.
+    if (name === "--clone" || (arg === "-c" && words[0] === "repo" && words[1] === "create")) { clone = equals < 0 || !/^false$/i.test(arg.slice(equals + 1)); continue; }
     if (!GH_VALUE.test(name)) continue;
     const value = long ? (equals < 0 ? args[++i] : arg.slice(equals + 1)) : arg.length > 2 ? arg.slice(arg[2] === "=" ? 3 : 2) : args[++i];
     values[name] = value ?? "";
   }
+  const [group = "", command = "", ...operands] = words;
+  if (/^(?:extension|extensions|ext)$/.test(group)) return /^(?:install|upgrade|remove|rm|create)$/.test(command) || [];
   const option = (short, long) => values[short] ?? values[long];
   const key = `${group} ${command}`;
   if (/^(?:repo|gist) clone$/.test(key)) {
     if (operands.length > 1) return [operands[1]];
-    return operands.length ? [operands[0].replace(/\/+$/, "").split(/[/:]/).pop().replace(/\.git$/, "")] : [];
+    return operands.length ? [cloneFolder(operands[0])] : [];
   }
+  if (key === "repo fork") return !clone ? [] : operands.length ? [values["--fork-name"] ?? cloneFolder(operands[0])] : ["."];
+  if (key === "repo create") return clone ? [operands.length ? cloneFolder(operands[0]) : "."] : [];
   if (key === "run download") return [option("-D", "--dir") ?? "."];
   if (key === "release download") {
     const output = option("-O", "--output");
     return output === "-" ? [] : [output ?? option("-D", "--dir") ?? "."];
   }
+  if (key === "attestation download") return ["."];
   if (/^(?:codespace|cs) cp$/.test(key)) return operands.length > 1 && !operands.at(-1).startsWith("remote:") ? [operands.at(-1)] : [];
   return [];
 }
