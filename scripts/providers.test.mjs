@@ -1080,7 +1080,7 @@ async function roleInstructionsFixture(t, provider = "codex") {
 }
 
 test("shared role instructions ship outside the checkout and generate existing specialist bodies", async t => {
-  const roles = ["implementer", "pe", "designer", "arena-judge", "code-reviewer", "security-reviewer", "ux-reviewer", "qa"];
+  const roles = ["implementer", "pe", "designer", "arena-judge", "code-reviewer", "security-reviewer", "ux-reviewer", "qa", "investigate", "evidence-review"];
   for (const provider of ["claude", "codex"]) {
     const f = await roleInstructionsFixture(t, provider);
     for (const role of [...roles, "lead"]) {
@@ -1100,6 +1100,13 @@ test("shared role instructions ship outside the checkout and generate existing s
     const qa = f.api.renderRoleInstructions("qa", f.bindings.qa);
     assert.match(qa, /You do not fix anything/);
     assert.match(qa, /PASS or FAIL/);
+    // The investigation's two roles have one text in core (T932); each provider says where its agent may write.
+    const investigate = f.api.renderRoleInstructions("investigate", f.bindings.investigate);
+    const review = f.api.renderRoleInstructions("evidence-review", f.bindings["evidence-review"]);
+    assert.match(investigate, /^# Investigate\n\nYou investigate one task for the chief\. /);
+    assert.match(review, /^# Evidence review\n\nYou independently review an investigation for the chief\. /);
+    assert.match(investigate, provider === "codex" ? /This role is read-only in the Codex skill-led workflow\./ : /You write only your pages, in the task's pages folder/);
+    assert.match(review, provider === "codex" ? /This role is read-only in the Codex skill-led workflow\./ : /This role is read-only: you have no file tools/);
     const lead = f.api.renderRoleInstructions("lead", f.bindings.lead);
     assert.match(lead, /at most nine children/);
     assert.match(lead, /code review for every change/);

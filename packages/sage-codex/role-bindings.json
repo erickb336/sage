@@ -15,6 +15,12 @@
   "security-reviewer": {},
   "ux-reviewer": {},
   "qa": {},
+  "investigate": {
+    "WRITE_SCOPE": "This role is read-only in the Codex skill-led workflow."
+  },
+  "evidence-review": {
+    "WRITE_SCOPE": "This role is read-only in the Codex skill-led workflow."
+  },
   "report": {
     "REPORT_GATE": "Start each required field on its own line. The chief reviews the report before it accepts the result.",
     "REPORT_FINDINGS": "for each problem: a key, high, medium or low, the location, and the steps that show it",

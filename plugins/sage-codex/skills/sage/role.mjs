@@ -5,21 +5,13 @@ import { readFileSync, realpathSync } from "node:fs";
 import { fileURLToPath } from "node:url";
 import { renderReportInstructions, renderRoleInstructions, ROLE_PRINCIPLES } from "../../core/index.mjs";
 
-// These two roles belong to the Codex skill-led path; core has no role text for them.
-const localRoles = new Map([
-  ["investigate", "references/investigate.md"],
-  ["evidence-review", "references/evidence-review.md"],
-]);
-
 // These roles write git or reach the network, so Codex's default sandbox asks the owner each time.
 // Every other role only runs checks and reads, and gets the short text.
 const approvalRoles = new Set(["implementer", "designer", "arena-judge", "lead"]);
 
 export function roleMessage(role) {
   const bindings = JSON.parse(readFileSync(new URL("../../role-bindings.json", import.meta.url), "utf8"));
-  const local = localRoles.get(role);
-  const instructions = local ? readFileSync(new URL(local, import.meta.url), "utf8").trim()
-    : renderRoleInstructions(role, { ...bindings.common, ...bindings[role] });
+  const instructions = renderRoleInstructions(role, { ...bindings.common, ...bindings[role] });
   return `${instructions}${role === "lead" ? leadSteps() : ""}${principles(role)}\n\n${reference(approvalRoles.has(role) ? "approvals.md" : "sandbox-refusal.md")}\n\n${renderReportInstructions(bindings.report)}\n`;
 }
 

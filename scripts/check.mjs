@@ -74,6 +74,8 @@ for (const f of agents) {
   const mapped = [...(ROLE_PRINCIPLES[f.slice(0, -3)] ?? [])].sort().join(", ");
   if (preloaded !== mapped) problems.push(`agents/${f}: preloads the principles [${preloaded}], but ROLE_PRINCIPLES in packages/sage-core/roles.mjs gives [${mapped}]`);
 }
+// Each role of the role map has its Claude agent file, so no role starts as a general agent without its principles (T932).
+for (const role of Object.keys(ROLE_PRINCIPLES)) if (!agents.includes(`${role}.md`)) problems.push(`ROLE_PRINCIPLES names the role ${role}, which has no agent file in packages/sage-claude/agents/`);
 // Every principle has a role, and the role map names only principles that exist.
 const principleNames = readdirSync(join(ROOT, "principles")).filter((f) => f.endsWith(".md") && f !== "README.md").map((f) => f.slice(0, -3));
 const mappedPrinciples = new Set(Object.values(ROLE_PRINCIPLES).flat());
