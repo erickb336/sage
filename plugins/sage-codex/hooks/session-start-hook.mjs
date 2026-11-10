@@ -10,7 +10,7 @@ import { readFileSync, realpathSync } from "node:fs";
 import { homedir } from "node:os";
 import { basename, dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
-import { PHRASES, readModeFile } from "../core/index.mjs";
+import { PHRASES, readModeFile, startsInSageMode } from "../core/index.mjs";
 import { privateDirectory, readState, saveState, stateKey } from "./hook-state.mjs";
 import { sessionMeta } from "./report-gate.mjs";
 import { modeDirectory, TESTED_CODEX } from "./sage-codex-hook.mjs";
@@ -70,7 +70,7 @@ function sageOn(input, env) {
 function startMode(input, env) {
   if (!["startup", "clear"].includes(input.source) || typeof input.session_id !== "string" || !input.session_id || "agent_id" in input) return {};
   let on;
-  try { on = tool.startsInSageMode(input.cwd ?? process.cwd(), env); } catch { on = false; }
+  try { on = startsInSageMode(tool.storeDir(input.cwd ?? process.cwd(), env)); } catch { on = false; }
   if (!on) return {};
   try {
     const dir = modeDirectory(env);

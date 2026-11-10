@@ -206,7 +206,7 @@ export function handle(input, state, slots) {
   // The project's start setting (config start=sage-mode, read by core for both providers, T948) turns sage mode on at the
   // session's first event, once: the off phrase then holds for the rest of the session.
   if (main && !("start" in state)) {
-    try { state.start = stateTool.startsInSageMode(input.cwd ?? process.cwd()); } catch { state.start = false; }
+    try { state.start = core.startsInSageMode(stateTool.storeDir(input.cwd ?? process.cwd())); } catch { state.start = false; }
     if (state.start === true && state.sage === undefined) state.sage = true;
   }
 

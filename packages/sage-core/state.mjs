@@ -22,7 +22,7 @@ import { PR, pullRequestHead } from "./pull-request.mjs";
 import { REPORT_FIELDS } from "./report.mjs";
 import { cleanReport, fieldsOf, readReport } from "./report-reader.mjs";
 import { ROLES } from "./roles.mjs";
-import { AGENT_CAPS, BREAKS, FINDING_CLASSES, HIDDEN, LINE, NAME_MAX, PRIORITIES, PRIORITY_SCALE, START_SAGE_MODE, TABLES as PLAIN_TABLES, TASK_KINDS, countOf, logbookSettings, nameProblem, proposalOf } from "./logbook-fields.mjs";
+import { AGENT_CAPS, BREAKS, FINDING_CLASSES, HIDDEN, LINE, NAME_MAX, PRIORITIES, PRIORITY_SCALE, START_SAGE_MODE, TABLES as PLAIN_TABLES, TASK_KINDS, countOf, nameProblem, proposalOf } from "./logbook-fields.mjs";
 import { BREAKDOWN, ENDED, GATE_ID, MET, PROGRAM_ID, TASK_ID, breakdownGate, byIds, dead, droppedBy, gateLines, lostClause, programState, progressOf, progressText, shownGraph, shownWaits, unmetWaits, waitGraph, waitWords, waitsOf, waitsWithState } from "./program-rules.mjs";
 import { OBSERVATIONS_MAX_BYTES, OBSERVATION_DATA_MAX_BYTES, validateObservation, validateObservations } from "./observations.mjs";
 import { MOVES, PLAN_MAX, checkoutGone, createSharedRoot, sharedRoot, unreadableFolder } from "./shared-root.mjs";
@@ -2813,18 +2813,6 @@ function logbookConfig(dir, pairs) {
   return `name=${visible(typeof next.name === "string" ? next.name : "")} archived=${next.archived === true ? "yes" : "no"} start=${next.start === START_SAGE_MODE ? START_SAGE_MODE : "normal"}`;
 }
 
-/**
- * Whether each new session in the project starts in sage mode: the start key of its logbook's own config.json (T948),
- * which both providers' hooks read at a session's start. No logbook, a file that cannot be read and a bad value are a
- * normal start, so a broken file never puts a session into sage mode.
- */
-function startsInSageMode(project, env = process.env) {
-  try {
-    return logbookSettings(JSON.parse(readRegular(join(storeDir(project, env), "config.json"), { max: 64 * 1024 }) ?? "{}")).sageModeStart;
-  } catch {
-    return false;
-  }
-}
 
 /** Runs one command and returns its output line(s). A refused command throws, with the reason. */
 /** The folder of this command. A checkout that moved or was cloned again can leave a session in a folder that is gone. */
@@ -4118,5 +4106,5 @@ const { bindings, fillCommits, folderOf, link, locate, movePlans, notePlugin, pl
   listed: (root) => known(root, undefined, undefined, true),
   enroll });
 const { chiefs, chiefRow, rowOf } = createChiefs({ now, provider, readRegular, refuse, rowsOf, sheetText, swap });
-return { SIZES, BLOCKS, RISKS, KINDS, STATES, DEFAULTS, PR, sageRoot, locate, startsInSageMode, chiefFor, sessionBar, branchBar, actorOptions, git, projectRoot, roleReadProject, optionsOf, slug, worktreeRoot, pagesRoot, BRANCH, ofTask, branchOfTask, branchHome, branchTip, projectName, storeDir, config, cyclesFor, modelFor, read, mergeCheck, landingBar, boardLandingCheck, logbookView, sage, keepReport, compareRetainedReport, takenRows, withLock, board, answerPaths, command, runCli, waitingPlugins, writeIdFloors };
+return { SIZES, BLOCKS, RISKS, KINDS, STATES, DEFAULTS, PR, sageRoot, locate, chiefFor, sessionBar, branchBar, actorOptions, git, projectRoot, roleReadProject, optionsOf, slug, worktreeRoot, pagesRoot, BRANCH, ofTask, branchOfTask, branchHome, branchTip, projectName, storeDir, config, cyclesFor, modelFor, read, mergeCheck, landingBar, boardLandingCheck, logbookView, sage, keepReport, compareRetainedReport, takenRows, withLock, board, answerPaths, command, runCli, waitingPlugins, writeIdFloors };
 }

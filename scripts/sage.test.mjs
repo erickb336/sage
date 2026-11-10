@@ -9,7 +9,8 @@ import { hostname, tmpdir, uptime } from "node:os";
 import { basename, dirname, join } from "node:path";
 import { test } from "node:test";
 import { fileURLToPath } from "node:url";
-import { keepReport, startsInSageMode } from "../plugins/sage/skills/sage/sage.mjs";
+import { keepReport } from "../plugins/sage/skills/sage/sage.mjs";
+import { startsInSageMode } from "../plugins/sage/core/index.mjs";
 import { BACKER, backed, linkFinding, reportFor } from "./verdict-backing.mjs";
 import { TABLES } from "../packages/sage-core/logbook-fields.mjs";
 
@@ -4488,7 +4489,7 @@ test("T314: config name= and archived= set one logbook's own config.json, never 
 
 test("T948: config start=sage-mode starts each new session of the project in sage mode; start=normal and a bad file start it off", () => {
   const s = store();
-  const own = join(s.dir, "config.json"), starts = () => startsInSageMode(s.project, testEnv({ SAGE_HOME: s.home }));
+  const own = join(s.dir, "config.json"), starts = () => startsInSageMode(s.dir);
   assert.equal(starts(), false, "the default: no config.json");
   assert.equal(s.ok("config", "start=sage-mode"), "name= archived=no start=sage-mode");
   assert.deepEqual(JSON.parse(readFileSync(own, "utf8")), { start: "sage-mode" });
@@ -4503,8 +4504,10 @@ test("T948: config start=sage-mode starts each new session of the project in sag
     writeFileSync(own, text);
     assert.equal(starts(), false, `${text}: a bad file is a normal start`);
   }
-  writeFileSync(own, '{"start":"sage-mode"}');
-  assert.equal(startsInSageMode(join(s.home, "no-such-folder"), testEnv({ SAGE_HOME: s.home })), false, "a folder with no logbook starts normal");
+  rmSync(own);
+  mkdirSync(own);
+  assert.equal(starts(), false, "a folder in the file's place starts normal");
+  assert.equal(startsInSageMode(join(s.home, "no-such-folder")), false, "no logbook folder starts normal");
 });
 
 test("T314: config refuses a name that is too long, empty of text, spaced at an end, or holds a control, format or hidden character, and a bad archived", () => {
