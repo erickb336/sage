@@ -1,16 +1,17 @@
 // The worktrees command of the state tool (T927): it lists the git worktrees of a project's repository with the task of
-// each, and it removes only the clean ones of a merged or abandoned task, or of a branch that is in origin/main. The idea
+// each, and it removes only the clean ones of a merged, concluded or abandoned task, or of a branch that a merge brought
+// into origin/main (T937). The idea
 // comes from pstack's worktree audit playbook (worktree-audit.sh: audit, then prune only what is merged and clean).
 // The listing reads the local git data and the logbook only: it does not fetch. The prune runs git worktree remove with
 // no --force, so git also refuses a worktree with changes, and it deletes no branch.
 import { realpathSync } from "node:fs";
 import { sep } from "node:path";
 
-/** The tasks that are over: a worktree of another task is open, and the prune keeps it. */
-const OVER = ["merged", "abandoned"];
+/** The states of a task that is over, in the order that names a row's reason: a worktree of another task is open. */
+const OVER = ["merged", "concluded", "abandoned"];
 /** The reasons of a row: the ones that the prune may remove come first. */
-const REASONS = ["merged", "abandoned", "branch merged", "open", "unknown"];
-const REMOVABLE = REASONS.slice(0, 3);
+const REASONS = [...OVER, "branch merged", "open", "unknown"];
+const REMOVABLE = REASONS.slice(0, 4);
 const real = (path) => { try { return realpathSync(path); } catch { return path; } };
 const short = (sha) => String(sha ?? "").slice(0, 7);
 
@@ -44,18 +45,22 @@ const lower = (s) => String(s ?? "").toLowerCase();
  * One row for each worktree: its task and reason. A worktree matches a task only through the logbook: the branch of the
  * task's row in tasks.tsv, or the branch of a run of the task in runs.tsv (a number in a branch's name is no match,
  * because older branches carry another logbook's numbers). A detached worktree has no branch, so its reason is unknown.
+ * A branch with no task is merged only when it adds a commit that a merge brought into origin/main. A head on the first-
+ * parent line of origin/main adds no commit: it is also where a new run starts (F-T927-1), so its row is fresh and unknown.
  */
 function rows({ git, root, tasks, runs, main }) {
   const byId = new Map(tasks.map((t) => [t.id, t]));
+  const trunk = new Set(main ? git(["-C", root, "rev-list", "--first-parent", main]).split("\n") : []);
   return listed(git, root).map((w, k) => {
     const name = lower(w.branch);
     const ids = !w.branch ? [] : [...new Set([...tasks.filter((t) => lower(t.branch) === name).map((t) => t.id), ...runs.filter((r) => lower(r.branch) === name).map((r) => r.task)])].filter((id) => byId.has(id));
     const matched = ids.map((id) => byId.get(id)), open = matched.filter((t) => !OVER.includes(t.state));
     const shown = open.length ? open : matched;
+    const fresh = !matched.length && Boolean(w.branch) && trunk.has(w.head);
     const reason = matched.length
-      ? (open.length ? "open" : matched.some((t) => t.state === "merged") ? "merged" : "abandoned")
-      : w.branch && main && w.head && inMain(git, root, w.head, main) ? "branch merged" : "unknown";
-    return { ...w, primary: k === 0, tasks: shown, reason };
+      ? (open.length ? "open" : OVER.find((s) => matched.some((t) => t.state === s)))
+      : w.branch && main && w.head && !fresh && inMain(git, root, w.head, main) ? "branch merged" : "unknown";
+    return { ...w, primary: k === 0, tasks: shown, reason, fresh };
   });
 }
 
@@ -73,20 +78,25 @@ function kept(w, here, all) {
   const inner = all.find((o) => o !== w && real(o.path).startsWith(real(w.path) + sep));
   if (inner) return `another worktree is inside it: ${inner.path}`;
   if (REMOVABLE.includes(w.reason)) return "";
-  if (w.tasks.length) return `${w.reason}: ${w.tasks.map((t) => `${t.id} is ${t.state}`).join(", ")}`;
-  return `${w.reason}: ${w.branch ? "no task of the logbook names its branch, and the branch is not in origin/main" : "it has no branch, so no task matches it"}`;
+  if (w.tasks.length) return `open: ${w.tasks.map((t) => `${t.id} is ${t.state}`).join(", ")}, so its work may still need this folder`;
+  if (!w.branch) return "unknown: it has no branch, so no task matches it";
+  return `unknown: no task of the logbook names its branch, and ${w.fresh ? "the branch adds no commit to origin/main, so a run may have just started on it" : "the branch is not in origin/main"}`;
 }
 
 /**
- * Why a clean-looking worktree must stay: uncommitted changes, untracked files or unpushed commits, or "". A commit is
+ * Why a clean-looking worktree must stay: uncommitted changes, untracked files, ignored files or unpushed commits, or "".
+ * git worktree remove deletes ignored files, such as .env, with the worktree, so an ignored file keeps it (F-T927-2). An
+ * ignored folder that an ignore pattern names as a whole, such as node_modules/, does not: a build makes it again. A commit is
  * pushed when a remote-tracking ref holds it, or when it is a reviewed head of the worktree's task (a verdict SHA of the
  * task in the ledger) or an ancestor of one: a squash merge leaves the task's commits out of origin/main, and
  * gh pr merge --delete-branch deletes its remote branch.
  */
 function changed(git, root, w, ledger) {
-  const status = git(["-C", w.path, "status", "--porcelain", "-z", "--untracked-files=all"]).split("\0").filter(Boolean);
-  const untracked = status.filter((s) => s.startsWith("?? ")).length, edits = status.length - untracked;
-  const why = [edits && "uncommitted changes", untracked && "untracked files"].filter(Boolean);
+  const status = git(["-C", w.path, "status", "--porcelain", "-z", "--untracked-files=all", "--ignored=matching"]).split("\0").filter(Boolean);
+  const untracked = status.filter((s) => s.startsWith("?? ")).length, edits = status.filter((s) => !/^(\?\?|!!) /.test(s)).length;
+  const ignored = status.filter((s) => s.startsWith("!! ") && !s.endsWith("/")).map((s) => s.slice(3));
+  const files = ignored.length > 3 ? `${ignored.slice(0, 3).join(", ")} and ${ignored.length - 3} more` : ignored.join(", ");
+  const why = [edits && "uncommitted changes", untracked && "untracked files", ignored.length && `ignored files that the prune would delete: ${files}`].filter(Boolean);
   if (why.length) return why.join(" and ");
   const ids = w.tasks.map((t) => t.id), reviewed = [...new Set(ledger.filter((l) => ids.includes(l.task) && /^[0-9a-f]{40}$/i.test(l.sha ?? "")).map((l) => l.sha))];
   const ahead = Number(git(["-C", root, "rev-list", "--count", "--ignore-missing", w.head, "--not", "--remotes", ...reviewed]).trim());

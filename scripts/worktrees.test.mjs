@@ -95,7 +95,7 @@ test("T927: worktrees lists each worktree with its branch, task, state and reaso
   for (const id of ["T3", "T5"]) w.cell(id, "state", "abandoned");
   const unknown = w.add("unknown", "feature/x");
   w.commit(unknown, "x.txt");
-  w.add("old", "old/done", first); // behind origin/main, with no commit of its own
+  w.add("old", "old/done", first); // behind origin/main, with no commit of its own: a run may have just started on it (T937)
   w.add("detached", null);
 
   const main = git(project, "rev-parse", "origin/main");
@@ -105,9 +105,9 @@ test("T927: worktrees lists each worktree with its branch, task, state and reaso
   t.diagnostic(`sage worktrees\n${listing}`); // the listing, for a reader of the test's output
   assert.equal(listing.split("\n")[0], head);
   assert.deepEqual(rows(listing), [
-    "<base>/project · main · - · - · branch merged · primary checkout",
+    "<base>/project · main · - · - · unknown · primary checkout",
     "<base>/wt/detached · detached " + main.slice(0, 7) + " · - · - · unknown",
-    "<base>/wt/old · old/done · - · - · branch merged",
+    "<base>/wt/old · old/done · - · - · unknown",
     "<base>/wt/t1 · claude/t1-merged · T1 · merged · merged",
     "<base>/wt/t10 · claude/t10-gone · T10 · merged · merged · folder gone",
     "<base>/wt/t2 · claude/t2-unpushed · T2 · merged · merged",
@@ -120,7 +120,7 @@ test("T927: worktrees lists each worktree with its branch, task, state and reaso
     "<base>/wt/t9 · claude/t9-here · T9 · merged · merged · this worktree",
     "<base>/wt/unknown · feature/x · - · - · unknown",
   ]);
-  assert.equal(listing.split("\n").at(-1), "14 worktrees: 7 merged, 2 abandoned, 2 branch merged, 1 open, 2 unknown. 7 can go when clean, and 1 entries have no folder. To remove them: sage worktrees prune --yes. It removes each clean one, prints each path that it removes or keeps, and deletes no branch.");
+  assert.equal(listing.split("\n").at(-1), "14 worktrees: 7 merged, 0 concluded, 2 abandoned, 0 branch merged, 1 open, 4 unknown. 6 can go when clean, and 1 entries have no folder. To remove them: sage worktrees prune --yes. It removes each clean one, prints each path that it removes or keeps, and deletes no branch.");
   assert.equal(w.ok(["worktrees"], wt.T9), listing, "the listing changes nothing");
 
   // The prune needs its flag, and takes no other words.
@@ -135,24 +135,24 @@ test("T927: worktrees lists each worktree with its branch, task, state and reaso
   assert.deepEqual(rows(pruned), [
     "kept <base>/project · the primary checkout",
     "kept <base>/wt/detached · unknown: it has no branch, so no task matches it",
+    "kept <base>/wt/old · unknown: no task of the logbook names its branch, and the branch adds no commit to origin/main, so a run may have just started on it",
     "kept <base>/wt/t2 · 1 unpushed commit",
-    "kept <base>/wt/t4 · open: T4 is building",
+    "kept <base>/wt/t4 · open: T4 is building, so its work may still need this folder",
     "kept <base>/wt/t6 · uncommitted changes",
     "kept <base>/wt/t7 · untracked files",
     "kept <base>/wt/t8 · locked",
     "kept <base>/wt/t9 · the worktree that this command runs in",
     "kept <base>/wt/unknown · unknown: no task of the logbook names its branch, and the branch is not in origin/main",
     "pruned the entry of <base>/wt/t10 · its folder is gone",
-    "removed <base>/wt/old · branch merged",
     "removed <base>/wt/t1 · merged",
     "removed <base>/wt/t3 · abandoned",
     "removed <base>/wt/t5 · abandoned",
   ]);
-  assert.equal(pruned.split("\n").at(-1), "Removed 4, kept 9, pruned 1 entries with no folder. No branch was deleted.");
-  assert.deepEqual(["old", "t1", "t3", "t5"].map((n) => existsSync(join(base, "wt", n))), [false, false, false, false]);
-  assert.deepEqual(["t2", "t4", "t6", "t7", "t8", "t9", "unknown", "detached"].map((n) => existsSync(join(base, "wt", n))), Array(8).fill(true));
+  assert.equal(pruned.split("\n").at(-1), "Removed 3, kept 10, pruned 1 entries with no folder. No branch was deleted.");
+  assert.deepEqual(["t1", "t3", "t5"].map((n) => existsSync(join(base, "wt", n))), [false, false, false]);
+  assert.deepEqual(["old", "t2", "t4", "t6", "t7", "t8", "t9", "unknown", "detached"].map((n) => existsSync(join(base, "wt", n))), Array(9).fill(true));
   assert.equal(readFileSync(join(wt.T6, "README.md"), "utf8"), "changed");
-  assert.equal(git(project, "worktree", "list", "--porcelain").split("\n").filter((l) => l.startsWith("worktree ")).length, 9);
+  assert.equal(git(project, "worktree", "list", "--porcelain").split("\n").filter((l) => l.startsWith("worktree ")).length, 10);
   for (const branch of [...Object.values(branches), "claude/t5-run", "old/done", "feature/x"]) assert.equal(git(project, "rev-parse", "--verify", "--quiet", `refs/heads/${branch}`).length, 40, `${branch} stays`);
   // A second prune from the primary checkout finds nothing more that may go, except the worktree that the first one ran in.
   const again = w.ok(["worktrees", "prune", "--yes"]);
@@ -203,4 +203,59 @@ test("T927: the prune keeps a worktree that holds another worktree in an ignored
     "kept <base>/wt/outer/.nest/inner · unknown: it has no branch, so no task matches it",
   ]);
   assert.equal(readFileSync(join(inner, "work.txt"), "utf8"), "not committed");
+});
+
+test("T937: the prune removes a clean worktree of a concluded task and of a branch that a merge brought into origin/main; it keeps a fresh branch at the tip and a worktree with ignored files", (t) => {
+  const w = world(t), { base, project } = w;
+  writeFileSync(join(project, ".gitignore"), ".env\n*.log\nnode_modules/\n");
+  git(project, "add", ".gitignore");
+  git(project, "commit", "-q", "-m", "ignore");
+  w.ok(["init"]);
+  for (let k = 1; k <= 3; k++) w.ok(["task", "add", "--title", `task ${k}`, "--size", "small", "--priority", "P2"]);
+  const wt = {};
+  for (const [id, branch] of [["T1", "claude/t1-concluded"], ["T2", "claude/t2-env"], ["T3", "claude/t3-logs"]]) {
+    wt[id] = w.add(id.toLowerCase(), branch);
+    w.ok(["task", id, "set", "state=briefed", `branch=${branch}`]);
+  }
+  w.cell("T1", "state", "concluded");
+  for (const id of ["T2", "T3"]) w.cell(id, "state", "merged");
+  // T1 also has an ignored folder that a build makes again: it does not keep the worktree.
+  mkdirSync(join(wt.T1, "node_modules", "pkg"), { recursive: true });
+  writeFileSync(join(wt.T1, "node_modules", "pkg", "index.js"), "built");
+  writeFileSync(join(wt.T2, ".env"), "TOKEN=local");
+  for (const name of [".env", "a.log", "b.log", "c.log"]) writeFileSync(join(wt.T3, name), name);
+  // A branch with its own commit, merged into main with a merge commit.
+  const merged = w.add("merged", "feature/merged");
+  w.commit(merged, "feature.txt");
+  git(project, "merge", "-q", "--no-ff", "-m", "merge feature", "feature/merged");
+  git(project, "push", "-q", "-u", "origin", "main");
+  const fresh = w.add("fresh", "feature/fresh", "origin/main"); // a run that just started at the tip, before its first edit
+  assert.equal(git(fresh, "rev-parse", "HEAD"), git(project, "rev-parse", "origin/main"));
+
+  const listing = w.ok(["worktrees"]).split("\n");
+  t.diagnostic(`sage worktrees\n${listing.join("\n")}`);
+  assert.deepEqual(listing.slice(1, -1).sort(), [
+    "<base>/project · main · - · - · unknown · primary checkout",
+    "<base>/wt/fresh · feature/fresh · - · - · unknown",
+    "<base>/wt/merged · feature/merged · - · - · branch merged",
+    "<base>/wt/t1 · claude/t1-concluded · T1 · concluded · concluded",
+    "<base>/wt/t2 · claude/t2-env · T2 · merged · merged",
+    "<base>/wt/t3 · claude/t3-logs · T3 · merged · merged",
+  ]);
+  assert.match(listing.at(-1), /^6 worktrees: 2 merged, 1 concluded, 0 abandoned, 1 branch merged, 0 open, 2 unknown\. 4 can go when clean,/);
+
+  const pruned = w.ok(["worktrees", "prune", "--yes"]);
+  t.diagnostic(`sage worktrees prune --yes\n${pruned}`);
+  assert.deepEqual(pruned.split("\n").slice(1).sort(), [
+    "Removed 2, kept 4, pruned 0 entries with no folder. No branch was deleted.",
+    "kept <base>/project · the primary checkout",
+    "kept <base>/wt/fresh · unknown: no task of the logbook names its branch, and the branch adds no commit to origin/main, so a run may have just started on it",
+    "kept <base>/wt/t2 · ignored files that the prune would delete: .env",
+    "kept <base>/wt/t3 · ignored files that the prune would delete: .env, a.log, b.log and 1 more",
+    "removed <base>/wt/merged · branch merged",
+    "removed <base>/wt/t1 · concluded",
+  ]);
+  assert.deepEqual(["t1", "merged"].map((n) => existsSync(join(base, "wt", n))), [false, false]);
+  assert.equal(readFileSync(join(wt.T2, ".env"), "utf8"), "TOKEN=local");
+  assert.ok(existsSync(fresh));
 });
