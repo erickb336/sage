@@ -2116,7 +2116,7 @@ test("C2: an agent's read, diff or commit that names sage.mjs passes; running th
     const s = session();
     if (on) s.send(prompt("sage mode"));
     const path = "plugins/sage/skills/sage/sage.mjs";
-    const reads = [`cat ${path}`, `grep -n x ${path}`, `git diff main -- ${path}`, 'git commit -m "fix sage.mjs"' `cat ${TOOL} | head -5`];
+    const reads = [`cat ${path}`, `grep -n x ${path}`, `git diff main -- ${path}`, 'git commit -m "fix sage.mjs"', `cat ${TOOL} | head -5`];
     for (const command of reads) assert.equal(denied(s.send(bash(command, FEATURE, AGENT))), undefined, `sage mode ${on}: ${command}`);
     assert.equal(denied(s.send({ ...tool("Bash", { command: "npm test", description: "Test sage.mjs" }, { cwd: FEATURE }), ...AGENT })), undefined, "a description that names it");
     const runs = [
