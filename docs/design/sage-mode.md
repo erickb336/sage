@@ -96,6 +96,8 @@ The chief of staff never edits files. It writes briefs, records verdicts and ask
 | **qa** | Runs the checks and the real app, tries to break it. Verdict: PASS or FAIL with evidence | No | prove-it-works, test-behaviour |
 | **arena-judge** | Scores an arena's candidates against the rubric, picks the base, grafts the best parts of the others into it, and checks the result (Opus) | Its own new branch | exhaust-the-design-space, experience-first, laziness, prove-it-works |
 | **lead** | Runs one task's pull request from the build to its clean cycles: briefs the implementer, runs the reviews and QA in cycles and the repair rounds, records its own task's runs, findings and verdicts, and reports once to the chief | No: the state tool, on its own task only | never-block-on-the-human, prove-it-works |
+| **investigate** | Gathers the evidence for one question with read commands, tests each explanation, and reports its answer for an evidence review | Its research page, in the task's pages folder | build-the-lever, explain-the-number, guard-the-context-window |
+| **evidence-review** | Checks each claim of an investigation against its command output or source, as a different agent. Verdict: CLEAN or FINDINGS | No | explain-the-number |
 
 <a id="lead-loop"></a>
 

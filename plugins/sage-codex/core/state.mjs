@@ -70,7 +70,7 @@ const KINDS = [...Object.values(VERDICT), ...NOT_CLEAN];
 const CANDIDATES = ["implementer", "designer"];
 const WRITERS = [...CANDIDATES, "arena-judge"];
 /** The roles of a run: sage's child roles (roles.mjs), and the steps of an investigation, whose runs the board reads by the step's name. */
-const RUN_ROLES = [...ROLES, "investigate", "evidence-review"];
+const RUN_ROLES = [...ROLES];
 /** The roles of the runs whose reports give a review or QA verdict: none may still run when a task merges (F-T289-18). */
 const CHECKERS = ["code-reviewer", "security-reviewer", "ux-reviewer", "qa", "evidence-review"];
 /** A task's states and the moves between them (docs/design/sage-mode.md, "A task's life"). Any state may go to abandoned. */
@@ -232,10 +232,12 @@ const slug = (name) => String(name).toLowerCase().replace(/[^a-z0-9]+/g, "-").re
 /** The folder of the task copies (default ~/sage-worktrees; $SAGE_WORKTREES overrides it). It is outside the sage root, so agents may write in it. */
 const worktreeRoot = (env = process.env) => resolve(env.SAGE_WORKTREES || join(env.HOME || homedir(), "sage-worktrees"));
 /**
- * The folder where agents save a task's pages (research, designs, findings): <worktree root>/<logbook key>/pages/<task>.
- * The logbook key (name and hash) keeps two projects with the same folder name apart.
+ * The folder where agents save a project's pages (research, designs, findings): <worktree root>/<logbook key>/pages, one
+ * folder for each task in it. The logbook key (name and hash) keeps two projects with the same folder name apart. The
+ * Claude hook lets the investigate agent write here (T932).
  */
-const pagesDir = (project, task, env) => join(worktreeRoot(env), basename(storeDir(project, env)), "pages", task);
+const pagesRoot = (project, env = process.env) => join(worktreeRoot(env), basename(storeDir(project, env)), "pages");
+const pagesDir = (project, task, env) => join(pagesRoot(project, env), task);
 /** The largest page that pages record reads: 16 MiB, the size limit of a published page. */
 const PAGE_MAX = 16 * 1024 * 1024;
 
@@ -4101,5 +4103,5 @@ const { bindings, fillCommits, folderOf, link, locate, movePlans, notePlugin, pl
   listed: (root) => known(root, undefined, undefined, true),
   enroll });
 const { chiefs, chiefRow, rowOf } = createChiefs({ now, provider, readRegular, refuse, rowsOf, sheetText, swap });
-return { SIZES, BLOCKS, RISKS, KINDS, STATES, DEFAULTS, PR, sageRoot, locate, chiefFor, sessionBar, branchBar, actorOptions, git, projectRoot, roleReadProject, optionsOf, slug, worktreeRoot, BRANCH, ofTask, branchOfTask, branchHome, branchTip, projectName, storeDir, config, cyclesFor, modelFor, read, mergeCheck, landingBar, boardLandingCheck, logbookView, sage, keepReport, compareRetainedReport, takenRows, withLock, board, answerPaths, command, runCli, waitingPlugins, writeIdFloors };
+return { SIZES, BLOCKS, RISKS, KINDS, STATES, DEFAULTS, PR, sageRoot, locate, chiefFor, sessionBar, branchBar, actorOptions, git, projectRoot, roleReadProject, optionsOf, slug, worktreeRoot, pagesRoot, BRANCH, ofTask, branchOfTask, branchHome, branchTip, projectName, storeDir, config, cyclesFor, modelFor, read, mergeCheck, landingBar, boardLandingCheck, logbookView, sage, keepReport, compareRetainedReport, takenRows, withLock, board, answerPaths, command, runCli, waitingPlugins, writeIdFloors };
 }
