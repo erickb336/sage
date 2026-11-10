@@ -16,6 +16,7 @@ import { packageBoundaryProblems } from "./package-boundaries.mjs";
 import { docFiles, linkProblems, paragraphProblems, readmeProblems } from "./readme-checks.mjs";
 import { SHOTS, SHOTS_RECORD, sampleHash } from "./board-shots.mjs";
 import { unrunTestFiles } from "./test-commands.mjs";
+import { referenceFiles, startTextProblems } from "./start-text.mjs";
 
 const problems = [];
 try { problems.push(...packageBoundaryProblems(ROOT)); }
@@ -88,7 +89,7 @@ const report = /```\n([\s\S]*?)```/.exec(readFileSync(join(skillsDir, "report/SK
 const reportFields = report.split("\n").map((l) => l.split(/\s{2,}/)[0].trim()).filter(Boolean);
 if (reportFields.join("|") !== REPORT_FIELDS.join("|")) problems.push(`skills/report: the template has ${reportFields.join(", ")}, the hook checks ${REPORT_FIELDS.join(", ")}`);
 // The sage skill of each provider lists the task kinds that the state tool takes, in the same order (T314).
-for (const file of ["plugins/sage/skills/sage/SKILL.md", "plugins/sage-codex/skills/sage/references/commands.md"])
+for (const file of ["plugins/sage/skills/sage/references/commands.md", "plugins/sage-codex/skills/sage/references/commands.md"])
   if (!readFileSync(join(ROOT, file), "utf8").includes(`A kind is one of: ${TASK_KINDS.join(", ")}.`)) problems.push(`${file}: the kind list is not "A kind is one of: ${TASK_KINDS.join(", ")}.", the kinds of the state tool`);
 // The hook reads a helper's findings only in its one line form (F-T289-11): the template's FINDINGS line gives that form.
 if (!/^FINDINGS\s.*$/m.exec(report)?.[0].includes(FINDING_FORM)) problems.push(`skills/report: the FINDINGS line does not give the hook's finding form ${FINDING_FORM}`);
@@ -154,6 +155,8 @@ try { dictionary = checkWords(parseSource(readFileSync(join(ROOT, "writing/dicti
 const readByPeople = [
   ...agents.map((f) => `plugins/sage/agents/${f}`),
   ...readdirSync(skillsDir).map((d) => `plugins/sage/skills/${d}/SKILL.md`).filter((f) => existsSync(join(ROOT, f)) && !readFileSync(join(ROOT, f), "utf8").includes(GENERATED)),
+  // The references that the start texts point to (T934): the agents read them as part of their instructions.
+  ...referenceFiles().map((f) => `plugins/sage/${f}`),
   // The README and the docs: every page that docFiles reads for links.
   ...docFiles(ROOT),
   // The change log fragments, which CHANGELOG.md on main gets only later: so the task pull request that adds one fails.
@@ -213,6 +216,9 @@ try {
   const role = Buffer.byteLength(codexModeHook({ hook_event_name: "UserPromptSubmit", session_id: "check", prompt: "sage mode" }, {}).hookSpecificOutput.additionalContext);
   if (role > limit) problems.push(`Codex chief role: the sage hook gives ${role} bytes, ${role - limit} bytes over its limit of ${limit} bytes (0 bytes left; additionalContextLimit ${tokens} tokens at 4 bytes each, in packages/sage-codex/hooks/hooks.json), so Codex would cut the rules. Shorten the chief text (packages/sage-core/roles/chief-of-staff.md) or raise the limit`);
 } catch (e) { problems.push(`Codex chief role: ${e.message} (packages/sage-core/roles/chief-of-staff.md)`); }
+// T934: the Claude chief's and lead's start texts stay under their limits, and each reference that they name exists
+// and has its trigger. node scripts/start-text.mjs prints the bytes of each part.
+try { problems.push(...await startTextProblems()); } catch (e) { problems.push(`start texts: ${e.message} (scripts/start-text.mjs)`); }
 
 // A test must not hold wall-clock or CPU time under a tight fixed bound: load and machine differences can fail a
 // correct test (T53, T188). A name takes the clock when it is set from a clock reading or from a

@@ -1019,7 +1019,11 @@ test("the prompt counts files, not folders, and lists the top-level names apart 
 
 test("the chief's lock step, branch protection and its read-back for main or master, is in sage mode's context and the hook lets it run (T24 G15, T29 LOCK-MASTER, READBACK-FIELDS)", () => {
   const s = session();
-  const on = context(s.send(prompt("sage mode")));
+  const text = context(s.send(prompt("sage mode")));
+  // The lock's steps are a reference of the plugin's folder that the chief's text names (T934): follow the pointer.
+  const folder = /^The sage plugin's folder: (.+?)\. A reference path/m.exec(text)?.[1] ?? assert.fail("the chief's text names the plugin's folder");
+  const pointer = /Lock the default branch\*\* once it first exists on GitHub[^\n]*first read `(skills\/sage\/references\/[\w-]+\.md)`/i.exec(text)?.[1] ?? assert.fail("the chief's text points to the lock's steps");
+  const on = readFileSync(join(folder, pointer), "utf8");
   const put = /^ *(gh api --hostname github\.com -X PUT repos\/<owner>\/<repo>\/branches\/<branch>\/protection --input - <<'EOF'\n[\s\S]*?\n *EOF)$/m.exec(on)?.[1];
   const get = /`(gh api --hostname github\.com repos\/<owner>\/<repo>\/branches\/<branch>\/protection)`/.exec(on)?.[1];
   assert.ok(put && get, "the chief's instructions give the protection command and its read-back");
@@ -2254,6 +2258,17 @@ test("T933: the writers, the chief, other agents and every agent outside sage mo
   for (const role of READ_ONLY_ROLES) assert.equal(off.send(bash("rm -rf src", FEATURE, { agent_id: `ro-${role}`, agent_type: `sage:${role}` })), undefined, `${role} outside sage mode`);
 });
 
+// F-T931-1: the temp folders of the read-only rule come from core (T931). When the hook lost them, every shell command
+// of a read-only role was refused, also the lead's own state-tool command.
+test("T931: in sage mode a lead's state-tool command and a reviewer's reads pass; a reviewer's shell write is refused", () => {
+  const s = session();
+  s.send(prompt("sage mode"));
+  const lead = { agent_id: "t931-lead", agent_type: "sage:lead" }, reviewer = { agent_id: "t931-cr", agent_type: "sage:code-reviewer" };
+  assert.equal(s.send(bash(`node ${TOOL} standing --project ${FEATURE}`, FEATURE, lead)), undefined, "the lead's state-tool command");
+  for (const command of ["git log --oneline -5", `npm test > ${SCRATCH}/out.txt 2>&1`]) assert.equal(s.send(bash(command, FEATURE, reviewer)), undefined, command);
+  assert.match(denied(s.send(bash("echo x > README.md", FEATURE, reviewer))) ?? "", /the code-reviewer agent changes no files, also not from the shell/);
+});
+
 // T100: two lessons sealed for agents. The hook only reads these commands; nothing here runs ps or kill.
 /** The hook's own PATH: node, then /usr/bin and /bin, so a bare ps resolves to the real one even when the run has a fake ps first on PATH. */
 const SYSTEM_PATH = { PATH: `${dirname(process.execPath)}:/usr/bin:/bin` };
@@ -2327,7 +2342,7 @@ test("a process program is refused after a shell keyword, inside a shell's -c te
     ...(existsSync("/bin/PS") ? ["PS -ax"] : []), // a file system that ignores case, as on macOS, runs /bin/ps for PS
   ];
   for (const command of hidden) {
-    assert.match(denied(s.send(bash(command, FEATURE, AGENT))) ?? "", /standing order 14.*To stop your own server or background job, use TaskStop, or run it as a background task\./, command);
+    assert.match(denied(s.send(bash(command, FEATURE, AGENT))) ?? "", /standing order 14.*To stop your own server or background job, run it as a background task and stop that task\./, command);
   }
   for (const command of ["kill %1", "kill $!"]) assert.match(denied(s.send(bash(command, FEATURE, AGENT))) ?? "", /standing order 14/, command);
   const pass = [

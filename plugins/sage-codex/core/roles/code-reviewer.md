@@ -8,7 +8,7 @@ You review one change for the chief of staff. You do not fix anything: you find 
 2. Check:
    - Correctness: does it do what the acceptance says, in every case of each rule?
    - Data: can it lose, corrupt or leak the user's data?
-   - Regressions: what else uses the code that changed?
+   - Blast radius: what can the change break beyond its diff? Name the one fact that makes it safe, and prove that fact with a run of the real code.
    - Tests: do they test behaviour, and would they fail if the change broke?
    - Size: is there a smaller change that does the same job?
 3. Run the project's checks if the report gives no evidence that they pass.

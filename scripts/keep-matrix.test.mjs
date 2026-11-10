@@ -1,7 +1,8 @@
 // The KEEP set of T815 in one table, through both hooks as processes: Claude's sage hook and Codex's gate. T815 cut the
 // hooks' shell-text rules, and T909 cut the checks that only stopped a deliberate trick (standing order 70); this table
 // shows that each common merge form, push form, literal logbook write and the board, process and stash rules still
-// refuse, and that the plain forms pass. No command of the table runs: a hook only judges it.
+// refuse, and that the plain forms pass. No command of the table runs: a hook only judges it. The board, process and
+// stash rules are core's, so both hooks hold them (T931).
 import "./test-env.mjs"; // first: no variable of the developer's shell changes a result
 import assert from "node:assert/strict";
 import { execFileSync, spawnSync } from "node:child_process";
@@ -90,13 +91,18 @@ const modes = join(env.CODEX_HOME, "sage", ".hooks", "codex");
 mkdirSync(modes, { recursive: true, mode: 0o700 });
 writeFileSync(join(modes, `${stateKey({ session_id: SESSION.codex })}.json`), JSON.stringify({ sage: true, autopilot: false }), { mode: 0o600 });
 
-/** The roles that each row runs as: Claude's chief and its implementer agent, and Codex's chief (the root thread). */
+// A Codex implementer: a child thread whose record names its agent path under the root thread (T931).
+const CODEX_CHILD = join(BASE, "codex-child.jsonl");
+writeFileSync(CODEX_CHILD, JSON.stringify({ type: "session_meta", payload: { id: "child", session_id: SESSION.codex, agent_path: "/root/sage_implementer_t2_r1", source: { subagent: { thread_spawn: { depth: 1 } } } } }) + "\n");
+
+/** The roles that each row runs as: Claude's chief and its implementer agent, and Codex's chief (the root thread) and its implementer. */
 const ROLES = {
   "claude chief": (command, extra) => run(CLAUDE_HOOK, { hook_event_name: "PreToolUse", session_id: SESSION.claude, cwd: PROJECT, tool_name: "Bash", tool_use_id: "toolu_1", tool_input: { command } }, extra),
   "claude agent": (command, extra) => run(CLAUDE_HOOK, { hook_event_name: "PreToolUse", session_id: SESSION.claude, cwd: PROJECT, tool_name: "Bash", tool_use_id: "toolu_1", tool_input: { command }, agent_id: "agent-1", agent_type: "sage:implementer" }, extra),
   "codex chief": (command, extra) => run(CODEX_HOOK, { hook_event_name: "PreToolUse", session_id: SESSION.codex, turn_id: "t1", cwd: PROJECT, tool_name: "Bash", tool_use_id: "call_1", tool_input: { command } }, extra),
+  "codex agent": (command, extra) => run(CODEX_HOOK, { hook_event_name: "PreToolUse", session_id: SESSION.codex, turn_id: "t1", cwd: PROJECT, tool_name: "Bash", tool_use_id: "call_1", tool_input: { command }, agent_id: "agent-1", transcript_path: CODEX_CHILD }, extra),
 };
-const BOTH = Object.keys(ROLES), CLAUDE = ["claude chief", "claude agent"], AGENT = ["claude agent"];
+const BOTH = Object.keys(ROLES), CHIEFS = ["claude chief", "codex chief"], CLAUDE = ["claude chief", "claude agent"], AGENT = ["claude agent", "codex agent"];
 /** The words of each family's refusal in the Claude hook, so that no row passes for another rule's reason. */
 const WHY = {
   merge: /merge|reaches main/i, // a mergeBranch into main meets the push rule first, which runs before the merge rule
@@ -109,7 +115,8 @@ const WHY = {
   state: /state tool|writes the logbook/,
 };
 /** The words of a refusal in the Codex gate, where they name the family's own rule (T903); other families take any refusal. */
-const CODEX_WHY = { logbook: /^sage: no agent writes, moves or removes a logbook file from the shell/ };
+const CODEX_WHY = { logbook: /^sage: no agent writes, moves or removes a logbook file from the shell/, board: /^sage: the board password rule/,
+  process: /^sage: an agent never reads or signals the real process list/, stash: /^sage: an agent never runs git stash/ };
 
 /**
  * The table: [family, command, roles, extra env]. A command is a string for every role, or { claude, codex } when the two
@@ -177,16 +184,21 @@ const REFUSED = [
   // The Codex sage folder (the logbook and the mode files) is a root of the Codex gate only (T903).
   ["logbook", `echo '{"sage":true,"autopilot":true}' > ${CODEX_SAGE}/.hooks/codex/x.json`, ["codex chief"]],
   ["logbook", `mv ${env.CODEX_HOME} ${BASE}/codex-old`, ["codex chief"]],
-  // The board, process and stash rules: the Claude hook's (the Codex gate has none of them).
-  ["board", "cat ~/.config/sage-board/board.json", CLAUDE],
-  ["board", "node /opt/sage/board/cli.mjs board --set-password", CLAUDE],
-  ["board", "grep -r token ~/.config", CLAUDE],
+  // The board, process and stash rules: core's, so both hooks hold them (T931). The board rule holds every session; the
+  // process and stash rules hold agents only.
+  ["board", "cat ~/.config/sage-board/board.json"],
+  ["board", "node /opt/sage/board/cli.mjs board --set-password"],
+  ["board", "echo x > ~/.config/sage-board/board.json"],
+  ["board", "grep -r token ~/.config"],
   ["process", "ps aux", AGENT],
   ["process", "kill 1", AGENT],
   ["process", "pgrep node", AGENT],
   ["process", "launchctl list", AGENT], // F-T909-7: launchctl stops and starts the owner's services; no row runs it
-  ["board", "find ~ -name board.json -exec cat {} +", CLAUDE], // find with -exec reads each file it finds
+  ["process", "pkill node", AGENT],
+  ["board", "find ~ -name board.json -exec cat {} +"], // find with -exec reads each file it finds
   ["stash", `git -C ${T} stash`, AGENT],
+  ["stash", `git -C ${T} stash list`, AGENT],
+  ["stash", `git -C ${T} stash pop`, AGENT],
   // An agent's gh: only AGENT_GH, and gh api with GET. -XGET after -t is the template, so gh sends DELETE (F-T815-27).
   ["agent gh", "gh issue close 1", AGENT],
   ["agent gh", "gh api -X DELETE repos/acme/project/git/refs/heads/x -t -XGET", AGENT],
@@ -225,7 +237,7 @@ const PASSED = [
   ["brew install gh jq"],
   ["man gh pr"],
   ["rm -rf gh build"],
-  ["gh search repos git cli", ["claude chief", "codex chief"]],
+  ["gh search repos git cli", CHIEFS],
   // A logbook file's name outside a root, a variable in a write target and a read of a root pass in both hooks (T903, T909).
   [`echo x > ${BASE}/tasks.tsv`],
   ["rm -f ../runs.tsv"],
@@ -252,7 +264,7 @@ function play(rows, refuse) {
     for (const role of roles) {
       const text = typeof command === "string" ? command : command[role.split(" ")[0]];
       const why = ROLES[role](text, extra);
-      const ok = refuse ? why !== undefined && (role === "codex chief" ? CODEX_WHY[family] ?? /./ : WHY[family]).test(why) : why === undefined;
+      const ok = refuse ? why !== undefined && (role.startsWith("codex") ? CODEX_WHY[family] ?? /./ : WHY[family]).test(why) : why === undefined;
       if (ok) counts[role]++;
       else wrong.push(`${role} · ${refuse ? `${family} ` : ""}${text} → ${why ?? "passed"}`);
     }
@@ -264,9 +276,7 @@ test("T815: every row of the KEEP table refuses in both hooks, for its own rule"
   const { wrong, counts } = play(REFUSED, true);
   t.diagnostic(`refused rows by role: ${JSON.stringify(counts)} of ${REFUSED.length} rows`);
   assert.deepEqual(wrong, []);
-  assert.deepEqual(counts, { "claude chief": REFUSED.filter(([, , roles = BOTH]) => roles.includes("claude chief")).length,
-    "claude agent": REFUSED.filter(([, , roles = BOTH]) => roles.includes("claude agent")).length,
-    "codex chief": REFUSED.filter(([, , roles = BOTH]) => roles.includes("codex chief")).length });
+  assert.deepEqual(counts, Object.fromEntries(BOTH.map((role) => [role, REFUSED.filter(([, , roles = BOTH]) => roles.includes(role)).length])));
 });
 
 test("T815: the plain forms pass in both hooks: text that only names a merge or a push, reads and the push form", (t) => {
@@ -282,4 +292,24 @@ test("T815: the one merge form passes the merge rule, and the role and autopilot
   // The fake gh answered the push rule's reads of GitHub's default branch; no other gh call ran.
   assert.match(readFileSync(CALLS, "utf8"), /^api --hostname github\.com repos\/acme\/project --jq \.default_branch$/m);
   assert.doesNotMatch(readFileSync(CALLS, "utf8"), /^(?:pr merge|repo sync|api -X)/m);
+});
+
+test("T931: the stash, process and board rules give the same plain reason in both hooks, and the chiefs' own commands pass", () => {
+  const STASH = "sage: an agent never runs git stash: every worktree of a repo shares one stash list, so another agent can pop or drop your work (standing order 16). To test old code, use git worktree add --detach <scratch> <sha>, or git show <sha>:<path> into your scratch folder";
+  assert.equal(ROLES["codex agent"](`git -C ${T} stash`), STASH);
+  assert.equal(ROLES["claude agent"](`git -C ${T} stash`), `${STASH}.`);
+  // Codex ends a reason with no period of its own (it adds ". Command: ..."); the rest is the same text in both hooks.
+  for (const command of ["ps aux", "pgrep node", "kill 1", "pkill node", "launchctl list", "cat ~/.config/sage-board/board.json", "node /opt/sage/board/cli.mjs board --set-password"]) {
+    const claudeWhy = ROLES["claude agent"](command);
+    assert.match(claudeWhy ?? "passed", /process list|board password rule/, command);
+    assert.equal(ROLES["codex agent"](command), claudeWhy.replace(/\.$/, ""), command);
+  }
+  assert.match(ROLES["codex agent"]("launchctl list"), /^sage: an agent never reads or signals the real process list \(standing order 14\), so "launchctl" is refused\./);
+  // The chiefs are not held by the stash and process rules (a Claude chief never was; the Codex root thread is the chief).
+  for (const role of CHIEFS) for (const command of [`git -C ${T} stash list`, "ps aux", "kill 1", "launchctl list"]) assert.equal(ROLES[role](command), undefined, `${role} · ${command}`);
+  // A fake process program in the temp folder passes for an agent of either hook; nothing here runs it (standing order 14).
+  const fakes = join(BASE, "fake-bin");
+  mkdirSync(fakes);
+  writeFileSync(join(fakes, "ps"), "#!/bin/sh\necho fake ps\n", { mode: 0o755 });
+  for (const role of AGENT) assert.equal(ROLES[role](`${fakes}/ps -p 1`), undefined, role);
 });
