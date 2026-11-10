@@ -2370,6 +2370,19 @@ test("T947: a review's or QA's medium or high finding carries a proof that the p
   for (const type of ["sage:implementer", "sage:evidence-review"]) assert.equal(stop(type, report("FINDINGS", "\n- K1 medium a.js:1 a bad value")), undefined, `${type} gives no finding that a proof check reruns`);
 });
 
+test("T947: in a cycle, a lead triages a medium or high finding fix, or drops a medium one, only with --proof; a high one is never its to drop", () => {
+  const s = leadSession();
+  for (const state of ["building", "reviewing"]) s.sage("task", "T1", "set", `state=${state}`);
+  s.sage("finding", "add", "T1", "--source", "qa", "--severity", "high", "--summary", "c", "--run", "R1", "--class", "other"); // F-T1-3
+  const refused = (args, why) => assert.match(denied(stateRun(s, args)) ?? "", why, args);
+  refused("finding triage T1 F-T1-2 fix", /^sage: F-T1-2 is medium: in a cycle, a lead triages it fix only with --proof R<n>, the done proof check whose report says F-T1-2 reproduced or could not run\./);
+  refused("finding triage T1 F-T1-3 fix", /^sage: F-T1-3 is high: in a cycle, a lead triages it fix only with --proof R<n>/);
+  refused("finding triage T1 F-T1-2 dismiss --reason=x", /^sage: F-T1-2 is medium: a lead dismisses it only with --proof R<n>, the done proof check whose report says F-T1-2 not reproduced\./);
+  refused("finding triage T1 F-T1-3 dismiss --proof R4", /^sage: F-T1-3 is high: a lead never dismisses it, also when the proof check did not reproduce it\. Report it, or triage it fix: the chief decides\./);
+  // With --proof, the hook lets the triage through: the state tool then checks the proof check itself.
+  for (const args of ["finding triage T1 F-T1-2 dismiss --proof R4", "finding triage T1 F-T1-2 fix --proof R4", "finding triage T1 F-T1-3 fix --proof=R4", "finding triage T1 F-T1-1 fix"]) assert.equal(denied(stateRun(s, args)), undefined, args);
+});
+
 test("T932: the evidence review that the sage starts keeps its report for its run, and the evidence-clean verdict follows", () => {
   const s = session();
   investigation(s);
@@ -4671,7 +4684,7 @@ function linkedSession(env) {
 const stateRun = (s, args, actor = LEAD, extra = {}) => s.send(tool("Bash", { command: `node ${TOOL} ${args}` }, { cwd: s.dir, ...actor, ...extra }));
 const LEAD_TAIL = /A lead writes the logbook only with .* Report to the sage what else the logbook needs\.$/;
 /** A reason of core's one lead policy (T928), which the hook gives as the state tool's guard and the Codex gate do. */
-const LEAD_RULE = /is not of T1, and a lead records only its own task\.|a lead adds only runs of its team|is not a branch of T1|a lead gives T1 one PR|is not a branch named for T1|is not triaged fix|is not a fix of T1's round|is triaged ask: only the chief|a lead asks the owner nothing|a lead dismisses only a low finding|is a fix key of a round: only the chief|verdict is the chief's|a lead's verdict names|a lead sets only state, branch, pr|a lead moves it only to|only the chief moves it from there|only the chief ends it|only the chief opens a known finding again|is shared with/;
+const LEAD_RULE = /is not of T1, and a lead records only its own task\.|a lead adds only runs of its team|is not a branch of T1|a lead gives T1 one PR|is not a branch named for T1|is not triaged fix|is not a fix of T1's round|is triaged ask: only the chief|a lead asks the owner nothing|a lead dismisses it only with --proof|a lead never dismisses it|a lead triages it fix only with --proof|is a fix key of a round: only the chief|verdict is the chief's|a lead's verdict names|a lead sets only state, branch, pr|a lead moves it only to|only the chief moves it from there|only the chief ends it|only the chief opens a known finding again|is shared with/;
 const NOT_LISTED = /is not on a lead's list(?:, or it has other words)?\. A lead records only its own task, with run add, run done, finding add, finding close, finding triage, verdict, round, pages, and task set of state, branch, pr\./;
 const LEAD_ALLOWED = [
   ...["implementer --branch claude/t1", "code-reviewer", "security-reviewer", "ux-reviewer", "qa", "qa --branch=claude/t1"].map((role) => `run add T1 --role ${role}`),

@@ -531,10 +531,10 @@ test("T603: the lead's text holds the pilot's rules, each role that writes git o
   for (const role of ["lead", "implementer", "designer", "arena-judge"]) assert.doesNotMatch(text(role), /Sandbox refusals in Codex/, role);
 });
 
-test("T553: a lead's steps record a report's findings and verdict first, and triage fix after (F-T552-22)", () => {
+test("T553, T947: a lead's steps record a report's findings, run the proof check, then the verdict, and triage fix after (F-T552-22)", () => {
   const text = spawnSync("node", [ROLE, "lead"], { encoding: "utf8" }).stdout;
   const section = text.slice(text.indexOf("**A report with findings.**"), text.indexOf("**The pull request.**"));
-  const steps = ["1. `finding_add`", "2. `run_done`", "3. `verdict`: for a medium or high finding, give `findings`", "4. `finding_triage`", "5. `round`"].map((step) => section.indexOf(step));
+  const steps = ["1. `finding_add`", "2. `run_done`", "3. The proof check", "4. `verdict`: for a medium or high finding that is still open, give `findings`", "5. `finding_triage`", "6. `round`"].map((step) => section.indexOf(step));
   assert.ok(steps.every((at) => at > 0), String(steps));
   assert.deepEqual(steps, [...steps].sort((a, b) => a - b), "the order of the steps");
   assert.match(text, /`finding_move` stays the chief's tool/);

@@ -34,7 +34,7 @@ export function leadRequest(cmd, pos, opt) {
   }
   const [first, second, third] = command.includes(" ") ? pos.slice(1) : pos;
   if (command === "run done") return { command, run: first, status: opt.status, odd };
-  if (command === "finding close" || command === "finding triage") return { command, task: first, key: second, decision: third, reason: opt.reason, odd };
+  if (command === "finding close" || command === "finding triage") return { command, task: first, key: second, decision: third, reason: opt.reason, proof: opt.proof, odd };
   return { ...opt, command, task: first, odd: odd || command === "task set" || (command === "pages" && pos.length > 3) };
 }
 
@@ -88,8 +88,12 @@ export function leadProblem(request, { lead, view, ofTask, branchOfTask, head })
     case "finding triage":
       if (finding.triage === "ask") return `${finding.key} is triaged ask: only the chief changes it, with the owner's answer.`;
       if (request.decision === "ask") return "a lead asks the owner nothing: report the question.";
-      if (request.decision !== "dismiss") return undefined; // fix, or a word that the state tool refuses
-      if (finding.severity !== "low") return `${finding.key} is ${finding.severity}: a lead dismisses only a low finding. Report it, or triage it fix.`;
+      // Proof by run (T947): in a cycle, a medium or high finding goes to a fix, and a medium one to a drop, only after the
+      // proof check reran its proof on the head (--proof, which the state tool checks). A high one is never the lead's to drop.
+      if (request.decision === "fix") return finding.severity !== "low" && ["reviewing", "verifying"].includes(task.state) && request.proof === undefined ? `${finding.key} is ${finding.severity}: in a cycle, a lead triages it fix only with --proof R<n>, the done proof check whose report says ${finding.key} reproduced or could not run. Run the proof check first (the proof-check reference).` : undefined;
+      if (request.decision !== "dismiss") return undefined; // a word that the state tool refuses
+      if (finding.severity === "high") return `${finding.key} is high: a lead never dismisses it, also when the proof check did not reproduce it. Report it, or triage it fix: the chief decides.`;
+      if (finding.severity === "medium" && request.proof === undefined) return `${finding.key} is medium: a lead dismisses it only with --proof R<n>, the done proof check whose report says ${finding.key} not reproduced. Else report it, or triage it fix.`;
       // A fix key of the round, or of an earlier round, stays for the chief: the next round, a replan or its own dismissal.
       return finding.triage === "fix" && (roundKeys.includes(finding.key) || Number(finding.round) < Number(task.round)) ? `${finding.key} is a fix key of a round: only the chief dismisses it.` : undefined;
     case "verdict":

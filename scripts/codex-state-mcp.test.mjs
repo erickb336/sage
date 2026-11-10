@@ -278,7 +278,7 @@ test("T552: a lead's own task keeps the rules of the flow: its team, a kept repo
   assert.match((await lead("verdict", { task: "T1", kind: "review-clean", sha: SHA, pr: 5, run: none })).error, new RegExp(`^sage: ${none} has no kept report`));
   // A finding: the lead dismisses only a low one, and never one triaged ask.
   await lead("finding_add", { task: "T1", source: "qa", severity: "medium", summary: "a", run: qa, class: "other" }); // F-T1-1
-  await refused("finding_triage", { task: "T1", key: "F-T1-1", decision: "dismiss", reason: "r" }, /^sage: F-T1-1 is medium: a lead dismisses only a low finding/);
+  await refused("finding_triage", { task: "T1", key: "F-T1-1", decision: "dismiss", reason: "r" }, /^sage: F-T1-1 is medium: a lead dismisses it only with --proof R<n>/);
   await refused("finding_triage", { task: "T1", key: "F-T1-1", decision: "ask" }, /^sage: a lead asks the owner nothing/);
   await refused("finding_close", { task: "T1", key: "F-T1-1" }, /^sage: F-T1-1 is not triaged fix/);
   await w.call("finding_triage", { task: "T1", key: "F-T1-1", decision: "ask" });
@@ -335,13 +335,29 @@ async function reviewingWorld(t) {
   return { ...w, found: await reviewed(w, "code-reviewer", FOUND) };
 }
 const add = (w, severity, summary = "a.js:1 a bad value") => w.lead("finding_add", { task: "T1", source: "code-reviewer", severity, summary, run: w.found, class: "other" });
-const triage = (w, key, decision = "fix") => w.lead("finding_triage", { task: "T1", key, decision });
+const triage = (w, key, decision = "fix", proof) => w.lead("finding_triage", { task: "T1", key, decision, proof });
+
+test("T947: in a cycle, a lead triages a medium or high finding fix, or drops a medium one, only with a proof check; a high one is never its to drop", async (t) => {
+  const w = await reviewingWorld(t), { lead } = w;
+  await add(w, "medium"); // F-T1-1
+  await add(w, "high", "c.js:3 a crash"); // F-T1-2
+  await add(w, "medium", "d.js:4 a leak"); // F-T1-3
+  const proof = await proofCheck(w, { "F-T1-1": "not reproduced", "F-T1-2": "not reproduced", "F-T1-3": "reproduced" });
+  assert.equal((await triage(w, "F-T1-3")).denied, `sage: F-T1-3 is medium: in a cycle, a lead triages it fix only with --proof R<n>, the done proof check whose report says F-T1-3 reproduced or could not run. Run the proof check first (the proof-check reference)`);
+  assert.equal((await triage(w, "F-T1-2")).denied?.startsWith("sage: F-T1-2 is high: in a cycle, a lead triages it fix only with --proof"), true);
+  assert.match((await lead("finding_triage", { task: "T1", key: "F-T1-1", decision: "dismiss", reason: "r" })).denied, /^sage: F-T1-1 is medium: a lead dismisses it only with --proof R<n>, the done proof check whose report says F-T1-1 not reproduced/);
+  assert.match((await triage(w, "F-T1-2", "dismiss", proof)).denied, /^sage: F-T1-2 is high: a lead never dismisses it, also when the proof check did not reproduce it\. Report it, or triage it fix: the chief decides/);
+  // The server's state tool checks the proof check itself.
+  assert.match((await triage(w, "F-T1-3", "dismiss", proof)).error, new RegExp(`^sage: ${proof} says F-T1-3 reproduced, so it is not dismissed: triage it fix`));
+  assert.equal(await triage(w, "F-T1-1", "dismiss", proof), "F-T1-1 dismissed · dismiss");
+  assert.equal(await triage(w, "F-T1-3", "fix", proof), "F-T1-3 open · fix");
+});
 
 test("F-T552-1: a lead leaves repairing only after it closed each fix key of the round, so a correct repair never ends in replan", async (t) => {
   const w = await reviewingWorld(t), { lead } = w;
   await add(w, "medium"); // F-T1-1
   await add(w, "low", "b.js:2 slow"); // F-T1-2
-  await triage(w, "F-T1-1");
+  await triage(w, "F-T1-1", "fix", await proofCheck(w, { "F-T1-1": "reproduced" }));
   await triage(w, "F-T1-2");
   assert.match(await lead("round", { task: "T1" }), /^T1 repairing · round 1/);
   const OPEN = "sage: T1 has an open fix finding of its round: close each one after the repair's commit (finding close), then move it to reviewing. When the re-check did not confirm one, run round T1: it starts the next round";
