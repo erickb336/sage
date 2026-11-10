@@ -766,7 +766,8 @@ const usageFile = (dir, run) => join(dir, "kept", `${run}.usage.json`);
 /**
  * Keep a running run's usage at its agent's stop (T954): its token count (tokens, a whole number as text) or, when the
  * provider's record gives none, no tokens and the reason as evidence. The source names where the count came from. A later
- * stop of the same agent replaces it, as its count only grows. `run done` takes it when the chief gives no --tokens.
+ * stop of the same agent replaces it, as its count only grows, but a stop that reads no count (for example a half-written last
+ * line) keeps a measured one (T969). `run done` takes it when the chief gives no --tokens.
  */
 function keepUsage(project, { task, run, role, tokens, source, evidence } = {}, env = process.env) {
   const dir = storeDir(project, env);
@@ -774,6 +775,7 @@ function keepUsage(project, { task, run, role, tokens, source, evidence } = {}, 
   if (!/^R[1-9]\d*$/.test(String(run)) || !(tokens === undefined || tokenCount(tokens)) || !usageText(source) || !usageText(evidence)) refuse("kept usage needs its run id, a source, evidence and tokens of 1 to 12 digits or none. No usage is kept.");
   const row = read(dir, "runs").find((r) => r.id === run);
   if (row?.task !== task || row.role !== role || row.status !== "running") refuse(`${run} is not a running ${role} run of ${task}, so no usage is kept.`);
+  if (tokens === undefined && keptUsage(dir, row)?.tokens) return usageFile(dir, run);
   const folder = join(dir, "kept"), temporary = join(folder, `.usage-${randomUUID()}`);
   mkdirSync(folder, { recursive: true, mode: 0o700 });
   writeFileSync(temporary, JSON.stringify({ task, run, role, ...(tokens === undefined ? {} : { tokens }), source, evidence, at: now() }), { flag: "wx", mode: 0o600 });
@@ -3716,9 +3718,11 @@ function act(cmd, pos, opt, dir, env, skip, project) {
         if (opt.tokens !== undefined && run.usage_interface && (!usageText(opt["usage-source"]) || !usageText(opt["usage-evidence"]))) refuse("A declared interface needs its measured source and evidence. Nothing changed.");
         if (opt.usage !== undefined && !unavailable) refuse("--usage is unavailable. Nothing changed.");
         if (unavailable) {
-          if (opt.tokens !== undefined || st !== "done" || run.status !== "running" || !validUsageSnapshot(run)
-            || run.usage_capability !== "unavailable" || !usageText(opt["usage-source"]) || !usageText(opt["usage-evidence"])
-            || !usageText(opt.report)) refuse("Unavailable usage needs a running run, its unsupported interface snapshot, a report, source and evidence, without tokens. Nothing changed.");
+          // A lead with no declared interface and a report, whose usage the host did not give (for example after a restart), ends unavailable too (T969).
+          const declared = st === "done" && validUsageSnapshot(run) && run.usage_capability === "unavailable";
+          const lead = run.role === "lead" && !run.usage_interface && st !== "failed";
+          if (opt.tokens !== undefined || run.status !== "running" || !(declared || lead) || !usageText(opt["usage-source"]) || !usageText(opt["usage-evidence"])
+            || !usageText(opt.report)) refuse("Unavailable usage needs a running run, its unsupported interface snapshot (or a lead run with a report), a report, source and evidence, without tokens. Nothing changed.");
         } else if (opt["usage-source"] !== undefined || opt["usage-evidence"] !== undefined) {
           if (!tokenCount(opt.tokens) || !usageText(opt["usage-source"]) || !usageText(opt["usage-evidence"])) refuse("Measured usage needs tokens, source and evidence. Nothing changed.");
         }
@@ -3741,7 +3745,7 @@ function act(cmd, pos, opt, dir, env, skip, project) {
         // A done review or QA run gives its tokens, so that sage stats counts every review's cost (T346).
         if (st === "done" && CHECKERS.includes(run.role) && !counted) refuse(`${run.id} is a ${run.role} run, so run done --status done needs --tokens with its tokens as a whole number, for example --tokens 52000. Nothing changed.`);
         // A lead with a report gives its tokens too (T954): its own count, from its usage. A declared interface counts at the stop.
-        if (run.role === "lead" && st !== "failed" && !run.usage_interface && !counted) refuse(`${run.id} is a lead run, so run done --status ${st} needs --tokens with the lead's own tokens from its usage, as a whole number, for example --tokens 120000. Only --status failed, for a lead that gave no report, leaves them out. Nothing changed.`);
+        if (run.role === "lead" && st !== "failed" && !run.usage_interface && !counted) refuse(`${run.id} is a lead run, so run done --status ${st} needs --tokens with the lead's own tokens from its usage, as a whole number, for example --tokens 120000. When its usage gave no count, add --usage unavailable with --usage-source, --usage-evidence (the reason) and --report. Only --status failed, for a lead that gave no report, leaves them out. Nothing changed.`);
         if (kept) Object.assign(run, kept);
         else if (unavailable) Object.assign(run, { usage_status: "unavailable", usage_source: opt["usage-source"], usage_evidence: opt["usage-evidence"] });
         else if (opt.tokens !== undefined) Object.assign(run, { usage_status: "measured", usage_source: opt["usage-source"] ?? "", usage_evidence: opt["usage-evidence"] ?? "" });
