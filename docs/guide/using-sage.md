@@ -266,7 +266,9 @@ Each line of the list gives the path, the branch, the task, the task's state and
 - A branch that adds no commit to origin/main is `unknown`, not `branch merged`: it is on the main line of origin/main, for example at its tip, where a new run starts before its first commit. A branch that was merged with no merge commit (a fast-forward) reads the same way, so the prune keeps it too.
 - The list uses the origin/main that git has now, and prints its commit. It does not fetch, so fetch first when main moved.
 - The prune also keeps the primary checkout, the worktree that the command runs in, a locked worktree, a worktree that holds another worktree, and a worktree with uncommitted changes, untracked files, ignored files or unpushed commits. A commit counts as pushed when a remote branch holds it, or when the ledger has a verdict on it or on a later commit of its task: a squash merge deletes the task's branch on GitHub.
-- An ignored file, such as `.env`, keeps the worktree, because `git worktree remove` deletes ignored files with the folder. The reason names the files. An ignored folder that a pattern names as a whole, such as `node_modules/`, does not keep it: the prune deletes that folder with the worktree, so keep no work of your own there.
+- An ignored file, such as `.env`, or a whole ignored folder, such as `secrets/`, keeps the worktree, because `git worktree remove` deletes ignored files with the folder. The reason names them, for example `ignored files that the prune would delete: .env, secrets/`.
+- Only two ignored folders keep no worktree, because a package install or a build makes them again: `node_modules` and `dist`, at any depth, also as a link. The prune deletes them with the worktree, so keep no work of your own in them. The removed line names them, for example `removed <path> · merged · also deleted ignored node_modules/`.
+- The list of these folders is `REBUILT` in `packages/sage-core/worktrees.mjs`.
 - It prints each path that it removes or keeps, with the reason. It removes the entry of a worktree whose folder is gone, and it deletes no branch.
 - Only the chief runs it. A lead, a reviewer or QA cannot.
 
