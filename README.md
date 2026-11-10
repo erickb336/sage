@@ -65,16 +65,16 @@ claude plugin update sage@sage
 
 ### In Codex
 
-Use Codex 0.164 or later, in the CLI or the desktop app, and a multi-agent v2 model. The install commands need the Codex CLI, also for the desktop app (`npm install -g @openai/codex@0.164.0`), and a lead with more than 2 helpers at once needs `max_concurrent_threads_per_session = 10` under `[agents]` in your Codex config file, `$CODEX_HOME/config.toml` (by default `~/.codex/config.toml`). You also need Node.js 20 or later, `gh` logged in, and a GitHub remote for the project (see [What you need](docs/guide/codex.md#what-you-need)).
+Use Codex 0.164 or later, in the CLI or the desktop app, and a multi-agent v2 model. The install commands need the Codex CLI, also for the desktop app (`npm install -g @openai/codex@0.164.0`), and a lead with more than 2 helpers at once needs `max_concurrent_threads_per_session = 10` under `[agents]` in your Codex config, `~/.codex/config.toml`. You also need Node.js 20 or later, `gh` logged in, and a GitHub remote for the project (see [What you need](docs/guide/codex.md#what-you-need)).
 
-1. Add the sage marketplace and install sage, in a terminal:
+1. Add the sage marketplace and install sage, in a terminal. For an old or pinned install (`hooks install` says `unknown command "hooks"`), run `codex plugin marketplace remove sage` first:
    ```sh
    codex plugin marketplace add https://github.com/erickb336/sage-stack.git
    ```
    ```sh
    codex plugin add sage@sage
    ```
-2. Install sage's hooks once on each computer with the plugin's `hooks install` command, run `codex` in a project folder, and choose **Trust all and continue** at the "Hooks need review" screen ([Install](docs/guide/codex.md#install), step 3), then send `sage mode` alone. Without that trust, no sage hook runs and you see no warning, so do the [gate check](docs/guide/codex.md#check-that-the-sage-gate-runs) after you install the hooks; an update needs no new trust. The chief starts one lead for each task, and each report goes in the task's pages folder.
+2. Install sage's hooks once on each computer with the plugin's `hooks install` command, run `codex` in a project folder, and choose **Trust all and continue** at the "Hooks need review" screen ([Install](docs/guide/codex.md#install), step 3), then send `sage mode` alone. Without that trust, no sage hook runs and you see no warning, so do the [gate check](docs/guide/codex.md#check-that-the-sage-gate-runs); an update needs no new trust. The chief starts one lead for each task, and each report goes in the task's pages folder.
 3. Codex asks you at least 5 times in each small task (the worktree, the add, the commit, the push and the pull request): read the choices, then approve ([The approval prompts of each task](docs/guide/codex.md#the-approval-prompts-of-each-task)).
 4. To let sage merge verified work itself, send `autopilot on` alone after `sage mode`, while Codex is idle (if it is busy, press Esc, then send). Merges need `node` and `gh` outside the sandbox's writable folders, and they wait after a Codex update until sage tests that version. Esc stops a merge, and `autopilot off` counts at any time, from any thread ([Autopilot in Codex](docs/guide/codex.md#autopilot-in-codex)).
 

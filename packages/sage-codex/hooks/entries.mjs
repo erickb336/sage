@@ -7,7 +7,7 @@ import { mkdirSync, readFileSync, realpathSync } from "node:fs";
 import { homedir } from "node:os";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
-import { activeVersion, LAUNCHER_VERSION, launchCommand, launcherFolder, planHooks, pluginOff, readText, sageGroup, TIMEOUTS, uninstall, versionsFolder, writeAtomic } from "./launch.mjs";
+import { activeVersion, LAUNCHER_VERSION, launchCommand, launcherFolder, planHooks, pluginOff, readText, sageGroup, TIMEOUTS, tomlValue, uninstall, versionsFolder, writeAtomic } from "./launch.mjs";
 
 /** Each event's fields: its timeout (the launcher's TIMEOUTS), and the context limits that the roles need. */
 export const EVENTS = {
@@ -32,6 +32,19 @@ export const INSTALL = `node "${join(HERE, "..", "skills", "sage", "sage.mjs")}"
  * command, or says yes and the chief runs it; the chief never runs it on its own.
  */
 export const ASK_INSTALL = `the user runs this command in a terminal, or says yes and then the chief runs it (never without that yes): ${INSTALL}`;
+/** The steps that end a pin of the sage marketplace and install the newest sage: the user runs them in a terminal. */
+export const UNPIN = "codex plugin marketplace remove sage, then codex plugin marketplace add https://github.com/erickb336/sage-stack.git, then codex plugin add sage@sage";
+
+/**
+ * The warning when config.toml pins the sage marketplace to one commit ([marketplaces.sage] ref = "<sha>", from
+ * `codex plugin marketplace add --ref`), or undefined (T971). An upgrade of a pinned marketplace fetches the same
+ * commit, so `codex plugin add sage@sage` keeps the old copy. A ref that names a branch follows it, so only a commit counts.
+ */
+export function pinWarning(codexHome) {
+  const sha = /^"([0-9a-f]{7,40})"$|^'([0-9a-f]{7,40})'$/i.exec(tomlValue(codexHome, ["marketplaces", "sage", "ref"]) ?? "");
+  if (!sha) return undefined;
+  return `sage: ${join(codexHome, "config.toml")} pins the sage marketplace to the commit ${sha[1] ?? sha[2]}, so an upgrade gets no newer sage. To get updates, the user runs in a terminal: ${UNPIN}. Then start a new session.`;
+}
 const snake = (event) => event.replace(/(?<!^)([A-Z])/g, "_$1").toLowerCase();
 
 /**
@@ -123,6 +136,7 @@ export function status(codexHome, env = process.env) {
     `Launcher: ${launcher === undefined ? `none in ${launcherFolder(codexHome)}` : `version ${launcher} in ${launcherFolder(codexHome)}`}; this sage version's launcher is version ${LAUNCHER_VERSION}.`,
     `Installed sage: ${version === undefined ? `none in ${versionsFolder(codexHome)}` : join(versionsFolder(codexHome), version)}${pluginOff(codexHome) ? ", turned off in config.toml" : ""}.`,
     ...(bad.length || launcher !== LAUNCHER_VERSION ? [`To fix: ${ASK_INSTALL}`] : []),
+    ...[pinWarning(codexHome)].filter(Boolean),
   ];
 }
 
