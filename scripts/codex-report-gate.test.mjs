@@ -80,7 +80,7 @@ test("T483: the chief's review child keeps its report with the head that the gat
   ok("init");
   // T12 and runs from R40: ids of more than one digit, as real ones are (R1933-2).
   for (let k = 1; k <= 12; k++) ok("task", "add", "--priority", "P2", "--title", `t${k}`, "--size", "small");
-  for (let k = 1; k < 40; k++) ok("run", "add", "T1", "--role", "pe");
+  for (let k = 1; k < 40; k++) ok("run", "done", ok("run", "add", "T1", "--role", "pe").split(" ")[0], "--status", "failed"); // ended, so the agent cap has room (T952)
   ok("task", "T12", "set", "branch=codex/t12-a");
   const clean = "STATUS done\nRESULT CLEAN\nEVIDENCE npm test passed\nFINDINGS none\nQUESTIONS none\nNOT VERIFIED none\nBRANCH codex/t12-a";
   let threads = 0;
@@ -221,6 +221,7 @@ test("T585: an arena keeps the reports of its candidates and its judge, and a ca
     play(role.replaceAll("-", "_"), id, () => git("branch", "-q", "-f", "codex/t1-a", headB));
     assert.equal(kept(id).sha, base, role);
     git("branch", "-q", "-f", "codex/t1-a", headA);
+    ok("run", "done", id, "--status", "failed"); // its report is kept: the run's end frees its place of the agent cap (T952)
   }
   // When the branch of its task moves during the run, it gets no SHA, as a run with no --branch.
   for (const role of ["code-reviewer", "qa"]) {
@@ -228,6 +229,7 @@ test("T585: an arena keeps the reports of its candidates and its judge, and a ca
     play(role.replaceAll("-", "_"), id, () => git("branch", "-q", "-f", "codex/t1", headB));
     assert.equal(kept(id).sha, "", role);
     git("branch", "-q", "-f", "codex/t1", before);
+    ok("run", "done", id, "--status", "failed");
   }
   // The retained reports compare by digest, as the chief compares them with report_compare.
   // The comparison wants real paths, as the MCP server has them; the folder of the test may sit behind a link.

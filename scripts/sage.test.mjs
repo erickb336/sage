@@ -774,6 +774,41 @@ test("T609-LEAD-KEY: max_leads sets the limit, a bad value refuses, and a lower 
   assert.match(s.no("run", "add", "T4", "--role", "lead"), /^sage: the project has 3 running lead runs, the most it holds: /, "it only refuses the next one");
 });
 
+test("T952-AGENT-CAP: run add holds max_agents running runs of every role in a project; the 11th is refused with the running runs named, and an ended run frees a place", () => {
+  const s = store();
+  for (let i = 0; i < 6; i++) s.ok("task", "add", "--priority", "P2", "--title", `t${i + 1}`, "--size", "small");
+  for (const t of ["T1", "T2", "T3", "T4", "T5"]) s.ok("run", "add", t, "--role", "lead");
+  for (const t of ["T1", "T2", "T3"]) s.ok("run", "add", t, "--role", "implementer", "--branch", `claude/${t.toLowerCase()}`);
+  s.ok("run", "add", "T1", "--role", "code-reviewer");
+  s.ok("run", "add", "T6", "--role", "security-reviewer");
+  s.ok("run", "done", "R10", "--status", "failed"); // an ended run holds no place
+  s.ok("run", "add", "T6", "--role", "pe");
+  assert.equal(rows(s.dir, "runs").filter((r) => r.status === "running").length, 10);
+  assert.equal(s.no("run", "add", "T2", "--role", "qa"), "sage: the project has 10 running runs, its agent cap (max_agents, or cap.<project>): R1 lead on T1, R2 lead on T2, R3 lead on T3, R4 lead on T4, R5 lead on T5, R6 implementer on T1, R7 implementer on T2, R8 implementer on T3, R9 code-reviewer on T1, R11 pe on T6. Wait for one of them to end, or end a run whose agent has stopped (sage run done <R> --status done, blocked, question or failed). Nothing changed.");
+  assert.equal(rows(s.dir, "runs").length, 11, "the refused run is not recorded");
+  s.ok("run", "done", "R9", "--status", "failed"); // the chief ends a stuck run to free a place
+  assert.match(s.ok("run", "add", "T2", "--role", "qa"), /^R12 running · qa on T2/);
+  assert.match(s.no("run", "add", "T3", "--role", "qa"), /^sage: the project has 10 running runs, its agent cap/);
+  const other = store(s.home); // another project of the same root counts its own runs
+  other.ok("task", "add", "--priority", "P2", "--title", "t", "--size", "small");
+  assert.match(other.ok("run", "add", "T1", "--role", "lead"), /^R1 running · lead on T1/);
+});
+
+test("T952-AGENT-CAP-KEY: a lower max_agents, or the project's own cap.<project>, sets the cap at run add, and a lower value ends no run", () => {
+  const s = store(undefined, "cap-project-");
+  for (let i = 0; i < 2; i++) s.ok("task", "add", "--priority", "P2", "--title", `t${i + 1}`, "--size", "small");
+  s.ok("config", "max_agents=2");
+  s.ok("run", "add", "T1", "--role", "lead");
+  s.ok("run", "add", "T2", "--role", "lead");
+  assert.match(s.no("run", "add", "T1", "--role", "qa"), /^sage: the project has 2 running runs, its agent cap \(max_agents, or cap\.<project>\): R1 lead on T1, R2 lead on T2\./);
+  const name = basename(s.project).toLowerCase().replace(/[^a-z0-9]+/g, "-");
+  s.ok("config", `cap.${name}=3`); // the project's own cap wins over max_agents, as in the hook
+  assert.match(s.ok("run", "add", "T1", "--role", "qa"), /^R3 running · qa on T1/);
+  assert.match(s.no("run", "add", "T2", "--role", "qa"), /^sage: the project has 3 running runs/);
+  s.ok("config", `cap.${name}=1`);
+  assert.equal(rows(s.dir, "runs").filter((r) => r.status === "running").length, 3, "a lower value ends no run");
+});
+
 test("T266-LEAD-INVESTIGATE: an investigation takes no lead run, and the refusal says why", () => {
   const s = store();
   s.ok("task", "add", "--priority", "P2", "--title", "look", "--size", "investigate");
@@ -4678,7 +4713,9 @@ test("Balanced defaults cover every role and size without a config file", () => 
         || (["implementer", "code-reviewer"].includes(role) && size === "tiny") ? "sonnet" : "opus";
       const args = ["run", "add", task, "--role", role];
       if (["implementer", "designer", "arena-judge"].includes(role)) args.push("--branch", `sample/${task}-${role}`);
-      assert.ok(s.ok(...args).endsWith(` · model ${expected}`), `${role} on ${size}`);
+      const out = s.ok(...args);
+      assert.ok(out.endsWith(` · model ${expected}`), `${role} on ${size}`);
+      s.ok("run", "done", out.split(" ")[0], "--status", "failed"); // an ended run holds no place of the agent cap (T952)
     }
   }
 });
@@ -4707,6 +4744,7 @@ test("T40: each agent role gets its model by task size; run add prints it and re
   const out = s.ok("config");
   assert.ok(out.startsWith("max_agents=10 max_leads=5 cycles.small=1 cycles.large=2 cycles.risk=2 max_rounds=3 arena=3 arena_models=opus,sonnet,sonnet cap_total=20 model."), out);
   assert.equal(out.slice(out.indexOf(" model.") + 1), MODEL_DEFAULTS, "the model keys print after the numbers");
+  s.ok("config", "max_agents=50"); // the runs below stay running, so the agent cap needs room for them (T952)
   for (const size of ["tiny", "small", "large", "investigate"]) s.ok("task", "add", "--priority", "P2", "--title", size, "--size", size);
   const selected = (t, role) => role === "ux-reviewer" || (role === "qa" && ["T1", "T2"].includes(t)) || (role === "code-reviewer" && t === "T1") ? "sonnet" : "opus";
   let r = 0;
@@ -4732,7 +4770,7 @@ test("T40: each agent role gets its model by task size; run add prints it and re
   assert.equal(s.no("config", "model.qa.small=gpt-5"), `sage: model.qa.small is opus, sonnet, haiku, fable, or inherit for the agent's own model; not "gpt-5"`);
   assert.equal(s.no("config", "model.qa.small="), `sage: model.qa.small is opus, sonnet, haiku, fable, or inherit for the agent's own model; not ""`);
   for (const key of ["model.qa.huge", "model.chief.small", "model"]) assert.match(s.no("config", `${key}=opus`), /config takes .*model\.<role>\.<size>=<model>/);
-  writeFileSync(join(s.home, "config.json"), '{"model.code-reviewer.tiny": "gpt-5", "model.qa": 3, "model.pe": "haiku", "model.pe.huge": "opus"}');
+  writeFileSync(join(s.home, "config.json"), '{"max_agents": 50, "model.code-reviewer.tiny": "gpt-5", "model.qa": 3, "model.pe": "haiku", "model.pe.huge": "opus"}'); // max_agents: the runs still run (T952)
   const read = s.ok("config");
   assert.match(read, / model\.code-reviewer\.tiny=sonnet /, "a bad value in config.json reads as the default");
   assert.match(read, /model\.qa\.small=sonnet/);

@@ -3,7 +3,7 @@ import assert from "node:assert/strict";
 import { spawnSync } from "node:child_process";
 import { chmodSync, cpSync, existsSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, truncateSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
-import { join, relative, resolve } from "node:path";
+import { basename, join, relative, resolve } from "node:path";
 import { test } from "node:test";
 import { z } from "zod";
 import { ROOT } from "./build.mjs";
@@ -69,13 +69,13 @@ test("each hook command runs a file of the built plugin", () => {
 });
 
 /** An installed copy of the built plugin in a scratch CODEX_HOME, as `codex plugin add sage@sage` makes it. */
-function installed(t, { trust = [], cliVersion } = {}) {
+function installed(t, { trust = [], cliVersion, threads = "[agents]\nmax_concurrent_threads_per_session = 10\n" } = {}) {
   const home = realpathSync(mkdtempSync(join(tmpdir(), "sage-codex-home-")));
   t.after(() => rmSync(home, { recursive: true, force: true }));
   const root = join(home, "plugins/cache/sage/sage/0.1.0");
   mkdirSync(root, { recursive: true });
   cpSync(PLUGIN, root, { recursive: true });
-  writeFileSync(join(home, "config.toml"), `[plugins."sage@sage"]\nenabled = true\n` +
+  writeFileSync(join(home, "config.toml"), `${threads}[plugins."sage@sage"]\nenabled = true\n` +
     trust.map((key) => `\n[hooks.state."sage@sage:hooks/hooks.json:${key}"]\ntrusted_hash = "sha256:00"\n`).join(""));
   const transcript = join(home, "rollout.jsonl");
   if (cliVersion) writeFileSync(transcript, JSON.stringify({ type: "session_meta", payload: { cli_version: cliVersion } }) + "\n");
@@ -169,6 +169,34 @@ test("on resume of a session over Node's string limit, the SessionStart hook sti
   const { run, home } = installed(t, { trust: ALL, cliVersion: "0.164.0" });
   truncateSync(join(home, "rollout.jsonl"), 600 * 2 ** 20); // sparse: the 600 MiB after the first line cost no disk
   assert.deepEqual(run({ hook_event_name: "SessionStart", source: "resume" }), output(`sage 0.1.0 is installed. Codex 0.164.0. sage hooks: 8 of 8 have a trust record (Codex checks each hash).\n${START}`));
+});
+
+test("T952: the SessionStart hook warns when Codex's thread limit runs fewer agents than the project's agent cap, and names the setting to change", (t) => {
+  const warning = (threads, files = {}) => {
+    const { run, home } = installed(t, { trust: ALL, cliVersion: "0.164.0", threads });
+    for (const [path, text] of Object.entries(typeof files === "function" ? files(basename(home).toLowerCase().replace(/[^a-z0-9]+/g, "-")) : files)) { mkdirSync(join(home, path, ".."), { recursive: true }); writeFileSync(join(home, path), text); }
+    return [run({ hook_event_name: "SessionStart", source: "startup" }).systemMessage, join(home, "config.toml")];
+  };
+  // No setting: Codex's default of 4 threads holds the chief and 3 agents, below the default cap of 10.
+  const [none, file] = warning("");
+  assert.equal(none, `sage: Codex runs at most 3 agents at once in this session (Codex's default of 4 threads, the chief's own included), and this project's agent cap is 10 (max_agents, or cap.<project>). An agent over Codex's limit fails to start with "agent thread limit reached". To raise it, set max_concurrent_threads_per_session = 10 under [agents] in ${file}, then start a new session.`);
+  // Only the agents key: it counts the agents alone, and its alias max_threads reads the same.
+  for (const threads of ["[agents]\nmax_concurrent_threads_per_session = 6\n", "[agents]\nmax_threads = 6 # an alias\n", "agents.max_concurrent_threads_per_session = 6\n", "agents = { max_concurrent_threads_per_session = 6 }\n"]) {
+    assert.match(warning(threads)[0], /^sage: Codex runs at most 6 agents at once in this session \(agents\.max_concurrent_threads_per_session = 6\), and this project's agent cap is 10 .* set max_concurrent_threads_per_session = 10 under \[agents\] in /, threads);
+  }
+  // The features.multi_agent_v2 key wins over the agents key, and counts the chief's own thread: 10 threads hold 9 agents.
+  for (const threads of ["[agents]\nmax_concurrent_threads_per_session = 20\n[features.multi_agent_v2]\nenabled = true\nmax_concurrent_threads_per_session = 10\n", "[agents]\nmax_concurrent_threads_per_session = 20\n[features]\nmulti_agent_v2 = { enabled = true, max_concurrent_threads_per_session = 10 }\n",
+    "agents = { max_concurrent_threads_per_session = 20 }\nfeatures = { multi_agent_v2 = { enabled = true, max_concurrent_threads_per_session = 10 } }\n"]) { // an inline table in an inline table (F-T952-3)
+    assert.match(warning(threads)[0], /^sage: Codex runs at most 9 agents at once in this session \(features\.multi_agent_v2\.max_concurrent_threads_per_session = 10, which counts the chief's own thread\), and this project's agent cap is 10 .* set max_concurrent_threads_per_session = 11 under \[features\.multi_agent_v2\] in /, threads);
+  }
+  // A high enough value: no warning, and the status goes to the chief only.
+  for (const threads of ["[agents]\nmax_concurrent_threads_per_session = 10\n", "[agents]\nmax_concurrent_threads_per_session = 2\n[features.multi_agent_v2]\nmax_concurrent_threads_per_session = 11\n", "[features]\nmulti_agent_v2 = true\n[agents]\nmax_concurrent_threads_per_session = 12\n"]) {
+    assert.equal(warning(threads)[0], undefined, threads);
+  }
+  // The cap is sage's own: a lower max_agents needs fewer agents, and the project's cap.<project> wins over it.
+  assert.equal(warning("", { "sage/config.json": JSON.stringify({ max_agents: 3 }) })[0], undefined, "3 agents fit in Codex's default");
+  const project = (name) => ({ "sage/config.json": JSON.stringify({ max_agents: 3, [`cap.${name}`]: 5 }) }); // the project is the session's folder
+  assert.match(warning("[agents]\nmax_concurrent_threads_per_session = 4\n", project)[0] ?? "", /at most 4 agents .* this project's agent cap is 5 /);
 });
 
 test("the SessionStart hook says when it cannot read the Codex version, and ignores other events", (t) => {

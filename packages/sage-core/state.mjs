@@ -16,6 +16,7 @@ import { homedir, hostname, platform, tmpdir, uptime } from "node:os";
 import { basename, dirname, isAbsolute, join, resolve, sep } from "node:path";
 import { boardView, sessionRoots, sessionSources } from "./board-view.mjs";
 import { projectName as shownName } from "./board-model.mjs";
+import { agentCaps } from "./logbook-fields.mjs";
 import { logbookIdentity } from "./board-reader.mjs";
 import { createBoard } from "./board.mjs";
 import { PR, pullRequestHead } from "./pull-request.mjs";
@@ -630,7 +631,7 @@ function savedWriteColumns(tables, deny) {
 }
 
 /** A recorded running run is an assignment record, not proof that a native agent started. */
-function runFrame(dir, task, role, branch, candidate, env) {
+function runFrame(dir, project, task, role, branch, candidate, env) {
   if (!RUN_ROLES.includes(role)) refuse(`${JSON.stringify(role)} is not a role of a run. Roles: ${RUN_ROLES.join(", ")}.`);
   if (WAIT_ROLES.includes(role)) waitsMet(task, graphOf(dir), `${role} run`);
   if (role === "lead") {
@@ -661,6 +662,11 @@ function runFrame(dir, task, role, branch, candidate, env) {
     const other = there.find(row => row.status === "running" && WRITERS.includes(row.role));
     if (other) refuse(`${other.id} (${other.role}) still writes ${branch}, and a branch has one writer. Finish that run first (sage run done ${other.id} --status done, blocked, question or failed), or give this run another branch.`);
   }
+  // The project's agent cap holds every running run of the logbook, of each role and each provider (T952): in Codex it is
+  // the only agent cap, and in Claude the hook also counts the live agents against the same value.
+  const cap = agentCaps(config(env, dir)).cap(projectName(project));
+  const running = read(dir, "runs").filter((r) => r.status === "running");
+  if (running.length >= cap) refuse(`the project has ${running.length} running runs, its agent cap (max_agents, or cap.<project>): ${running.map((r) => `${r.id} ${r.role} on ${r.task}`).join(", ")}. Wait for one of them to end, or end a run whose agent has stopped (sage run done <R> --status done, blocked, question or failed). Nothing changed.`);
   return { id: nextId(dir, "R"), task: task.id, role, round: task.round, candidate, branch,
     status: "running", started: now(), model: modelFor(role, task.size, candidate, config(env), task.risk) };
 }
@@ -3602,7 +3608,7 @@ function act(cmd, pos, opt, dir, env, skip, project) {
         const role = cell(need(opt.role, "--role")).toLowerCase();
         const branch = opt.branch === undefined ? "" : branchOf(opt.branch);
         const candidate = opt.candidate === undefined ? "" : candidateOf(opt.candidate);
-        const run = { ...runFrame(dir, task, role, branch, candidate, env), ...chiefTag(opt), ...checkoutTag(dir, project, env) };
+        const run = { ...runFrame(dir, project, task, role, branch, candidate, env), ...chiefTag(opt), ...checkoutTag(dir, project, env) };
         if (opt["usage-interface"] !== undefined) {
           const entry = USAGE_INTERFACES.get(opt["usage-interface"]);
           if (!entry) refuse("Unknown usage interface. Nothing changed.");

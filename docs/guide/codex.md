@@ -23,7 +23,7 @@ The design of the two provider plugins is in [Separate provider packages](../des
 | The brief check | Yes: the hook refuses a brief without every field | Yes: the chief runs the `brief` tool before each spawn, and the gate refuses a role agent's spawn with no checked brief. Each role agent starts with the project's standing orders and its checked brief ([The brief check](#the-brief-check)) |
 | The report check | Yes | Yes, for a role agent whose task name starts with `sage_`: a report without every field gets one more turn, then the agent stops with one plain line. A review or QA agent's report goes through the same reader as in Claude Code: a report that the reader cannot read gets one more turn too |
 | sage mode: the push rule in code | Yes | Yes: the same push form as in Claude Code ([The rules in Codex](#the-rules-in-codex)) |
-| sage mode: agent caps in code | Yes | No: Codex's own thread limit is the cap ([Known limits in Codex](#known-limits-in-codex)) |
+| sage mode: agent caps in code | Yes | Yes: the state tool refuses a new run when the project already has its cap of running runs (`max_agents`, 10 by default), as in Claude Code. Codex's own thread limit must hold as many agents ([What you need](#what-you-need)) |
 | Autopilot | Yes | Yes, in Codex 0.164 and later: autopilot merges verified work with sage's merge command, with no prompt for the merge ([Autopilot in Codex](#autopilot-in-codex)). The hook refuses `gh pr merge` in every mode |
 | The merge rule, the no-edit rules and the `.codex` rule | Yes | Yes, in the plugin's hooks ([The rules in Codex](#the-rules-in-codex)) |
 | The mode phrases (`sage mode`, `sage mode off`, `autopilot on`, `autopilot off`, `sage help`) | Yes | Yes |
@@ -40,7 +40,16 @@ The browser board shows every logbook by default, and each card says which provi
 - Node.js 20 or later, on your PATH: the sage hooks are Node scripts.
 - `gh`, logged in (`gh auth login`), and a GitHub remote for the project. sage uses them for pull requests and the merge check; without them, work stops at a verified branch.
 - A multi-agent v2 model for the chief and each child. In Codex 0.164.0's bundled catalog, the `gpt-6-sol` models are v2, and `gpt-5.6-luna` is not ([limits](#the-rules-in-codex)).
-- For a full lead team, `agents.max_concurrent_threads_per_session` set to 10 in your Codex config. The default of 4 threads holds the chief, a lead and 2 helpers ([limits](#the-rules-in-codex)).
+- Codex's thread limit at sage's agent cap (`max_agents`, 10 by default). A sage plugin cannot set it, so add these lines to your Codex config (`~/.codex/config.toml`):
+
+  ```toml
+  [agents]
+  max_concurrent_threads_per_session = 10
+  ```
+
+  - This value counts the agents only: Codex adds one thread for the chief. The default of 4 threads holds the chief and 3 agents, for example a lead and 2 helpers.
+  - If your config has `max_concurrent_threads_per_session` under `[features.multi_agent_v2]`, that value wins over the `[agents]` value, and it counts the chief's thread too: set it to 11.
+  - When the limit that applies is below the project's agent cap, the sage start status warns you and names the line to change. Start a new session after the change.
 
 ## Install
 
@@ -460,7 +469,7 @@ Limits:
   - If the chief stops all the same, its last line says so. Send any message, and one more if the report has not come.
 - Codex v2 allows 4 threads in a session by default: the chief and 3 children. So a lead and 2 helpers fill the default, and a third helper at the same time fails with `collab spawn failed: agent thread limit reached`.
   - A finished or interrupted agent frees its thread, and the agent then tries again with the same name.
-  - One lead with one helper at a time needs no change. Set `agents.max_concurrent_threads_per_session` to 10 before you run more than one lead, because sage caps no agents in code here.
+  - The state tool holds at most `max_agents` running runs for a project, in both providers, so set Codex's limit to that cap ([What you need](#what-you-need)). The start status warns while it is lower. Codex counts the threads of one session; the state tool counts the runs of the project's logbook, in all sessions.
 - The reviewer's limits above hold for a lead too: its shell write is blocked only in the plain forms. A lead sends the branch and opens the pull request from the shell, under the same push and `gh` rules as the chief, and it never merges. It starts no lead, PE, designer or arena judge.
 - A lead records every finding of a helper's report. The state tool refuses a review or QA verdict while a medium or high finding of its kept report has no row, in Claude and in Codex. Claude's hook also stops the lead earlier, at its next run, verdict or state move (its gap rule), and the Codex gate does not.
 - The chief's own `resume_agent` is not blocked. The chief's text says to start a fresh agent.
@@ -476,7 +485,6 @@ These are the differences from Claude Code that stay in sage 1.0, by the owner's
 | Limit | What you see | What to do |
 | --- | --- | --- |
 | **Hook trust after updates** | After each sage update, Codex asks you to trust the sage hooks again. Until then, sage records nothing. | Choose **Trust all and continue**, or type `/hooks`. Then do the [gate check](#check-that-the-sage-gate-runs). |
-| **Thread limit** | With the default limit, a third helper at the same time fails with `collab spawn failed: agent thread limit reached`, then tries again. | Set `agents.max_concurrent_threads_per_session` to 10 before you run more than one lead. |
 | **One model for all agents** | Every agent runs on the session's model, also a light role such as the UX review. | Choose a multi-agent v2 model for the session. Do not change it during a run. |
 | **No token counts** | The logbook and the board show no token count for a Codex run. | Nothing. |
 | **Late check of a left-out finding** | A lead that leaves out a medium or high finding of a helper learns it only when it records the verdict. | Nothing. The state tool refuses that verdict, so the clean cycles stay safe. |
@@ -485,7 +493,6 @@ These are the differences from Claude Code that stay in sage 1.0, by the owner's
 ### Why each limit stays
 
 - **Hook trust after updates:** Codex runs a plugin hook only when your trust record matches the hook and the plugin's files. An update changes them.
-- **Thread limit:** sage counts no running agents in Codex, so Codex's own thread limit (4 by default) is the cap. The state tool still holds at most 5 running lead runs for a project (`max_leads`).
 - **One model for all agents:** Codex children inherit the session's model, so sage sets no model for each role and size.
 - **No token counts:** Codex's agent tools give no token count for each run, so the chief records the usage as unavailable.
 - **Late check of a left-out finding:** the state tool refuses that verdict in both providers. Claude's hook also checks it earlier, at the lead's next run or state move.
