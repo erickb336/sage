@@ -14,10 +14,13 @@
 //     mark. Then, and when a save fails, the hook removes the older mark, so that the reader refuses, and gives a limit
 //     line. When even the removal fails, the old mark stays: the gate then finds that its Codex process (pid) is not
 //     the one that runs now, and refuses (F-T663-9, F-T663-22).
+//   - The mark keeps sage: true when this start of the record began in sage mode by the project's start setting (T948),
+//     so that the reader replays the owner's switches from sage mode on. A resume continues the record, so it keeps the
+//     sage value of the mark before it.
 import { existsSync, readFileSync, unlinkSync } from "node:fs";
 import { basename, join } from "node:path";
 import { threadOf } from "./gate-hook.mjs";
-import { privateDirectory, saveState, stateKey } from "./hook-state.mjs";
+import { privateDirectory, readState, saveState, stateKey } from "./hook-state.mjs";
 
 /** The mark file of the session's root thread, in the mode folder dir. */
 export const markFile = (dir, sessionId) => join(dir, "marks", `${stateKey({ session_id: sessionId })}.json`);
@@ -37,7 +40,7 @@ const limit = (cause, step) => `sage: the sage hook could not ${cause}, so autop
  * limit line for the user when it saves no mark: then it also removes an older mark of the session, so that no stale
  * boundary stays. It never throws, so a failed mark never blocks the session.
  */
-export function saveStartMark(dir, input) {
+export function saveStartMark(dir, input, sage = false) {
   if (typeof input?.session_id !== "string" || !input.session_id || "agent_id" in input) return undefined;
   const file = markFile(dir, input.session_id);
   const path = typeof input.transcript_path === "string" && input.transcript_path ? input.transcript_path : null;
@@ -68,7 +71,9 @@ export function saveStartMark(dir, input) {
     privateDirectory(dir);
     folder = join(dir, "marks");
     privateDirectory(folder);
-    saveState(file, { session: input.session_id, source: input.source, lines, pid: process.ppid });
+    let started = sage;
+    if (input.source === "resume") try { started = readState(file).sage === true; } catch { started = false; }
+    saveState(file, { session: input.session_id, source: input.source, lines, pid: process.ppid, ...(started ? { sage: true } : {}) });
     return undefined;
   } catch (error) {
     remove();

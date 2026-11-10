@@ -95,13 +95,21 @@ export const TABLES = {
   programs: ["id", "name", "goal", "pilot", "gate", "at"],
 };
 
+/** The value of a logbook's start key that starts each new session of the project in sage mode (T948). */
+export const START_SAGE_MODE = "sage-mode";
+
 /**
- * The owner's settings of one logbook from its parsed config.json: its display name (null for none) and its archived
- * flag. A bad value falls back (no name; not archived) with a warning, so that a hand-edited file never stops the board.
+ * The owner's settings of one logbook from its parsed config.json: its display name (null for none), its archived flag,
+ * and whether each new session of the project starts in sage mode (start, T948). A bad value falls back (no name; not
+ * archived; a normal start) with a warning, so that a hand-edited file never stops the board or a session.
  */
 export function logbookSettings(config) {
-  if (!config || typeof config !== "object" || Array.isArray(config)) return { name: null, archived: false, warnings: ["config: config is not an object"] };
+  if (!config || typeof config !== "object" || Array.isArray(config)) return { name: null, archived: false, sageModeStart: false, warnings: ["config: config is not an object"] };
   const why = config.name === undefined ? null : nameProblem(config.name);
-  const warnings = [...(why ? [`config: the name ${why}`] : []), ...(config.archived !== undefined && typeof config.archived !== "boolean" ? ["config: archived is not true or false"] : [])];
-  return { name: config.name === undefined || why ? null : config.name, archived: config.archived === true, warnings };
+  const warnings = [
+    ...(why ? [`config: the name ${why}`] : []),
+    ...(config.archived !== undefined && typeof config.archived !== "boolean" ? ["config: archived is not true or false"] : []),
+    ...(config.start !== undefined && config.start !== START_SAGE_MODE ? [`config: start is not "${START_SAGE_MODE}"`] : []),
+  ];
+  return { name: config.name === undefined || why ? null : config.name, archived: config.archived === true, sageModeStart: config.start === START_SAGE_MODE, warnings };
 }

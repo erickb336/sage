@@ -207,6 +207,25 @@ test("T398: in a session that starts as the chief, the off phrase holds until th
   for (const call of fileTools) assert.match(denied(s.send(call)) ?? "", /you do not change files yourself/, `${call.tool_name} is refused again`);
 });
 
+test("T948: a project whose logbook has start=sage-mode starts each new session in sage mode, and the off phrase holds", () => {
+  const s = session();
+  const at = (id) => ({ cwd: FEATURE, session_id: id });
+  s.sage("init");
+  assert.equal(s.send({ ...prompt("what is open?"), ...at("s0") }), undefined, "by default a new session starts with sage mode off");
+  assert.equal(s.send(edit(at("s0"))), undefined);
+  s.sage("config", "start=sage-mode");
+  assert.match(context(s.send({ ...prompt("what is open?"), ...at("s1") })), /# Chief of staff/, "a new session is on at its first prompt");
+  assert.match(denied(s.send(edit(at("s1")))), /Give this change to a sage:implementer/);
+  assert.match(context(s.send({ ...prompt("sage mode off"), ...at("s1") })), /sage mode is off/);
+  assert.equal(s.send(edit(at("s1"))), undefined, "the off phrase holds for the rest of the session");
+  assert.equal(s.send({ ...prompt("fix the typo"), ...at("s1") }), undefined, "no chief text after the off phrase");
+  assert.equal(s.send({ ...prompt("still off?"), ...at("s0") }), undefined, "a session that started before the setting stays off");
+  assert.match(context(s.send({ ...prompt("hello"), ...at("s2") })), /# Chief of staff/, "the next new session (as after /clear) starts on again");
+  s.sage("config", "start=normal");
+  assert.equal(s.send({ ...prompt("hello"), ...at("s3") }), undefined, "start=normal: a new session starts off again");
+  assert.equal(s.send(edit(at("s3"))), undefined);
+});
+
 test("T398 F-R1517-1: when the hook cannot read or save its state, it refuses the chief's file tools (fail closed)", () => {
   const chief = { agent_type: "sage:chief-of-staff" };
   const refusedAll = (s, why, ms) => {

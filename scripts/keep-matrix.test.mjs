@@ -103,6 +103,8 @@ const ROLES = {
   "codex agent": (command, extra) => run(CODEX_HOOK, { hook_event_name: "PreToolUse", session_id: SESSION.codex, turn_id: "t1", cwd: PROJECT, tool_name: "Bash", tool_use_id: "call_1", tool_input: { command }, agent_id: "agent-1", transcript_path: CODEX_CHILD }, extra),
 };
 const BOTH = Object.keys(ROLES), CHIEFS = ["claude chief", "codex chief"], CLAUDE = ["claude chief", "claude agent"], AGENT = ["claude agent", "codex agent"];
+/** The roles of a plain write: the Codex chief changes no file from the shell in sage mode (T948), so its own test is in codex-gates. */
+const WRITERS = BOTH.filter((role) => role !== "codex chief");
 /** The words of each family's refusal in the Claude hook, so that no row passes for another rule's reason. */
 const WHY = {
   merge: /merge|reaches main/i, // a mergeBranch into main meets the push rule first, which runs before the merge rule
@@ -215,7 +217,7 @@ const PASSED = [
   // A push beside other commands, an honest hooks setup (husky) and a write under .git pass (T909, Q1).
   [{ claude: `git -C ${T} add -A && git -C ${T} commit -m x && git -C ${T} push origin sage/t1-a`, codex: `git -C ${T} push origin sage/t2-b && npm test` }],
   [`git -C ${T} config core.hooksPath .husky`],
-  [`echo x > ${PROJECT}/.git/info/exclude`],
+  [`echo x > ${PROJECT}/.git/info/exclude`, WRITERS],
   ["grep -rn 'gh pr merge' docs"],
   ["gh run list --limit 5"],
   ["rg -n -- --set-password docs", CLAUDE],
@@ -235,26 +237,26 @@ const PASSED = [
   ["echo 'gh pr merge 12'"],
   ["which gh", AGENT],
   [`cp ${BASE}/gh ${BASE}/fake-gh`, AGENT],
-  ["brew install gh jq"],
+  ["brew install gh jq", WRITERS],
   ["man gh pr"],
-  ["rm -rf gh build"],
+  ["rm -rf gh build", WRITERS],
   ["gh search repos git cli", CHIEFS],
   // A logbook file's name outside a root, a variable in a write target and a read of a root pass in both hooks (T903, T909).
   [`echo x > ${BASE}/tasks.tsv`],
-  ["rm -f ../runs.tsv"],
-  ["echo x > $DEST/tasks.tsv"],
+  ["rm -f ../runs.tsv", WRITERS],
+  ["echo x > $DEST/tasks.tsv", WRITERS],
   [`cat ${L}/tasks.tsv`],
   // Ordinary commands over a folder that holds the roots (BASE holds the shared root and the Codex home): a find that
   // deletes only matched files and a chmod that adds a right remove no root (F-T903-7). A find that runs no program
   // reads no file, so the Claude board rule lets it pass over a folder that holds the board config too (F-T909-9).
-  [`find ${BASE} -name '*.tmp' -delete`],
-  ["find ~ -name '*.tmp' -delete"],
+  [`find ${BASE} -name '*.tmp' -delete`, WRITERS],
+  ["find ~ -name '*.tmp' -delete", WRITERS],
   // A dry run of the agent's own branch sends nothing (F-T909-13).
   [{ claude: `git -C ${T} push --dry-run origin sage/t1-a`, codex: `git -C ${T} push -n origin sage/t2-b` }],
   [`chmod -R u+w ${BASE}`],
   ["chmod -R u+w ~"],
   // rm of a project link to the shared root removes the link, not the root (F-T903-10).
-  [`rm ${LINK}`],
+  [`rm ${LINK}`, WRITERS],
 ];
 
 /** Runs a table's rows as each of their roles; returns the rows whose answer is not the expected one, and the counts. */

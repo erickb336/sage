@@ -8,7 +8,8 @@
 //     an event comes from. Only the session's root thread is the chief. A thread that Codex starts itself (its review
 //     thread, guardian) shares the session id and has no agent_id, but its record names a subagent source or another
 //     thread id: it counts as a read-only role agent. A child whose record cannot be read is read-only and starts nothing.
-//   - The chief: in sage mode the root thread changes no file with apply_patch. A child may.
+//   - The chief: in sage mode the root thread changes no file with apply_patch, nor with a shell write form (core's
+//     commandWrites, or Codex's own apply_patch program), except a redirection into the temp folder (T948). A child may.
 //   - A read-only role: in sage mode the leaf sage name (the last part of the agent path that starts with sage_) decides
 //     the edit rule. Under a role that core keeps from editing (a reviewer, QA, the PE, the lead), a child changes no
 //     file, with apply_patch or with a shell write form (core's commandWrites, or Codex's own apply_patch program).
@@ -74,7 +75,7 @@ import { accessSync, constants, existsSync, linkSync, mkdirSync, readdirSync, re
 import { homedir } from "node:os";
 import { basename, dirname, isAbsolute, join, relative, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
-import { AGENT_GH, agentCommandProblem, agentGh, boardCommandProblem, boardPathProblem, chiefEditDenied, commandWrites, createCommandPolicy, createPushPolicy, ghRuns, logbookWrite, PR, programName, programsRun, pullRequestHead, readModeFile, roleEditDenied, sharedRoot, shellCommands, shellWriteEvidence, TEAM } from "sage-core";
+import { AGENT_GH, agentCommandProblem, agentGh, boardCommandProblem, boardPathProblem, chiefEditDenied, commandWrites, createCommandPolicy, createPushPolicy, ghRuns, logbookWrite, PR, programName, programsRun, pullRequestHead, readModeFile, roleEditDenied, sharedRoot, shellCommands, shellWriteEvidence, TEAM, TEMP } from "sage-core";
 import { modeFile, readMode, tool } from "../skills/sage/sage.mjs";
 import { verificationOptions } from "../skills/sage/verify-install.mjs";
 import { privateDirectory, readState } from "./hook-state.mjs";
@@ -97,6 +98,7 @@ const UNREADABLE = "sage: the hook could not read this tool call, so it refuses 
 const CODEX_FOLDER = "sage: no agent changes files under a .codex folder, because Codex reads its project settings there. Ask the user to make this change.";
 const CODEX_SETTINGS = "sage: no agent writes Codex's config file or the sage plugin's folder from the shell, because the trust of sage's hooks is there. Ask the user to make this change.";
 const CHIEF = 'sage: sage mode is on, so the chief does not change files. Brief an implementer to make this change. The user ends sage mode with the message "sage mode off", alone.';
+const CHIEF_SHELL = 'sage: sage mode is on, so the chief does not change files, also not from the shell: this command has a write form (a redirection into a file, tee, cp, mv, rm, sed -i, or code in node -e). Brief an implementer to make this change. To keep output, redirect it into a scratch folder in the temp folder, outside the project, with a literal path (for example > /tmp/notes/out.txt). git, gh, the sage tools and reads run as before. The user ends sage mode with the message "sage mode off", alone.';
 const OWNER_MERGE = "sage: in Codex, only sage's merge command merges, on autopilot, as the chief's instructions say. Without autopilot, the owner merges the pull request in GitHub";
 const LOGBOOK_WRITE = (word) => `sage: no agent writes, moves or removes a logbook file from the shell: ${JSON.stringify(word)} is in the Codex sage folder or the shared root, or holds one. Use the sage MCP tools for the logbook.`;
 const LOGBOOK_PATCH = (path) => `sage: no patch changes a logbook file: ${JSON.stringify(path)} is in the Codex sage folder or the shared root. Use the sage MCP tools for the logbook.`;
@@ -847,6 +849,9 @@ export async function gate(input, { mode = readMode, check = checkMerge, env = p
   if (writeEvidence ? namesReference(writeEvidence.writes, namesCodexSettings) : commandWrites(f.command, f.cwd) && namesCodexSettings(f.command, env, f.cwd)) return deny(CODEX_SETTINGS);
   const now = mode(f, env);
   if (!now.sage) return undefined; // the merge refusal above applies in every mode
+  // The chief's shell writes too (T948): core's write forms, as for a read-only role; a redirection into the temp folder,
+  // outside the project, passes. A disguised write (a variable, a script's own code) is a documented limit (order 70).
+  if (!thread.child && chiefEditDenied({ sage: true, chief: true }) && (commandWrites(f.command, f.cwd, TEMP) || runsPatch(f.command, f.cwd, env))) return deny(CHIEF_SHELL);
   const gh = thread.child ? ghProblem(f.command, f.cwd, env) : undefined;
   if (gh) return refuse(thread, gh);
   // A shared logbook's task branch takes a push only from its owning chief, the chief of the root thread's session (T822).

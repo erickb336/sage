@@ -957,9 +957,9 @@ test("T930: program_propose (new and again) and task_set program= give the Claud
 
 test("T930: config sets the board name, the archive, the cycle counts and max_leads through the Codex server, with the Claude state tool's lines", async (t) => {
   const s = await programWorld(t), { both } = s;
-  assert.equal(await both("config", { settings: { name: "Council Record" } }, ["config", "name=Council Record"]), "name=Council Record archived=no");
-  assert.equal(await both("config", { settings: { archived: "yes" } }, ["config", "archived=yes"]), "name=Council Record archived=yes");
-  assert.equal(await both("config", { settings: { name: "", archived: "no" } }, ["config", "name=", "archived=no"]), "name= archived=no");
+  assert.equal(await both("config", { settings: { name: "Council Record" } }, ["config", "name=Council Record"]), "name=Council Record archived=no start=normal");
+  assert.equal(await both("config", { settings: { archived: "yes" } }, ["config", "archived=yes"]), "name=Council Record archived=yes start=normal");
+  assert.equal(await both("config", { settings: { name: "", archived: "no" } }, ["config", "name=", "archived=no"]), "name= archived=no start=normal");
   assert.match((await both("config", { settings: { name: "x", max_leads: "4" } }, ["config", "name=x", "max_leads=4"])).error, /^sage: "max_leads" is a key for all projects/);
   assert.match((await both("config", { settings: { "cycles.large": "1" } }, ["config", "cycles.large=1"])).error, /^sage: cycles\.large must be a whole number of 2 or more: 1 is below the floor of 2/);
   // The counts print with each provider's own models (arena_models and the model keys), so the lines compare without them.

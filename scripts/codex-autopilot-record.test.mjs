@@ -15,6 +15,7 @@ const { readRecord, autopilotSwitch, onCanCount, turnAborted, RECORD_LIMIT } = a
 const { exactPhrase, switchModes } = await import(join(PLUGIN, "core/index.mjs"));
 const { markFile } = await import(join(PLUGIN, "hooks/start-mark.mjs"));
 const { modeDirectory } = await import(join(PLUGIN, "hooks/sage-codex-hook.mjs"));
+const { stateKey } = await import(join(PLUGIN, "hooks/hook-state.mjs"));
 const RECORDS = JSON.parse(readFileSync(fileURLToPath(new URL("./fixtures/codex-owner-records.json", import.meta.url)), "utf8"));
 
 const SCRATCH = realpathSync(mkdtempSync(join(tmpdir(), "sage-autopilot-record-")));
@@ -500,6 +501,49 @@ test("startup, resume and clear (session-start-hook) and fork (sage-codex-hook) 
     // pid: the hook's parent, which is Codex when Codex runs the hook (here, this test process).
     assert.deepEqual(markOf(h), { session: SESSION, source, lines: ROOT_RECORD.length, pid: process.pid }, source);
   }
+});
+
+test("T948: a project with start=sage-mode starts each new session in sage mode: the mode file, the mark and the status say so, and the off phrase holds", () => {
+  const h = hookHome();
+  const project = join(h.env.HOME, "project");
+  mkdirSync(project);
+  const cli = (...args) => { const r = spawnSync(process.execPath, [join(PLUGIN, "skills/sage/sage.mjs"), ...args, "--project", project], { env: h.env, encoding: "utf8" }); assert.equal(r.status, 0, r.stderr); return r.stdout.trim(); };
+  const modeOf = () => JSON.parse(readFileSync(join(h.dir, `${stateKey({ session_id: SESSION })}.json`), "utf8"));
+  const status = (output) => output.hookSpecificOutput.additionalContext.split("\n")[1];
+  cli("init");
+  // The default: a normal start, as before.
+  assert.equal(status(start(h, HOOK_OF.startup, "startup", { cwd: project })), 'To start sage mode, the user sends this message alone: sage mode');
+  assert.equal(markOf(h).sage, undefined);
+  assert.equal(cli("config", "start=sage-mode"), "name= archived=no start=sage-mode");
+  for (const source of ["startup", "clear"]) {
+    rmSync(join(h.dir, `${stateKey({ session_id: SESSION })}.json`), { force: true }); // a new session has no mode file yet
+    assert.equal(status(start(h, HOOK_OF[source], source, { cwd: project })), "sage mode is on in this session, because this project starts each session in sage mode.", source);
+    assert.equal(modeOf().sage, true, source);
+    assert.equal(markOf(h).sage, true, `${source}: the mark keeps the start in sage mode`);
+  }
+  start(h, HOOK_OF.resume, "resume", { cwd: project });
+  assert.equal(markOf(h).sage, true, "a resume keeps the start of its record");
+  // The chief's role comes at the first prompt; the off phrase turns sage mode off, and a later start does not undo it.
+  const say = (text) => { const r = spawnSync(process.execPath, [join(PLUGIN, "hooks/sage-codex-hook.mjs")], { env: h.env, encoding: "utf8", input: JSON.stringify({ hook_event_name: "UserPromptSubmit", session_id: SESSION, cwd: project, transcript_path: h.transcript, turn_id: `t-${text}`, prompt: text }) }); assert.equal(r.status, 0, r.stderr); return r.stdout ? JSON.parse(r.stdout).hookSpecificOutput?.additionalContext ?? "" : ""; };
+  assert.match(say("what is open?"), /sage mode is on\. You are the user's chief of staff/);
+  assert.match(say("sage mode off"), /sage mode is off/);
+  assert.equal(modeOf().sage, false);
+  start(h, HOOK_OF.clear, "clear", { cwd: project });
+  assert.equal(modeOf().sage, false, "a start in the same session keeps the owner's off");
+  // A child's start, and a fork, never turn sage mode on by the setting.
+  const child = hookHome();
+  start(child, HOOK_OF.startup, "startup", { cwd: project, agent_id: "agent-1" });
+  start(child, HOOK_OF.fork, "fork", { cwd: project });
+  assert.equal(existsSync(join(child.dir, `${stateKey({ session_id: SESSION })}.json`)) && JSON.parse(readFileSync(join(child.dir, `${stateKey({ session_id: SESSION })}.json`), "utf8")).sage === true, false);
+});
+
+test("T948: the owner record reader replays from sage mode on when the mark says that the session started in sage mode", () => {
+  const record = read(RECORDS["exec-on"]); // the owner's on phrase, with no mode phrase before it
+  assert.deepEqual(sw(record, { lines: 0 }), NONE, "a normal start: the on counts for nothing without sage mode");
+  assert.deepEqual(sw(record, { lines: 0, sage: true }), ON, "a start in sage mode: the on counts");
+  assert.deepEqual(sw(record, { lines: 0, sage: "true" }), NONE, "only the value true counts");
+  const off = read([...RECORDS["exec-on"], ...turn("exec", "sage mode off")]);
+  assert.deepEqual(sw(off, { lines: 0, sage: true }), OFF, "the off phrase ends it");
 });
 
 test("a later start replaces the mark; compact saves none and keeps the earlier one; a child's start saves none", () => {
