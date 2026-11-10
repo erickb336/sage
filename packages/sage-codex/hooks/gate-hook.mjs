@@ -27,6 +27,11 @@
 //   - gh in sage mode: an agent (a child thread) runs only core's AGENT_GH commands and gh api with GET, as in the
 //     Claude hook. The chief's gh meets the merge and push rules.
 //   - Multi-agent v1's send_input: none in sage mode (sage sends with v2).
+//   - Stash and process programs (core's agentCommandProblem, as in the Claude hook, T931): a child under a sage name in
+//     any mode, and every child in sage mode, never runs git stash, and runs a process program (ps, pgrep, kill, pkill,
+//     launchctl and the like) only as a fake in the temp folder. The root thread, the chief, is not held.
+//   - The board password rule (core's boardCommandProblem and boardPathProblem, as in the Claude hook, T229, T931): no
+//     thread, in any mode, sets the board password or reads, copies, replaces or searches the board config.
 //   - Logbook writes: no thread, in any mode, runs a shell write whose literal path is in the Codex sage folder (the
 //     logbook and the mode files) or the shared root, or that removes or moves a folder that holds one (core's
 //     logbookWrite, T903), and no patch changes a file there. A read passes.
@@ -69,7 +74,7 @@ import { accessSync, constants, existsSync, linkSync, mkdirSync, readdirSync, re
 import { homedir } from "node:os";
 import { basename, dirname, isAbsolute, join, relative, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
-import { AGENT_GH, agentGh, chiefEditDenied, commandWrites, createCommandPolicy, createPushPolicy, ghRuns, logbookWrite, PR, programName, programsRun, pullRequestHead, readModeFile, roleEditDenied, sharedRoot, shellCommands, shellWriteEvidence, TEAM } from "sage-core";
+import { AGENT_GH, agentCommandProblem, agentGh, boardCommandProblem, boardPathProblem, chiefEditDenied, commandWrites, createCommandPolicy, createPushPolicy, ghRuns, logbookWrite, PR, programName, programsRun, pullRequestHead, readModeFile, roleEditDenied, sharedRoot, shellCommands, shellWriteEvidence, TEAM } from "sage-core";
 import { modeFile, readMode, tool } from "../skills/sage/sage.mjs";
 import { verificationOptions } from "../skills/sage/verify-install.mjs";
 import { privateDirectory, readState } from "./hook-state.mjs";
@@ -800,6 +805,8 @@ export async function gate(input, { mode = readMode, check = checkMerge, env = p
     } catch { return deny("sage: the hook could not read this patch, so it refuses it. Send one patch from *** Begin Patch to *** End Patch."); }
     if (!paths.length) return deny("sage: the hook could not read this patch, so it refuses it. Send one patch from *** Begin Patch to *** End Patch.");
     for (const path of paths) {
+      const board = boardPathProblem(path, f.cwd, { home: env.HOME || homedir() });
+      if (board) return deny(`sage: ${board}`);
       if (managedPatchPath(path, { cwd: f.cwd, env, pluginRoot: ROOT })) continue;
       if (codexPath(projectRoot(f.cwd), resolve(f.cwd, path))) return deny(CODEX_FOLDER);
       if (logbookWord(asWrite(path), env, f.cwd) !== undefined) return deny(LOGBOOK_PATCH(path));
@@ -815,6 +822,8 @@ export async function gate(input, { mode = readMode, check = checkMerge, env = p
   const namesReference = (references, test) => references.some(({ word, dir }) => test(asWord(resolve(dir, word)), env, f.cwd));
   const logbook = logbookWord(f.command, env, f.cwd);
   if (logbook !== undefined) return deny(LOGBOOK_WRITE(logbook));
+  const board = boardCommandProblem(f.command, f.cwd, { home: env.HOME || homedir() });
+  if (board) return deny(`sage: ${board}`);
   const runs = codexRuns(f.command, f.cwd, env);
   // A command that the reader cannot read and that names codex: refused when it may resume, fork or queue a turn, and
   // for a role agent in sage mode. Any other thread runs it, for example "$EDITOR codex/a.txt".
@@ -832,6 +841,8 @@ export async function gate(input, { mode = readMode, check = checkMerge, env = p
     if (stateToolWrites(f.command, f.cwd, env) && !(knownThread && scopedStateRead(f.command, f.cwd, env))) return refuse(thread, recordsAsLead(thread) ? LEAD_SHELL : CHILD_LOGBOOK);
     const why = commandWrites(f.command, f.cwd) || runsPatch(f.command, f.cwd, env) ? childChange(thread, mode(f, env).sage) : undefined;
     if (why) return refuse(thread, why);
+    const agent = underSage(thread) !== false || mode(f, env).sage ? agentCommandProblem(f.command, f.cwd, env.PATH ?? "") : undefined;
+    if (agent) return refuse(thread, `sage: ${agent}`);
   }
   if (writeEvidence ? namesReference(writeEvidence.writes, namesCodexSettings) : commandWrites(f.command, f.cwd) && namesCodexSettings(f.command, env, f.cwd)) return deny(CODEX_SETTINGS);
   const now = mode(f, env);
