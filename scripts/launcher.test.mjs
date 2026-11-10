@@ -14,7 +14,7 @@ const HOOK = "sage-hook.mjs";
 
 /** The command that a hook file registers for an event, as Claude Code runs it: through a shell, with CLAUDE_PLUGIN_ROOT set. */
 const command = (file, event) => JSON.parse(readFileSync(join(HOOKS, file), "utf8")).hooks[event][0].hooks[0].command;
-const REGISTERED = { [HOOK]: command("claude.json", "Stop"), "principles-hook.mjs": command("hooks.json", "Stop") };
+const REGISTERED = { [HOOK]: command("claude.json", "Stop") };
 
 /** A fake HOME with two installed versions of sage, each with this tree's hooks folder, its hooks replaced by markers that print the version. */
 function home() {
@@ -55,7 +55,6 @@ test("an event through the old version's command runs the hook of the newer inst
   const h = home();
   h.record(h.newer);
   assert.deepEqual(JSON.parse(h.run()), { version: "new", argv1: join(h.newer, "hooks", HOOK) });
-  assert.deepEqual(JSON.parse(h.run("principles-hook.mjs")), { version: "new", argv1: join(h.newer, "hooks", "principles-hook.mjs") }, "the principles hook too");
 });
 
 test("without a record, or with an unreadable one, the launcher runs its own hook", () => {
@@ -107,10 +106,9 @@ test("the launcher runs the chosen hook in its own process: one node start per e
   assert.deepEqual(JSON.parse(r.stdout), { version: "new", pid: r.pid }, "the newer install's hook ran in the launcher's process");
 });
 
-test("every event of both hook files runs through the launcher", () => {
-  for (const [file, name] of [["claude.json", HOOK], ["hooks.json", "principles-hook.mjs"]])
-    for (const [event, groups] of Object.entries(JSON.parse(readFileSync(join(HOOKS, file), "utf8")).hooks))
-      for (const g of groups) for (const h of g.hooks) assert.equal(h.command, `node "\${CLAUDE_PLUGIN_ROOT}/hooks/launcher.mjs" ${name}`, `${file} ${event}`);
+test("every event of the hook file runs through the launcher", () => {
+  for (const [event, groups] of Object.entries(JSON.parse(readFileSync(join(HOOKS, "claude.json"), "utf8")).hooks))
+    for (const g of groups) for (const h of g.hooks) assert.equal(h.command, `node "\${CLAUDE_PLUGIN_ROOT}/hooks/launcher.mjs" ${HOOK}`, event);
 });
 
 test("the hook's exit code and stderr reach Claude Code through the launcher", () => {
@@ -228,19 +226,19 @@ test("a launcher outside any plugins cache (a dev folder) runs its own hook, als
   assert.equal(JSON.parse(r.stdout).version, "dev");
 });
 
-test("when both hooks fail to load, only a Bash merge or push is denied; other calls and the principles hook pass", () => {
+test("when the hook of both installs fails to load, only a Bash merge or push is denied; other calls pass", () => {
   const h = home();
   for (const name of Object.keys(REGISTERED)) for (const v of [h.old, h.newer]) writeFileSync(join(v, "hooks", name), `throw new Error("broken");\n`);
   h.record(h.newer);
-  const pre = (tool_name, tool_input, name = HOOK) => h.exec(name, { hook_event_name: "PreToolUse", tool_name, tool_input });
+  const pre = (tool_name, tool_input) => h.exec(HOOK, { hook_event_name: "PreToolUse", tool_name, tool_input });
   for (const command of ["gh pr merge 18", "git push origin hook/t44-launcher"]) {
     const r = pre("Bash", { command });
     assert.equal(r.status, 0);
     assert.equal(JSON.parse(r.stdout).hookSpecificOutput.permissionDecision, "deny", command);
   }
-  for (const [tool, input, name] of [["Edit", { file_path: "/x" }], ["Bash", { command: "ls" }], ["Bash", { command: "gh pr merge 18" }, "principles-hook.mjs"]]) {
-    const r = pre(tool, input, name);
-    assert.deepEqual([r.status, r.stdout], [0, ""], `${tool} ${JSON.stringify(input)} ${name ?? HOOK}`);
+  for (const [tool, input] of [["Edit", { file_path: "/x" }], ["Bash", { command: "ls" }]]) {
+    const r = pre(tool, input);
+    assert.deepEqual([r.status, r.stdout], [0, ""], `${tool} ${JSON.stringify(input)}`);
     assert.match(r.stderr, /could not load/);
   }
 });

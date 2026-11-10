@@ -582,7 +582,7 @@ test("T804: the round tool takes why: with autopilot on in the root's mode file,
   const shared = realpathSync(mkdtempSync(join(tmpdir(), "sage-state-mcp-rounds-")));
   t.after(() => rmSync(shared, { recursive: true, force: true }));
   const s = await connect(t, { SAGE_SHARED_HOME: shared });
-  const { modeDirectory, stateKey } = await import(pathToFileURL(join(s.dir, "plugin/hooks/principles-hook.mjs")).href);
+  const { modeDirectory, stateKey } = await import(pathToFileURL(join(s.dir, "plugin/hooks/hook-state.mjs")).href);
   const mode = join(modeDirectory(s.env), `${stateKey({ session_id: "019a0000-0000-7000-8000-0000000000aa" })}.json`);
   const autopilot = (on) => { mkdirSync(modeDirectory(s.env), { recursive: true, mode: 0o700 }); writeFileSync(mode, JSON.stringify({ sage: true, autopilot: on }), { mode: 0o600 }); };
   await s.call("link", { separate: true });

@@ -4,19 +4,17 @@ Sage has one shared implementation of its principles, logbook rules and board, w
 
 > **Note:** this page is the design of the first Codex milestone, and it keeps that milestone's scope. Since then, sage mode, the chief, role agents, the push and merge rules, autopilot and the shared logbook work in Codex. For what works in Codex today, see [sage in Codex](../guide/codex.md).
 
-This change implements the first Codex milestone: skills, advice hooks and manual logbook commands. It does **not** enable Sage's chief workflow in Codex. The lifecycle investigation remains in [draft PR #55](https://github.com/erickb336/sage/pull/55).
+This change implements the first Codex milestone: skills, advice hooks and manual logbook commands. T925 later removed the advice hooks of both providers: each role agent now gets its principles from its role. It does **not** enable Sage's chief workflow in Codex. The lifecycle investigation remains in [draft PR #55](https://github.com/erickb336/sage/pull/55).
 
 ## Source and install boundaries
 
 | Source package | Responsibility | Install output |
 | --- | --- | --- |
-| `packages/sage-core` | Principle selection, change fingerprints, task routes, findings, review verdicts, merge eligibility, locking and board rendering | Identical `core/` files bundled in each plugin |
+| `packages/sage-core` | The role-to-principle map, task routes, findings, review verdicts, merge eligibility, locking and board rendering | Identical `core/` files bundled in each plugin |
 | `packages/sage-claude` | Claude event translation, launcher, orchestration hooks, agents, commands, model defaults and storage default | `plugins/sage` |
 | `packages/sage-codex` | Codex event translation, native manifest, manual logbook skill and storage default | `plugins/sage-codex` |
 
 Providers import the public `sage-core` entry point. Core never imports either provider. `createStateTool` creates an instance with a default-root function, allowed models and model defaults; it does not change process environment or share mutable provider configuration. The board receives that instance's operations, replacing the previous circular module imports.
-
-`applyPrinciples` accepts a small normalized event and returns added context or a stop decision. Each adapter owns native field names and response JSON. Codex only sends advice events; it never invokes the shared stop gate.
 
 The root's `principles/`, `writing/` and `preferences/` remain the authoring inputs for core's shared skills. `scripts/build.mjs` generates them once, then assembles both outputs. These inputs belong with `sage-core` when repositories split. Claude roles stay in the Claude source package until Codex can use and enforce them; there is no copied Codex role set to maintain.
 
@@ -29,15 +27,10 @@ The existing Claude marketplace name, plugin name, source path and command paths
 | Capability | Claude Code | Codex initial milestone |
 | --- | --- | --- |
 | Principles and writing skills | Existing behavior | 29 skills, including manual Sage entry |
-| Design/refactor advice | Existing behavior | `UserPromptSubmit` |
-| Test/document/README advice | Existing behavior | Every `apply_patch` header, including move destinations |
-| Commit advice | Existing behavior | Native hook tool name `Bash` |
-| Failed-check advice | Existing behavior | Disabled: shell hook output is not a reliable exit status |
+| Principle advice at a moment | Removed in T925 | Removed in T925 |
 | Stop gate and compaction recovery | Existing behavior | Disabled pending native captures |
 | Manual logbook and board | Shared core | Shared core |
 | Chief, roles, agent caps, report gates, edit/Git enforcement, autopilot | Existing behavior | Not exposed or enabled |
-
-Codex's patch decoder selects advice; it is not a write authorization parser. Unknown tools/events produce no result. Advice state is partitioned by provider and a hash of session/child identity. Concurrent advice callbacks can repeat a hint; no capacity or authorization decision depends on that state.
 
 Claude keeps its current models and `CLAUDE_CONFIG_DIR` / `~/.claude/sage` default. Codex accepts only `inherit` and uses `CODEX_HOME` / `~/.codex/sage`. `SAGE_HOME` remains an explicit override. Each adapter also passes `legacyRoots(env)`, the provider roots that may hold a project's legacy logbook, so that core names no provider setting. A project with a row in `bindings.tsv` uses a logbook of the shared root (`~/.sage`, or `SAGE_SHARED_HOME`). There is no automatic migration or mixed-provider orchestration. The data format, project keys, task rules and locking stay shared. Error examples use neutral `sage/t1` branch names; existing branch names remain valid.
 
@@ -69,7 +62,7 @@ Start a new Codex session with its hook features enabled:
 codex --enable codex_hooks --enable plugin_hooks
 ```
 
-Review and trust Sage's hook commands through Codex's hook controls when requested. Sage does not bypass hook trust or change global configuration itself. Use the `sage` skill for manual logbook commands. A design request or a patch to a test file should add principle context once per session/child. Check this in the target client before relying on automatic advice; skills and manual commands remain usable separately.
+Review and trust Sage's hook commands through Codex's hook controls when requested. Sage does not bypass hook trust or change global configuration itself. Use the `sage` skill for manual logbook commands. Skills and manual commands remain usable separately.
 
 The native `.codex-plugin/plugin.json` is intentional. In release `rust-v0.159.2`, a portable root manifest discovers skills but the loader excludes its hooks. `plugin/read` verified 29 skills and both hooks after switching to the native manifest. See the release's [plugin manager](https://github.com/openai/codex/blob/rust-v0.159.2/codex-rs/core-plugins/src/manager.rs) and [loader](https://github.com/openai/codex/blob/rust-v0.159.2/codex-rs/core-plugins/src/loader.rs).
 

@@ -13,7 +13,7 @@ import { shellCommands } from "../plugins/sage/core/command-reader.mjs";
 import { landingRule } from "../plugins/sage/core/board-view.mjs";
 import * as claude from "../plugins/sage/skills/sage/sage.mjs";
 import { tool as codex } from "../plugins/sage-codex/skills/sage/sage.mjs";
-import { modeDirectory, stateKey } from "../plugins/sage-codex/hooks/principles-hook.mjs";
+import { modeDirectory, stateKey } from "../plugins/sage-codex/hooks/hook-state.mjs";
 import { backed, reportFor } from "./verdict-backing.mjs";
 
 const at = (path) => fileURLToPath(new URL(path, import.meta.url));

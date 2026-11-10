@@ -38,4 +38,4 @@ Each new session starts off. Keep the owner's instruction in context. After unce
 
 The phrases match Claude's interface. Timing differs: Claude's queued off phrase disables autopilot while its active guards remain. Here, off requests the stop/interruption/preservation procedure above; do not claim timing parity.
 
-Keep the selected Codex model and Codex's permissions, sandbox and hooks. Advice hooks are optional. Do not change settings or defaults to use this skill. A refusal of the sage gate or of Codex's sandbox remains a refusal: never use the manual CLI to bypass it. Automatic recovery needs separate evidence.
+Keep the selected Codex model and Codex's permissions, sandbox and hooks. Do not change settings or defaults to use this skill. A refusal of the sage gate or of Codex's sandbox remains a refusal: never use the manual CLI to bypass it. Automatic recovery needs separate evidence.

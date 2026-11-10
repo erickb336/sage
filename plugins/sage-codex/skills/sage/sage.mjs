@@ -4,7 +4,7 @@ import { homedir } from "node:os";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { createStateTool, readModeFile } from "../../core/index.mjs";
-import { modeDirectory, readState, stateKey } from "../../hooks/principles-hook.mjs";
+import { modeDirectory, readState, stateKey } from "../../hooks/hook-state.mjs";
 import { claimStep, legacyRoots, replaceStep } from "../../runtime/logbook-env.mjs";
 import { verifyInstall } from "./verify-install.mjs";
 

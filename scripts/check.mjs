@@ -5,8 +5,7 @@ import { dirname, join, relative } from "node:path";
 import { GENERATED, ROOT, outputs, filesUnder, parseSource } from "./build.mjs";
 import { changelog } from "./changelog.mjs";
 import { checkWords, flaggedWords, yamlText } from "./dictionary.mjs";
-import { MOMENTS } from "../plugins/sage/hooks/principles-hook.mjs";
-import { BRIEF_FIELDS as CORE_BRIEF_FIELDS, FINDING_FORM } from "../packages/sage-core/index.mjs";
+import { BRIEF_FIELDS as CORE_BRIEF_FIELDS, FINDING_FORM, ROLE_PRINCIPLES } from "../packages/sage-core/index.mjs";
 import { TASK_KINDS } from "../packages/sage-core/logbook-fields.mjs";
 import { BRIEF_FIELDS, REPORT_FIELDS } from "../plugins/sage/hooks/sage-hook.mjs";
 import { handle as codexModeHook } from "../plugins/sage-codex/hooks/sage-codex-hook.mjs";
@@ -52,11 +51,6 @@ for (const d of readdirSync(skillsDir)) {
   }
 }
 
-// Every skill that the hook gives must exist, because the hook reads the text from it.
-for (const [moment, { skills }] of Object.entries(MOMENTS)) {
-  for (const s of skills) if (!existsSync(join(skillsDir, s, "SKILL.md"))) problems.push(`hooks: moment "${moment}" names "${s}", which has no skill`);
-}
-
 // Sage mode (Claude Code only). Agents: name equals the file, a description, preloaded skills that exist, sage names that exist.
 const PLUGIN = join(ROOT, "plugins/sage");
 const frontmatter = (file) => /^---\n([\s\S]*?)\n---\n([\s\S]*)$/.exec(readFileSync(file, "utf8"));
@@ -75,7 +69,16 @@ for (const f of agents) {
   }
   // Every agent writes for a person, in sage's words; every agent but the chief ends with the report.
   for (const skill of f === "chief-of-staff.md" ? ["dictionary"] : ["report", "dictionary"]) if (!new RegExp(`^  - sage:${skill}$`, "m").test(m[1])) problems.push(`agents/${f}: must preload sage:${skill}`);
+  // Each agent preloads exactly the principles that core's role map gives its role.
+  const preloaded = [...m[1].matchAll(/^  - sage:principle-(\S+)$/gm)].map(([, p]) => p).sort().join(", ");
+  const mapped = [...(ROLE_PRINCIPLES[f.slice(0, -3)] ?? [])].sort().join(", ");
+  if (preloaded !== mapped) problems.push(`agents/${f}: preloads the principles [${preloaded}], but ROLE_PRINCIPLES in packages/sage-core/roles.mjs gives [${mapped}]`);
 }
+// Every principle has a role, and the role map names only principles that exist.
+const principleNames = readdirSync(join(ROOT, "principles")).filter((f) => f.endsWith(".md") && f !== "README.md").map((f) => f.slice(0, -3));
+const mappedPrinciples = new Set(Object.values(ROLE_PRINCIPLES).flat());
+for (const p of principleNames) if (!mappedPrinciples.has(p)) problems.push(`principles/${p}.md: no role in ROLE_PRINCIPLES (packages/sage-core/roles.mjs) gets it`);
+for (const p of mappedPrinciples) if (!principleNames.includes(p)) problems.push(`ROLE_PRINCIPLES names ${p}, which is not a file of principles/`);
 // The chief's brief template and the report skill list the same fields as the hook's gates, in the same order.
 const template = /## The brief[\s\S]*?```\n([\s\S]*?)```/.exec(frontmatter(join(PLUGIN, "agents/chief-of-staff.md"))?.[2] ?? "")?.[1] ?? "";
 const briefFields = template.split("\n").map((l) => l.split(/\s+/)[0]).filter(Boolean);
@@ -94,12 +97,10 @@ if (!/^FINDINGS\s.*$/m.exec(report)?.[0].includes(FINDING_FORM)) problems.push(`
 for (const [name, text] of [["skills/report", readFileSync(join(skillsDir, "report/SKILL.md"), "utf8")], ...agents.map((f) => [`agents/${f}`, readFileSync(join(PLUGIN, "agents", f), "utf8")])]) {
   if ((name === "skills/report" || /For each finding, the/.test(text)) && !text.includes("on indented lines under")) problems.push(`${name}: a finding's detail must go on indented lines under the finding's line, the one form that the hook reads`);
 }
-// Every hook command runs a script that exists, in the shared hooks and in Claude's own.
-for (const cfg of ["hooks.json", "claude.json"]) {
-  for (const [event, groups] of Object.entries(JSON.parse(readFileSync(join(PLUGIN, "hooks", cfg), "utf8")).hooks)) for (const g of groups) for (const h of g.hooks) {
-    const script = /\$\{CLAUDE_PLUGIN_ROOT\}\/([^"]+)"/.exec(h.command)?.[1];
-    if (!script || !existsSync(join(PLUGIN, script))) problems.push(`hooks/${cfg} ${event}: runs ${script ?? h.command}, which does not exist`);
-  }
+// Every hook command runs a script that exists.
+for (const [event, groups] of Object.entries(JSON.parse(readFileSync(join(PLUGIN, "hooks/claude.json"), "utf8")).hooks)) for (const g of groups) for (const h of g.hooks) {
+  const script = /\$\{CLAUDE_PLUGIN_ROOT\}\/([^"]+)"/.exec(h.command)?.[1];
+  if (!script || !existsSync(join(PLUGIN, script))) problems.push(`hooks/claude.json ${event}: runs ${script ?? h.command}, which does not exist`);
 }
 if (JSON.parse(readFileSync(join(PLUGIN, ".claude-plugin/plugin.json"), "utf8")).hooks !== "./hooks/claude.json") problems.push("plugin.json: Claude Code must load hooks/claude.json, the sage mode hook");
 

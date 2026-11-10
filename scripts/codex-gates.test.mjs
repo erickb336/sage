@@ -25,7 +25,7 @@ const TOOL = fileURLToPath(new URL("../plugins/sage-codex/skills/sage/sage.mjs",
 const { gate, readMode, codexRuns } = await import(HOOK);
 // Codex adds ". Command: <the command>" after a refusal reason, so no reason ends with a period (F-T470-6).
 const UNREADABLE = "sage: the hook could not read this tool call, so it refuses it. Codex may have changed its hook input: update the sage plugin, or tell the user";
-const { stateKey } = await import(new URL("../plugins/sage-codex/hooks/principles-hook.mjs", import.meta.url));
+const { stateKey } = await import(new URL("../plugins/sage-codex/hooks/hook-state.mjs", import.meta.url));
 
 const SHA = "a1b2c3d4e5f60718293a4b5c6d7e8f9012345678";
 const MERGE = `gh pr merge 41 --squash --delete-branch --match-head-commit ${SHA}`;
