@@ -12,7 +12,6 @@ Give the version (the commit), the steps that show the problem, and what an agen
 
 - The sage hook (`packages/sage-claude/hooks/`): a way for an agent to push to main, merge, write the logbook, stop another agent, or read the board config, past a rule that the hook says it holds.
 - The state tool and the merge check (`packages/sage-core/`): a way to make an unreviewed commit pass the merge check.
-- The PR script (`sage-pr.mjs`): a way past its checks.
 - The board server (`packages/sage-board/`): access from outside the Mac without the password, or a page that runs text from a logbook as code.
 - The Codex plugin's hooks (`packages/sage-codex/`).
 

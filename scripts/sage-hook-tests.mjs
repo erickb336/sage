@@ -1722,7 +1722,6 @@ test("1 MB of padding in an agent's text cannot time out the hook: its time grow
 // T83: only the chief writes the logbook. An agent runs only the state tool's read commands, as one plain command.
 const AGENT = { agent_id: "ag1", agent_type: "sage:implementer" };
 const ONLY_CHIEF = /Only the chief writes the logbook/;
-const PR_SCRIPT = TOOL.replace(/sage\.mjs$/, "sage-pr.mjs");
 /** The forgery steps of the T77 re-check (R354), and the other state-tool writes. */
 const FORGERIES = [
   ...["checks-pass", "review-clean", "qa-pass"].map((kind) => `${TOOL} verdict T2 --kind ${kind} --sha ${SHA}`),
@@ -1741,7 +1740,6 @@ const FORGERIES = [
   `${TOOL} program propose --name x --goal y --pilot T2`,
   `${TOOL} task T2 set program=PG1`,
   `${TOOL} newcommand T2`,
-  `${PR_SCRIPT} create T2`,
 ].map((args) => `node ${args} --project /p`);
 const READ_COMMANDS = (dir) => ["status", `merge-check --sha ${SHA}`, "standing", "logbook", "config", "status --project=x", `standing --project ${dir}`].map((args) => `node ${TOOL} ${args} --project ${dir}`);
 
@@ -1786,7 +1784,6 @@ test("an agent cannot hide a state-tool write in another spelling: quotes, a bac
   const writes = spellings(`verdict T2 --kind qa-pass --sha ${SHA}`).filter((command) => !limits(`verdict T2 --kind qa-pass --sha ${SHA}`).includes(command));
   for (const command of writes) assert.match(denied(s.send(bash(command, FEATURE, AGENT))) ?? "", ONLY_CHIEF, command);
   for (const command of [...spellings("status"), ...limits(`verdict T2 --kind qa-pass --sha ${SHA}`)]) assert.equal(denied(s.send(bash(command, FEATURE, AGENT))), undefined, command);
-  assert.match(denied(s.send(bash(`node ${at}sage-p''r.mjs create`, FEATURE, AGENT))) ?? "", /only the chief runs the PR script/);
 });
 
 test("an agent's file change under the sage root is refused, also through a link or ..; elsewhere it passes (T83)", () => {
@@ -1857,7 +1854,7 @@ test("the rule holds for every tool that runs a command: Monitor, PowerShell and
   const read = `node ${TOOL} status --project /p`;
   for (const name of ["Monitor", "PowerShell", "mcp__terminal__run_in_terminal"]) {
     const write = `echo x >> ${join(s.vars.SAGE_HOME, "p", "ledger.tsv")}`;
-    for (const command of [forged, `node ${PR_SCRIPT} create T2`, write]) {
+    for (const command of [forged, write]) {
       assert.match(denied(s.send({ ...tool(name, { command, description: "d" }), ...AGENT })) ?? "", ONLY_CHIEF, `${name}: ${command}`);
       if (command !== write) assert.equal(denied(s.send(tool(name, { command, description: "d" }))), undefined, `chief ${name}: ${command}`);
     }
@@ -2137,14 +2134,14 @@ test("S-GLOBLINK: the narrowed rule's ordinary forms pass in real folders with n
 });
 
 // T83 cycle 1 (R429): the rule decides on the program that runs (C2) and on the folder that a root variable names (C3).
-test("C2: an agent's read, diff or commit that names sage.mjs passes; running the state tool's write or the PR script is refused (T83)", () => {
+test("C2: an agent's read, diff or commit that names sage.mjs passes; running the state tool's write is refused (T83)", () => {
   for (const on of [false, true]) {
     const s = session();
     if (on) s.send(prompt("sage mode"));
     const path = "plugins/sage/skills/sage/sage.mjs";
-    const reads = [`cat ${path}`, `grep -n x ${path}`, `git diff main -- ${path}`, 'git commit -m "fix sage.mjs"', 'git commit -m "fix sage-pr.mjs and sage.mjs"', `cat ${TOOL} | head -5`];
+    const reads = [`cat ${path}`, `grep -n x ${path}`, `git diff main -- ${path}`, 'git commit -m "fix sage.mjs"', `cat ${TOOL} | head -5`];
     for (const command of reads) assert.equal(denied(s.send(bash(command, FEATURE, AGENT))), undefined, `sage mode ${on}: ${command}`);
-    assert.equal(denied(s.send({ ...tool("Bash", { command: "npm test", description: "Test sage.mjs and sage-pr.mjs" }, { cwd: FEATURE }), ...AGENT })), undefined, "a description that names them");
+    assert.equal(denied(s.send({ ...tool("Bash", { command: "npm test", description: "Test sage.mjs" }, { cwd: FEATURE }), ...AGENT })), undefined, "a description that names it");
     const runs = [
       `node ${TOOL} verdict T2 --kind qa-pass --sha ${SHA}`,
       `bash -c "node ${TOOL} verdict T2 --kind qa-pass --sha ${SHA}"`,
@@ -2155,7 +2152,6 @@ test("C2: an agent's read, diff or commit that names sage.mjs passes; running th
     for (const command of runs) assert.match(denied(s.send(bash(command, FEATURE, AGENT))) ?? "", ONLY_CHIEF, `sage mode ${on}: ${command}`);
     // T815, T909: the tool's text on node's stdin, a variable that names it and code that loads it are limits of the hook.
     for (const command of [`cat ${TOOL} | node - verdict T2`, `S=${TOOL}; node $S verdict T2`, `node -e "import('${TOOL}')"`]) assert.equal(denied(s.send(bash(command, FEATURE, AGENT))), undefined, `sage mode ${on}: ${command}`);
-    assert.match(denied(s.send(bash(`git log && node ${PR_SCRIPT} create T2`, FEATURE, AGENT))) ?? "", /only the chief runs the PR script/);
     assert.match(denied(s.send({ ...tool("Write", { file_path: join(s.vars.SAGE_HOME, "p", "ledger.tsv"), content: "x" }), ...AGENT, cwd: s.dir })) ?? "", /never writes under the sage root/);
   }
 });
@@ -3773,20 +3769,20 @@ test("R7-A: the pattern rule is gone: [ ], [[ ]], if [[ ]], || mkdir and $(( )) 
 
 // T815: the state tool's rule judges node's program word, whatever node's options before it; a text that names the tool,
 // a program that only changes its file, code that runs it and a variable that names it are not runs that the hook sees.
-test("R7-B, T815: node that runs the state tool's write or the PR script is refused, whatever its options; a text that names them passes", () => {
+test("R7-B, T815: node that runs the state tool's write is refused, whatever its options; a text that names it passes", () => {
   const s = session();
   const dir = dirname(TOOL);
   const write = `verdict T2 --kind qa-pass --sha ${SHA}`;
   const refused = [
     [`node -r dotenv/config ${TOOL} ${write}`, ONLY_CHIEF], [`node --env-file .env ${TOOL} ${write}`, ONLY_CHIEF],
     [`node --max-old-space-size 4096 ${TOOL} ${write}`, ONLY_CHIEF], [`node --inspect-port 9229 ${TOOL} init`, ONLY_CHIEF],
-    [`node --title x ${dir}/sage-pr.mjs merge 36`, /only the chief runs the PR script/], [`bash -o pipefail -c "node ${TOOL} ${write}"`, ONLY_CHIEF],
+    [`bash -o pipefail -c "node ${TOOL} ${write}"`, ONLY_CHIEF],
   ];
   for (const [command, re] of refused) assert.match(denied(s.send(bash(command, FEATURE, AGENT))) ?? "", re, command);
   for (const command of [`python3 -W ignore -c "import os; os.system('node ${TOOL} ${write}')"`, `echo "node ${TOOL} status"`, `git -c core.editor=x commit -m "fix sage.mjs"`, `S=${TOOL}; $S status`]) {
     assert.equal(denied(s.send(bash(command, FEATURE, AGENT))), undefined, `${command} (no run of the tool that the hook sees)`);
   }
-  const readers = [`shasum -a 256 ${TOOL}`, `jq . x.json | grep sage.mjs`, `awk '{print}' ${TOOL} | head`, `sed -n 1,5p ${TOOL}`, `git log --oneline -- ${TOOL}`, `git -C ${s.dir} show main:plugins/sage/skills/sage/sage.mjs`, `git add ${TOOL} && git commit -m "fix sage.mjs"`, `rg -n READS ${TOOL}`, `wc -l ${TOOL} ${dir}/sage-pr.mjs`, `grep -i sage.mjs x.txt`, `ls -la ${dir}/SAGE.MJS`, `node ${TOOL} status --project ${s.dir}`];
+  const readers = [`shasum -a 256 ${TOOL}`, `jq . x.json | grep sage.mjs`, `awk '{print}' ${TOOL} | head`, `sed -n 1,5p ${TOOL}`, `git log --oneline -- ${TOOL}`, `git -C ${s.dir} show main:plugins/sage/skills/sage/sage.mjs`, `git add ${TOOL} && git commit -m "fix sage.mjs"`, `rg -n READS ${TOOL}`, `wc -l ${TOOL}`, `grep -i sage.mjs x.txt`, `ls -la ${dir}/SAGE.MJS`, `node ${TOOL} status --project ${s.dir}`];
   for (const command of readers) assert.equal(denied(s.send(bash(command, FEATURE, AGENT))), undefined, command);
   assert.equal(denied(s.send(bash(`node -r dotenv/config ${TOOL} ${write} --project ${s.dir}`))), undefined, "the chief");
 });

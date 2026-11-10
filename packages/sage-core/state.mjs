@@ -249,7 +249,7 @@ const PAGE_MAX = 16 * 1024 * 1024;
  * characters are outside the letters. The one pattern for every branch check in this tool: task set and run add.
  */
 const BRANCH = /^(?![-./])(?!(?:refs|heads|remotes|origin)\/)(?!(?:main|master|HEAD)$)(?!.*(?:\.\.|\/\/|\/\.|\.lock(?:\/|$)|[/.]$))[A-Za-z0-9._/-]+$/i;
-/** Does a branch belong to a task: a BRANCH of the form [<prefix>/]<task>[-<words>]? task set and the PR script check this one rule. */
+/** Does a branch belong to a task: a BRANCH of the form [<prefix>/]<task>[-<words>]? task set checks this one rule. */
 const ofTask = (task, name) => BRANCH.test(name) && new RegExp(`^(?:[A-Za-z0-9_-]+/)?${task}(?:-[A-Za-z0-9._-]+)?$`, "i").test(name);
 /**
  * May a task name this branch: a branch of the task, or the branch that another task of its logbook names, so that two
@@ -274,7 +274,7 @@ const openBar = (task, runs) => (arenaOpen(task, runs) ? `${task.id}'s arena ste
 /**
  * Why a task must not go on, or "": the branch that would land is an arena candidate's, its arena step is open, or it
  * has candidates and names no branch. The rule reads the branch, not the SHA: a judge with no graft keeps the candidate's
- * commit on its own branch. The move to verified, the merge check and sage-pr create share it (T584), so no task reaches
+ * commit on its own branch. The move to verified and the merge check share it (T584), so no task reaches
  * the owner as ready before a judge ended done. runs holds at least the task's own runs.
  */
 const candidateBar = (task, landing, candidates, runs) => {
@@ -981,11 +981,9 @@ function branchCheckout(dir, project, branch, env) {
   if (!writer?.checkout) return project;
   const row = bindings(dirname(dir)).find((r) => r.folder === basename(dir) && r.root === writer.checkout);
   if (!row) refuse(`The checkout of ${writer.id} is not a checkout of this logbook in bindings.tsv, so sage cannot read ${branch}. Nothing changed.`);
-  if (checkoutGone(row)) throw Object.assign(new Refusal(`The checkout of ${writer.id} (${visible(basename(row.root))}) is gone, so sage cannot read ${branch}. Nothing changed.`), { goneRun: writer.id });
+  if (checkoutGone(row)) refuse(`The checkout of ${writer.id} (${visible(basename(row.root))}) is gone, so sage cannot read ${branch}. Nothing changed.`);
   return row.root;
 }
-/** Where a branch of a project lives (branchCheckout): sage-pr reads the branch's origin there. A gone checkout refuses with goneRun. */
-const branchHome = (project, branch, env = process.env) => branchCheckout(storeDir(project, env), project, branch, env);
 /**
  * The tip of a branch where it lives (branchCheckout), or "" on any failure, so that a hook fails closed. When the local
  * branch is behind origin's copy (its tip is an ancestor of refs/remotes/origin/<branch>, as after gh pr update-branch
@@ -2305,11 +2303,6 @@ function takenAt(decisions) {
  * ended before the answer backs no fresh verdict, also when the new chief records it later. A check verdict names no run.
  */
 const olderThan = (since, runs) => (r) => !(Date.parse(r.at) > Date.parse(since)) || (!!r.run && !(Date.parse(runs.find((x) => x.id === r.run)?.started) > Date.parse(since)));
-/** olderThan of one task of a logbook folder, or a rule that keeps each row: the PR script reads only the other verdicts as the task's own (T656). */
-function takenRows(dir, id) {
-  const since = takenAt(read(dir, "decisions").filter((d) => d.task === id));
-  return since ? olderThan(since, read(dir, "runs").filter((r) => r.task === id)) : () => false;
-}
 
 /** The rows of a table by their task. */
 const group = (rows) => rows.reduce((m, r) => (m.has(r.task) ? m.get(r.task).push(r) : m.set(r.task, [r]), m), new Map());
@@ -4106,5 +4099,5 @@ const { bindings, fillCommits, folderOf, link, locate, movePlans, notePlugin, pl
   listed: (root) => known(root, undefined, undefined, true),
   enroll });
 const { chiefs, chiefRow, rowOf } = createChiefs({ now, provider, readRegular, refuse, rowsOf, sheetText, swap });
-return { SIZES, BLOCKS, RISKS, KINDS, STATES, DEFAULTS, PR, sageRoot, locate, chiefFor, sessionBar, branchBar, actorOptions, git, projectRoot, roleReadProject, optionsOf, slug, worktreeRoot, pagesRoot, BRANCH, ofTask, branchOfTask, branchHome, branchTip, projectName, storeDir, config, cyclesFor, modelFor, read, mergeCheck, landingBar, boardLandingCheck, logbookView, sage, keepReport, compareRetainedReport, takenRows, withLock, board, answerPaths, command, runCli, waitingPlugins, writeIdFloors };
+return { SIZES, BLOCKS, RISKS, KINDS, STATES, DEFAULTS, PR, sageRoot, locate, chiefFor, sessionBar, branchBar, actorOptions, git, projectRoot, roleReadProject, optionsOf, slug, worktreeRoot, pagesRoot, BRANCH, ofTask, branchOfTask, branchTip, projectName, storeDir, config, cyclesFor, modelFor, read, mergeCheck, boardLandingCheck, logbookView, sage, keepReport, compareRetainedReport, withLock, board, answerPaths, command, runCli, waitingPlugins, writeIdFloors };
 }

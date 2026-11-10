@@ -360,8 +360,7 @@ export function createSharedRoot({ Refusal, refuse, listed, legacyRoots, makeLog
     const row = rows.find((r) => r.root === realOf(checkout));
     const folder = folderOf(checkout), all = roots(env);
     stopped(shared, [row?.folder ?? folder], realOf(checkout), row ? [] : all.map((root) => join(root.path, folder)));
-    // owner: the checkout of the logbook's owner row (ownerOf), whose origin is the logbook's repository (sage-pr, T634).
-    if (row) return { dir: boundFolder(shared, rows, row), row, get owner() { return ownerOf(rows, row.folder)?.root; }, checkout, shared: true };
+    if (row) return { dir: boundFolder(shared, rows, row), row, checkout, shared: true };
     const moved = all.map((root) => join(root.path, folder, "moved.json")).find(seen);
     if (moved) refuse(`this project's logbook moved to the shared root, but the move did not finish (${moved}). Nothing changed. Run the move again.`);
     // old: each provider root's logbook of this project, with the root's provider (null when the adapter does not name it).

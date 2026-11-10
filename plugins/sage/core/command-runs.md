@@ -21,7 +21,7 @@ gate uses `mergeRun`, the push readers and `logbookWrite`, with its own roots
   its literal part counts. `chmod`, `chown`, `chgrp` and `chflags` with `-R`
   count in any line when a word names a root or a path in one, not a folder
   above one. `find -delete` counts only as a write: a word in a root.
-- `stateToolRun(command, cwd)` gives each run of `sage.mjs` or `sage-pr.mjs`:
+- `stateToolRun(command, cwd)` gives each run of `sage.mjs`:
   node or the script itself as the program. A program that only reads the file
   is no run.
 - `ghRuns(command, cwd, path)` gives each gh run's command words and, for
