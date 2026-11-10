@@ -28,7 +28,7 @@ const UNREADABLE = "sage: the hook could not read this tool call, so it refuses 
 const { stateKey } = await import(new URL("../plugins/sage-codex/hooks/hook-state.mjs", import.meta.url));
 const { recordBrief } = await import(new URL("../plugins/sage-codex/hooks/brief-hook.mjs", import.meta.url));
 const { ROUTES } = await import(new URL("../plugins/sage-codex/hooks/dispatch.mjs", import.meta.url));
-const { BRIEF_FIELDS } = await import(new URL("../plugins/sage-codex/core/index.mjs", import.meta.url));
+const { BRIEF_FIELDS, CHIEF_SHELL: CHIEF_SHELL_TEXT } = await import(new URL("../plugins/sage-codex/core/index.mjs", import.meta.url));
 
 const SHA = "a1b2c3d4e5f60718293a4b5c6d7e8f9012345678";
 const MERGE = `gh pr merge 41 --squash --delete-branch --match-head-commit ${SHA}`;
@@ -166,7 +166,7 @@ test("in sage mode the chief changes no file, and a child may", async (t) => {
 });
 
 test("T948: in sage mode the chief changes no repository file from the shell either; git, gh, the sage tool, reads and scratch output run", async (t) => {
-  const CHIEF_SHELL = 'sage: sage mode is on, so the chief does not change files, also not from the shell: this command has a write form (a redirection into a file, tee, cp, mv, rm, sed -i, or code in node -e). Brief an implementer to make this change. To keep output, redirect it into a scratch folder in the temp folder, outside the project, with a literal path (for example > /tmp/notes/out.txt). git, gh, the sage tools and reads run as before. The user ends sage mode with the message "sage mode off", alone';
+  const CHIEF_SHELL = `sage: ${CHIEF_SHELL_TEXT}`.replace(/\.$/, "");
   const writes = ["echo x > src/a.js", "cat > notes.md <<'EOF'\nhi\nEOF", "printf x | tee src/a.js", "cp src/a.js src/b.js", "mv src/a.js src/b.js", "rm src/a.js",
     "sed -i '' s/a/b/ src/a.js", "node -e \"require('fs').writeFileSync('a.js', 'b')\"", `echo x > ${CWD}/src/a.js`, "cd src && echo x >> a.js", "rm /tmp/notes/out.txt"];
   const runs = ["git status", "git add -A && git commit -m 'a change'", "git -C /work/project worktree add /work/wt -b claude/t1", "gh pr view 41", "gh api -X PATCH repos/acme/site -f description=x", "gh api -X PUT repos/o/r/branches/main/protection --input /tmp/notes/p.json", "gh pr create --title T --body \"$(cat <<'EOF'\nbody\nEOF\n)\"",
@@ -179,6 +179,36 @@ test("T948: in sage mode the chief changes no repository file from the shell eit
   for (const command of runs) assert.equal(await on.run(pre("Bash", command)), undefined, command);
   const child = record(t, { id: "child", session_id: base.session_id, agent_path: "/root/sage_implementer_t1_r1", source: { subagent: { thread_spawn: { depth: 1 } } } });
   assert.equal(await on.run(pre("Bash", "echo x > src/a.js", { ...CHILD, transcript_path: child })), undefined, "an implementer writes");
+});
+
+/**
+ * T960: the Claude hook and the Codex gate give the chief the same answer in sage mode, from core's commandWrites and
+ * core's text; outside sage mode both let every command run. F-T948-1 and F-T948-5: a gh command that clones, downloads,
+ * copies from a codespace or installs an extension writes; into the temp folder a clone or a download runs; gh pr checkout
+ * changes the work tree as git checkout does, and runs.
+ */
+const CHIEF_WRITES = ["cat > notes.md <<'EOF'\nhi\nEOF", "echo x > src/a.js", "printf x | tee src/a.js", "cp src/a.js src/b.js", "sed -i '' s/a/b/ src/a.js",
+  "mv src/a.js src/b.js", "rm src/a.js", "node -e \"require('fs').writeFileSync('a.js', 'b')\"", "printf x | tee /tmp/notes/out.txt", "cp src/a.js /tmp/notes/a.js",
+  "gh repo clone acme/site", "gh repo clone acme/site src/site", "gh run download 5", "gh run download 5 -D src", "gh release download v1", "gh release download v1 -O site.tgz",
+  "gh codespace cp remote:a.txt a.txt", "gh extension install acme/gh-x", "gh ext upgrade --all", "git rm src/a.js"];
+const CHIEF_RUNS = ["git status", "git add -A && git commit -m 'a change'", "git -C /work/project worktree add /work/wt -b claude/t1", "git worktree add /work/wt/install -b claude/t2", "git commit -m patch", "gh pr view 41",
+  "gh api -X PATCH repos/acme/site -f description=x", "gh pr create --title T --body \"$(cat <<'EOF'\nbody\nEOF\n)\"", "gh pr checkout 41", "gh extension list",
+  "gh repo clone acme/site /tmp/notes/site", "gh run download 5 -D /tmp/notes/run", "gh release download v1 -O -", "gh codespace cp a.txt remote:a.txt",
+  `node ${TOOL} status --project ${CWD}`, "cat src/a.js", "grep -rn x src", "ls -la > /dev/null", "echo x > /tmp/notes/out.txt", "mkdir -p /tmp/notes", "npm test 2>&1"];
+test("T960: the Claude hook and the Codex gate give the chief the same answer to each command, in sage mode and out of it", async () => {
+  const { handle } = await import(new URL("../plugins/sage/hooks/sage-hook.mjs", import.meta.url));
+  const slots = { bind() {}, release() {}, drop() {}, touch() {}, reconcile() {} };
+  const claude = (command, sage) => denied(handle({ hook_event_name: "PreToolUse", tool_name: "Bash", tool_input: { command }, cwd: CWD, session_id: "s1" }, { sage, autopilot: false, start: false }, slots))?.replace(/\.$/, "");
+  const CHIEF_SHELL = `sage: ${CHIEF_SHELL_TEXT}`.replace(/\.$/, "");
+  for (const sage of [true, false]) {
+    const codex = fixed({ sage });
+    for (const command of [...CHIEF_WRITES, ...CHIEF_RUNS]) {
+      const expected = sage && CHIEF_WRITES.includes(command) ? CHIEF_SHELL : undefined;
+      assert.deepEqual({ claude: claude(command, sage), codex: denied(await codex.run(pre("Bash", command))) }, { claude: expected, codex: expected }, `sage mode ${sage}: ${command}`);
+    }
+  }
+  // The text names each write form, and says that only a redirection, a clone or a download runs into the temp folder (F-T948-4).
+  for (const form of ["a redirection or a heredoc into a file", "tee", "cp", "sed -i", "gh repo clone", "tee, cp and the other forms are refused also there"]) assert.ok(CHIEF_SHELL.includes(form), form);
 });
 
 test("T931: a sage child, and every child in sage mode, runs no git stash and no real process program; the chief is not held", async (t) => {

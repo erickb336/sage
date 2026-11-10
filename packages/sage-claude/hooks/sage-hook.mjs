@@ -452,6 +452,11 @@ export function handle(input, state, slots) {
       if (result?.hookSpecificOutput?.permissionDecision === "deny") return result;
       answer ??= result;
     }
+    // The chief's shell writes in sage mode (T960), as in the Codex gate (T948): core's write forms, with the same text; a
+    // redirection, or a gh clone or download, into the temp folder, outside the project, passes. A disguised write is a limit (order 70).
+    if (main && runFields(ti).some((command) => { try { return core.commandWrites(command, cwd, core.TEMP); } catch { return true; } })) {
+      return deny(event, core.CHIEF_SHELL ?? "the sage core cannot load, so the hook refuses this shell command of the chief. Reinstall or update the sage plugin.");
+    }
     return answer;
   }
   return undefined;
