@@ -31,9 +31,12 @@ export function checkRoleReservation(reservations, assignment, input) {
   return plan;
 }
 
+/** The roles of an investigation: the chief starts them, and they change no project file. */
+const INVESTIGATION = new Set(["investigate", "evidence-review"]);
+
 /** Providers supply verified mode and role. Null names an unmanaged actor. */
 export function roleEditDenied({ sage, role }) {
-  if (typeof sage !== "boolean" || (role !== null && !ROLES.has(role)) || (sage && role === null))
+  if (typeof sage !== "boolean" || (role !== null && !ROLES.has(role) && !INVESTIGATION.has(role)) || (sage && role === null))
     throw Error("Invalid role edit context");
   return sage && !["implementer", "designer", "arena-judge"].includes(role);
 }

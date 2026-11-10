@@ -2244,7 +2244,108 @@ test("T933: in sage mode a reviewer, QA, the PE and the lead change no files fro
     assert.match(denied(s.send(tool(name, { command: "rm -rf src", description: "d" }, { cwd: FEATURE, ...qa }))) ?? "", /the qa agent changes no files/, name);
   }
   // A sage role that core does not know counts as read-only.
-  assert.match(denied(s.send(bash("rm -rf src", FEATURE, { agent_id: "x1", agent_type: "sage:investigate" }))) ?? "", /the investigate agent changes no files/);
+  assert.match(denied(s.send(bash("rm -rf src", FEATURE, { agent_id: "x1", agent_type: "sage:researcher" }))) ?? "", /the researcher agent changes no files/);
+});
+
+// T932 (gap G19): the investigation's agents have their own agent files and the read-only rule. The hook only reads these
+// commands and file tool calls; none runs or writes.
+/**
+ * An investigation task T1 in FEATURE's logbook, and its pages folder: <SAGE_WORKTREES>/<logbook folder>/pages/T1, as
+ * `sage pages T1` prints it to the chief. The test's worktree root is outside the temp folder, as ~/sage-worktrees is, so
+ * that the temp folder's own rule does not decide; nothing creates it, because the hook only reads the paths.
+ */
+const WORKTREE_ROOT = "/sage-t932-not-created/worktrees";
+const investigation = (s) => {
+  s.sage("init");
+  s.sage("task", "add", "--priority", "P2", "--title", "Why are writes lost?", "--size", "investigate");
+  return join(WORKTREE_ROOT, basename(s.sage("logbook")), "pages", "T1");
+};
+const fileWrites = (file, who) => [tool("Write", { file_path: file, content: "x" }, { cwd: FEATURE, ...who }), tool("Edit", { file_path: file, old_string: "a", new_string: "b" }, { cwd: FEATURE, ...who }),
+  tool("MultiEdit", { file_path: file, edits: [] }, { cwd: FEATURE, ...who }), tool("NotebookEdit", { notebook_path: file, new_source: "x" }, { cwd: FEATURE, ...who })];
+
+test("T932: in sage mode the investigate and evidence-review agents change no project file, from the shell or a file tool; investigate writes its pages", () => {
+  const s = session({ SAGE_WORKTREES: WORKTREE_ROOT });
+  const pages = investigation(s);
+  const printed = session(); // the same layout as the folder that the state tool prints and makes, under a root that it may create
+  const layout = investigation(printed).replace(WORKTREE_ROOT, join(printed.vars.HOME, "sage-worktrees"));
+  assert.equal(printed.sage("pages", "T1"), layout, "the pages folder that the chief gives in the brief");
+  s.send(prompt("sage mode"));
+  const investigate = { agent_id: "inv-1", agent_type: "sage:investigate" }, evidence = { agent_id: "ev-1", agent_type: "sage:evidence-review" };
+  for (const [role, who] of [["investigate", investigate], ["evidence-review", evidence]]) {
+    for (const command of SHELL_WRITES) {
+      assert.match(denied(s.send(bash(command, FEATURE, who))) ?? "", new RegExp(`the ${role} agent changes no files, also not from the shell.*write form`), `${role}: ${command}`);
+    }
+    for (const command of SHELL_READS) assert.equal(s.send(bash(command, FEATURE, who)), undefined, `${role}: ${command}`);
+    for (const event of fileWrites(join(FEATURE, "README.md"), who)) {
+      assert.match(denied(s.send(event)) ?? "", new RegExp(`^sage: in sage mode, the ${role} agent changes no project files, so its ${event.tool_name} of "[^"]+" is refused\\. (?:Report the finding instead|The investigate agent writes only its pages)`), `${role}: ${event.tool_name}`);
+    }
+  }
+  // The investigate agent writes its page in the pages folder, and a file in its scratch folder, with a file tool or a redirection.
+  for (const file of [join(pages, "research.md"), join(pages, "designs", "a", "notes.md"), join(SCRATCH, "probe.md")]) {
+    for (const event of fileWrites(file, investigate)) assert.equal(denied(s.send(event)), undefined, `investigate: ${event.tool_name} of ${file}`);
+  }
+  for (const command of [`cat > ${pages}/research.md <<'EOF'\n# Research\nEOF`, `node --test scripts/a.test.mjs > ${pages}/run.txt 2>&1`, `mkdir -p ${pages}/designs`]) {
+    assert.equal(s.send(bash(command, FEATURE, investigate)), undefined, `investigate: ${command}`);
+  }
+  // Not the rest of the worktree root: a task's worktree is next to the pages folder. Not another write form into pages.
+  const beside = join(dirname(dirname(pages)), "R1-t1", "src", "a.js");
+  for (const event of fileWrites(beside, investigate)) assert.match(denied(s.send(event)) ?? "", /the investigate agent changes no project files.*writes only its pages, in the task's pages folder/, `investigate: ${event.tool_name} beside the pages folder`);
+  for (const command of [`echo x > ${beside}`, `cp README.md ${pages}/copy.md`, `echo x > ${pages}/../../R1-t1/a.js`]) {
+    assert.match(denied(s.send(bash(command, FEATURE, investigate))) ?? "", /the investigate agent changes no files.*writes only its pages/, `investigate: ${command}`);
+  }
+  // Each path of a call counts: a NotebookEdit whose notebook_path is in the project is refused, also beside a page's file_path.
+  assert.match(denied(s.send(tool("NotebookEdit", { file_path: join(pages, "a.ipynb"), notebook_path: join(FEATURE, "a.ipynb"), new_source: "x" }, { cwd: FEATURE, ...investigate }))) ?? "", /the investigate agent changes no project files, so its NotebookEdit of "[^"]+" is refused/);
+  assert.match(denied(s.send(tool("Write", { content: "x" }, { cwd: FEATURE, ...investigate }))) ?? "", /the investigate agent changes no project files, so its Write of "" is refused/, "no path");
+  // The evidence review writes in no pages folder; its agent file takes away the file tools.
+  assert.match(denied(s.send(bash(`echo x > ${pages}/review.md`, FEATURE, evidence))) ?? "", /the evidence-review agent changes no files.*Report the finding instead/);
+  assert.match(denied(s.send(fileWrites(join(pages, "review.md"), evidence)[0])) ?? "", /the evidence-review agent changes no project files.*Report the finding instead/);
+  // The writers keep their file tools, and outside sage mode nothing changes.
+  assert.equal(denied(s.send(fileWrites(join(FEATURE, "README.md"), { agent_id: "imp-1", agent_type: "sage:implementer" })[0])), undefined, "the implementer");
+  const off = session();
+  for (const who of [investigate, evidence]) {
+    assert.equal(denied(off.send(fileWrites(join(FEATURE, "README.md"), who)[0])), undefined, `${who.agent_type} outside sage mode`);
+    assert.equal(off.send(bash("rm -rf src", FEATURE, who)), undefined, `${who.agent_type} outside sage mode`);
+  }
+});
+
+test("T932: the investigate and evidence-review agents get the brief check and the report check; the evidence review's report is read like a review's", () => {
+  const s = session();
+  s.send(prompt("sage mode"));
+  for (const type of ["sage:investigate", "sage:evidence-review"]) {
+    assert.match(denied(s.send(spawnAgent(type, "GOAL find why\nSCOPE src/", `brief-${type}`))) ?? "", /the brief has no CONTEXT, DECISIONS, ACCEPTANCE, VERIFY, BUDGET, FORBIDDEN, REPORT, STANDING/, type);
+    assert.equal(denied(s.send(spawnAgent(type, BRIEF, `full-${type}`))), undefined, type);
+  }
+  const stop = (type, message) => s.send({ hook_event_name: "SubagentStop", agent_id: `stop-${type}`, agent_type: type, last_assistant_message: message });
+  for (const type of ["sage:investigate", "sage:evidence-review"]) {
+    assert.match(stop(type, "The writes are lost in the cache.")?.reason ?? "", /your report has no STATUS, RESULT, EVIDENCE, FINDINGS, QUESTIONS, NOT VERIFIED, BRANCH/, type);
+  }
+  // The investigator's RESULT is its answer; the evidence review's RESULT is CLEAN or FINDINGS, with findings the reader reads.
+  assert.equal(stop("sage:investigate", report("the cache drops writes at 1 MiB")), undefined, "the investigator's answer");
+  const odd = stop("sage:evidence-review", report("CLEAN", "Y1 medium no dash"));
+  assert.equal(odd?.decision, "block", "an evidence review that the reader cannot read");
+  assert.match(odd.reason, /^sage: the hook cannot read your report: a line under FINDINGS is not none alone/);
+  assert.match(stop("sage:evidence-review", report("the claims hold"))?.reason ?? "", /cannot read your report: .*Start RESULT with CLEAN, PASS, FINDINGS, FAIL/, "a RESULT without a verdict word");
+  assert.equal(stop("sage:evidence-review", report("FINDINGS", "- E1 medium page 2 has no command for its number")), undefined, "a readable finding");
+  assert.equal(stop("sage:evidence-review", report("CLEAN")), undefined, "a clean review");
+});
+
+test("T932: the evidence review that the sage starts keeps its report for its run, and the evidence-clean verdict follows", () => {
+  const s = session();
+  investigation(s);
+  s.send(prompt("sage mode"));
+  s.sage("run", "add", "T1", "--role", "investigate");
+  s.sage("run", "done", "R1", "--status", "done");
+  s.sage("task", "T1", "set", "state=reviewing");
+  const run = s.sage("run", "add", "T1", "--role", "evidence-review").split(" ")[0];
+  assert.equal(run, "R2");
+  assert.equal(denied(s.send(spawnAgent("sage:evidence-review", `Run ${run} · task T1 (evidence-review)\n${BRIEF}`, "tu-ev", { cwd: FEATURE }))), undefined, "the spawn");
+  s.send(resultOf("tu-ev", "ev-agent", { cwd: FEATURE }));
+  const text = report("CLEAN");
+  s.send(ended("ev-agent", "sage:evidence-review", { cwd: FEATURE, last_assistant_message: text }));
+  const kept = JSON.parse(readFileSync(join(s.sage("logbook"), "kept", `${run}.json`), "utf8"));
+  assert.deepEqual([kept.task, kept.run, kept.role, kept.sha, kept.text], ["T1", "R2", "evidence-review", "", text]);
+  s.sage("run", "done", run, "--status", "done", "--tokens", "1");
+  assert.equal(s.sage("verdict", "T1", "--kind", "evidence-clean", "--run", run), "T1 evidence-clean · cycle 1");
 });
 
 test("T933: the writers, the chief, other agents and every agent outside sage mode keep their shell writes", () => {

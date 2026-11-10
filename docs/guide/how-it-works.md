@@ -37,8 +37,10 @@ The state lives in the logbook: plain files in `~/.claude/sage/<project>-<hash>/
 | **UX reviewer** | The flow, the states, the copy and accessibility |
 | **QA** | Runs the checks and the real app, and tries to break it |
 | **Arena judge** | Scores an arena's candidates and grafts the best parts into one |
+| **Investigate** | Gathers the evidence for a question with read commands, and writes its research page |
+| **Evidence review** | Checks each claim of an investigation against its evidence, as a different agent |
 
-Three agents change files, each in its own git worktree: the designer, the implementer and the arena judge, which writes the final version on its own new branch. The others change no files.
+Three agents change files, each in its own git worktree: the designer, the implementer and the arena judge, which writes the final version on its own new branch. The investigate agent writes only its research page, in the task's pages folder. The others change no files.
 
 Only one agent writes on a branch at a time. Reviewers start fresh, so they don't share the builder's blind spots.
 

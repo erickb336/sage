@@ -15,6 +15,12 @@
   "security-reviewer": {},
   "ux-reviewer": {},
   "qa": {},
+  "investigate": {
+    "WRITE_SCOPE": "You write only your pages, in the task's pages folder that your brief names, and files in your scratch folder in the temp folder: the hook refuses every other write, also from the shell."
+  },
+  "evidence-review": {
+    "WRITE_SCOPE": "This role is read-only: you have no file tools, and the hook refuses a shell write outside your scratch folder in the temp folder."
+  },
   "report": {
     "REPORT_GATE": "The sage hook does not let you finish until each field starts a line.",
     "REPORT_FINDINGS": "none, or one line for each problem: - <key> <severity> <summary>, where the severity is high, medium or low and the summary gives the location and the steps that show it",

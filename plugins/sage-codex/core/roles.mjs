@@ -1,12 +1,12 @@
 import { readFileSync } from "node:fs";
 
 /** The child roles of sage: each has its instructions in roles/. The state tool records runs of these roles. */
-export const ROLES = new Set(["lead", "implementer", "pe", "designer", "arena-judge", "code-reviewer", "security-reviewer", "ux-reviewer", "qa"]);
+export const ROLES = new Set(["lead", "implementer", "pe", "designer", "arena-judge", "code-reviewer", "security-reviewer", "ux-reviewer", "qa", "investigate", "evidence-review"]);
 
 /**
  * The principles that each role starts with: the one map (T925). Each name is a file of principles/. A Claude agent file
  * lists the same principles in its skills: list (npm run check compares them), and Codex's role.mjs puts their text in
- * the role's message. investigate and evidence-review are Codex roles only, until Claude has agent files for them.
+ * the role's message.
  */
 export const ROLE_PRINCIPLES = Object.freeze({
   "chief-of-staff": ["never-block-on-the-human", "encode-lessons-in-structure", "contextualize-and-write-for-the-reader", "guard-the-context-window"],
