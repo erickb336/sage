@@ -285,10 +285,21 @@ test("right before gh it reads the record again: the owner's switch must be on, 
   const missing = session();
   permit(missing, { transcript: join(SCRATCH, "no-record.jsonl") });
   assertRefused(merge(missing), "sage cannot read Codex's record of this session. Ask for the merge again. If it refuses again, the owner merges the pull request in GitHub (ENOENT)", "no record");
+  // T951: no upper bound. A record of a newer Codex reads, and the merge runs gh once.
+  for (const cli of ["0.168.0", "0.169.0-alpha.8", "1.0.0"]) {
+    const newer = session();
+    const text = readFileSync(newer.transcript, "utf8");
+    writeFileSync(newer.transcript, text.replace('"cli_version":"0.164.0"', `"cli_version":"${cli}"`));
+    assert.notEqual(readFileSync(newer.transcript, "utf8"), text, cli);
+    permit(newer);
+    assert.deepEqual(merge(newer), { status: 0, stdout: `${MARKER}\n`, stderr: "" }, cli);
+    assert.equal(ghCalls().length, 1, cli);
+    rmSync(GH_LOG);
+  }
   const version = session();
-  writeFileSync(version.transcript, readFileSync(version.transcript, "utf8").replace('"cli_version":"0.164.0"', '"cli_version":"0.168.0"'));
+  writeFileSync(version.transcript, readFileSync(version.transcript, "utf8").replace('"cli_version":"0.164.0"', '"cli_version":"0.163.0"'));
   permit(version);
-  assertRefused(merge(version), "this session runs Codex 0.168.0, and sage reads the records of Codex 0.164 to 0.167 only. A newer Codex waits until sage adds it. Until then, the owner merges the pull request in GitHub", "a newer Codex");
+  assertRefused(merge(version), "this session runs Codex 0.163.0, and sage reads the records of Codex 0.164 and later only. Start a new session with Codex 0.164 or later, or the owner merges the pull request in GitHub", "an older Codex");
   const form = session();
   writeFileSync(form.transcript, `${readFileSync(form.transcript, "utf8")}{not json\n`);
   permit(form);
