@@ -56,13 +56,13 @@ Install its Codex entry:
 codex plugin add sage@sage
 ```
 
-Start a new Codex session with its hook features enabled:
+Install sage's hook entries once, with the plugin's `hooks install` command (`node <plugin>/skills/sage/sage.mjs hooks install`). It writes the user's `<CODEX_HOME>/hooks.json` and copies a launcher to `<CODEX_HOME>/sage-hooks` (T957). The plugin itself declares no hooks. Start a new Codex session with its hook features enabled:
 
 ```sh
-codex --enable codex_hooks --enable plugin_hooks
+codex --enable codex_hooks
 ```
 
-Review and trust Sage's hook commands through Codex's hook controls when requested. Sage does not bypass hook trust or change global configuration itself. Use the `sage` skill for manual logbook commands. Skills and manual commands remain usable separately.
+Review and trust Sage's hook entries through Codex's hook controls when requested. Codex trusts a user hook by its entry, so an update of sage needs no new trust. Sage does not bypass hook trust or write Codex's configuration by itself; `hooks install` changes only sage's own entries in the hooks file. Use the `sage` skill for manual logbook commands. Skills and manual commands remain usable separately.
 
 The native `.codex-plugin/plugin.json` is intentional. In release `rust-v0.159.2`, a portable root manifest discovers skills but the loader excludes its hooks. `plugin/read` verified 29 skills and both hooks after switching to the native manifest. See the release's [plugin manager](https://github.com/openai/codex/blob/rust-v0.159.2/codex-rs/core-plugins/src/manager.rs) and [loader](https://github.com/openai/codex/blob/rust-v0.159.2/codex-rs/core-plugins/src/loader.rs).
 
@@ -78,7 +78,7 @@ For read-only native discovery, with a Codex binary on PATH:
 npm run check:codex
 ```
 
-Or set `SAGE_CODEX_BIN` to its absolute path for this command. This check asks the app server to read the local plugin and verifies the complete skill inventory and both hook declarations. It installs nothing and starts no model turn. The environment's full Codex session startup stalled in the earlier probe even with hooks disabled, so native event delivery, hook trust, fresh installation and compaction remain unverified. Do not treat discovery plus subprocess tests as an end-to-end runtime pass.
+Or set `SAGE_CODEX_BIN` to its absolute path for this command. This check runs in a scratch `HOME` and `CODEX_HOME`. It asks the app server to read the local plugin and verifies the complete skill inventory and that the plugin declares no hooks. Then it installs sage's entries in the scratch hooks file, checks that `hooks/list` shows them as user hooks, trusts them with `config/batchWrite`, swaps the plugin's version folder, and checks that each entry stays trusted (T957). It starts no model turn. The environment's full Codex session startup stalled in the earlier probe even with hooks disabled, so native event delivery, hook trust, fresh installation and compaction remain unverified. Do not treat discovery plus subprocess tests as an end-to-end runtime pass.
 
 Full Codex Sage mode still needs verified failed-spawn reconciliation, child-turn correlation across later work, interruption/closure handling, prompt provenance and persistent capacity accounting. Keep it unavailable until those gates pass; do not add guessed leases, transcript inference or a supervisor to hide missing runtime evidence.
 

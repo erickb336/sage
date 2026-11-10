@@ -222,6 +222,8 @@ test("the Codex guide carries the owner's lines for install, trust, removal, the
     "A reviewer's commit through these forms can also be pushed to the task's branch. Read the branch's commits before a merge, or keep autopilot off for such a task.", // R1670-6
     "when no sage hook is trusted, no sage hook runs, so you see no sage line at all, also no warning. If sage mode does not start, type `/hooks` in the Codex CLI", // R1671-1
     "Codex keeps the trust records of the sage hooks in your Codex config", // R1671-3
+    "An update needs no new trust. Codex trusts each sage entry of your hooks file by its text and its place, not by sage's files", // T957
+    "It removes the 7 sage entries from your hooks file and the `~/.codex/sage-hooks` folder. Your own hooks stay.", // T957
     "sage: sage was not tested with Codex 0.168.0, so some sage rules may not run. Autopilot merges in Codex 0.164 and later.", // R1670-7, F-T677-20, F-T951-2, F-T951-3
     "Codex 0.164.0 runs no hook for text that an agent types into a shell that still runs (`write_stdin`, for example after `zsh -i`). That text passes every sage rule", // R1675-2
   ]) assert.ok(guide.includes(line), line);
