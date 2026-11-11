@@ -1309,14 +1309,45 @@ test("T625: the review reads the branch in the checkout of its writer run, from 
   assert.equal(w.capture(), w.tip);
 });
 
-// F-T625-6: a checkout that is now a plain file or an empty folder is gone too: the tip read fails closed, with no raw git error.
-const LEAVE = { "missing": () => {}, "a plain file": (path) => writeFileSync(path, ""), "an empty folder": (path) => mkdirSync(path) };
-for (const [form, leave] of Object.entries(LEAVE)) test(`T625: a gone checkout of the writer run (${form}) gives no branch tip, and no table changes`, (t) => {
-  const w = clones(t);
+/**
+ * A git first on PATH that notes each call's arguments, then runs the real git: so a test sees whether git read a folder.
+ * calls() gives the noted argument lists, ranIn(folder) says whether a call ran with -C folder, and clear() forgets them.
+ */
+function fakeGit(w) {
+  const fake = join(w.base, "fake-git"), file = join(w.base, "git-calls");
+  mkdirSync(fake);
+  writeFileSync(join(fake, "git"), `#!${process.execPath}\nconst { appendFileSync } = require("node:fs"), { spawnSync } = require("node:child_process");\nappendFileSync(${JSON.stringify(file)}, JSON.stringify(process.argv.slice(2)) + "\\n");\nconst path = process.env.PATH.split(":").filter((dir) => dir !== ${JSON.stringify(fake)}).join(":");\nprocess.exit(spawnSync("git", process.argv.slice(2), { stdio: "inherit", env: { ...process.env, PATH: path } }).status ?? 1);\n`, { mode: 0o755 });
+  const calls = () => (existsSync(file) ? readFileSync(file, "utf8").trim().split("\n").map((line) => JSON.parse(line)) : []);
+  const ranIn = (folder) => calls().some((args) => args.some((arg, k) => arg === "-C" && args[k + 1] === folder));
+  return { env: { ...w.env, PATH: `${fake}:${w.env.PATH}` }, calls, ranIn, clear: () => rmSync(file, { force: true }) };
+}
+
+// F-T625-6: a checkout that is now a plain file or an empty folder is gone too: the tip read fails closed, and git never
+// runs there (F-T943-1). Outside a repository git fails by itself, so the git calls, not only the empty tip, show the
+// refusal. An empty folder inside another repository has a .git above it: there git would read that repository's branch.
+const LEAVE = {
+  "missing": () => {},
+  "a plain file": (w) => writeFileSync(w.a, ""),
+  "an empty folder": (w) => mkdirSync(w.a),
+  "an empty folder inside another repository": (w) => {
+    mkdirSync(w.a);
+    git("init", "-q", "-b", "main", w.base);
+    git("-C", w.base, "commit", "-q", "--allow-empty", "-m", "the outer repository");
+    git("-C", w.base, "branch", w.branch);
+    assert.match(git("-C", w.a, "rev-parse", "--verify", `refs/heads/${w.branch}^{commit}`), /^[0-9a-f]{40}$/, "git in the folder reads the outer branch");
+  },
+};
+for (const [form, leave] of Object.entries(LEAVE)) test(`T625: a gone checkout of the writer run (${form}) gives no branch tip, git never runs there, and no table changes`, (t) => {
+  const w = clones(t), spy = fakeGit(w);
+  // The live checkout first: the fake is the git that the state tool calls, in the writer's checkout.
+  assert.equal(codex.branchTip(w.b, w.branch, spy.env), w.tip);
+  assert.ok(spy.ranIn(w.a), "git ran in the live checkout");
+  spy.clear();
   rmSync(w.a, { recursive: true, force: true });
-  leave(w.a);
+  leave(w);
   const tables = w.tables();
-  assert.equal(codex.branchTip(w.b, w.branch, w.env), "", "the state tool's tip read fails closed");
+  assert.equal(codex.branchTip(w.b, w.branch, spy.env), "", "the state tool's tip read fails closed");
+  assert.deepEqual(spy.calls(), [], "git never ran");
   assert.equal(w.capture(), "", "the hook's tip read fails closed");
   assert.equal(w.tables(), tables);
 });
@@ -1345,22 +1376,19 @@ test("T625: a writer run with no checkout cell reads the branch in the command's
 });
 
 test("T625: a writer run's checkout that is no bindings.tsv row of this logbook gives no branch tip, and git never reads it", (t) => {
-  const w = clones(t), planted = join(w.base, "planted"), fake = join(w.base, "fake-git"), calls = join(w.base, "git-calls");
+  const w = clones(t), planted = join(w.base, "planted"), spy = fakeGit(w);
   git("init", "-q", "-b", "main", planted);
   git("-C", planted, "commit", "-q", "--allow-empty", "-m", "planted");
   git("-C", planted, "branch", w.branch);
   setCheckout(w, "R1", planted);
-  // A git first on PATH that notes each call's arguments, then runs the real git: so the test sees whether git read the planted folder.
-  mkdirSync(fake);
-  writeFileSync(join(fake, "git"), `#!${process.execPath}\nconst { appendFileSync } = require("node:fs"), { spawnSync } = require("node:child_process");\nappendFileSync(${JSON.stringify(calls)}, JSON.stringify(process.argv.slice(2)) + "\\n");\nconst path = process.env.PATH.split(":").filter((dir) => dir !== ${JSON.stringify(fake)}).join(":");\nprocess.exit(spawnSync("git", process.argv.slice(2), { stdio: "inherit", env: { ...process.env, PATH: path } }).status ?? 1);\n`, { mode: 0o755 });
-  const env = { ...w.env, PATH: `${fake}:${w.env.PATH}` }, tables = w.tables();
-  assert.equal(codex.branchTip(w.b, w.branch, env), "", "the state tool's tip read fails closed");
-  assert.equal(existsSync(calls), false, "git never ran");
+  const tables = w.tables();
+  assert.equal(codex.branchTip(w.b, w.branch, spy.env), "", "the state tool's tip read fails closed");
+  assert.deepEqual(spy.calls(), [], "git never ran");
   assert.equal(w.tables(), tables);
   // The same read with the writer's own checkout runs the fake git there: so the fake is what the state tool calls.
   setCheckout(w, "R1", w.a);
-  assert.equal(codex.branchTip(w.b, w.branch, env), w.tip);
-  assert.match(readFileSync(calls, "utf8"), new RegExp(`"-C","${w.a}","rev-parse"`));
+  assert.equal(codex.branchTip(w.b, w.branch, spy.env), w.tip);
+  assert.ok(spy.ranIn(w.a), "git ran in the writer's checkout");
 });
 
 test("T634: the Claude hook reads a review's branch tip in the checkout of the writer run from another clone, and none when that checkout is gone", (t) => {
