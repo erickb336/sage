@@ -624,6 +624,7 @@ test("T301: the lead file's verdict table is the rule of the hook and the state 
   const p = project({ size: "large", config: ["max_agents=20"] });
   play(["$ sage task T1 set state=building branch=sage/t1-example", "$ sage run add T1 --role implementer --branch sage/t1-example", "> R2 sage:implementer", "< R2 done: none",
     "$ sage run done R2 --status done --tokens 1", "$ sage task T1 set state=reviewing pr=12"], p);
+  const ledger = join(p.chief("logbook"), "ledger.tsv");
   const wrong = [], passed = new Map(rows.map(([said]) => [said, new Set()])); // passed: each row's kinds that the hook and the state tool let pass in its cases
   let keys = 0;
   CASES.forEach(([role, said, row], i) => {
@@ -632,9 +633,12 @@ test("T301: the lead file's verdict table is the rule of the hook and the state 
     if (severity) lines.push(`$ sage finding add T1 --source ${role} --severity ${severity} --summary=case-${i} --run ${run} --class copy`);
     play([...lines, `$ sage run done ${run} --status done --tokens 1`], p);
     // The hook lets the lead's verdict through, and the state tool records it only when the run's kept report backs that kind (T483, T928).
+    // Each kind meets the same ledger: a run backs one verdict, so a kind that recorded first would hide a second one (F-T928-9).
     const passes = ALL.filter((kind) => {
-      const args = ["verdict", "T1", "--sha", p.head(), "--kind", kind, "--cycle", "1", "--pr", "12", "--run", run];
-      return p.ask(`node ${TOOL} ${args.join(" ")}`) === undefined && p.run("sage", args).status === 0;
+      const args = ["verdict", "T1", "--sha", p.head(), "--kind", kind, "--cycle", "1", "--pr", "12", "--run", run], before = readFileSync(ledger, "utf8");
+      const passed = p.ask(`node ${TOOL} ${args.join(" ")}`) === undefined && p.run("sage", args).status === 0;
+      writeFileSync(ledger, before);
+      return passed;
     });
     if (passes.length !== 1 || !kinds(row).includes(passes[0])) wrong.push(`${role} "${said}": the hook and the state tool pass ${passes.join(", ") || "no kind"}; the table names ${kinds(row).join(", ")}`);
     passes.forEach((kind) => passed.get(row)?.add(kind));
