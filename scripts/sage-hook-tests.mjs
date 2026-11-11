@@ -778,7 +778,7 @@ test("T536: no push reaches the default branch through a remote with another nam
   refused("cd ~ && gh repo sync", /^sage: gh repo sync writes a branch on GitHub/);
   // T909: git or gh behind a wrapper that the reader does not know is a limit too.
   passes("op run -- gh repo sync");
-  refused("cp /usr/bin/git /tmp/git-copy", CHIEF_SHELL); // a renamed copy stays a limit; the copy meets the chief's write rule (T960)
+  passes("cp /usr/bin/git /tmp/git-copy"); // a renamed copy stays a limit; a copy into the temp folder is the chief's scratch (T807)
   // R1936 F7: GitHub names the default branch, trunk here, and a failed read refuses.
   const trunk = session({ FAKE_DEFAULT_BRANCH: "trunk" });
   trunk.send(prompt("sage mode"));
@@ -2245,6 +2245,8 @@ const SHELL_WRITES = ["sed -i '' 's/a/b/' README.md", "sed -i.bak s/a/b/ src/app
   "echo x > $TMPDIR/out.txt", // a variable: the hook does not expand it, so the target is not a known scratch folder
   `cp README.md ${SCRATCH}/copy.md`, `sed -i '' s/a/b/ ${SCRATCH}/copy.md`, // only a redirection passes into scratch
   `node -e "require('fs').writeFileSync('a.txt', 'x')"`, "git diff --output=out.patch"];
+/** A reviewer's writes that are the chief's scratch in sage mode, so they run for the chief (T807). */
+const CHIEF_SCRATCH_WRITES = [`cp README.md ${SCRATCH}/copy.md`, `printf x | tee ${SCRATCH}/out.txt`];
 const SHELL_READS = ["npm test", "node --test scripts/sage-hook-1.test.mjs", `npm test > ${SCRATCH}/out.txt 2>&1`,
   `cat > ${SCRATCH}/probe.mjs <<'EOF'\nconsole.log(1)\nEOF`, `node ${SCRATCH}/probe.mjs`, `cd ${SCRATCH} && echo x > out.txt`,
   `git show HEAD:README.md | sed 's/a/b/' > ${SCRATCH}/copy.md`, "npm test > /dev/null 2>&1", "cat README.md", "grep -n sage README.md",
@@ -2422,9 +2424,10 @@ test("T933: the writers, the chief, other agents and every agent outside sage mo
     for (const command of SHELL_WRITES) assert.equal(s.send(bash(command, FEATURE, { agent_id: `w-${role}`, agent_type: `sage:${role}` })), undefined, `${role}: ${command}`);
   }
   for (const command of SHELL_WRITES) {
-    // The chief meets its own write rule in sage mode (T960).
-    assert.match(denied(s.send(bash(command))) ?? "", CHIEF_SHELL, `the chief: ${command}`);
-    assert.match(denied(s.send(bash(command, FEATURE, { agent_type: "sage:chief-of-staff" }))) ?? "", CHIEF_SHELL, `the chief as an agent type: ${command}`);
+    // The chief meets its own write rule in sage mode (T960), except in its scratch places (T807).
+    const chief = CHIEF_SCRATCH_WRITES.includes(command) ? (why) => assert.equal(why, undefined, command) : (why) => assert.match(why ?? "", CHIEF_SHELL, command);
+    chief(denied(s.send(bash(command))));
+    chief(denied(s.send(bash(command, FEATURE, { agent_type: "sage:chief-of-staff" }))));
     assert.equal(s.send(bash(command, FEATURE, { agent_id: "gp", agent_type: "general-purpose" })), undefined, `an agent with no sage role: ${command}`);
   }
   const off = session();
@@ -2436,16 +2439,17 @@ test("T933: the writers, the chief, other agents and every agent outside sage mo
 test("T960: in sage mode the chief runs no shell write form, as in Codex; reads, git, gh, the state tool and scratch output run; outside sage mode it writes", () => {
   const s = session(), off = session();
   s.send(prompt("sage mode"));
-  const writes = [...SHELL_WRITES, "cat > notes.md <<'EOF'\nhi\nEOF", "printf x | tee notes.txt", `printf x | tee ${SCRATCH}/out.txt`,
+  // The chief's cp and tee into its scratch places run (T807): a reviewer's do not.
+  const writes = [...SHELL_WRITES.filter((command) => !CHIEF_SCRATCH_WRITES.includes(command)), "cat > notes.md <<'EOF'\nhi\nEOF", "printf x | tee notes.txt",
     "gh repo clone acme/site", "gh run download 5", "gh codespace cp remote:a.txt a.txt", "gh extension install acme/gh-x"];
   for (const command of writes) {
     const why = denied(s.send(bash(command))) ?? "";
     assert.match(why, CHIEF_SHELL, command);
-    for (const form of ["a redirection or a heredoc into a file", "tee", "cp", "sed -i", "tee, cp and the other forms are refused also there"]) assert.ok(why.includes(form), `${command}: ${form}`);
+    for (const form of ["a redirection or a heredoc into a file", "tee", "cp", "sed -i", "sed -i, code in node -e and the other forms are refused also there"]) assert.ok(why.includes(form), `${command}: ${form}`);
     assert.equal(off.send(bash(command)), undefined, `outside sage mode: ${command}`);
   }
   const runs = [...SHELL_READS, "git status", "git add -A && git commit -m 'a change'", "gh pr view 41 --json headRefOid", "gh pr checkout 41",
-    `gh repo clone acme/site ${SCRATCH}/site`, `gh run download 5 -D ${SCRATCH}/run`, `node ${TOOL} status --project ${FEATURE}`];
+    `gh repo clone acme/site ${SCRATCH}/site`, `gh run download 5 -D ${SCRATCH}/run`, `node ${TOOL} status --project ${FEATURE}`, ...CHIEF_SCRATCH_WRITES];
   for (const command of runs) assert.equal(denied(s.send(bash(command))), undefined, command);
 });
 
@@ -2467,6 +2471,41 @@ test("T936: in sage mode a reviewer's git that changes the checkout is refused a
   assert.match(denied(s.send(bash("chmod +x scripts/a.sh"))) ?? "", CHIEF_SHELL, "the chief's chmod in the project");
 });
 
+// T807: the hook process, as Claude Code runs it. scripts/codex-gates.test.mjs compares the two providers on each case.
+// The worktree root is outside the temp folder, as ~/sage-worktrees is; nothing creates it, because the hook only reads
+// the paths.
+test("T807: in sage mode the chief writes its pages and removes leftover folders in the sage worktrees folder and the temp folder; the project stays refused", () => {
+  const root = "/sage-t807-not-created/worktrees", s = session({ SAGE_WORKTREES: root });
+  const pages = investigation(s).replace(WORKTREE_ROOT, root);
+  s.send(prompt("sage mode"));
+  for (const command of [`rmdir ${root}/leftover`, `rm -rf ${root}/sage-x/wt-r12`, `cat > ${pages}/plan.md <<'EOF'\n# Plan\nEOF`, `cp ${SCRATCH}/page.md ${pages}/page.md`, `rm -rf ${SCRATCH}/old`]) {
+    assert.equal(denied(s.send(bash(command))), undefined, command);
+  }
+  for (const command of [`rm -rf ${root}`, "rmdir src", `cp ${pages}/page.md README.md`, `echo x > ${FEATURE}/notes.txt`, `rm -rf ${FEATURE}`]) {
+    assert.match(denied(s.send(bash(command))) ?? "", CHIEF_SHELL, command);
+  }
+});
+
+// F-T807-1: the hook process, as Claude Code runs it, with a sage worktrees folder in scratch that holds a live task
+// worktree (a .git file) and a leftover folder. scripts/codex-gates.test.mjs compares the two providers on each case.
+test("F-T807-1: in sage mode the chief's rm -rf of a live worktree in the sage worktrees folder is refused and names git worktree remove; a leftover folder and a page run", () => {
+  const root = join(SCRATCH, "f-t807-1", "sage-worktrees"), live = join(root, "t94");
+  mkdirSync(join(live, "packages"), { recursive: true });
+  mkdirSync(join(root, "leftover", "empty"), { recursive: true });
+  mkdirSync(join(root, "sage-x", "pages", "T1"), { recursive: true });
+  writeFileSync(join(live, ".git"), `gitdir: ${FEATURE}/.git/worktrees/t94\n`);
+  const s = session({ SAGE_WORKTREES: root });
+  s.send(prompt("sage mode"));
+  const WORKTREE = /^sage: sage mode is on, so the chief does not change a git work tree in the sage worktrees folder .*run git worktree remove <path> \(without --force\)/;
+  for (const [command, cwd] of [[`rm -rf ${live}`], [`echo x > ${live}/README.md`], ["rm -rf packages", live], [`rm -rf ${root}`]]) {
+    assert.match(denied(s.send(bash(command, cwd))) ?? "", WORKTREE, command);
+  }
+  for (const command of [`git worktree remove ${live}`, `rmdir ${root}/leftover/empty`, `rm -rf ${root}/leftover`, `cat > ${root}/sage-x/pages/T1/plan.md <<'EOF'\n# Plan\nEOF`]) {
+    assert.equal(denied(s.send(bash(command))), undefined, command);
+  }
+  assert.match(denied(s.send(bash(`git worktree remove --force ${live}`))) ?? "", /^sage: sage mode is on, so the chief does not throw away uncommitted work: /, "--force");
+});
+
 // T968: the hook process, as Claude Code runs it, with a real linked worktree in scratch. scripts/codex-gates.test.mjs
 // compares the two providers on each case; the hook only reads these commands.
 test("T968: in sage mode the chief's git that throws away uncommitted work is refused in the project and runs in a scratch worktree; a reviewer's git runs in its own", () => {
@@ -2475,7 +2514,7 @@ test("T968: in sage mode the chief's git that throws away uncommitted work is re
   const wt = join(SCRATCH, "t968-wt");
   spawnSync("git", ["-C", FEATURE, "worktree", "add", "-q", "--detach", wt, "HEAD"]);
   assert.ok(existsSync(join(wt, ".git")), "the scratch worktree");
-  const CHIEF_GIT = /^sage: sage mode is on, so the chief does not throw away uncommitted work: .*can destroy changes in the owner's checkout\. Make a scratch worktree in the temp folder .*or ask the owner/;
+  const CHIEF_GIT = /^sage: sage mode is on, so the chief does not throw away uncommitted work: .*can destroy changes in the owner's checkout or a task's worktree\. Make a scratch worktree in the temp folder .*or ask the owner/;
   for (const command of ["git reset --hard", "git checkout -- .", "git checkout -- README.md", "git clean -fd", "git restore .", `git -C ${FEATURE} reset --hard HEAD`]) {
     assert.match(denied(s.send(bash(command))) ?? "", CHIEF_GIT, command);
     // From the scratch worktree, git -C names the project again, so it stays refused.

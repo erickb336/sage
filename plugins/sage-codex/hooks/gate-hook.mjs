@@ -9,7 +9,8 @@
 //     thread, guardian) shares the session id and has no agent_id, but its record names a subagent source or another
 //     thread id: it counts as a read-only role agent. A child whose record cannot be read is read-only and starts nothing.
 //   - The chief: in sage mode the root thread changes no file with apply_patch, nor with a shell write form (core's
-//     chiefShellProblem, or Codex's own apply_patch program), except a redirection into the temp folder (T948), and runs
+//     chiefShellProblem, or Codex's own apply_patch program), except a redirection, rm, rmdir, touch, tee, cp or mv in its
+//     places, the temp folder and the sage worktrees folder with the pages root, outside the project (T948, T807), and runs
 //     no git form that throws away uncommitted work, such as git reset --hard, outside a scratch worktree (T968). A child may.
 //   - A read-only role: in sage mode the leaf sage name (the last part of the agent path that starts with sage_) decides
 //     the edit rule. Under a role that core keeps from editing (a reviewer, QA, the PE, the lead), a child changes no
@@ -818,10 +819,11 @@ export async function gate(input, { mode = readMode, check = checkMerge, env = p
   if (writeEvidence ? namesReference(writeEvidence.writes, namesCodexSettings) : commandWrites(f.command, f.cwd) && namesCodexSettings(f.command, env, f.cwd)) return deny(CODEX_SETTINGS);
   const now = mode(f, env);
   if (!now.sage) return undefined; // the merge refusal above applies in every mode
-  // The chief's shell writes too (T948): core's write forms, as for a read-only role; a redirection into the temp folder,
-  // outside the project, passes. A disguised write (a variable, a script's own code) is a documented limit (order 70).
+  // The chief's shell writes too (T948): core's write forms, as for a read-only role; a redirection, rm, rmdir, touch, tee,
+  // cp or mv into the chief's places (the temp folder and the sage worktrees folder), outside the project and outside a
+  // git work tree there, passes (T807, F-T807-1). A disguised write (a variable, a script's own code) is a documented limit (order 70).
   if (!thread.child && chiefEditDenied({ sage: true, chief: true })) {
-    const why = chiefShellProblem(f.command, f.cwd) ?? (runsPatch(f.command, f.cwd, env) ? CHIEF_SHELL : undefined);
+    const why = chiefShellProblem(f.command, f.cwd, env) ?? (runsPatch(f.command, f.cwd, env) ? CHIEF_SHELL : undefined);
     if (why) return deny(`sage: ${why}`);
   }
   const gh = thread.child ? ghProblem(f.command, f.cwd, env) : undefined;
