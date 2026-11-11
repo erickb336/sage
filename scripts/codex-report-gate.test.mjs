@@ -255,8 +255,8 @@ test("T585: an arena keeps the reports of its candidates and its judge, and a ca
   assert.deepEqual(finish(after, report(late)), { systemMessage: `sage: ${late}'s report is not kept: no child started for ${late} while it ran.` });
   const ended = candidate(), stopped = spawned("implementer", ended);
   start(stopped);
-  ok("run", "done", ended, "--status", "blocked");
-  assert.deepEqual(finish(stopped, report(ended)), { systemMessage: `sage: ${ended}'s report is not kept: ${ended} ended as blocked before this stop, so no report is kept.` });
+  ok("run", "done", ended, "--status", "done");
+  assert.deepEqual(finish(stopped, report(ended)), { systemMessage: `sage: ${ended}'s report is not kept: ${ended} ended as done before this stop, so no report is kept.` });
 });
 
 test("T483 R1933-2: a review child's task name gives its role, task and run, also for ids of many digits", async () => {
@@ -528,7 +528,7 @@ test("T553: role.mjs lead adds the Codex steps to the lead's text, and no other 
   assert.match(r.stdout, /The `checks-pass` and `checks-fail` verdicts are the chief's/);
   // The carried limits, each with what to do.
   assert.match(r.stdout, /record every finding of the report, before you end its run/);
-  assert.match(r.stdout, /the gate refuses your next `run_add` of that role, your `run_done` of that run and a state move \(the gap rule, as in Claude\)/);
+  assert.match(r.stdout, /the gate refuses your next `run_add` of that role, your `run_done` of that run, a state move and a `round` \(the gap rule, as in Claude\)/);
   assert.match(r.stdout, /`collab spawn failed: agent thread limit reached` means that no thread is free/);
   assert.doesNotMatch(r.stdout, /\{\{|<role\.mjs>/);
   // Each tool that the steps give a lead exists on v2. The two v1 names are there only as refusals (F-T553-1).
@@ -666,7 +666,8 @@ for (const role of ["investigate", "evidence-review", "pe", "designer"]) {
       if (issue !== "no start") begin(file);
       if (issue === "ended after start") ok("run", "done", id, "--status", "blocked");
       end(file, FULL);
-      assert.equal(existsSync(saved(id)), false, issue);
+      // A run that ended as blocked after its child started keeps the late report, in every logbook (T970 F3).
+      assert.equal(existsSync(saved(id)), issue === "ended after start", issue);
     }
     const id = run(), first = child(id), conflicting = child(id);
     begin(first); begin(conflicting);

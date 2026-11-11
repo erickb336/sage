@@ -542,7 +542,7 @@ Limits:
   - A finished or interrupted agent frees its thread, and the agent then tries again with the same name.
   - The state tool holds at most `max_agents` running runs for a project, in both providers, so set Codex's limit to that cap ([What you need](#what-you-need)). The start status warns while it is lower. Codex counts the threads of one session; the state tool counts the runs of the project's logbook, in all sessions.
 - The reviewer's limits above hold for a lead too: its shell write is blocked only in the plain forms. A lead sends the branch and opens the pull request from the shell, under the same push and `gh` rules as the chief, and it never merges. It starts no lead, PE, designer or arena judge.
-- A lead records every finding of a helper's report. In Claude and in Codex, the state tool refuses the lead's next run of that role, its run done of that run and its state move while a medium or high finding of a kept report has no row with the run (the gap rule), and it refuses a review or QA verdict that such a report backs.
+- A lead records every finding of a helper's report. In Claude and in Codex, the state tool refuses the lead's next run of that role, its run done of that run, its state move and its round while a medium or high finding of a kept report has no row with the run (the gap rule), and it refuses a review or QA verdict that such a report backs.
 - The chief's own `resume_agent` is not blocked. The chief's text says to start a fresh agent.
 
 ## Inactive trigger observation
