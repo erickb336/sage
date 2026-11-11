@@ -4845,21 +4845,32 @@ test("T273: each command that is not on the lead's list is refused, with the sen
     "finding triage T1 F-T1-2 dismiss --reason=x", "finding triage T1 F-T1-1 ask",
     ...["merged", "pr-ready", "held", "abandoned", "briefed", "concluded", "replan", "repairing", "reviewing", "verified"].map((state) => `task T1 set state=${state}`),
     "task T1 set title=x", "task T1 set state=building title=x", "task T1 set states=building"];
-  // pages joined the list in T928: the Codex lead had it, and one list serves both providers.
-  const notListed = ["finding triage T1 F-T1-1 --reason=x", "finding move T1 F-T1-1 --to x", "gate add T1 --question q --options a,b --recommend a", "gate answer G1 --option 1",
-    "log T1 --why x", "config cycles.small=1", "init", "standing add never", "logbook repair --accept-loss tasks", "logbook repair --accept-change-loss yes", "observe T1 --kind x",
-    "newcommand T1", "run frob T1", "round T1 T2", `verdict T1 T2 --kind qa-pass --sha ${SHA}`, "run add T1 T2 --role qa", "finding close T1 F-T1-2 F-T1-1", "run done R2 R3 --status done",
-    "task T1", "task add --title x --size small", "task T1 set", "task T1 frob state=building", "pages T1 record x y"];
+  // pages joined the list in T928: the Codex lead had it, and one list serves both providers. Each refusal names the
+  // command by its command words, never an id or a value after them (F-T928-6): "log T1 ..." is log.
+  const notListed = Object.entries({ "finding triage T1 F-T1-1 --reason=x": "finding triage", "finding move T1 F-T1-1 --to x": "finding move",
+    "gate add T1 --question q --options a,b --recommend a": "gate add", "gate answer G1 --option 1": "gate answer", "log T1 --why x": "log", "log - x --why y": "log",
+    "config cycles.small=1": "config", init: "init", "standing add never": "standing add", "logbook repair --accept-loss tasks": "logbook repair",
+    "logbook repair --accept-change-loss yes": "logbook repair", "observe T1 --kind x": "observe", "newcommand T1": "newcommand", "run frob T1": "run frob", "round T1 T2": "round",
+    [`verdict T1 T2 --kind qa-pass --sha ${SHA}`]: "verdict", "run add T1 T2 --role qa": "run add", "finding close T1 F-T1-2 F-T1-1": "finding close",
+    "run done R2 R3 --status done": "run done", "task T1": "task", "task add --title x --size small": "task add", "task T1 set": "task set",
+    "task T1 frob state=building": "task", "pages T1 record x y": "pages" });
   for (const args of notOwn) {
     const why = denied(stateRun(s, args)) ?? "";
     assert.match(why, /^task T1 set state=[\w-]+$/.test(args) ? /T1 is briefed: a lead moves it only to building\./ : LEAD_RULE, args);
     assert.match(why, LEAD_TAIL, args);
   }
-  for (const args of notListed) {
+  for (const [args, name] of notListed) {
     const why = denied(stateRun(s, args)) ?? "";
+    assert.ok(why.startsWith(`sage: "${name}" is not on a lead's list`), `${args}: ${why}`);
     assert.match(why, NOT_LISTED, args);
     assert.match(why, LEAD_TAIL, args);
   }
+});
+
+test("F-T928-10: a lead's pages with no task says that it names none, and names the lead's own task", () => {
+  const why = denied(stateRun(leadSession(), "pages")) ?? "";
+  assert.ok(why.startsWith('sage: "pages" names no task: a lead names its own task, T1. '), why);
+  assert.match(why, LEAD_TAIL);
 });
 
 test("T273: a child of the lead and every other agent still cannot write the logbook; the lead's own write passes", () => {

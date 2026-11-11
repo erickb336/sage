@@ -481,6 +481,33 @@ test("F-T552-2: a lead's verdict on a commit of the ledger passes while a repair
   assert.match(await lead("verdict", { task: "T1", kind: "findings", sha: SHA, pr: 5, run: other }), /^T1 findings · 1111111/);
 });
 
+test("F-T928-8: a Codex lead moves its task to verifying only when the head of its branch has a full clean cycle", async (t) => {
+  const w = await leadWorld(t), { lead } = w;
+  const git = (...args) => execFileSync("git", ["-C", w.project, "-c", "user.name=t", "-c", "user.email=t@t", ...args], { encoding: "utf8" }).trim();
+  git("commit", "-q", "--allow-empty", "-m", "work");
+  git("branch", "sage/t1-a");
+  const head = git("rev-parse", "sage/t1-a"), NO_CYCLE = new RegExp(`^sage: T1's head ${head.slice(0, 7)} has no full clean cycle yet .* so T1 stays at reviewing: record them first`);
+  await lead("task_set", { task: "T1", fields: { state: "building" } });
+  await lead("task_set", { task: "T1", fields: { state: "reviewing", pr: "5" } });
+  const verifying = () => lead("task_set", { task: "T1", fields: { state: "verifying" } });
+  assert.match((await verifying()).denied, NO_CYCLE, "no verdict on the head");
+  for (const [role, kind, result] of [["code-reviewer", "review-clean", "CLEAN"], ["qa", "qa-pass", "PASS"]]) {
+    const run = (await lead("run_add", { task: "T1", role })).split(" ")[0];
+    w.tool.keepReport(w.project, { task: "T1", run, role, sha: head, text: CLEAN.replace("RESULT CLEAN", `RESULT ${result}`).replaceAll(SHA, head) }, w.env);
+    assert.equal(await lead("run_done", { run, status: "done", tokens: 1 }), `${run} done`);
+    assert.match(await lead("verdict", { task: "T1", kind, sha: head, pr: 5, run }), new RegExp(`^T1 ${kind} · ${head.slice(0, 7)}`));
+    if (kind === "review-clean") assert.match((await verifying()).denied, NO_CYCLE, "the review alone is no full clean cycle of a small task");
+  }
+  assert.match(await verifying(), /^T1 verifying/, "a full clean cycle on the head");
+});
+
+test("F-T928-10: a Codex lead's call that names no task, no run or no finding says so, with the lead's own task", async (t) => {
+  const { lead } = await leadWorld(t);
+  assert.equal((await lead("pages", {})).denied, 'sage: "pages" names no task: a lead names its own task, T1');
+  assert.equal((await lead("run_done", { status: "failed" })).denied, 'sage: "run done" names no run: a lead names a run of T1');
+  assert.equal((await lead("finding_close", { task: "T1" })).denied, 'sage: "finding close" names no finding: a lead names a finding of T1');
+});
+
 test("T956, T970: the gap rule holds a Codex lead at its next step, also its round: a medium finding of a kept report needs its row with the run; a low one does not", async (t) => {
   const w = await leadWorld(t), { lead } = w;
   await lead("task_set", { task: "T1", fields: { state: "building" } });
