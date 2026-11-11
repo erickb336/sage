@@ -190,12 +190,14 @@ test("f: both boards agree with the merge check on a head whose cycles carry, an
   const sources = [{ id: "current", path: w.env.SAGE_HOME }];
   const card = () => buildBoardModel(readBoardSources(sources), { landing: landingRule(sources) }).tasks.find((c) => c.id === "T1").mergeCheck;
   assert.deepEqual(card(), { ok: true, text: `The merge check passes on ${h2.slice(0, 7)}. The board does not check the PR's head branch.` }, "the rich board");
-  assert.match(w.cli("board", "all"), /\n- T1 PR #41 waits for your merge \(autopilot may merge it tonight, as of the last fetch\): t\n/, "the chat board");
+  assert.match(w.cli("board", "all"), /\n> The board cannot tell if autopilot is on, so review and merge PR 41\\\.\n/, "the chat board");
   // Fail closed: when git cannot read the history, the boards refuse as the merge check does.
   w.git("update-ref", "-d", "refs/remotes/origin/main");
   assert.equal(w.refused(h2), notCarried(h1, GONE));
   assert.deepEqual(card(), { ok: false, text: `The merge check refuses ${h2.slice(0, 7)}. T1: 0 of 1 clean cycles on this SHA; never recorded: review-clean, qa-pass.` });
-  assert.match(w.cli("board", "all"), /\n- T1 PR #41 cannot merge yet \(T1\\: 0 of 1 clean cycles on this SHA; never recorded\\: review-clean, qa…\): t\n/);
+  const chat = w.cli("board", "all");
+  assert.ok(chat.includes(`\n> The merge check refuses ${h2.slice(0, 7)}\\. T1\\: 0 of 1 clean cycles on this SHA; never recorded\\: review-clean, qa-pass\\.\n`), chat);
+  assert.doesNotMatch(chat, /review and merge PR 41/, "the chat board");
 });
 
 test("g: a carried refusal says that a verdict on this SHA replaces the carried cycles, and the next refusal says why (F-T805-2)", (t) => {

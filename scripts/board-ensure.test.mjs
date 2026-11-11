@@ -586,7 +586,7 @@ test("T922: on the first run in a sandbox, as in Codex, ensure gives one plain l
   // The profile is the proof's base: a plain write in the home folder fails with EPERM under it.
   assert.match(sandboxed(["-e", `require("fs").writeFileSync(${JSON.stringify(join(home, "probe"))}, "")`]).stderr, /EPERM/);
   const run = sandboxed([cli, "board", "--ensure", "--port", String(port)]);
-  assert.equal(run.stderr, `sage board: this command cannot write ${join(home, ".config", "sage-board")}: a sandbox blocks writes there (EPERM). In Codex, run it escalated (outside the sandbox), or in Terminal on the Mac.\n`);
+  assert.equal(run.stderr, `sage board: this command cannot write ${join(home, ".config", "sage-board")}: a sandbox or the system blocks writes there (EPERM). In Codex, run it escalated (outside the sandbox), or in Terminal on the Mac.\n`);
   assert.equal(run.status, 1);
   assert.equal(run.stdout, "");
   assert.deepEqual(readdirSync(home), [".config"]);

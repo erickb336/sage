@@ -1349,7 +1349,7 @@ test("T49: scoped reads reject writes, other projects and providers, and ambiguo
   const commands = [
     `${cli} task T1 set state=verified ${project}`, `${cli} task add --title x --size small ${project}`,
     `${cli} config max_agents=20 ${project}`, `${cli} config name=x ${project}`,
-    `${cli} board T1 --remember yes ${project}`, `${cli} board all --view task ${project}`,
+    `${cli} board T1 ${project}`, `${cli} board all --view task ${project}`,
     `${cli} board T1 --view html ${project}`, `${cli} board T1 --view task --name-hex 616c6c ${project}`,
     `${cli} task T1 --project '${other}'`, `${cli} config --project '${other}'`, `${cli} board T1 --view task --project '${other}'`,
     `${cli} task T1`, `${cli} task T0 ${project}`, `${cli} task T1 extra ${project}`, `${cli} task T1 --unknown x ${project}`,
