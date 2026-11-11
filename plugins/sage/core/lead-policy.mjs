@@ -27,7 +27,9 @@ const TEAM_TEXT = [...TEAM].join(", ");
  * task set T1 state=…, with its words in the wrong order), or a task set key twice or with no value.
  */
 export function leadRequest(cmd, pos, opt) {
-  const set = cmd === "task" && pos[1] === "set", command = set ? "task set" : [`${cmd} ${pos[0]}`, cmd].find((name) => LEAD_COMMANDS.includes(name)) ?? [cmd, ...pos.slice(0, 1)].join(" ");
+  // A command off the list is named by its command words: a sub word (add, answer, prune), never an id or a value (F-T928-6).
+  const sub = /^[a-z]+$/.test(pos[0] ?? "") ? [pos[0]] : [];
+  const set = cmd === "task" && pos[1] === "set", command = set ? "task set" : [`${cmd} ${pos[0]}`, cmd].find((name) => LEAD_COMMANDS.includes(name)) ?? [cmd, ...sub].join(" ");
   const odd = Object.hasOwn(WORDS, command) && pos.length !== WORDS[command];
   if (set) {
     const pairs = pos.slice(2), fields = Object.fromEntries(pairs.map((kv) => [kv.slice(0, kv.indexOf("=")), kv.slice(kv.indexOf("=") + 1)]));
@@ -56,13 +58,14 @@ export function leadStopped(own, task) {
 export function leadProblem(request, { lead, view, ofTask, branchOfTask, head }) {
   const own = lead.task, { command } = request;
   if (!LEAD_COMMANDS.includes(command) || request.odd) return `"${command}" is not on a lead's list${request.odd ? ", or it has other words" : ""}. ${LIST}`;
-  // Each id that the request names is of the lead's task: its task, a run, a finding key.
-  const notOwn = (id) => `${id} is not of ${own}, and a lead records only its own task. Report to your chief what ${id} needs.`;
+  // Each id that the request names is of the lead's task: its task, a run, a finding key. A missing id gets its own reason (F-T928-10).
+  const notOwn = (id, what) => (id === undefined || id === "" ? `"${command}" names no ${what}: a lead names ${what === "task" ? `its own task, ${own}` : `a ${what} of ${own}`}.`
+    : `${id} is not of ${own}, and a lead records only its own task. Report to your chief what ${id} needs.`);
   // finding add takes no key (below); an empty run is the state tool's to refuse.
   const named = command === "finding close" || command === "finding triage", run = request.run ? view.row(String(request.run)) : undefined, finding = named ? view.row(String(request.key)) : undefined;
-  if (command !== "run done" && request.task !== own) return notOwn(request.task ?? "no task");
-  if ((request.run || command === "run done") && run?.task !== own) return notOwn(request.run || "no run");
-  if (named && finding?.task !== own) return notOwn(request.key);
+  if (command !== "run done" && request.task !== own) return notOwn(request.task, "task");
+  if ((request.run || command === "run done") && run?.task !== own) return notOwn(request.run, "run");
+  if (named && finding?.task !== own) return notOwn(request.key, "finding");
   const task = view.task(own), stopped = leadStopped(own, task);
   if (stopped) return stopped;
   const roundKeys = String(task.keys ?? "").split(",").filter(Boolean);
