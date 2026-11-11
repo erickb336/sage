@@ -891,9 +891,10 @@ test("T266-LEAD-SHOWN: status counts a lead run like any run, and the board show
   s.ok("run", "add", "T1", "--role", "lead");
   s.ok("run", "add", "T1", "--role", "implementer", "--branch", "claude/t1");
   assert.match(s.ok("status"), /^agents {2}2 runs · 2 running · about 0k tokens · 0 measured, 0 unavailable, 0 legacy-unrecorded$/m);
-  const board = s.ok("board", "this", "--remember", "no");
-  assert.match(board, /^- T1 lead · \d+ min$/m, board);
-  assert.match(board, /^- T1 implementer · \d+ min$/m, board);
+  const board = s.ok("board", "this");
+  assert.match(board, /· 2 agents at work ·/, board);
+  assert.match(board, /^.* · lead at work\\$/m, board);
+  assert.match(board, /^.* · implementer at work\\$/m, board);
 });
 
 test("T266-MAX-AGENTS: the default max_agents is 10, one lead and its 9 children, and a value in config.json still wins", async () => {
@@ -5692,7 +5693,7 @@ test("R1258-1: gate add makes each option, the recommendation and the default on
   const [g] = rows(s.dir, "gates");
   assert.deepEqual([g.options, g.recommendation, g.default], ["ship now|wait for Bob", "ship now", "wait for Bob"]);
   assert.equal(gatesLine(s), "gates   1 open · G1 Ship it? (default: wait for Bob)");
-  const board = s.ok("board", "this", "--remember", "no");
+  const board = s.ok("board", "this");
   assert.ok(board.includes("ship now") && !/[\u2028\u2029]/.test(board), board);
   const core = (file) => import(new URL(`../plugins/sage/core/${file}`, import.meta.url).href);
   const [{ readBoardSources }, { buildBoardModel }, { renderBoardHtml, renderBoardText }] = await Promise.all(["board-reader.mjs", "board-model.mjs", "board-render.mjs"].map(core));

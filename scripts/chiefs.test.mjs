@@ -119,7 +119,7 @@ test("F-T604-8: a legacy project refuses --chief and --lead also on the commands
   const run = (...args) => claude.sage([...args, "--project", w.project], w.env);
   run("init");
   for (const args of [["config", "--chief", "C1"], ["config", "max_rounds=4", "--lead", "R1"], ["link", "--separate", "--chief", "C1"], ["projects", "rebuild", "--accept-listing", "yes", "--lead", "R1"],
-    ["board", "--chief", "C1"], ["board", "--remember", "no", "--lead", "R1"], ["merge-check", "--sha", SHA, "--chief", "C1"]]) {
+    ["board", "--chief", "C1"], ["board", "--view", "chat", "--lead", "R1"], ["merge-check", "--sha", SHA, "--chief", "C1"]]) {
     assert.throws(() => run(...args), /only a shared logbook has chiefs: leave out --chief and --lead/, args.join(" "));
   }
   assert.equal(claude.locate(w.project, w.env).shared, false, "the refused link made no row");
@@ -260,7 +260,7 @@ for (const [name, own, other] of pairs) {
     const w = world(t, own, other);
     w.owner("task", "add", "--title", "a", ...ADD);
     w.owner("gate", "add", "T1", "--question", "q?", "--options", "a|b", "--recommend", "a");
-    for (const args of [["status"], ["stats"], ["task", "T1"], ["logbook"], ["standing"], ["pages", "T1"], ["config"], ["merge-check", "--sha", SHA, "--pr", "1"], ["board", "--remember", "no"]]) {
+    for (const args of [["status"], ["stats"], ["task", "T1"], ["logbook"], ["standing"], ["pages", "T1"], ["config"], ["merge-check", "--sha", SHA, "--pr", "1"], ["board", "--view", "chat"]]) {
       try { w.nobody(...args); } catch (e) { assert.doesNotMatch(e.message, /no chief|belongs to/, args.join(" ")); }
     }
     assert.match(other.sage(["gate", "answer", "G1", "--option", "1", "--project", w.project], w.env), /^G1 answered/);

@@ -18,7 +18,6 @@ import { boardView, sessionRoots, sessionSources } from "./board-view.mjs";
 import { projectName as shownName } from "./board-model.mjs";
 import { agentCaps } from "./logbook-fields.mjs";
 import { logbookIdentity } from "./board-reader.mjs";
-import { createBoard } from "./board.mjs";
 import { PR, pullRequestHead } from "./pull-request.mjs";
 import { REPORT_FIELDS } from "./report.mjs";
 import { cleanReport, fieldsOf, proofResults, readReport } from "./report-reader.mjs";
@@ -168,7 +167,7 @@ const OPTIONS = {
   "gate answer": ["option", "other-hex"],
   log: ["why"],
   "merge-check": ["sha", "pr", "cycles", "head"],
-  board: ["remember", "name-hex", "view"],
+  board: ["name-hex", "view"],
   stats: ["task"],
   pages: ["run", "text"],
   "worktrees prune": ["yes"],
@@ -2915,9 +2914,13 @@ function sage(argv, env = process.env) {
   const root = sageRoot(env), project = resolve(opt.project ?? env.SAGE_PROJECT ?? folderHere());
   // First, because board, link, config, projects and merge-check return before they open a logbook. Only a command that names an actor locates here, so link can still replace a row that locate refuses.
   if ((opt.chief !== undefined || opt.lead !== undefined || chiefOnly(cmd, pos)) && !locate(project, env).shared) refuse(chiefOnly(cmd, pos) && cmd !== "claim" ? `${visible(project)} has no shared logbook, so it has no chiefs to hand a task to. Nothing changed.` : `${visible(project)} has no shared logbook, and only a shared logbook has chiefs: leave out --chief and --lead, and a task here needs no claim. Nothing changed.`);
-  if (cmd === "board" && opt.view !== undefined) {
-    if (pos.length > 1 || opt.remember !== undefined) refuse("rich board takes one scope or task id and never remembers state");
-    const scope = opt["name-hex"] !== undefined ? unhex(opt["name-hex"]) : /^T[1-9]\d*$/.test(pos[0] ?? "") ? "this" : pos[0] ?? "this";
+  // The board reads every logbook, takes no lock and writes nothing. --name-hex gives the scope as the hex of its UTF-8
+  // bytes, so that the hook's command line holds no text that the owner typed. Without --view it is the chat board.
+  if (cmd === "board") {
+    const hex = opt["name-hex"];
+    if (pos.length > 1 || (hex !== undefined && unhex(hex) === undefined))
+      refuse("board takes one scope or task id: this, all or a project's name, or --name-hex with the name's UTF-8 bytes in lower-case hex");
+    const scope = hex !== undefined ? unhex(hex) : /^T[1-9]\d*$/.test(pos[0] ?? "") ? "this" : pos[0] ?? "this";
     let sources;
     try {
       if (env.SAGE_BOARD_ROOTS && Buffer.byteLength(env.SAGE_BOARD_ROOTS) > 65536) throw new Error("root configuration is too large");
@@ -2927,7 +2930,7 @@ function sage(argv, env = process.env) {
       const located = () => { try { return storeDir(folder, env); } catch (e) { if (readOnly) throw e; return null; } };
       const dir = !env.SAGE_BOARD_ROOTS && folder ? located() : null, key = dir && `${isShared(dir, env) ? "shared" : "current"}/${basename(dir)}`;
       // A shared project is this project by its logbook, also from a worktree or a subfolder; a legacy one as before.
-      return boardView({ sources, scope, project: folder, logbookKey: readOnly ? key : null, here: key?.startsWith("shared/") ? key : null, providerRoots: sessionRoots(root, legacyRoots(env), provider), taskId: /^T[1-9]\d*$/.test(pos[0] ?? "") ? pos[0] : null, format: opt.view });
+      return boardView({ sources, scope, project: folder, logbookKey: readOnly ? key : null, here: key?.startsWith("shared/") ? key : null, providerRoots: sessionRoots(root, legacyRoots(env), provider), taskId: /^T[1-9]\d*$/.test(pos[0] ?? "") ? pos[0] : null, format: opt.view ?? "chat" });
     } catch (error) { refuse(error.message); }
   }
   if (!readOnly && statSync(root, { throwIfNoEntry: false })?.isDirectory() && ["projects.tsv", "projects.made"].every((f) => !lstatSync(join(root, f), { throwIfNoEntry: false }))) known(root); // the first writing command of this version lists today's logbooks
@@ -2967,14 +2970,6 @@ function sage(argv, env = process.env) {
     const c = { ...config(env, home), ...set };
     const models = Object.keys(c).filter((k) => MODEL.test(k));
     return [...Object.keys(c).filter((k) => !models.includes(k)), ...models].map((k) => `${k}=${c[k]}`).join(" "); // the numbers, then the models
-  }
-  // The board reads every logbook and takes no lock. --remember no leaves board.json as it is. --name-hex gives the scope
-  // as the hex of its UTF-8 bytes, so that the hook's command line holds no text that the owner typed.
-  if (cmd === "board") {
-    const hex = opt["name-hex"];
-    if (pos.length + (hex === undefined ? 0 : 1) > 1 || !["yes", "no", undefined].includes(opt.remember) || (hex !== undefined && unhex(hex) === undefined))
-      refuse("board takes one scope (this, all or a project's name, or --name-hex with the name's UTF-8 bytes in hex) and --remember yes or no");
-    return board({ scope: hex === undefined ? pos[0] : unhex(hex), project, env, save: opt.remember !== "no" });
   }
   const place = locate(project, env), { dir } = place;
   const repair = cmd === "logbook" && pos[0] === "repair";
@@ -4210,10 +4205,9 @@ function runCli(argv = process.argv.slice(2)) {
   console.log(text);
 }
 
-const { board, answerPaths } = createBoard({ BLOCKS, BRANCH, RISKS, STATES, mergeCheck, optionsOf, projectName, projectRoot, read, sageRoot, slug, storeDir, withLock });
 const { bindings, fillCommits, folderOf, link, locate, movePlans, notePlugin, pluginRows, projectMoves, refuseNewLogbook, repositoryLogbooks, rootOf, sameDir, waitingPlugins, writeBindings, writePlugin } = createSharedRoot({ Refusal, refuse, legacyRoots: rootsOf, makeLogbook, now, projectRoot, provider, raiseCounts, readRegular, rowsOf, sageRoot, sheetText, slug, swap, visible, withLock,
   listed: (root) => known(root, undefined, undefined, true),
   enroll });
 const { chiefs, chiefRow, rowOf } = createChiefs({ now, provider, readRegular, refuse, rowsOf, sheetText, swap });
-return { SIZES, BLOCKS, RISKS, KINDS, STATES, DEFAULTS, PR, LEAD_COMMANDS, leadProblem, leadRequest, sageRoot, locate, chiefFor, sessionBar, branchBar, actorOptions, git, projectRoot, roleReadProject, optionsOf, slug, worktreeRoot, pagesRoot, BRANCH, ofTask, branchOfTask, branchTip, projectName, storeDir, config, cyclesFor, modelFor, read, mergeCheck, boardLandingCheck, logbookView, sage, keepReport, keepUsage, compareRetainedReport, withLock, board, answerPaths, command, runCli, waitingPlugins, writeIdFloors };
+return { SIZES, BLOCKS, RISKS, KINDS, STATES, DEFAULTS, PR, LEAD_COMMANDS, leadProblem, leadRequest, sageRoot, locate, chiefFor, sessionBar, branchBar, actorOptions, git, projectRoot, roleReadProject, optionsOf, slug, worktreeRoot, pagesRoot, BRANCH, ofTask, branchOfTask, branchTip, projectName, storeDir, config, cyclesFor, modelFor, read, mergeCheck, boardLandingCheck, logbookView, sage, keepReport, keepUsage, compareRetainedReport, withLock, command, runCli, waitingPlugins, writeIdFloors };
 }
