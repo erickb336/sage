@@ -8,7 +8,7 @@ import { existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, realpath
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
-import { createStateTool } from "../packages/sage-core/index.mjs";
+import { boardNote, createStateTool } from "../packages/sage-core/index.mjs";
 
 const HEADERS = {
   tasks: "id title size risk route state branch pr round keys",
@@ -231,6 +231,8 @@ test("T205 acceptance: existing Claude hook dispatches owner board/task/status p
 // T922 (F-T922-1): Codex runs the board note's chat board in its sandbox, where a write outside the workspace fails with
 // EPERM. The chat board writes nothing (no board.json, no lock): what is done comes from the logbook's completion records
 // (Done, last 7 days). So in the sandbox, a second board shows a task that merged after the first one, as in Claude Code.
+// T938 (F-T922-3): the command comes from core's board note, as the hooks send it. The write check runs outside the
+// sandbox, where a write would succeed and show; inside it, the sandbox would block the write and hide it.
 test("T922: in a sandbox that blocks every write, as Codex's does, the note's chat board shows a merge after the first board, and writes nothing", { skip: process.platform !== "darwin" && "macOS sandbox-exec only" }, t => {
   const f = fixture(t), home = join(f.dir, "home"), hour = new Date(Date.now() - 3600000).toISOString();
   mkdirSync(home);
@@ -241,11 +243,17 @@ test("T922: in a sandbox that blocks every write, as Codex's does, the note's ch
   const env = { PATH: process.env.PATH, HOME: home, SAGE_HOME: f.root };
   const sandboxed = args => spawnSync("/usr/bin/sandbox-exec", ["-p", `(version 1)(allow default)(deny network*)(deny file-write* (subpath "${f.dir}"))`, process.execPath, ...args], { env, encoding: "utf8" });
   assert.match(sandboxed(["-e", `require("fs").writeFileSync(${JSON.stringify(join(f.root, "board.json"))}, "{}")`]).stderr, /EPERM/, "the profile blocks the write of board.json at the sage root");
-  // The command of the Codex hook's note for "show board for all".
+  // The state tool's words in the note for "show board for all": each word, a quoted one ('…') without its quotes.
+  let args;
+  boardNote({ kind: "board", scope: "all" }, f.project, { state: words => { args ??= words; return words; }, ensure: "", choice: "" });
+  const argv = args.match(/'(?:[^']|'\\'')*'|\S+/g).map(word => word.startsWith("'") ? word.slice(1, -1).replaceAll("'\\''", "'") : word);
+  assert.ok(argv.includes(f.project), args);
   const board = () => {
-    const before = snapshot(f.dir), run = sandboxed([cli, "board", "all", "--project", f.project, "--view", "chat"]);
+    const before = snapshot(f.dir), open = spawnSync(process.execPath, [cli, ...argv], { env, encoding: "utf8" });
+    assert.equal(open.status, 0, open.stderr);
+    assert.deepEqual(snapshot(f.dir), before, "the chat board writes nothing, also where a write would succeed");
+    const run = sandboxed([cli, ...argv]);
     assert.equal(run.status, 0, run.stderr);
-    assert.deepEqual(snapshot(f.dir), before, "the chat board writes nothing");
     return run.stdout;
   };
   const first = board();
