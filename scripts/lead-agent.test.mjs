@@ -41,15 +41,16 @@ const report = (result, findings) => {
 const denied = (out) => out?.hookSpecificOutput?.permissionDecision === "deny" ? out.hookSpecificOutput.permissionDecisionReason : undefined;
 const words = (text) => text.trim().split(/\s+/).join(" ");
 // The fake gh: it answers only "gh pr checks <n>" as CI with one check does, and "gh pr view <n> --json headRefOid" with
-// the head of the branch in the remote that the file remote next to it names (p.remote). The check passes, unless the
-// file checks next to it has lines: each call then takes the first line as the check's state (p.checks). Any other call
-// fails, so the file cannot teach a gh command that the test does not know.
+// the head of the branch in the remote that the file remote next to it names (p.remote), or with no remote, in the
+// project's own folder, as if the implementer had pushed it. The check passes, unless the file checks next to it has
+// lines: each call then takes the first line as the check's state (p.checks). Any other call fails, so the file cannot
+// teach a gh command that the test does not know.
 const FAKE_GH = `#!/usr/bin/env node
 const fs = require("fs"), path = require("path").join(__dirname, "checks");
 const a = process.argv.slice(2);
 if (a.length === 5 && a[0] === "pr" && a[1] === "view" && /^[1-9][0-9]*$/.test(a[2]) && a[3] === "--json" && a[4] === "headRefOid") {
-  const remote = fs.readFileSync(require("path").join(__dirname, "remote"), "utf8");
-  const sha = require("child_process").execFileSync("git", ["--git-dir", remote, "rev-parse", "sage/t1-example"], { encoding: "utf8" }).trim();
+  const remote = require("path").join(__dirname, "remote"), where = fs.existsSync(remote) ? ["--git-dir", fs.readFileSync(remote, "utf8")] : [];
+  const sha = require("child_process").execFileSync("git", [...where, "rev-parse", "sage/t1-example"], { encoding: "utf8" }).trim();
   console.log(JSON.stringify({ headRefOid: sha }));
   process.exit(0);
 }
@@ -116,13 +117,16 @@ function table(first) {
   return m[1].trim().split("\n").map((row) => row.slice(1, -1).split("|").map((cell) => cell.trim()));
 }
 
-/** A project with a git repository, a logbook and the sage's own steps before a lead: T1 briefed, its lead run, lead-T1 started. */
-function project({ size = "small", config = [] } = {}) {
+/**
+ * A project with a git repository, a logbook and the sage's own steps before a lead: T1 briefed (or framed, with the
+ * blocks of add), its lead run, lead-T1 started. env: more variables of the commands, such as SAGE_WAIT_MS.
+ */
+function project({ size = "small", config = [], framed = false, add = [], env: more = {} } = {}) {
   const dir = realpathSync(mkdtempSync(join(tmpdir(), "sage-lead-agent-")));
   const folder = join(dir, "project"), bin = join(dir, "bin");
   mkdirSync(bin);
   writeFileSync(join(bin, "gh"), FAKE_GH, { mode: 0o755 });
-  const env = { ...process.env, PATH: `${bin}:${process.env.PATH}`, HOME: join(dir, "home"), SAGE_HOME: join(dir, "sage"), SAGE_HOOKS_STATE: join(dir, "hooks") };
+  const env = { ...process.env, PATH: `${bin}:${process.env.PATH}`, HOME: join(dir, "home"), SAGE_HOME: join(dir, "sage"), SAGE_HOOKS_STATE: join(dir, "hooks"), ...more };
   const git = (...args) => spawnSync("git", ["-C", folder, ...args]).stdout.trim();
   spawnSync("git", ["init", "-q", "-b", "main", folder]);
   git("-c", "user.name=t", "-c", "user.email=t@t", "commit", "-q", "--allow-empty", "-m", "start");
@@ -157,8 +161,8 @@ function project({ size = "small", config = [] } = {}) {
   send({ hook_event_name: "UserPromptSubmit", prompt: "sage mode" });
   chief("init");
   if (config.length) chief("config", ...config);
-  chief("task", "add", "--priority", "P2", "--title", "example", "--size", size); // T1; small: build, code review, QA
-  chief("task", "T1", "set", "state=briefed");
+  chief("task", "add", "--priority", "P2", "--title", "example", "--size", size, ...add.flatMap((block) => ["--add", block, "--why", "a-screen-first"])); // T1; small: build, code review, QA
+  if (!framed) chief("task", "T1", "set", "state=briefed");
   chief("run", "add", "T1", "--role", "lead"); // R1
   assert.equal(p.startLead(), undefined, "the sage starts lead-T1");
   // The implementer's work: a new commit at the tip of the task's branch.
@@ -284,7 +288,7 @@ const EXAMPLES = ["A worked example", "An example that ends blocked"];
 test("T301: each example of the lead file runs through the hook, from lead-T1's start to a passing merge check, and the examples run every command that the file teaches", () => {
   const ran = [];
   for (const heading of EXAMPLES) {
-    const { ran: here, sage, printed } = play(block(heading), project());
+    const { ran: here, sage, printed } = play(block(heading), project({ framed: heading === "A worked example" })); // the worked example starts framed (T803)
     assert.match(sage.at(-1), /^sage merge-check --sha [0-9a-f]{40} --pr 12$/, `"${heading}" ends with the merge check`);
     assert.match(printed, /^T1 may merge/, `and the merge check of "${heading}" passes`);
     ran.push(...here);
@@ -579,6 +583,40 @@ test("T301 checks still run:after a blocked report, the sage waits, and after th
     "! sage verdict T1 --sha <sha> --kind checks-pass --cycle 1 --pr 12", "! sage task T1 set state=verified", "! sage merge-check --sha <sha> --pr 12"], p);
   assert.match(printed, /^T1 may merge/);
   assert.deepEqual(moves, ["reviewing>verifying"], "the sage's one state move");
+});
+
+test("T803: a lead that the sage starts on a framed task briefs it itself as step 1 says, then builds; a framed task with a design step stays the sage's", () => {
+  const p = project({ framed: true });
+  play([leadSays("sage task <T> set state=briefed", "framed:"), "$ sage task T1 set state=building branch=sage/t1-example", "$ sage run add T1 --role implementer --branch sage/t1-example", "→ R2 running · implementer on T1"], p);
+  assert.match(p.chief("task", "T1"), /^T1 building /, "the lead took its framed task to building");
+  const design = project({ framed: true, add: ["design"] });
+  assert.match(design.chief("task", "T1"), /^T1 framed .*route design,/, "a framed task with a design step");
+  assert.match(design.ask(`node ${TOOL} task T1 set state=briefed`) ?? "", /^sage: T1 is framed, and its route has a design step: the chief runs the design before the brief\. Report to your chief\. /);
+  assert.match(design.chief("task", "T1"), /^T1 framed /, "it stays framed");
+});
+
+test("T803: the lead's CI wait is one allowed command; it waits while CI runs on the branch's head, and ends when CI ends", () => {
+  const p = project({ env: { SAGE_WAIT_MS: "4000" } });
+  play([...BUILT.slice(0, 6)], p); // the build, and T1 at reviewing on PR 12
+  const wait = () => {
+    assert.equal(p.ask(`node ${WAIT} T1 --ci`), undefined, "the hook lets the lead run the CI wait");
+    const r = p.run("wait", ["T1", "--ci"]);
+    assert.equal(r.status, 0, r.stderr);
+    return r.stdout.trim().split("\n");
+  };
+  p.checks("pending", "pending", "pass");
+  assert.deepEqual(wait(), [`CI pass · PR 12 · ${p.head()}`, "build pass", "CI passed on this head: start the reviews and QA on it."], "it waits through two pending reads, and ends at the pass");
+  assert.equal(readFileSync(join(p.folder, "..", "bin", "checks"), "utf8"), "", "it read the checks three times: it ended when CI ended");
+  p.checks("pending", "fail");
+  assert.deepEqual(wait().slice(0, 2), [`CI fail · PR 12 · ${p.head()}`, "build fail"], "a failed check ends the wait");
+  p.checks(...Array(200).fill("pending"));
+  assert.match(wait().join("\n"), /^CI runs · PR 12 · [0-9a-f]{40}\nbuild pending\nCI still runs after 0 minutes: run this command again\.$/, "CI that runs past the wait: run it again");
+  // The PR's head on GitHub is behind the branch: the wait does not read the old head's checks as this head's.
+  p.checks();
+  p.remote();
+  p.commit();
+  assert.match(wait()[1], /^PR 12's head is [0-9a-f]{7}, not the branch's head [0-9a-f]{7} after 0 minutes: run this command again\.$/);
+  assert.match(p.run("wait", ["T1", "--ci", "12"]).stdout, /^usage: node wait\.mjs <T> \[--ci\]/, "the wait takes no PR: it reads the task's own");
 });
 
 test("T301: the lead file's state table is the hook's: each move in it passes, and each other move of the lead is refused", () => {

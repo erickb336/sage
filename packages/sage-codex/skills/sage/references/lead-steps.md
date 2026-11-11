@@ -1,6 +1,6 @@
 ## Your steps in Codex
 
-Your task name is `sage_lead_t<n>_r<k>`, where `<n>` is the number of your task. Give `project`, the absolute project folder of your brief, in each sage tool call.
+Your task name is `sage_lead_t<n>_r<k>`, where `<n>` is the number of your task. Give `project`, the absolute project folder of your brief, in each sage tool call. When your task is framed, move it to briefed, then to building, with `task_set` before your first helper.
 
 **Start a helper.** Do these steps for each implementer, code reviewer, security reviewer, UX reviewer and QA agent:
 
@@ -24,7 +24,7 @@ Your task name is `sage_lead_t<n>_r<k>`, where `<n>` is the number of your task.
 
 Use `status` for a logbook read, or the trusted literal command form in [commands](commands.md). Scoped task reads require the hook's absolute Node executable, this provider's absolute CLI and the assigned absolute project. A refused incidental action does not cancel independent allowed work; stop that action without another shell form.
 
-- `task_set`: give `task` and `fields`, with string values, for example `{"task": "T12", "fields": {"state": "reviewing"}}`. The fields are `state` (briefed to building, building to reviewing, reviewing to verifying, verifying to reviewing, repairing to reviewing), `branch` and `pr`.
+- `task_set`: give `task` and `fields`, with string values, for example `{"task": "T12", "fields": {"state": "reviewing"}}`. The fields are `state` (framed to briefed, briefed to building, building to reviewing, reviewing to verifying, verifying to reviewing, repairing to reviewing), `branch` and `pr`.
 - `verdict`: give `task`, `kind` (`review-clean`, `security-clean`, `ux-clean`, `qa-pass`, `qa-fail` or `findings`), `sha`, `cycle`, `pr` and the `run` whose kept report backs it, after you end that run. The `checks-pass` and `checks-fail` verdicts are the chief's.
 
 **A report with findings.** Do these steps in this order. Triage comes after the verdict, because after a `fix` triage of a medium or high finding, the gate refuses the first verdict of a head until `round`.
@@ -37,6 +37,8 @@ Use `status` for a logbook read, or the trusted literal command form in [command
 6. `round`: when a medium or high finding has `fix`, start the repair with it. First do steps 1 to 5 for each helper of the cycle: after `round`, the gate refuses a verdict on a run of an earlier round. When `round` prints held or replan, report blocked: the sage tools now refuse you. Start an implementer on the same branch for the keys that it names. After the repair's commit, call `finding_close` for each key, then move the task to reviewing, and start the roles that `round` named.
 
 **The pull request.** A Codex implementer commits and reports, and it does not push. After its first commit, send the branch with `git -C <worktree> push -u <remote> <branch>`, open the pull request with `gh pr create --head <branch> --title <title> --body <body>`, and record the number with `task_set`. Send the branch again after each repair. A verdict needs the pull request. Never merge.
+
+**Wait for CI.** Start no review or QA on a head before CI passes there. After each push, run `<node> <ci-wait.mjs> T<n>` with the project folder as the working folder. It reaches GitHub, as `gh` does. It waits up to 9 minutes for CI on the head of your task's branch, on the PR of the logbook, and reads only that PR's head and its checks. It prints `CI pass`, `CI fail`, `CI none` (no checks) or `CI runs` (run it again), and the next step: do it. After `CI fail`, report STATUS blocked with `Left: the checks`.
 
 **Steer by a new agent.** The gate refuses `send_message`, `followup_task` and `send_input` from a lead, because each agent works only from its checked brief. To change a helper's work, stop it with `interrupt_agent`, end its run as failed, then start a new agent on a new run with a new brief. The gate also refuses `resume_agent`.
 

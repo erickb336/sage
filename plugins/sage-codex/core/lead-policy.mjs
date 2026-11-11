@@ -12,8 +12,11 @@ export const LEAD_COMMANDS = ["run add", "run done", "finding add", "finding clo
 const LEAD_KINDS = ["review-clean", "security-clean", "ux-clean", "qa-pass", "qa-fail", "findings"];
 /** The keys of task set that a lead sets on its task. */
 const LEAD_FIELDS = ["state", "branch", "pr"];
-/** The state moves of a cycle that a lead makes, by the task's state. Only the chief moves a task from any other state. */
-const LEAD_MOVES = { briefed: ["building"], building: ["reviewing"], reviewing: ["verifying"], repairing: ["reviewing"], verifying: ["verified", "reviewing"], verified: ["reviewing"] };
+/**
+ * The state moves that a lead makes, by the task's state: its own brief first (T803), then the moves of a cycle. Only the
+ * chief moves a task from any other state.
+ */
+const LEAD_MOVES = { framed: ["briefed"], briefed: ["building"], building: ["reviewing"], reviewing: ["verifying"], repairing: ["reviewing"], verifying: ["verified", "reviewing"], verified: ["reviewing"] };
 /** The states in which a lead records nothing and starts no agent. */
 const LEAD_STOPS = ["held", "replan", "merged", "concluded", "abandoned"];
 /** The number of words of each command, so that no word goes past the policy unread. */
@@ -163,6 +166,8 @@ function taskBranch(branch, own, task, view, branchOfTask) {
 function stateMove(state, own, task, view, head, roundKeys) {
   const next = LEAD_MOVES[task.state] ?? [];
   if (!next.includes(state)) return `${own} is ${task.state}: ${next.length ? `a lead moves it only to ${next.join(" or ")}` : "only the chief moves it from there"}.`;
+  // A design comes before the brief, and the chief runs it (T803): so a lead briefs only a framed task with no design step.
+  if (task.state === "framed" && String(task.route ?? "").split(",").includes("design")) return `${own} is framed, and its route has a design step: the chief runs the design before the brief. Report to your chief.`;
   const back = ["verifying", "verified"].includes(task.state) && state === "reviewing";
   if (back || state === "verifying") {
     const tip = head();

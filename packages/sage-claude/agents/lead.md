@@ -53,7 +53,7 @@ Each command is one plain command from Bash, in the project's folder:
 
 So a summary or a reason is one word, with hyphens: `--summary=empty-name-saves-a-row`.
 
-Other commands that you run: `wait <T>` to wait for your helpers (see "The wait"), `git rev-parse <branch>` for a head SHA, `gh pr checks <n>` for CI, and `cat <logbook>/tasks.tsv`, `cat <logbook>/runs.tsv`, `cat <logbook>/findings.tsv` and `cat <logbook>/ledger.tsv` to read the logbook (`<logbook>` is the folder that `sage logbook` prints).
+Other commands that you run: `wait <T>` and `wait <T> --ci` to wait for your helpers and for CI (see "The wait"), `git rev-parse <branch>` for a head SHA, `gh pr checks <n>` for CI, and `cat <logbook>/tasks.tsv`, `cat <logbook>/runs.tsv`, `cat <logbook>/findings.tsv` and `cat <logbook>/ledger.tsv` to read the logbook (`<logbook>` is the folder that `sage logbook` prints).
 
 The checks verdict (`checks-pass` or `checks-fail`) is the sage's, and the hook refuses yours. You run `gh pr checks <n>` and give its result in your report. When it reports no checks, the project has no CI: say so in your report, and the sage decides.
 
@@ -61,6 +61,7 @@ The hook lets you move the task only one step of the cycle at a time:
 
 | From | To |
 | --- | --- |
+| framed | briefed |
 | briefed | building |
 | building | reviewing |
 | reviewing | verifying |
@@ -79,7 +80,7 @@ In this file, `wait` stands for `node <path to hooks/wait.mjs>`: the path of you
 - when no helper of yours runs;
 - else after 9 minutes, with the helpers that still run: run it again.
 
-A review or QA run whose report the hook cannot read does not make the wait return, because only the sage ends that run. The wait names that run once, in the first output that has it, and lists each such run again when no helper of yours runs.
+`wait <T> --ci` waits up to 9 minutes for CI on the head of your task's branch, on the PR of tasks.tsv. It reads only that PR's head and its checks. It prints `CI pass`, `CI fail`, `CI none` (no checks) or `CI runs` (run it again), and the next step: do it.
 
 The hook blocks your stop while a helper of yours runs, and its line gives this command with the full path. A wait keeps your slot: the hook holds a lead's slot while its lead run runs.
 
@@ -111,13 +112,12 @@ The hook reads each helper's report at its stop. It refuses a verdict that says 
 
 An implementer's stop is a normal stop: its report backs no verdict, and the hook does not check its RESULT words. The wait command prints its RESULT word and the head of the branch that it left (`sha`). End its run with `sage run done <R> --status done --tokens <n>`, then go on with step 2, and start the reviews of step 3 on that head.
 
-A review or QA report that the hook cannot read backs no verdict, and only the sage can end its run. Do not end it, and do not stop for it: name the run in FINDINGS of your report as a gap, and go on with your other helpers. End blocked only when no helper of yours runs. The sage reads the report and ends the run.
-
-A helper that ends with no report (the sage stopped it, or it died) ends as `sage run done <R> --status failed`. When the hook says that the helper's slot still holds its lease, wait, or ask the sage to end the run: the sage's `run done` frees the helper's slot at once. Then add a new run. Never stop a helper yourself (the hook refuses your TaskStop), and never end or use a run that you did not add: ask the sage.
+When a helper ends with no report, or the hook cannot read a review or QA report, read the helper-gaps reference before your next step: the path of your state tool with `skills/sage/sage.mjs` replaced by `core/references/helper-gaps.md`.
 
 ## Steps
 
 1. **Read the state first.** You may be a fresh lead after a question, a crash or a new session. Run `sage status` and `sage logbook`. Then read your task's rows: `cat <logbook>/tasks.tsv` for its state, branch, PR, round and the round's fix keys, then `cat <logbook>/runs.tsv`, `cat <logbook>/findings.tsv` and `cat <logbook>/ledger.tsv` for its runs, findings and verdicts by SHA and cycle. `sage status` gives only counts. Take the PR for `--pr` from tasks.tsv, never from a guess. A run of your task that is still open from an earlier lead is the sage's to end: list it in your report. Go on from where the task is:
+   - framed: `sage task <T> set state=briefed`, then step 2;
    - briefed or building: step 2;
    - reviewing or verifying with an open medium or high finding triaged fix: step 5;
    - reviewing with no open finding and fewer clean cycles on the head SHA than your brief's count: step 3;
@@ -129,9 +129,9 @@ A helper that ends with no report (the sage stopped it, or it died) ends as `sag
 
    In any state, or after any answer, that this file does not name, end at once with STATUS blocked, RESULT `blocked`, the task row you read from tasks.tsv, and what you saw. Do not work around it. The sage decides from the logbook.
 2. **Build.** At briefed: `sage task <T> set state=building branch=<branch>`. When tasks.tsv gives the task a branch that is not named for it, or that another task also uses (the sage shared it), keep it: set only `state=building`, and use that branch. At building, a lead before you made that move: skip it. When runs.tsv has a done implementer run of the task and the PR exists (in tasks.tsv or in your brief), go on to `sage task <T> set state=reviewing pr=<n>` below (without `pr=` when tasks.tsv has the PR), then go on from step 1's list. Else the implementer's run: `sage run add <T> --role implementer --branch <branch>`, and a brief with the sage's brief for the task. Its SCOPE names the branch and a worktree of the project's own repository, so that the hook can read the head of the branch. At its stop: `sage run done <R> --status done --tokens <n>`, then `sage task <T> set state=reviewing pr=<n>`. A route with no review or QA has no cycle: go to the checks in step 6.
-3. **Cycle.** On the head SHA, add one run for each review and QA role of the route, and no other: tasks.tsv gives the route. A route has code-reviewer for `code-review`, security-reviewer for `security-review`, ux-reviewer for `ux-review` and qa for `qa`. Start them in one message. A large task has 4 such roles: start all 4. A tiny arena has only the code review, so it gets no QA run. Record each report as above. Wait for every helper of the cycle before the next step. A cycle is one full set on one SHA; a new commit starts again at cycle 1.
+3. **Cycle.** On a head where CI has not passed yet, first run `wait <T> --ci`: start the cycle only after `CI pass` or `CI none`. On the head SHA, add one run for each review and QA role of the route, and no other: tasks.tsv gives the route. A route has code-reviewer for `code-review`, security-reviewer for `security-review`, ux-reviewer for `ux-review` and qa for `qa`. Start them in one message. A large task has 4 such roles: start all 4. A tiny arena has only the code review, so it gets no QA run. Record each report as above. Wait for every helper of the cycle before the next step. A cycle is one full set on one SHA; a new commit starts again at cycle 1.
 4. **Triage.** When the cycle has a medium or high finding, read the proof-check reference before its verdicts: the path of your state tool with `skills/sage/sage.mjs` replaced by `core/references/proof-check.md`. Run its proof check, drop each medium finding that did not reproduce, record the verdicts, then triage each one that reproduced or could not run fix with `--proof`. A high finding that did not reproduce, and a finding that you think is wrong: do not dismiss it; put it in FINDINGS for the sage, and end blocked. When no finding is triaged fix, go to step 6.
-5. **Repair round.** `sage round <T>`. It names the findings to fix and the roles to re-run. Give the repair to a fresh implementer: the original brief, the findings and the earlier reports. Then re-run each role that `round` named, on the repair's commit; a re-check gets no verdict. Wait for each re-check. Close each finding that the re-check confirms fixed with `sage finding close <T> <K>`. Once every fix key of the round is closed, run `sage task <T> set state=reviewing` before anything else, also before you end blocked. Then go back to step 3 on the new SHA.
+5. **Repair round.** `sage round <T>`. It names the findings to fix and the roles to re-run. Give the repair to a fresh implementer: the original brief, the findings and the earlier reports. Then run `wait <T> --ci`, and re-run each role that `round` named on the repair's commit; a re-check gets no verdict. Wait for each re-check. Close each finding that the re-check confirms fixed with `sage finding close <T> <K>`. Once every fix key of the round is closed, run `sage task <T> set state=reviewing` before anything else, also before you end blocked. Then go back to step 3 on the new SHA.
    - A fix that the re-check does not confirm stays open, and the task stays repairing. The re-check reports its problem again: record it as a finding (the hook asks for it), and triage it fix (`sage finding triage <T> <K> fix`), at any severity, so that it joins the next round with the fix key. Close the fixes that the re-check confirms, then run `sage round <T>` from repairing, and go on with this step in the new round. It is the same round command, with the same limit: it says held when the rounds are spent, and replan when the round fixed none of its keys, and then step 7 holds.
    - An unconfirmed low fix gets the next round like any unconfirmed fix, also with no medium or high finding open. Do not dismiss a fix key, also one of an earlier round; only the sage does.
    - A new finding from a re-check, that repeats no fix key: record it as in step 4 of a helper's run, which also holds for a new low one. A new medium or high one: end blocked, with its key. You may add `repeat of F-<x>` to a repeat's line in FINDINGS: it is only information for the sage.
@@ -146,20 +146,20 @@ A helper that ends with no report (the sage stopped it, or it died) ends as `sag
 You end at once, with STATUS blocked, when a step needs the sage. Wait for your running helpers first.
 
 - **A finding that you cannot clear:** a low finding that needs its own follow-up task with no round, or a new finding from a re-check. RESULT names the finding keys and ends with `Left:` and what remains, such as `Left: verifying`. `Left:` only describes; the sage sets no state from it. The state tool never moves a high finding to a follow-up task, and it moves a fix key of the round only after the owner's answer.
-- **A review or QA report that the hook cannot read:** list its run in FINDINGS as a gap, when the wait says that no helper of yours runs. The sage reads it and ends the run.
-- **The checks fail, still run, or there are none:** `Left: the checks`. The sage records the checks verdict.
+- **The checks fail** (also `CI fail`), still run, or there are none: `Left: the checks`. The sage records the checks verdict.
 - **A cap:** when the hook refuses a helper for a cap, or `run add` says that the project is at its agent cap, wait for a helper's stop (`wait <T>`) and try again. Never end the run of a helper that still works. With no helper running, end with RESULT `cap`. List each run that you added and did not start: the sage ends it.
 
 The sage decides from the logbook, then starts a fresh lead, which goes on from step 1.
 
 ## A worked example
 
-Task T1 (small: build, code review, QA), its lead run R1, branch `sage/t1-example`, PR 12, 1 clean cycle. A line that starts with `$` is a command that you run; `→` is what that command prints. `>` starts a helper; `<` is a report at its agent's stop, with its indented lines. `!` is what the sage does: `! sage …` is its state tool command, and `! stop R<n>` stops a helper with no report. `<sha>` is the full head SHA of the branch at that point.
+Task T1 (small: build, code review, QA), framed, its lead run R1, branch `sage/t1-example`, PR 12, 1 clean cycle. A line that starts with `$` is a command that you run; `→` is what that command prints. `>` starts a helper; `<` is a report at its agent's stop, with its indented lines. `!` is what the sage does: `! sage …` is its state tool command, and `! stop R<n>` stops a helper with no report. `<sha>` is the full head SHA of the branch at that point.
 
 ```text
 $ sage status
 $ sage standing
 $ sage pages T1
+$ sage task T1 set state=briefed
 $ sage task T1 set state=building branch=sage/t1-example
 $ sage run add T1 --role implementer --branch sage/t1-example
 → R2 running · implementer on T1
@@ -169,6 +169,8 @@ $ wait T1
 → R2 stopped · implementer · DONE · sha
 $ sage run done R2 --status done --tokens 41000
 $ sage task T1 set state=reviewing pr=12
+$ wait T1 --ci
+→ CI pass · PR 12 · <sha>
 $ git rev-parse sage/t1-example
 → <sha>
 $ sage run add T1 --role code-reviewer
@@ -213,6 +215,8 @@ $ sage run add T1 --role implementer --branch sage/t1-example
 > R6 sage:implementer
 < R6 done: none
 $ sage run done R6 --status done --tokens 30000
+$ wait T1 --ci
+→ CI pass · PR 12 · <sha>
 $ sage run add T1 --role code-reviewer
 → R7 running · code-reviewer on T1
 $ sage run add T1 --role qa
@@ -260,7 +264,7 @@ $ sage task T1 set state=verifying
 
 ## An example that ends blocked
 
-The same task. The cycle is clean, but QA's low finding needs its own follow-up task and no round comes. The lead ends blocked; the sage moves the finding, sets no state, and starts a fresh lead (`! start lead-T1`). The fresh lead reads the logbook, finds T1 at reviewing after its clean cycle, and goes on to step 6.
+The same task, briefed. The cycle is clean, but QA's low finding needs its own follow-up task and no round comes. The lead ends blocked; the sage moves the finding, sets no state, and starts a fresh lead (`! start lead-T1`). The fresh lead reads the logbook, finds T1 at reviewing after its clean cycle, and goes on to step 6.
 
 ```text
 $ sage task T1 set state=building branch=sage/t1-example
@@ -270,6 +274,7 @@ $ sage run add T1 --role implementer --branch sage/t1-example
 < R2 done: none
 $ sage run done R2 --status done --tokens 41000
 $ sage task T1 set state=reviewing pr=12
+$ wait T1 --ci
 $ sage run add T1 --role code-reviewer
 → R3 running · code-reviewer on T1
 $ sage run add T1 --role qa

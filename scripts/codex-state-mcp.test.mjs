@@ -37,7 +37,7 @@ async function connect(t, overrides = {}) {
   child.stdin.write(JSON.stringify({ jsonrpc: "2.0", method: "notifications/initialized" }) + "\n");
   t.after(async () => { child.stdin.end(); assert.equal(await closed, 0); assert.equal(stderr, ""); });
   return {
-    dir, project, env,
+    dir, project, env, gateOf,
     /** A proof of this call with this caller, as the gate saves it. */
     writeProof: (name, id, caller) => writeProof({ tool_use_id: id, session_id: "019a0000-0000-7000-8000-0000000000aa", tool_name: `mcp__sage__${name}` }, env, caller),
     tools: async () => (await rpc("tools/list", {})).result.tools,
@@ -362,6 +362,63 @@ test("T552: a reviewer, QA, an implementer, a run of another task and a lead tha
   assert.match((await lead("round", { task: "T1" })).denied, /^sage: T1 is abandoned, so its lead records nothing/);
   await w.call("run_done", { run: "R1", status: "failed" });
   assert.match((await lead("round", { task: "T1" })).denied, /^sage: T1 has no running lead run R1/);
+});
+
+test("T803: a Codex lead started on a framed task briefs it itself, then builds; a framed task with a design step stays the chief's", async (t) => {
+  const s = await connect(t);
+  await s.call("init");
+  await s.call("task_add", { title: "task 1", size: "small", priority: "P2" });
+  await s.call("task_add", { title: "task 2", size: "small", priority: "P2", add: "design", why: "a-screen-first" });
+  for (const n of [1, 2]) assert.match(await s.call("run_add", { task: `T${n}`, role: "lead" }), new RegExp(`^R${n} running · lead on T${n}`), "the chief starts a lead on a framed task");
+  const lead = (n, name, args) => s.call(name, args, { agent: `/root/sage_lead_t${n}_r${n}` });
+  assert.match(await lead(1, "task_set", { task: "T1", fields: { state: "briefed" } }), /^T1 briefed /);
+  assert.match(await lead(1, "task_set", { task: "T1", fields: { state: "building", branch: "sage/t1-a" } }), /^T1 building /);
+  assert.match((await lead(2, "task_set", { task: "T2", fields: { state: "briefed" } })).denied, /^sage: T2 is framed, and its route has a design step: the chief runs the design before the brief\. Report to your chief/);
+  assert.match(await s.call("status"), /building 1 · framed 1/, "T2 stays framed");
+});
+
+test("T803: a Codex lead's CI wait passes the gate, reads only its PR's head and checks with gh, and ends when CI ends", async (t) => {
+  const s = await connect(t);
+  await s.call("init");
+  await s.call("task_add", { title: "task 1", size: "small", priority: "P2" });
+  await s.call("task_set", { task: "T1", fields: { state: "briefed", branch: "sage/t1-a" } });
+  await s.call("run_add", { task: "T1", role: "lead" });
+  const git = (...args) => execFileSync("git", ["-C", s.project, "-c", "user.name=t", "-c", "user.email=t@t", ...args], { encoding: "utf8" }).trim();
+  git("commit", "-q", "--allow-empty", "-m", "work");
+  git("branch", "sage/t1-a");
+  const sha = git("rev-parse", "sage/t1-a"), agent = "/root/sage_lead_t1_r1";
+  await s.call("task_set", { task: "T1", fields: { state: "building" } }, { agent });
+  await s.call("task_set", { task: "T1", fields: { state: "reviewing", pr: "5" } }, { agent });
+  // The fake gh knows only the two reads of the wait; it logs each call. The file mode says what the checks are.
+  const bin = join(s.dir, "bin");
+  mkdirSync(bin);
+  writeFileSync(join(bin, "gh"), `#!/usr/bin/env node
+const fs = require("fs"), at = (f) => require("path").join(__dirname, f), a = process.argv.slice(2);
+fs.appendFileSync(at("log"), a.join(" ") + "\\n");
+if (a.join(" ") === "pr view 5 --json headRefOid") { console.log(JSON.stringify({ headRefOid: ${JSON.stringify(sha)} })); process.exit(0); }
+if (a.join(" ") !== "pr checks 5") { console.error("the fake gh does not know: " + a.join(" ")); process.exit(1); }
+const [mode, ...rest] = fs.readFileSync(at("mode"), "utf8").split(" ");
+fs.writeFileSync(at("mode"), (rest.length ? rest : [mode]).join(" "));
+if (mode === "none") { console.error("no checks reported on the 'sage/t1-a' branch"); process.exit(1); }
+console.log("build\\t" + mode + "\\t1m\\thttps://example.invalid/runs/1");
+`, { mode: 0o755 });
+  const script = join(s.dir, "plugin/skills/sage/ci-wait.mjs"), command = `${process.execPath} ${script} T1`;
+  const thread = { agent_id: "agent-1", transcript_path: join(s.dir, "lead-shell.jsonl") };
+  writeFileSync(thread.transcript_path, JSON.stringify({ type: "session_meta", payload: { id: "019a0000-0000-7000-8000-0000000000bb", agent_path: agent, source: { subagent: { thread_spawn: { depth: 1 } } } } }) + "\n");
+  assert.equal(await s.gateOf({ hook_event_name: "PreToolUse", session_id: "019a0000-0000-7000-8000-0000000000aa", turn_id: "t1", cwd: s.project, model: "m", permission_mode: "default",
+    tool_name: "Bash", tool_use_id: "ci-wait", tool_input: { command }, ...thread }, { env: s.env }), undefined, "the gate lets the lead run its CI wait");
+  const wait = (mode) => {
+    writeFileSync(join(bin, "mode"), mode);
+    writeFileSync(join(bin, "log"), "");
+    const r = spawnSync(process.execPath, [script, "T1"], { cwd: s.project, env: { ...s.env, PATH: `${bin}:${s.env.PATH}`, SAGE_WAIT_MS: "3000" }, encoding: "utf8" });
+    assert.equal(r.status, 0, r.stderr);
+    return { out: r.stdout, log: readFileSync(join(bin, "log"), "utf8").trim().split("\n") };
+  };
+  const passed = wait("pending pending pass");
+  assert.equal(passed.out, `CI pass · PR 5 · ${sha}\nbuild pass\nCI passed on this head: start the reviews and QA on it.\n`, "it waits while CI runs, and ends at the pass");
+  assert.deepEqual(passed.log, Array(3).fill(["pr view 5 --json headRefOid", "pr checks 5"]).flat(), "three looks, each with the two reads only");
+  assert.match(wait("fail").out, /^CI fail · PR 5 · [0-9a-f]{40}\nbuild fail\nCI failed on this head: start no review\. End blocked/);
+  assert.match(wait("none").out, /^CI none · PR 5 · [0-9a-f]{40}\nThe pull request has no checks, so the project has no CI/, "no checks, after the grace for checks that come late");
 });
 
 /** A leadWorld whose T1 is reviewing on PR 5, with a done code-reviewer run (found) whose medium finding is F-T1-1. */
