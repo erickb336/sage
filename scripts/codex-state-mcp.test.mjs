@@ -1054,6 +1054,20 @@ test("T930: config sets the board name, the archive, the cycle counts and max_le
   assert.deepEqual(JSON.parse(readFileSync(join(s.env.CODEX_HOME, "sage", "config.json"), "utf8")), { "cycles.small": 2, "cycles.large": 3, "cycles.risk": 4, max_leads: 4 });
 });
 
+test("F-T950-1: after the brief tool's check, the gate starts the chief's sage spawn from a session outside the project, in that session only", async (t) => {
+  const s = await connect(t), outside = join(s.dir, "elsewhere");
+  mkdirSync(outside);
+  await s.call("init");
+  const { gate } = await import(pathToFileURL(join(s.dir, "plugin/hooks/gate-hook.mjs")).href);
+  const spawn = async (session_id = "019a0000-0000-7000-8000-0000000000aa") => (await gate({ hook_event_name: "PreToolUse", session_id, turn_id: "t1", cwd: outside, model: "m", permission_mode: "default",
+    tool_name: "collaborationspawn_agent", tool_use_id: "call_spawn", transcript_path: null, tool_input: { task_name: "sage_qa_t1_r2", message: "go", fork_turns: "none" } }, { mode: () => ({ sage: true }), env: s.env }))?.hookSpecificOutput?.permissionDecisionReason;
+  assert.match(await spawn() ?? "", /^sage: sage_qa_t1_r2 does not start, because no brief for it was checked in the last 30 minutes\./, "before the check");
+  const brief = ["GOAL", "SCOPE", "CONTEXT", "DECISIONS", "ACCEPTANCE", "VERIFY", "BUDGET", "FORBIDDEN", "REPORT", "STANDING"].map((f) => `${f}: the ${f.toLowerCase()}.`).join("\n");
+  assert.match(await s.call("brief", { task_name: "sage_qa_t1_r2", brief }), /checked: all 10 fields/);
+  assert.equal(await spawn(), undefined, "the check names the project, which the session's folder is not");
+  assert.match(await spawn("019a0000-0000-7000-8000-0000000000cc") ?? "", /^sage: sage_qa_t1_r2 does not start/, "another session");
+});
+
 test("T952: run_add holds the project's agent cap in Codex as in Claude: the 11th running run is refused with the same line, and an ended run frees a place", async (t) => {
   const s = await programWorld(t), { both } = s;
   for (let n = 1; n <= 10; n++) {
@@ -1063,9 +1077,9 @@ test("T952: run_add holds the project's agent cap in Codex as in Claude: the 11t
   }
   const refused = await both("run_add", { task: "T1", role: "code-reviewer" }, ["run", "add", "T1", "--role", "code-reviewer"]);
   assert.equal(refused.error, "sage: the project has 10 running runs, its agent cap (max_agents, or cap.<project>): R1 qa on T2, R2 qa on T3, R3 qa on T1, R4 qa on T2, R5 qa on T3, R6 qa on T1, R7 qa on T2, R8 qa on T3, R9 qa on T1, R10 qa on T2. Wait for one of them to end, or end a run whose agent has stopped (sage run done <R> --status done, blocked, question or failed). Nothing changed.");
-  // The lead's steps name this refusal, and say to wait for a helper's report, as the refusal does (F-T952-1).
+  // The lead's steps name this refusal by the words that it gives (F-T952-1); its wording is the steps' own (F-T952-9).
   const steps = readFileSync(new URL("../plugins/sage-codex/skills/sage/references/lead-steps.md", import.meta.url), "utf8");
-  assert.match(steps, /\*\*Agent cap\.\*\* When `run_add` says that the project is at its agent cap, wait for a helper's report with `wait_agent`, end its run, then call `run_add` again\. Never end the run of a helper that still works\./);
+  assert.ok(steps.includes(/its (agent cap)/.exec(refused.error)[1]), "the lead's steps name the refusal");
   assert.equal(await both("run_done", { run: "R4", status: "failed" }, ["run", "done", "R4", "--status", "failed"]), "R4 failed");
   assert.match(await s.call("run_add", { task: "T1", role: "code-reviewer" }), /^R11 running · code-reviewer on T1/);
   assert.match(s.claude("run", "add", "T1", "--role", "code-reviewer"), /^R11 running · code-reviewer on T1/);

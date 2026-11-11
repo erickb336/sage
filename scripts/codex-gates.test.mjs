@@ -52,6 +52,8 @@ const OFF_LIST = (name) => `sage: "${name.replaceAll("_", " ")}" is not on a lea
 const SPAWN = "sage: role agents start no agents; only the chief and a lead do. Put what you need in your report";
 /** The refusal of a sage spawn with no brief checked in the last 30 minutes (T950). */
 const NO_BRIEF = (name) => `sage: ${name} does not start, because no brief for it was checked in the last 30 minutes. Run the sage tool brief with this task name and the whole brief until it says checked, then spawn the agent again`;
+/** The refusal of a sage_ spawn name that is not a sage task name, which no brief check takes (F-T950-5). */
+const MALFORMED = (name) => `sage: "${name}" does not start, because its name is malformed: it starts with sage_, but a sage task name is sage_, the role with _ for -, the task, and the run, for example sage_implementer_t12_r40. Give the agent such a name`;
 const LEAD_SPAWN = (task, name) => `sage: a lead starts only the team of its own task: sage_<role>_t${task}_r<k>, where the role is implementer, code_reviewer, security_reviewer, ux_reviewer or qa. ${name} is not one of these. Put what else you need in your report`;
 const BAD_CHAIN = (name) => `sage: "${name}" is above this agent in its agent path, and only a lead (sage_lead_t<n>) has sage agents under it, so this agent changes no files. Report instead`;
 const SEND = "sage: agents send no input to another thread, because a message to the chief's thread would count as the user's. Put it in your report";
@@ -938,7 +940,7 @@ test("T950: in sage mode the chief's sage spawn starts only with a brief of its 
   writeFileSync(file, JSON.stringify({ task: "sage_implementer_t1_r3", text: JSON.parse(readFileSync(file, "utf8")).text }));
   assert.equal(denied(spawn("sage_implementer_t1_r3")), NO_BRIEF("sage_implementer_t1_r3"), "a record with no time of its check");
   for (const name of ["helper", "worker_1", undefined]) assert.equal(spawn(name), undefined, `${name}: not sage's spawn, so not judged`);
-  assert.equal(denied(spawn("sage_qa")), NO_BRIEF("sage_qa"), "a sage_ name in another form has no checked brief");
+  for (const name of ["sage_qa", "sage_qa_t1_r", "Sage_QA_t1_r2"]) assert.equal(denied(spawn(name)), MALFORMED(name), `${name}: a sage_ name in another form is named malformed, not sent to brief, which refuses it`);
   w.mode({ sage: false, autopilot: false });
   assert.equal(spawn("sage_qa_t1_r9"), undefined, "outside sage mode the chief's spawn is not judged");
 });
@@ -961,6 +963,27 @@ test("T950: in sage mode the chief's spawn of a lead starts only while that lead
   assert.equal(denied(spawn("sage_lead_t1_r3")), "sage: T1 is abandoned, so no lead starts for it", "a finished task");
   writeFileSync(join(w.env.SAGE_HOME, readdirSync(w.env.SAGE_HOME).find((name) => name.startsWith("project-")), "tasks.tsv"), "not a table\n");
   assert.match(denied(spawn("sage_lead_t2_r2")) ?? "", /^sage: the gate could not read the logbook \(.*\), so no lead starts\. Tell the user$/, "a damaged logbook");
+});
+
+test("F-T950-1: the gate reads a sage spawn's brief, and a lead's run, in the logbook of the project that brief got in this session, also from a session outside that project", async (t) => {
+  const w = world(t), outside = join(w.dir, "elsewhere"), other = "019a0000-0000-7000-8000-000000000002";
+  mkdirSync(outside);
+  leadOnT1(w);
+  const spawn = (name, cwd, session_id = base.session_id) => gate({ ...leadSpawn({}, name), session_id, cwd }, { mode: () => ({ sage: true }), env: w.env });
+  const text = BRIEF_FIELDS.map((field) => `${field}: the ${field.toLowerCase()}.`).join("\n");
+  // A check that names no session is found only from the project's own folder, as before.
+  recordBrief(w.project, "sage_qa_t1_r5", text, w.env);
+  assert.equal(await spawn("sage_qa_t1_r5", w.project), undefined, "from the project's folder");
+  assert.equal(denied(await spawn("sage_qa_t1_r5", outside)), NO_BRIEF("sage_qa_t1_r5"), "from another folder, with no project of the check");
+  // The brief tool's check names its session: the gate reads that project's logbook, from any folder of the session.
+  recordBrief(w.project, "sage_qa_t1_r5", text, w.env, base.session_id);
+  assert.equal(await spawn("sage_qa_t1_r5", outside), undefined, "the chief checked the brief, from outside the project");
+  assert.equal(denied(await spawn("sage_qa_t1_r5", outside, other)), NO_BRIEF("sage_qa_t1_r5"), "another session did not check it");
+  assert.equal(denied(await spawn("sage_qa_t1_r6", outside)), NO_BRIEF("sage_qa_t1_r6"), "another task name");
+  // A lead's spawn reads its running lead run in the same logbook.
+  assert.match(denied(await spawn("sage_lead_t1_r1", outside)) ?? "", /^sage: T1 has no running lead run R1, so this lead does not start/, "no check: the session's folder has no logbook");
+  recordBrief(w.project, "sage_lead_t1_r1", text, w.env, base.session_id);
+  assert.equal(await spawn("sage_lead_t1_r1", outside), undefined, "its lead run runs in the brief's project");
 });
 
 test("F-T552-15: a lead's shell write of the state tool names the sage MCP tools; a role agent's keeps its own line", (t) => {

@@ -8,12 +8,13 @@ Each role agent (lead, implementer, pe, designer, arena-judge, code-reviewer, se
 
 1. Print the role text. Run the `role.mjs` script beside this skill with inspected absolute Node and script paths, for example `<absolute Node path> <absolute skill folder>/role.mjs implementer`.
 2. Write the message: the whole output of step 1, without a change, then a blank line, then the brief (see [briefs and reports](briefs.md)).
-3. Call `spawn_agent` in the `collaboration` namespace with:
+3. Call the sage tool `brief` with the task name of step 4 and the whole brief. Fix each missing field, and call it again until it says `checked`. The gate starts a `sage_` agent only in the 30 minutes after this check.
+4. Call `spawn_agent` in the `collaboration` namespace with:
    - `task_name`: `sage_`, the role with `_` for `-`, the task, then the run id that `run_add` printed, for example `sage_implementer_t12_r40` or `sage_code_reviewer_t12_r41`. Codex refuses a task name that an open agent of the session already has, so the run id makes each name new, also for a second run of a role on the same task. A name without the run (`sage_implementer_t12`) still starts, but sage keeps no report for that run, so always give the run. The report check knows a sage role agent by the `sage_` start. A name that starts with `sage_` in another form counts as a read-only role: it changes no files.
    - `message`: the message of step 2.
    - `fork_turns: "none"`. The default, `all`, gives the agent the chief's history in place of a clean start.
    - Leave out `agent_type`: sage has no Codex role of that name.
-4. Wait for the agent, as **Run the route** says, and read its report. `wait_agent` has no target, and it wakes on any message or after `timeout_ms` (default 30 s, at most one hour). It returns no report, so read the sender of each message in your next input, and call it again until the agent's report comes.
+5. Wait for the agent, as **Run the route** says, and read its report. `wait_agent` has no target, and it wakes on any message or after `timeout_ms` (default 30 s, at most one hour). It returns no report, so read the sender of each message in your next input, and call it again until the agent's report comes.
 
 ## Start a lead
 
@@ -44,7 +45,7 @@ Steps 3 and 4 need the network, as do the push and the pull request after an are
 
 Codex v2 allows 4 threads in a session by default: the chief and 3 children. So a lead and 2 helpers fill the default, and a third helper at the same time fails. When no thread is free, a spawn fails with `collab spawn failed: agent thread limit reached`, and the setting is `agents.max_concurrent_threads_per_session`. A finished or interrupted agent frees its thread. With the setting at 10, a lead ran 4 helpers at the same time.
 
-When a spawn of the chief fails so, wait for a running agent with `wait_agent`, then call `spawn_agent` again with the same task name. One lead with one helper at a time stays inside the default. Three leads fill it, and then no lead can start a helper, so ask the owner to set the limit to 10 before you run more than one lead. An agent never changes that setting.
+When a spawn of the chief fails so, wait for a running agent with `wait_agent`, then call `spawn_agent` again with the same task name. When its brief was checked more than 30 minutes before, call `brief` again first. One lead with one helper at a time stays inside the default. Three leads fill it, and then no lead can start a helper, so ask the owner to set the limit to 10 before you run more than one lead. An agent never changes that setting.
 
 ## The report check
 

@@ -448,12 +448,13 @@ In Codex, a hook cannot read a spawn message: with a real model, Codex sends it 
 The gate holds the check before the spawn (T950). The spawn message is encrypted, but its task name is plain text:
 
 - A spawn whose task name starts with `sage_` starts only when `brief` checked that exact task name, with its run id, in the last 30 minutes. This holds for the chief's spawn in sage mode, and for a lead's spawn in every mode. Otherwise the gate refuses it with one line that says to run `brief`, then spawn again.
+- A spawn whose task name starts with `sage_` but is not a sage task name gets one line that says that the name is malformed.
 - The chief's spawn of a lead (`sage_lead_t<n>_r<k>`) starts only while that lead run runs and its task can move. Otherwise the gate refuses it with one line that says to add the lead run with `run_add`.
 - A spawn whose task name does not start with `sage_` is not sage's, and the gate does not judge it.
 
 The check counts for 30 minutes, not for one spawn, because Codex can refuse a spawn after the gate (its thread limit), and the steps then spawn again with the same task name. The check is in the brief's record in the logbook. A record that an agent forges, for example from a script, is a documented limit (standing order 70): the gate refuses a plain shell write into the logbook, and the sandbox and the reviews guard the rest.
 
-No hook changes the spawn message. The hooks find the record by the folder that Codex runs in, so start Codex in the project folder.
+No hook changes the spawn message. The hooks find the record in the logbook of the `project` that `brief` got in this session for that task name, so the session's folder can be outside the project. With no such check in the session, they look in the logbook of the folder that Codex runs in.
 
 ## The rules in Codex
 

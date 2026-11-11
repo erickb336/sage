@@ -253,9 +253,9 @@ export function createStateServer({ env = process.env } = {}) {
     inputSchema: z.object({ project, task_name: z.string().regex(TASK_NAME, NAME_RULE).describe("the task_name of the spawn"),
       brief: z.string().max(BRIEF_LIMIT).describe("the whole brief, each field at the start of a line") }).strict(),
     annotations: { readOnlyHint: false, destructiveHint: false },
-  }, async ({ project: folder, task_name: task, brief }) => {
+  }, async ({ project: folder, task_name: task, brief }, caller, session) => {
     let missing;
-    try { missing = recordBrief(folder, task, brief, env); } catch (error) { return { isError: true, content: [{ type: "text", text: `sage: ${error.message}` }] }; }
+    try { missing = recordBrief(folder, task, brief, env, session); } catch (error) { return { isError: true, content: [{ type: "text", text: `sage: ${error.message}` }] }; }
     const text = missing.length
       ? `sage: the brief of ${task} has no ${missing.join(", ")}. Every brief has all of ${BRIEF_FIELDS.join(", ")}, each at the start of a line that is not in a list or a code block, with a colon, two spaces or a tab after its name (GOAL: …, GOAL   …), or its name alone on the line. Add them, then run brief again.`
       : `brief ${task} checked: all ${BRIEF_FIELDS.length} fields. Spawn the agent with this task name and this brief.`;

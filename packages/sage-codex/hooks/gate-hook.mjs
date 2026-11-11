@@ -86,7 +86,7 @@ import { AGENT_GH, agentCommandProblem, agentGh, boardCommandProblem, boardPathP
 import { modeFile, readMode, tool } from "../skills/sage/sage.mjs";
 import { verificationOptions } from "../skills/sage/verify-install.mjs";
 import { privateDirectory, readState } from "./hook-state.mjs";
-import { briefChecked } from "./brief-hook.mjs";
+import { briefChecked, briefProject, NAME_RULE } from "./brief-hook.mjs";
 import { patchTargets } from "../runtime/patch-targets.mjs";
 import { managedPatchPath } from "../runtime/managed-worktree.mjs";
 import { agentPathOf, sageName, sessionMeta, TASK_NAME } from "./report-gate.mjs";
@@ -125,6 +125,8 @@ const CHILD_SPAWN = "sage: role agents start no agents; only the chief and a lea
 const TEAM_NAMES = [...TEAM].map((role) => role.replaceAll("-", "_")).join(", ").replace(/, (?=[^,]*$)/, " or ");
 const LEAD_SPAWN = (task, name) => `sage: a lead starts only the team of its own task: sage_<role>_t${task}_r<k>, where the role is ${TEAM_NAMES}. ${JSON.stringify(name ?? "no task_name")} is not one of these. Put what else you need in your report.`;
 const NO_BRIEF = (name) => `sage: ${name} does not start, because no brief for it was checked in the last 30 minutes. Run the sage tool brief with this task name and the whole brief until it says checked, then spawn the agent again.`;
+/** A sage_ spawn name that the brief tool refuses, so that no brief of it can be checked (F-T950-5). */
+const MALFORMED = (name) => `sage: ${JSON.stringify(name)} does not start, because its name is malformed: it starts with sage_, but a sage task name is ${NAME_RULE}. Give the agent such a name.`;
 const LEAD_RESUME = "sage: a lead restarts no agent, because each agent works only from its checked brief. To go on with its work, start a new agent on a new run, with a new brief.";
 const CHILD_SEND = "sage: agents send no input to another thread, because a message to the chief's thread would count as the user's. Put it in your report.";
 const LEAD_SEND = "sage: a lead sends no message to an agent, because each agent works only from its checked brief. To steer your team, start a new agent on a new run, with a new brief.";
@@ -302,28 +304,30 @@ function callerOf(t, cwd) {
  * only core's TEAM roles with its own task number, while it could record (leadStopped). The name of the new agent is the
  * spawn's task_name. A logbook that the rule cannot read, or a project with none, refuses.
  */
-function childSpawn(t, name, cwd, env) {
+function childSpawn(t, name, cwd, session, env) {
   const self = t.parts?.at(-1);
   if (!isLead(self) || notLeadAbove(t.parts)) return CHILD_SPAWN;
   const fits = typeof name === "string" && TEAM.has(taskRole(name)) && taskNumber(name) === taskNumber(self);
   if (!fits) return LEAD_SPAWN(taskNumber(self), name);
-  try { return leadStopped(leadOf(self), tool.logbookView(cwd, env)) ?? unbriefed(name, cwd, env); } catch (error) { return UNREAD_LOGBOOK(error); }
+  try { return leadStopped(leadOf(self), tool.logbookView(cwd, env)) ?? unbriefed(name, briefProject(cwd, session, name, env), env); } catch (error) { return UNREAD_LOGBOOK(error); }
 }
-/** Why a sage spawn does not start for want of a checked brief of its exact task name, or undefined (T950). */
-const unbriefed = (name, cwd, env) => (briefChecked(cwd, name, env) ? undefined : NO_BRIEF(name));
+/** Why a sage spawn does not start for want of a checked brief of its exact task name in the project's logbook, or undefined (T950). */
+const unbriefed = (name, project, env) => (!TASK_NAME.test(name) ? MALFORMED(name) : briefChecked(project, name, env) ? undefined : NO_BRIEF(name));
 /**
  * Why the gate refuses the chief's spawn in sage mode, or undefined (T950): a sage_ task name needs its checked brief,
- * and a lead's name also needs its running lead run, so that no lead starts only to stop at its first write. Any other
- * name is not judged.
+ * and a lead's name also needs its running lead run, so that no lead starts only to stop at its first write. Both are
+ * read in the logbook of the brief tool's project, which the session's folder may not be (F-T950-1). Any other name is
+ * not judged.
  */
-function chiefSpawn(name, cwd, env) {
+function chiefSpawn(name, cwd, session, env) {
   if (typeof name !== "string" || !sageName(name)) return undefined;
+  const project = briefProject(cwd, session, name, env);
   if (isLead(name)) {
     let why;
-    try { why = leadStopped(leadOf(name), tool.logbookView(cwd, env), true); } catch (error) { return `sage: the gate could not read the logbook (${error?.message ?? error}), so no lead starts. Tell the user.`; }
+    try { why = leadStopped(leadOf(name), tool.logbookView(project, env), true); } catch (error) { return `sage: the gate could not read the logbook (${error?.message ?? error}), so no lead starts. Tell the user.`; }
     if (why) return why;
   }
-  return unbriefed(name, cwd, env);
+  return unbriefed(name, project, env);
 }
 
 const escape = (text) => text.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
@@ -756,10 +760,10 @@ export async function gate(input, { mode = readMode, check = checkMerge, env = p
     const under = thread.child && underSage(thread);
     if (under && realLead(thread) && f.tool.endsWith("resume_agent")) return refuse(thread, LEAD_RESUME);
     if (under === false) {
-      const why = !thread.child && mode(f, env).sage ? chiefSpawn(f.input.task_name, f.cwd, env) : undefined;
+      const why = !thread.child && mode(f, env).sage ? chiefSpawn(f.input.task_name, f.cwd, f.session, env) : undefined;
       return why ? deny(why) : undefined;
     }
-    const why = under ? childSpawn(thread, f.input.task_name, f.cwd, env) : UNREAD_ROLE;
+    const why = under ? childSpawn(thread, f.input.task_name, f.cwd, f.session, env) : UNREAD_ROLE;
     return why ? refuse(thread, why) : undefined;
   }
   if (f.tool === "apply_patch") {
