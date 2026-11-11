@@ -42,6 +42,7 @@ In this file, `sage` stands for `node <path to skills/sage/sage.mjs>`, the absol
 - findings: `sage finding add <T> --source <role> --severity <severity> --summary=<word> --run <R> --class <class>`, `sage finding triage <T> <K> fix` (in a cycle, a medium or high one: `sage finding triage <T> <K> fix --proof <R>`), `sage finding triage <T> <K> dismiss --reason=<word>` (a low finding that is no fix key of the round or of an earlier one), `sage finding triage <T> <K> dismiss --proof <R>` (a medium finding that the proof check did not reproduce) and `sage finding close <T> <K>`;
 - verdicts: `sage verdict <T> --sha <sha> --kind <kind> --cycle <n> --pr <n> --run <R>`, for a review or QA only;
 - the round: `sage round <T>`;
+- pages: `sage pages <T> [record <file>]`;
 - the task: `sage task <T> set state=<state>`, with `branch=<branch>` and `pr=<n>`.
 
 Each command is one plain command from Bash, in the project's folder:
@@ -69,7 +70,7 @@ The hook lets you move the task only one step of the cycle at a time:
 | verifying | reviewing |
 | verified | reviewing |
 
-You move from repairing to reviewing only after you close each fix key of the round, also a low one. You move from verifying or verified to reviewing only when the head of the branch has no full clean cycle (one cycle with the clean verdict of each review and QA of the route): the head moved past the clean cycles. You move from reviewing to verifying only when the head has a full clean cycle. The move to verified needs a checks verdict on the head, so it is the sage's unless the ledger already has one there. You set `pr=` once, while the task has none. You never clear the branch. Everything else is the sage's: the checks verdicts, `finding move`, a dismissal of a high finding or of a medium one without the proof check, a dismissal of a fix key of the round or of an earlier one (a finding triaged fix from before the round), a triage `ask`, gates, the decision trail, the pages record, other states and the merge. A held, replan, merged, concluded or abandoned task takes no write from you and no helper. When your lead run ends (for example, the sage moved the task back to briefed), you write nothing more.
+You move from repairing to reviewing only after you close each fix key of the round, also a low one. You move from verifying or verified to reviewing only when the head of the branch has no full clean cycle (one cycle with the clean verdict of each review and QA of the route): the head moved past the clean cycles. You move from reviewing to verifying only when the head has a full clean cycle. The move to verified needs a checks verdict on the head, so it is the sage's unless the ledger already has one there. You set `pr=` once, while the task has none. You never clear the branch. Everything else is the sage's: the checks verdicts, `finding move`, a dismissal of a high finding or of a medium one without the proof check, a dismissal of a fix key of the round or of an earlier one (a finding triaged fix from before the round), a triage `ask`, gates, the decision trail, other states and the merge. A held, replan, merged, concluded or abandoned task takes no write from you and no helper. When your lead run ends (for example, the sage moved the task back to briefed), you write nothing more.
 
 ## The wait
 
