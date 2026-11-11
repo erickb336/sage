@@ -331,7 +331,7 @@ const CHIEF_PLACES = ["rmdir ~/sage-worktrees/sage-0a1b2c/leftover", `rmdir ${T8
   // item 12: plain chains of state tool commands
   `node ${TOOL} status --project ${CWD} ; node ${TOOL} board --project ${CWD}`, `node ${TOOL} task T1 set priority=P1 --chief C1 ; node ${TOOL} task T2 set priority=P2 --chief C1`];
 const CHIEF_ELSEWHERE = ["rm src/a.js", `rm -rf ${CWD}/src`, "rmdir src/empty", "touch src/new.js", "cp /tmp/notes/a.js src/a.js", "mv src/a.js /tmp/notes/a.js", "printf x | tee /tmp/notes/a.txt src/a.js",
-  "echo x > ~/.claude/settings.json", "rm -rf ~/.claude/projects", "printf x | tee ~/.claude/CLAUDE.md", "touch ~/notes.txt", "rm -rf ~/sage-worktrees", "rm -rf /tmp", "rm -rf /tmp/",
+  "echo x > ~/.claude/settings.json", "rm -rf ~/.claude/projects", "printf x | tee ~/.claude/CLAUDE.md", "touch ~/notes.txt", "rm -rf ~/sage-worktrees",
   "find /tmp/notes | xargs rm", "env rm /tmp/notes/a.txt", "sed -i '' s/a/b/ /tmp/notes/a.txt", "rm $TMPDIR/notes", "rm /tmp/notes/*", "cp -t /tmp/notes src/a.js", "rm ~other/notes"];
 test("T807: in sage mode the chief writes and removes files in the temp folder and the sage worktrees folder, in both providers; the project, ~/.claude and the logbook stay refused", async (t) => {
   const { handle } = await import(new URL("../plugins/sage/hooks/sage-hook.mjs", import.meta.url));
@@ -347,6 +347,11 @@ test("T807: in sage mode the chief writes and removes files in the temp folder a
   for (const command of CHIEF_ELSEWHERE) {
     assert.deepEqual({ claude: claude(command), codex: denied(await on.run(pre("Bash", command))) }, { claude: CHIEF_SHELL, codex: CHIEF_SHELL }, `refused: ${command}`);
     assert.deepEqual({ claude: claude(command, false), codex: denied(await off.run(pre("Bash", command))) }, { claude: undefined, codex: undefined }, `outside sage mode it runs: ${command}`);
+  }
+  // The temp folder itself is no scratch place. Where it holds this test's logbook (/tmp on Linux), the logbook rule
+  // refuses first; else the chief's rule does.
+  for (const command of ["rm -rf /tmp", "rm -rf /tmp/"]) {
+    for (const why of [claude(command), denied(await on.run(pre("Bash", command)))]) assert.match(why ?? "", /logbook file from the shell|the chief does not change files/, command);
   }
   // The logbook is in the temp folder here, and its own rule still refuses the chief's write there, in both providers.
   for (const command of [`rm -rf ${logbook}/sage-0a1b2c`, `echo x > ${logbook}/sage-0a1b2c/tasks.tsv`, `rmdir ${logbook}/sage-0a1b2c`]) {
