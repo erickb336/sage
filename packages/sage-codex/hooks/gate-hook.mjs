@@ -820,7 +820,8 @@ export async function gate(input, { mode = readMode, check = checkMerge, env = p
   const now = mode(f, env);
   if (!now.sage) return undefined; // the merge refusal above applies in every mode
   // The chief's shell writes too (T948): core's write forms, as for a read-only role; a redirection, rm, rmdir, touch, tee,
-  // cp or mv into the chief's places (the temp folder and the sage worktrees folder), outside the project, passes (T807). A disguised write (a variable, a script's own code) is a documented limit (order 70).
+  // cp or mv into the chief's places (the temp folder and the sage worktrees folder), outside the project and outside a
+  // git work tree there, passes (T807, F-T807-1). A disguised write (a variable, a script's own code) is a documented limit (order 70).
   if (!thread.child && chiefEditDenied({ sage: true, chief: true })) {
     const why = chiefShellProblem(f.command, f.cwd, env) ?? (runsPatch(f.command, f.cwd, env) ? CHIEF_SHELL : undefined);
     if (why) return deny(`sage: ${why}`);

@@ -2,7 +2,7 @@
 import { shellCommands, programsRun } from "./command-reader.mjs";
 import { ghTargets, outputDispatchWrites } from "./output-writes.mjs";
 import { GIT_VALUE, gitSubcommand, programName } from "./command-policy.mjs";
-import { readFileSync, realpathSync, statSync } from "node:fs";
+import { existsSync, readFileSync, readdirSync, realpathSync, statSync } from "node:fs";
 import { basename, dirname, isAbsolute, join, resolve, sep } from "node:path";
 
 const CODE = /^-(?:[a-z]*[ce]|p|-eval|-print|command)$/;
@@ -224,7 +224,7 @@ function gitDestroys(sub, rest) {
  * change, change the checkout's branches or settings; git worktree add, move and remove change their paths. Every other git
  * command, such as fetch, log, worktree list or branch --list, changes no file of the project. git --git-dir or
  * --work-tree names another checkout: true. With destroys (the chief, T968), only the forms of gitDestroys count, at their
- * work tree.
+ * work tree, and git worktree remove --force, at the path that it removes.
  */
 function gitTargets(args, destroys = false) {
   let tree = ".", k = 0, other = false;
@@ -233,6 +233,8 @@ function gitTargets(args, destroys = false) {
     if (args[k] === "-C") tree = isAbsolute(args[k + 1] ?? "") ? args[k + 1] : join(tree, args[k + 1] ?? "");
     if (GIT_VALUE.test(args[k])) k++;
   }
+  // git worktree remove --force throws away the changes of the worktree that it removes, at its path (F-T807-1).
+  if (destroys && args[k] === "worktree" && args[k + 1] === "remove") return args.slice(k + 2).some((a) => /^(?:-f+|--force)$/.test(a)) ? gitTargets(args) : [];
   if (destroys) return !gitDestroys(args[k] ?? "", args.slice(k + 1)) ? [] : other || [tree];
   if (other) return true;
   const sub = args[k] ?? "", rest = args.slice(k + 1);
@@ -275,18 +277,43 @@ function realPath(path) {
 }
 /**
  * Is a redirection's target in a scratch folder, outside cwd (the caller's project), and not a folder that holds the
- * project, both as written and through a link? Only a literal target in a known folder counts: a variable, a pattern or ~ in it, or a folder that the reader
- * cannot follow, does not. With home (the chief's places, T807), a leading ~ is home, as the shell reads it.
+ * project, both as written and through a link? Only a literal target in a known folder counts: a variable, a pattern or ~
+ * in it, or a folder that the reader cannot follow, does not. The chief's places (T807) add home, which reads a leading ~
+ * as the shell does, and guard, the folders where a git work tree holds repository files (inWorkTree, F-T807-1).
  */
-function intoScratch({ target, dir, uncertainDirectory }, cwd, scratch, home) {
+function intoScratch({ target, dir, uncertainDirectory }, cwd, scratch, { home, guard = [] } = {}) {
   const word = home && /^~(?:\/|$)/.test(target) ? home + target.slice(1) : target;
   if (!scratch.length || uncertainDirectory || /[$`*?[\]{}~!]/.test(word)) return false;
   const absolute = resolve(dir ?? cwd, word), project = mainCheckout(realPath(resolve(cwd)));
   // Both the path itself (a link that rm removes) and the place that it resolves to (where a write lands) count.
-  return [join(realPath(dirname(absolute)), basename(absolute)), realPath(absolute)].every((path) => {
+  return [...new Set([join(realPath(dirname(absolute)), basename(absolute)), realPath(absolute)])].every((path) => {
     const under = (folder) => path.startsWith(folder.endsWith(sep) ? folder : folder + sep);
-    return path !== project && !under(project) && !project.startsWith(path.endsWith(sep) ? path : path + sep) && scratch.some((folder) => under(realPath(resolve(folder))));
+    return path !== project && !under(project) && !project.startsWith(path.endsWith(sep) ? path : path + sep) &&
+      scratch.some((folder) => under(realPath(resolve(folder)))) && !inWorkTree(path, guard);
   });
+}
+/** The most folders that inWorkTree reads below a path; a larger tree counts as one that holds a work tree (fail closed). */
+const WALK_MAX = 2000;
+/**
+ * Is a path in or over a git work tree, inside one of the guard folders (the sage worktrees folder, F-T807-1)? A .git
+ * entry (a worktree's file or a clone's folder) at the path or in a folder between it and the guard folder counts, and so
+ * does one in a folder below the path. The walk does not follow links.
+ */
+function inWorkTree(path, guard) {
+  const root = guard.map((folder) => realPath(resolve(folder))).find((folder) => path === folder || path.startsWith(folder + sep));
+  if (!root) return false;
+  for (let dir = path; dir.startsWith(root + sep); dir = dirname(dir)) if (existsSync(join(dir, ".git"))) return true;
+  const folders = [path];
+  for (let i = 0; i < folders.length; i++) {
+    if (i === WALK_MAX) return true;
+    let entries;
+    try { entries = readdirSync(folders[i], { withFileTypes: true }); } catch { continue; }
+    for (const entry of entries) {
+      if (entry.name === ".git") return true;
+      if (entry.isDirectory()) folders.push(join(folders[i], entry.name));
+    }
+  }
+  return false;
 }
 /**
  * The project of a folder: the main checkout of the repository that holds it, so that a worktree in a scratch folder is
@@ -324,9 +351,11 @@ function inProject({ target, dir, uncertainDirectory }, cwd) {
  * that changes no files (T936); a git command in a scratch folder, such as a worktree of the head, does not count. The
  * chief's rule leaves it out, so the chief's git runs (T960). placed (the chief's rule, T807): a placed write program
  * (rm, rmdir, touch, tee, cp, mv) counts only when one of its targets (placedTargets) is outside the scratch folders, or
- * when a wrapper runs it; home reads a leading ~ in a target.
+ * when a wrapper runs it; home reads a leading ~ in a target. guard: folders where a target in or over a git work tree
+ * is no scratch place (inWorkTree, F-T807-1).
  */
-export function commandWrites(text, cwd, scratch = [], { readOnly = false, placed = false, home } = {}) {
+export function commandWrites(text, cwd, scratch = [], { readOnly = false, placed = false, home, guard } = {}) {
+  const place = { home, guard };
   if (typeof text !== "string") return true;
   try {
     const commands = shellCommands(text);
@@ -335,11 +364,11 @@ export function commandWrites(text, cwd, scratch = [], { readOnly = false, place
     if (commands.some((command) => writesIn(command, runs, placed))) return true;
     const placeWrites = (entry, i) => {
       const name = programName(entry.run.word);
-      if (placed && PLACED.has(name)) return Boolean(evidence.programs[i - 1]?.wrapper) || outsideScratch(placedTargets(name, entry.run.args), entry, cwd, scratch, home);
+      if (placed && PLACED.has(name)) return Boolean(evidence.programs[i - 1]?.wrapper) || outsideScratch(placedTargets(name, entry.run.args), entry, cwd, scratch, place);
       if (/^(?:chmod|chown|chgrp|chflags)$/.test(name)) return modeTargets(name, entry.run.args).some((target) => inProject(at(entry, target), cwd));
-      return outsideScratch(name === "gh" ? ghTargets(entry.run.args) : readOnly && name === "git" ? gitTargets(entry.run.args) : [], entry, cwd, scratch, home);
+      return outsideScratch(name === "gh" ? ghTargets(entry.run.args) : readOnly && name === "git" ? gitTargets(entry.run.args) : [], entry, cwd, scratch, place);
     };
-    return evidence.redirects.some(r => toFile(r) && !intoScratch(r, cwd, scratch, home)) || evidence.programs.some((entry, i) => readerDispatch(entry) || outputDispatchWrites(entry) || placeWrites(entry, i));
+    return evidence.redirects.some(r => toFile(r) && !intoScratch(r, cwd, scratch, place)) || evidence.programs.some((entry, i) => readerDispatch(entry) || outputDispatchWrites(entry) || placeWrites(entry, i));
   } catch {
     return true;
   }
@@ -347,15 +376,15 @@ export function commandWrites(text, cwd, scratch = [], { readOnly = false, place
 /** A target of a program's entry, in the program's folder. */
 const at = ({ run, uncertainDirectory }, target) => ({ target, dir: run.dir, uncertainDirectory });
 /** Is one of the targets (or true: a place that the hook cannot tell) outside the scratch folders (intoScratch)? */
-const outsideScratch = (targets, entry, cwd, scratch, home) => targets === true || targets.some((target) => !intoScratch(at(entry, target), cwd, scratch, home));
+const outsideScratch = (targets, entry, cwd, scratch, place) => targets === true || targets.some((target) => !intoScratch(at(entry, target), cwd, scratch, place));
 /**
  * Does a command line run a git form that throws away uncommitted work (gitDestroys) in a work tree outside the scratch
- * folders, such as git reset --hard in the project (T968)? A line that the reader cannot read does not: commandWrites
- * counts it as a write.
+ * folders, such as git reset --hard in the project (T968)? A work tree in a guard folder is no scratch place (F-T807-1).
+ * A line that the reader cannot read does not: commandWrites counts it as a write.
  */
-export function gitDestroysWork(text, cwd, scratch = []) {
+export function gitDestroysWork(text, cwd, scratch = [], guard = []) {
   try {
-    return programsRun(text, cwd, undefined, { contextEvidence: true }).programs.some((entry) => programName(entry.run.word) === "git" && outsideScratch(gitTargets(entry.run.args, true), entry, cwd, scratch));
+    return programsRun(text, cwd, undefined, { contextEvidence: true }).programs.some((entry) => programName(entry.run.word) === "git" && outsideScratch(gitTargets(entry.run.args, true), entry, cwd, scratch, { guard }));
   } catch {
     return false;
   }

@@ -1,6 +1,6 @@
 # Shared shell-write classification
 
-`commandWrites(text, cwd, scratch, { readOnly, placed, home })` identifies known shell write forms and reader options
+`commandWrites(text, cwd, scratch, { readOnly, placed, home, guard })` identifies known shell write forms and reader options
 that can run another program. It parses text without executing it. Non-text or
 unreadable input counts as a write form.
 
@@ -23,6 +23,13 @@ or `--target-directory` option, or a wrapper before the program (`xargs rm`,
 home folder. A target that holds the project, such as a parent folder of
 `cwd`, counts too. Each target counts both as written (its folder's real path
 and its own name, so `rm` of a link in the project counts) and through a link.
+
+`guard` (the chief's rule, F-T807-1) lists folders, the sage worktrees folder,
+where a git work tree holds repository files: a target in or over one is no
+scratch place. A `.git` entry at the target, in a folder above it inside the
+guard folder, or in a folder below it counts. The walk below reads at most
+2,000 folders and does not follow links; a larger tree counts as one that holds
+a work tree.
 
 A write program's name (`rm`, `tee`, `install`, `sed -i`, `uniq`) counts only
 where the command runs that program, also through a wrapper that the reader
@@ -52,14 +59,16 @@ the repository that holds `cwd` (the nearest `.git` entry; a linked worktree's
 `.git` file names its main checkout). So a worktree in the temp folder is
 scratch also when it is `cwd` (F-T936-5).
 
-`gitDestroysWork(text, cwd, scratch)` is the chief's git rule (T968): true for
+`gitDestroysWork(text, cwd, scratch, guard)` is the chief's git rule (T968): true for
 a git form that throws away uncommitted work at a work tree outside the scratch
 folders: `reset --hard`, `checkout` with paths (after `--`, or `.`) or
 `--force`, `switch --force` or `--discard-changes`, `clean` with `-f` (not a
-dry run) and `restore` of the work tree (not `--staged` alone). A line that the
-reader cannot read is false here; `commandWrites` counts it. Core's
-`chiefShellProblem` (in `agent-rules.mjs`) calls both, and both providers call
-it for the chief in sage mode, with core's `CHIEF_GIT` or `CHIEF_SHELL` text.
+dry run), `restore` of the work tree (not `--staged` alone) and `worktree
+remove --force` at the path that it removes. A work tree in a `guard` folder is
+no scratch folder. A line that the reader cannot read is false here;
+`commandWrites` counts it. Core's `chiefShellProblem` (in `agent-rules.mjs`)
+calls both, and both providers call it for the chief in sage mode, with core's
+`CHIEF_GIT`, `CHIEF_SHELL` or `CHIEF_WORKTREE` text.
 
 Executable-name checks ignore case and a trailing `.exe`, using the shared
 normalizer. Reader-option parsing keeps the original arguments and option case.

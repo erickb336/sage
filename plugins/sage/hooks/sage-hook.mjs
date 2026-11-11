@@ -456,7 +456,7 @@ export function handle(input, state, slots) {
     // The chief's shell writes in sage mode (T960), as in the Codex gate (T948): core's write forms and the git forms that
     // throw away uncommitted work (T968), with the same text; such git in the temp folder, and a redirection, rm, rmdir,
     // touch, tee, cp, mv or a gh clone or download in the chief's places (the temp folder and the sage worktrees folder),
-    // outside the project, pass (T807). A disguised write is a limit (order 70).
+    // outside the project and outside a git work tree there, pass (T807, F-T807-1). A disguised write is a limit (order 70).
     const chief = main ? runFields(ti).map((command) => { try { return core.chiefShellProblem(command, cwd); } catch { return "the sage core cannot load, so the hook refuses this shell command of the chief. Reinstall or update the sage plugin."; } }).find(Boolean) : undefined;
     if (chief) return deny(event, chief);
     return answer;

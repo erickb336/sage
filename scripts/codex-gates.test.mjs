@@ -28,7 +28,7 @@ const UNREADABLE = "sage: the hook could not read this tool call, so it refuses 
 const { stateKey } = await import(new URL("../plugins/sage-codex/hooks/hook-state.mjs", import.meta.url));
 const { recordBrief } = await import(new URL("../plugins/sage-codex/hooks/brief-hook.mjs", import.meta.url));
 const { ROUTES } = await import(new URL("../plugins/sage-codex/hooks/dispatch.mjs", import.meta.url));
-const { BRIEF_FIELDS, CHIEF_GIT: CHIEF_GIT_TEXT, CHIEF_SHELL: CHIEF_SHELL_TEXT, READ_ONLY_SHELL_WAY } = await import(new URL("../plugins/sage-codex/core/index.mjs", import.meta.url));
+const { BRIEF_FIELDS, CHIEF_GIT: CHIEF_GIT_TEXT, CHIEF_SHELL: CHIEF_SHELL_TEXT, CHIEF_WORKTREE: CHIEF_WORKTREE_TEXT = "", READ_ONLY_SHELL_WAY } = await import(new URL("../plugins/sage-codex/core/index.mjs", import.meta.url));
 
 const SHA = "a1b2c3d4e5f60718293a4b5c6d7e8f9012345678";
 const MERGE = `gh pr merge 41 --squash --delete-branch --match-head-commit ${SHA}`;
@@ -359,6 +359,80 @@ test("T807: in sage mode the chief writes and removes files in the temp folder a
     assert.match(c ?? "", /never writes, moves or removes a logbook file from the shell/, `Claude, the logbook: ${command}`);
     assert.match(x ?? "", /writes, moves or removes a logbook file from the shell/, `Codex, the logbook: ${command}`);
   }
+});
+
+/**
+ * A sage worktrees folder in scratch, as ~/sage-worktrees holds it, with a project beside it: a live task worktree
+ * (t94, a .git file), a clone (a .git folder), a pages folder with a scratch worktree of a run in it, a folder that
+ * holds a work tree deeper down, and leftovers that hold none. The hooks only read these paths.
+ */
+function worktreesFolder(t) {
+  const top = realpathSync(mkdtempSync(join(tmpdir(), "sage-t807-wt-"))), root = join(top, "sage-worktrees"), project = join(top, "project");
+  t.after(() => rmSync(top, { recursive: true, force: true }));
+  const live = (dir) => { mkdirSync(dir, { recursive: true }); writeFileSync(join(dir, ".git"), `gitdir: ${project}/.git/worktrees/${dir.split("/").pop()}\n`); };
+  for (const dir of [join(project, ".git"), join(project, "src"), join(root, "clone", ".git"), join(root, "sage-0a1b2c", "pages", "T1"), join(root, "leftover", "empty")]) mkdirSync(dir, { recursive: true });
+  live(join(root, "t94"));
+  mkdirSync(join(root, "t94", "packages", "sage-core"), { recursive: true });
+  live(join(root, "sage-0a1b2c", "pages", "T44", "R1", "baseline"));
+  live(join(root, "holder", "inner", "t95"));
+  return { root, project, pages: join(root, "sage-0a1b2c", "pages") };
+}
+/** The chief's answers in both providers, in sage mode or outside it, with the chief's folder as cwd. */
+async function chiefAnswers(t, root) {
+  const { handle } = await import(new URL("../plugins/sage/hooks/sage-hook.mjs", import.meta.url));
+  const slots = { bind() {}, release() {}, drop() {}, touch() {}, reconcile() {} };
+  const logbook = realpathSync(mkdtempSync(join(tmpdir(), "sage-t807-logbook-")));
+  const saved = { SAGE_WORKTREES: process.env.SAGE_WORKTREES, SAGE_HOME: process.env.SAGE_HOME };
+  Object.assign(process.env, { SAGE_WORKTREES: root, SAGE_HOME: logbook });
+  t.after(() => {
+    for (const [key, value] of Object.entries(saved)) if (value === undefined) delete process.env[key]; else process.env[key] = value;
+    rmSync(logbook, { recursive: true, force: true });
+  });
+  return async (command, cwd, sage = true) => ({
+    claude: denied(handle({ hook_event_name: "PreToolUse", tool_name: "Bash", tool_input: { command }, cwd, session_id: "s1" }, { sage, autopilot: false, start: false }, slots))?.replace(/\.$/, ""),
+    codex: denied(await fixed({ sage }).run(pre("Bash", command, { cwd }))),
+  });
+}
+/**
+ * F-T807-1, F-T807-4: a git work tree under the sage worktrees folder holds repository files, so in sage mode the chief's
+ * shell write into it, also with it as the chief's folder, and the removal of a folder that holds one are refused in both
+ * providers, with core's CHIEF_WORKTREE, which names git worktree remove. git worktree remove without --force runs; with
+ * --force it meets the T968 rule. A folder there that holds no work tree, and a page in the pages folder, stay the
+ * chief's scratch. Outside sage mode all of it runs.
+ */
+test("F-T807-1: the chief's shell write into a git work tree under the sage worktrees folder is refused in both providers; git worktree remove runs", async (t) => {
+  const { root, project, pages } = worktreesFolder(t), answer = await chiefAnswers(t, root);
+  const WORKTREE = `sage: ${CHIEF_WORKTREE_TEXT}`.replace(/\.$/, ""), GIT = `sage: ${CHIEF_GIT_TEXT}`.replace(/\.$/, "");
+  const runs = [[`rmdir ${root}/leftover/empty`], [`rm -rf ${root}/leftover`], [`cat > ${pages}/T1/plan.md <<'EOF'\n# Plan\nEOF`], [`cp /tmp/notes/page.md ${pages}/T1/page.md`],
+    [`printf x | tee ${pages}/T1/notes.md`], [`rm -rf ${pages}/T1`], [`git worktree remove ${root}/t94`], [`git -C ${project} worktree remove ${pages}/T44/R1/baseline`], ["rm -rf /tmp/notes"]];
+  const refused = [[`rm -rf ${root}/t94`], [`echo x > ${root}/t94/packages/sage-core/state.mjs`], [`cp /tmp/notes/x ${root}/t94/README.md`], [`mv ${root}/t94 ${root}/old`],
+    ["rm -rf packages", join(root, "t94")], ["echo x > README.md", join(root, "t94", "packages")], [`rm -rf ${root}/holder`], [`rm -rf ${root}/clone`], [`touch ${root}/clone/a.txt`],
+    [`rm -rf ${pages}`], [`rm -rf ${pages}/T44`], [`rm -rf ${root}`], [`rm -rf ${root}/`]];
+  const destroys = [[`git worktree remove --force ${root}/t94`], [`git -C ${project} worktree remove -f ${pages}/T44/R1/baseline`], [`git -C ${root}/t94 reset --hard`]];
+  for (const [command, cwd = project] of runs) assert.deepEqual(await answer(command, cwd), { claude: undefined, codex: undefined }, `runs: ${command}`);
+  for (const [command, cwd = project] of refused) assert.deepEqual(await answer(command, cwd), { claude: WORKTREE, codex: WORKTREE }, `refused, a work tree: ${command} (in ${cwd})`);
+  for (const [command, cwd = project] of destroys) assert.deepEqual(await answer(command, cwd), { claude: GIT, codex: GIT }, `refused, git: ${command}`);
+  for (const [command, cwd = project] of [...refused, ...destroys]) assert.deepEqual(await answer(command, cwd, false), { claude: undefined, codex: undefined }, `outside sage mode: ${command}`);
+  for (const part of ["git worktree remove <path>", "without --force"]) assert.ok(CHIEF_WORKTREE_TEXT.includes(part), part);
+});
+
+/**
+ * F-T807-3: a path in the chief's places counts both by its own path and by the place that a link leads to, in both
+ * providers. A link in the pages folder that leads into the project or into a work tree is no scratch place, and a link in
+ * the project that leads into scratch stays in the project. A link in scratch that leads into scratch runs.
+ */
+test("F-T807-3: a link counts by its own path and by the place that it leads to, in both providers", async (t) => {
+  const { root, project, pages } = worktreesFolder(t), answer = await chiefAnswers(t, root);
+  symlinkSync(join(project, "src"), join(pages, "T1", "to-src"));
+  symlinkSync(join(root, "t94"), join(pages, "T1", "to-t94"));
+  symlinkSync(join(root, "leftover"), join(project, "to-leftover"));
+  symlinkSync(join(root, "leftover", "empty"), join(pages, "T1", "to-empty"));
+  const SHELL = `sage: ${CHIEF_SHELL_TEXT}`.replace(/\.$/, ""), WORKTREE = `sage: ${CHIEF_WORKTREE_TEXT}`.replace(/\.$/, "");
+  for (const command of [`rm ${pages}/T1/to-src`, `echo x > ${pages}/T1/to-src/a.js`, `touch ${pages}/T1/to-src/a.js`, "rm to-leftover", `rm ${project}/to-leftover`]) {
+    assert.deepEqual(await answer(command, project), { claude: SHELL, codex: SHELL }, `the project: ${command}`);
+  }
+  for (const command of [`rm ${pages}/T1/to-t94`, `echo x > ${pages}/T1/to-t94/README.md`]) assert.deepEqual(await answer(command, project), { claude: WORKTREE, codex: WORKTREE }, `a work tree: ${command}`);
+  for (const command of [`rm ${pages}/T1/to-empty`, `touch ${pages}/T1/to-empty/a.txt`]) assert.deepEqual(await answer(command, project), { claude: undefined, codex: undefined }, `scratch: ${command}`);
 });
 
 /** T936 (F-T960-9): the push form names the branch, so git push origin HEAD is refused for each role, with the form. */

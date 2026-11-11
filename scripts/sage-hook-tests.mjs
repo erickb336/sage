@@ -2486,6 +2486,26 @@ test("T807: in sage mode the chief writes its pages and removes leftover folders
   }
 });
 
+// F-T807-1: the hook process, as Claude Code runs it, with a sage worktrees folder in scratch that holds a live task
+// worktree (a .git file) and a leftover folder. scripts/codex-gates.test.mjs compares the two providers on each case.
+test("F-T807-1: in sage mode the chief's rm -rf of a live worktree in the sage worktrees folder is refused and names git worktree remove; a leftover folder and a page run", () => {
+  const root = join(SCRATCH, "f-t807-1", "sage-worktrees"), live = join(root, "t94");
+  mkdirSync(join(live, "packages"), { recursive: true });
+  mkdirSync(join(root, "leftover", "empty"), { recursive: true });
+  mkdirSync(join(root, "sage-x", "pages", "T1"), { recursive: true });
+  writeFileSync(join(live, ".git"), `gitdir: ${FEATURE}/.git/worktrees/t94\n`);
+  const s = session({ SAGE_WORKTREES: root });
+  s.send(prompt("sage mode"));
+  const WORKTREE = /^sage: sage mode is on, so the chief does not change a git work tree in the sage worktrees folder .*run git worktree remove <path> \(without --force\)/;
+  for (const [command, cwd] of [[`rm -rf ${live}`], [`echo x > ${live}/README.md`], ["rm -rf packages", live], [`rm -rf ${root}`]]) {
+    assert.match(denied(s.send(bash(command, cwd))) ?? "", WORKTREE, command);
+  }
+  for (const command of [`git worktree remove ${live}`, `rmdir ${root}/leftover/empty`, `rm -rf ${root}/leftover`, `cat > ${root}/sage-x/pages/T1/plan.md <<'EOF'\n# Plan\nEOF`]) {
+    assert.equal(denied(s.send(bash(command))), undefined, command);
+  }
+  assert.match(denied(s.send(bash(`git worktree remove --force ${live}`))) ?? "", /^sage: sage mode is on, so the chief does not throw away uncommitted work: /, "--force");
+});
+
 // T968: the hook process, as Claude Code runs it, with a real linked worktree in scratch. scripts/codex-gates.test.mjs
 // compares the two providers on each case; the hook only reads these commands.
 test("T968: in sage mode the chief's git that throws away uncommitted work is refused in the project and runs in a scratch worktree; a reviewer's git runs in its own", () => {
@@ -2494,7 +2514,7 @@ test("T968: in sage mode the chief's git that throws away uncommitted work is re
   const wt = join(SCRATCH, "t968-wt");
   spawnSync("git", ["-C", FEATURE, "worktree", "add", "-q", "--detach", wt, "HEAD"]);
   assert.ok(existsSync(join(wt, ".git")), "the scratch worktree");
-  const CHIEF_GIT = /^sage: sage mode is on, so the chief does not throw away uncommitted work: .*can destroy changes in the owner's checkout\. Make a scratch worktree in the temp folder .*or ask the owner/;
+  const CHIEF_GIT = /^sage: sage mode is on, so the chief does not throw away uncommitted work: .*can destroy changes in the owner's checkout or a task's worktree\. Make a scratch worktree in the temp folder .*or ask the owner/;
   for (const command of ["git reset --hard", "git checkout -- .", "git checkout -- README.md", "git clean -fd", "git restore .", `git -C ${FEATURE} reset --hard HEAD`]) {
     assert.match(denied(s.send(bash(command))) ?? "", CHIEF_GIT, command);
     // From the scratch worktree, git -C names the project again, so it stays refused.

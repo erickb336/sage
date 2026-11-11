@@ -52,15 +52,26 @@ export const CHIEF_SHELL = 'sage mode is on, so the chief does not change files,
  * own rule) and every other folder, such as ~/.claude, stays refused.
  */
 export const chiefPlaces = (env = process.env) => [...TEMP, worktreeRoot(env)];
+/**
+ * Why the chief's shell write into a git work tree in the sage worktrees folder is refused in sage mode, in both providers
+ * (F-T807-1): a task worktree or a clone there holds repository files, as the project does. It names the safe way.
+ */
+export const CHIEF_WORKTREE = 'sage mode is on, so the chief does not change a git work tree in the sage worktrees folder (~/sage-worktrees): a task worktree or a clone there holds repository files, and rm -rf can lose uncommitted work. This command writes into a work tree there, or removes a folder that holds one. To remove a worktree, run git worktree remove <path> (without --force): git refuses a worktree with changes. For a clone or any other change, brief an implementer or ask the owner. Folders there that hold no work tree stay your scratch place.';
 /** Why the chief's git that throws away uncommitted work is refused in sage mode, in both providers (T968). */
-export const CHIEF_GIT = 'sage mode is on, so the chief does not throw away uncommitted work: git reset --hard, git checkout -- <path> (or ., or --force), git clean -f and git restore of the work tree can destroy changes in the owner\'s checkout. Make a scratch worktree in the temp folder and run the command there (for example git worktree add --detach /tmp/<name>/wt <sha>, then git -C /tmp/<name>/wt reset --hard), or ask the owner. git commit, git checkout <branch>, git fetch, git merge-tree, git commit-tree, git worktree add and remove, and reads run as before.';
+export const CHIEF_GIT = 'sage mode is on, so the chief does not throw away uncommitted work: git reset --hard, git checkout -- <path> (or ., or --force), git clean -f, git restore of the work tree and git worktree remove --force can destroy changes in the owner\'s checkout or a task\'s worktree. Make a scratch worktree in the temp folder and run the command there (for example git worktree add --detach /tmp/<name>/wt <sha>, then git -C /tmp/<name>/wt reset --hard), or ask the owner. git commit, git checkout <branch>, git fetch, git merge-tree, git commit-tree, git worktree add, git worktree remove without --force, and reads run as before.';
 /**
  * Why the chief's shell command is refused in sage mode, or undefined, in both providers: a git form that throws away
- * uncommitted work outside a scratch worktree in the temp folder (CHIEF_GIT, T968), or a write form outside the chief's
- * places (CHIEF_SHELL, T948, T960, T807). env gives the places and the home folder of a leading ~.
+ * uncommitted work outside a scratch worktree in the temp folder (CHIEF_GIT, T968), a write form outside the chief's
+ * places (CHIEF_SHELL, T948, T960, T807), or a write in or over a git work tree in the sage worktrees folder
+ * (CHIEF_WORKTREE, F-T807-1). env gives the places and the home folder of a leading ~.
  */
-export const chiefShellProblem = (command, cwd, env = process.env) =>
-  gitDestroysWork(command, cwd, TEMP) ? CHIEF_GIT : commandWrites(command, cwd, chiefPlaces(env), { placed: true, home: env.HOME || homedir() }) ? CHIEF_SHELL : undefined;
+export function chiefShellProblem(command, cwd, env = process.env) {
+  const guard = [worktreeRoot(env)];
+  if (gitDestroysWork(command, cwd, TEMP, guard)) return CHIEF_GIT;
+  const places = chiefPlaces(env), options = { placed: true, home: env.HOME || homedir() };
+  if (!commandWrites(command, cwd, places, { ...options, guard })) return undefined;
+  return commandWrites(command, cwd, places, options) ? CHIEF_SHELL : CHIEF_WORKTREE;
+}
 /**
  * The way forward of a read-only role's shell refusal, in both providers (T936, F-T936-3): output, a changed copy and a
  * head go into a scratch folder in the temp folder.
