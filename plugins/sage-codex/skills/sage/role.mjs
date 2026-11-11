@@ -30,8 +30,9 @@ function principles(role) {
   return `\n\n# The principles of your role\n\n${names.map(text).join("\n\n")}`;
 }
 
-/** The shared lead text names no tool, so Codex adds its own dispatch steps, with the real path of this script for each helper's role text. */
-const leadSteps = () => `\n\n${reference("lead-steps.md").replaceAll("<node>", process.execPath).replaceAll("<role.mjs>", fileURLToPath(import.meta.url))}`;
+/** The shared lead text names no tool, so Codex adds its own dispatch steps, with the real paths of this script (each helper's role text) and of the CI wait. */
+const leadSteps = () => `\n\n${reference("lead-steps.md").replaceAll("<node>", process.execPath).replaceAll("<role.mjs>", fileURLToPath(import.meta.url))
+  .replaceAll("<ci-wait.mjs>", fileURLToPath(new URL("ci-wait.mjs", import.meta.url)))}`;
 
 if (process.argv[1] && realpathSync(process.argv[1]) === realpathSync(fileURLToPath(import.meta.url))) {
   try { process.stdout.write(roleMessage(process.argv[2])); } catch (error) {

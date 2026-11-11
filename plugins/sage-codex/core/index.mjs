@@ -30,5 +30,6 @@ export { FINDING_FORM, cleanReport, fieldsOf, missingFields, proofResults, readR
 
 export { roleEditDenied, TEAM } from "./role-policy.mjs";
 export { leadStopped } from "./lead-policy.mjs";
+export { waitForCi } from "./ci-wait.mjs";
 
 export { REVIEW_ROLES, parseReviewTarget, parseReviewReport } from "./review.mjs";
