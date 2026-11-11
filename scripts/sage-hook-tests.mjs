@@ -2245,6 +2245,8 @@ const SHELL_WRITES = ["sed -i '' 's/a/b/' README.md", "sed -i.bak s/a/b/ src/app
   "echo x > $TMPDIR/out.txt", // a variable: the hook does not expand it, so the target is not a known scratch folder
   `cp README.md ${SCRATCH}/copy.md`, `sed -i '' s/a/b/ ${SCRATCH}/copy.md`, // only a redirection passes into scratch
   `node -e "require('fs').writeFileSync('a.txt', 'x')"`, "git diff --output=out.patch"];
+/** A reviewer's writes that are the chief's scratch in sage mode, so they run for the chief (T807). */
+const CHIEF_SCRATCH_WRITES = [`cp README.md ${SCRATCH}/copy.md`, `printf x | tee ${SCRATCH}/out.txt`];
 const SHELL_READS = ["npm test", "node --test scripts/sage-hook-1.test.mjs", `npm test > ${SCRATCH}/out.txt 2>&1`,
   `cat > ${SCRATCH}/probe.mjs <<'EOF'\nconsole.log(1)\nEOF`, `node ${SCRATCH}/probe.mjs`, `cd ${SCRATCH} && echo x > out.txt`,
   `git show HEAD:README.md | sed 's/a/b/' > ${SCRATCH}/copy.md`, "npm test > /dev/null 2>&1", "cat README.md", "grep -n sage README.md",
@@ -2422,9 +2424,10 @@ test("T933: the writers, the chief, other agents and every agent outside sage mo
     for (const command of SHELL_WRITES) assert.equal(s.send(bash(command, FEATURE, { agent_id: `w-${role}`, agent_type: `sage:${role}` })), undefined, `${role}: ${command}`);
   }
   for (const command of SHELL_WRITES) {
-    // The chief meets its own write rule in sage mode (T960).
-    assert.match(denied(s.send(bash(command))) ?? "", CHIEF_SHELL, `the chief: ${command}`);
-    assert.match(denied(s.send(bash(command, FEATURE, { agent_type: "sage:chief-of-staff" }))) ?? "", CHIEF_SHELL, `the chief as an agent type: ${command}`);
+    // The chief meets its own write rule in sage mode (T960), except in its scratch places (T807).
+    const chief = CHIEF_SCRATCH_WRITES.includes(command) ? (why) => assert.equal(why, undefined, command) : (why) => assert.match(why ?? "", CHIEF_SHELL, command);
+    chief(denied(s.send(bash(command))));
+    chief(denied(s.send(bash(command, FEATURE, { agent_type: "sage:chief-of-staff" }))));
     assert.equal(s.send(bash(command, FEATURE, { agent_id: "gp", agent_type: "general-purpose" })), undefined, `an agent with no sage role: ${command}`);
   }
   const off = session();
@@ -2437,8 +2440,7 @@ test("T960: in sage mode the chief runs no shell write form, as in Codex; reads,
   const s = session(), off = session();
   s.send(prompt("sage mode"));
   // The chief's cp and tee into its scratch places run (T807): a reviewer's do not.
-  const scratchWrites = [`cp README.md ${SCRATCH}/copy.md`, `printf x | tee ${SCRATCH}/out.txt`];
-  const writes = [...SHELL_WRITES.filter((command) => !scratchWrites.includes(command)), "cat > notes.md <<'EOF'\nhi\nEOF", "printf x | tee notes.txt",
+  const writes = [...SHELL_WRITES.filter((command) => !CHIEF_SCRATCH_WRITES.includes(command)), "cat > notes.md <<'EOF'\nhi\nEOF", "printf x | tee notes.txt",
     "gh repo clone acme/site", "gh run download 5", "gh codespace cp remote:a.txt a.txt", "gh extension install acme/gh-x"];
   for (const command of writes) {
     const why = denied(s.send(bash(command))) ?? "";
@@ -2447,7 +2449,7 @@ test("T960: in sage mode the chief runs no shell write form, as in Codex; reads,
     assert.equal(off.send(bash(command)), undefined, `outside sage mode: ${command}`);
   }
   const runs = [...SHELL_READS, "git status", "git add -A && git commit -m 'a change'", "gh pr view 41 --json headRefOid", "gh pr checkout 41",
-    `gh repo clone acme/site ${SCRATCH}/site`, `gh run download 5 -D ${SCRATCH}/run`, `node ${TOOL} status --project ${FEATURE}`, ...scratchWrites];
+    `gh repo clone acme/site ${SCRATCH}/site`, `gh run download 5 -D ${SCRATCH}/run`, `node ${TOOL} status --project ${FEATURE}`, ...CHIEF_SCRATCH_WRITES];
   for (const command of runs) assert.equal(denied(s.send(bash(command))), undefined, command);
 });
 
