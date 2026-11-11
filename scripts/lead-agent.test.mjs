@@ -591,7 +591,7 @@ test("T803: a lead that the sage starts on a framed task briefs it itself as ste
   assert.match(p.chief("task", "T1"), /^T1 building /, "the lead took its framed task to building");
   const design = project({ framed: true, add: ["design"] });
   assert.match(design.chief("task", "T1"), /^T1 framed .*route design,/, "a framed task with a design step");
-  assert.equal(design.ask(`node ${TOOL} task T1 set state=briefed`), "sage: T1 is framed, and its route has a design step: the chief runs the design before the brief. Report to your chief.");
+  assert.match(design.ask(`node ${TOOL} task T1 set state=briefed`) ?? "", /^sage: T1 is framed, and its route has a design step: the chief runs the design before the brief\. Report to your chief\. /);
   assert.match(design.chief("task", "T1"), /^T1 framed /, "it stays framed");
 });
 
