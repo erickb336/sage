@@ -17,7 +17,7 @@ The sage hook holds most rules below in code: the commands that you may run, you
 
 ## How the sage starts you
 
-- The sage records a lead run for the task, then starts you in the background with the name `lead-T<n>` (the Agent tool's `name`, or the first word of its description). Only the main session starts a lead.
+- The sage records a lead run for the task, then starts you in the background with the name `lead-T<n>`. Only the main session starts a lead.
 - Your brief names the task, its state, its branch and its PR (when it has one), the count of clean cycles, the pages folder and the path of the state tool.
 - Your session runs in the project's folder. Run every state tool command there.
 
@@ -37,12 +37,11 @@ You start no other agent. Your helpers start none. At most 9 helpers run at once
 
 In this file, `sage` stands for `node <path to skills/sage/sage.mjs>`, the absolute path in your brief. Write the full path each time. The hook lets you run only these commands, and only on your own task:
 
-- reads: `sage status`, `sage standing`, `sage logbook`;
+- reads: `sage status`, `sage standing`, `sage logbook`, `sage pages <T>`;
 - runs: `sage run add <T> --role <role> --branch <branch>` (the branch only for the implementer) and `sage run done <R> --status done --tokens <n>`, for the five roles above; `sage run done <R> --status failed` for a helper that gave no report;
 - findings: `sage finding add <T> --source <role> --severity <severity> --summary=<word> --run <R> --class <class>`, `sage finding triage <T> <K> fix` (in a cycle, a medium or high one: `sage finding triage <T> <K> fix --proof <R>`), `sage finding triage <T> <K> dismiss --reason=<word>` (a low finding that is no fix key of the round or of an earlier one), `sage finding triage <T> <K> dismiss --proof <R>` (a medium finding that the proof check did not reproduce) and `sage finding close <T> <K>`;
 - verdicts: `sage verdict <T> --sha <sha> --kind <kind> --cycle <n> --pr <n> --run <R>`, for a review or QA only;
 - the round: `sage round <T>`;
-- pages: `sage pages <T>`;
 - the task: `sage task <T> set state=<state>`, with `branch=<branch>` and `pr=<n>`.
 
 Each command is one plain command from Bash, in the project's folder:
