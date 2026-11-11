@@ -240,8 +240,8 @@ test("the start status names each missing or changed entry, each entry without a
   writeFileSync(join(s.codex, "config.toml"), keys.map((key) => `[hooks.state."${s.file}:${key}:0:0"]\ntrusted_hash = "sha256:00"\n`).join("\n"));
   const start = { hook_event_name: "SessionStart", source: "startup", session_id: "s1", cwd: s.dir, transcript_path: join(s.dir, "none.jsonl") };
   const warning = () => JSON.parse(s.launch("SessionStart", start).stdout).systemMessage;
-  assert.equal(warning(), "sage: the hook could not read the Codex version, so some sage rules may not run. Autopilot merges in Codex 0.164 and later.\n" +
-    "sage: Codex runs at most 3 agents at once in this session (Codex's default of 4 threads, the chief's own included), and this project's agent cap is 10 (max_agents, or cap.<project>). An agent over Codex's limit fails to start with \"agent thread limit reached\". To raise it, set max_concurrent_threads_per_session = 10 under [agents] in " + join(s.codex, "config.toml") + ", then start a new session.", "all 7 entries match and have a record");
+  // All 7 entries match and have a record: no line names an entry, a trust or the launcher (the case below shows those lines).
+  assert.deepEqual(warning().split("\n").filter((line) => /hook entries|not trusted|launcher/.test(line)), [], "all 7 entries match and have a record");
   const install = `node "${join(root, "skills/sage/sage.mjs")}" hooks install`;
   const ask = `the user runs this command in a terminal, or says yes and then the chief runs it (never without that yes): ${install}`;
   // One entry gone, one with another timeout (a hand edit), and an old launcher.

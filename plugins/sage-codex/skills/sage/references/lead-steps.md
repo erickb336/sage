@@ -6,7 +6,7 @@ Your task name is `sage_lead_t<n>_r<k>`, where `<n>` is the number of your task.
 
 1. Call `run_add` with `task`, `role` and `"usage-interface": "collaboration-tools"`. For an implementer, also give `branch`, the task's branch. When the task has no branch, set it first with `task_set`. It prints the run id `R<k>`.
 2. Run `<node> <role.mjs> <role>`, and keep the whole output.
-3. Write the helper's brief, with the fields `GOAL` to `STANDING`. Call `brief` with the task name of step 4 and the whole brief. Fix each missing field.
+3. Write the helper's brief, with the fields `GOAL` to `STANDING`. Call `brief` with the task name of step 4 and the whole brief. Fix each missing field. The gate starts the helper only in the 30 minutes after this check.
 4. Call `spawn_agent` in the `collaboration` namespace with:
    - `task_name`: `sage_<role>_t<n>_r<k>`, with `_` for `-` in the role, for example `sage_code_reviewer_t12_r41`. The gate refuses another role, another task and another form. A name with no run still starts, but sage keeps no report for that run, and no verdict can use it, so always give the run.
    - `message`: the whole output of step 2, a blank line, then the brief.
@@ -40,7 +40,7 @@ Use `status` for a logbook read, or the trusted literal command form in [command
 
 **Steer by a new agent.** The gate refuses `send_message`, `followup_task` and `send_input` from a lead, because each agent works only from its checked brief. To change a helper's work, stop it with `interrupt_agent`, end its run as failed, then start a new agent on a new run with a new brief. The gate also refuses `resume_agent`.
 
-**Thread limit.** `collab spawn failed: agent thread limit reached` means that no thread is free. Codex allows 4 threads by default: the chief, you and 2 helpers, so a third helper at the same time fails. A finished or interrupted helper frees its thread. Call `list_agents`, wait for a helper that runs, then call `spawn_agent` again with the same task name. When no helper runs and it still fails, end the run as blocked, and report STATUS blocked: the chief asks the owner to raise `agents.max_concurrent_threads_per_session`.
+**Thread limit.** `collab spawn failed: agent thread limit reached` means that no thread is free. Codex allows 4 threads by default: the chief, you and 2 helpers, so a third helper at the same time fails. A finished or interrupted helper frees its thread. Call `list_agents`, wait for a helper that runs, then call `spawn_agent` again with the same task name, after a new `brief` when the last check is over 30 minutes old. When no helper runs and it still fails, end the run as blocked, and report STATUS blocked: the chief asks the owner to raise `agents.max_concurrent_threads_per_session`.
 
 **Agent cap.** When `run_add` says that the project is at its agent cap, wait for a helper's report with `wait_agent`, end its run, then call `run_add` again. Never end the run of a helper that still works. When no helper of yours runs, report STATUS blocked: the chief frees a place.
 

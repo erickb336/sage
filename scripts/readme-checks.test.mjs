@@ -228,5 +228,6 @@ test("the README's lead and agent caps are the ones that the hook and the state 
   const helpers = readFileSync(join(ROOT, "packages/sage-claude/hooks/sage-hook.mjs"), "utf8").match(/^const LEAD_HELPERS = (\d+);$/m)[1];
   const readme = realReadme().replace(/\s+/g, " ");
   assert.ok(readme.includes(`with up to ${helpers} helpers at once`), "the lead's helpers");
-  assert.ok(readme.includes(`at most ${AGENT_CAPS.max_agents} agents at once by default (\`max_agents\`), so one lead and its ${helpers} helpers fit, and all projects ${AGENT_CAPS.cap_total} (\`cap_total\`)`), "the caps");
+  assert.ok(readme.includes(`at most ${AGENT_CAPS.max_agents} agents at once by default (\`max_agents\`), so one lead and its ${helpers} helpers fit`), "the project's cap");
+  assert.ok(readme.includes(`all projects ${AGENT_CAPS.cap_total} (\`cap_total\`)`), "the total cap");
 });

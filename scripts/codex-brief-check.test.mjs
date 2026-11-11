@@ -131,6 +131,22 @@ test("T950: a check with every field keeps its time and counts for 30 minutes, f
   assert.equal(briefChecked(w.project, "sage_qa_t1_r2", w.env), false, "the last check had a missing field");
 });
 
+test("F-T950-1: the start note and the spawn warning read the brief in the project that brief got in this session, also when the session's folder is outside it", (t) => {
+  const w = world(t), outside = join(w.dir, "elsewhere"), session = w.start("sage_qa_t1_r2").session_id;
+  assert.equal(w.sage("init").status, 0);
+  mkdirSync(outside);
+  const from = (input) => ({ ...input, cwd: outside });
+  recordBrief(w.project, "sage_qa_t1_r2", brief(), w.env);
+  assert.equal(w.context(w.send(from(w.start("sage_qa_t1_r2")))), NO_BRIEF, "a check that names no session: only the session's folder counts");
+  assert.match(w.context(w.send(from(w.spawned("sage_qa_t1_r2")))) ?? "", /^sage: sage_qa_t1_r2 started with no checked brief/);
+  recordBrief(w.project, "sage_qa_t1_r2", brief(), w.env, session);
+  const note = w.context(w.send(from(w.start("sage_qa_t1_r2"))));
+  assert.ok(note.startsWith("sage: the standing orders of this project, from its logbook."), "the project's standing orders");
+  assert.ok(note.endsWith(`Your checked brief (sage_qa_t1_r2), as it was recorded:\n\n${brief()}`), note);
+  assert.deepEqual(w.send(from(w.spawned("sage_qa_t1_r2"))), {}, "no warning after the spawn");
+  assert.equal(w.context(w.send(from({ ...w.start("sage_qa_t1_r2"), session_id: "01a172c7-2843-7653-b62d-000000000000" }))), NO_BRIEF, "another session's start reads its own folder");
+});
+
 test("an input that the hook cannot read gives one plain line and no note", (t) => {
   const w = world(t);
   const UNREAD = { systemMessage: "sage: the brief check could not read what Codex sent it, so this agent starts without its brief note. If this comes again, update the sage plugin, and keep Codex in the tested range (0.164 to 0.167)." };

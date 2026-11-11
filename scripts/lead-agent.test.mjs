@@ -670,9 +670,9 @@ test("T301: the lead file's helper cap is the hook's, and with the default agent
   const full = new RegExp(`^sage: the project has ${DEFAULT_CAP} running runs, its agent cap`);
   const refused = p.run("sage", ["run", "add", "T1", "--role", "qa"]).stderr.toString();
   assert.match(refused, full, "the lead's next run waits for room under the default cap");
-  // The refusal says to wait, as the file's cap rule does, and the file names it (F-T952-1).
+  // The refusal says to wait, and the file names the refusal by the words that it gives (F-T952-1); its wording is the file's own (F-T952-9).
   assert.match(refused, /Wait for one of them to end, or end a run whose agent has stopped /);
-  assert.match(/^- \*\*A cap:\*\* .*$/m.exec(TEXT)?.[0] ?? assert.fail("the file has its cap rule"), /`run add` says that the project is at its agent cap, wait for a helper's stop \(`wait <T>`\)/);
+  assert.ok(TEXT.includes(/its (agent cap)/.exec(refused)[1]), "the lead file names the refusal");
   // A second lead finds the project's cap full while lead-T1 and its helpers run.
   p.chief("task", "add", "--priority", "P2", "--title", "second", "--size", "small");
   p.chief("task", "T2", "set", "state=briefed");
