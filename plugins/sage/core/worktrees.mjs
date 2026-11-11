@@ -6,7 +6,14 @@
 // no --force, so git also refuses a worktree with changes; it keeps a worktree with ignored files, except REBUILT
 // folders, and it deletes no branch.
 import { lstatSync, realpathSync } from "node:fs";
-import { join, sep } from "node:path";
+import { homedir } from "node:os";
+import { join, resolve, sep } from "node:path";
+
+/**
+ * The folder of the task copies (default ~/sage-worktrees; $SAGE_WORKTREES overrides it). It is outside the sage root,
+ * so agents may write in it. It holds each project's pages root, and in sage mode the chief writes in it too (T807).
+ */
+export const worktreeRoot = (env = process.env) => resolve(env.SAGE_WORKTREES || join(env.HOME || homedir(), "sage-worktrees"));
 
 /** The states of a task that is over, in the order that names a row's reason: a worktree of another task is open. */
 const OVER = ["merged", "concluded", "abandoned"];

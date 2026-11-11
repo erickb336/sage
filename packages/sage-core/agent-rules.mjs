@@ -9,6 +9,7 @@ import { programsRun } from "./command-reader.mjs";
 import { gitSubcommand, programName, unreadable } from "./command-policy.mjs";
 import { canonical } from "./protected-paths.mjs";
 import { commandWrites, gitDestroysWork } from "./shell-write-policy.mjs";
+import { worktreeRoot } from "./worktrees.mjs";
 
 const fold = (text) => text.normalize("NFKC").toLowerCase();
 /** A command line without quotes, backslashes and line joins: the text that a rule tests when the reader cannot read the line (fail closed). */
@@ -39,19 +40,27 @@ const NO_PROCESS = (word) => `an agent never reads or signals the real process l
 /** The temp folders, as real paths: the system temp folder, /tmp and TMPDIR. A fake process program passes only in one; the Claude hook's read-only rule (T933) lets a redirection into one pass. */
 export const TEMP = [...new Set([tmpdir(), "/tmp", process.env.TMPDIR].filter(Boolean).map((d) => { try { return realpathSync.native(d); } catch { return resolve(d); } }))];
 /**
- * Why the chief's shell write is refused in sage mode, in both providers (T948, T960): each caller refuses a command when
- * core's commandWrites(command, cwd, TEMP) finds a write form, so that a redirection or a gh clone or download into the
- * temp folder, outside the project, passes. The text names each form, and says that the others are refused there too.
+ * Why the chief's shell write is refused in sage mode, in both providers (T948, T960, T807): each caller refuses a command
+ * when core's commandWrites finds a write form outside the chief's places (chiefPlaces), so that a redirection, rm,
+ * rmdir, touch, tee, cp, mv, or a gh clone or download there, outside the project, passes. The text names each form,
+ * and says that the others are refused there too.
  */
-export const CHIEF_SHELL = 'sage mode is on, so the chief does not change files, also not from the shell: this command has a write form (a redirection or a heredoc into a file, tee, cp, mv, rm, sed -i, code in node -e, or gh repo clone, gh run download or gh extension install). Brief an implementer to make this change. To keep output, redirect it into a scratch folder in the temp folder, outside the project, with a literal path (for example > /tmp/notes/out.txt); a gh clone or download into that folder runs too. tee, cp and the other forms are refused also there. gh, the sage tools, reads and git run as before, except git rm, git mv and the git forms that throw away uncommitted work. The user ends sage mode with the message "sage mode off", alone.';
+export const CHIEF_SHELL = 'sage mode is on, so the chief does not change files, also not from the shell: this command has a write form (a redirection or a heredoc into a file, tee, cp, mv, rm, sed -i, code in node -e, or gh repo clone, gh run download or gh extension install) outside your scratch places. Brief an implementer to make this change. Your scratch places are the temp folder and the sage worktrees folder (~/sage-worktrees, which holds the pages folder that the pages command of the state tool prints), outside the project. There a redirection, rm, rmdir, touch, tee, cp, mv and a gh clone or download run, with literal paths (for example > /tmp/notes/out.txt, or rm -rf /tmp/notes). sed -i, code in node -e and the other forms are refused also there. gh, the sage tools, reads and git run as before, except git rm, git mv and the git forms that throw away uncommitted work. The user ends sage mode with the message "sage mode off", alone.';
+/**
+ * The chief's scratch places in sage mode (T807, the owner's decision of 2026-11-07): the temp folder and the sage
+ * worktrees folder (worktreeRoot, which holds each project's pages root). A write inside the project, the logbook (its
+ * own rule) and every other folder, such as ~/.claude, stays refused.
+ */
+export const chiefPlaces = (env = process.env) => [...TEMP, worktreeRoot(env)];
 /** Why the chief's git that throws away uncommitted work is refused in sage mode, in both providers (T968). */
 export const CHIEF_GIT = 'sage mode is on, so the chief does not throw away uncommitted work: git reset --hard, git checkout -- <path> (or ., or --force), git clean -f and git restore of the work tree can destroy changes in the owner\'s checkout. Make a scratch worktree in the temp folder and run the command there (for example git worktree add --detach /tmp/<name>/wt <sha>, then git -C /tmp/<name>/wt reset --hard), or ask the owner. git commit, git checkout <branch>, git fetch, git merge-tree, git commit-tree, git worktree add and remove, and reads run as before.';
 /**
  * Why the chief's shell command is refused in sage mode, or undefined, in both providers: a git form that throws away
- * uncommitted work outside a scratch worktree (CHIEF_GIT, T968), or a write form (CHIEF_SHELL, T948, T960). A command
- * into the temp folder, outside the project's main checkout, passes.
+ * uncommitted work outside a scratch worktree in the temp folder (CHIEF_GIT, T968), or a write form outside the chief's
+ * places (CHIEF_SHELL, T948, T960, T807). env gives the places and the home folder of a leading ~.
  */
-export const chiefShellProblem = (command, cwd) => (gitDestroysWork(command, cwd, TEMP) ? CHIEF_GIT : commandWrites(command, cwd, TEMP) ? CHIEF_SHELL : undefined);
+export const chiefShellProblem = (command, cwd, env = process.env) =>
+  gitDestroysWork(command, cwd, TEMP) ? CHIEF_GIT : commandWrites(command, cwd, chiefPlaces(env), { placed: true, home: env.HOME || homedir() }) ? CHIEF_SHELL : undefined;
 /**
  * The way forward of a read-only role's shell refusal, in both providers (T936, F-T936-3): output, a changed copy and a
  * head go into a scratch folder in the temp folder.

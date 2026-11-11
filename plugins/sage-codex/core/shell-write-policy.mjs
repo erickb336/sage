@@ -107,7 +107,22 @@ export function inlineCode(text) {
     return false;
   }
 }
-function writesIn({ words }, runs) {
+/**
+ * The write programs whose targets the reader names (placedTargets): with places (the chief's rule, T807), each counts
+ * only when a target is outside the scratch folders, as a redirection does.
+ */
+const PLACED = new Set(["rm", "rmdir", "touch", "tee", "cp", "mv"]);
+/**
+ * The paths that a placed write program changes: each operand, but for cp only the last (its destination). True (a place
+ * that the reader cannot tell) when it has no operand, or a -t or --target-directory option.
+ */
+function placedTargets(name, args) {
+  const end = args.indexOf("--"), options = end < 0 ? args : args.slice(0, end);
+  const operands = [...options.filter((a) => !a.startsWith("-")), ...(end < 0 ? [] : args.slice(end + 1))];
+  if (!operands.length || options.some((a) => /^-[^-]*t|^--t/.test(a))) return true;
+  return name === "cp" ? operands.slice(-1) : operands;
+}
+function writesIn({ words }, runs, placed) {
   const low = words.map((w) => w.toLowerCase());
   const base = words.map(programName);
   const at = low.findIndex((w) => !/^\w+=/.test(w)), program = base[at] ?? "";
@@ -121,7 +136,7 @@ function writesIn({ words }, runs) {
   // A program of this command that runs: a word that only names one (man sed, --why rm) is data.
   const has = (re) => base.some((w) => re.test(w) && runs.has(w));
   return (
-    base.some((w) => WRITE_NAMES.has(w) && runs.has(w)) || (runs.has("uniq") && uniqWrites(words, base)) ||
+    base.some((w) => WRITE_NAMES.has(w) && runs.has(w) && !(placed && PLACED.has(w))) || (runs.has("uniq") && uniqWrites(words, base)) ||
     (has(/^g?sed$|^perl$|^ruby$/) && low.some((w) => /^-[a-z]*i|^--in-place/.test(w))) ||
     (has(/^[gmn]?awk$/) && (low.includes("inplace") || words.some(awkWrites))) ||
     (has(/^g?sort$/) && low.some((w) => /^-[a-z]*o|^--o/.test(w))) || // sort takes a shortened long option: --out=FILE, --outp=FILE (T83-R5-SORTABBR)
@@ -259,14 +274,19 @@ function realPath(path) {
   try { return realpathSync.native(path); } catch { return dirname(path) === path ? path : join(realPath(dirname(path)), basename(path)); }
 }
 /**
- * Is a redirection's target in a scratch folder and outside cwd (the caller's project)? Only a literal target in a known
- * folder counts: a variable, a pattern or ~ in it, or a folder that the reader cannot follow, does not.
+ * Is a redirection's target in a scratch folder, outside cwd (the caller's project), and not a folder that holds the
+ * project, both as written and through a link? Only a literal target in a known folder counts: a variable, a pattern or ~ in it, or a folder that the reader
+ * cannot follow, does not. With home (the chief's places, T807), a leading ~ is home, as the shell reads it.
  */
-function intoScratch({ target, dir, uncertainDirectory }, cwd, scratch) {
-  if (!scratch.length || uncertainDirectory || /[$`*?[\]{}~!]/.test(target)) return false;
-  const path = realPath(resolve(dir ?? cwd, target)), project = mainCheckout(realPath(resolve(cwd)));
-  const under = (folder) => path.startsWith(folder.endsWith(sep) ? folder : folder + sep);
-  return path !== project && !under(project) && scratch.some((folder) => under(realPath(resolve(folder))));
+function intoScratch({ target, dir, uncertainDirectory }, cwd, scratch, home) {
+  const word = home && /^~(?:\/|$)/.test(target) ? home + target.slice(1) : target;
+  if (!scratch.length || uncertainDirectory || /[$`*?[\]{}~!]/.test(word)) return false;
+  const absolute = resolve(dir ?? cwd, word), project = mainCheckout(realPath(resolve(cwd)));
+  // Both the path itself (a link that rm removes) and the place that it resolves to (where a write lands) count.
+  return [join(realPath(dirname(absolute)), basename(absolute)), realPath(absolute)].every((path) => {
+    const under = (folder) => path.startsWith(folder.endsWith(sep) ? folder : folder + sep);
+    return path !== project && !under(project) && !project.startsWith(path.endsWith(sep) ? path : path + sep) && scratch.some((folder) => under(realPath(resolve(folder))));
+  });
 }
 /**
  * The project of a folder: the main checkout of the repository that holds it, so that a worktree in a scratch folder is
@@ -302,21 +322,24 @@ function inProject({ target, dir, uncertainDirectory }, cwd) {
  * counts only in cwd (modeTargets, inProject, F-T933-1): chmod +x of a fake in scratch, or chmod -R u+w ~, runs. readOnly: also
  * the git commands that change the project's work tree, index, history, branches or settings (gitTargets), for a role
  * that changes no files (T936); a git command in a scratch folder, such as a worktree of the head, does not count. The
- * chief's rule leaves it out, so the chief's git runs (T960).
+ * chief's rule leaves it out, so the chief's git runs (T960). placed (the chief's rule, T807): a placed write program
+ * (rm, rmdir, touch, tee, cp, mv) counts only when one of its targets (placedTargets) is outside the scratch folders, or
+ * when a wrapper runs it; home reads a leading ~ in a target.
  */
-export function commandWrites(text, cwd, scratch = [], { readOnly = false } = {}) {
+export function commandWrites(text, cwd, scratch = [], { readOnly = false, placed = false, home } = {}) {
   if (typeof text !== "string") return true;
   try {
     const commands = shellCommands(text);
     const evidence = programsRun(text, cwd, undefined, { contextEvidence: true, redirectParts: true });
     const runs = new Set(evidence.programs.map(({ run }) => programName(run.word)));
-    if (commands.some((command) => writesIn(command, runs))) return true;
-    const placeWrites = (entry) => {
+    if (commands.some((command) => writesIn(command, runs, placed))) return true;
+    const placeWrites = (entry, i) => {
       const name = programName(entry.run.word);
+      if (placed && PLACED.has(name)) return Boolean(evidence.programs[i - 1]?.wrapper) || outsideScratch(placedTargets(name, entry.run.args), entry, cwd, scratch, home);
       if (/^(?:chmod|chown|chgrp|chflags)$/.test(name)) return modeTargets(name, entry.run.args).some((target) => inProject(at(entry, target), cwd));
-      return outsideScratch(name === "gh" ? ghTargets(entry.run.args) : readOnly && name === "git" ? gitTargets(entry.run.args) : [], entry, cwd, scratch);
+      return outsideScratch(name === "gh" ? ghTargets(entry.run.args) : readOnly && name === "git" ? gitTargets(entry.run.args) : [], entry, cwd, scratch, home);
     };
-    return evidence.redirects.some(r => toFile(r) && !intoScratch(r, cwd, scratch)) || evidence.programs.some(entry => readerDispatch(entry) || outputDispatchWrites(entry) || placeWrites(entry));
+    return evidence.redirects.some(r => toFile(r) && !intoScratch(r, cwd, scratch, home)) || evidence.programs.some((entry, i) => readerDispatch(entry) || outputDispatchWrites(entry) || placeWrites(entry, i));
   } catch {
     return true;
   }
@@ -324,7 +347,7 @@ export function commandWrites(text, cwd, scratch = [], { readOnly = false } = {}
 /** A target of a program's entry, in the program's folder. */
 const at = ({ run, uncertainDirectory }, target) => ({ target, dir: run.dir, uncertainDirectory });
 /** Is one of the targets (or true: a place that the hook cannot tell) outside the scratch folders (intoScratch)? */
-const outsideScratch = (targets, entry, cwd, scratch) => targets === true || targets.some((target) => !intoScratch(at(entry, target), cwd, scratch));
+const outsideScratch = (targets, entry, cwd, scratch, home) => targets === true || targets.some((target) => !intoScratch(at(entry, target), cwd, scratch, home));
 /**
  * Does a command line run a git form that throws away uncommitted work (gitDestroys) in a work tree outside the scratch
  * folders, such as git reset --hard in the project (T968)? A line that the reader cannot read does not: commandWrites

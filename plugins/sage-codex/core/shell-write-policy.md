@@ -1,16 +1,28 @@
 # Shared shell-write classification
 
-`commandWrites(text, cwd, scratch, { readOnly })` identifies known shell write forms and reader options
+`commandWrites(text, cwd, scratch, { readOnly, placed, home })` identifies known shell write forms and reader options
 that can run another program. It parses text without executing it. Non-text or
 unreadable input counts as a write form.
 
 `scratch` is an optional list of absolute folders, such as the temp folder. A
 redirection, or a gh clone or download (`ghTargets`), whose literal target is
 in one of them, and not in `cwd` (the caller's project), does not count. Every other write form counts, also into a
-scratch folder. A target with a variable, a pattern or `~`, or in a folder that
+scratch folder, except the placed write programs below. A target with a variable, a pattern or `~`, or in a folder that
 the reader cannot follow, counts. Both providers pass the temp folders for a
-read-only role (T933, T936) and for the chief in sage mode (T948, T960), with
+read-only role (T933, T936). For the chief in sage mode (T948, T960, T807),
+core's `chiefShellProblem` passes the chief's places (`chiefPlaces`: the temp
+folders and the sage worktrees folder, which holds the pages roots), with
 core's `CHIEF_SHELL` text.
+
+`placed: true` (the chief's rule, T807) lets the placed write programs `rm`,
+`rmdir`, `touch`, `tee`, `cp` and `mv` count like a redirection: only when one
+of their targets is outside the scratch folders. The targets are every
+operand, and for `cp` only the last one, its destination. No operand, a `-t`
+or `--target-directory` option, or a wrapper before the program (`xargs rm`,
+`env rm`) counts as a write. `home` reads a leading `~` in a target as the
+home folder. A target that holds the project, such as a parent folder of
+`cwd`, counts too. Each target counts both as written (its folder's real path
+and its own name, so `rm` of a link in the project counts) and through a link.
 
 A write program's name (`rm`, `tee`, `install`, `sed -i`, `uniq`) counts only
 where the command runs that program, also through a wrapper that the reader

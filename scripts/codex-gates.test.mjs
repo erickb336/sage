@@ -172,9 +172,9 @@ test("in sage mode the chief changes no file, and a child may", async (t) => {
 test("T948: in sage mode the chief changes no repository file from the shell either; git, gh, the sage tool, reads and scratch output run", async (t) => {
   const CHIEF_SHELL = `sage: ${CHIEF_SHELL_TEXT}`.replace(/\.$/, "");
   const writes = ["echo x > src/a.js", "cat > notes.md <<'EOF'\nhi\nEOF", "printf x | tee src/a.js", "cp src/a.js src/b.js", "mv src/a.js src/b.js", "rm src/a.js",
-    "sed -i '' s/a/b/ src/a.js", "node -e \"require('fs').writeFileSync('a.js', 'b')\"", `echo x > ${CWD}/src/a.js`, "cd src && echo x >> a.js", "rm /tmp/notes/out.txt"];
+    "sed -i '' s/a/b/ src/a.js", "node -e \"require('fs').writeFileSync('a.js', 'b')\"", `echo x > ${CWD}/src/a.js`, "cd src && echo x >> a.js", "sed -i '' s/a/b/ /tmp/notes/out.txt"];
   const runs = ["git status", "git add -A && git commit -m 'a change'", "git -C /work/project worktree add /work/wt -b claude/t1", "gh pr view 41", "gh api -X PATCH repos/acme/site -f description=x", "gh api -X PUT repos/o/r/branches/main/protection --input /tmp/notes/p.json", "gh pr create --title T --body \"$(cat <<'EOF'\nbody\nEOF\n)\"",
-    `node ${TOOL} status --project ${CWD}`, "cat src/a.js", "grep -rn x src", "ls -la > /dev/null", "echo x > /tmp/notes/out.txt", "mkdir -p /tmp/notes", "npm test 2>&1"];
+    `node ${TOOL} status --project ${CWD}`, "cat src/a.js", "grep -rn x src", "ls -la > /dev/null", "echo x > /tmp/notes/out.txt", "mkdir -p /tmp/notes", "npm test 2>&1", "rm /tmp/notes/out.txt"];
   const on = fixed({ sage: true }), off = fixed({ sage: false });
   for (const command of writes) {
     assert.equal(denied(await on.run(pre("Bash", command))), CHIEF_SHELL, command);
@@ -192,7 +192,7 @@ test("T948: in sage mode the chief changes no repository file from the shell eit
  * changes the work tree as git checkout does, and runs.
  */
 const CHIEF_WRITES = ["cat > notes.md <<'EOF'\nhi\nEOF", "echo x > src/a.js", "printf x | tee src/a.js", "cp src/a.js src/b.js", "sed -i '' s/a/b/ src/a.js",
-  "mv src/a.js src/b.js", "rm src/a.js", "node -e \"require('fs').writeFileSync('a.js', 'b')\"", "printf x | tee /tmp/notes/out.txt", "cp src/a.js /tmp/notes/a.js",
+  "mv src/a.js src/b.js", "rm src/a.js", "node -e \"require('fs').writeFileSync('a.js', 'b')\"", "sed -i '' s/a/b/ /tmp/notes/a.js",
   "gh repo clone acme/site", "gh repo clone acme/site src/site", "gh run download 5", "gh run download 5 -D src", "gh release download v1", "gh release download v1 -O site.tgz",
   "gh codespace cp remote:a.txt a.txt", "gh extension install acme/gh-x", "gh ext upgrade --all", "git rm src/a.js",
   // T936: gh's options before its command words; the clones of a fork or a new repository; an attestation download; awk's
@@ -203,6 +203,7 @@ const CHIEF_RUNS = ["git status", "git add -A && git commit -m 'a change'", "git
   "gh api -X PATCH repos/acme/site -f description=x", "gh pr create --title T --body \"$(cat <<'EOF'\nbody\nEOF\n)\"", "gh pr checkout 41", "gh extension list",
   "gh repo clone acme/site /tmp/notes/site", "gh run download 5 -D /tmp/notes/run", "gh release download v1 -O -", "gh codespace cp a.txt remote:a.txt",
   `node ${TOOL} status --project ${CWD}`, "cat src/a.js", "grep -rn x src", "ls -la > /dev/null", "echo x > /tmp/notes/out.txt", "mkdir -p /tmp/notes", "npm test 2>&1",
+  "printf x | tee /tmp/notes/out.txt", "cp src/a.js /tmp/notes/a.js", // the chief's scratch places (T807)
   // T936 (F-T960-3): a word that names a write program is data unless it runs, so the chief's notes and installs run.
   `node ${TOOL} log T1 "rm of the old files" --why rm --chief C1`, `node ${TOOL} task add --title "tee the log" --why "cp, mv and rm"`, "npm install", "npm ci", "man tee", "which rm",
   // A fork without --clone, a download into the temp folder, an awk comparison, a chmod outside the project, and git:
@@ -223,8 +224,8 @@ test("T960: the Claude hook and the Codex gate give the chief the same answer to
       assert.deepEqual({ claude: claude(command, sage), codex: denied(await codex.run(pre("Bash", command))) }, { claude: expected, codex: expected }, `sage mode ${sage}: ${command}`);
     }
   }
-  // The text names each write form, and says that only a redirection, a clone or a download runs into the temp folder (F-T948-4).
-  for (const form of ["a redirection or a heredoc into a file", "tee", "cp", "sed -i", "gh repo clone", "tee, cp and the other forms are refused also there"]) assert.ok(CHIEF_SHELL.includes(form), form);
+  // The text names each write form, the chief's scratch places, and the forms that run there and those that do not (F-T948-4, T807).
+  for (const form of ["a redirection or a heredoc into a file", "tee", "cp", "sed -i", "gh repo clone", "the temp folder and the sage worktrees folder (~/sage-worktrees", "There a redirection, rm, rmdir, touch, tee, cp, mv and a gh clone or download run", "sed -i, code in node -e and the other forms are refused also there"]) assert.ok(CHIEF_SHELL.includes(form), form);
 });
 
 /**
@@ -312,6 +313,47 @@ test("T968: the chief's git that throws away uncommitted work is refused in the 
   }
   // The text says why, and names the safe way.
   for (const part of ["can destroy changes in the owner's checkout", "Make a scratch worktree in the temp folder", "git worktree add --detach /tmp/<name>/wt <sha>", "or ask the owner"]) assert.ok(CHIEF_GIT.includes(part), part);
+});
+
+/**
+ * T807: in sage mode the chief writes and removes its own files in its scratch places, in both providers: the temp folder
+ * and the sage worktrees folder (~/sage-worktrees, which holds each project's pages root). Core's one rule
+ * (chiefShellProblem) refuses a write into the project, ~/.claude, the worktrees folder itself or any other folder, and
+ * the logbook rule refuses a write into the logbook, also when the logbook is in the temp folder. Chains of state tool
+ * commands run. The home is outside the temp folder, as the owner's is; nothing creates it, because the hooks only read
+ * these commands.
+ */
+const T807_HOME = "/sage-t807-not-created/home";
+const CHIEF_PLACES = ["rmdir ~/sage-worktrees/sage-0a1b2c/leftover", `rmdir ${T807_HOME}/sage-worktrees/sage-0a1b2c/leftover`, "rm -rf ~/sage-worktrees/sage-0a1b2c/wt-r12",
+  "cat > ~/sage-worktrees/sage-0a1b2c/pages/T1/plan.md <<'EOF'\n# Plan\nEOF", `printf x | tee ${T807_HOME}/sage-worktrees/sage-0a1b2c/pages/T1/notes.md`,
+  "cp /tmp/notes/page.md ~/sage-worktrees/sage-0a1b2c/pages/T1/page.md", "touch ~/sage-worktrees/sage-0a1b2c/pages/T1/page.md", "rm -rf /tmp/notes", "rm -f /tmp/notes/a.txt",
+  "mkdir -p /tmp/notes && touch /tmp/notes/a.txt", "mv /tmp/notes/a.txt /tmp/notes/b.txt", "cp src/a.js /tmp/notes/a.js", "rmdir /tmp/notes/empty",
+  // item 12: plain chains of state tool commands
+  `node ${TOOL} status --project ${CWD} ; node ${TOOL} board --project ${CWD}`, `node ${TOOL} task T1 set priority=P1 --chief C1 ; node ${TOOL} task T2 set priority=P2 --chief C1`];
+const CHIEF_ELSEWHERE = ["rm src/a.js", `rm -rf ${CWD}/src`, "rmdir src/empty", "touch src/new.js", "cp /tmp/notes/a.js src/a.js", "mv src/a.js /tmp/notes/a.js", "printf x | tee /tmp/notes/a.txt src/a.js",
+  "echo x > ~/.claude/settings.json", "rm -rf ~/.claude/projects", "printf x | tee ~/.claude/CLAUDE.md", "touch ~/notes.txt", "rm -rf ~/sage-worktrees", "rm -rf /tmp", "rm -rf /tmp/",
+  "find /tmp/notes | xargs rm", "env rm /tmp/notes/a.txt", "sed -i '' s/a/b/ /tmp/notes/a.txt", "rm $TMPDIR/notes", "rm /tmp/notes/*", "cp -t /tmp/notes src/a.js", "rm ~other/notes"];
+test("T807: in sage mode the chief writes and removes files in the temp folder and the sage worktrees folder, in both providers; the project, ~/.claude and the logbook stay refused", async (t) => {
+  const { handle } = await import(new URL("../plugins/sage/hooks/sage-hook.mjs", import.meta.url));
+  const slots = { bind() {}, release() {}, drop() {}, touch() {}, reconcile() {} };
+  const logbook = realpathSync(mkdtempSync(join(tmpdir(), "sage-t807-logbook-")));
+  const saved = { HOME: process.env.HOME, SAGE_HOME: process.env.SAGE_HOME };
+  Object.assign(process.env, { HOME: T807_HOME, SAGE_HOME: logbook });
+  t.after(() => { process.env.HOME = saved.HOME; if (saved.SAGE_HOME === undefined) delete process.env.SAGE_HOME; else process.env.SAGE_HOME = saved.SAGE_HOME; rmSync(logbook, { recursive: true, force: true }); });
+  const claude = (command, sage = true) => denied(handle({ hook_event_name: "PreToolUse", tool_name: "Bash", tool_input: { command }, cwd: CWD, session_id: "s1" }, { sage, autopilot: false, start: false }, slots))?.replace(/\.$/, "");
+  const CHIEF_SHELL = `sage: ${CHIEF_SHELL_TEXT}`.replace(/\.$/, "");
+  const on = fixed({ sage: true }), off = fixed({ sage: false });
+  for (const command of CHIEF_PLACES) assert.deepEqual({ claude: claude(command), codex: denied(await on.run(pre("Bash", command))) }, { claude: undefined, codex: undefined }, `runs: ${command}`);
+  for (const command of CHIEF_ELSEWHERE) {
+    assert.deepEqual({ claude: claude(command), codex: denied(await on.run(pre("Bash", command))) }, { claude: CHIEF_SHELL, codex: CHIEF_SHELL }, `refused: ${command}`);
+    assert.deepEqual({ claude: claude(command, false), codex: denied(await off.run(pre("Bash", command))) }, { claude: undefined, codex: undefined }, `outside sage mode it runs: ${command}`);
+  }
+  // The logbook is in the temp folder here, and its own rule still refuses the chief's write there, in both providers.
+  for (const command of [`rm -rf ${logbook}/sage-0a1b2c`, `echo x > ${logbook}/sage-0a1b2c/tasks.tsv`, `rmdir ${logbook}/sage-0a1b2c`]) {
+    const c = claude(command), x = denied(await on.run(pre("Bash", command)));
+    assert.match(c ?? "", /never writes, moves or removes a logbook file from the shell/, `Claude, the logbook: ${command}`);
+    assert.match(x ?? "", /writes, moves or removes a logbook file from the shell/, `Codex, the logbook: ${command}`);
+  }
 });
 
 /** T936 (F-T960-9): the push form names the branch, so git push origin HEAD is refused for each role, with the form. */
@@ -677,7 +719,8 @@ test("T903: a logbook file's name outside the project passes; a shell write by a
   w.mode({ sage: true, autopilot: false });
   for (const name of ["bindings.tsv", "tasks.tsv", "config.json"]) {
     assert.equal(denied(w.send(bash(`cd .. && rm ${name}`))), undefined, name);
-    assert.match(denied(w.send(bash(`rm ../${name}`, {}))) ?? "", CHIEF_SHELL, `the chief: ${name} is no logbook path, but the chief changes no file in sage mode (T948)`);
+    // The project is in the temp folder here, so its parent folder is the chief's scratch (T807): a name in the project.
+    assert.match(denied(w.send(bash(`rm ${name}`, {}))) ?? "", CHIEF_SHELL, `the chief: ${name} is no logbook path, but the chief changes no project file in sage mode (T948)`);
   }
   assert.equal(denied(w.send(bash("cd $SOMEWHERE && rm tasks.tsv"))), undefined, "no known place: a documented limit");
   // The roots: the Codex sage folder (SAGE_HOME here) and a shared root of its own. A link in the project to the shared

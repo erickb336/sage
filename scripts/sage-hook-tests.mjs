@@ -778,7 +778,7 @@ test("T536: no push reaches the default branch through a remote with another nam
   refused("cd ~ && gh repo sync", /^sage: gh repo sync writes a branch on GitHub/);
   // T909: git or gh behind a wrapper that the reader does not know is a limit too.
   passes("op run -- gh repo sync");
-  refused("cp /usr/bin/git /tmp/git-copy", CHIEF_SHELL); // a renamed copy stays a limit; the copy meets the chief's write rule (T960)
+  passes("cp /usr/bin/git /tmp/git-copy"); // a renamed copy stays a limit; a copy into the temp folder is the chief's scratch (T807)
   // R1936 F7: GitHub names the default branch, trunk here, and a failed read refuses.
   const trunk = session({ FAKE_DEFAULT_BRANCH: "trunk" });
   trunk.send(prompt("sage mode"));
@@ -2436,16 +2436,18 @@ test("T933: the writers, the chief, other agents and every agent outside sage mo
 test("T960: in sage mode the chief runs no shell write form, as in Codex; reads, git, gh, the state tool and scratch output run; outside sage mode it writes", () => {
   const s = session(), off = session();
   s.send(prompt("sage mode"));
-  const writes = [...SHELL_WRITES, "cat > notes.md <<'EOF'\nhi\nEOF", "printf x | tee notes.txt", `printf x | tee ${SCRATCH}/out.txt`,
+  // The chief's cp and tee into its scratch places run (T807): a reviewer's do not.
+  const scratchWrites = [`cp README.md ${SCRATCH}/copy.md`, `printf x | tee ${SCRATCH}/out.txt`];
+  const writes = [...SHELL_WRITES.filter((command) => !scratchWrites.includes(command)), "cat > notes.md <<'EOF'\nhi\nEOF", "printf x | tee notes.txt",
     "gh repo clone acme/site", "gh run download 5", "gh codespace cp remote:a.txt a.txt", "gh extension install acme/gh-x"];
   for (const command of writes) {
     const why = denied(s.send(bash(command))) ?? "";
     assert.match(why, CHIEF_SHELL, command);
-    for (const form of ["a redirection or a heredoc into a file", "tee", "cp", "sed -i", "tee, cp and the other forms are refused also there"]) assert.ok(why.includes(form), `${command}: ${form}`);
+    for (const form of ["a redirection or a heredoc into a file", "tee", "cp", "sed -i", "sed -i, code in node -e and the other forms are refused also there"]) assert.ok(why.includes(form), `${command}: ${form}`);
     assert.equal(off.send(bash(command)), undefined, `outside sage mode: ${command}`);
   }
   const runs = [...SHELL_READS, "git status", "git add -A && git commit -m 'a change'", "gh pr view 41 --json headRefOid", "gh pr checkout 41",
-    `gh repo clone acme/site ${SCRATCH}/site`, `gh run download 5 -D ${SCRATCH}/run`, `node ${TOOL} status --project ${FEATURE}`];
+    `gh repo clone acme/site ${SCRATCH}/site`, `gh run download 5 -D ${SCRATCH}/run`, `node ${TOOL} status --project ${FEATURE}`, ...scratchWrites];
   for (const command of runs) assert.equal(denied(s.send(bash(command))), undefined, command);
 });
 
@@ -2465,6 +2467,21 @@ test("T936: in sage mode a reviewer's git that changes the checkout is refused a
     assert.equal(denied(s.send(bash(command))), undefined, `the chief: ${command}`);
   }
   assert.match(denied(s.send(bash("chmod +x scripts/a.sh"))) ?? "", CHIEF_SHELL, "the chief's chmod in the project");
+});
+
+// T807: the hook process, as Claude Code runs it. scripts/codex-gates.test.mjs compares the two providers on each case.
+// The worktree root is outside the temp folder, as ~/sage-worktrees is; nothing creates it, because the hook only reads
+// the paths.
+test("T807: in sage mode the chief writes its pages and removes leftover folders in the sage worktrees folder and the temp folder; the project stays refused", () => {
+  const root = "/sage-t807-not-created/worktrees", s = session({ SAGE_WORKTREES: root });
+  const pages = investigation(s).replace(WORKTREE_ROOT, root);
+  s.send(prompt("sage mode"));
+  for (const command of [`rmdir ${root}/leftover`, `rm -rf ${root}/sage-x/wt-r12`, `cat > ${pages}/plan.md <<'EOF'\n# Plan\nEOF`, `cp ${SCRATCH}/page.md ${pages}/page.md`, `rm -rf ${SCRATCH}/old`]) {
+    assert.equal(denied(s.send(bash(command))), undefined, command);
+  }
+  for (const command of [`rm -rf ${root}`, "rmdir src", `cp ${pages}/page.md README.md`, `echo x > ${FEATURE}/notes.txt`, `rm -rf ${FEATURE}`]) {
+    assert.match(denied(s.send(bash(command))) ?? "", CHIEF_SHELL, command);
+  }
 });
 
 // T968: the hook process, as Claude Code runs it, with a real linked worktree in scratch. scripts/codex-gates.test.mjs
