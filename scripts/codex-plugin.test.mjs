@@ -177,7 +177,12 @@ test("T952: the SessionStart hook warns when Codex's thread limit runs fewer age
   };
   // No setting: Codex's default of 4 threads holds the chief and 3 agents, below the default cap of 10.
   const [none, file] = warning("");
-  assert.equal(none, `sage: Codex runs at most 3 agents at once in this session (Codex's default of 4 threads, the chief's own included), and this project's agent cap is 10 (max_agents, or cap.<project>). An agent over Codex's limit fails to start with "agent thread limit reached". To raise it, set max_concurrent_threads_per_session = 10 under [agents] in ${file}, then start a new session. sage reads only ${file} and the project's .codex/config.toml (it counts that file only where it lowers the limit, because Codex skips it in a project that Codex does not trust), not a -c override, a profile or a managed config.`);
+  // The warning gives the numbers, the setting and the file to change, and what sage does not read (F-T952-9: not the exact wording).
+  assert.equal(none.split("\n").length, 1, none);
+  assert.match(none, /^sage: Codex runs at most 3 agents at once in this session \(Codex's default of 4 threads, the chief's own included\), and this project's agent cap is 10 /);
+  assert.ok(none.includes(`set max_concurrent_threads_per_session = 10 under [agents] in ${file}, then start a new session.`), none);
+  assert.ok(none.includes(`sage reads only ${file} and the project's .codex/config.toml`), none);
+  assert.match(none, /not a -c override, a profile or a managed config\.$/);
   // Only the agents key: it counts the agents alone, and its alias max_threads reads the same.
   for (const threads of ["[agents]\nmax_concurrent_threads_per_session = 6\n", "[agents]\nmax_threads = 6 # an alias\n", "agents.max_concurrent_threads_per_session = 6\n", "agents = { max_concurrent_threads_per_session = 6 }\n"]) {
     assert.match(warning(threads)[0], /^sage: Codex runs at most 6 agents at once in this session \(agents\.max_concurrent_threads_per_session = 6\), and this project's agent cap is 10 .* set max_concurrent_threads_per_session = 10 under \[agents\] in /, threads);
