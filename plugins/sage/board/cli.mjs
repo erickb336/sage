@@ -333,7 +333,7 @@ if (process.argv[1] === fileURLToPath(import.meta.url)) {
   } catch (error) {
     // A sandbox, such as Codex's, refuses a write outside the workspace with EPERM: on the first run, the mkdir of the
     // board config folder (T922). The owner gets one line that says what to do, not Node's error.
-    const line = error.code === "EPERM" && error.path ? `this command cannot write ${error.path}: a sandbox blocks writes there (EPERM). ${ESCALATE}` : error.message;
+    const line = error.code === "EPERM" && error.path ? `this command cannot write ${error.path}: a sandbox or the system blocks writes there (EPERM). ${ESCALATE}` : error.message;
     process.stderr.write(`sage board: ${line}\n`); process.exitCode = 1;
   }
 }
