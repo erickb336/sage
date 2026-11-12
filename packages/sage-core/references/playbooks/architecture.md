@@ -9,6 +9,7 @@ The chief reads this playbook at the moment that its line in the chief's text na
    - For each shape: at most 6 boxes, and the data that each part keeps.
    - A check for warning signs: hidden shared data, many special cases.
    - For each shape: the cost, the risk, and what it ties the project to.
+   - The prior art: 2 or 3 existing stacks or tools with a similar shape, and the one that each shape follows, or how and why it differs.
 3. **The owner's moment:** message kind `question`, with one `architecture` picture for each shape, side by side on its page: here the owner often gives their own design, so show pictures, not long text. Under each picture: what changes for the owner (speed, what they see, what can break, what it ties the project to).
    - Answers: A, B, or "you decide".
    - If the owner does not answer: a shape that is internal and easy to change goes ahead as recommended. A shape that changes data that the owner keeps, or what the owner sees, waits.
