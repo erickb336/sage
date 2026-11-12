@@ -8,22 +8,22 @@ import { tmpdir } from "node:os";
 import { join, relative } from "node:path";
 import { test } from "node:test";
 import { ROOT } from "./build.mjs";
-import { anchors, linkProblems, paragraphProblems, readmeProblems, slug } from "./readme-checks.mjs";
+import { anchors, linkProblems, paragraphProblems, readmeProblems, RELEASES, slug } from "./readme-checks.mjs";
 
 const README = (lines = {}) => [
   "<p>", "  <img alt=\"a graphic\" src=\"x.svg\">", "</p>", "",
   lines.pitch ?? "**sage-stack is a multi-agent development stack for Claude Code and Codex.**",
   "**Status:** early. Start with the [Quick start](#quick-start).", "",
   "## Quick start", "", "Install it.", "",
-  "## Learn more", "", "- [What's new](CHANGELOG.md): every change.", "", ...(lines.more ?? []),
+  "## Learn more", "", `- [What's new](${RELEASES}): every change.`, "", ...(lines.more ?? []),
 ].join("\n");
 
-test("a README within its budget, with a changelog link and a first screen that answers, has no problem", () => {
+test("a README within its budget, with a link to the releases page and a first screen that answers, has no problem", () => {
   assert.deepEqual(readmeProblems(README()), []);
 });
 
-test("a missing changelog link and a first screen without the pitch, the status or the quick start link are problems", () => {
-  assert.deepEqual(readmeProblems(README().replace("](CHANGELOG.md)", "](docs/)")), ["README.md: no link to CHANGELOG.md; the changelog holds the list of changes"]);
+test("a missing link to the releases page and a first screen without the pitch, the status or the quick start link are problems", () => {
+  assert.deepEqual(readmeProblems(README().replace(`](${RELEASES})`, "](docs/)")), [`README.md: no link to the releases page (${RELEASES}); the release notes list the changes`]);
   assert.deepEqual(readmeProblems(README({ pitch: "**sage is a plugin for Claude Code.**" })), ['README.md: the first screen (the first 10 lines with text) needs one bold sentence that starts "**sage-stack is a"']);
   // Ten lines of text before the status line push it and its link off the first screen.
   const late = README().replace("**Status:**", `${Array.from({ length: 10 }, (_, i) => `Line ${i}.`).join("\n")}\n**Status:**`);
@@ -162,14 +162,14 @@ test("a link to the repository root, a query and a link to a folder on GitHub pa
   ]);
 });
 
-test("npm run check fails on a README with no changelog link, a missing screenshot and a stale screenshot record", (t) => {
+test("npm run check fails on a README with no link to the releases page, a missing screenshot and a stale screenshot record", (t) => {
   const dir = mkdtempSync(join(realpathSync(tmpdir()), "sage-readme-"));
   t.after(() => rmSync(dir, { recursive: true, force: true }));
   cpSync(ROOT, dir, { recursive: true, filter: (src) => ![".git", ".claude", "node_modules"].includes(relative(ROOT, src)) });
   symlinkSync(join(ROOT, "node_modules"), join(dir, "node_modules"), "dir");
   const readme = readFileSync(join(dir, "README.md"), "utf8");
-  // The real README with each changelog link pointed elsewhere.
-  writeFileSync(join(dir, "README.md"), readme.replaceAll("](CHANGELOG.md)", "](docs/README.md)"));
+  // The real README with each link to the releases page pointed elsewhere.
+  writeFileSync(join(dir, "README.md"), readme.replaceAll(`](${RELEASES})`, "](docs/README.md)"));
   rmSync(join(dir, "docs/assets/board-dark.png"));
   writeFileSync(join(dir, "docs/assets/board-shots.json"), JSON.stringify({ sample: "0".repeat(64) }));
   const faq = readFileSync(join(dir, "docs/guide/faq.md"), "utf8");
@@ -177,7 +177,7 @@ test("npm run check fails on a README with no changelog link, a missing screensh
   const r = spawnSync("node", [join(dir, "scripts/check.mjs")], { encoding: "utf8" });
   assert.equal(r.status, 1);
   assert.match(r.stderr, new RegExp(`^✗ docs/guide/faq\\.md:${faq.trimEnd().split("\n").length + 2}: a paragraph of 4 sentences; keep it at 3 or fewer`, "m"));
-  assert.match(r.stderr, /^✗ README\.md: no link to CHANGELOG\.md; the changelog holds the list of changes$/m);
+  assert.ok(r.stderr.split("\n").includes(`✗ README.md: no link to the releases page (${RELEASES}); the release notes list the changes`), r.stderr);
   assert.match(r.stderr, /^✗ docs\/assets\/board-dark\.png: missing; run node scripts\/board-shots\.mjs \(see CONTRIBUTING\.md\)$/m);
   assert.match(r.stderr, /^✗ docs\/assets\/board-shots\.json: the sample logbook changed after the board screenshots; run node scripts\/board-shots\.mjs/m);
 });

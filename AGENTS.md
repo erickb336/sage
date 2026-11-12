@@ -1,8 +1,8 @@
 # Working on sage
 
-- **Edit the sources only:** `principles/`, `writing/`, `preferences/`, `packages/` (shared code and provider sources), and `changes/`.
-  - Never edit build output: `plugins/sage/`, `plugins/sage-codex/`, `instructions/core.md`, or `CHANGELOG.md`.
-  - Write a pull request's change log entry in its own file, `changes/<task>.md` (see CONTRIBUTING.md), not in `CHANGELOG.md`. A task pull request never changes `CHANGELOG.md`: only `npm run changelog` writes it, on main, in a change-log pull request that changes nothing else. `npm run check` refuses any other diff that changes it.
+- **Edit the sources only:** `principles/`, `writing/`, `preferences/`, and `packages/` (shared code and provider sources).
+  - Never edit build output: `plugins/sage/`, `plugins/sage-codex/`, or `instructions/core.md`.
+  - The repository keeps no history file: no `CHANGELOG.md` and no change files. A pull request description says what changed for users. At a release, the chief drafts the notes on the [releases page](https://github.com/erickb336/sage-stack/releases) from the merged pull requests and asks the owner before it publishes them (see CONTRIBUTING.md). `npm run check` fails on a `CHANGELOG.md` or a file in `changes/`.
   - Provider packages depend only on the public `sage-core` entry point. Core must not import a provider or name its models or settings.
   - One small exception: each adapter's `legacyRoots(env)` function may name each provider's logbook settings, and passes the list to core. No other adapter code names another provider's settings.
   - A provider plugin bundles core and that provider only; `scripts/providers.test.mjs` checks isolated copies.

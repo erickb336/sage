@@ -267,15 +267,14 @@ test("the Codex guide carries the owner's lines for install, trust, removal, the
     "sage: sage was not tested with Codex 0.168.0, so some sage rules may not run. Autopilot merges in Codex 0.164 and later.", // R1670-7, F-T677-20, F-T951-2, F-T951-3
     "Codex 0.164.0 runs no hook for text that an agent types into a shell that still runs (`write_stdin`, for example after `zsh -i`). That text passes every sage rule", // R1675-2
   ]) assert.ok(guide.includes(line), line);
-  assert.match(readFileSync(join(ROOT, "CHANGELOG.md"), "utf8"), /- A limit: Codex 0\.164\.0 runs no hook for text that an agent types into a shell that still runs \(`write_stdin`\)/, "R1675-2");
   assert.doesNotMatch(guide, /the chief and the leads use/);
   // R1670-8: the README's limits table is gone (T521); the Codex guide's rules table keeps these stops.
   for (const rule of ["| The chief and a lead record the logbook |", "| A role agent starts no agents |", "| No agent runs Codex from the shell |"]) assert.ok(guide.includes(rule), `R1670-8: ${rule}`);
 });
 
-test("T470: the Codex guide, the README and the CHANGELOG carry the owner's copy before the pilot", () => {
+test("T470: the Codex guide and the README carry the owner's copy before the pilot", () => {
   const flat = (path) => readFileSync(join(ROOT, path), "utf8").replace(/\s+/g, " ");
-  const texts = { guide: flat("docs/guide/codex.md"), readme: flat("README.md"), changelog: flat("CHANGELOG.md") };
+  const texts = { guide: flat("docs/guide/codex.md"), readme: flat("README.md") };
   const lines = {
     guide: [
       "Codex 0.164.0 runs no hook for text that an agent types into a shell that still runs (`write_stdin`, for example after `zsh -i`). That text passes every sage rule, also a push or a merge. Autopilot off does not stop such a merge.", // F-T470-13
@@ -298,17 +297,12 @@ test("T470: the Codex guide, the README and the CHANGELOG carry the owner's copy
       "in Codex (the CLI and the desktop app), sage mode, autopilot, the shared logbook and the board phrases work through the sage plugin ([sage in Codex](docs/guide/codex.md))", // F-T470-11, T905, T921
       "You also need Node.js 20 or later, `gh` logged in, and a GitHub remote for the project (see [What you need](docs/guide/codex.md#what-you-need)).", // F-T470-15, T467
     ],
-    changelog: [
-      "and a command such as `$EDITOR codex/a.txt` runs, except for a role agent while the mode is on.", // F-T470-3
-      "so that text passes every sage rule, also a push or a merge. In workspace-write, the sandbox keeps this text off the network and keeps the logbook closed: keep network access off, and refuse an interactive shell outside the sandbox. Autopilot off does not stop such a merge.", // F-T470-13
-    ],
   };
   const missing = Object.entries(lines).flatMap(([name, list]) => list.filter((line) => !texts[name].includes(line)).map((line) => `${name}: ${line}`));
   assert.deepEqual(missing, []);
   const wrong = { // the old lines, which misled
     "guide: autopilot off as a mitigation of write_stdin": /network access off for role agents, or keep autopilot off/.test(texts.guide),
     "guide: step 4 says any message": /4\. Send a message\./.test(texts.guide),
-    "CHANGELOG: outside sage mode only": /and outside sage mode a command such as/.test(texts.changelog),
     "README: a Claude Code plugin only": /sage is a Claude Code plugin for developers/.test(texts.readme),
   };
   assert.deepEqual(Object.entries(wrong).filter(([, found]) => found).map(([name]) => name), []);

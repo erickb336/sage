@@ -62,7 +62,7 @@ The names of sage's parts. They are not words of the list above, but the word ta
 `npm run check` fails when a flagged word, or its plural, is in one of these texts:
 
 - an agent file or a hand-written skill;
-- a page that the link check reads: the README, `CHANGELOG.md`, `CONTRIBUTING.md`, `SECURITY.md`, `AGENTS.md`, every page under `docs/`, the board service guide and the `sage-help` skill;
+- a page that the link check reads: the README, `CONTRIBUTING.md`, `SECURITY.md`, `AGENTS.md`, every page under `docs/`, the board service guide and the `sage-help` skill;
 - every SVG graphic in `docs/assets/`.
 
 It does not fail on a word in quotes, in code or in a link URL, so a text can name a word to say that it is wrong:

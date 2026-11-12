@@ -1,6 +1,6 @@
 # Sage dry run 1
 
-> **A dated record.** This is the report of the first dry run, on 4 Oct 2026, before the fixes that came from it. sage changed much after it: see the [changelog](../../CHANGELOG.md). It was converted from an HTML page; its words are as they were, except one old word for the merge check, and the tables that replace its chart.
+> **A dated record.** This is the report of the first dry run, on 4 Oct 2026, before the fixes that came from it. sage changed much after it: see the [release notes](https://github.com/erickb336/sage-stack/releases). It was converted from an HTML page; its words are as they were, except one old word for the merge check, and the tables that replace its chart.
 
 4 Oct 2026 · sage mode in one headless Claude Code session · every agent on Sonnet 5.5 · **sample project and sample data: every trip and email address is made up**
 
