@@ -21,6 +21,8 @@ const CODE_SPAN = /`(?:[^`\n]|\n(?!\s*\n))*`/g;
 const HEADS = Object.entries(KINDS).map(([kind, k]) => [kind, k.head]);
 const BOX_MARK = /[─-╿]/u;
 const FENCE = /^\s*(`{3,}|~{3,})/;
+/** The most problems that a note lists, and the most ids that the raw-id problem lists: the rest are "and N more". */
+const SHOWN = 20;
 
 /** The kind that a text names on its first line (its head), or null. */
 export function kindOf(text) {
@@ -82,11 +84,13 @@ function namedProblems(text, { width = WIDTH } = {}) {
   const kind = kindOf(text);
   if (!kind) return { kind, problems: [] };
   const { lines, pictures } = partsOfText(text), problems = [];
-  pictures.forEach((pic, k) => problems.push(...pictureProblems(pic, width).map((p) => ["picture", `picture ${k + 1}: ${p}`])));
+  // One push for each problem: a spread of a long list into push() overflows the stack (F-T1004-5).
+  pictures.forEach((pic, k) => { for (const p of pictureProblems(pic, width)) problems.push(["picture", `picture ${k + 1}: ${p}`]); });
   if (lines.some((l) => TREE.test(l))) problems.push(["tree marks", "the message has tree marks (├ └ ┬ ┴ ┼ ┤ ┌ ┐ ┘): draw boxes inside boxes, or write a list"]);
   // A word in code is not an id: the text form keeps each code span's marks.
   const ids = [...new Set([ownWords(lines).join("\n").replace(CODE_SPAN, ""), ...pictures.flat()].flatMap((l) => [...l.matchAll(RAW_ID)].map((m) => m[0])))];
-  if (ids.length) problems.push(["raw ids", `raw ids in the message: ${ids.join(", ")}. Name the work in words; put its ids in the Ref line`]);
+  const some = ids.length > SHOWN ? `${ids.slice(0, SHOWN).join(", ")} and ${ids.length - SHOWN} more` : ids.join(", ");
+  if (ids.length) problems.push(["raw ids", `raw ids in the message: ${some}. Name the work in words; put its ids in the Ref line`]);
   // The parts, in order: each labelled part that the kind needs, at the start of a line. A long message gives its main
   // point and its Page block: its parts are on its page.
   if (lines.some((l) => /^Main point:/.test(l)) && lines.some((l) => /^Page · /.test(l))) return { kind, problems };
@@ -108,16 +112,19 @@ function namedProblems(text, { width = WIDTH } = {}) {
 /**
  * The check of a message that the chief wrote by hand, for a hook in note mode (T1004, T1005): undefined when the text
  * names no kind or fits its kind's shape, else { kind, names, note }. names are the problems' names, with no word of
- * the message, for the count of the misses. note is the line for the chief at its next prompt: the kind, and each problem.
+ * the message, for the count of the misses. note is the line for the chief at its next prompt: the kind, and each problem,
+ * at most SHOWN of them, so that a message with thousands of problems keeps a small note (F-T1004-2).
  */
 export function messageMiss(text) {
   const { kind, problems } = namedProblems(text);
   if (!problems.length) return undefined;
+  const more = problems.length - SHOWN;
   return {
     kind,
     names: [...new Set(problems.map(([name]) => name))],
     note: [`sage: your last message names the kind "${kind}" on its first line, but it misses the shape of that kind:`,
-      ...problems.map(([, problem]) => `- ${problem}`),
+      ...problems.slice(0, SHOWN).map(([, problem]) => `- ${problem}`),
+      ...(more > 0 ? [`- and ${more} more`] : []),
       "Fix this in your next message of that kind: the presentation skill gives each kind's parts, and sage's message command prints a message in its kind's shape."].join("\n"),
   };
 }
@@ -148,7 +155,7 @@ export function pageProblems(html) {
   const text = /<details class="text-form"><summary>[^<]*<\/summary><pre>([\s\S]*?)<\/pre><\/details>/.exec(html)?.[1];
   if (text === undefined) return [...problems, "the page has no plain-text form of its message, so no image can be checked against its text"];
   const plain = unescape(text), wide = /<main class="long">/.test(html);
-  problems.push(...textProblems(plain, { width: wide ? LONG_WIDTH : WIDTH }).map((p) => `the text form: ${p}`));
+  for (const p of textProblems(plain, { width: wide ? LONG_WIDTH : WIDTH })) problems.push(`the text form: ${p}`);
   // Each image must be the one that pictureSvg draws from a picture of the text form, character for character.
   const drawn = new Set(partsOfText(plain).pictures.map((lines) => pictureSvg(lines).replace(/ aria-label="[^"]*"/, "")));
   const images = [...html.matchAll(/<svg class="pic"[\s\S]*?<\/svg>/g)].map((m) => m[0].replace(/ aria-label="[^"]*"/, ""));
