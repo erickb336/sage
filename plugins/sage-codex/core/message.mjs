@@ -20,7 +20,7 @@ const LESSON_HEAD = ["Where the lesson lives now", "What it holds", "State"];
  * anywhere. use: when the chief sends it, for the skill.
  */
 export const KINDS = {
-  progress: { head: "PROGRESS", use: "While a task runs: one short note when it moves to a new step, with nothing for you to do.",
+  progress: { head: "PROGRESS", use: "While a task runs: one short note when it moves to a new step, with nothing for the owner to do.",
     parts: ["Where this is", "?Since my last note", "What changed", "Next", "?Cost so far", "What I need from you"] },
   question: { head: "QUESTION", use: "When work waits for the owner's choice. The title is the question.", tableHead: QUESTION_HEAD, pick: true,
     parts: ["Where this is", "What you approve", "The one real choice in it", "table", "If you do not answer", "Needed by", "?Judged by", "?The bad side of my pick", "After you answer", "?page"] },
