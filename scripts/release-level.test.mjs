@@ -101,6 +101,28 @@ test("T1003: a milestone goes into one release, moves to another one with a deci
   assert.equal(rowsOf(s.dir, "decisions").length, decisions, "a set to the same release writes no row");
 });
 
+test("T1003: a milestone that is proposed again keeps its release, with no release row: after the owner's change, with a new pilot after approval, and at the end of a stopped proposal", () => {
+  const s = logbook(3);
+  s.ok("release", "add", "--name", "1.0");
+  s.ok("milestone", "propose", "--name", "Sage feel", "--goal", "A sample goal", "--pilot", "T1", "--tasks", "T2");
+  s.ok("milestone", "M1", "set", "release=1.0");
+  const kept = (path) => {
+    assert.equal(rowsOf(s.dir, "milestones")[0].release, "1.0", path);
+    assert.deepEqual(rowsOf(s.dir, "decisions").filter((d) => /release/.test(d.decision)).map((d) => d.decision), ["M1 release none → 1.0"], `${path}: no release row`);
+    assert.equal(s.levels()[0], "release 1.0 · in progress · 0 of 2 tasks done · milestones M1", path);
+  };
+  s.ok("gate", "answer", "G1", "--option", "2"); // change
+  s.ok("milestone", "propose", "M1", "--goal", "A new sample goal");
+  kept("round 2 after change");
+  s.ok("gate", "answer", "G2", "--option", "1"); // approve
+  s.ok("milestone", "propose", "M1", "--pilot", "T2", "--tasks", "T1");
+  kept("a new pilot of an approved milestone");
+  // A proposal that stopped after it wrote the milestone's row, before its gate: the same command finishes it.
+  writeFileSync(join(s.dir, "gates.tsv"), readFileSync(join(s.dir, "gates.tsv"), "utf8").split("\n").filter((l) => !l.startsWith("G3\t")).join("\n"));
+  s.ok("milestone", "propose", "--name", "Sage feel");
+  kept("the end of a stopped proposal");
+});
+
 test("T1003: a single task goes into a release; a task of a milestone is refused with the way out; a task that joins a milestone leaves its own release, with a decision row", () => {
   const s = logbook(4);
   s.ok("release", "add", "--name", "1.0");

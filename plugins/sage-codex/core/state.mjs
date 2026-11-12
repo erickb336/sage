@@ -3768,7 +3768,8 @@ function act(cmd, pos, opt, dir, env, skip, project) {
       const question = [`Approve milestone ${pid}${round > 1 ? ` (round ${round})` : ""}? No task builds before you approve.`, `Name: ${oneLine(name)}`, `Goal: ${oneLine(goal)}`,
         "Pilot, runs first:", item(pilot), ...(others.length ? [`Then, each after ${pilot.id}:`, ...others.map(item)] : [])].join(LINE);
       const g = { id: nextId(dir, "G"), task: pilot.id, question, options: BREAKDOWN, recommendation: "approve", default: "", at };
-      const row = { id: pid, name, goal, pilot: pilot.id, gate: g.id, at: old?.at ?? at };
+      // A milestone proposed again keeps its other cells, such as its release: nothing moves it to another release by itself (T1003).
+      const row = { ...old, id: pid, name, goal, pilot: pilot.id, gate: g.id, at: old?.at ?? at };
       const after = old ? milestones.map((p) => (p.id === pid ? row : p)) : [...milestones, row];
       // A row for each task but the pilot whose milestone changes (R1269-3): from its cell before this command. After a stopped
       // proposal, which changed cells but wrote no rows, from what the decision rows say: a task's last move row, or a
