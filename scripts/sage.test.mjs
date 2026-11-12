@@ -579,13 +579,13 @@ test("T584: --candidate takes a whole number from 1, after the cleaning of every
   assert.equal(rows(s.dir, "runs")[0].candidate, "2");
 });
 
-test("T584: a large arena is a design arena: candidates, a judge's page, the PE, the owner's approval, then the build on its own branch", () => {
+test("T584: a large arena is a design arena: candidates, a judge's page, the PE, the owner's answer on the design, then the build on its own branch", () => {
   const s = store();
   s.ok("task", "add", "--priority", "P2", "--title", "t", "--size", "large", "--add", "arena", "--why", "no clear answer");
   assert.equal(rows(s.dir, "tasks")[0].route, "design,arena,pe,build,code-review,security-review,ux-review,qa");
   s.ok("task", "T1", "set", "state=designing");
   const candidate = (role, k) => ["run", "add", "T1", "--role", role, "--branch", `sage/t1-c${k}`, "--candidate", String(k)];
-  assert.equal(s.no(...candidate("implementer", 1)), "sage: T1 is large and designing, so its arena is a design arena, and an implementer is no candidate of it: use --role designer. A build arena runs on a tiny or small task, or on a briefed task after an approved design. Nothing changed.");
+  assert.equal(s.no(...candidate("implementer", 1)), "sage: T1 is large and designing, so its arena is a design arena, and an implementer is no candidate of it: use --role designer. A build arena runs on a tiny or small task, or on a briefed task whose design may go ahead. Nothing changed.");
   assert.match(s.no("run", "add", "T1", "--role", "designer", "--branch", "sage/t1-design"), /^sage: T1's arena step is open/, "the arena stands for the design block: a plain designer waits");
   const pages = s.ok("pages", "T1");
   for (const k of [1, 2]) {
@@ -620,7 +620,7 @@ test("T584: a large arena is a design arena: candidates, a judge's page, the PE,
   assert.equal(check("sage/t1-c1").stderr.trim(), wouldLand("sage/t1-c1", 1, "R1"));
 });
 
-test("T584: a build arena on a large task waits for briefed, after an approved design", () => {
+test("T584: a build arena on a large task waits for briefed, once its design may go ahead", () => {
   const s = store();
   s.ok("task", "add", "--priority", "P2", "--title", "t", "--size", "large", "--add", "arena", "--why", "no clear answer");
   const candidate = ["run", "add", "T1", "--role", "implementer", "--branch", "sage/t1-c1", "--candidate", "1"];
