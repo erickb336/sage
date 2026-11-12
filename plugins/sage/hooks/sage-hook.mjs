@@ -22,7 +22,7 @@
 //     (sage mode, or a sage agent in any mode), an agent sends SendMessage only to main (it can wake a stopped agent), and
 //     never names a spawn main or lead-T<n> (reservedName). Only the main session's TaskStop frees a slot.
 //   - A sage agent may finish only with the full report of the sage:report skill.
-//   - In sage mode, the chief's message that names its kind and misses that kind's shape (core's shapeMiss) gets the
+//   - In sage mode, the chief's message that names its kind and misses that kind's shape (core's messageMiss) gets the
 //     chief a note at its next prompt, and a line in shape-misses.jsonl (T1004). It never blocks, and it fails open.
 //   - Only the chief writes the logbook, in any mode (agentWriteProblem): an agent runs only the state tool's read
 //     commands. The one exception is a lead (agent type sage:lead, in the bound slot of its lead-T<n> spawn): it runs
@@ -266,7 +266,7 @@ export function handle(input, state, slots) {
   // and the problem names, no text of the message. Claude Code 2.1.289 sends last_assistant_message on this Stop.
   if (event === "Stop" && main && state.sage) {
     let miss;
-    try { miss = typeof input.last_assistant_message === "string" && core.shapeMiss(input.last_assistant_message); } catch {}
+    try { miss = typeof input.last_assistant_message === "string" && core.messageMiss(input.last_assistant_message); } catch {}
     if (miss) {
       state.shapeNote = miss.note;
       try {

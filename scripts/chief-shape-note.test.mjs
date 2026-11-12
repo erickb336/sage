@@ -49,7 +49,7 @@ test("a chief's message that names its kind and misses its shape gives one note 
   assert.ok(problems.some((p) => /needs "Needed by"/.test(p)) && problems.some((p) => /raw ids/.test(p)), "the fixture misses two ways");
   assert.equal(s.stop(MISSED), undefined, "the Stop is never blocked: the owner already sees the message");
   const note = s.prompt("go on");
-  assert.match(note, /QUESTION/, "the note names the kind");
+  assert.match(note, /^sage: your last message names the kind "question"/, "the note names the kind");
   for (const p of problems) assert.ok(note.includes(`- ${p}`), `the note names the problem: ${p}`);
   assert.equal(s.prompt("and then?"), undefined, "the note comes once");
   // The count: one line for the miss, with its time, its kind and its problem names, and no text of the message.
@@ -89,8 +89,8 @@ test("an error in the check gives no note and no block", () => {
   const plugin = realpathSync(mkdtempSync(join(tmpdir(), "sage-plugin-")));
   cpSync(PLUGIN, plugin, { recursive: true });
   const checks = join(plugin, "core/message-checks.mjs"), text = readFileSync(checks, "utf8");
-  assert.ok(text.includes("export function shapeMiss(text) {"));
-  writeFileSync(checks, text.replace("export function shapeMiss(text) {", 'export function shapeMiss(text) {\n  throw new Error("a broken check");'));
+  assert.ok(text.includes("export function messageMiss(text) {"));
+  writeFileSync(checks, text.replace("export function messageMiss(text) {", 'export function messageMiss(text) {\n  throw new Error("a broken check");'));
   const s = session(plugin);
   assert.match(s.prompt("sage mode"), /sage mode is on/);
   assert.equal(s.stop(MISSED), undefined, "no block");
@@ -100,5 +100,5 @@ test("an error in the check gives no note and no block", () => {
   const real = session();
   real.prompt("sage mode");
   real.stop(MISSED);
-  assert.match(real.prompt("go on"), /QUESTION/);
+  assert.match(real.prompt("go on"), /the kind "question"/);
 });

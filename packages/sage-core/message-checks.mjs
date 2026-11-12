@@ -122,45 +122,6 @@ export function messageMiss(text) {
   };
 }
 
-// A short name for each form of textProblems, for the count of misses: it has no text of the message, so a raw id or a
-// line of the message never reaches the count. A part's name comes from KINDS. A form that this table does not know is
-// "other".
-const NAMES = [
-  [/^picture \d+: line \d+ is \d+ columns/, () => "picture width"],
-  [/^picture \d+: a picture has no tree marks/, () => "picture tree marks"],
-  [/^picture \d+: the box that starts/, () => "box not closed"],
-  [/^the message has tree marks/, () => "tree marks"],
-  [/^raw ids in the message/, () => "raw ids"],
-  [/^a [a-z -]+ needs a picture/, () => "no picture"],
-  [/^"([^"]+)" is out of order/, (m) => `out of order: ${m[1]}`],
-  [/^a [a-z -]+ needs "([^"]+)"$/, (m) => `missing: ${m[1]}`],
-  [/^a [a-z -]+ marks your pick/, () => "no pick"],
-];
-const problemName = (problem) => {
-  for (const [re, name] of NAMES) {
-    const m = re.exec(problem);
-    if (m) return name(m);
-  }
-  return "other";
-};
-
-/**
- * A chief's message that names its kind and misses its shape, for a hook that reads it after the owner sees it (T1004,
- * T1005): its kind, its problems, a short name for each problem (no text of the message, for the count), and the note
- * for the chief's next turn. A message with no kind, or one that fits its shape, gives null.
- */
-export function shapeMiss(text) {
-  const problems = textProblems(text);
-  if (!problems.length) return null;
-  const kind = kindOf(text);
-  const note = [
-    `sage: your last message names its kind, ${KINDS[kind].head}, but it does not fit that kind's shape:`,
-    ...problems.map((p) => `- ${p}`),
-    "The owner already sees it, so do not send it again only to fix its shape. Give the next message of this kind its shape: the presentation skill has each kind's shape, and the message command builds a message that fits.",
-  ].join("\n");
-  return { kind, problems, names: problems.map(problemName), note };
-}
-
 const unescape = (s) => s.replace(/&lt;/g, "<").replace(/&gt;/g, ">").replace(/&quot;/g, '"').replace(/&#39;/g, "'").replace(/&amp;/g, "&");
 // LOADS and EVENT read a tag without its quoted values: a value is escaped text, such as a picture's title in its
 // aria-label ("Where data = truth"), not an attribute. REFRESH reads the whole tag.
