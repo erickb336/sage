@@ -65,7 +65,7 @@ test("T294: a qa-fail that the merge check no longer refuses is not an owner fai
   const ledger = ["checks-pass", "review-clean", "qa-pass", "qa-fail"].map(kind => ({ task: "T1", pr: "12", sha: head, kind, cycle: "1", at: now }));
   const make = ok => buildBoardModel([source("one", [task("T1", "verified", { pr: "12" })], { ledger }, records)], { now, landing: () => ({ ok, reason: "T1 refused." }) }).tasks[0];
   assert.deepEqual(make(true).reasons.filter(reason => reason.kind !== "merge").map(reason => reason.kind), [], "the merge check passed: triage cleared the verdict");
-  assert.deepEqual(make(false).reasons.map(reason => reason.kind), ["merge-check", "qa-fail"]);
+  assert.deepEqual(make(false).reasons.map(reason => reason.kind), ["merge-refused", "qa-fail"], "a refusal of the head has its own kind (T1002, F5)");
 });
 
 
