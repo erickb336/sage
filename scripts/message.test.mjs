@@ -191,6 +191,24 @@ test("the shape of each kind holds in code: a missing part, a part out of order,
   assert.match(textProblems(render(fixture("02-question.json")).text.replace(/\nNeeded by:[^\n]*\n[^\n]*\n/, "\n")).join("\n"), /a question needs "Needed by"/);
 });
 
+test("a wrong input is refused with a plain problem, never a crash: an inherited name, a null block, sections or a frame nested too deep (F-T984-3, F-T984-13)", () => {
+  const progress = fixture("01-progress-note.json");
+  const refused = (msg, re) => { const out = renderMessage(msg); assert.ok(out.problems, "refused"); assert.match(out.problems.join("\n"), re); };
+  for (const kind of ["constructor", "__proto__", "toString", "hasOwnProperty"]) refused({ ...progress, kind }, /^kind is one of: progress/);
+  for (const t of ["constructor", "__proto__", "toString"]) refused({ ...progress, blocks: [{ t: "section", label: "x", body: [{ t, text: "x" }] }, ...progress.blocks] }, /blocks\[0\]\.body\[0\] is not a block/);
+  refused({ ...progress, blocks: [null, ...progress.blocks] }, /blocks\[0\] is not a block/);
+  refused({ ...progress, blocks: [{ t: "section", label: "x", body: [null] }, ...progress.blocks] }, /blocks\[0\]\.body\[0\] is not a block/);
+  const nest = (n) => { let b = { t: "p", text: "x" }; for (let i = 0; i < n; i++) b = { t: "section", label: "s", body: [b] }; return b; };
+  refused({ ...progress, blocks: [...progress.blocks, nest(5000)] }, /sections nest at most 5 deep/);
+  refused({ ...progress, blocks: [...progress.blocks, nest(6)] }, /sections nest at most 5 deep/);
+  // Five deep is still a message: a page shows the labels as h2 to h6.
+  assert.doesNotMatch(renderMessage({ ...progress, blocks: [...progress.blocks, nest(5)] }).problems?.join("\n") ?? "", /nest/);
+  let frame = { box: "task", name: "a", state: "framed" };
+  for (let i = 0; i < 5000; i++) frame = { box: "group", name: "g", word: "done", items: [frame] };
+  const catchUp = fixture("10-catch-up.json");
+  refused({ ...catchUp, blocks: catchUp.blocks.map((b) => (b.t === "picture" ? { ...b, frame } : b)) }, /nested too deep for a box of 46 columns/);
+});
+
 test("the page escapes every text, loads nothing, and allows only its own style and the hash of its one script", () => {
   const msg = structuredClone(fixture("05-explainer.json"));
   msg.title = "About <script>alert(1)</script> & \"quotes\"";

@@ -80,6 +80,9 @@ const SHAPES = {
 };
 
 const LEVELS = ["release", "milestone", "task", "group"];
+const MIN_BOX = 8;
+// A page shows a section's label as h2 to h6, so sections nest at most 5 deep; the limit also keeps the walk off the stack.
+const MAX_SECTIONS = 5;
 const WORDS = ["not started", "waiting", "needs you", "in progress", "done", "stopped"];
 const cap = (s) => s.charAt(0).toUpperCase() + s.slice(1);
 
@@ -92,6 +95,8 @@ export function frameLines(node, width) {
   const problems = [];
   const lay = (n, w, path) => {
     if (!n || typeof n !== "object" || !LEVELS.includes(n.box)) { problems.push(`${path} is a box: { box: ${LEVELS.join(" | ")}, name, … }`); return { rows: [], word: null }; }
+    // Each level takes 4 columns, so a frame nests only as deep as its width allows: stop before the stack does.
+    if (w < MIN_BOX) { problems.push(`${path} is nested too deep for a box of ${width} columns`); return { rows: [], word: null }; }
     const items = Array.isArray(n.items) ? n.items : [];
     const kids = items.map((item, k) => (typeof item === "string" ? null : lay(item, w - 4, `${path}.items[${k}]`)));
     const words = kids.filter(Boolean).map((kid) => kid.word);
@@ -123,7 +128,8 @@ export function frameLines(node, width) {
 export function prepareMessage(input) {
   const problems = [];
   const msg = input && typeof input === "object" && !Array.isArray(input) ? input : {};
-  const kind = KINDS[msg.kind];
+  // Own names only: "constructor" or "__proto__" is not a kind.
+  const kind = Object.hasOwn(KINDS, msg.kind) ? KINDS[msg.kind] : undefined;
   if (!kind) return { problems: [`kind is one of: ${Object.keys(KINDS).join(", ")}; not ${JSON.stringify(msg.kind ?? "")}`] };
   const long = msg.long !== undefined;
   const width = long ? LONG_WIDTH : WIDTH;
@@ -134,10 +140,13 @@ export function prepareMessage(input) {
   if (msg.kind === "question" && isText(msg.title) && !msg.title.trim().endsWith("?")) problems.push("the title of a question is the question: it ends with ?");
   if (msg.kind === "confirm" && isText(msg.title) && !/cannot be undone/i.test(msg.title)) problems.push("the title of a confirm names the act and says that it cannot be undone");
   if (!Array.isArray(msg.blocks)) return { problems: [...problems, "blocks is a list of blocks"] };
-  const bad = (b) => !b || typeof b !== "object" || !BLOCKS[b.t] || !BLOCKS[b.t](b);
-  const walk = (blocks, path) => blocks.map((b, k) => {
+  const bad = (b) => !b || typeof b !== "object" || !Object.hasOwn(BLOCKS, b.t) || !BLOCKS[b.t](b);
+  const walk = (blocks, path, depth = 0) => blocks.map((b, k) => {
     if (bad(b)) { problems.push(`${path}[${k}] is not a block. The blocks: ${Object.values(SHAPES).join("; ")}`); return b; }
-    if (b.t === "section") return { ...b, body: walk(b.body, `${path}[${k}].body`) };
+    if (b.t === "section") {
+      if (depth >= MAX_SECTIONS) { problems.push(`${path}[${k}] is a section ${depth + 1} deep: sections nest at most ${MAX_SECTIONS} deep`); return b; }
+      return { ...b, body: walk(b.body, `${path}[${k}].body`, depth + 1) };
+    }
     if (b.t === "picture") {
       const lines = b.frame !== undefined ? frameLines(b.frame, width) : { lines: b.lines, problems: [] };
       problems.push(...lines.problems.map((p) => `${path}[${k}] (${b.title}): ${p}`));
@@ -148,7 +157,9 @@ export function prepareMessage(input) {
     return b;
   });
   const blocks = walk(msg.blocks, "blocks");
-  if (!problems.length) problems.push(...shapeProblems(msg.kind, blocks, { long }));
+  // The checks below read each block: a block that is not one stops here.
+  if (problems.length) return { problems };
+  problems.push(...shapeProblems(msg.kind, blocks, { long }));
   const tables = blocks.filter((b) => b.t === "table");
   if (kind.tableHead && tables[0] && tables[0].head.join("|") !== kind.tableHead.join("|")) problems.push(`the table of a ${msg.kind} has the columns: ${kind.tableHead.join(", ")}`);
   if (kind.pick && tables[0] && tables[0].pick === undefined) problems.push(`the table of a ${msg.kind} marks your pick: pick is the number of its row, from 0`);
