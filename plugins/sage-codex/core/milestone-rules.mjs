@@ -277,11 +277,24 @@ export function releaseNameProblem(name, releases) {
  */
 const rowWord = (task) => (MET.includes(task.state) ? "done" : task.state === "abandoned" ? "stopped" : task.state === "framed" ? "not started" : "in progress");
 /**
+ * A milestone's state as the board and status show it: the state tool's, plus done (each task that is not abandoned is
+ * merged or concluded) and stuck (the pilot of an active, proposed or changing milestone is abandoned or lost, so no card
+ * shows its breakdown gate). graph: a shownGraph.
+ */
+export function shownMilestoneState(milestone, { byId, byMilestone }) {
+  const pilot = byId.get(milestone.pilot)?.state;
+  if (milestone.state === "active") return progressOf(byMilestone.get(milestone.id) ?? []).done ? "done" : dead(pilot) ? "stuck" : "active";
+  return ["proposed", "changing"].includes(milestone.state) && dead(pilot) ? "stuck" : milestone.state;
+}
+/** A milestone's word and reason (state-words.mjs), as the board, status and its release show it: from its shown state, or its tasks. */
+export const milestoneWordOf = (milestone, graph) => milestoneWord({ state: shownMilestoneState(milestone, graph) }, (graph.byMilestone.get(milestone.id) ?? []).map(rowWord));
+/**
  * Each release in row order, with its milestones, its single tasks, its state and the count of its tasks (the tasks of its
  * milestones and its single tasks): done, stopped and all. Then a stand-in (missing: true) for each name that a release
  * cell names and the releases table lacks, so no milestone or task drops out of the count. graph: a shownGraph.
  */
-export function releasesOf(releases, { byId, milestones, byMilestone }) {
+export function releasesOf(releases, graph) {
+  const { byId, milestones, byMilestone } = graph;
   const out = new Map(releases.map((r) => [releaseKey(r.name), { ...r, milestones: [], singles: [] }]));
   const of = (name) => out.get(releaseKey(name)) ?? out.set(releaseKey(name), { name, missing: true, milestones: [], singles: [] }).get(releaseKey(name));
   for (const m of milestones.values()) if (m.release) of(m.release).milestones.push(m);
@@ -289,7 +302,7 @@ export function releasesOf(releases, { byId, milestones, byMilestone }) {
   return [...out.values()].map((r) => {
     const tasks = [...r.milestones.flatMap((m) => byMilestone.get(m.id) ?? []), ...r.singles];
     // The state words' one rule (state-words.mjs, T1002): a milestone's word from its state or its tasks, a release's from its items.
-    const words = [...r.milestones.map((m) => milestoneWord(m, (byMilestone.get(m.id) ?? []).map(rowWord)).word), ...r.singles.map(rowWord)];
+    const words = [...r.milestones.map((m) => milestoneWordOf(m, graph).word), ...r.singles.map(rowWord)];
     return { ...r, state: releaseWord(words).word, done: tasks.filter((t) => MET.includes(t.state)).length, stopped: tasks.filter((t) => t.state === "abandoned").length, total: tasks.length };
   });
 }
