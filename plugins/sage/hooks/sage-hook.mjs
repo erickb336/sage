@@ -22,6 +22,8 @@
 //     (sage mode, or a sage agent in any mode), an agent sends SendMessage only to main (it can wake a stopped agent), and
 //     never names a spawn main or lead-T<n> (reservedName). Only the main session's TaskStop frees a slot.
 //   - A sage agent may finish only with the full report of the sage:report skill.
+//   - In sage mode, the chief's message that names its kind and misses that kind's shape (core's messageMiss) gets the
+//     chief a note at its next prompt, and a line in shape-misses.jsonl (T1004). It never blocks, and it fails open.
 //   - Only the chief writes the logbook, in any mode (agentWriteProblem): an agent runs only the state tool's read
 //     commands. The one exception is a lead (agent type sage:lead, in the bound slot of its lead-T<n> spawn): it runs
 //     the commands of core's lead policy on its own task, from Bash, as one plain command, with no --project and no
@@ -219,6 +221,8 @@ export function handle(input, state, slots) {
       state.given = true;
       notes.unshift(chiefText());
     }
+    if (state.sage && state.shapeNote) notes.push(state.shapeNote);
+    delete state.shapeNote;
     return notes.length ? context(event, notes.join("\n\n---\n\n")) : undefined;
   }
   if (event === "PostCompact") {
@@ -256,6 +260,24 @@ export function handle(input, state, slots) {
   // dies (for one, on a usage limit) fires no SubagentStop, but it leaves the registry, and the chief's next turn ends.
   // Only then: at a SubagentStop, a foreground agent of the session may be running and not listed.
   if (event === "Stop" && main && Array.isArray(input.background_tasks)) slots.reconcile(input.background_tasks.map((t) => t?.id));
+  // The chief's message, at the main session's Stop in sage mode (T1004): one that names its kind and misses its shape
+  // gives the chief a note at its next prompt. The note is about the last message only: each Stop replaces it, so a
+  // later message that fits, or that names no kind, leaves none (F-T1004-1, F-T1004-4). The owner already sees the
+  // message, so the hook never blocks, and any error gives no note. Each miss counts as one line of shape-misses.jsonl
+  // beside the hook state: the time, the kind and the problem names, no text of the message. Claude Code 2.1.289 sends
+  // last_assistant_message on this Stop.
+  if (event === "Stop" && main && state.sage) {
+    let miss;
+    delete state.shapeNote;
+    try { miss = typeof input.last_assistant_message === "string" && core.messageMiss(input.last_assistant_message); } catch {}
+    if (miss) {
+      state.shapeNote = miss.note;
+      try {
+        mkdirSync(stateDir(), { recursive: true });
+        appendFileSync(join(stateDir(), "shape-misses.jsonl"), `${JSON.stringify({ at: new Date().toISOString(), kind: miss.kind, problems: miss.names })}\n`);
+      } catch {}
+    }
+  }
   // A helper's stop keeps its report and the commit that it saw, for its lead's verdict (F-T289-4, F-T289-5).
   if (event === "SubagentStop") {
     const helper = slots.helperFor(input.agent_id), head = helper && headOf(helper.folder, helper.task);

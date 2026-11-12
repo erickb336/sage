@@ -129,6 +129,13 @@ A picture is plain text first, at most 46 columns wide, so it reads the same in 
 - The page shows the whole message, with each picture drawn as an image from the same text.
 - A design's page has a switch between the picture after the change and today's picture.
 
+In Claude Code, the sage hook reads each message of the chief when it ends. A message whose first line names a kind, and that does not fit that kind's shape, gets the chief a short note at its next turn:
+
+- The note names the kind and each problem, at most 20 of them, and then the count of the rest. The chief gives the next message of that kind its shape.
+- The note is about the chief's last message before your next message only. When that message fits, or names no kind, there is no note.
+- The hook never stops or changes the message, because you already see it.
+- The hook counts each miss in `shape-misses.jsonl`, in its state folder (`~/.claude/sage/.hooks/` by default): the time, the kind and the names of the problems, with no text of the message.
+
 Known limits:
 
 - A page loads nothing and runs only its own switch, but a page that you open can still send its own content out, for example through a link in it. A page may link to sites outside this Mac: a link that you click there sends you, and what the link carries, to that site.
