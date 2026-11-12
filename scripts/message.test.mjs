@@ -436,6 +436,17 @@ test("T1023: a question or confirm in its fallback text form gives each part und
   assert.match(messagePage(prepareMessage(fixture("13-confirm.json")).msg, ""), /<table><thead><tr><th>Folder<\/th>/);
 });
 
+test("T1023: the presentation skill's before and after example: the check notes the run-together question with a table, and passes the fallback", () => {
+  const skill = readFileSync(join(HERE, "..", "writing", "presentation.md"), "utf8");
+  const example = skill.slice(skill.indexOf("### Before and after"), skill.indexOf("## The kinds"));
+  const questions = [...example.matchAll(/^```text\n([\s\S]*?)\n```$/gm)].map((m) => m[1]).filter((b) => b.startsWith("QUESTION\n"));
+  assert.equal(questions.length, 2, "a before and an after");
+  const [before, after] = questions;
+  const names = messageMiss(before).names;
+  assert.ok(names.includes("table") && names.includes("missing: Where this is"), names.join(", "));
+  assert.equal(messageMiss(after), undefined);
+});
+
 // ---------------------------------------------------------------- the state tool's message command
 
 function sandbox() {

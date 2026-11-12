@@ -79,7 +79,8 @@ const TYPE_WORDS = { picture: "a picture", table: "a table", toggle: "a toggle",
 /** The kinds of message, from core's KINDS: the state tool's message command checks the same parts. */
 export function kindsTable() {
   const part = (kind) => (p) => {
-    const name = TYPE_WORDS[p.name] ? `${TYPE_WORDS[p.name]}${p.name === "table" && KINDS[kind].tableHead ? ` (${KINDS[kind].tableHead.join(", ")}${KINDS[kind].pick ? "; your pick marked" : ""})` : ""}${p.many ? (p.need ? ", one or more" : ", any number") : ""}` : p.name;
+    // A question's answers are a list in its text, never a table (T1023).
+    const name = TYPE_WORDS[p.name] ? `${p.name === "table" && KINDS[kind].pick ? "the answers, a numbered list" : TYPE_WORDS[p.name]}${p.name === "table" && KINDS[kind].tableHead ? ` (${KINDS[kind].tableHead.join(", ")}${KINDS[kind].pick ? "; your pick marked" : ""})` : ""}${p.many ? (p.need ? ", one or more" : ", any number") : ""}` : p.name;
     return p.need ? name : `[${name}]`;
   };
   const rows = Object.entries(KINDS).map(([kind, k]) => `| \`${kind}\` | \`${k.head}\` | ${k.use} | ${partsOf(kind).map(part(kind)).join(" · ")} |`);
