@@ -83,7 +83,7 @@ A project with a [shared logbook](using-sage.md#shared-logbooks) shows as one pr
 | Line | Where | What it says |
 | --- | --- | --- |
 | `Claude · C1` on the card's top line | Each card of a shared task, in place of the logbook's name | The owning chief and its provider. |
-| `Unclaimed`, with a dashed outline | A shared task with no owning chief | The chief that released it can claim it back; another chief needs your takeover gate. |
+| `Unclaimed`, with a dashed outline | A shared task with no owning chief | The chief that unclaimed it can claim it back; another chief needs your takeover gate. |
 | `Offered to Codex · C2. It waits for R407 to end, then Codex · C2 accepts.` | Under the step line, and on the task page | An open offer, while a run of the task runs. |
 | `Offered to Claude · C1. Ready: Claude · C1 can accept.` | The same | An open offer with no running run. |
 | `Hand T320 from Claude · C1 to Codex · C2? R410 and R411 end as failed.` | Needs you | An open takeover gate, with its options and recommendation: `approve, when you know that Claude · C1 stopped`, or after an accept `approve, because Claude · C1 offered T320 to Codex · C2`. Then the offer line says `Codex · C2 asks to take this. Needs you: G7.` |
@@ -136,6 +136,7 @@ The page reads files only: the logbooks, the hook's agent slots and helper notes
 
 To join a slot to its run, the hook marks each agent slot with the run id from the first line of the agent's brief ("Run R12 · task T3"). An agent whose brief has no such line shows with "No run recorded".
 
+<!-- The old anchor stays: older entries of CHANGELOG.md and changes/earlier.md link to it. -->
 <a id="programs-on-the-board"></a>
 
 ## Milestones on the board
