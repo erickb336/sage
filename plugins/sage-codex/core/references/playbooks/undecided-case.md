@@ -9,8 +9,8 @@ The chief reads this playbook at the moment that its line in the chief's text na
    - The result under each option.
    - A recommendation, and why.
    - Engineering details (formats, internal names) are not cases: the chief decides them and logs them.
-3. **The owner's moment:** message kind `question`, with the case table as numbered rows and the recommended answer in each row. Ask once, in the task's one batch of questions, before the build.
-   - Answers: accept all, or change single rows.
-   - If the owner does not answer: the rows that change what a user sees wait. The engineering rows go ahead.
+3. **The owner's moment:** message kind `question`, with one question for each case on the choice card and the recommended answer first. Ask once, in the task's one batch of questions, before the build.
+   - Answers: accept each recommendation, or change single cases.
+   - If the owner does not answer: the cases that change what a user sees wait. The engineering cases go ahead.
 4. **After the answer:** each answer becomes an acceptance line and a test in the build brief, and a decision row. QA checks each case in the real app.
 5. **The owner learns:** **special case.** A branch in code for one situation. An undecided case becomes one by accident, and then nobody knows why it is there. Example: if a Codex model cannot show question cards, how does sage ask? The owner chose numbered choices in the chat.

@@ -74,6 +74,33 @@ A catch-up's picture is a `frame`: boxes inside boxes that the command lays out 
 
 In the text of a field, a list or a cell, `**bold**` and a code span show on the page. The chat text shows bold words without their marks, and keeps a code span's backticks: a word in code, such as a chip name, is not an id.
 
+## Ask with the question tool
+
+Ask a `question` or a `confirm` with the host's question tool when the session has one: the owner picks an option on a card, the choice card. The text form of the kind, with its numbered rows, is the fallback only.
+
+Use the tool only for a choice that is the owner's: product direction, or an act that cannot be undone. Never use it for reversible work: decide that, and report it.
+
+1. Park each question with `sage gate add` first.
+2. Send a short chat message: where this is, what the choice is about in plain words, when you need the answer, and what happens if you do not answer. Add the page, "Judged by" and the bad side of your pick when the kind asks for them, and the Ref line last. The card can hide the chat, so the message gives no head line and no table: the card is the question.
+3. Call the tool. Put the whole batch in one call when it fits, the most important question first.
+
+| Part of the question | On the card |
+| --- | --- |
+| The title | The question text. It stands alone: it names the items that it asks about. |
+| A short name of the topic | The header chip, at most 12 characters. |
+| Each answer (each row of the table) | One option. Its label is the answer, in 1 to 5 words. |
+| Your pick | The first option, with "(Recommended)" at the end of its label. |
+| What happens next, and the cost | The option's description. |
+| If you do not answer | Not on the card: it stays in the chat message. |
+
+4. Record the answer with `gate answer`: the option's number, or the owner's own words (the tool's Other) as `--other-hex`.
+
+Each host has its tool:
+
+- **Claude Code:** `AskUserQuestion`, with 1 to 4 questions a call and 2 to 4 options a question. The tool adds Other.
+- **Codex:** `request_user_input_async`, when your tools have it. An option is one line with no description, so write it as "label: what happens next, cost". The tool returns at once, and the answer comes as the owner's next message. Codex's `request_user_input` works only in Plan mode: do not use it.
+- **No tool:** send the kind's text form, as below.
+
 ## The kinds
 
 A playbook (a file in `core/references/playbooks/` in the plugin's folder) names the kind of each moment where the owner answers, for example `question` for the case table of an undecided case. Use the kind that the playbook names.

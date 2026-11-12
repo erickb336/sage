@@ -7,7 +7,7 @@ The chief reads this playbook at the moment that its line in the chief's text na
    - A test that pins what the code does today.
    - A removal table: the item, who uses it, what changes for the owner, and the risk.
    - Two groups: no change for the owner, and a change that the owner would notice.
-3. **The owner's moment:** message kind `question`, with only the second group: one numbered row for each item that the owner would notice (a guard, a command, a part of a page), each with its recommended mark, remove or keep.
+3. **The owner's moment:** message kind `question`, with only the second group: one question on the choice card for each item that the owner would notice (a guard, a command, a part of a page), with its recommended mark, remove or keep, first.
    - Answers: accept the marks, or change single rows.
    - If the owner does not answer: the items with no change for the owner go ahead. The items that the owner would notice wait.
 4. **After the answer:** a decision row for each group. The pinned test still passes after the change. The pull request description names what the owner would notice.

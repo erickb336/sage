@@ -79,6 +79,33 @@ A catch-up's picture is a `frame`: boxes inside boxes that the command lays out 
 
 In the text of a field, a list or a cell, `**bold**` and a code span show on the page. The chat text shows bold words without their marks, and keeps a code span's backticks: a word in code, such as a chip name, is not an id.
 
+## Ask with the question tool
+
+Ask a `question` or a `confirm` with the host's question tool when the session has one: the owner picks an option on a card, the choice card. The text form of the kind, with its numbered rows, is the fallback only.
+
+Use the tool only for a choice that is the owner's: product direction, or an act that cannot be undone. Never use it for reversible work: decide that, and report it.
+
+1. Park each question with `sage gate add` first.
+2. Send a short chat message: where this is, what the choice is about in plain words, when you need the answer, and what happens if you do not answer. Add the page, "Judged by" and the bad side of your pick when the kind asks for them, and the Ref line last. The card can hide the chat, so the message gives no head line and no table: the card is the question.
+3. Call the tool. Put the whole batch in one call when it fits, the most important question first.
+
+| Part of the question | On the card |
+| --- | --- |
+| The title | The question text. It stands alone: it names the items that it asks about. |
+| A short name of the topic | The header chip, at most 12 characters. |
+| Each answer (each row of the table) | One option. Its label is the answer, in 1 to 5 words. |
+| Your pick | The first option, with "(Recommended)" at the end of its label. |
+| What happens next, and the cost | The option's description. |
+| If you do not answer | Not on the card: it stays in the chat message. |
+
+4. Record the answer with `gate answer`: the option's number, or the owner's own words (the tool's Other) as `--other-hex`.
+
+Each host has its tool:
+
+- **Claude Code:** `AskUserQuestion`, with 1 to 4 questions a call and 2 to 4 options a question. The tool adds Other.
+- **Codex:** `request_user_input_async`, when your tools have it. An option is one line with no description, so write it as "label: what happens next, cost". The tool returns at once, and the answer comes as the owner's next message. Codex's `request_user_input` works only in Plan mode: do not use it.
+- **No tool:** send the kind's text form, as below.
+
 ## The kinds
 
 A playbook (a file in `core/references/playbooks/` in the plugin's folder) names the kind of each moment where the owner answers, for example `question` for the case table of an undecided case. Use the kind that the playbook names.
@@ -88,7 +115,7 @@ Each kind: its `kind` in the JSON, its head (the first line), when to send it, a
 | Kind | Head | When | Parts, in order |
 | --- | --- | --- | --- |
 | `progress` | `PROGRESS` | While a task runs: one short note when it moves to a new step, with nothing for the owner to do. | Where this is · [Since my last note] · What changed · Next · [Cost so far] · What I need from you |
-| `question` | `QUESTION` | When work waits for the owner's choice. The title is the question. | Where this is · What you approve · The one real choice in it · a table (Answer, What happens next, Cost; your pick marked) · If you do not answer · Needed by · [Judged by] · [The bad side of my pick] · After you answer · [a Page block] |
+| `question` | `QUESTION` | When work waits for the owner's choice. The title is the question. Ask it on the choice card (see above); this text form is the fallback. | Where this is · What you approve · The one real choice in it · a table (Answer, What happens next, Cost; your pick marked) · If you do not answer · Needed by · [Judged by] · [The bad side of my pick] · After you answer · [a Page block] |
 | `report` | `REPORT` | When work ends: a pull request merged, or a study concluded. The title says what happened and what it needs. | Where this is · [Why this change] · [a picture, any number] · a table (Piece of work, What changes for you, How I know it works, Cost, You must act) · What I did not check · Weak points · What you need to do · [a Page block] |
 | `request understood` | `REQUEST UNDERSTOOD` | Right after the owner asks for new work, before agents spend hours on it. It starts on its defaults unless the owner corrects it. | Your words · What I understood · Read back (costly if wrong) · In · Out · Appetite · [Unsure, with my default] · If you say nothing |
 | `explainer` | `EXPLAINER` | When the owner asks what a part of sage is, or a message uses a word that is new to the owner. The title is “About …”. | What it is · Why it exists · A real example · [a picture, any number] · [Like, and where the likeness stops] · [What it is not] · [New words] · [a Page block] |
@@ -99,5 +126,5 @@ Each kind: its `kind` in the JSON, its head (the first line), when to send it, a
 | `catch-up` | `CATCH-UP` | When the owner comes back after time away, or asks where the work is: boxes inside boxes (release › milestone › task), each with its state word, the current task in a double box. | a picture · Each box · Since · What changed · If this happens · What I need from you |
 | `estimate` | `ESTIMATE` | Before work starts, when the owner asks how long or how much, or when a cost changes a choice. The title is the number, with its unit and range. | What it covers · a table · [a picture, any number] · Basis · How sure · [What would change it] · [So far] · [Your time] · What I need from you |
 | `steps for you` | `STEPS FOR YOU` | When only the owner can do something: an install, an update, a setting, a sign-in. A warning goes before the steps it is about. | When · Why · numbered steps · How you know it worked · Your time · If a step fails |
-| `confirm` | `CONFIRM` | Just before an act that cannot be undone: a delete, a publish, a message to other people. The title names the act and says that it cannot be undone. | What I will do · a table · What stays · If you say yes · If you say no, or nothing |
+| `confirm` | `CONFIRM` | Just before an act that cannot be undone: a delete, a publish, a message to other people. The title names the act and says that it cannot be undone. Ask it on the choice card too. | What I will do · a table · What stays · If you say yes · If you say no, or nothing |
 | `lesson kept` | `LESSON KEPT` | When a mistake teaches sage something: the lesson once, and where it now lives. | What happened · [a picture, any number] · The lesson · Has it happened before · a table (Where the lesson lives now, What it holds, State) · What changes for you · What I need from you |
