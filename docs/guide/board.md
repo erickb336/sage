@@ -174,7 +174,7 @@ A milestone is a request that sage runs as two or more tasks for one goal, with 
 | A milestone's page (`/milestone/<key>`) | Its goal and progress, the pilot, what moves next, its tasks in order (the pilot first, then each task after the tasks that it waits for), and its latest decisions, as short lines with short dates (for example "17 Oct T2 merged: PR 66"). While the breakdown waits for you, the page shows the breakdown gate in the frame. An unknown milestone gives the page "Milestone not found", with status 404. |
 | The chat | A Milestones section with one line for each milestone that is not done. Done milestones, and dropped milestones with no task left in them, are counts, with ": open the board's Milestones tab". A dropped milestone with tasks still in it keeps its line, which asks the chief to take each task out. |
 
-A project with releases shows its milestones in the chat's "Where we are" frame, not in the Milestones section (see [Releases on the board](#releases-on-the-board)).
+A project with releases shows its milestones in the chat's "Where we are" frame, not in the Milestones section (see [Releases on the board](#releases-on-the-board)). The section keeps a milestone of that project only when the frame does not show it: for example, a dropped milestone with tasks still in it, in a done release. Its line still asks the chief to take each task out.
 
 The offline HTML file holds the milestones list and each milestone's page too, as parts of the one file. Each of its pages has its own theme switch.
 
@@ -193,10 +193,12 @@ The frame follows these rules:
 
 - It shows each release that is not done or stopped, or the last release when all are. Then it shows the open milestones and tasks that are in no release.
 - A release box shows how many of its tasks are done. Its single tasks are one box.
+- A box names a task by its title, for example "Task: Presentation skill". On the page, the task's id follows in grey.
 - A milestone box holds its tasks that need you or are in progress (at most 3). Then it has a box for each other word, with its count.
-- A box that needs you has a double border.
+- A box of waiting tasks says what they wait for, when they all wait for the same thing: for example "Waiting for Presentation skill", or "Waiting for your approval". Else it shows the word alone.
+- A box that needs you has a double border. So has a task in progress, which says "you are here".
 
-A release's word comes from its milestones and single tasks: see the rules of the state words above. A release that a milestone or a task names, but that the logbook does not have, says so in its box: ask the chief to add it.
+A release's word comes from its milestones and single tasks: see the rules of the state words above. A release that a milestone or a task names, but that the logbook does not have, says so in its box: ask the chief to add it. A releases table that the board cannot read is an item in Needs you, with the file and the line; the board then shows the tasks without their releases.
 
 ## The board server
 
