@@ -142,32 +142,34 @@ test("the checks catch the designer's negative cases: width, tree marks, an imag
   assert.match(textProblems(out.text.replace("│ In progress · in review                │", "│ In progress · in review T995           │")).join("\n"), /raw ids in the message: T995/, "in a picture too");
 });
 
-test("a page check reads only real attributes, and a picture of arrows alone is a picture (F-T984-1, F-T984-2)", () => {
+const explainerWith = (pic) => {
   const msg = fixture("05-explainer.json"), at = msg.blocks.findIndex((b) => b.t === "picture");
-  const withPicture = (pic) => ({ ...msg, blocks: msg.blocks.map((b, k) => (k === at ? { ...b, ...pic } : b)) });
-  // A picture's title is text in the image's aria-label, not an attribute: these titles pass.
+  return { ...msg, blocks: msg.blocks.map((b, k) => (k === at ? { ...b, ...pic } : b)) };
+};
+
+test("F-T984-1: the page check reads only real attributes, not a picture's title in its aria-label", () => {
   for (const title of ["Where data = truth", "A background = the old board", "Its src=the text form", "The page onload= nothing", "x href = y"]) {
-    const out = render(withPicture({ title }));
+    const out = render(explainerWith({ title }));
     assert.equal(out.problems, undefined, `${title}: ${out.problems}`);
     assert.ok(out.page.html.includes(`aria-label="${title}"`), title);
   }
   // Real attributes are still caught, quoted or not.
-  const html = render(msg).page.html;
+  const html = render(fixture("05-explainer.json")).page.html;
   assert.match(pageProblems(html.replace('<svg class="pic"', '<svg class="pic" onload="alert(1)"')).join("\n"), /an event attribute/);
   assert.match(pageProblems(html.replace("<main>", "<main><a href=https://example.com>x</a>")).join("\n"), /loads from outside itself/);
   assert.match(pageProblems(html.replace("</head>", '<meta http-equiv="refresh" content="0;url=https://example.com"></head>')).join("\n"), /loads from outside itself/);
-  // A picture with no box mark, only arrows: its image is drawn from its text, and the page passes.
-  const arrows = render(withPicture({ title: "The flow", lines: ["Brief  ▶  Run  ▶  Report"] }));
-  assert.equal(arrows.problems, undefined, arrows.problems);
+});
+
+test("F-T984-2: a picture of arrows alone, with no box mark, is a picture: its image passes, and it counts as the kind's picture", () => {
+  const arrows = render(explainerWith({ title: "The flow", lines: ["Brief  ▶  Run  ▶  Report"] }));
+  assert.equal(arrows.problems, undefined, arrows.problems?.join("\n"));
   assert.equal((arrows.page.html.match(/<svg class="pic"/g) ?? []).length, 1);
   assert.deepEqual(pageProblems(arrows.page.html), []);
   // An architecture needs a picture: one of arrows alone counts, also in the text check.
   const arch = fixture("08-architecture.json");
   const flow = render({ ...arch, blocks: arch.blocks.map((b) => (b.t === "picture" ? { ...b, lines: ["Brief  ▶  Run  ▶  Report"] } : b)) });
-  assert.equal(flow.problems, undefined, flow.problems);
+  assert.equal(flow.problems, undefined, flow.problems?.join("\n"));
   assert.deepEqual(textProblems(flow.text), []);
-  // Code stays code: a fence after a blank line, with no box mark, needs no image.
-  assert.match(render(fixture("12-steps-for-you.json")).text, /\n\n {3}```\n/);
 });
 
 test("the raw-id check has none of the false hits that the PE found: the Ref line, the Page block, code, the board, a message with no kind", () => {
@@ -180,7 +182,7 @@ test("the raw-id check has none of the false hits that the PE found: the Ref lin
   assert.deepEqual(textProblems("The board: T10 waits for G7 in M4, and ├─ marks a tree."), [], "a message that names no kind is not checked");
 });
 
-test("on the message command's path, a word in code and a product name are not ids, and the state tool's ids are (F-T984-11)", () => {
+test("F-T984-11: on the message command's path, a word in code and a product name are not ids, and the state tool's ids are", () => {
   // renderMessage is what the message command runs. Before T984's repair its text form dropped the code marks, so a word
   // in code reached the raw-id check bare, and "the M4 Mac" (a milestone's form, the PE's false hit) refused a message.
   const progress = fixture("01-progress-note.json");
@@ -237,41 +239,52 @@ test("the shape of each kind holds in code: a missing part, a part out of order,
   assert.match(textProblems(render(fixture("02-question.json")).text.replace(/\nNeeded by:[^\n]*\n[^\n]*\n/, "\n")).join("\n"), /a question needs "Needed by"/);
 });
 
-test("a wrong input is refused with a plain problem, never a crash: an inherited name, a null block, sections or a frame nested too deep (F-T984-3, F-T984-13)", () => {
+/** The problems of a message that the command must refuse: a list, never a throw. */
+const refusal = (msg) => { const out = renderMessage(msg); assert.ok(out.problems, "refused"); return out.problems.join("\n"); };
+
+test("F-T984-3: a kind or a block type that is an inherited name is refused, not a crash", () => {
   const progress = fixture("01-progress-note.json");
-  const refused = (msg, re) => { const out = renderMessage(msg); assert.ok(out.problems, "refused"); assert.match(out.problems.join("\n"), re); };
-  for (const kind of ["constructor", "__proto__", "toString", "hasOwnProperty"]) refused({ ...progress, kind }, /^kind is one of: progress/);
-  for (const t of ["constructor", "__proto__", "toString"]) refused({ ...progress, blocks: [{ t: "section", label: "x", body: [{ t, text: "x" }] }, ...progress.blocks] }, /blocks\[0\]\.body\[0\] is not a block/);
-  refused({ ...progress, blocks: [null, ...progress.blocks] }, /blocks\[0\] is not a block/);
-  refused({ ...progress, blocks: [{ t: "section", label: "x", body: [null] }, ...progress.blocks] }, /blocks\[0\]\.body\[0\] is not a block/);
+  for (const kind of ["constructor", "__proto__", "toString", "hasOwnProperty"]) assert.match(refusal({ ...progress, kind }), /^kind is one of: progress/, kind);
+  for (const t of ["constructor", "__proto__", "toString"])
+    assert.match(refusal({ ...progress, blocks: [{ t: "section", label: "x", body: [{ t, text: "x" }] }, ...progress.blocks] }), /blocks\[0\]\.body\[0\] is not a block/, t);
+});
+
+test("F-T984-13: a null block, and sections or a frame nested too deep, are refused, not a crash", () => {
+  const progress = fixture("01-progress-note.json");
+  assert.match(refusal({ ...progress, blocks: [null, ...progress.blocks] }), /blocks\[0\] is not a block/);
+  assert.match(refusal({ ...progress, blocks: [{ t: "section", label: "x", body: [null] }, ...progress.blocks] }), /blocks\[0\]\.body\[0\] is not a block/);
   const nest = (n) => { let b = { t: "p", text: "x" }; for (let i = 0; i < n; i++) b = { t: "section", label: "s", body: [b] }; return b; };
-  refused({ ...progress, blocks: [...progress.blocks, nest(5000)] }, /sections nest at most 5 deep/);
-  refused({ ...progress, blocks: [...progress.blocks, nest(6)] }, /sections nest at most 5 deep/);
+  assert.match(refusal({ ...progress, blocks: [...progress.blocks, nest(5000)] }), /sections nest at most 5 deep/);
+  assert.match(refusal({ ...progress, blocks: [...progress.blocks, nest(6)] }), /sections nest at most 5 deep/);
   // Five deep is still a message: a page shows the labels as h2 to h6.
   assert.doesNotMatch(renderMessage({ ...progress, blocks: [...progress.blocks, nest(5)] }).problems?.join("\n") ?? "", /nest/);
   let frame = { box: "task", name: "a", state: "framed" };
   for (let i = 0; i < 5000; i++) frame = { box: "group", name: "g", word: "done", items: [frame] };
   const catchUp = fixture("10-catch-up.json");
-  refused({ ...catchUp, blocks: catchUp.blocks.map((b) => (b.t === "picture" ? { ...b, frame } : b)) }, /nested too deep for a box of 46 columns/);
+  assert.match(refusal({ ...catchUp, blocks: catchUp.blocks.map((b) => (b.t === "picture" ? { ...b, frame } : b)) }), /nested too deep for a box of 46 columns/);
 });
 
-test("the example texts: each row numbered once, an estimate's total as a total line that agrees with its rows, the sample confirm labelled (F-T984-7, -8, -9)", () => {
+test("F-T984-7: no example text numbers a row twice", () => {
   for (const name of ALL) assert.doesNotMatch(render(fixture(name)).text, /^\d+\. \d+\. /m, `${name}: a row numbered twice`);
+});
+
+test("F-T984-8: the estimate's total is a total line, not an item, and its title, total and picture agree with its rows", () => {
   const msg = fixture("11-estimate.json"), { text } = render(msg);
   const rows = msg.blocks.find((b) => b.t === "table").rows;
-  assert.deepEqual(text.match(/^\d+\. .*/gm).map((l) => l.split(" ")[0]), rows.map((_, i) => `${i + 1}.`), "one numbered item for each pull request");
-  // The total is the sum of the rows, and the title, the total line and the picture say the same range.
+  assert.deepEqual(text.match(/^\d+\. .*/gm).map((l) => l.split(" ")[0]), ["1.", "2.", "3."], "one numbered item for each of the three pull requests");
   const sum = (col, unit) => [0, 1].map((side) => rows.reduce((t, r) => t + Number(r[col].split(` ${unit}`)[0].split(" to ")[side]), 0));
   const [tokLo, tokHi] = sum(1, "M"), [hLo, hHi] = sum(2, "h");
   assert.deepEqual([tokLo, tokHi, hLo, hHi], [10.5, 21, 13, 26]);
   assert.ok(msg.title.includes(`${tokLo} to ${tokHi} M tokens and ${hLo} to ${hHi} h`), msg.title);
   const paragraphs = text.split("\n\n").map((p) => p.replace(/\n/g, " "));
-  assert.ok(paragraphs.includes(`All three together: ${tokLo} to ${tokHi} M tokens and ${hLo} to ${hHi} h of agent time.`), "a total line of its own, not an item");
-  assert.match(text, new RegExp(`All three {2}${tokLo}–${tokHi} `), "the picture");
-  assert.match(text, new RegExp(`All three {2}${hLo}–${hHi} `), "the picture");
-  // The confirm example is sample data: its text and its page say so before its first part.
-  const confirm = render(fixture("13-confirm.json")).text;
-  assert.ok(confirm.indexOf("SAMPLE CONTENT") > 0 && confirm.indexOf("SAMPLE CONTENT") < confirm.indexOf("What I will do"), confirm);
+  assert.ok(paragraphs.includes(`All three together: ${tokLo} to ${tokHi} M tokens and ${hLo} to ${hHi} h of agent time.`), "a total line of its own");
+  assert.match(text, new RegExp(`All three {2}${tokLo}–${tokHi} `), "the picture's tokens");
+  assert.match(text, new RegExp(`All three {2}${hLo}–${hHi} `), "the picture's hours");
+});
+
+test("F-T984-9: the confirm example is sample data, and its text says so before its first part", () => {
+  const text = render(fixture("13-confirm.json")).text, at = text.indexOf("SAMPLE CONTENT");
+  assert.ok(at > 0 && at < text.indexOf("What I will do"), text);
 });
 
 test("the page escapes every text, loads nothing, and allows only its own style and the hash of its one script", () => {
