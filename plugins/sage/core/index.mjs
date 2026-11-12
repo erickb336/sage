@@ -21,6 +21,7 @@ export { renderRoleInstructions, renderReportInstructions, renderChiefInstructio
 export { PRIORITIES, PRIORITY_SCALE, startsInSageMode } from "./logbook-fields.mjs";
 export { readBoardSources } from "./board-reader.mjs";
 export { buildBoardModel } from "./board-model.mjs";
+export { taskWord, milestoneWord, releaseWord } from "./state-words.mjs";
 export { renderBoardHtml, renderAgentsHtml, renderMilestonesHtml, renderBoardText, renderTaskText, renderBoardStatus } from "./board-render.mjs";
 export { boardView, landingRule } from "./board-view.mjs";
 export { parseBoardIntent, boardNote, BOARD_PHRASES } from "./board-intent.mjs";
