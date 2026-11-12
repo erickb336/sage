@@ -12,11 +12,11 @@ Run it as `node ${CLAUDE_SKILL_DIR}/sage.mjs <command> --project <path to the pr
 
 Each option takes a value: `--name value`, or `--name=value` for a value that starts with `--`. A command refuses an option that it does not take, and names the options that it takes. It refuses an option given twice.
 
-In a shared logbook, each write names its actor: the chief adds `--chief C<n>`, and a lead adds `--lead R<n>`, its own lead run. The hook names the id at the first write and refuses another chief's id, also when a value is in quotes. It reads a write that is one command of its own: after `cd` or in a pipe, it names no id. A write on a task of another chief refuses and names that chief. A command with no chief only reads. A legacy logbook refuses both options, `claim`, `offer`, `cancel`, `accept`, `unclaim` and `gate replace`.
+In a shared logbook, each write names its actor: the chief adds `--chief C<n>`, and a lead adds `--lead R<n>`, its own lead run. The hook names the id at the first write and refuses another chief's id, also when a value is in quotes. It reads a write that is one command of its own: after `cd` or in a pipe, it names no id.
 
 A reference path in this skill, such as `skills/sage/references/<name>.md` or `core/references/<name>.md`, is a file in the sage plugin's folder: your start text names that folder, and it is also two folders above this skill's own folder. Read a reference only when its trigger holds.
 
-Read `skills/sage/references/hook-rules.md` when the sage hook refuses a command or a file change, and before you tell an agent in a brief which commands it may run: it has the hook's rules for the logbook, for the commands of an agent and the chief, and for program words.
+Read `skills/sage/references/hook-rules.md` when the sage hook refuses a command or a file change, and before you tell an agent in a brief which commands it may run.
 
 ## Commands
 
@@ -24,7 +24,7 @@ Each line gives a command and the start of its rules. The reference of its group
 
 ### The common commands
 
-Read `skills/sage/references/commands.md` for the full row of a command before you use an option or a value that its line here does not explain, for the priority scale and the kind list of `task add`, and when a command refuses and its reason is not clear.
+Read `skills/sage/references/commands.md` for the full row of a command before you use an option or a value that its line here does not explain, for the priority scale and the kind list of `task add`, before you end an investigation, and when a command refuses and its reason is not clear.
 
 | Command | Does |
 | --- | --- |
@@ -45,7 +45,7 @@ Read `skills/sage/references/commands.md` for the full row of a command before y
 | `log <T\|-> "<decision>" --why "<reason>"` | Adds a line to the decision trail. |
 | `pages <T>` · `pages <T> record <file>` · `pages <T> record --run <R> --text <report>` | Makes (mode 700) and prints the folder where agents save the task's pages (research, designs, findings pages). |
 | `board [this\|all\|<project>\|<T>] [--view chat\|task\|status\|html]` · `board --name-hex <hex>` | Prints the board: the chat board by default. |
-| `stats [--task <T>]` | Prints a guide line, a total line with the count of done review runs that have no tokens, and one table of the 50 tasks with the most review tokens, largest first. |
+| `stats [--task <T>]` | Prints the 50 tasks with the most review tokens, largest first. |
 | `worktrees` · `worktrees prune --yes` | Lists the git worktrees of the project's repository, one line each. |
 | `status` | Prints the status lines. |
 
@@ -73,11 +73,11 @@ Read `skills/sage/references/merge-check-and-config.md` before a merge check of 
 | Command | Does |
 | --- | --- |
 | `merge-check --sha <sha> [--pr <n> [--head <branch>]] [--cycles <n>] [--chief C<n>]` | Says if the full SHA may merge. |
-| `config [key=n ...]` | Prints or sets max_agents, max_leads, cycles.small, cycles.large, cycles.risk, max_rounds, arena and cap_total for all projects, and `cap.<project>=n` for one project's agent cap (the project's name is its main checkout's folder name, as a slug: `cap.sage=5`). |
+| `config [key=n ...]` | Prints or sets max_agents, max_leads, cycles.small, cycles.large, cycles.risk, max_rounds, arena and cap_total for all projects, and `cap.<project>=n` for one project's agent cap. |
 
 ### A shared logbook
 
-Read `skills/sage/references/shared-logbook.md` before you run `link`, `move`, `claim`, `offer`, `cancel`, `accept`, `unclaim`, `gate replace` or `projects rebuild`, and when a command refuses for another chief.
+Read `skills/sage/references/shared-logbook.md` before you run `link`, `move`, `claim`, `offer`, `cancel`, `accept`, `unclaim`, `gate replace` or `projects rebuild`, and when a command refuses for another chief or a legacy logbook.
 
 ## References
 
@@ -85,12 +85,5 @@ These rules have no command row of their own. Read a file when its trigger holds
 
 - Read `core/references/cycles-and-merges.md` when you need a cycle rule that your start text does not give: a verdict that clears or blocks a SHA, a clean merge of main, two tasks on one pull request, or an abandoned task's verdicts.
 - Read `core/references/round-hold.md` when `round` says held, and before you give an extra round in autopilot.
-- Read `core/references/logbook-recovery.md` when a command refuses for a table of the logbook or for a saved change that cannot finish, and before any `logbook repair`.
 - Read `core/references/sessions.md` when a command says that the logbook is busy, refuses for a lock, or refuses for a newer version of sage.
 - Read `core/references/hidden-characters.md` when the tool prints `\xNN` or `\u{N}`, or keeps a character out of a cell or the standing orders.
-
-## How an investigation ends
-
-- An investigate task has no build block, so it ends at `concluded`, not at verified. Its last states are reviewing → verifying → concluded.
-- `concluded` needs no open findings, and the task's latest verdict must be `evidence-clean`. Record it with `verdict <T> --kind evidence-clean --run <R>`, without `--sha`.
-- A task with a build block cannot use `concluded`.
