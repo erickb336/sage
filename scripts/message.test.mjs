@@ -466,11 +466,12 @@ test("the message command resolves a Page block in a task's pages folder, and re
 });
 
 test("F-T984-24: on the message command's path, sections nested thousands deep are refused, not a stack overflow", () => {
-  const { sage, file } = sandbox();
-  let deep = { t: "page", title: "x", task: "T1", file: "x.html" };
-  for (let i = 0; i < 5000; i++) deep = { t: "section", label: "s", body: [deep] };
-  const progress = fixture("01-progress-note.json");
-  const r = sage("message", "T1", "--file", file("deep.json", { ...progress, blocks: [...progress.blocks, deep] }));
+  const { base, sage } = sandbox();
+  // The JSON is written as text: JSON.stringify itself recurses, and a small stack (as on CI) overflows in the test.
+  const deep = `${'{"t":"section","label":"s","body":['.repeat(5000)}{"t":"page","title":"x","task":"T1","file":"x.html"}${"]}".repeat(5000)}`;
+  const progress = fixture("01-progress-note.json"), path = join(base, "deep.json");
+  writeFileSync(path, JSON.stringify({ ...progress, blocks: [...progress.blocks, "DEEP"] }).replace('"DEEP"', deep));
+  const r = sage("message", "T1", "--file", path);
   assert.equal(r.status, 1, r.out);
   assert.match(r.out, /^sage: the message is not in its kind's shape[^\n]*\n- blocks\[\d+\]\.body\[0\]\.body\[0\]\.body\[0\]\.body\[0\]\.body\[0\] is a section 6 deep: sections nest at most 5 deep/);
 });
