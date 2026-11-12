@@ -85,8 +85,11 @@ function context(model, snapshot) {
   for (const task of model.tasks) for (const wait of task.waits ?? []) if (wait.id) waitedBy.set(`${task.project}/${wait.id}`, [...(waitedBy.get(`${task.project}/${wait.id}`) ?? []), task]);
   // The shared root is no provider (T306): its agents take the colour of their provider's source, and the legend does not name it.
   const providers = model.sources.filter(source => !source.shared);
+  // The id map of each project's rename of program to milestone (T995), from each milestone's old id, for a breakdown gate's old answer rows.
+  const renamed = new Map();
+  for (const milestone of model.milestones ?? []) if (milestone.was) (renamed.get(milestone.project) ?? renamed.set(milestone.project, new Map()).get(milestone.project)).set(milestone.was, milestone.id);
   return { snapshot, slot: new Map(keys.map((key, i) => [key, `p${i % 8}`])), sources: providers.map(source => source.id), names: providers.map(source => title(source.standIn)), at: model.at,
-    tasks: new Map(model.tasks.map(task => [task.key, task])), milestones: new Map((model.milestones ?? []).map(milestone => [milestone.key, milestone])), waitedBy };
+    tasks: new Map(model.tasks.map(task => [task.key, task])), milestones: new Map((model.milestones ?? []).map(milestone => [milestone.key, milestone])), renamed, waitedBy };
 }
 const dot = (ctx, key) => `<span class="dot ${ctx.slot.get(key) ?? "p0"}" aria-hidden="true"></span>`;
 // A long name ends in an ellipsis on its inner span (a flex box cuts its own text with none); the title keeps it whole.
@@ -291,7 +294,7 @@ function page(ctx, task, { routed = false } = {}) {
   const ownRow = task.shared ?`<div class="ownrow"><span class="f">Owning chief</span> ${holderTag(task)}${offerLine(task, "span")}</div>` : "";
   const content = `<div class="ptop"><span class="id">${esc(task.id)}</span>${task.was ? ` <span class="faint">${esc(task.was)}</span>` : ""} · ${project(ctx, task)}${pr} · ${tags(task)} · ${holder}</div>`
     + `<${routed ? "h1" : "h2"} class="ptitle">${esc(task.title)}</${routed ? "h1" : "h2"}>${oldNote}${unlisted}`
-    + `<div class="detail"><section class="wide"><h3>Where in the loop</h3>${ownRow}${stepLine(task)}${nowWaits(task)}${stepRows(task)}${agents(ctx, task, " nowagents")}${meta(task)}<p class="faint">${task.shared ? "To claim, offer, accept or release this task, ask a chief in the chat. " : ""}To change the priority or the kind, ask the chief in the chat. The board is read-only.</p></section>`
+    + `<div class="detail"><section class="wide"><h3>Where in the loop</h3>${ownRow}${stepLine(task)}${nowWaits(task)}${stepRows(task)}${agents(ctx, task, " nowagents")}${meta(task)}<p class="faint">${task.shared ? "To claim, offer, accept or unclaim this task, ask a chief in the chat. " : ""}To change the priority or the kind, ask the chief in the chat. The board is read-only.</p></section>`
     + `<div class="colL"><section><h3>Brief</h3>${brief}</section><section><h3>Agent runs <span class="n">${task.runs.length}</span></h3>${runsTable(task)}</section><section><h3>Findings <span class="n">${task.findings.filter(row => row.status === "open").length} open</span></h3>${findings(task)}</section></div>`
     + `<div class="colR">${milestoneSections(ctx, task)}<section><h3>Evidence <span class="n">${task.ledger.length}</span></h3>${evidence(task)}</section><section><h3>Latest decisions</h3>${decisions}</section><section><h3>Artifacts</h3>${artifacts(task)}</section></div></div>${legend(null)}`;
   return routed ? content : `<section class="page" id="${esc(anchor(task))}" aria-label="${esc(task.id)}"><div class="pagebar"><a class="back" href="#">← Board</a>${milestoneLink(ctx, task)}<span class="spacer"></span>${themeSwitch(`flip-${anchor(task)}`, true)}</div>${content}</section>`;
@@ -996,7 +999,7 @@ function decisionText(ctx, project, text) {
  * question and an arrow in the answer both stay (R1481-2). null when that line has no arrow.
  */
 function answerOf(ctx, project, text) {
-  const question = ctx.milestones.get(`${project}/${proposalOf({ question: text })}`)?.questions.find(asked => text.startsWith(`${asked} → `)), arrow = text.indexOf(" → ", text.lastIndexOf(LINE) + 1);
+  const question = ctx.milestones.get(`${project}/${proposalOf({ question: text }, ctx.renamed.get(project))}`)?.questions.find(asked => text.startsWith(`${asked} → `)), arrow = text.indexOf(" → ", text.lastIndexOf(LINE) + 1);
   return question !== undefined ? text.slice(question.length + 3) : arrow >= 0 ? text.slice(arrow + 3) : null;
 }
 const MONTHS = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"];

@@ -516,6 +516,28 @@ test("T368 C9: /milestones and /milestone/KEY are routes with the same sign-in a
   assert.ok((await stream.next(p => p.html.includes("Sample changed goal."))).html.includes("Sample milestone"));
 });
 
+test("F-T995-4: an old milestone page's address, with its program id, moves to the page of its milestone through the id map, before and after the migration", async t => {
+  const f = await fixture(t);
+  // Before the migration: programs.tsv and the program column, and the floor row of milestones 1 to 4, so PG1 reads as M5.
+  writeFileSync(join(f.project, "tasks.tsv"), `${HEADERS.tasks.replaceAll(" ", "\t")}\twaits\tprogram\nT1\tSample pilot\tsmall\t\tbuild\tmerged\t\t\t0\t\t\tPG1\nT2\tSample second\tsmall\t\tbuild\tframed\t\t\t0\t\tT1\tPG1\n`);
+  writeFileSync(join(f.project, "gates.tsv"), `${HEADERS.gates.replaceAll(" ", "\t")}\nG1\tT1\tApprove program PG1? No task builds before you approve.\tapprove|change|drop\tapprove\t\tapprove\t\n`);
+  writeFileSync(join(f.project, "decisions.tsv"), `${HEADERS.decisions.replaceAll(" ", "\t")}\n2026-10-10T09:00:00Z\tM4\tM4 is the last of milestones 1 to 4\tsample floor\n`);
+  writeFileSync(join(f.project, "programs.tsv"), "id\tname\tgoal\tpilot\tgate\tat\nPG1\tSample milestone\tSample goal of PG1.\tT1\tG1\t\n");
+  for (const when of ["before", "after"]) {
+    if (when === "after") {
+      // After the migration: milestones.tsv, the milestone column and the map row M5 was PG1.
+      rmSync(join(f.project, "programs.tsv"));
+      writeFileSync(join(f.project, "milestones.tsv"), "id\tname\tgoal\tpilot\tgate\tat\nM5\tSample milestone\tSample goal of PG1.\tT1\tG1\t\n");
+      writeFileSync(join(f.project, "tasks.tsv"), `${HEADERS.tasks.replaceAll(" ", "\t")}\twaits\tmilestone\nT1\tSample pilot\tsmall\t\tbuild\tmerged\t\t\t0\t\t\tM5\nT2\tSample second\tsmall\t\tbuild\tframed\t\t\t0\t\tT1\tM5\n`);
+      writeFileSync(join(f.project, "decisions.tsv"), `${HEADERS.decisions.replaceAll(" ", "\t")}\n2026-10-10T09:00:00Z\tM4\tM4 is the last of milestones 1 to 4\tsample floor\n2026-10-11T09:00:00Z\t\tM5 was PG1\tprogram renamed to milestone (T995)\n`);
+    }
+    const page = await until(f, `/milestone/${milestoneKey("M5")}`, "Sample goal of PG1.");
+    assert.equal(page.status, 200, when);
+    const moved = await read(f, `/program/${milestoneKey("PG1")}`);
+    assert.deepEqual([moved.status, moved.headers.location], [301, `/milestone/${milestoneKey("M5")}`], when);
+  }
+});
+
 test("T368 C9: the size check covers the milestones list: a goal that makes it too large keeps the last good board, marked stale", async t => {
   const f = await fixture(t);
   milestones(f.project);

@@ -954,6 +954,14 @@ test("R1481-2: without the gate's row, an own-words answer still shows in full: 
   assert.equal(decisionsOf(renderMilestonesHtml(milestonesModel(tables), { milestoneKey: KEY("M1") }))[0], "12 Oct G1 answered: other: move T3 → after T2, then approve (2026-10-12 09:00 UTC)");
 });
 
+test("F-T995-5: an answer row of a breakdown gate from before the rename reads through the id map: an arrow in the last task's title does not start the answer", () => {
+  const tables = milestonesTables(), question = ["Approve program PG1? No task builds before you approve.", "Name: Codex support", "Goal: Sample goal.", "Pilot, runs first:", "  T1: Sample T1 → T2 in order"].join(" ");
+  tables.gates.find(gate => gate.id === "G1").question = question;
+  tables.decisions.push({ at: "2026-10-10T09:00:00Z", task: "T1", decision: "PG1 proposed with gate G1, pilot T1, tasks none, name: Codex support", why: "program propose" },
+    { at: "2026-10-11T09:00:00Z", task: "", decision: "M1 was PG1", why: "program renamed to milestone (T995)" }, { at: "2026-10-12T09:00:00Z", task: "T1", decision: `${question} → approve`, why: "the user's answer" });
+  assert.equal(decisionsOf(renderMilestonesHtml(milestonesModel(tables), { milestoneKey: KEY("M1") }))[0], "12 Oct G1 answered: approve (2026-10-12 09:00 UTC)");
+});
+
 test("R1384-1: a member's move between two other milestones is not a decision of this milestone: it never says the task left", () => {
   const tables = milestonesTables();
   tables.decisions.push({ at: "2026-10-11T09:00:00Z", task: "T3", decision: "milestone M3 → M4", why: "sample: between two others" },
