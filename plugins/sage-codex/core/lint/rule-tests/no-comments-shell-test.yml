@@ -21,3 +21,6 @@ invalid:
   - "f() {\n  # inside\n  echo hi\n}"
   - "echo hi # explain\r\n"
   - "# shellcheck disable=SC2086 because\r\necho $x\r\n"
+  - "f() {\n  #!/bin/sh\n  echo hi\n}"
+  - "if true; then\n  #!/bin/sh\n  echo hi\nfi"
+  - "a=(\n  #!/bin/sh\n  x)"

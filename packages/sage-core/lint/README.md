@@ -36,7 +36,7 @@ Every language allows one SPDX line, such as `// SPDX-License-Identifier: MIT` (
 | Java | `no-comments-java` | `line_comment`, `block_comment` | none |
 | Kotlin | `no-comments-kotlin` | `line_comment`, `multiline_comment` | none |
 | Shell (Bash) | `no-comments-shell` | `comment` | a shebang on line 1 (with any arguments), `shellcheck <directive>=<value>` |
-| Ruby | `no-comments-ruby` | `comment` | `frozen_string_literal`, `rubocop:disable`, `enable` and `todo`, Sorbet's `typed:`. A shebang is flagged. |
+| Ruby | `no-comments-ruby` | `comment` | a shebang on line 1 (with any arguments), `frozen_string_literal`, `rubocop:disable`, `enable` and `todo`, Sorbet's `typed:` |
 | CSS | `no-comments-css` | `comment`, `js_comment` | `stylelint-disable` and `stylelint-enable` (also `-line` and `-next-line`), `prettier-ignore` |
 | HTML | `no-comments-html` | `comment` | `prettier-ignore`, `stylelint-disable` and `stylelint-enable` |
 | YAML | `no-comments-yaml` | `comment` | `yaml-language-server: $schema=<url>`, `yamllint disable` and `enable` (also `-line`), `yamllint disable-file` |

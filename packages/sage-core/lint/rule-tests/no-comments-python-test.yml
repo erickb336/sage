@@ -32,3 +32,7 @@ invalid:
   - "def f():\n    # inside\n    return 1"
   - "x = 1  # explain\r\ny = 2\r\n"
   - "import os  # noqa: F401 because\r\n"
+  - "def f():\n    #!/bin/sh\n    return 1"
+  - "if x:\n    #!/bin/sh\n    pass"
+  - "l = [\n    #!/bin/sh\n    1]"
+  - "class A:\n    #!/bin/sh\n    x = 1"

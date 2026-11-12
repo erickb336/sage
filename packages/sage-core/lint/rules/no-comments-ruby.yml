@@ -6,6 +6,7 @@ rule:
   kind: comment
   not:
     any:
+      - all: [{ regex: '^#!' }, { nthChild: 1 }, { inside: { kind: program } }]
       - regex: '^# frozen_string_literal: (true|false)\r?$'
       - regex: '^# rubocop:(disable|enable|todo) [\w/]+(, ?[\w/]+)*\r?$'
       - regex: '^# typed: (ignore|false|true|strict|strong)\r?$'

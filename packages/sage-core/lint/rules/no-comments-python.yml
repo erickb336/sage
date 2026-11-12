@@ -6,7 +6,7 @@ rule:
   kind: comment
   not:
     any:
-      - all: [{ regex: '^#!' }, { nthChild: 1 }]
+      - all: [{ regex: '^#!' }, { nthChild: 1 }, { inside: { kind: module } }]
       - all: [{ regex: '^# (-\*- )?coding[:=] ?[\w.-]+( -\*-)?\r?$' }, { any: [{ nthChild: 1 }, { nthChild: 2 }] }]
       - regex: '^# noqa: ?[A-Z]+\d+(, ?[A-Z]+\d+)*\r?$'
       - regex: '^# type: ignore\[[\w-]+(, ?[\w-]+)*\]\r?$'

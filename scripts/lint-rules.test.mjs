@@ -14,8 +14,9 @@ const MUTANTS = [
   { name: "Java block comments are lost", file: "rules/no-comments-java.yml", from: "any: [{ kind: line_comment }, { kind: block_comment }]", to: "kind: line_comment", fails: "no-comments-java" },
   { name: "Kotlin block comments are lost", file: "rules/no-comments-kotlin.yml", from: "any: [{ kind: line_comment }, { kind: multiline_comment }]", to: "kind: line_comment", fails: "no-comments-kotlin" },
   { name: "the docstring rule flags every string", file: "rules/no-docstrings-python.yml", from: "\n  inside: { kind: expression_statement }", to: "", fails: "no-docstrings-python" },
-  { name: "a Python shebang passes on any line", file: "rules/no-comments-python.yml", from: "{ nthChild: 1 }]", to: "{ regex: '.' }]", fails: "no-comments-python" },
-  { name: "a shell shebang passes on any line", file: "rules/no-comments-shell.yml", from: "{ nthChild: 1 }]", to: "{ regex: '.' }]", fails: "no-comments-shell" },
+  { name: "a Python shebang passes on any line", file: "rules/no-comments-python.yml", from: "{ nthChild: 1 }, { inside", to: "{ regex: '.' }, { inside", fails: "no-comments-python" },
+  { name: "a Python shebang passes as the first comment of any block, not only on line 1 of the file", file: "rules/no-comments-python.yml", from: ", { inside: { kind: module } }", to: "", fails: "no-comments-python" },
+  { name: "a shell shebang passes on any line", file: "rules/no-comments-shell.yml", from: "{ nthChild: 1 }, { inside", to: "{ regex: '.' }, { inside", fails: "no-comments-shell" },
   { name: "any comment before a later import \"C\" passes as a cgo preamble", file: "rules/no-comments-go.yml", from: "stopBy: { not: { kind: comment } }", to: "stopBy: end", fails: "no-comments-go" },
   { name: "a comment inside an HTML attribute value is flagged", file: "rules/no-comments-html.yml", from: "\n      - inside: { kind: quoted_attribute_value }", to: "", fails: "no-comments-html" },
 ];

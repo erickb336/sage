@@ -6,6 +6,6 @@ rule:
   kind: comment
   not:
     any:
-      - all: [{ regex: '^#!' }, { nthChild: 1 }]
+      - all: [{ regex: '^#!' }, { nthChild: 1 }, { inside: { kind: program } }]
       - regex: '^# shellcheck (disable|enable|source|shell|external-sources)=[\w,./-]+\r?$'
       - matches: spdx
