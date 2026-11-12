@@ -1,0 +1,13 @@
+id: no-comments-html
+valid:
+  - '<p>Text with // slashes and /* stars */</p>'
+  - '<p title="<!-- not a comment -->">x</p>'
+  - '<!-- prettier-ignore -->'
+  - '<!-- SPDX-License-Identifier: MIT -->'
+  - "<!-- SPDX-License-Identifier: MIT -->\r\n<p>x</p>\r\n"
+  - '<script>const u = "<!-- x -->";</script>'
+invalid:
+  - '<!-- explain -->'
+  - '<div><!-- inside --></div>'
+  - '<!--[if IE]><p>old</p><![endif]-->'
+  - '<!-- prettier-ignore because -->'

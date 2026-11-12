@@ -1,0 +1,16 @@
+id: no-comments-yaml
+valid:
+  - 'url: "https://example.com/#anchor"'
+  - "key: 'a # b'"
+  - "text: |\n  # inside a block scalar\n  more"
+  - '# yaml-language-server: $schema=https://json.schemastore.org/github-workflow.json'
+  - 'line: x # yamllint disable-line rule:line-length'
+  - '# yamllint disable rule:truthy rule:comments'
+  - '# SPDX-License-Identifier: MIT'
+  - "# SPDX-License-Identifier: MIT\r\na: 1\r\n"
+  - "# yamllint disable-file\na: 1"
+invalid:
+  - '# explain'
+  - 'key: value # trailing'
+  - "list:\n  # inside\n  - a"
+  - '# yamllint disable-line rule:line-length because'

@@ -48,7 +48,7 @@ To add a principle, add `principles/<name>.md`. A principle adapted from pstack 
    npm run build
    ```
 
-5. Run the checks. They include the README's limits, its links and sage's word check:
+5. Run the checks. They include the README's limits, its links and sage's word check. They also run the tests of the no-comments rule set in [`packages/sage-core/lint/`](packages/sage-core/lint/README.md). For these tests, `ast-grep test` runs from the pinned `@ast-grep/cli` devDependency.
 
    ```sh
    npm run check
