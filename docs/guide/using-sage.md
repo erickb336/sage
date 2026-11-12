@@ -204,6 +204,19 @@ Milestones were called programs before. At its first write, this version renames
 
 The board shows each milestone on its Milestones tab: see [Milestones on the board](board.md#milestones-on-the-board). The full rules are in [Rules held in code](../design/rules-in-code.md#waits-and-milestones).
 
+### Releases
+
+A release is a version that you ship, such as 1.0. It holds milestones and single tasks (tasks outside a milestone). A release is optional.
+
+> **Warning:** before you put a milestone or a task in a release, update sage in each Claude Code and Codex session. After that, an older session reads the logbook but refuses to write it.
+
+- Tell the chief to add a release, for example "add release 1.0". The chief runs `sage release add --name "1.0"`.
+- Tell the chief which release a milestone or a task goes in. The chief runs `sage milestone M5 set release=1.0`, or `sage task T12 set release=1.0` for a single task.
+- A task of a milestone is in its milestone's release. A task that joins a milestone leaves its own release.
+- Nothing moves to another release by itself. When you say that a release ships, the chief moves each open item to the next release, one command each, with a decision row.
+
+`status` shows one line for each release, in the order that you added them: its state (not started, in progress, done or stopped) and how many of its tasks are done. For example: `release 1.0 · in progress · 1 of 10 tasks done · milestones M5 · single tasks T993, T996`. The board does not show releases yet.
+
 ## Start every session in sage mode
 
 By default, each new session starts with sage mode off. To make every new session of a project start in sage mode, ask the chief to set the project's start setting. It runs:
@@ -403,7 +416,7 @@ A moved folder with no Git commits, or that is no Git repository, has no first c
 | --- | --- |
 | The owning chief | Its own task: `task <T> set`, `round`, `run add`, `run done`, `finding add`, `triage`, `close`, `move`, `verdict`, `gate add <T>`, `milestone propose` for its pilot and each of its tasks, `log <T>`, `offer`, `cancel` and `unclaim`. |
 | A lead | What the chief of its lead run may write, on the task of that run only, while that run runs. |
-| Any chief | `task add`, `claim`, `accept` or `cancel` (a decline) of an offer that names it, `gate add` with no task, `gate replace`, `init`, `standing add`, `config`, `log -`, `pages <T> record`, `observe` and `run usage`. |
+| Any chief | `task add`, `claim`, `accept` or `cancel` (a decline) of an offer that names it, `gate add` with no task, `gate replace`, `init`, `standing add`, `config`, `log -`, `pages <T> record`, `observe`, `run usage`, `release add` and `milestone <M> set release=`. |
 | You | `gate answer`, in your own words, from either provider, each form of `logbook repair` (`--accept-loss`, `--accept-change-loss`, or both) and `projects rebuild`: each is your act and names no chief, so the line that sage prints works in your terminal. |
 | A stop hook | The report and the end of the run of its own slot, so no report is lost. |
 | A helper, or a command with no chief | Nothing. It only reads. |

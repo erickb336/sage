@@ -57,9 +57,9 @@ Read `core/references/logbook-recovery.md` before any `logbook repair`, and when
 | --- | --- |
 | `logbook` · `logbook repair --accept-loss <table>[,<table>...]` · `logbook repair --accept-change-loss yes` | Prints the logbook's folder. |
 
-### Milestones
+### Milestones and releases
 
-Read `skills/sage/references/milestones.md` before you propose a milestone, put a task in one or take it out, and when a milestone refuses a step.
+Read `skills/sage/references/milestones.md` before you propose a milestone, put a task in one or take it out, add a release or put an item in one, and when a milestone or a release refuses a step.
 
 | Command | Does |
 | --- | --- |
