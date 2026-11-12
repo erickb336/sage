@@ -469,20 +469,18 @@ test("T453: the README and the Codex guide say what the hook really does in Code
   }, Object.fromEntries(["guide and README: no obsolete merge status", "README: no claim that every phrase works as in Claude Code", "guide: the warning line, and that codex exec does not show it", "guide: no claim that the hook shows one line", "guide: a damaged mode file", "guide: send a phrase when Codex is idle", "guide: no exact phrase for a question", "guide: the app's own hook review, not yet checked", "guide: step 3 starts Codex with no flags and trusts the hooks", "guide: a fork starts with sage mode off"].map((k) => [k, true])));
 });
 
-test("T462: the guide, the README and the CHANGELOG say what is checked in Codex and what is not (R1665-1, R1665-2, R1664-7, R1664-8)", () => {
+test("T462: the guide and the README say what is checked in Codex and what is not (R1665-1, R1665-2, R1664-7, R1664-8)", () => {
   const read = (path) => readFileSync(new URL(path, import.meta.url), "utf8").replace(/\s+/g, " ");
   const guide = read("../docs/guide/codex.md"), readme = read("../README.md");
-  const entry = /- \*\*sage on Codex\.\*\*[^\n]*/.exec(readFileSync(new URL("../CHANGELOG.md", import.meta.url), "utf8"))[0];
   assert.deepEqual({
     "guide: the Codex CLI on PATH, also for a desktop app user": /The Codex CLI on your PATH, in that range, also when you use only the desktop app: .*`npm install -g @openai\/codex@0\.164\.0`/.test(guide),
     "guide: the app's own plugin list is not checked": /An install from the app's own plugin list is not checked yet\./.test(guide),
     "guide: checked on 0.164.0": /Codex 0\.164 or later\. sage was checked with the Codex CLI 0\.164\.0 and 0\.166\.0/.test(guide),
-    "CHANGELOG: the desktop app should work the same way, not checked yet": /The Codex desktop app should work the same way, but it is not checked yet\./.test(entry) && !/in the CLI and the desktop app/.test(entry),
     "README: no claim that the desktop app is checked": !/the CLI or the desktop app: run/.test(readme),
     "guide: the reviewer writes that the hook does not block": /A write through a script file that `node` or `python` runs, or `make`, is not blocked/.test(guide),
     "guide: full access gives no mode guarantee": /Under full access \(`danger-full-access`\), sage mode gives no guarantee/.test(guide),
     "guide: the logbook write rule": /writes into the Codex sage folder or the shared root/.test(guide),
-  }, Object.fromEntries(["guide: the Codex CLI on PATH, also for a desktop app user", "guide: the app's own plugin list is not checked", "guide: checked on 0.164.0", "CHANGELOG: the desktop app should work the same way, not checked yet",
+  }, Object.fromEntries(["guide: the Codex CLI on PATH, also for a desktop app user", "guide: the app's own plugin list is not checked", "guide: checked on 0.164.0",
     "README: no claim that the desktop app is checked", "guide: the reviewer writes that the hook does not block", "guide: full access gives no mode guarantee", "guide: the logbook write rule"].map((k) => [k, true])));
 });
 

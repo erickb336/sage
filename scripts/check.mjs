@@ -180,13 +180,15 @@ try {
   }
 } catch (e) { problems.push(String(e.message)); } // a source that the build cannot read, such as a README without its markers
 
-// T1014: no change file per task. A task pull request says what changed for users in its description, and each
-// release gets its notes, drafted from the pull requests that merged since the last release (CONTRIBUTING.md).
-// So a changes/ folder that comes back, for example from a branch made before T1014, fails here. A dot file, such
-// as a Finder .DS_Store that git leaves behind in the old folder, is not a change file.
-if (existsSync(join(ROOT, "changes"))) for (const f of readdirSync(join(ROOT, "changes")).filter((f) => !f.startsWith("."))) {
-  problems.push(`changes/${f}: sage has no change file per task any more (T1014); delete it, and say what changed for users in the pull request description. Each release gets notes drafted from the merged pull requests (CONTRIBUTING.md)`);
-}
+// T1014: the repository keeps no history file, because an agent that arrives fresh reads old history as current fact.
+// Git history and the merged pull requests are the record: a task pull request says what changed for users in its
+// description, and each release gets its notes on the releases page (CONTRIBUTING.md). So a CHANGELOG.md (in any
+// letter case, so that the check is the same on every file system) or a changes/ folder that comes back, for example
+// from a branch made before T1014, fails here. A dot file, such as a Finder .DS_Store that git leaves behind in the
+// old folder, is not a change file.
+const NO_HISTORY = "the repository keeps no history file (T1014); delete it, and say what changed for users in the pull request description. Each release gets its notes on the releases page, https://github.com/erickb336/sage-stack/releases (CONTRIBUTING.md)";
+for (const f of readdirSync(ROOT).filter((f) => f.toLowerCase() === "changelog.md")) problems.push(`${f}: ${NO_HISTORY}`);
+if (existsSync(join(ROOT, "changes"))) for (const f of readdirSync(join(ROOT, "changes")).filter((f) => !f.startsWith("."))) problems.push(`changes/${f}: ${NO_HISTORY}`);
 
 const core = readFileSync(join(ROOT, "instructions/core.md"), "utf8");
 if (Buffer.byteLength(core) > 8 * 1024) problems.push(`instructions/core.md: ${Buffer.byteLength(core)} bytes; keep it under 8 KiB (it loads into every session, so each byte costs context there)`);

@@ -3728,22 +3728,16 @@ test("R1128-3: a hand-edited waits cell is read with the ids parser: its other t
   assert.match(s.ok("merge-check", "--sha", SHA, "--pr", "5"), /^2 tasks have verdicts/);
 });
 
-test("R1130-1, R1140-2, R1140-3, R1157-2, R1157-3, T381, T439: the rules page and the changelog give the update command and the restart first, and teach a pair on one PR; the README warns before waits", () => {
+test("R1130-1, R1140-2, R1140-3, R1157-2, R1157-3, T381, T439: the rules page gives the update command and the restart first, and teaches a pair on one PR; the README warns before waits", () => {
   const read = (rel) => readFileSync(new URL(`../${rel}`, import.meta.url), "utf8");
   const warn = "Before you use waits, run `claude plugin update sage@sage` (see To update sage), then restart every session that was already open: an older session still merges a waiting task.";
   const pair = "To merge two tasks on one pull request, build both under the first task. The waiting task takes the same `pr=` and records its own verdicts with `--pr`, and gets its wait after its build. It moves to merged after the first one.";
-  // T439: the rules page teaches the shared branch that autopilot merges; the older changelog entry keeps its own text.
+  // T439: the rules page teaches the shared branch that autopilot merges.
   const shared = " The chief gives the waiting task the first task's `branch=` too, and autopilot merges the pull request when each task passes on its own verdicts.";
-  const before = " Autopilot does not merge such a pull request, because its head branch is not a branch of each task: you merge it.";
   const rule = read("docs/design/rules-in-code.md").split("\n").filter((l) => l.includes(warn));
-  const change = read("CHANGELOG.md").split("\n").filter((l) => l.includes(warn));
   assert.equal(rule.length, 1, "once in the rules page's table");
-  assert.equal(change.length, 1, "once in the changelog");
   assert.ok(rule[0].startsWith(`| ${warn} A task can wait`), "the warning starts the table's cell");
-  assert.ok(change[0].startsWith(`- **A task can wait for other tasks.** ${warn} `), "the warning starts the changelog's text");
   assert.ok(rule[0].includes(pair + shared), "the rules page teaches the pair on a shared branch");
-  assert.ok(change[0].includes(pair + before), "the older changelog entry keeps its text");
-  assert.match(read("CHANGELOG.md"), /\n- \*\*Two tasks can share one pull request under autopilot\.\*\* /, "the changelog says what changed");
   const readme = read("README.md");
   assert.ok(!readme.includes("no build of its own"), "no option to record states that did not happen");
   assert.ok(read("docs/guide/using-sage.md").includes("\n## To update sage\n"), "the section that the line names");
