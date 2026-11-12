@@ -191,10 +191,12 @@ Each page opens in a sandbox: it cannot read the board or your files, load anyth
 
 Two warning lines in the index tell you the rest:
 
-- A page may link to sites outside this Mac. A link that you click in a page sends you, and what the link carries, to that site.
-- "Open with its scripts" (in the index, for a page with a script of its own) runs the page's own scripts. They cannot read the board or your files, but they can send the page's own content to another site. Use it only for a page that you trust.
+- A page may link to sites outside this Mac. When you click such a link, your browser opens that site, and the site gets everything in the link's address.
+- The link "open with its scripts" (in the index, for a page with a script of its own) runs the page's own scripts. They cannot read the board or your files, but they can send the page's content to another site. Use it only for a page that you trust.
 
-A page cannot link to another page of the board: use the index. A link to a page from another site opens only by your click; a site that moves you to a page by itself gets "not permitted", and so does a link to "open with its scripts" from another site.
+A link in a page to another page of the board, or to the index, opens when you click it: the board opens a page by a person's click from any site. A page cannot load or fetch anything from the board.
+
+A site that moves you to a page by itself gets "not permitted", and so does a link to "open with its scripts" in a page or on another site: open it from the index. When another site opens the index in a new tab, the index cuts that site's hold on the tab, so the site cannot move the tab or read what a page sends to it.
 
 ## The board server
 
