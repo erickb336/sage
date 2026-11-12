@@ -239,14 +239,16 @@ problems.push(...priorArtProblems());
 // correct test (T53, T188). A name takes the clock when it is set from a clock reading or from a
 // name that took it, or when it is a function that returns one. A lower bound may stay: a busy machine only adds time.
 const CLOCK = String.raw`(?:(?:Date\.now|performance\.now|process\.hrtime(?:\.bigint)?)\(\)|process\.cpuUsage\([^)]*\))`;
-const FIX = 'assert CPU time (process.cpuUsage) as a ratio between two sizes with a generous bound, an order of events or a flag (for example: the lock holder still holds when the command returns), or a count. If none can, end the line with "// timing-ok: <reason>"';
+const FIX = 'assert CPU time (process.cpuUsage) as a ratio between two sizes with a generous bound, an order of events or a flag (for example: the lock holder still holds when the command returns), or a count. If none can, give the line a message that holds "timing-ok: <reason>"';
 let timingOk = 0;
 // Every test source: each test file and each file of scripts/ that a test file imports, such as sage-hook-tests.mjs,
 // which the six sage-hook-<n>.test.mjs parts run (F-T289-61).
 const testFiles = readdirSync(join(ROOT, "scripts")).filter((f) => f.endsWith(".test.mjs"));
 const imported = testFiles.flatMap((f) => [...readFileSync(join(ROOT, "scripts", f), "utf8").matchAll(/["']\.\/([\w.-]+\.mjs)["']/g)].map((m) => m[1]));
 for (const f of [...new Set([...testFiles, ...imported])].filter((f) => existsSync(join(ROOT, "scripts", f)))) {
-  const lines = readFileSync(join(ROOT, "scripts", f), "utf8").split("\n").map((l) => l.replace(/(["'`])(?:\\.|(?!\1)[^\\])*\1/g, '""').replace(/(^|\s)\/\/(?! timing-ok:).*$/, "$1")); // no strings, no comments
+  const raw = readFileSync(join(ROOT, "scripts", f), "utf8").split("\n"), STRING = /(["'`])(?:\\.|(?!\1)[^\\])*\1/g;
+  const marked = raw.map((l) => (l.match(STRING) ?? []).some((text) => /timing-ok: \S/.test(text)));
+  const lines = raw.map((l) => l.replace(STRING, '""'));
   const clocked = new Set();
   const takes = (text) => new RegExp(`${CLOCK}${clocked.size ? `|(?<![\\w$.])(?:${[...clocked].join("|")})(?![\\w$])` : ""}`).test(text);
   for (let before = -1; before !== clocked.size; ) {
@@ -267,9 +269,9 @@ for (const f of [...new Set([...testFiles, ...imported])].filter((f) => existsSy
   const under = new RegExp(`${term}[^<>&|,;?]*?<=?\\s*${number}\\s*(?=[),;]|&&|\\|\\||$)|(?:^|[,(;]|&&|\\|\\|)\\s*${number}\\s*>=?[^<>&|,;?]*?${term}[^<>&|,;?]*`, "g");
   const ratio = new RegExp(`/\\s*\\(*\\s*${term}`); // divide by another measured size, not by a unit such as 1000
   lines.forEach((line, i) => {
-    const comparisons = [...line.replace(/\/\/ timing-ok:.*$/, "").matchAll(under)];
+    const comparisons = [...line.matchAll(under)];
     if (!comparisons.some(([comparison]) => !ratio.test(comparison))) return;
-    if (/\/\/ timing-ok: \S/.test(line)) timingOk++;
+    if (marked[i]) timingOk++;
     else problems.push(`scripts/${f}:${i + 1}: a test holds a wall-clock or CPU time under a fixed number, so a busy machine can break it. Instead, ${FIX}.`);
   });
 }
@@ -287,4 +289,4 @@ for (const dir of ["plugins/sage", "plugins/sage-codex"]) {
 
 // The build reads the dictionary too, so a problem in it comes twice: report it once.
 if (problems.length) { console.error([...new Set(problems)].map((p) => `✗ ${p}`).join("\n")); process.exit(1); }
-console.log(`✓ all checks pass (${timingOk} timing ${timingOk === 1 ? "bound carries" : "bounds carry"} "// timing-ok:")`);
+console.log(`✓ all checks pass (${timingOk} timing ${timingOk === 1 ? "bound carries" : "bounds carry"} "timing-ok:")`);

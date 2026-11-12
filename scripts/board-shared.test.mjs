@@ -314,7 +314,7 @@ test("the server shows the changing note over its last good read, not stale, and
 
 /** The board page, asked again until it matches. The 30 s are a guard against a hang, not a time check: a pass never waits for them. */
 async function until(port, ok) {
-  for (const start = Date.now(); Date.now() - start < 30_000;) { // timing-ok: a hang guard only, as EVENT_GUARD in board-server.test.mjs
+  for (const hangGuardEnd = Date.now() + 30_000; Date.now() < hangGuardEnd;) { // a hang guard only, as EVENT_GUARD in board-server.test.mjs
     const { body } = await get(port, "/");
     if (ok(body)) return body;
     await new Promise(done => setTimeout(done, 100));

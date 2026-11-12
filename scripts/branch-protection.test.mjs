@@ -129,7 +129,7 @@ for (const host of ["claude", "codex"]) {
     const took = Date.now() - start;
     assert.match(note, AUTOPILOT, "autopilot still turns on");
     assert.match(note, UNREADABLE, note);
-    assert.ok(took < 8000, `the hook took ${took} ms`); // timing-ok: the host kills a hook at 10 s; the deadline is 5 s, the old code took 9 s, and the fake gh is the slow part
+    assert.ok(took < 8000, `the hook took ${took} ms (timing-ok: the host kills a hook at 10 s; the deadline is 5 s, the old code took 9 s, and the fake gh is the slow part)`);
     assert.ok(s.calls().length <= 2, "no read starts after the deadline");
   });
 

@@ -3700,7 +3700,7 @@ test("R1124-2: the merge check of dense waits in one merge is linear: 60 tasks, 
   const { ok } = mergeCheck(SHA, { SAGE_HOME: s.home }, { pr: "5", project: s.project });
   const { user, system } = process.cpuUsage(t);
   assert.equal(ok, true);
-  assert.ok((user + system) / 1000 < 1000, `60 dense tasks: ${((user + system) / 1000).toFixed(1)} ms of CPU time`); // timing-ok: CPU time, a bound about 100 times the linear check's, and an exponential one takes minutes
+  assert.ok((user + system) / 1000 < 1000, `60 dense tasks: ${((user + system) / 1000).toFixed(1)} ms of CPU time (timing-ok: CPU time, a bound about 100 times the linear check's, and an exponential one takes minutes)`);
   write((id) => (id === "T1" ? "abandoned" : "verified")); // T1 never meets a wait, so every task that waits for it, directly or not, refuses
   const { ok: after, reason } = mergeCheck(SHA, { SAGE_HOME: s.home }, { pr: "5", project: s.project });
   assert.equal(after, false);

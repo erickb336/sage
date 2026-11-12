@@ -116,13 +116,13 @@ test("npm run check refuses a wall-clock time under a fixed number of ms in a te
   const bounds = () => {
     const r = c.run("check");
     assert.equal(r.status, 0, r.stderr);
-    const n = r.stdout.match(/✓ all checks pass \((\d+) timing bounds? carr(?:y|ies) "\/\/ timing-ok:"\)/)?.[1];
+    const n = r.stdout.match(/✓ all checks pass \((\d+) timing bounds? carr(?:y|ies) "timing-ok:"\)/)?.[1];
     assert.ok(n, r.stdout);
     return Number(n);
   };
   sample("const t0 = Date.now();");
   const before = bounds(); // the bounds that the repository already has: a new justified bound must not break this test
-  sample(`${forms[0]} // timing-ok: the hook's own 10 s budget`);
+  sample(forms[0].replace("< 3000)", "< 3000, \"timing-ok: the hook's own 10 s budget\")"));
   assert.equal(bounds(), before + 1, "an explicit escape passes, and the check counts it");
   for (const allowed of [
     "const t0 = Date.now();\nwork();\nassert.ok(Date.now() - t0 >= 3000, 'a lower bound: a busy machine only adds time');",
@@ -136,7 +136,7 @@ test("npm run check refuses a wall-clock time under a fixed number of ms in a te
 
 test("F-T289-61: the timing check reads each file that a test file imports, such as sage-hook-tests.mjs, and counts its marks", () => {
   const c = copy();
-  const marks = c.read("scripts/sage-hook-tests.mjs").split("\n").filter((line) => /\/\/ timing-ok: \S/.test(line)).length;
+  const marks = c.read("scripts/sage-hook-tests.mjs").split("\n").filter((line) => /timing-ok: \S/.test(line)).length;
   assert.ok(marks > 0, "sage-hook-tests.mjs has timing-ok marks");
   const counted = () => Number(c.run("check").stdout.match(/✓ all checks pass \((\d+) timing bounds? carr/)?.[1]);
   assert.ok(counted() >= marks, `the check counts the ${marks} marks of sage-hook-tests.mjs`);
@@ -170,7 +170,7 @@ test("T188: check rejects fixed CPU-time bounds and permits ratios or a reason",
     assert.match(r.stderr, /scripts\/sample\.test\.mjs:\d+: a test holds a wall-clock or CPU time under a fixed number/);
   }
   for (const body of [
-    `${forms[0]} // timing-ok: a generous bound detects an endless reader`,
+    forms[0].replace("< 200_000)", "< 200_000, 'timing-ok: a generous bound detects an endless reader')"),
     "const cpu = process.cpuUsage();\nassert.ok(cpu.user >= 1);",
     "const [a, b] = [process.cpuUsage().user, process.cpuUsage().user];\nassert.ok(b < 30 * a + 20_000);",
     "const [a, b] = [process.cpuUsage().user, process.cpuUsage().user];\nassert.ok(b / a < 30);",

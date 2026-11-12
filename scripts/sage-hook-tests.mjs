@@ -1716,7 +1716,7 @@ test("1 MB of padding in an agent's text cannot time out the hook: its time grow
     const t = timed(small[i][1], stop); // the fastest of 3
     return { name, small: t, big: timed(input, stop, bound(t)) };
   });
-  const slow = times.filter((t) => t.big > bound(t.small) || t.big > 10_000).map((t) => `${t.name}: ${t.small.toFixed(1)} ms for 100 KB, ${t.big.toFixed(1)} ms for 1000 KB`); // timing-ok: the hook's own 10 s budget, 20 times the 0.5 s of CPU that 1000 KB takes on a Mac
+  const slow = times.filter((t) => t.big > bound(t.small) || t.big > 10_000).map((t) => `${t.name}: ${t.small.toFixed(1)} ms for 100 KB, ${t.big.toFixed(1)} ms for 1000 KB (timing-ok: the hook's own 10 s budget, 20 times the 0.5 s of CPU that 1000 KB takes on a Mac)`);
   assert.deepEqual(slow, [], "the time of each call grows in line with its text");
 });
 
@@ -2695,7 +2695,7 @@ test("R454-N5: 1 MB of git words that the hook cannot read takes under 2 s of CP
     const { ms, reason } = cpu(command);
     // A wide margin, with a reason: a linear scan takes about 100 to 210 ms (CI, 2026-10-06), and a bound of 200 ms failed
     // there at 209.6 ms. The slow path that this guards against, a regex that backtracks over each git word, runs for minutes.
-    assert.ok(ms < 2000, `${ms.toFixed(1)} ms of CPU for ${JSON.stringify(command.slice(0, 20))}…`); // timing-ok: about 10 times the observed CPU cost; the broken path takes minutes
+    assert.ok(ms < 2000, `${ms.toFixed(1)} ms of CPU for ${JSON.stringify(command.slice(0, 20))}… (timing-ok: about 10 times the observed CPU cost; the broken path takes minutes)`);
     // T815: a line that the hook cannot read is refused only when its text names a merge, a push, the state tool, gh, a
     // stash or a process program.
     assert.equal(/never runs git stash/.test(reason ?? ""), command.endsWith("stash"), "only the text with a stash word is refused");
@@ -3401,7 +3401,7 @@ test("F-T229-17: the board rule is fast on a word of many variable and ? pieces"
       const start = performance.now();
       const reason = denied(handle(bash(`cat ${word}`), { sage: false }, slots)) ?? "";
       const ms = performance.now() - start;
-      assert.ok(ms < 1000, `one call took ${Math.round(ms)} ms for a word of ${word.length} characters`); // timing-ok: 200 times the 5 ms a call needs; the old code took over 10 s
+      assert.ok(ms < 1000, `one call took ${Math.round(ms)} ms for a word of ${word.length} characters (timing-ok: 200 times the 5 ms a call needs; the old code took over 10 s)`);
       assert.equal(/board password rule/.test(reason), config, `${word}: ${reason || "allowed"}`);
     }
   } finally {
@@ -6194,11 +6194,11 @@ test("F-T289-34: a padded field line costs the reader time in proportion to its 
   // A reader in linear time takes a few milliseconds; 1 s leaves a wide margin for a loaded machine (order 26).
   let start = Date.now();
   assert.equal(hookHandle({ hook_event_name: "SubagentStop", agent_type: "sage:qa", stop_hook_active: false, last_assistant_message: report("PASS").replace("STATUS done", `STATUS done${pad}y`) }, {}, slots), undefined);
-  assert.ok(Date.now() - start < 1000, `the stop gate took ${Date.now() - start} ms`); // timing-ok: linear takes ms, the old quadratic reader 30 s
+  assert.ok(Date.now() - start < 1000, `the stop gate took ${Date.now() - start} ms (timing-ok: linear takes ms, the old quadratic reader 30 s)`);
   start = Date.now();
   const why = denied(hookHandle({ hook_event_name: "PreToolUse", tool_name: "Agent", tool_input: { subagent_type: "sage:qa", prompt: BRIEF.replace("GOAL fix it", `GOAL fix it${pad}y`).replace(/\nSTANDING.*/, "") } }, { sage: true }, slots));
   assert.match(why ?? "", /the brief has no STANDING/);
-  assert.ok(Date.now() - start < 1000, `the brief gate took ${Date.now() - start} ms`); // timing-ok: linear takes ms, the old quadratic reader 30 s
+  assert.ok(Date.now() - start < 1000, `the brief gate took ${Date.now() - start} ms (timing-ok: linear takes ms, the old quadratic reader 30 s)`);
 });
 
 test("F-T289-39: the stop gate blocks a RESULT that is not CLEAN, PASS, FINDINGS or FAIL once, and lists the four; RESULT on the next line counts", () => {
