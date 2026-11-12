@@ -5,6 +5,8 @@ import { LINE, PRIORITIES, TASK_KINDS, proposalOf } from "./logbook-fields.mjs";
 import { ENDED, lostClause, lostWhy, MILESTONE_ID, milestoneName } from "./milestone-rules.mjs";
 import { releaseWord, taskWord } from "./state-words.mjs";
 import { box, columns } from "./picture.mjs";
+import { pageUrl } from "./message.mjs";
+import { pageTaskFolder } from "./page-files.mjs";
 const esc = value => String(value ?? "").replace(/[&<>"']/g, c => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]));
 // The backslash and the tilde too (F1): a text that ends with a backslash would cancel the chat's hard break, and "~~" strikes text through.
 // Every control (C0, C1 with U+0085) and line or paragraph separator is a space, and every format character (\p{Cf}:
@@ -285,9 +287,18 @@ const milestoneLink = (ctx, task) => {
 };
 
 /** A task page. Offline it is a section of the board file with its own way back; at its route it is the main content. */
-function page(ctx, task, { routed = false } = {}) {
+/**
+ * The link to a task's pages index (T1010), for the Mac's own task page only: the pages route answers only there. It shows
+ * only when the route serves the task's folder, by the route's own rule (pageTaskFolder), so that the link always opens.
+ */
+function pagesLink(task) {
+  const logbook = task.project.slice(task.project.indexOf("/") + 1);
+  return pageTaskFolder(logbook, task.id) ? ` · <a href="${esc(pageUrl(logbook, task.id, ""))}" title="The pages of ${esc(task.id)}, on this Mac">Pages</a>` : "";
+}
+
+function page(ctx, task, { routed = false, mac = false } = {}) {
   const url = prUrl(task);
-  const pr = task.pr ? ` · ${url ? link(`PR ${task.pr}`, url) : standIn(`PR ${task.pr}`, "No link: the project's GitHub remote is not known.")}` : "";
+  const pr = (task.pr ? ` · ${url ? link(`PR ${task.pr}`, url) : standIn(`PR ${task.pr}`, "No link: the project's GitHub remote is not known.")}` : "") + (mac ? pagesLink(task) : "");
   const brief = task.brief ? `<p><b>Goal:</b> ${esc(task.briefFields.goal ?? "not recorded")}</p><p><b>Acceptance:</b></p><pre>${esc(task.briefFields.acceptance ?? "not recorded")}</pre><details class="fold" data-key="brief"><summary id="sum-brief">Full brief</summary><pre>${esc(task.brief)}</pre></details>` : `<div class="empty">No brief recorded for this task.</div>`;
   const decisions = task.decisions.length ? `<ol class="log">${[...task.decisions].reverse().map(row => `<li><span class="faint">${esc(day(row.at))}</span> ${esc(row.decision)}${row.why ? ` · ${esc(row.why)}` : ""}</li>`).join("")}</ol>` : `<div class="empty">No decisions recorded.</div>`;
   // A shared task names its owning chief and its offer over the steps; an old task says why it did not move (T306, F9).
@@ -859,6 +870,10 @@ const THEME_WORDS = '<span class="to-light">Light theme</span><span class="to-da
 const themeSwitch = (id = "flip", snapshot = false) => `<input type="checkbox" id="${id}" class="vh flip"${snapshot ? ' form="themes"' : ""}><label class="chip theme" for="${id}">${THEME_WORDS}</label>${snapshot ? `<button type="reset" form="themes" class="chip theme unflip">${THEME_WORDS}</button>` : ""}`;
 const THEME_SWITCH = themeSwitch();
 
+/**
+ * The board, or one task's page. paths is the server's own onMac result for the request, never a header that the render
+ * reads: only the Mac's page gets the checkout paths and the task's Pages link.
+ */
 export function renderBoardHtml(model, { taskKey = null, snapshot = true, live = false, paths = false } = {}) {
   const task = taskKey ? model.tasks.find(task => task.key === taskKey) : null;
   if (taskKey && !task) throw new RangeError("unknown task key");
@@ -868,7 +883,7 @@ export function renderBoardHtml(model, { taskKey = null, snapshot = true, live =
   // The theme switch sits in the header or the page bar, so the way back comes before it in focus order (F-T218-14).
   const theme = snapshot && !task ? themeSwitch("flip", true) : THEME_SWITCH;
   let body;
-  if (task) body = `<main class="page open" id="${esc(anchor(task))}" aria-label="${esc(task.id)}"><div class="pagebar"><a class="back" href="${snapshot ? "#" : "/"}">← Board</a>${milestoneLink(ctx, task)}${pill}<span class="spacer"></span>${theme}</div><div id="board-content" data-at="${esc(at)}">${banners(model)}${page(ctx, task, { routed: true })}</div></main>`;
+  if (task) body = `<main class="page open" id="${esc(anchor(task))}" aria-label="${esc(task.id)}"><div class="pagebar"><a class="back" href="${snapshot ? "#" : "/"}">← Board</a>${milestoneLink(ctx, task)}${pill}<span class="spacer"></span>${theme}</div><div id="board-content" data-at="${esc(at)}">${banners(model)}${page(ctx, task, { routed: true, mac: paths })}</div></main>`;
   else {
     const summary = `<div class="summary" id="board-summary"><span><b class="needn" id="s-needs">${counts.needsOwner}</b> needs you</span><span><b id="s-agents">${counts.recordedAgents}</b> agents at work</span>${counts.inferredWork ? `<span><b id="s-inferred">${counts.inferredWork}</b> inferred PRs</span>` : ""}<span><b id="s-review">${counts.inReview}</b> in review</span><span><b id="s-tasks">${counts.tasks}</b> tasks</span><span>built ${esc(day(model.at))} UTC</span></div>`;
     // No task at all, archived ones included: the board is new. Tasks only in archived projects: one line says so.
