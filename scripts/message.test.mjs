@@ -142,6 +142,34 @@ test("the checks catch the designer's negative cases: width, tree marks, an imag
   assert.match(textProblems(out.text.replace("│ In progress · in review                │", "│ In progress · in review T995           │")).join("\n"), /raw ids in the message: T995/, "in a picture too");
 });
 
+test("a page check reads only real attributes, and a picture of arrows alone is a picture (F-T984-1, F-T984-2)", () => {
+  const msg = fixture("05-explainer.json"), at = msg.blocks.findIndex((b) => b.t === "picture");
+  const withPicture = (pic) => ({ ...msg, blocks: msg.blocks.map((b, k) => (k === at ? { ...b, ...pic } : b)) });
+  // A picture's title is text in the image's aria-label, not an attribute: these titles pass.
+  for (const title of ["Where data = truth", "A background = the old board", "Its src=the text form", "The page onload= nothing", "x href = y"]) {
+    const out = render(withPicture({ title }));
+    assert.equal(out.problems, undefined, `${title}: ${out.problems}`);
+    assert.ok(out.page.html.includes(`aria-label="${title}"`), title);
+  }
+  // Real attributes are still caught, quoted or not.
+  const html = render(msg).page.html;
+  assert.match(pageProblems(html.replace('<svg class="pic"', '<svg class="pic" onload="alert(1)"')).join("\n"), /an event attribute/);
+  assert.match(pageProblems(html.replace("<main>", "<main><a href=https://example.com>x</a>")).join("\n"), /loads from outside itself/);
+  assert.match(pageProblems(html.replace("</head>", '<meta http-equiv="refresh" content="0;url=https://example.com"></head>')).join("\n"), /loads from outside itself/);
+  // A picture with no box mark, only arrows: its image is drawn from its text, and the page passes.
+  const arrows = render(withPicture({ title: "The flow", lines: ["Brief  ▶  Run  ▶  Report"] }));
+  assert.equal(arrows.problems, undefined, arrows.problems);
+  assert.equal((arrows.page.html.match(/<svg class="pic"/g) ?? []).length, 1);
+  assert.deepEqual(pageProblems(arrows.page.html), []);
+  // An architecture needs a picture: one of arrows alone counts, also in the text check.
+  const arch = fixture("08-architecture.json");
+  const flow = render({ ...arch, blocks: arch.blocks.map((b) => (b.t === "picture" ? { ...b, lines: ["Brief  ▶  Run  ▶  Report"] } : b)) });
+  assert.equal(flow.problems, undefined, flow.problems);
+  assert.deepEqual(textProblems(flow.text), []);
+  // Code stays code: a fence after a blank line, with no box mark, needs no image.
+  assert.match(render(fixture("12-steps-for-you.json")).text, /\n\n {3}```\n/);
+});
+
 test("the raw-id check has none of the false hits that the PE found: the Ref line, the Page block, code, the board, a message with no kind", () => {
   const out = render(fixture("10-catch-up.json"));
   assert.match(out.text, /Ref: T984 · T995 to T997/);

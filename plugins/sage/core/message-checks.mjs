@@ -25,8 +25,10 @@ export function kindOf(text) {
 }
 
 /**
- * The parts of a text: its fenced blocks (a picture when it has box marks, else code), and its other lines. The board's
- * chat text, from its "**sage board**" line on, is not the message's own text.
+ * The parts of a text: its fenced blocks, and its other lines. A fenced block is a picture when its fence comes right
+ * under its title (the text form writes a picture so, and code after a blank line), or when it has box marks: a picture
+ * may be only arrows, such as "Brief ▶ Run ▶ Report". The board's chat text, from its "**sage board**" line on, is not
+ * the message's own text.
  */
 function partsOfText(text) {
   const lines = String(text).split("\n"), out = { lines: [], pictures: [], code: [] };
@@ -34,9 +36,9 @@ function partsOfText(text) {
     if (/^\*\*sage board\*\*/.test(lines[i])) break;
     const open = FENCE.exec(lines[i]);
     if (!open) { out.lines.push(lines[i]); continue; }
-    const body = [];
+    const body = [], titled = i > 0 && lines[i - 1].trim() !== "";
     for (i++; i < lines.length && !lines[i].trim().startsWith(open[1]); i++) body.push(lines[i]);
-    (body.some((l) => BOX_MARK.test(l)) ? out.pictures : out.code).push(body);
+    (titled || body.some((l) => BOX_MARK.test(l)) ? out.pictures : out.code).push(body);
   }
   return out;
 }
@@ -91,7 +93,11 @@ export function textProblems(text, { width = WIDTH } = {}) {
 }
 
 const unescape = (s) => s.replace(/&lt;/g, "<").replace(/&gt;/g, ">").replace(/&quot;/g, '"').replace(/&#39;/g, "'").replace(/&amp;/g, "&");
-const LOADS = /\s(?:src|srcset|href|action|formaction|poster|data|xlink:href|background)\s*=|^<(?:link|iframe|object|embed|img|image|use|base|frame|audio|video|source|track|form)\b|^<meta\s+http-equiv="refresh"/i;
+// LOADS and EVENT read a tag without its quoted values: a value is escaped text, such as a picture's title in its
+// aria-label ("Where data = truth"), not an attribute. REFRESH reads the whole tag.
+const LOADS = /\s(?:src|srcset|href|action|formaction|poster|data|xlink:href|background)\s*=|^<(?:link|iframe|object|embed|img|image|use|base|frame|audio|video|source|track|form)\b/i;
+const EVENT = /\son[a-z]+\s*=/i, REFRESH = /^<meta\s+http-equiv="refresh"/i;
+const withoutValues = (tag) => tag.replace(/"[^"]*"|'[^']*'/g, '""');
 
 /**
  * The problems of a message's page: a load from outside the page, a policy other than sage's (each script and style
@@ -102,13 +108,13 @@ export function pageProblems(html) {
   const problems = [];
   // A tag is markup: the page escapes every text, so a "<" in the page starts a real tag.
   const tags = String(html).match(/<[a-z][^>]*>/gi) ?? [], styles = (html.match(/<style\b[^>]*>([\s\S]*?)<\/style>/gi) ?? []).join("");
-  const loads = [...tags.filter((t) => LOADS.test(t)), ...(/@import|url\(/i.test(styles) ? ["a style that loads a file"] : [])];
+  const loads = [...tags.filter((t) => LOADS.test(withoutValues(t)) || REFRESH.test(t)), ...(/@import|url\(/i.test(styles) ? ["a style that loads a file"] : [])];
   if (loads.length) problems.push(`the page loads from outside itself: ${[...new Set(loads)].join(", ")}`);
   const policy = /<meta http-equiv="Content-Security-Policy" content="([^"]*)">/.exec(html)?.[1];
   if (policy !== PAGE_POLICY) problems.push("the page's Content-Security-Policy is not sage's: nothing loads, and only the page's own style and its one script run");
   const scripts = tags.filter((t) => /^<script\b/i.test(t)).length, sheets = tags.filter((t) => /^<style\b/i.test(t)).length;
   if (scripts > 1 || sheets > 1) problems.push(`the page has ${scripts} scripts and ${sheets} styles: at most one of each, the ones that its policy names`);
-  if (tags.some((t) => /\son[a-z]+\s*=/i.test(t))) problems.push("the page has an event attribute (on…=): its one script is the only code");
+  if (tags.some((t) => EVENT.test(withoutValues(t)))) problems.push("the page has an event attribute (on…=): its one script is the only code");
   const text = /<details class="text-form"><summary>[^<]*<\/summary><pre>([\s\S]*?)<\/pre><\/details>/.exec(html)?.[1];
   if (text === undefined) return [...problems, "the page has no plain-text form of its message, so no image can be checked against its text"];
   const plain = unescape(text), wide = /<main class="long">/.test(html);
