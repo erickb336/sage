@@ -104,7 +104,8 @@ test("F-T604-23: the printed repair line on a legacy project adds no chiefs.tsv 
 test("T995 F4: every command of the state tool is a read or has a writer class, also the old words program and release", () => {
   let listed;
   try { claude.sage(["no-such-command"]); } catch (error) { listed = /Commands: (.*)$/.exec(error.message)[1].split(", "); }
-  const READS = ["status", "stats", "merge-check", "board", "link", "worktrees"];
+  // message writes only a page in the pages folder, outside the logbook, as pages <T> does (T984).
+  const READS = ["status", "stats", "merge-check", "board", "link", "worktrees", "message"];
   const WRITES = {
     init: [[]], logbook: [["repair"]], standing: [["add"]], pages: [["T1", "record"]], task: [["add"], ["T1", "set"]], "task-adopt": [["T1"]],
     milestone: [["propose"]], round: [["T1"]], run: [["add", "T1"], ["done", "R1"], ["usage", "R1"]], finding: [["add", "T1"], ["triage", "T1"], ["close", "T1"], ["move", "T1"]],
