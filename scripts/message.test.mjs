@@ -446,10 +446,14 @@ test("T1023: a section in a question or a confirm has the same bold label on its
   }
 });
 
-test("T1023: a hand-written question may keep a colon with its bold label, and may hold a table of short data", () => {
+test("T1023: a hand-written question may keep a colon with its bold label", () => {
   const question = render(fixture("02-question.json")).text;
   assert.equal(messageMiss(question.replace("**Needed by**\n", "**Needed by:**\n")), undefined, "the colon inside the bold");
   assert.equal(messageMiss(question.replace("**Needed by**\n", "**Needed by**:\n")), undefined, "the colon after the bold");
+});
+
+test("T1023: a hand-written question may hold a table of short data; a table of answers gets the note", () => {
+  const question = render(fixture("02-question.json")).text;
   const data = "\n\n| Folder | Size |\n| --- | --- |\n| pages | 12 MB |";
   assert.equal(messageMiss(question.replace("\n\n**If you do not answer**", `${data}\n\n**If you do not answer**`)), undefined, "a table of short data");
   // A table of answers gets the note also when no row holds the pick: its head names the answers.
