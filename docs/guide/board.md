@@ -218,7 +218,9 @@ The board shows web pages, PDFs, pictures (PNG, JPEG, GIF, WebP and SVG), and Ma
 
 A page can be at most 3 parts deep in the task's folder (for example `designs/final/index.html`) and at most 16 MiB. The index lists at most 200 pages.
 
-Each page opens in a sandbox: it cannot read the board or your files, load anything, or send a form. Only sage's own script runs, the switch of a design's page.
+Each page opens in a sandbox. A page cannot read the board or your files, load anything from the board or from another site, send a form, or move to another site by itself. The one way out of a page is a link that you click in it.
+
+Only sage's own script runs: the Today switch of a message's page. A page that holds this switch and also an `http-equiv` meta tag other than sage's own policy tag (for example a refresh) gets no script, so that a refresh cannot move it. It shows without its switch.
 
 Two warning lines in the index tell you the rest:
 
