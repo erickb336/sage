@@ -2,7 +2,7 @@
 // read from real board cards, and the agreement of "needs you" with the board's Needs you box. SAMPLE DATA only.
 import test from "node:test";
 import assert from "node:assert/strict";
-import { buildBoardModel, milestoneWord, releaseWord, taskWord } from "../packages/sage-core/index.mjs";
+import { buildBoardModel, milestoneWord, releaseWord, renderBoardHtml, renderBoardText, renderMilestonesHtml, renderTaskText, taskWord } from "../packages/sage-core/index.mjs";
 import { NOW as MILESTONES_NOW, milestonesSource } from "./fixtures/board-milestones.mjs";
 
 const SIX = ["not started", "waiting", "needs you", "in progress", "done", "stopped"];
@@ -80,7 +80,7 @@ test("T1002: the reason says what the owner answers, what the task waits for, or
   const reason = fixture => taskWord(cardOf(fixture)).reason;
   assert.equal(reason({ row: task("T1", "building"), gates: [gate()] }), "Sample: which layout?");
   assert.equal(reason({ row: task("T1", "verified", { pr: "41" }), ledger: clean, records: autopilot(false) }), "Autopilot is off, so review and merge PR 41.");
-  assert.equal(reason({ row: task("T1", "framed", { waits: "T2" }), others: [task("T2", "building")] }), "Waits for T2 (building).");
+  assert.equal(reason({ row: task("T1", "framed", { waits: "T2" }), others: [task("T2", "building")] }), "Waits for T2 (in progress).");
   assert.match(reason({ row: task("T1", "framed", { waits: "T2" }), others: [task("T2", "abandoned")] }), /cannot start/);
   assert.equal(reason({ row: task("T1", "verified", { pr: "41" }), ledger: clean, records: autopilot(false), landing: refuses }), "The merge check refuses aaaaaaa. T1 has open findings: F-T1-1.");
   assert.equal(reason({ row: task("T1", "verified", { pr: "41" }), ledger: failed("qa-fail"), records: autopilot(true), landing: refuses }), "The merge check refuses aaaaaaa. T1 has open findings: F-T1-1.");
@@ -148,6 +148,12 @@ test("T1002: each milestone's word, from its state and its tasks' words", () => 
   }
 });
 
+test("T997: the board model gives each milestone the same word, from the one rule that status and the release line use", () => {
+  const board = buildBoardModel([milestonesSource()], { now: MILESTONES_NOW });
+  assert.deepEqual(Object.fromEntries(board.milestones.map(milestone => [milestone.id, milestone.word])),
+    { M1: "in progress", M2: "needs you", M3: "needs you", M4: "in progress", M5: "done", M6: "stopped", M7: "needs you", M8: "in progress", M9: "in progress" });
+});
+
 test("T1002: an active milestone with nothing started is not started; a stuck one whose tasks all stopped still needs you", () => {
   assert.deepEqual(milestoneWord({ state: "active" }, ["not started", "waiting", "waiting"]), { word: "not started", reason: "Nothing in it has started." });
   assert.equal(milestoneWord({ state: "active" }, ["waiting", "needs you"]).word, "in progress");
@@ -161,4 +167,46 @@ test("T1002 F6: a release's word, from the words of its items", () => {
     word(["done", "stopped"]), word(["done"]), word(["stopped", "stopped"]),
   ], ["not started", "not started", "in progress", "in progress", "in progress", "done", "done", "stopped"]);
   assert.equal(releaseWord(["done", "stopped", "in progress", "not started"]).reason, "1 of 4 done.");
+});
+
+// T997: the owner sees the six words on the board. One logbook with a task for each word (SAMPLE DATA): the word on the
+// model's card, on the web card with its mark (the T995 design), and on the chat board's line, after the title.
+const SHOWN = { T1: "not started", T2: "waiting", T3: "in progress", T4: "needs you", T5: "done", T6: "stopped" };
+const MARKS = { "not started": "○", waiting: "⧗", "needs you": "!", "in progress": "▶", done: "✓", stopped: "■" };
+const sixBoard = () => model({
+  row: task("T1", "framed"),
+  others: [task("T2", "framed", { waits: "T3" }), task("T3", "building"), task("T4", "framed"), task("T5", "merged", { pr: "41" }), task("T6", "abandoned"), task("T7", "framed", { waits: "T6" })],
+  gates: [{ ...gate(), task: "T4" }],
+  records: [{ ...observation("completion", { state: "merged", at: now }), task: "T5" }],
+});
+
+test("T997: the board model gives each card its word, one card for each of the six words", () => {
+  const board = sixBoard();
+  assert.deepEqual(Object.fromEntries(Object.keys(SHOWN).map(id => [id, board.tasks.find(card => card.id === id).word])), SHOWN);
+});
+
+test("T997: each web card shows its word with its mark, and a stopped task, which no column holds, shows it on its page", () => {
+  const board = sixBoard(), html = renderBoardHtml(board, { snapshot: false });
+  const cardOf = id => html.split('<a class="card').find(card => card.includes(`<span class="id">${id}</span>`)) ?? "";
+  for (const [id, word] of Object.entries(SHOWN).filter(([id]) => id !== "T6")) assert.match(cardOf(id), new RegExp(`<div class="top">.*<span class="sw stw-[a-z]+"><span aria-hidden="true">${MARKS[word]}</span> ${word}</span></div>`), id);
+  assert.equal(cardOf("T6"), "", "Done holds merged and concluded tasks only");
+  const page = renderBoardHtml(board, { snapshot: false, taskKey: board.tasks.find(card => card.id === "T6").key });
+  assert.ok(page.includes('<span class="pstate stw-ab"><span aria-hidden="true">■</span> stopped</span>'), page);
+});
+
+test("T997: each chat board line shows its word after the title, and a wait names the word of the task that it waits for", () => {
+  const board = sixBoard(), text = renderBoardText(board);
+  for (const [id, word] of Object.entries(SHOWN).filter(([id]) => id !== "T6")) assert.ok(text.includes(`**${id} Sample** · ${word} · one · `), `${id}: ${text}`);
+  assert.ok(text.includes("**1 · T4 Sample** · needs you · one · "), "the Needs you item too");
+  assert.ok(text.includes("⧗ Waits for T3 \\(in progress\\)\\.") && text.includes("⊘ Waits for T6 \\(stopped\\)\\: it cannot start\\."), text);
+  assert.equal(renderTaskText(board.tasks.find(card => card.id === "T6")).split("\n")[1], "one · sample · stopped · small", "the chat lookup of one task");
+});
+
+test("T997: a milestone's row and page show its word; each task row of the milestone shows its own", () => {
+  const board = buildBoardModel([milestonesSource()], { now: MILESTONES_NOW }), key = id => `claude/sage-ff5ee2/${id}`;
+  const list = renderMilestonesHtml(board);
+  assert.ok(list.includes('<span class="id">M2</span><span class="pstate stw-need"><span aria-hidden="true">!</span> needs you</span>'), "a stuck milestone needs you");
+  const page = renderMilestonesHtml(board, { milestoneKey: key("M5") });
+  assert.ok(page.includes('<span class="pstate stw-done"><span aria-hidden="true">✓</span> done</span>'), page);
+  for (const [id, word] of [["T50", "done"], ["T51", "done"], ["T52", "stopped"]]) assert.ok(page.includes(`<span class="id">${id}</span>`) && new RegExp(`<span class="id">${id}</span>.*?<span class="sw stw-[a-z]+"><span aria-hidden="true">${MARKS[word]}</span> ${word}</span>`).test(page), id);
 });

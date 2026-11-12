@@ -2,7 +2,8 @@ import { createHash } from "node:crypto";
 import { basename } from "node:path";
 import { githubRepository, hookProvider } from "./board-reader.mjs";
 import { LINE, PRIORITIES, TASK_KINDS, agentCaps, proposalOf } from "./logbook-fields.mjs";
-import { ENDED, MET, breakdownGate, dead, gateLines, lostWhy, namedText, progressOf, progressText, shownGraph, shownWaits, waitGraph, waitsOf } from "./milestone-rules.mjs";
+import { ENDED, MET, breakdownGate, dead, gateLines, lostWhy, milestoneWordOf, namedText, progressOf, progressText, shownGraph, shownMilestoneState, shownWaits, waitGraph, waitsOf } from "./milestone-rules.mjs";
+import { taskWord } from "./state-words.mjs";
 import { offerOf, replaceOf } from "./chiefs.mjs";
 import { checkoutLabel, plainName } from "./shared-root.mjs";
 // One semantic model for HTML, chat and the read-only server.
@@ -250,9 +251,6 @@ function stepLine({ task, route, cycles, required, head, judged, reasons, merge,
 // Milestones (T233). A milestone's key is its logbook's key, a slash and its id, as a task's key is: M1 of the Claude logbook
 // and M1 of the Codex logbook of one project are two milestones. Waits resolve inside the task's own logbook, with the
 // state tool's rules (milestone-rules.mjs), so the board and the status line never disagree.
-const WAIT_WORD = { backlog: "not started", design: "in design", building: "building", review: "in review", ready: "ready to merge" };
-/** A task state as a wait names it: "merged", "in review", or "not in the logbook" for a task that the logbook lost. */
-const stateWord = state => state === undefined ? "not in the logbook" : ["merged", "concluded", "abandoned"].includes(state) ? state : WAIT_WORD[COLUMNS.find(([, , states]) => states.includes(state))?.[0]] ?? state;
 /** The graph of one logbook's waits and milestones: its tasks by id and each milestone with its state, as every printer shows it (shownGraph). */
 const graphOf = project => shownGraph(waitGraph((project.tables.tasks ?? []).filter(task => /^T[1-9]\d*$/.test(task.id)), project.tables.milestones ?? [], project.tables.gates ?? [], project.tables.decisions ?? []), project.tables.gates ?? []);
 const LOST_FIX = id => `ask the chief to repair the logbook, or to propose ${id} again.`;
@@ -266,14 +264,27 @@ const waitsFor = (task, graph) => shownWaits(task, graph).map(wait =>
   wait.odd ? { odd: true, met: false, never: true }
   : wait.milestone ? { breakdown: { id: wait.milestone.id, gate: wait.milestone.gate ?? null, pilot: wait.milestone.pilot, state: wait.milestone.state, gateFound: !!wait.milestone.gateFound, ...(wait.milestone.missing && { missing: true }), ...(wait.milestone.named !== undefined && { named: wait.milestone.named }) }, met: false, never: ["dropped", "lost"].includes(wait.milestone.state) }
   // A wait of a loop of waits (a hand edit) is never met, as no task of the loop can start first.
-  : { id: wait.id, state: wait.state ?? null, word: `${stateWord(wait.state)}${wait.loop ? ", in a loop" : ""}`, pilot: !!wait.pilot, met: MET.includes(wait.state), never: dead(wait.state) || !!wait.loop, ...(wait.loop && { loop: true }) });
+  // Its word is the state word of the task that it waits for (namedWaits), once each card has its word.
+  : { id: wait.id, state: wait.state ?? null, pilot: !!wait.pilot, met: MET.includes(wait.state), never: dead(wait.state) || !!wait.loop, ...(wait.loop && { loop: true }) });
 const BREAKDOWN_WAIT = {
   proposed: (id, gate) => `your approval of the ${id} breakdown (gate ${gate})`,
   changing: (id, gate) => `the new breakdown of ${id}: you asked for changes (gate ${gate})`,
   dropped: (id, gate) => `the ${id} breakdown, which you dropped (gate ${gate})`,
 };
 const waitName = wait => wait.breakdown ? BREAKDOWN_WAIT[wait.breakdown.state]?.(wait.breakdown.id, wait.breakdown.gate) ?? `the ${wait.breakdown.id} breakdown, ${wait.breakdown.missing ? "which is not in the logbook" : !wait.breakdown.gate ? "whose milestone names no breakdown gate" : wait.breakdown.named !== undefined ? `whose gate ${wait.breakdown.gate} ${namedText(wait.breakdown.named, wait.breakdown.id)}` : wait.breakdown.gateFound ? `whose gate ${wait.breakdown.gate} is not a breakdown gate` : `whose gate ${wait.breakdown.gate} is not in the logbook`}`
-  : `${wait.id} (${wait.pilot ? "pilot, " : ""}${wait.word})`;
+  : `${wait.id}${wait.pilot || wait.word ? ` (${[wait.pilot && "pilot", wait.word].filter(Boolean).join(", ")})` : ""}`;
+/**
+ * The owner's state words (state-words.mjs, T997): each card's word, then each wait names the word of the task that it
+ * waits for ("Waits for T12 (in progress)."), or "not in the logbook". A card's word reads only whether its wait line is
+ * there, not the words in it, so the words come from the first lines, and the lines are made again with the words.
+ */
+function namedWaits(tasks, byKey) {
+  for (const task of tasks) task.word = taskWord(task).word;
+  for (const task of tasks) {
+    for (const wait of task.waits) if (wait.id) wait.word = `${wait.state === null ? "not in the logbook" : byKey.get(`${task.project}/${wait.id}`)?.word ?? wait.state}${wait.loop ? ", in a loop" : ""}`;
+    if (task.waitLine) task.waitLine = waitLine(task, task.waits, task.column);
+  }
+}
 /**
  * The card's wait line, or null when nothing waits: each wait that is never met, first, so a task that cannot start
  * says so, as the milestone page and status do (R1509-1); then each other unmet wait, only the breakdown when it waits for one.
@@ -738,8 +749,7 @@ function milestonesOf(source, project, group, graph, cards) {
   // An old logbook (T306, the move) is read-only history: only its finished milestones show, and none needs the owner (F-T624-12).
   return [...graph.milestones.values()].map(milestone => {
     const own = graph.byMilestone.get(milestone.id) ?? [], progress = progressOf(own), pilotState = graph.byId.get(milestone.pilot)?.state;
-    const state = milestone.state === "active" ? progress.done ? "done" : dead(pilotState) ? "stuck" : "active"
-      : ["proposed", "changing"].includes(milestone.state) && dead(pilotState) ? "stuck" : milestone.state;
+    const state = shownMilestoneState(milestone, graph);
     const layered = milestoneOrder(milestone, own), ordered = layered.map(([task]) => task), card = task => cards.get(`${project.key}/${task.id}`);
     const open = ordered.filter(task => !ENDED.includes(task.state)).map(card).filter(Boolean);
     const moving = open.filter(item => item.waits.every(wait => wait.met)), waiting = open.filter(item => item.waitLine);
@@ -751,8 +761,8 @@ function milestonesOf(source, project, group, graph, cards) {
     return { key: `${project.key}/${milestone.id}`, id: milestone.id, name: milestone.name, goal: milestone.goal, pilot: milestone.pilot, pilotState: pilotState ?? null, gate: milestone.gate, gateFound: milestone.gateFound, questions: questions.get(milestone.id) ?? [], ...(milestone.named !== undefined && { named: milestone.named }), ...(was.has(milestone.id) && { was: was.get(milestone.id) }), open: open.length,
       // An old logbook's milestone names that logbook, not the shared root that the board reads it through (F-T624-19).
       source: source.id, sourceLabel: project.old ? `Old ${title(project.old.provider)}` : source.label, project: project.key, group: group.key, projectName: group.name, archived: group.archived,
-      state, progress, progressText: progressText(progress), tasks: ordered.map(task => `${project.key}/${task.id}`), depths: layered.map(([, depth]) => depth),
-      next: first ? { key: first.key, id: first.id, word: stateWord(first.state), pilot: first.id === milestone.pilot } : null,
+      state, word: milestoneWordOf(milestone, graph).word, progress, progressText: progressText(progress), tasks: ordered.map(task => `${project.key}/${task.id}`), depths: layered.map(([, depth]) => depth),
+      next: first ? { key: first.key, id: first.id, word: first.word, pilot: first.id === milestone.pilot } : null,
       waiting: waiting.filter(item => !item.waitLine.never).length, cannotStart: waiting.filter(item => item.waitLine.never).map(item => item.id),
       need: need && { ...need, key: `${project.key}/${milestone.id}`, milestone: milestone.id, source: source.id, sourceLabel: source.label, projectName: group.name, group: group.key, archived: group.archived } };
   }).filter(milestone => !project.old || ["done", "dropped"].includes(milestone.state) && !milestone.open);
@@ -848,6 +858,7 @@ export function buildBoardModel(input,{ now = new Date().toISOString(), landing 
   const graphs = new Map(sources.flatMap(source => source.projects.map(project => [project.key, graphOf(project)])));
   const tasks = sources.flatMap(source => source.projects.flatMap(project => (project.tables.tasks ?? []).filter(task => /^T[1-9]\d*$/.test(task.id)).map(task => card(source, project, groupOf.get(project.key), task, at, graphs.get(project.key), landing))));
   const byKey = new Map(tasks.map(task => [task.key, task]));
+  namedWaits(tasks, byKey);
   const milestones = sources.flatMap(source => source.projects.flatMap(project => milestonesOf(source, project, groupOf.get(project.key), graphs.get(project.key), byKey)));
   // What needs the owner that no card shows: a stuck milestone, a lost breakdown gate, a table or a logbook that the board
   // cannot read. An archived project's leave the counts, as its tasks do.

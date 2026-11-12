@@ -23,7 +23,7 @@ import { REPORT_FIELDS } from "./report.mjs";
 import { cleanReport, fieldsOf, proofResults, readReport } from "./report-reader.mjs";
 import { ROLES } from "./roles.mjs";
 import { AGENT_CAPS, BREAKS, FINDING_CLASSES, HIDDEN, LINE, NAME_MAX, PRIORITIES, PRIORITY_SCALE, START_SAGE_MODE, TABLES as PLAIN_TABLES, TASK_KINDS, breakdownLine, countOf, nameProblem, proposalOf } from "./logbook-fields.mjs";
-import { BREAKDOWN, ENDED, GATE_ID, MET, MILESTONE_ID, TASK_ID, breakdownGate, renameRows, renamedIds, byIds, dead, droppedBy, gateLines, lostClause, milestoneState, progressOf, progressText, releaseKey, releaseNameProblem, releasesOf, shownGraph, shownWaits, unmetWaits, waitGraph, waitWords, waitsOf, waitsWithState } from "./milestone-rules.mjs";
+import { BREAKDOWN, ENDED, GATE_ID, MET, MILESTONE_ID, TASK_ID, breakdownGate, renameRows, renamedIds, byIds, dead, droppedBy, gateLines, lostClause, milestoneState, milestoneWordOf, progressOf, progressText, releaseKey, releaseNameProblem, releasesOf, shownGraph, shownMilestoneState, shownWaits, unmetWaits, waitGraph, waitWords, waitsOf, waitsWithState } from "./milestone-rules.mjs";
 import { OBSERVATIONS_MAX_BYTES, OBSERVATION_DATA_MAX_BYTES, validateObservation, validateObservations } from "./observations.mjs";
 import { MOVES, PLAN_MAX, checkoutGone, createSharedRoot, sharedRoot, unreadableFolder } from "./shared-root.mjs";
 import { changedText, countsOf, endText, gateQuestion, gateText, localTime, mapHtml, mismatchText, previewText, providersOf, reconciliationText, startText, stepText, stoppedText, title } from "./move-text.mjs";
@@ -2788,26 +2788,27 @@ function judgeMerge(sha, env, { cycles, pr, readOnly, head, project, locked, ses
 }
 
 /**
- * The milestone lines of status, one for each milestone: its progress (progressText: its merged or concluded tasks of all its
+ * The milestone lines of status, one for each milestone: the owner's state word, its progress (progressText: its merged or concluded tasks of all its
  * tasks, and each abandoned task by id, the owner's Q3), its pilot and what it waits for, then its name last, after a
  * label, so the name cannot pass for the status. A done or dropped milestone keeps its name and count, and a dropped one
  * names the next step for its tasks that have not ended. A milestone whose pilot is abandoned or lost is stuck, also before
  * its approval, as on the board. The graph has the tasks by milestone (shownGraph), so the lines are linear in the tasks (R1208-5).
  */
-function milestonesLine({ byId, milestones, byMilestone }) {
-  const each = [...milestones.values()].map((p) => {
-    const own = byMilestone.get(p.id) ?? [], progress = progressOf(own), text = progressText(progress);
+function milestonesLine(graph) {
+  const { byId, milestones, byMilestone } = graph;
+  return [...milestones.values()].map((p) => {
+    const own = byMilestone.get(p.id) ?? [], text = progressText(progressOf(own));
     const open = own.filter((t) => !ENDED.includes(t.state)).length;
-    const pilot = byId.get(p.pilot)?.state;
+    const state = shownMilestoneState(p, graph), pilot = byId.get(p.pilot)?.state;
     // The board's words for each state (F-T233-11), and why a lost milestone is lost (F-T233-2).
     const why = { proposed: ` · breakdown waits for you (${p.gate})`, changing: ` · you asked for changes (${p.gate}): the chief revises the breakdown`, lost: ` · ${lostClause(p)}` }[p.state] ?? "";
-    const line = p.state === "dropped" ? `dropped${open ? `: ${open} ${open === 1 ? "task" : "tasks"} still in it, take each out with milestone=none` : ""}`
-      : p.state === "active" && progress.done ? `done, ${text}`
-      : ["active", "proposed", "changing"].includes(p.state) && dead(pilot) ? `${text} · pilot ${p.pilot} ${pilot ?? "not in the logbook"}: choose a new pilot, or drop the milestone`
+    const line = state === "dropped" ? `dropped${open ? `: ${open} ${open === 1 ? "task" : "tasks"} still in it, take each out with milestone=none` : ""}`
+      : state === "done" ? text
+      : state === "stuck" ? `${text} · pilot ${p.pilot} ${pilot ?? "not in the logbook"}: choose a new pilot, or drop the milestone`
       : `pilot ${p.pilot}: ${text}${why}`;
-    return `milestone ${p.id}${p.release ? ` · release ${oneLine(p.release)}` : ""} · ${line} · name: ${oneLine(p.name)}`;
+    // The owner's word (state-words.mjs, T997) comes first after the release, as on the release line.
+    return `milestone ${p.id}${p.release ? ` · release ${oneLine(p.release)}` : ""} · ${milestoneWordOf(p, graph).word} · ${line} · name: ${oneLine(p.name)}`;
   });
-  return each;
 }
 
 /**

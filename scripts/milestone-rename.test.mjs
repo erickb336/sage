@@ -72,7 +72,7 @@ function oldLogbook({ answer = "approve", floor = true, stopped = [], pr = false
 
 /** The status lines without the first, which names the logbook's folder. */
 const statusOf = (s) => s.ok("status").split("\n").slice(1).join("\n");
-const SAGE_FEEL = "milestone M5 · pilot T984: 0 of 8 merged · name: Sage feel";
+const SAGE_FEEL = "milestone M5 · in progress · pilot T984: 0 of 8 merged · name: Sage feel";
 
 test("T995: this logbook's shape reads as milestone M5 before any write; the first write migrates it, and status stays the same", () => {
   const s = oldLogbook(), before = snapshot(s.dir), status = statusOf(s);
@@ -108,7 +108,7 @@ test("T995: the merge check, which only reads, sees the same waits before and af
 
 test("T995: without the floor row, PG1 becomes M1", () => {
   const s = oldLogbook({ floor: false });
-  assert.match(statusOf(s), /^milestone M1 · pilot T984: 0 of 8 merged · name: Sage feel$/m);
+  assert.match(statusOf(s), /^milestone M1 · in progress · pilot T984: 0 of 8 merged · name: Sage feel$/m);
   s.ok("log", "-", "a note", "--why", "w");
   assert.deepEqual(rowsOf(s.dir, "milestones").map((m) => m.id), ["M1"]);
   assert.deepEqual(rowsOf(s.dir, "decisions").filter((d) => d.why === RENAME_WHY).map((d) => d.decision), ["M1 was PG1"]);
@@ -139,7 +139,7 @@ test("T995: an open old breakdown gate gets the new first line at the migration,
   const s = oldLogbook({ answer: "" });
   const status = statusOf(s);
   assert.match(status, /G140 Approve milestone M5\? No task builds before you approve\. \(breakdown, 8 tasks\)/, "the gates line before the write");
-  assert.ok(status.includes("milestone M5 · pilot T984: 0 of 8 merged · breakdown waits for you (G140) · name: Sage feel"), status);
+  assert.ok(status.includes("milestone M5 · needs you · pilot T984: 0 of 8 merged · breakdown waits for you (G140) · name: Sage feel"), status);
   s.ok("log", "-", "a note", "--why", "w");
   const question = rowsOf(s.dir, "gates").find((g) => g.id === "G140").question;
   assert.equal(question, QUESTION.replace("Approve program PG1?", "Approve milestone M5?"), "only the first words change");
@@ -152,7 +152,7 @@ test("T995: an answered old gate stays as it is, and a drop in it still counts t
   const s = oldLogbook({ answer: "drop" });
   s.ok("log", "-", "a note", "--why", "w");
   assert.equal(rowsOf(s.dir, "gates").find((g) => g.id === "G140").question, QUESTION);
-  assert.ok(statusOf(s).includes("milestone M5 · dropped: 8 tasks still in it, take each out with milestone=none · name: Sage feel"), statusOf(s));
+  assert.ok(statusOf(s).includes("milestone M5 · stopped · dropped: 8 tasks still in it, take each out with milestone=none · name: Sage feel"), statusOf(s));
   assert.match(s.no("milestone", "propose", "M5", "--pilot", "T993"), /the owner dropped M5/);
   assert.match(s.no("gate", "answer", "G140", "--option", "1"), /a breakdown gate answers once/);
 });
@@ -263,7 +263,7 @@ test("F-T995-6: a program that an older sage proposed after a stopped migration 
   writeFileSync(join(s.dir, "gates.tsv"), `${readFileSync(join(s.dir, "gates.tsv"), "utf8")}G150\tT993\t${question}\tapprove|change|drop\tapprove\t\t\t\n`);
   writeFileSync(join(s.dir, "decisions.tsv"), `${readFileSync(join(s.dir, "decisions.tsv"), "utf8")}${at}\tT993\tPG2 proposed with gate G150, pilot T993, tasks none, name: Next steps\tprogram propose\n`);
   const status = statusOf(s);
-  assert.ok(status.includes("milestone M6 · pilot T993: 0 of 1 merged · breakdown waits for you (G150) · name: Next steps"), status);
+  assert.ok(status.includes("milestone M6 · needs you · pilot T993: 0 of 1 merged · breakdown waits for you (G150) · name: Next steps"), status);
   s.ok("log", "-", "a note", "--why", "w");
   assert.equal(existsSync(join(s.dir, "programs.tsv")), false);
   assert.deepEqual(rowsOf(s.dir, "milestones").map((m) => [m.id, m.goal, m.gate]), [["M5", "A goal that the older sage changed", "G140"], ["M6", "A sample goal", "G150"]]);

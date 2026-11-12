@@ -32,6 +32,7 @@ A verified pull request is in Ready to merge only when sage's merge check passes
 
 Each card shows its task, project, the provider whose logbook holds it (Claude or Codex), PR, priority, kind, size, risk, and recorded agent roles and providers. Every task has a priority (P0 to P3); the card of an older open task with none shows a "no priority" tag, so that you can ask the chief to set one. Under the title, the step line shows only the steps of the task's route, each with a mark and a word, then a "Now" or "Needs you" line and a "Next" line.
 
+- At the top right, a card shows the task's [state word](#the-state-words).
 - A backlog card has no "Now" and "Next" lines; it shows its "Needs you" line when it needs you.
 - A long project name ends in an ellipsis, and its tooltip gives the full name.
 - A project shows by its display name (set by the chief), else by its GitHub repository (the `upstream` remote, then `origin`), else by its folder.
@@ -49,6 +50,25 @@ The browser board has a project picker (the button with the current project; "/"
 - At phone width each chip, filter and button is at least 44 px high.
 - On a task page, a dotted stand-in value shows its reason when you tap it or move the focus to it.
 - The browser board is dark until you choose the light theme with the switch at the top; it works with scripts off too, and with scripts the board keeps your choice in this browser.
+
+### The state words
+
+Each card, each task line of the chat board, each milestone and each task page shows one of six state words. Each word has a mark, so it reads without colour too.
+
+| Word | Mark | It means |
+| --- | --- | --- |
+| not started | ○ | The task exists, and no agent works on it yet. |
+| waiting | ⧗ | It cannot start before another task, or before you approve its milestone. |
+| needs you | ! | It waits for your answer to a question, or for your merge. |
+| in progress | ▶ | Agents or the chief work on it. |
+| done | ✓ | It merged, or it was a study that ended. |
+| stopped | ■ | Its work stopped for good. |
+
+- A wait names the word of the task that it waits for, for example "Waits for T12 (in progress)".
+- A milestone's word comes from its breakdown: "needs you" while the breakdown waits for you, or when its pilot stopped; "stopped" when you dropped it. Else it comes from its tasks.
+- The status lines that the chief shows you (the `status` command) give the word of each release and each milestone. Their tasks line keeps the tool's own states.
+- The task page keeps the tool's own state of the task (for example `reviewing`) under its steps, as "Recorded state".
+- The columns stay as they are. Done holds the done tasks. A card in another column shows not started, waiting, needs you or in progress.
 
 ## Needs you and task pages
 
@@ -148,7 +168,7 @@ A milestone is a request that sage runs as two or more tasks for one goal, with 
 | A card | The milestone's name (◫), "pilot" on the pilot, and a wait line in place of the Now line: what the task waits for (⧗), or ⊘ when a wait is never met, so the task cannot start. A wait in a loop of waits (a hand edit) says "in a loop" and is never met. |
 | The pilot's card, while the breakdown waits for you | A "Milestone approval" band on top and a frame, then the breakdown gate's question as the chief stored it, line by line, and how to answer: approve, change (say what to change) or drop the milestone. Only the gate that the milestone's row names, on its pilot, with the options approve, change and drop, gets the band: a gate that only copies its words is a plain gate. |
 | The Milestone filter | The cards of one milestone, or of no milestone. A milestone with no card on the board (its tasks ended more than 7 days ago) says why, with a link to its page. The board keeps the choice in the address (`#pg=`). |
-| The Milestones tab (`/milestones`) | Each milestone in a group (Needs you, Active, Done; Dropped is folded) with its state, goal, progress bar and progress, for example "3 of 7 merged · T10 abandoned", and what moves next: only a task that waits for nothing, then how many tasks wait and which cannot start. A milestone whose breakdown you asked to change is a line here: the chief revises it. |
+| The Milestones tab (`/milestones`) | Each milestone in a group (Needs you, Active, Done; Dropped is folded) with its state word, goal, progress bar and progress, for example "3 of 7 merged · T10 abandoned", and what moves next: only a task that waits for nothing, then how many tasks wait and which cannot start. A milestone whose breakdown you asked to change is a line here: the chief revises it. |
 | A milestone's page (`/milestone/<key>`) | Its goal and progress, the pilot, what moves next, its tasks in order (the pilot first, then each task after the tasks that it waits for), and its latest decisions, as short lines with short dates (for example "17 Oct T2 merged: PR 66"). While the breakdown waits for you, the page shows the breakdown gate in the frame. An unknown milestone gives the page "Milestone not found", with status 404. |
 | The chat | A Milestones section with one line for each milestone that is not done. Done milestones, and dropped milestones with no task left in them, are counts, with ": open the board's Milestones tab". A dropped milestone with tasks still in it keeps its line, which asks the chief to take each task out. |
 
