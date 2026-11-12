@@ -81,7 +81,7 @@ In the text of a field, a list or a cell, `**bold**` and a code span show on the
 
 ## The kinds
 
-A playbook (`core/references/playbooks.md` in the plugin's folder) names the kind of each moment where the owner answers, for example `question` for the case table of an undecided case. Use the kind that the playbook names.
+A playbook (a file in `core/references/playbooks/` in the plugin's folder) names the kind of each moment where the owner answers, for example `question` for the case table of an undecided case. Use the kind that the playbook names.
 
 Each kind: its `kind` in the JSON, its head (the first line), when to send it, and its parts in order after the title. A part in [brackets] is optional; a paragraph may stand anywhere. The last part of the text is the Ref line, when the message has ids to give.
 
