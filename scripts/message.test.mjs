@@ -469,6 +469,10 @@ test("the message command resolves a Page block in a task's pages folder, and re
   const folder = sage("pages", "T1").out;
   writeFileSync(join(folder, "research.html"), "<p>research</p>");
   const local = { ...question, blocks: question.blocks.map((b) => (b.t === "page" ? { ...b, task: "T1" } : b)) };
+  // F-T1001-18: a path through a regular file (research.html is a file) is not there either: the same refusal, not a crash.
+  const through = sage("message", "T1", "--json", JSON.stringify({ ...local, blocks: local.blocks.map((b) => (b.t === "page" ? { ...b, file: "research.html/x.html" } : b)) }));
+  assert.equal(through.status, 1, through.out);
+  assert.match(through.out, /^sage: the page block "Showing visuals in every app" names .*\/research\.html\/x\.html, and it does not exist\. Save the page there first\. Nothing written\./);
   const ok = sage("message", "T1", "--file", file("q.json", local));
   assert.equal(ok.status, 0, ok.out);
   // T1001: the board's link to the page, between the title and the path: its logbook is the folder above the pages folder.

@@ -4188,7 +4188,10 @@ function act(cmd, pos, opt, dir, env, skip, project) {
           refuse(`a page block names its page as { t: page, title, task, file }: a task id and a file in that task's pages folder that the board serves: 1 to 3 parts of letters, digits and . _ - (none that starts with a dot or holds ..), ending in .${Object.keys(PAGE_TYPES).join(", .")}; not ${JSON.stringify({ task: b.task, file: b.file })}. Nothing written.`);
         b.path = join(pagesDir(project, b.task, env), b.file);
         b.url = pageUrl(logbook, b.task, b.file);
-        if (!lstatSync(b.path, { throwIfNoEntry: false })) refuse(`the page block "${b.title}" names ${b.path}, and it does not exist. Save the page there first. Nothing written.`);
+        // Any failed look (no entry, a file in the path, a loop) means no page is there (F-T1001-18).
+        let there;
+        try { there = lstatSync(b.path); } catch { /* not there */ }
+        if (!there) refuse(`the page block "${b.title}" names ${b.path}, and it does not exist. Save the page there first. Nothing written.`);
         const folder = pageTaskFolder(logbook, b.task, env);
         if (!folder || !pageFile(folder, b.file)) refuse(`the page block "${b.title}" names ${b.path}, and the board serves only a regular file with one name that it can read, of at most 16 MiB, with no link in its path or in the pages folders. Save the page itself there. Nothing written.`);
       });
