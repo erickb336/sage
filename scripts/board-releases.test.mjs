@@ -233,16 +233,44 @@ test("F-T996-10: a box of waiting tasks that wait for different tasks keeps its 
 });
 
 /** A logbook on disk whose releases table cannot be read: line 2 has 2 cells, and the header has 3 (SAMPLE DATA). */
-function damagedReleases(t) {
+const damagedReleases = t => logbookOnDisk(t, { releases: [["name", "goal", "at"], ["1.0", "Sample goal."]] });
+/** A logbook on disk (SAMPLE DATA): T1 not in a release, T2 a single task of release 1.0; sheets replace its tables. */
+function logbookOnDisk(t, sheets) {
   const root = mkdtempSync(join(tmpdir(), "sage-board-releases-")), project = join(root, "sample-abcdef");
   t.after(() => rmSync(root, { recursive: true, force: true }));
   mkdirSync(project);
   const sheet = (name, rows) => writeFileSync(join(project, `${name}.tsv`), rows.map(row => row.join("\t")).join("\n") + "\n");
   sheet("tasks", [["id", "title", "size", "risk", "route", "state", "branch", "pr", "round", "keys", "milestone", "release"], ["T1", "Sample first", "small", "", "build", "framed", "", "", "0", "", "", ""], ["T2", "Sample single", "small", "", "build", "framed", "", "", "0", "", "", "1.0"]]);
   for (const [name, header] of Object.entries({ runs: "id task role round candidate branch status tokens report started ended", findings: "task key round source severity summary triage reason status", ledger: "task pr sha kind cycle run at", gates: "id task question options recommendation default answer at", decisions: "at task decision why", milestones: "id name goal pilot gate at" })) sheet(name, [header.split(" ")]);
-  sheet("releases", [["name", "goal", "at"], ["1.0", "Sample goal."]]);
+  sheet("releases", [["name", "goal", "at"], ["1.0", "Sample goal.", ""]]);
+  for (const [name, rows] of Object.entries(sheets)) sheet(name, rows);
   return readBoardSources([{ id: "sample", path: root, label: "Sample source" }])[0];
 }
+
+const TASKS_HEADER = ["id", "title", "size", "risk", "route", "state", "branch", "pr", "round", "keys", "milestone", "release"];
+/** A table that a release depends on cannot be read: the board gives no release, so none reads wrong; Needs you and the Releases tab say why. */
+function noReleaseFrom(source, need, reason, name = "sample") {
+  const data = buildBoardModel([source], { now: NOW }), text = renderBoardText(data), html = renderBoardHtml(data, { snapshot: false });
+  const tab = renderReleasesHtml(data), releases = tab.slice(tab.indexOf('<main class="page open" aria-label="Releases">'));
+  assert.deepEqual(data.releases, [], need);
+  for (const view of [text, html]) assert.ok(!view.includes("Where we are") && !view.includes("Release 1.0"), view);
+  const needs = text.split("### 🔴 Needs you\n")[1].split("\n### ")[0];
+  assert.ok(needs.includes(`**1 · ${need}**`) && needs.includes(reason.replaceAll(".", "\\.")), needs);
+  // The Releases tab says that the project's releases cannot be read, with the same reason, and never asks for a new release.
+  assert.ok(releases.includes(`<b>The releases of ${name} cannot be read.</b> ${reason}`), releases);
+  assert.ok(!releases.includes("No releases yet") && !releases.includes("Release 1.0"), releases);
+}
+test("F-T996-28: a milestones table that cannot be read gives no release, so release 1.0 with open milestone work never reads done", t => {
+  // Release 1.0 holds milestone M1 (open: T1 is framed) and the merged single task T2. Line 2 of milestones.tsv has 2 cells.
+  noReleaseFrom(logbookOnDisk(t, {
+    tasks: [TASKS_HEADER, ["T1", "Sample first", "small", "", "build", "framed", "", "", "0", "", "M1", ""], ["T2", "Sample single", "small", "", "build", "merged", "", "", "0", "", "", "1.0"]],
+    milestones: [["id", "name", "goal", "pilot", "gate", "at", "release"], ["M1", "Sample milestone"]] }),
+  "The milestones table cannot be read", "milestones.tsv line 2 has 2 cells, and its header has 7.");
+});
+test("F-T996-29: a tasks table that cannot be read gives no release, so release 1.0 never reads \"not started, 0 of 0\"", t => {
+  // With no task, the board names the project by its folder.
+  noReleaseFrom(logbookOnDisk(t, { tasks: [TASKS_HEADER, ["T1", "Sample first"]] }), "The Sample source logbook cannot be read", "tasks.tsv line 2 has 2 cells, and its header has 12.", "sample-abcdef");
+});
 
 test("F-T996-11: the Releases tab says that a releases table cannot be read, per project, and never \"No releases yet\" for it", t => {
   const damaged = damagedReleases(t);

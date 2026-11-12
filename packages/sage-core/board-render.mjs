@@ -1239,8 +1239,9 @@ function releasesList(ctx, model, routed) {
   const entries = shownReleases(model), h = routed ? "h1" : "h2";
   const intro = `<p class="rintro">A release holds milestones and single tasks. It is done when each of them is done or stopped. Shipping it (a tag, a publish) is your action, not a state.</p>`;
   // A releases table that cannot be read says so for its project, as the Milestones tab does, so that the owner never asks
-  // for releases that the logbook has (F-T996-11). The project filter shows the line with its project.
-  const broken = (model.milestoneNeeds ?? []).filter(need => need.kind === "releases").map(need => `<div class="banner warn" data-rproject="${esc(need.group)}">${ICON}<div><b>The releases of ${esc(need.projectName)} cannot be read.</b> ${esc(need.text)}</div></div>`).join("");
+  // for releases that the logbook has (F-T996-11). So does a milestones or tasks table that cannot be read, as the board then
+  // shows no release of the project (F-T996-28, F-T996-29). The project filter shows the line with its project.
+  const broken = (model.milestoneNeeds ?? []).filter(need => need.kind === "releases" || need.kind === "milestones" || need.noTasks).map(need => `<div class="banner warn" data-rproject="${esc(need.group)}">${ICON}<div><b>The releases of ${esc(need.projectName)} cannot be read.</b> ${esc(need.text)}</div></div>`).join("");
   if (!entries.length) return `<${h} class="ptitle">Releases</${h}>${broken || `<div class="emptyboard"><b>No releases yet.</b> A release is a version that you ship, such as 1.0. To add one, ask the chief. It then holds milestones and single tasks.</div>`}`;
   const none = `<div class="emptyboard" id="noreleases" hidden><b>No release in this project.</b> <button class="linkbtn" type="button" data-reset>Show all projects</button></div>`;
   return `<${h} class="ptitle">Releases</${h}>${intro}${broken}${none}${entries.map(entry => releasesOfEntry(ctx, entry, entries.length > 1)).join("")}`;

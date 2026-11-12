@@ -779,8 +779,9 @@ const wordOf = ({ word, reason }) => ({ word, reason });
  */
 function releasesOfBook(project, group, graph, byKey) {
   // A releases table that cannot be read gives no releases, as a damaged milestones table gives no milestones: Needs you
-  // says why (logbookNeeds), and no release that a cell names shows as "not in the logbook" (F-T996-1).
-  if (project.old || !project.tables.releases) return null;
+  // says why (logbookNeeds), and no release that a cell names shows as "not in the logbook" (F-T996-1). So does a milestones
+  // or tasks table that cannot be read: a release's count needs both, else it reads done or "0 of 0" (F-T996-28, F-T996-29).
+  if (project.old || !project.tables.releases || !project.tables.milestones || !project.tables.tasks) return null;
   const releases = releasesOf(project.tables.releases ?? [], graph);
   if (!releases.length) return null;
   const key = id => `${project.key}/${id}`, ids = new Set(), names = new Map();
@@ -855,7 +856,7 @@ function logbookNeeds(source, project, group) {
     ...moves.map(gate => ({ ...item("move", `The move gate ${gate.id} waits for your answer`, `${String(gate.question).split(LINE)[1] ?? "Move the project into one shared logbook?"} Answer the gate in the chat: the chief puts it to you word for word, with its options and its recommendation.`), key: `${project.key}/${gate.id}` })),
     ...(milestones && !noTasks ? [item("milestones", "The milestones table cannot be read", `${reasonOf(milestones)}. The board shows the tasks without their milestones. Ask the chief to repair the logbook.`)] : []),
     ...(releases && !noTasks ? [item("releases", "The releases table cannot be read", `${reasonOf(releases)}. The board shows the tasks without their releases. Ask the chief to repair the logbook.`)] : []),
-    ...(lost.length ? [item("logbook", `The ${title(source.label)} logbook cannot be read`, `${folder ?? why.map(reasonOf).join(". ")}. ${shows} Ask the chief to repair the logbook.`)] : []),
+    ...(lost.length ? [{ ...item("logbook", `The ${title(source.label)} logbook cannot be read`, `${folder ?? why.map(reasonOf).join(". ")}. ${shows} Ask the chief to repair the logbook.`), ...(noTasks && { noTasks }) }] : []),
   ];
 }
 /** A logbook whose milestones table cannot be read shows its tasks with no milestone (R1307-1): no tag, and no milestone wait. */
