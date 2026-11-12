@@ -54,7 +54,7 @@ To add a principle, add `principles/<name>.md`. A principle adapted from pstack 
    npm run check
    ```
 
-6. Run the tests. CI runs the check and the tests on each pull request. It runs `npm test` in 4 parts at the same time; to run one part, set `TEST_SHARD`, for example `TEST_SHARD=2/4 npm test`.
+6. Run the tests. CI runs the check and the tests on each pull request. It runs `npm test` in 4 parts at the same time: `node --test` sorts the test files by path and gives each file to exactly one part. To run one part, set `TEST_SHARD`, for example `TEST_SHARD=2/4 npm test`. CI runs on Ubuntu 24.04, not on `ubuntu-latest`, because Playwright 1.55.1 has no headless shell for Ubuntu 26.04 (`ubuntu-latest` since 2026-10-19). The last job of the workflow, `check`, passes only when every other job passed. The protection of `main` requires that job by its name, so keep the name.
 
    ```sh
    npm test
@@ -67,7 +67,7 @@ To add a principle, add `principles/<name>.md`. A principle adapted from pstack 
    npm run test:browser
    ```
 
-   To run one file: `node --test scripts/board-picker.test.mjs`. CI installs the same browser and runs `npm run test:browser` after `npm run check`.
+   To run one file: `node --test scripts/board-picker.test.mjs`. CI installs the same browser in each run, with no browser cache, as Playwright advises, and runs `npm run test:browser` after `npm run check`.
 
 ## The README and the docs
 
