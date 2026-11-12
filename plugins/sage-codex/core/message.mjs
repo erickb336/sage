@@ -210,7 +210,9 @@ function shapeProblems(kind, blocks, { long }) {
 
 // ---------------------------------------------------------------- the text form
 
-const plain = (s) => String(s).replace(/\*\*(.+?)\*\*/g, "$1").replace(/`([^`]+)`/g, "$1");
+// The text form drops the marks of bold, and keeps a code span's marks: they show code in a terminal and in a chat
+// that reads Markdown, and they tell the checks that a word in code is not an id.
+const plain = (s) => String(s).replace(/\*\*(.+?)\*\*/g, "$1");
 const FENCE = "```";
 
 /** The Page block: what the page is, then its file path (C4: the board's page link comes with T1001). */

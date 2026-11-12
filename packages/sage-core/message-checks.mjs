@@ -10,9 +10,14 @@ import { PR } from "./pull-request.mjs";
 import { pictureSvg } from "./picture.mjs";
 
 // The ids of the state tool, in its own forms: a task, a milestone, a gate, a chief, a run, a finding's key and a pull
-// request (PR 12). A message names work by its words; its ids go only in the Ref line.
+// request (PR 12). A message names work by its words; its ids go only in the Ref line. A milestone, gate or chief form
+// that a product name follows is that product, not an id: "the M4 Mac", "an M2 chip", "a G5 server", "a C3 chord".
+// Only these three forms, and only before these words, so that M12, G7 and C2 alone stay ids.
 const bare = (re) => re.source.replace(/^\^|\$$/g, "");
-const RAW_ID = new RegExp(`(?<![\\w-])(?:${[TASK_ID, MILESTONE_ID, GATE_ID, CHIEF].map(bare).join("|")}|R[1-9]\\d*|F-T[1-9]\\d*-[1-9]\\d*|PR ?#?${bare(PR)})(?![\\w-])`, "g");
+const PRODUCT = String.raw`(?!\s+(?:Mac|MacBook|iMac|chips?|Pro|Max|Ultra|servers?|chords?)\b)`;
+const RAW_ID = new RegExp(`(?<![\\w-])(?:${bare(TASK_ID)}|(?:${[MILESTONE_ID, GATE_ID, CHIEF].map(bare).join("|")})(?![\\w-])${PRODUCT}|R[1-9]\\d*|F-T[1-9]\\d*-[1-9]\\d*|PR ?#?${bare(PR)})(?![\\w-])`, "g");
+// A code span: in one paragraph, and it may wrap onto the next line.
+const CODE_SPAN = /`(?:[^`\n]|\n(?!\s*\n))*`/g;
 const HEADS = Object.entries(KINDS).map(([kind, k]) => [kind, k.head]);
 const BOX_MARK = /[─-╿]/u;
 const FENCE = /^\s*(`{3,}|~{3,})/;
@@ -52,7 +57,7 @@ function ownWords(lines) {
       while (i + 1 < lines.length && lines[i + 1].trim()) i++;
       continue;
     }
-    out.push(lines[i].replace(/`[^`]*`/g, ""));
+    out.push(lines[i]);
   }
   return out;
 }
@@ -73,7 +78,8 @@ export function textProblems(text, { width = WIDTH } = {}) {
   const { lines, pictures } = partsOfText(text), problems = [];
   pictures.forEach((pic, k) => problems.push(...pictureProblems(pic, width).map((p) => `picture ${k + 1}: ${p}`)));
   if (lines.some((l) => TREE.test(l))) problems.push("the message has tree marks (├ └ ┬ ┴ ┼ ┤ ┌ ┐ ┘): draw boxes inside boxes, or write a list");
-  const ids = [...new Set([...ownWords(lines), ...pictures.flat()].flatMap((l) => [...l.matchAll(RAW_ID)].map((m) => m[0])))];
+  // A word in code is not an id: the text form keeps each code span's marks.
+  const ids = [...new Set([ownWords(lines).join("\n").replace(CODE_SPAN, ""), ...pictures.flat()].flatMap((l) => [...l.matchAll(RAW_ID)].map((m) => m[0])))];
   if (ids.length) problems.push(`raw ids in the message: ${ids.join(", ")}. Name the work in words; put its ids in the Ref line`);
   // The parts, in order: each labelled part that the kind needs, at the start of a line. A long message gives its main
   // point and its Page block: its parts are on its page.

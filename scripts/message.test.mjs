@@ -180,6 +180,24 @@ test("the raw-id check has none of the false hits that the PE found: the Ref lin
   assert.deepEqual(textProblems("The board: T10 waits for G7 in M4, and ├─ marks a tree."), [], "a message that names no kind is not checked");
 });
 
+test("on the message command's path, a word in code and a product name are not ids, and the state tool's ids are (F-T984-11)", () => {
+  // renderMessage is what the message command runs. Before T984's repair its text form dropped the code marks, so a word
+  // in code reached the raw-id check bare, and "the M4 Mac" (a milestone's form, the PE's false hit) refused a message.
+  const progress = fixture("01-progress-note.json");
+  const say = (text) => render({ ...progress, blocks: [progress.blocks[0], { t: "p", text }, ...progress.blocks.slice(1)] });
+  for (const text of ["The tests ran on the Mac with the `M4` chip.", "Run `sage show T12` and `gh pr view 40` first.", "A long code span: `node sage.mjs message T12 --file /tmp/sage-message/T12.json` wraps."]) {
+    const out = say(text);
+    assert.equal(out.problems, undefined, `${text}: ${out.problems}`);
+    assert.match(out.text, /`[^`]+/, "the text form keeps the code marks");
+  }
+  for (const text of ["The tests ran on the M4 Mac.", "It runs on an M2 chip and an M3 Pro.", "The old G5 server is gone.", "Play a C3 chord.", "A MacBook with an M4 Max."])
+    assert.equal(say(text).problems, undefined, text);
+  // The state tool's own forms stay ids, also next to a product name that is not right after them.
+  for (const [text, id] of [["After G7, the Mac.", "G7"], ["It waits for M12.", "M12"], ["The M4 milestone is done.", "M4"], ["T12345 is next.", "T12345"],
+    ["T10 waits.", "T10"], ["See PR 515.", "PR 515"], ["R40 ran.", "R40"], ["C2 owns it.", "C2"], ["F-T807-1 is fixed.", "F-T807-1"], ["The T10 chip.", "T10"]])
+    assert.match(say(text).problems?.join("\n") ?? "", new RegExp(`raw ids in the message: ${id}\\.`), text);
+});
+
 test("a picture drawn by hand: each box that does not close is named, and its marks stay in the image as fixed-width text", () => {
   const lines = ["╔═ The part in focus ═╗", "║ text                ║", "╚══════════════════"];
   assert.deepEqual(openBoxes(lines), ["the box that starts at line 1, column 1 does not close: each corner needs its edge and the three other corners"]);

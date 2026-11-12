@@ -77,7 +77,7 @@ The JSON: `{ "kind", "title", "blocks": [ … ], "ref" }`, and `"status"` for an
 
 A catch-up's picture is a `frame`: boxes inside boxes that the command lays out and gives their state words. Each box is `{ "box": "release" | "milestone" | "task" | "group", "name", "items": [ boxes or lines of text ] }`. A task gives its recorded `state` (for example `"reviewing"`), and may give `waits` (what it waits for) and `needs` (the owner's question). A milestone may give its state (`"proposed"`); its word and a release's word come from their items. A group gives its `word`. Any box may give a `note` for its first line, and one box is `"here": true`: the double box.
 
-In the text of a field, a list or a cell, `**bold**` and a code span show on the page; the chat text shows the words alone.
+In the text of a field, a list or a cell, `**bold**` and a code span show on the page. The chat text shows bold words without their marks, and keeps a code span's backticks: a word in code, such as a chip name, is not an id.
 
 ## The kinds
 
