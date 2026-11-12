@@ -287,13 +287,71 @@ test("F-T984-9: the confirm example is sample data, and its text says so before 
   assert.ok(at > 0 && at < text.indexOf("What I will do"), text);
 });
 
+/** The state word on the first line of a frame's top box. */
+const frameWord = (node) => frameLines(node, 46).lines[1]?.slice(2).trim().replace(/ *│$/, "");
+/** A catch-up with its frame replaced. */
+const withFrame = (frame) => { const c = fixture("10-catch-up.json"); return { ...c, blocks: c.blocks.map((b) => (b.t === "picture" ? { ...b, frame } : b)) }; };
+
+test("F-T984-44: a milestone that the chief marks done reads done; boxes that disagree with it, and a box of text lines alone, are refused", () => {
+  // QA's catch-up (R3325): milestone 4 is done, its tasks one line of text.
+  const out = render(withFrame({ box: "release", name: "1.0", items: [
+    { box: "milestone", name: "4: Board", state: "done", items: ["All 6 tasks merged"] },
+    { box: "milestone", name: "5: Sage feel", items: [{ box: "task", name: "Message command", state: "reviewing", here: true }] }] }));
+  assert.equal(out.problems, undefined, out.problems);
+  const [frame] = pictures(out.text), at = frame.findIndex((l) => l.includes("Milestone 4: Board"));
+  assert.equal(frame[at + 1].slice(4).trim().replace(/ *│ │$/, ""), "Done");
+  assert.equal(frameWord({ box: "milestone", name: "4", state: "done" }), "Done");
+  assert.equal(frameWord({ box: "milestone", name: "4", state: "done", items: [{ box: "task", name: "b", state: "merged" }] }), "Done");
+  // The chief's state and the boxes inside it disagree: the frame is refused, not shown with either word.
+  assert.match(frameLines({ box: "milestone", name: "4", state: "done", items: [{ box: "task", name: "b", state: "building" }] }, 46).problems.join("\n"),
+    /^frame is done, but its boxes say in progress: give each task its recorded state/);
+  // A box whose items are only lines of text has nothing to count: it gives its word.
+  for (const node of [{ box: "release", name: "1.0", items: ["Done: milestones 1 to 4"] }, { box: "milestone", name: "4", items: ["All 6 tasks merged"] }])
+    assert.match(frameLines(node, 46).problems.join("\n"), /^frame has only lines of text, so no box gives its word: give its word/, node.box);
+  assert.equal(frameWord({ box: "release", name: "1.0", word: "done", items: ["Done: milestones 1 to 4"] }), "Done");
+  assert.equal(frameWord({ box: "release", name: "1.0", items: [] }), "Not started", "an empty box has nothing in it yet");
+});
+
+test("F-T984-48: a group's own word does not hide the tasks inside it: its box counts them", () => {
+  const group = { box: "group", name: "g", word: "waiting", items: [{ box: "task", name: "t", state: "building" }] };
+  assert.equal(frameWord({ box: "milestone", name: "5", items: [group] }), "In progress");
+  assert.equal(frameWord({ box: "release", name: "1.0", items: [{ box: "milestone", name: "5", items: [group] }] }), "In progress");
+  assert.equal(frameWord(group), "Waiting", "the group shows its own word");
+  // A group with no boxes inside counts as its own word.
+  assert.equal(frameWord({ box: "milestone", name: "5", items: [{ box: "group", name: "g", word: "done" }] }), "Done");
+});
+
+test("F-T984-46: a catch-up has exactly one double box, the task that runs now", () => {
+  const task = (here) => ({ box: "task", name: "t", state: "building", ...(here ? { here: true } : {}) });
+  assert.match(refusal(withFrame({ box: "milestone", name: "5", items: [task(false), task(false)] })), /a catch-up has one double box: mark the task that runs now with "here": true/);
+  assert.match(refusal(withFrame({ box: "milestone", name: "5", items: [task(true), task(true)] })), /a catch-up has one double box, not 2: mark only the task that runs now with "here": true/);
+  assert.equal(render(withFrame({ box: "milestone", name: "5", items: [task(true), task(false)] })).problems, undefined);
+});
+
+test("F-T984-27: a kind or a block type that is not a string is refused, not a crash", () => {
+  const progress = fixture("01-progress-note.json");
+  assert.match(refusal({ ...progress, kind: ["progress"] }), /^kind is one of: progress/);
+  assert.match(refusal({ ...progress, blocks: [{ t: ["page"], title: "x", file: "x.html" }, ...progress.blocks] }), /blocks\[0\] is not a block/);
+  assert.match(refusal({ ...progress, blocks: [{ t: ["p"], text: "x" }, ...progress.blocks] }), /blocks\[0\] is not a block/);
+});
+
+test("F-T984-26: the skill's message steps make the folder before they write a file in it", () => {
+  const skill = readFileSync(join(HERE, "..", "writing", "presentation.md"), "utf8");
+  const steps = skill.slice(skill.indexOf("## The message command"));
+  const writes = [...steps.matchAll(/cat > (\S+)\//g)];
+  assert.ok(writes.length > 0, "the steps write the JSON to a file");
+  for (const [whole, folder] of writes) {
+    const made = steps.indexOf(`mkdir -p ${folder}`);
+    assert.ok(made >= 0 && made < steps.indexOf(whole), `a step makes ${folder} before ${whole}`);
+  }
+});
+
 test("F-T984-30: the lesson's rows say what is true: the check of raw ids runs on the message command's path", () => {
   const lesson = fixture("14-lesson-kept.json"), rows = lesson.blocks.find((b) => b.t === "table").rows;
   const row = rows.find((r) => /^A check that fails on a message with raw ids/.test(r[1]));
   assert.match(row[2], /^Done/, row.join(" | "));
   assert.match(refusal({ ...fixture("01-progress-note.json"), title: "T12 is built" }), /raw ids in the message: T12/);
 });
-
 
 test("F-T984-31: the incident and the design give the cost of the new words that the estimate's rows add up to", () => {
   const rows = fixture("11-estimate.json").blocks.find((b) => b.t === "table").rows;
@@ -305,7 +363,6 @@ test("F-T984-31: the incident and the design give the cost of the new words that
     assert.ok(said.length > 0 && said.every((r) => r === total), `${name}: ${said.join(", ")}`);
   }
 });
-
 
 test("the page escapes every text, loads nothing, and allows only its own style and the hash of its one script", () => {
   const msg = structuredClone(fixture("05-explainer.json"));
@@ -406,4 +463,14 @@ test("the message command resolves a Page block in a task's pages folder, and re
   assert.match(sage("message", "T1", "--json", "{not json").out, /the message is not JSON/);
   assert.match(sage("message", "T2", "--json", "{}").out, /no task T2/);
   assert.match(sage("message", "T1").out, /message takes <task> and one of --file/);
+});
+
+test("F-T984-24: on the message command's path, sections nested thousands deep are refused, not a stack overflow", () => {
+  const { sage, file } = sandbox();
+  let deep = { t: "page", title: "x", task: "T1", file: "x.html" };
+  for (let i = 0; i < 5000; i++) deep = { t: "section", label: "s", body: [deep] };
+  const progress = fixture("01-progress-note.json");
+  const r = sage("message", "T1", "--file", file("deep.json", { ...progress, blocks: [...progress.blocks, deep] }));
+  assert.equal(r.status, 1, r.out);
+  assert.match(r.out, /^sage: the message is not in its kind's shape[^\n]*\n- blocks\[\d+\]\.body\[0\]\.body\[0\]\.body\[0\]\.body\[0\]\.body\[0\] is a section 6 deep: sections nest at most 5 deep/);
 });

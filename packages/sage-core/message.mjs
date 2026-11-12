@@ -82,31 +82,41 @@ const SHAPES = {
 const LEVELS = ["release", "milestone", "task", "group"];
 const MIN_BOX = 8;
 // A page shows a section's label as h2 to h6, so sections nest at most 5 deep; the limit also keeps the walk off the stack.
-const MAX_SECTIONS = 5;
+export const MAX_SECTIONS = 5;
 const WORDS = ["not started", "waiting", "needs you", "in progress", "done", "stopped"];
 const cap = (s) => s.charAt(0).toUpperCase() + s.slice(1);
 
 /**
  * The lines of a catch-up frame: boxes inside boxes, each with its title and, on its first line, its state word. A
  * task's word comes from its recorded state (taskWord), a milestone's from its state and its items (milestoneWord), a
- * release's from its items (releaseWord); a group gives its word. One box may be "here": a double box.
+ * release's from its items (releaseWord); a group gives its word, and its box counts the tasks inside it. A box that
+ * the chief marks done is done. here: the count of boxes that are "here", each a double box.
  */
 export function frameLines(node, width) {
   const problems = [];
+  let here = 0;
   const lay = (n, w, path) => {
-    if (!n || typeof n !== "object" || !LEVELS.includes(n.box)) { problems.push(`${path} is a box: { box: ${LEVELS.join(" | ")}, name, … }`); return { rows: [], word: null }; }
+    if (!n || typeof n !== "object" || !LEVELS.includes(n.box)) { problems.push(`${path} is a box: { box: ${LEVELS.join(" | ")}, name, … }`); return { rows: [], counts: [] }; }
     // Each level takes 4 columns, so a frame nests only as deep as its width allows: stop before the stack does.
-    if (w < MIN_BOX) { problems.push(`${path} is nested too deep for a box of ${width} columns`); return { rows: [], word: null }; }
+    if (w < MIN_BOX) { problems.push(`${path} is nested too deep for a box of ${width} columns`); return { rows: [], counts: [] }; }
+    if (n.here) here++;
     const items = Array.isArray(n.items) ? n.items : [];
     const kids = items.map((item, k) => (typeof item === "string" ? null : lay(item, w - 4, `${path}.items[${k}]`)));
-    const words = kids.filter(Boolean).map((kid) => kid.word);
-    let result;
-    if (n.word !== undefined) result = WORDS.includes(String(n.word).toLowerCase()) ? { word: String(n.word).toLowerCase() } : (problems.push(`${path}.word is one of: ${WORDS.join(", ")}`), { word: null });
-    else if (n.box === "task") result = taskWord({ state: n.state, reasons: isText(n.needs) ? [{ kind: "owner", text: n.needs }] : [], waitLine: isText(n.waits) ? { text: n.waits } : null });
-    else if (n.box === "milestone") result = milestoneWord({ state: n.state ?? "active" }, words);
-    else if (n.box === "release") result = releaseWord(words);
-    else { problems.push(`${path} is a group: give its word, one of: ${WORDS.join(", ")}`); result = { word: null }; }
-    const word = result.word;
+    // The words that the box counts: a group stands for the boxes inside it, so its own word hides none of them.
+    const words = kids.filter(Boolean).flatMap((kid) => kid.counts);
+    let word = null;
+    if (n.word !== undefined) {
+      if (WORDS.includes(String(n.word).toLowerCase())) word = String(n.word).toLowerCase();
+      else problems.push(`${path}.word is one of: ${WORDS.join(", ")}`);
+    } else if (n.box === "task") word = taskWord({ state: n.state, reasons: isText(n.needs) ? [{ kind: "owner", text: n.needs }] : [], waitLine: isText(n.waits) ? { text: n.waits } : null }).word;
+    else if (n.box === "group") problems.push(`${path} is a group: give its word, one of: ${WORDS.join(", ")}`);
+    else if (n.box === "milestone" && n.state === "done") {
+      // The chief's state wins, and the boxes inside it must agree: a word never contradicts the chief's input.
+      const from = releaseWord(words).word;
+      if (words.length && from !== "done") problems.push(`${path} is done, but its boxes say ${from}: give each task its recorded state, or the milestone its state`);
+      else word = "done";
+    } else if (!words.length && items.length) problems.push(`${path} has only lines of text, so no box gives its word: give its word, one of: ${WORDS.join(", ")}, or its tasks as boxes`);
+    else word = (n.box === "milestone" ? milestoneWord({ state: n.state ?? "active" }, words) : releaseWord(words)).word;
     // A state that the tool does not write has no word: the box says so, and keeps its place.
     const first = `${word ? cap(word) : "State unknown"}${word === "waiting" && isText(n.waits) ? ` for ${n.waits}` : ""}${isText(n.note) ? ` · ${n.note}` : ""}`;
     const title = isText(n.title) ? n.title : { release: `Release ${n.name}`, milestone: `Milestone ${n.name}`, task: `Task: ${n.name}`, group: `${n.name}` }[n.box];
@@ -114,10 +124,10 @@ export function frameLines(node, width) {
     try {
       rows = box({ w, title, style: n.here ? "double" : "round", lines: [first, ...items.map((item, k) => (typeof item === "string" ? item : kids[k].rows))] });
     } catch (e) { problems.push(`${path}: ${e.message}`); }
-    return { rows, word };
+    return { rows, counts: n.box === "group" && words.length ? words : [word] };
   };
   const { rows } = lay(node, width, "frame");
-  return { lines: rows, problems };
+  return { lines: rows, problems, here };
 }
 
 /**
@@ -129,7 +139,7 @@ export function prepareMessage(input) {
   const problems = [];
   const msg = input && typeof input === "object" && !Array.isArray(input) ? input : {};
   // Own names only: "constructor" or "__proto__" is not a kind.
-  const kind = Object.hasOwn(KINDS, msg.kind) ? KINDS[msg.kind] : undefined;
+  const kind = typeof msg.kind === "string" && Object.hasOwn(KINDS, msg.kind) ? KINDS[msg.kind] : undefined;
   if (!kind) return { problems: [`kind is one of: ${Object.keys(KINDS).join(", ")}; not ${JSON.stringify(msg.kind ?? "")}`] };
   const long = msg.long !== undefined;
   const width = long ? LONG_WIDTH : WIDTH;
@@ -140,7 +150,8 @@ export function prepareMessage(input) {
   if (msg.kind === "question" && isText(msg.title) && !msg.title.trim().endsWith("?")) problems.push("the title of a question is the question: it ends with ?");
   if (msg.kind === "confirm" && isText(msg.title) && !/cannot be undone/i.test(msg.title)) problems.push("the title of a confirm names the act and says that it cannot be undone");
   if (!Array.isArray(msg.blocks)) return { problems: [...problems, "blocks is a list of blocks"] };
-  const bad = (b) => !b || typeof b !== "object" || !Object.hasOwn(BLOCKS, b.t) || !BLOCKS[b.t](b);
+  const bad = (b) => !b || typeof b !== "object" || typeof b.t !== "string" || !Object.hasOwn(BLOCKS, b.t) || !BLOCKS[b.t](b);
+  let here = 0;
   const walk = (blocks, path, depth = 0) => blocks.map((b, k) => {
     if (bad(b)) { problems.push(`${path}[${k}] is not a block. The blocks: ${Object.values(SHAPES).join("; ")}`); return b; }
     if (b.t === "section") {
@@ -148,7 +159,8 @@ export function prepareMessage(input) {
       return { ...b, body: walk(b.body, `${path}[${k}].body`, depth + 1) };
     }
     if (b.t === "picture") {
-      const lines = b.frame !== undefined ? frameLines(b.frame, width) : { lines: b.lines, problems: [] };
+      const lines = b.frame !== undefined ? frameLines(b.frame, width) : { lines: b.lines, problems: [], here: 0 };
+      here += lines.here;
       problems.push(...lines.problems.map((p) => `${path}[${k}] (${b.title}): ${p}`));
       problems.push(...pictureProblems(lines.lines, width).map((p) => `${path}[${k}] (${b.title}): ${p}`));
       return { ...b, lines: lines.lines };
@@ -164,6 +176,7 @@ export function prepareMessage(input) {
   if (kind.tableHead && tables[0] && tables[0].head.join("|") !== kind.tableHead.join("|")) problems.push(`the table of a ${msg.kind} has the columns: ${kind.tableHead.join(", ")}`);
   if (kind.pick && tables[0] && tables[0].pick === undefined) problems.push(`the table of a ${msg.kind} marks your pick: pick is the number of its row, from 0`);
   if (msg.kind === "catch-up" && !blocks.some((b) => b.t === "picture" && b.frame !== undefined)) problems.push("a catch-up's picture is a frame: boxes inside boxes from release to task, so that each box gets its state word");
+  if (msg.kind === "catch-up" && here !== 1) problems.push(here ? `a catch-up has one double box, not ${here}: mark only the task that runs now with "here": true` : 'a catch-up has one double box: mark the task that runs now with "here": true');
   if (msg.kind === "design" && !blocks.some((b) => b.t === "toggle" || b.t === "changes")) problems.push("a design shows its before and after: a toggle (the picture after the change, each change tagged [new] or [was: …], and today's picture), or a changes table for changes without a screen");
   if (msg.kind === "explainer") for (const b of blocks) if (b.t === "section" && b.label === "New words" && b.body.some((x) => x.t === "list" && x.items.length > 3)) problems.push("New words has at most 3 words");
   return problems.length ? { problems } : { problems, msg: { ...msg, blocks }, width };

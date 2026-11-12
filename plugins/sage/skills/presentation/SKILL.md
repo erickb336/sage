@@ -53,7 +53,7 @@ A page loads nothing and runs only its own switch. Known limit: a page that the 
 
 For a message with a picture, a long message, or any message where the shape matters, write it as JSON and let the state tool render it:
 
-1. Write the JSON in your temp folder, for example `cat > /tmp/sage-message/T12.json <<'EOF'` … `EOF`.
+1. Make a temp folder, and write the JSON in it, for example `mkdir -p /tmp/sage-message`, then `cat > /tmp/sage-message/T12.json <<'EOF'` … `EOF`.
 2. Run `sage message <task> --file /tmp/sage-message/T12.json`. In Codex, call the `message` tool with the task and the message.
 3. Send the text that it prints, word for word. It ends with the Page block when the message has a page.
 
@@ -75,7 +75,7 @@ The JSON: `{ "kind", "title", "blocks": [ … ], "ref" }`, and `"status"` for an
 | `code` | `lines` | the lines in a fence |
 | `page` | `title`, `task`, `file` (a page in that task's pages folder) | the Page block |
 
-A catch-up's picture is a `frame`: boxes inside boxes that the command lays out and gives their state words. Each box is `{ "box": "release" | "milestone" | "task" | "group", "name", "items": [ boxes or lines of text ] }`. A task gives its recorded `state` (for example `"reviewing"`), and may give `waits` (what it waits for) and `needs` (the owner's question). A milestone may give its state (`"proposed"`); its word and a release's word come from their items. A group gives its `word`. Any box may give a `note` for its first line, and one box is `"here": true`: the double box.
+A catch-up's picture is a `frame`: boxes inside boxes that the command lays out and gives their state words. Each box is `{ "box": "release" | "milestone" | "task" | "group", "name", "items": [ boxes or lines of text ] }`. A task gives its recorded `state` (for example `"reviewing"`), and may give `waits` (what it waits for) and `needs` (the owner's question). A milestone may give its state (`"proposed"`, or `"done"`, which the boxes inside it must agree with); its word and a release's word come from the boxes inside them, and the tasks inside a group count too. A group gives its `word`, and so does a box whose items are only lines of text. Any box may give a `note` for its first line. Exactly one box is `"here": true`: the double box, the task that runs now.
 
 In the text of a field, a list or a cell, `**bold**` and a code span show on the page. The chat text shows bold words without their marks, and keeps a code span's backticks: a word in code, such as a chip name, is not an id.
 

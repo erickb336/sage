@@ -31,6 +31,7 @@ import { worktreeRoot, worktrees } from "./worktrees.mjs";
 import { CHIEF, TAKEOVER_OPTIONS, chiefOnly, createChiefs, crossed, offerOf, replaceOf, replaceQuestion, writerClass } from "./chiefs.mjs";
 import { LEAD_COMMANDS, leadProblem as leadPolicy, leadRequest } from "./lead-policy.mjs";
 import { renderMessage } from "./message-checks.mjs";
+import { MAX_SECTIONS } from "./message.mjs";
 
 /** The one line for a saved change that cannot finish: the settle step refuses with it, and `sage logbook repair` is its way out. */
 export const STUCK_WRITE = 'This command changed nothing. This project cannot save changes; other projects work. Tell the owner. There are two ways out. With a backup: the owner restores the folder that `sage logbook` prints; rows newer than the backup are lost. With no backup: after the owner accepts the loss of this saved change, the chief runs `sage logbook repair --accept-change-loss yes --project <the project>`, or the owner runs it in a terminal when the chief cannot; it keeps the file, and a half-published update keeps mixed tables. Do not remove review-pending.json by hand.';
@@ -4054,9 +4055,10 @@ function act(cmd, pos, opt, dir, env, skip, project) {
       if (Buffer.byteLength(text) > MESSAGE_MAX) refuse("the message's JSON is over 1 MiB. Nothing written.");
       let input;
       try { input = JSON.parse(text); } catch (e) { refuse(`the message is not JSON: ${e.message}. Nothing written.`); }
-      // A Page block names a page by its task and its file in that task's pages folder; the page must exist.
-      const pages = (blocks) => (Array.isArray(blocks) ? blocks : []).forEach((b) => {
-        if (b?.t === "section") pages(b.body);
+      // A Page block names a page by its task and its file in that task's pages folder; the page must exist. The walk
+      // stops where sections nest too deep: the shape check refuses those, and the stack stays small.
+      const pages = (blocks, depth = 0) => (Array.isArray(blocks) ? blocks : []).forEach((b) => {
+        if (b?.t === "section" && depth < MAX_SECTIONS) pages(b.body, depth + 1);
         if (b?.t !== "page") return;
         if (!TASK_ID.test(String(b.task)) || typeof b.file !== "string" || !/^(?:[\w.-]+\/)*[\w.-]+$/.test(b.file) || b.file.split("/").some((part) => /^\.+$/.test(part)))
           refuse(`a page block names its page as { t: page, title, task, file }: a task id and a file name in that task's pages folder, not ${JSON.stringify({ task: b.task, file: b.file })}. Nothing written.`);
