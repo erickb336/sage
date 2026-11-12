@@ -102,7 +102,7 @@ Four exceptions can interrupt you again:
 
 - An irreversible action always gets its own yes.
 - A new fact that changes an earlier answer can bring the question back.
-- A large task's design gets your approval after the PE check.
+- A large task's design goes to you after the PE check. It waits for your approval when it changes what you see or data that you keep. An internal shape goes ahead as recommended when you do not answer.
 - An escalation: the work finds something that the chief cannot decide alone. For example:
   - The task is held or needs a new plan.
   - An agent stops at a new product question.

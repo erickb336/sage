@@ -8,6 +8,7 @@ The chief reads this playbook at the moment that its line in the chief's text na
    - Every state: empty, loading, error and success.
    - Sample data, labelled as sample.
    - The cost of each option.
+   - The prior art: 2 or 3 existing products or tools, and the one that each option follows, or how and why it differs.
    - The cases that the design does not decide (see **Undecided case**, `undecided-case.md`).
 3. **The owner's moment:** message kind `design`, with a page. The options side by side, one picture each, what changes for the owner, and the cost. The recommendation is first.
    - Answers: pick A, B or C, or pick one and mark the parts of the others to keep.

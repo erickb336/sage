@@ -2142,7 +2142,7 @@ test("T85 isolated public PE and designer helpers render shared contracts and tr
   assert.match(roles, /role\.mjs pe/);
   assert.match(roles, /role\.mjs designer/);
   assert.match(roles, /installed acceptance/);
-  assert.match(workflow, /designer → PE → owner.*approval → build/);
+  assert.match(workflow, /designer → PE → the owner's answer on the design → build\. A design waits for the owner's approval when it changes what the user sees or data that the user keeps; an internal shape goes ahead/);
   assert.match(workflow, /ordinary.*design.*gate.*not.*merge refusal/i);
   assert.match(briefs, /pages.*folder/);
   assert.match(briefs, /CHANGE/);
