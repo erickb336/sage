@@ -23,7 +23,7 @@ import { REPORT_FIELDS } from "./report.mjs";
 import { cleanReport, fieldsOf, proofResults, readReport } from "./report-reader.mjs";
 import { ROLES } from "./roles.mjs";
 import { AGENT_CAPS, BREAKS, FINDING_CLASSES, HIDDEN, LINE, NAME_MAX, PRIORITIES, PRIORITY_SCALE, START_SAGE_MODE, TABLES as PLAIN_TABLES, TASK_KINDS, breakdownLine, countOf, nameProblem, proposalOf } from "./logbook-fields.mjs";
-import { BREAKDOWN, ENDED, GATE_ID, MET, MILESTONE_ID, TASK_ID, breakdownGate, renameRows, renamedIds, byIds, dead, droppedBy, gateLines, lostClause, milestoneState, progressOf, progressText, shownGraph, shownWaits, unmetWaits, waitGraph, waitWords, waitsOf, waitsWithState } from "./milestone-rules.mjs";
+import { BREAKDOWN, ENDED, GATE_ID, MET, MILESTONE_ID, TASK_ID, breakdownGate, renameRows, renamedIds, byIds, dead, droppedBy, gateLines, lostClause, milestoneState, progressOf, progressText, releaseKey, releaseNameProblem, releasesOf, shownGraph, shownWaits, unmetWaits, waitGraph, waitWords, waitsOf, waitsWithState } from "./milestone-rules.mjs";
 import { OBSERVATIONS_MAX_BYTES, OBSERVATION_DATA_MAX_BYTES, validateObservation, validateObservations } from "./observations.mjs";
 import { MOVES, PLAN_MAX, checkoutGone, createSharedRoot, sharedRoot, unreadableFolder } from "./shared-root.mjs";
 import { changedText, countsOf, endText, gateQuestion, gateText, localTime, mapHtml, mismatchText, previewText, providersOf, reconciliationText, startText, stepText, stoppedText, title } from "./move-text.mjs";
@@ -129,16 +129,19 @@ const FILLED = { runs: ["model", ...USAGE_FIELDS], tasks: ["hold", "extra", "pri
 const CHIEF_COLUMN = "chief";
 /** A shared logbook's run also names its checkout: the main checkout of the folder that the run started from (T625). */
 const CHECKOUT_COLUMN = "checkout";
-const TABLES = { ...PLAIN_TABLES, tasks: [...PLAIN_TABLES.tasks, CHIEF_COLUMN], runs: [...PLAIN_TABLES.runs, CHIEF_COLUMN, CHECKOUT_COLUMN] };
+/**
+ * The release of a milestone, or of a task outside a milestone (T1003). A table gets the column only when a row has it, so
+ * an older sage still writes a logbook until a release is set; from then on it refuses, as for any column that it does not know.
+ */
+const RELEASE_COLUMN = "release";
 /** All the columns of that rule: also a task's open offer, and the kind of a gate, which only the state tool writes. */
-const SPARSE = { tasks: [CHIEF_COLUMN, "offer"], runs: [CHIEF_COLUMN, CHECKOUT_COLUMN], gates: ["kind"] };
-TABLES.tasks = [...TABLES.tasks, "offer"];
-TABLES.gates = [...TABLES.gates, "kind"];
+const SPARSE = { tasks: [CHIEF_COLUMN, "offer", RELEASE_COLUMN], runs: [CHIEF_COLUMN, CHECKOUT_COLUMN], gates: ["kind"], milestones: [RELEASE_COLUMN] };
+const TABLES = { ...PLAIN_TABLES, ...Object.fromEntries(Object.entries(SPARSE).map(([t, cols]) => [t, [...PLAIN_TABLES[t], ...cols]])) };
 /** The columns that a table may lack. */
-const ADDED = { ...FILLED, runs: [...FILLED.runs, ...SPARSE.runs], tasks: [...FILLED.tasks, ...SPARSE.tasks], gates: SPARSE.gates };
+const ADDED = { ...FILLED, ...Object.fromEntries(Object.entries(SPARSE).map(([t, cols]) => [t, [...(FILLED[t] ?? []), ...cols]])) };
 /** The status of a run that ended. Any other status is an active or an unknown run. */
 const RUN_ENDS = ["done", "blocked", "question", "failed"];
-const COMMANDS = ["init", "logbook", "standing", "pages", "task", "task-adopt", "milestone", "round", "run", "finding", "verdict", "gate", "log", "status", "stats", "merge-check", "config", "projects", "board", "observe", "link", "claim", "offer", "cancel", "accept", "unclaim", "move", "worktrees"];
+const COMMANDS = ["init", "logbook", "standing", "pages", "task", "task-adopt", "milestone", "release", "round", "run", "finding", "verdict", "gate", "log", "status", "stats", "merge-check", "config", "projects", "board", "observe", "link", "claim", "offer", "cancel", "accept", "unclaim", "move", "worktrees"];
 /** The options of each command, by its name or by its name and first word. Every command also takes --project. */
 const OPTIONS = {
   "logbook repair": ["accept-loss", "accept-change-loss"],
@@ -155,6 +158,7 @@ const OPTIONS = {
   round: ["why"], // round <T> --why <reason>: the chief's extra round in autopilot (T804)
   "task-adopt": ["source-logbook", "source-provider", "source-task", "pr", "branch"],
   "milestone propose": ["name", "goal", "pilot", "tasks"],
+  "release add": ["name", "goal"],
   "run add": ["role", "branch", "candidate", "usage-interface"],
   observe: ["kind", "source", "basis", "observed-at", "data-hex"],
   "run done": ["status", "tokens", "report", "usage", "usage-source", "usage-evidence"],
@@ -543,7 +547,7 @@ const RENAMED_TABLES = ["decisions", "milestones", "tasks", "gates"];
  * The table of a logbook from before the rename (T995) that no table of this version has: programs.tsv, the milestones
  * table of then, with the same columns. Its read has every check of a table, and a repair can start it again.
  */
-const OLD_TABLES = { programs: TABLES.milestones };
+const OLD_TABLES = { programs: PLAIN_TABLES.milestones };
 const tableCols = (table) => TABLES[table] ?? OLD_TABLES[table];
 /**
  * A renamed table of a logbook from before the rename (T995), as a read gives it in memory and the migration of the next
@@ -563,7 +567,7 @@ function renamedSheet(dir, table, also = [], max = Infinity) {
   const sheets = Object.fromEntries([...RENAMED_TABLES, "programs"].map((t) => [t, mine(t) ? own(t) : other(t)]));
   const rows = (t) => (sheets[t] ? rowsOf(sheets[t]) : ["milestones", "programs"].includes(t) ? undefined : []);
   const out = renameRows({ tasks: rows("tasks"), decisions: rows("decisions"), gates: rows("gates"), milestones: rows("milestones"), programs: rows("programs") }, now())[table];
-  const cols = (sheets[table]?.cols ?? TABLES.milestones).filter((c) => c !== "program");
+  const cols = (sheets[table]?.cols ?? PLAIN_TABLES.milestones).filter((c) => c !== "program");
   if (table === "tasks" && !cols.includes("milestone")) cols.push("milestone");
   return { cols, lines: out.map((row) => cols.map((c) => row[c] ?? "").join("\t")) };
 }
@@ -597,7 +601,7 @@ function fileSheet(dir, table, also = [], max = Infinity) {
     if (e instanceof Refusal || !e.code) throw e;
     refuse(`${file} cannot be read (${e.code}). ${fixIt(file, e.code)}`);
   }
-  if (text === undefined && table === "milestones" && !namesMilestone(dir, max)) return { cols: TABLES.milestones, lines: [] };
+  if (text === undefined && Object.hasOwn(NAMED_BY, table) && !namedBy(dir, table, max)) return { cols: PLAIN_TABLES[table], lines: [] };
   if (text === undefined) throw lost(dir, table, "is missing or is a link to nothing", also);
   const { cols, lines } = sheetText(text);
   if (!cols.length) throw lost(dir, table, text ? "has only blank lines" : "is empty (0 bytes)", also);
@@ -605,18 +609,23 @@ function fileSheet(dir, table, also = [], max = Infinity) {
   return { cols, lines };
 }
 
+/** The tables that came later, each with the column and the tables whose cells name its rows: milestones (T337) and releases (T1003). */
+const NAMED_BY = { milestones: ["milestone", ["tasks"]], releases: [RELEASE_COLUMN, ["tasks", "milestones"]] };
 /**
- * Does a task of the logbook name a milestone? The milestones table came later (T337): a logbook made before it has no
- * milestones.tsv, and that reads as a table with no rows while no task names a milestone. Once one does, the file is
- * missing rows, and a missing file is a loss as for any table. The first milestone propose writes it. A tasks table that
- * cannot be read names none here: its own check refuses it.
+ * Does a row of the logbook name a row of this later table? A logbook made before the table has no file for it, and that
+ * reads as a table with no rows while no cell names one. Once a cell does, the file is missing rows, and a missing file
+ * is a loss as for any table. The first write of a row adds it. A table that cannot be read names none here: its own
+ * check refuses it.
  */
-function namesMilestone(dir, max) {
-  try {
-    return rowsOf(sheet(dir, "tasks", [], max)).some((t) => t.milestone); // a program cell reads as its milestone cell (T995)
-  } catch {
-    return false;
-  }
+function namedBy(dir, table, max) {
+  const [column, tables] = NAMED_BY[table];
+  return tables.some((t) => {
+    try {
+      return rowsOf(sheet(dir, t, [], max)).some((row) => row[column]); // a program cell reads as its milestone cell (T995)
+    } catch {
+      return false;
+    }
+  });
 }
 
 function sheetText(text) {
@@ -646,6 +655,10 @@ const check = (dir, skip = [], max = Infinity) => {
   const seen = new Set();
   const twice = (tables.milestones ? rowsOf(tables.milestones) : []).find(({ id }) => seen.has(id) || !seen.add(id))?.id;
   if (twice !== undefined) refuse(`${join(dir, "milestones.tsv")} has two rows for ${visible(twice)}, but a milestone's id is on one row. Ask the user to fix the file: keep one row of ${visible(twice)}.`);
+  // A release's name is its key, also without case or width (T1003): with two rows, a cell could name either.
+  const names = new Set();
+  const same = (tables.releases ? rowsOf(tables.releases) : []).find(({ name }) => names.has(releaseKey(name)) || !names.add(releaseKey(name)));
+  if (same) refuse(`${join(dir, "releases.tsv")} has two rows for the release ${visible(same.name)} (case and width do not count), but a release's name is on one row. Ask the user to fix the file: keep one row of it.`);
   if (receipts() !== version) refuse("A Replace receipt was created while this logbook was read. Retry the read.");
   return tables;
 };
@@ -1539,7 +1552,10 @@ function movePlan(scope, env, gate) {
     milestones: [...milestoneIds].map(([k, id]) => ({ provider: books[k.split(" ")[0]].provider, old: k.split(" ")[1], new: id })),
     standing: parts, waits, finished,
   };
-  const rows = { tasks, findings, gates, milestones, decisions };
+  // The releases move by name (T1003): each name once, the first logbook's row first, and each cell keeps its name.
+  const releases = [];
+  for (const b of books) for (const r of b.rows.releases) if (!releases.some((o) => releaseKey(o.name) === releaseKey(r.name))) releases.push(keepColumns("releases", r));
+  const rows = { tasks, findings, gates, milestones, decisions, releases };
   // The board reads at most 4 MiB a file and 16 MiB in one read: the new logbook and its old logbooks must fit (F-T641).
   const sizes = Object.entries(rows).map(([t, r]) => [t, Buffer.byteLength(tableText(t, r))]);
   const old = books.reduce((n, b) => n + RAW.reduce((m, f) => m + (statSync(join(b.dir, f), NO)?.size ?? 0), 0), 0);
@@ -1763,7 +1779,7 @@ function moveSteps(plan, file, env, resumed) {
       rmSync(temp, { recursive: true, force: true }); // an unfinished build of an earlier run: the plan builds it again
       mkdirSync(join(temp, "briefs"), { recursive: true });
       mkdirSync(join(temp, "reports"));
-      for (const t of ["runs", "ledger", "findings", "gates", "milestones"]) write(temp, t, plan.rows[t] ?? []);
+      for (const t of ["runs", "ledger", "findings", "gates", "milestones", "releases"]) write(temp, t, plan.rows[t] ?? []);
       write(temp, "decisions", stamp(plan.rows.decisions));
       writeIdFloors(temp, plan.sources); // under the old logbooks' locks, once for each build (F-T641-3)
       put(join(temp, "standing.md"), plan.standing.replaceAll(DAY, localTime(at).day));
@@ -2100,6 +2116,18 @@ const milestoneDecision = (task, was, at, why, { milestones }) => {
   return { rows: [{ at, task: task.id, decision: `milestone ${was || "none"} → ${task.milestone || "none"}`, why: `${why}${after ? "; after the breakdown approval" : ""}` }], note: after };
 };
 
+/**
+ * A release value as a release cell holds it (T1003): the release's own name, also when the value has another case or
+ * width, or "" for none (none or an empty value takes the item out). It refuses a name that the logbook does not have,
+ * and two names: who (a milestone or a task) is in at most one release.
+ */
+function releaseValue(value, releases, who) {
+  if (value === "" || releaseKey(value) === "none") return "";
+  if (value.includes(",")) refuse(`${who} is in at most one release: name one release, not ${visible(value)}. Nothing changed.`);
+  const release = releases.find((r) => releaseKey(r.name) === releaseKey(value));
+  return release?.name ?? refuse(`no release ${visible(value)}. ${releases.length ? `The releases: ${releases.map((r) => visible(r.name)).join(", ")}.` : "There is none yet."} To add a release: sage release add --name "<name>". Nothing changed.`);
+}
+
 /** The most repair rounds that the chief gives itself in autopilot, with a reason; above it only the owner's gate gives one (T804). */
 const ROUND_CEILING = 5;
 /** Is autopilot on for this chief's session? Only a chief of this provider, by its session, through the adapter's reader. */
@@ -2226,7 +2254,20 @@ function planTaskChanges(before, id, changes, at, facts) {
       const { rows, note: joined } = milestoneDecision(task, was, at, "task set", graph);
       decided.push(...rows);
       note += joined;
-    } else refuse(`task set takes state=, branch=, pr=, title=, priority=, kind=, waits=, milestone= or approval=`);
+      // A task that joins a milestone is in the milestone's release: its own release goes (T1003).
+      if (task.milestone && task.release) {
+        decided.push({ at, task: task.id, decision: `release ${task.release} → none`, why: `${task.id} joins ${task.milestone}, and a task of a milestone is in its milestone's release` });
+        note += ` · leaves the release ${oneLine(task.release)}: a task of ${task.milestone} is in the release of ${task.milestone}`;
+        task.release = "";
+      }
+    } else if (k === "release") {
+      if (task.milestone) refuse(`${task.id} is in ${task.milestone}, and a task of a milestone is in its milestone's release. Set the release of ${task.milestone} (sage milestone ${task.milestone} set release=<name>), or take ${task.id} out of ${task.milestone} first (sage task ${task.id} set milestone=none). Nothing changed.`);
+      const was = task.release ?? "", to = releaseValue(v, facts.releases, task.id);
+      if (to !== was) {
+        task.release = to;
+        decided.push({ at, task: task.id, decision: `release ${was || "none"} → ${to || "none"}`, why: "task set" });
+      }
+    } else refuse(`task set takes state=, branch=, pr=, title=, priority=, kind=, waits=, milestone=, release= or approval=`);
   }
   return { task, tasks, runs, decisions: [...decisions, ...decided], note };
 }
@@ -2262,7 +2303,7 @@ function frame(dir, title, size, risk, add, tags = {}) {
   return task;
 }
 /** A task's priority, kind and milestone for a printed line: nothing when it has none. */
-const tagsOf = (task) => `${task.priority ? ` · ${task.priority}` : ""}${task.kind ? ` · kind ${task.kind}` : ""}${task.milestone ? ` · milestone ${task.milestone}` : ""}${task.chief ? ` · chief ${task.chief}` : ""}${offerOf(task) ? ` · offer ${offerOf(task).id} to ${offerOf(task).to} · version ${taskVersion(task)}` : ""}`;
+const tagsOf = (task) => `${task.priority ? ` · ${task.priority}` : ""}${task.kind ? ` · kind ${task.kind}` : ""}${task.milestone ? ` · milestone ${task.milestone}` : task.release ? ` · release ${oneLine(task.release)}` : ""}${task.chief ? ` · chief ${task.chief}` : ""}${offerOf(task) ? ` · offer ${offerOf(task).id} to ${offerOf(task).to} · version ${taskVersion(task)}` : ""}`;
 const framed = (task) => `${task.id} framed · ${task.size}${task.risk ? ` · risk ${task.risk}` : ""} · route ${task.route}${tagsOf(task)}${task.waits ? ` · waits ${task.waits.replaceAll(",", ", ")}` : ""}`;
 
 function move(task, to) {
@@ -2757,10 +2798,18 @@ function milestonesLine({ byId, milestones, byMilestone }) {
       : p.state === "active" && progress.done ? `done, ${text}`
       : ["active", "proposed", "changing"].includes(p.state) && dead(pilot) ? `${text} · pilot ${p.pilot} ${pilot ?? "not in the logbook"}: choose a new pilot, or drop the milestone`
       : `pilot ${p.pilot}: ${text}${why}`;
-    return `milestone ${p.id} · ${line} · name: ${oneLine(p.name)}`;
+    return `milestone ${p.id}${p.release ? ` · release ${oneLine(p.release)}` : ""} · ${line} · name: ${oneLine(p.name)}`;
   });
   return each;
 }
+
+/**
+ * The release line of status (T1003), one for each release in row order: its state, the count of its tasks (done, of all
+ * the tasks of its milestones and its single tasks, and the stopped ones), its milestones and single tasks, then its goal
+ * last, after a label. A release that a cell names and the releases table lacks says so.
+ */
+const releaseLine = (r) => `release ${oneLine(r.name)} · ${r.missing ? "not in the logbook: add it with release add, or set the release of each item again" : r.state} · ${r.done} of ${r.total} ${r.total === 1 ? "task" : "tasks"} done${r.stopped ? ` · ${r.stopped} stopped` : ""}`
+  + `${r.milestones.length ? ` · milestones ${r.milestones.map((m) => m.id).join(", ")}` : ""}${r.singles.length ? ` · single tasks ${r.singles.map((t) => t.id).join(", ")}` : ""}${r.goal ? ` · goal: ${oneLine(r.goal)}` : ""}`;
 
 /**
  * A gate's question on the status line: a breakdown gate's first line and its count of tasks (each task line starts with
@@ -2797,7 +2846,7 @@ function status(dir, save) {
   // The open tasks with no priority (T500): older rows stay valid, so status names them for the chief to set.
   const none = tasks.filter((t) => !ENDED.includes(t.state) && !t.priority).map((t) => t.id);
   if (none.length) lines.push(`priority ${none.length} open task${none.length === 1 ? " has" : "s have"} none: ${none.slice(0, 10).join(", ")}${none.length > 10 ? `, and ${none.length - 10} more` : ""} · set them with task <T> set priority=<P0 to P3>`);
-  lines.push(...milestonesLine(graph));
+  lines.push(...releasesOf(read(dir, "releases"), graph).map(releaseLine), ...milestonesLine(graph));
   // The runs by task, once, so the usage lines are linear in the runs.
   const runsOf = new Map();
   for (const r of runs) (runsOf.get(r.task) ?? runsOf.set(r.task, []).get(r.task)).push(r);
@@ -2964,15 +3013,22 @@ function folderHere() {
   }
 }
 
-/** The old words of the renames of T995, kept for one version: program (now milestone) and release (now unclaim). */
-const OLD_WORDS = new Map([["program", "milestone"], ["release", "unclaim"]]); // a Map, so constructor is no old word (F-T995-24)
 /**
- * A command with an old word runs as its new form: the command program or release, the option --program and a task set
+ * The old words of the renames of T995, kept for one version: program (now milestone) and release <T> (now unclaim).
+ * release is the release level's word too (T1003), so only release with a task id, which no release name has, is the old word.
+ */
+const oldWord = (cmd, rest) => {
+  if (cmd === "program") return "milestone";
+  if (cmd !== "release") return undefined;
+  try { return TASK_ID.test(parse(cmd, rest).pos[0] ?? "") ? "unclaim" : undefined; } catch { return undefined; } // a refusal of parse comes again from the command
+};
+/**
+ * A command with an old word runs as its new form: the command program, release <T>, the option --program and a task set
  * key program=. Its output ends with a note that names the new word, so the chief learns it.
  */
 function sage(argv, env = process.env) {
-  const [cmd, ...rest] = argv, old = [];
-  const words = [OLD_WORDS.has(cmd) ? (old.push(`${cmd} is ${OLD_WORDS.get(cmd)} now`), OLD_WORDS.get(cmd)) : cmd, ...rest.map((word, i) => {
+  const [cmd, ...rest] = argv, old = [], newCmd = oldWord(cmd, rest);
+  const words = [newCmd ? (old.push(`${cmd} is ${newCmd} now`), newCmd) : cmd, ...rest.map((word, i) => {
     if (/^--program(?:=|$)/.test(word)) return old.push("--program is --milestone now"), word.replace("--program", "--milestone");
     if (cmd === "task" && rest[1] === "set" && i > 1 && word.startsWith("program=")) return old.push("program= is milestone= now"), `milestone=${word.slice(8)}`;
     return word;
@@ -3403,6 +3459,23 @@ const chiefTag = (opt) => (opt.chief === undefined ? {} : { chief: opt.chief });
 /** The checkout cell of a new run: only a shared logbook's run has one, the root of the project's bindings.tsv row. */
 const checkoutTag = (dir, project, env) => (isShared(dir, env) ? { checkout: locate(project, env).row.root } : {});
 
+/**
+ * milestone <M> set release=<name> (T1003): puts a milestone in a release, moves it to another one (a late milestone, when
+ * the owner says that a release ships), or takes it out with release=none. Each change writes a decision row.
+ */
+function milestoneSet(dir, asked, changes) {
+  const [milestones, decisions] = ["milestones", "decisions"].map((t) => read(dir, t));
+  const id = askedMilestone(asked, renamedIds(decisions)), m = milestones.find((p) => p.id === id) ?? missing(`milestone ${visible(asked)}`, milestones.map((p) => p.id));
+  if (!changes.length || changes.some((kv) => !kv.startsWith("release="))) refuse(`milestone <M> set takes release=<name>, or release=none to take the milestone out of its release. Nothing changed.`);
+  if (changes.length > 1) refuse(`${m.id} is in at most one release: give release= once. Nothing changed.`);
+  const was = m.release ?? "", to = releaseValue(changes[0].slice("release=".length), read(dir, "releases"), m.id);
+  if (to !== was) {
+    write(dir, "milestones", milestones.map((p) => (p === m ? { ...p, release: to } : p)));
+    write(dir, "decisions", [...decisions, { at: now(), task: "", decision: `${m.id} release ${was || "none"} → ${to || "none"}`, why: "milestone set" }]);
+  }
+  return `${m.id} · release ${to || "none"} · name: ${oneLine(m.name)}`;
+}
+
 function act(cmd, pos, opt, dir, env, skip, project) {
   const [sub, id, ...more] = pos;
   switch (cmd) {
@@ -3621,7 +3694,7 @@ function act(cmd, pos, opt, dir, env, skip, project) {
       const why = opt.why === undefined ? undefined : [cell(opt.why), opt.chief && `abandoned by ${opt.chief}${task.chief ? "" : ", with no owning chief"}`].filter(Boolean).join(" · ");
       if (id === "set") {
         const before = { tasks, runs: read(dir, "runs"), decisions: read(dir, "decisions") };
-        const planned = planTaskChanges(before, task.id, more, now(), { ...Object.fromEntries(["findings", "ledger", "gates", "milestones"].map((t) => [t, read(dir, t)])), maxRounds: config(env, dir).max_rounds, why });
+        const planned = planTaskChanges(before, task.id, more, now(), { ...Object.fromEntries(["findings", "ledger", "gates", "milestones", "releases"].map((t) => [t, read(dir, t)])), maxRounds: config(env, dir).max_rounds, why });
         const bar = moveBar(more, planned); // after the plan, so that a branch= in the same command counts, in either order
         if (bar) refuse(bar);
         if (JSON.stringify(planned.decisions) !== JSON.stringify(before.decisions)) write(dir, "decisions", planned.decisions);
@@ -3637,7 +3710,8 @@ function act(cmd, pos, opt, dir, env, skip, project) {
       // pilot task, where the board shows it under Needs you. The gate's question names each task and what it waits for
       // (R1205-1). milestone propose <M> proposes it again, after the owner's change or for a new pilot: a new gate, with
       // the milestone's tasks (or a new --tasks list) and its round.
-      if (sub !== "propose" || more.length) refuse("milestone takes: propose --name <name> --goal <goal> --pilot <T> --tasks <T,T>, or propose <M> with --name, --goal, --pilot or --tasks to propose it again");
+      if (id === "set" && sub !== "propose") return milestoneSet(dir, sub, more);
+      if (sub !== "propose" || more.length) refuse("milestone takes: propose --name <name> --goal <goal> --pilot <T> --tasks <T,T>, or propose <M> with --name, --goal, --pilot or --tasks to propose it again, or <M> set release=<name> (release=none takes it out)");
       const [tasks, milestones, gates, runs, decisions] = ["tasks", "milestones", "gates", "runs", "decisions"].map((t) => read(dir, t));
       const nothing = " Nothing changed.";
       // An old program id names its milestone through the logbook's id map (T995, F-T995-16): the line names the new id.
@@ -3709,6 +3783,9 @@ function act(cmd, pos, opt, dir, env, skip, project) {
         .filter(([, from, to]) => from !== to && (from === pid || to === pid))
         .map(([t, from, to]) => ({ at, task: t.id, decision: `milestone ${from || "none"} → ${to || "none"}`, why: PROPOSE }));
       for (const { t, to } of moved) t.milestone = to;
+      // A task that joins the milestone is in the milestone's release: its own release goes (T1003).
+      const unreleased = tasks.filter((t) => t.milestone === pid && t.release).map((t) => ({ at, task: t.id, decision: `release ${t.release} → none`, why: `${t.id} joins ${pid}, and a task of a milestone is in its milestone's release` }));
+      for (const t of tasks) if (t.milestone === pid && t.release) t.release = "";
       const graph = waitGraph(tasks, after, gates, decisions);
       noLoop(pilot, graph, { oldPilot: old?.pilot }); // each new wait is a wait for the pilot, so a new loop goes through it
       apartFromPilot(pilot, graph, decisions, read(dir, "ledger"), "propose");
@@ -3718,8 +3795,19 @@ function act(cmd, pos, opt, dir, env, skip, project) {
       write(dir, "milestones", after);
       write(dir, "tasks", tasks);
       write(dir, "gates", [...gates, g]);
-      write(dir, "decisions", [...decisions, ...rowsOfMoves, { at, task: pilot.id, decision, why: PROPOSE }]);
+      write(dir, "decisions", [...decisions, ...rowsOfMoves, ...unreleased, { at, task: pilot.id, decision, why: PROPOSE }]);
       return `${pid} proposed${round > 1 ? ` (round ${round})` : ""} · pilot ${pilot.id} · ${others.length ? `tasks ${others.map((t) => t.id).join(", ")}` : "no other task"} · ${g.id} open: ask the owner to approve, change or drop it. To say what to change, the owner may answer in own words. Until the owner approves, no task of ${pid} builds.`;
+    }
+    case "release": {
+      // release add (T1003): a release that the owner ships, such as 1.0, in the order of the rows. Its name is its key.
+      if (sub !== "add" || id !== undefined) refuse(`release takes: add --name "<name>" [--goal "<goal>"]. A milestone goes into a release with sage milestone <M> set release=<name>, and a task outside a milestone with sage task <T> set release=<name>.`);
+      const releases = read(dir, "releases"), name = need(opt.name, "--name"), goal = opt.goal ?? "";
+      const why = nameProblem(name) ?? releaseNameProblem(name, releases);
+      if (why) refuse(`the release's name ${why}. Nothing changed.`);
+      const goalWhy = opt.goal === undefined ? null : nameProblem(goal, 300);
+      if (goalWhy) refuse(`the release's goal ${goalWhy}. Nothing changed.`);
+      write(dir, "releases", [...releases, { name, goal, at: now() }]);
+      return `release ${name} added${goal ? ` · goal: ${goal}` : ""}. Put a milestone in it with sage milestone <M> set release=<name>, and a task outside a milestone with sage task <T> set release=<name>.`;
     }
     case "round": {
       const { tasks, task } = taskOf(dir, need(sub, "the task id"));

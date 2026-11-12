@@ -46,7 +46,7 @@ export const TOOLS = {
       gate: id("G", "the move gate's id").optional() },
     pos: ["preview"], argv: (i) => ["move", ...(i.preview ? ["--preview"] : [])],
   },
-  status: { describe: "Print the status lines of the project's logbook: tasks, runs, gates and milestones.", argv: () => ["status"] },
+  status: { describe: "Print the status lines of the project's logbook: tasks, runs, gates, releases and milestones.", argv: () => ["status"] },
   task_add: {
     describe: "Frame a task and its route. The size gives the least route; a risk flag adds the security review.",
     input: { title: z.string(), size: z.enum(Object.keys(tool.SIZES)), risk: optional(`risk flags joined by a comma: ${tool.RISKS.join(", ")}`),
@@ -56,7 +56,7 @@ export const TOOLS = {
     argv: () => ["task", "add"],
   },
   task_set: {
-    describe: "Change a task: its state, branch, pr, priority, kind, waits or milestone. Resuming a round hold needs approval=<G>, an unused owner-approved repair gate for this task and round limit. The tool refuses a move that the route does not allow. Any chief may abandon a task with no owning chief: fields {\"state\": \"abandoned\"} alone, with why.",
+    describe: "Change a task: its state, branch, pr, priority, kind, waits, milestone or release (only for a task outside a milestone: a task of a milestone is in its milestone's release). Resuming a round hold needs approval=<G>, an unused owner-approved repair gate for this task and round limit. The tool refuses a move that the route does not allow. Any chief may abandon a task with no owning chief: fields {\"state\": \"abandoned\"} alone, with why.",
     input: { task, fields: z.record(z.string().regex(/^[a-z]+$/), z.string()).describe('the keys and values to set, for example {"state": "building", "branch": "codex/t7-name"}'),
       why: optional("the reason of an abandon, only with the state abandoned; needed to abandon a task with no owning chief") },
     pos: ["task", "fields"],
@@ -68,6 +68,19 @@ export const TOOLS = {
     input: { milestone: id("M", "the milestone's id, to propose it again").optional(), name: optional("the milestone's name"), goal: optional("the milestone's goal"),
       pilot: id("T", "the pilot task's id").optional(), tasks: optional("the milestone's other task ids, joined by a comma") },
     pos: ["milestone"], argv: (i) => ["milestone", "propose", ...(i.milestone ? [i.milestone] : [])],
+  },
+  release_add: {
+    describe: "Add a release: a version that the owner ships, such as 1.0. It holds milestones and single tasks (tasks outside a milestone), and the releases keep the order in which you add them. "
+      + "The name is 1 to 60 characters, unique when case and width do not count, not in the form of an id such as T12 or M5, not none, and with no comma or middle dot. "
+      + "Put a milestone in it with milestone_set, and a single task with task_set release=<name>.",
+    input: { name: z.string().describe("the release's name, for example 1.0"), goal: optional("the release's goal") },
+    argv: () => ["release", "add"],
+  },
+  milestone_set: {
+    describe: "Put a milestone in a release, or take it out with release none. A milestone is in at most one release, and each of its tasks is in that release. "
+      + "Move a late milestone to the next release only when the owner says that its release ships: one call for each open item. Each change writes a decision row.",
+    input: { milestone: id("M", "the milestone's id"), release: z.string().describe("the release's name, or none") },
+    pos: ["milestone", "release"], argv: (i) => ["milestone", i.milestone, "set", `release=${i.release}`],
   },
   config: {
     describe: "Set config keys, only when the owner asks, and print the values. name (the project's name on the board; an empty value removes it), archived (yes or no) and start (sage-mode: each new session of the project starts in sage mode, also in Claude when the two share the logbook; normal: it starts off) are keys of this project's logbook: set them in a call of their own. "

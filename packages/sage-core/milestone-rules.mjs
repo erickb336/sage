@@ -248,3 +248,51 @@ export const progressOf = (tasks) => {
 };
 /** The progress as the board and the status line say it: "3 of 7 merged · T10 abandoned". */
 export const progressText = ({ merged, total, abandoned }) => `${merged} of ${total} merged${abandoned.length ? ` · ${abandoned.join(", ")} abandoned` : ""}`;
+
+/**
+ * Releases (T1003): a release is a version that the owner ships, such as 1.0. It holds milestones and single tasks (the
+ * tasks outside a milestone); a task of a milestone is in its milestone's release. A release is optional, and nothing
+ * moves an item to another release by itself. Its name is its key: two names are one name when they are equal without
+ * case or width (NFKC). The releases keep their row order, so the next release is the next row: no name sorts.
+ */
+export const releaseKey = (name) => String(name ?? "").normalize("NFKC").toLowerCase();
+/**
+ * Why a release name is refused, besides the name rule of a display name (nameProblem), or null: the form of a sage id
+ * (T12, M5, G3, R7, C2, PG1), which a command or a line reads as that id; none, which takes an item out; a comma or a
+ * middle dot, which a value or a status line reads as a separator; and a name that a release has already.
+ */
+export function releaseNameProblem(name, releases) {
+  const key = releaseKey(name);
+  if (/^(?:t|m|g|r|c|pg)[0-9]+$/.test(key)) return "has the form of a sage id (such as T12 or M5), so a line could read it as that id: give it a name such as 1.0 or Beta";
+  if (key === "none") return "is none, which takes an item out of its release";
+  if (/[,·]/.test(key)) return "has a comma or a middle dot (·), which a value or a status line reads as a separator";
+  const twin = releases.find((r) => releaseKey(r.name) === key);
+  return twin ? `is the name of the release ${twin.name} already (case and width do not count): give each release its own name` : null;
+}
+/** The word of a task in a release: done (merged or concluded), stopped (abandoned), not started (framed), else in progress. */
+const taskWord = (task) => (MET.includes(task.state) ? "done" : task.state === "abandoned" ? "stopped" : task.state === "framed" ? "not started" : "in progress");
+/**
+ * The state of a release from the words of its items (the owner's rule, PE plan of T1003): not started when it is empty or
+ * no item has started; stopped when every item is stopped; done when each item is done or stopped and one is done; else
+ * in progress. A milestone item has the same rule over its tasks, and is stopped when the owner dropped it.
+ */
+const levelState = (words) => !words.length ? "not started"
+  : words.every((w) => w === "stopped") ? "stopped"
+  : words.every((w) => w === "done" || w === "stopped") ? "done"
+  : words.some((w) => w === "done" || w === "in progress") ? "in progress" : "not started";
+/**
+ * Each release in row order, with its milestones, its single tasks, its state and the count of its tasks (the tasks of its
+ * milestones and its single tasks): done, stopped and all. Then a stand-in (missing: true) for each name that a release
+ * cell names and the releases table lacks, so no item drops out of the count. graph: a shownGraph.
+ */
+export function releasesOf(releases, { byId, milestones, byMilestone }) {
+  const out = new Map(releases.map((r) => [releaseKey(r.name), { ...r, milestones: [], singles: [] }]));
+  const of = (name) => out.get(releaseKey(name)) ?? out.set(releaseKey(name), { name, missing: true, milestones: [], singles: [] }).get(releaseKey(name));
+  for (const m of milestones.values()) if (m.release) of(m.release).milestones.push(m);
+  for (const t of byId.values()) if (t.release && !t.milestone) of(t.release).singles.push(t);
+  return [...out.values()].map((r) => {
+    const tasks = [...r.milestones.flatMap((m) => byMilestone.get(m.id) ?? []), ...r.singles];
+    const words = [...r.milestones.map((m) => (m.state === "dropped" ? "stopped" : levelState((byMilestone.get(m.id) ?? []).map(taskWord)))), ...r.singles.map(taskWord)];
+    return { ...r, state: levelState(words), done: tasks.filter((t) => MET.includes(t.state)).length, stopped: tasks.filter((t) => t.state === "abandoned").length, total: tasks.length };
+  });
+}

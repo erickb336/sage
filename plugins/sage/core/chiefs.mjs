@@ -18,7 +18,8 @@ const onTask = (task) => ({ kind: "task", task });
  *   read: no guard. owner: the owner's own act, so no chief: a gate answer, which a hook checks, a logbook repair or
  *   projects rebuild, which the owner may run in a terminal with no hook, and the move, which the move gate's answer starts. any: any chief. new: a chief that gets the task.
  *   task: the owning chief of task, or of the task of run; with recipient, also the chief that the task's open offer
- *   names, so that it can decline the offer. milestone: the owning chief of each task that it names.
+ *   names, so that it can decline the offer. milestone: the owning chief of each task that it names. A release (release add,
+ *   milestone <M> set release=) changes no task, so any chief sets it.
  * A task on an any class is only the place of a lead: such a command changes no task. link is a read here, because a
  * checkout has no chief until it has a row.
  */
@@ -26,11 +27,13 @@ export function writerClass(cmd, [sub, id] = []) {
   switch (cmd) {
     case "task": return sub === "add" ? NEW : id === "set" ? onTask(sub) : READ;
     case "claim": case "accept": return NEW;
-    case "offer": case "unclaim": case "release": return onTask(sub); // release: the old word of unclaim, for one version (T995)
+    case "offer": case "unclaim": return onTask(sub);
+    // release <T>: the old word of unclaim, for one version (T995); release add: the release level (T1003).
+    case "release": return TASK.test(sub ?? "") ? onTask(sub) : sub === "add" ? ANY : READ;
     case "cancel": return { ...onTask(sub), recipient: true };
     case "task-adopt": case "round": case "verdict": return onTask(sub);
     case "finding": return onTask(id);
-    case "milestone": case "program": return { kind: "milestone" }; // program: the old word of milestone, for one version (T995)
+    case "milestone": case "program": return id === "set" ? ANY : { kind: "milestone" }; // program: the old word of milestone, for one version (T995)
     case "run": return sub === "add" ? onTask(id) : sub === "done" ? { kind: "task", run: id } : sub === "usage" ? ANY : READ;
     case "gate": return sub === "answer" ? OWNER : sub === "replace" ? ANY : sub === "add" ? (id === undefined ? ANY : onTask(id)) : READ;
     case "log": return TASK.test(sub ?? "") ? onTask(sub) : ANY;
@@ -47,7 +50,7 @@ export function writerClass(cmd, [sub, id] = []) {
 }
 
 /** A command that only a shared logbook has: it moves a task between chiefs. */
-export const chiefOnly = (cmd, [sub] = []) => ["claim", "offer", "cancel", "accept", "unclaim", "release"].includes(cmd) || (cmd === "gate" && sub === "replace");
+export const chiefOnly = (cmd, [sub] = []) => ["claim", "offer", "cancel", "accept", "unclaim"].includes(cmd) || (cmd === "release" && TASK.test(sub ?? "")) || (cmd === "gate" && sub === "replace");
 
 /** The open offer of a task's row: { id, from, to }. An empty cell has none, and so has a cell that does not read as one. */
 export function offerOf(task) {

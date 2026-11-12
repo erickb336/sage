@@ -202,7 +202,7 @@ function readLogbook(directory, project, budget, { now, bound, chiefs = true, du
     try { project.tables[name] = table(join(directory, `${name}.tsv`), name, budget); }
     catch (error) {
       // A logbook from before milestones has no milestones table: that is a table with no rows while no task names a
-      // milestone (the state tool's namesMilestone rule). Once one does, a missing table is a diagnostic, as for any table.
+      // milestone (the state tool's namedBy rule). Once one does, a missing table is a diagnostic, as for any table.
       // A program cell names a milestone too, when its logbook from before the rename (T995) lost programs.tsv.
       if (name === "milestones" && error.code === "ENOENT" && !(project.tables.tasks ?? []).some(task => task.milestone || (task.program && !lstatSync(join(directory, "programs.tsv"), { throwIfNoEntry: false })))) project.tables.milestones = [], none = true;
       else project.diagnostics.push(`${name}: ${error.code ?? error.message}`);

@@ -107,6 +107,8 @@ export const TABLES = {
   gates: ["id", "task", "question", "options", "recommendation", "default", "answer", "at"],
   decisions: ["at", "task", "decision", "why"],
   milestones: ["id", "name", "goal", "pilot", "gate", "at"],
+  // T1003: the releases, in the order that the owner adds them. The name is the key; a milestone or a task names it in its release cell.
+  releases: ["name", "goal", "at"],
 };
 
 /** The value of a logbook's start key that starts each new session of the project in sage mode (T948). */
