@@ -197,8 +197,13 @@ The frame follows these rules:
 - A milestone box holds its tasks that need you or are in progress (at most 3). Then it has a box for each other word, with its count.
 - A box of waiting tasks says what they wait for, when they all wait for the same thing: for example "Waiting for Presentation skill", or "Waiting for your approval". Else it shows the word alone.
 - A box that needs you has a double border. So has a task in progress, which says "you are here".
+- A milestone that you dropped, with tasks still in it, says how many and what to do: "2 tasks still in it: ask the chief to take each task out of the milestone."
 
-A release's word comes from its milestones and single tasks: see the rules of the state words above. A release that a milestone or a task names, but that the logbook does not have, says so in its box: ask the chief to add it. A releases table that the board cannot read is an item in Needs you, with the file and the line; the board then shows the tasks without their releases.
+A release's word comes from its milestones and single tasks: see the rules of the state words above. A release that a milestone or a task names, but that the logbook does not have, says so in its box: ask the chief to add it.
+
+A releases table that the board cannot read is an item in Needs you, with the file and the line; the board then shows the tasks without their releases. The Releases tab says the same for that project ("The releases of sage cannot be read"), and never "No releases yet".
+
+Every line that the owner reads names a milestone by its level: "Milestone 6: Faster reviews", or "milestone 6" inside a sentence ("Waits for your approval of milestone 6"). Two places keep the id: the Milestone filter list, and the text of a gate, which comes from the gate's row.
 
 ## The board server
 
