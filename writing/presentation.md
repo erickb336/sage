@@ -58,9 +58,9 @@ The JSON: `{ "kind", "title", "blocks": [ … ], "ref" }`, and `"status"` for an
 
 | Block | Fields | Text form |
 | --- | --- | --- |
-| `field` | `label`, `text` | `Label: text` |
+| `field` | `label`, `text` | `Label: text`; in a question or a confirm, `**Label**` on its own line, then the text |
 | `p` | `text` | a paragraph, anywhere |
-| `section` | `label`, `body` (blocks) | the label, then its blocks |
+| `section` | `label`, `body` (blocks) | the label, then its blocks; in a question or a confirm, the label in bold |
 | `list` | `items`, `ordered` | `- item` or `1. item` |
 | `table` | `head`, `rows`, `pick` (the row of your pick, from 0), `caption` | numbered rows; your pick says "(my pick)" |
 | `picture` | `title`, `lines` or `frame`, `key` | the title, the lines in a fence, the key |
