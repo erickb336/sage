@@ -8,18 +8,18 @@ A project gets this rule set only after its owner says yes. The project then own
 
 ## Quick start
 
-Run these commands in this folder. They need ast-grep 0.51.1 (`npm install --save-dev --save-exact @ast-grep/cli@0.51.1`).
+Run these commands in this folder. They run ast-grep 0.51.1 with the real package, `@ast-grep/cli`, pinned. The form works with a local install and without one. On npm, the bare name `ast-grep` is an unrelated package, so never run it by that name.
 
 1. Run the rule tests. You see `test result: ok`.
 
    ```sh
-   npx ast-grep test --skip-snapshot-tests
+   npx --yes --package=@ast-grep/cli@0.51.1 ast-grep test --skip-snapshot-tests
    ```
 
 2. Scan a folder. Each comment that is not allowed is an error, and the command exits with 1.
 
    ```sh
-   npx ast-grep scan --config sgconfig.yml --no-ignore hidden --globs '!.git' <folder>
+   npx --yes --package=@ast-grep/cli@0.51.1 ast-grep scan --config sgconfig.yml --no-ignore hidden --globs '!.git' <folder>
    ```
 
    The scan then includes hidden folders such as `.github`, but not `.git`.
