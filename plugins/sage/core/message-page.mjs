@@ -21,8 +21,8 @@ main{max-width:860px;margin:0 auto;padding:22px 20px 48px}main.long{max-width:10
 h1{font-size:22px;line-height:1.3;margin:4px 0 12px}p{margin:8px 0}.m-label{font-weight:650}
 h2{font-size:15px;margin:16px 0 4px}ul,ol{margin:6px 0;padding-left:22px}li{margin:3px 0}
 .m-table{overflow-x:auto;margin:10px 0}table{border-collapse:collapse;font-size:14px;min-width:100%}caption{text-align:left;font-weight:650;padding:0 0 4px}
-th,td{border:1px solid var(--line);padding:6px 8px;text-align:left;vertical-align:top}th{background:var(--panel2);font-weight:650}tr.pick td{background:var(--accent-fill)}
-.pick-mark{font-weight:650;color:var(--accent)}
+th,td{border:1px solid var(--line);padding:6px 8px;text-align:left;vertical-align:top}th{background:var(--panel2);font-weight:650}
+.pick-mark{font-weight:650;color:var(--accent)}.m-answers li{margin:8px 0}.m-answers li.pick{background:var(--accent-fill);border-radius:6px;padding:2px 8px}
 figure{margin:14px 0}figcaption{font-weight:650;font-size:14px;margin-bottom:6px}.m-key{font-size:13px;color:var(--muted);margin-top:6px}
 .m-pic{border:1px solid var(--line);border-radius:10px;padding:10px;background:var(--pic-f0);overflow-x:auto}
 svg.pic{display:block;width:100%;max-width:600px;height:auto}main.long svg.pic{max-width:860px}
@@ -58,7 +58,9 @@ function blockHtml(b, level = 2) {
     case "p": return `<p>${inline(b.text)}</p>`;
     case "section": return `<section><h${level}>${esc(b.label)}</h${level}>${b.body.map((x) => blockHtml(x, Math.min(level + 1, 6))).join("")}</section>`;
     case "list": { const tag = b.ordered ? "ol" : "ul"; return `<${tag}>${b.items.map((i) => `<li>${inline(i)}</li>`).join("")}</${tag}>`; }
-    case "table": return `<div class="m-table"><table>${b.caption ? `<caption>${esc(b.caption)}</caption>` : ""}<thead><tr>${b.head.map((h) => `<th>${esc(h)}</th>`).join("")}</tr></thead><tbody>${b.rows.map((r, i) => `<tr${b.pick === i ? ' class="pick"' : ""}>${r.map((c, k) => `<td>${inline(c)}${b.pick === i && k === 0 && !/\(my pick\)/i.test(c) ? ' <span class="pick-mark">(my pick)</span>' : ""}</td>`).join("")}</tr>`).join("")}</tbody></table></div>`;
+    // A question's answers (a table with a pick) are a list, as in the text form: a table makes long answers hard to read (T1023).
+    case "table": if (b.pick !== undefined) return `${b.caption ? `<p class="m-label">${esc(b.caption)}</p>` : ""}<ol class="m-answers">${b.rows.map((r, i) => `<li${b.pick === i ? ' class="pick"' : ""}><p class="m-label">${inline(r[0])}${b.pick === i && !/\(my pick\)/i.test(r[0]) ? ' <span class="pick-mark">(my pick)</span>' : ""}</p>${r.slice(1).map((c, k) => `<p><span class="m-label">${esc(b.head[k + 1])}:</span> ${inline(c)}</p>`).join("")}</li>`).join("")}</ol>`;
+      return `<div class="m-table"><table>${b.caption ? `<caption>${esc(b.caption)}</caption>` : ""}<thead><tr>${b.head.map((h) => `<th>${esc(h)}</th>`).join("")}</tr></thead><tbody>${b.rows.map((r) => `<tr>${r.map((c) => `<td>${inline(c)}</td>`).join("")}</tr>`).join("")}</tbody></table></div>`;
     case "picture": return figure(b.title, b.lines, b.key);
     case "toggle": {
       const side = (cls, label, pics) => `<div class="tg-pane ${cls}"><p class="tg-label">${label}</p>${pics.map((p) => figure(p.title, p.lines)).join("")}</div>`;

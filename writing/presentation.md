@@ -58,9 +58,9 @@ The JSON: `{ "kind", "title", "blocks": [ … ], "ref" }`, and `"status"` for an
 
 | Block | Fields | Text form |
 | --- | --- | --- |
-| `field` | `label`, `text` | `Label: text` |
+| `field` | `label`, `text` | `Label: text`; in a question or a confirm, `**Label**` on its own line, then the text |
 | `p` | `text` | a paragraph, anywhere |
-| `section` | `label`, `body` (blocks) | the label, then its blocks |
+| `section` | `label`, `body` (blocks) | the label, then its blocks; in a question or a confirm, the label in bold |
 | `list` | `items`, `ordered` | `- item` or `1. item` |
 | `table` | `head`, `rows`, `pick` (the row of your pick, from 0), `caption` | numbered rows; your pick says "(my pick)" |
 | `picture` | `title`, `lines` or `frame`, `key` | the title, the lines in a fence, the key |
@@ -72,7 +72,142 @@ The JSON: `{ "kind", "title", "blocks": [ … ], "ref" }`, and `"status"` for an
 
 A catch-up's picture is a `frame`: boxes inside boxes that the command lays out and gives their state words. Each box is `{ "box": "release" | "milestone" | "task" | "group", "name", "items": [ boxes or lines of text ] }`. A task gives its recorded `state` (for example `"reviewing"`), and may give `waits` (what it waits for) and `needs` (the owner's question). A milestone may give its state (`"proposed"`, or `"done"`, which the boxes inside it must agree with); its word and a release's word come from the boxes inside them, and the tasks inside a group count too. A group gives its `word`, and so does a box whose items are only lines of text. Any box may give a `note` for its first line. Exactly one box is `"here": true`: the double box, the task that runs now.
 
-In the text of a field, a list or a cell, `**bold**` and a code span show on the page. The chat text shows bold words without their marks, and keeps a code span's backticks: a word in code, such as a chip name, is not an id.
+In the text of a field, a list or a cell, `**bold**` and a code span show on the page. The chat text shows bold words without their marks, except the bold label of each part of a question or a confirm, and keeps a code span's backticks: a word in code, such as a chip name, is not an id.
+
+## Ask with the question tool
+
+Ask a `question` or a `confirm` with the host's question tool when the session has one: the owner picks an option on a card, the choice card. The text form of the kind is the fallback only.
+
+Use the tool only for a choice that is the owner's: product direction, or an act that cannot be undone. Never use it for reversible work: decide that, and report it.
+
+1. Park each question with `sage gate add` first.
+2. Send a short chat message: the kind's parts, except the title and the answers, which go on the card, and the Ref line last. The card can hide the chat, so the message has no head line: the card is the question.
+3. Call the tool. Put the whole batch in one call when it fits, the most important question first.
+4. Record the answer with `gate answer`: the option's number, or the owner's own words (the tool's Other) as `--other-hex`.
+
+The owner's rules for the chat message and the text form (12 Nov 2026), because the parts ran together and a table made long answers hard to read:
+
+1. **Separate segments.** Give each part a bold label on its own line, such as **Where this is** or **If you do not answer**, with its text on the next line. Put a blank line between the parts. Keep each part to one or two short sentences.
+2. **No tables for answers or explanations.** On the card, the long text goes in the option's description. In the text form, the answers are a short numbered list, with what happens next and the cost under each answer. Use a table only for short, uniform data, such as numbers or dates.
+3. **The same rules with no tool.** The text form has the same bold labels and the same list of answers. `sage message` prints it so, and the message check notes a label in the line or a table of answers.
+
+| Part of the question | On the card |
+| --- | --- |
+| The title | The question text. It stands alone: it names the items that it asks about. |
+| A short name of the topic | The header chip, at most 12 characters. |
+| Each answer | One option. Its label is the answer, in 1 to 5 words. |
+| Your pick | The first option, with "(Recommended)" at the end of its label. |
+| What happens next, and the cost | The option's description. |
+| If you do not answer | Not on the card: it stays in the chat message. |
+
+Each host has its tool:
+
+- **Claude Code:** `AskUserQuestion`, with 1 to 4 questions a call and 2 to 4 options a question. The tool adds Other.
+- **Codex:** `request_user_input_async`, when your tools have it. An option is one line with no description, so write it as "label: what happens next, cost". The tool returns at once, and the answer comes as the owner's next message. Codex's `request_user_input` works only in Plan mode: do not use it.
+- **No tool:** send the kind's text form, with the rules above.
+
+### Before and after
+
+SAMPLE CONTENT: a shorter copy of an approved question of 11 Nov 2026.
+
+**Before:** the parts run together, and a table holds the long answers.
+
+```text
+QUESTION
+
+Should pages reach you only by a link to your Mac? Where this is: Release 1.0 › single task: one way to show visuals › step: investigate. What you approve: how pages reach you in the Claude app. The one real choice in it: a page inside the chat, or a page that never leaves your Mac. If you do not answer: the build uses my pick. Needed by: before the page link build starts. After you answer: I say in one line what I recorded.
+
+| Answer | What happens next | Cost |
+| --- | --- | --- |
+| Link only (my pick) | Every page comes as a link and a path, in Claude and in Codex. No copy leaves your Mac. | None: it is part of the planned page link work. |
+| Keep the file tool too | Some pages open inside the Claude chat. A copy of each goes through Anthropic's servers. | Small: one more rule for the chief. |
+```
+
+**After, with the tool:** first the chat message, in segments.
+
+```text
+**Where this is**
+Release 1.0 › single task: one way to show visuals › step: investigate
+
+**What you approve**
+How pages reach you in the Claude app.
+
+**The one real choice in it**
+A page inside the chat, or a page that never leaves your Mac.
+
+**If you do not answer**
+The build uses my pick.
+
+**Needed by**
+Before the page link build starts.
+
+**After you answer**
+I say in one line what I recorded.
+```
+
+Then the card. In Claude Code:
+
+```json
+{ "questions": [{
+  "question": "Should pages reach you only by a link to your Mac?",
+  "header": "Pages",
+  "multiSelect": false,
+  "options": [
+    { "label": "Link only (Recommended)",
+      "description": "Every page comes as a link and a path, in Claude and in Codex. No copy leaves your Mac. Cost: none, it is part of the planned page link work." },
+    { "label": "Keep the file tool too",
+      "description": "Some pages open inside the Claude chat. A copy of each goes through Anthropic's servers. Cost: small, one more rule for the chief." }
+  ] }] }
+```
+
+In Codex, the same question with one line for each option:
+
+```text
+Link only (Recommended): every page comes as a link and a path; no copy leaves your Mac. Cost: none.
+Keep the file tool too: some pages open inside the Claude chat; a copy goes through Anthropic's servers. Cost: small.
+```
+
+**After, with no tool:** the text form, as `sage message` prints it.
+
+```text
+QUESTION
+
+Should pages reach you only by a link to your
+Mac?
+
+**Where this is**
+Release 1.0 › single task: one way to show
+visuals › step: investigate
+
+**What you approve**
+How pages reach you in the Claude app.
+
+**The one real choice in it**
+A page inside the chat, or a page that never
+leaves your Mac.
+
+1. Link only (my pick)
+   - What happens next: Every page comes as a
+     link and a path, in Claude and in Codex.
+     No copy leaves your Mac.
+   - Cost: None: it is part of the planned
+     page link work.
+
+2. Keep the file tool too
+   - What happens next: Some pages open inside
+     the Claude chat. A copy of each goes
+     through Anthropic's servers.
+   - Cost: Small: one more rule for the chief.
+
+**If you do not answer**
+The build uses my pick.
+
+**Needed by**
+Before the page link build starts.
+
+**After you answer**
+I say in one line what I recorded.
+```
 
 ## The kinds
 

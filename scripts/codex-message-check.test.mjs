@@ -18,7 +18,7 @@ const fixture = (name) => JSON.parse(readFileSync(join(ROOT, "scripts/fixtures/m
 /** A question as the message command prints it: a message that fits its kind's shape. */
 const QUESTION = renderMessage(fixture("02-question.json"), { pagePath: (name) => `/pages/T1/${name}` }).text;
 /** The same question written by hand with two misses: no "Needed by" part, and a task id in its own words. */
-const MISSED = QUESTION.replace(/\nNeeded by:[^\n]*\n[^\n]*\n/, "\n").replace("Where this is:", "Where this is: T4242 waits.");
+const MISSED = QUESTION.replace(/\n\n\*\*Needed by\*\*\n[\s\S]*?(?=\n\n)/, "").replace("**Where this is**\n", "**Where this is**\nT4242 waits. ");
 
 let sessions = 0, turns = 0;
 /** A scratch HOME and Codex home with the built plugin installed and sage's entries in hooks.json, and one Codex session. */

@@ -18,7 +18,7 @@ const fixture = (name) => JSON.parse(readFileSync(fileURLToPath(new URL(`./fixtu
 /** The text of the approved example question, as the chat shows it: it fits its shape. */
 const QUESTION = renderMessage(fixture("02-question.json")).text;
 /** The same question, written by hand with no "Needed by" part and with a task's raw id. */
-const MISSED = QUESTION.replace(/\nNeeded by:[^\n]*\n[^\n]*\n/, "\n").replace("Should sage stop", "Should T77 stop");
+const MISSED = QUESTION.replace(/\n\n\*\*Needed by\*\*\n[\s\S]*?(?=\n\n)/, "").replace("Should sage stop", "Should T77 stop");
 
 /** A session with its own scratch home, sage home and hook state. send() returns the hook's answer, or undefined. */
 function session(plugin = PLUGIN) {
@@ -123,7 +123,7 @@ test("F-T1004-4: the note is about the last message before a prompt: of two miss
   const s = session();
   s.prompt("sage mode");
   const onlyId = QUESTION.replace("Should sage stop", "Should T77 stop"); // a raw id, and every part
-  const onlyPart = QUESTION.replace(/\nNeeded by:[^\n]*\n[^\n]*\n/, "\n"); // no "Needed by", and no id
+  const onlyPart = QUESTION.replace(/\n\n\*\*Needed by\*\*\n[\s\S]*?(?=\n\n)/, ""); // no "Needed by", and no id
   assert.deepEqual(textProblems(onlyId).length, 1);
   assert.deepEqual(textProblems(onlyPart).length, 1);
   s.stop(onlyId);
