@@ -551,7 +551,7 @@ Limits:
 
 ## Inactive trigger observation
 
-sage no longer has the inactive turn-trigger observer or its sample command. No hook or manifest ran them, so T732 removed them. The change log keeps their earlier entries, which link here.
+sage no longer has the inactive turn-trigger observer or its sample command. No hook or manifest ran them, so T732 removed them. Older pull requests link here.
 
 ## Known limits in Codex
 

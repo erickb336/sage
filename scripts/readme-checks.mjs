@@ -1,6 +1,6 @@
 // The README's limits and the docs' links, for `npm run check` (T381). The README is a short front page: a line
-// budget, a link to the changelog (T465: the changelog alone lists the changes), and a first screen that says what sage
-// is, its status and where to start.
+// budget, a link to the releases page (T1014: the release notes list the changes, and the repository keeps no history
+// file), and a first screen that says what sage is, its status and where to start.
 // Every relative link in the README and the docs resolves to a file, and every #anchor to a heading or an id; so does
 // each link to this repository's main branch on GitHub. A local check, not a link checker such as lychee: it needs no
 // download and no network, and other web links stay unchecked.
@@ -16,13 +16,16 @@ const GITHUB = /^https:\/\/github\.com\/erickb336\/sage-stack\/(?:blob|tree)\/ma
 /** The first screen, as the README guide defines it: the first 10 lines that are not blank and not a lone tag. */
 export const firstScreen = (text) => text.split("\n").filter((l) => !/^\s*(<\/?(a|picture|p)( [^>]*)?>|<source [^>]*>)?\s*$/.test(l)).slice(0, 10);
 
-/** The problems of a README's text: its budget, its link to the changelog and its first screen. */
+/** The releases page, where each release's notes list the changes for users. */
+export const RELEASES = "https://github.com/erickb336/sage-stack/releases";
+
+/** The problems of a README's text: its budget, its link to the releases page and its first screen. */
 export function readmeProblems(text) {
   const problems = [];
   const lines = text.split("\n").length - (text.endsWith("\n") ? 1 : 0), bytes = Buffer.byteLength(text);
   if (lines > MAX_LINES) problems.push(`README.md: ${lines} lines; keep it at ${MAX_LINES} or fewer. Move reference material to a page under docs/`);
   if (bytes > MAX_BYTES) problems.push(`README.md: ${bytes} bytes; keep it at ${MAX_BYTES} or fewer. Move reference material to a page under docs/`);
-  if (!text.includes("](CHANGELOG.md)")) problems.push("README.md: no link to CHANGELOG.md; the changelog holds the list of changes");
+  if (!text.includes(`](${RELEASES})`)) problems.push(`README.md: no link to the releases page (${RELEASES}); the release notes list the changes`);
   const screen = firstScreen(text).join("\n");
   for (const [need, what] of [[/^\*\*sage-stack is an? [^*]+\.\*\*/m, 'one bold sentence that starts "**sage-stack is a"'], [/^\*\*Status:\*\* /m, 'a status line that starts "**Status:**"'], [/\]\(#quick-start\)/, "a link to #quick-start"]])
     if (!need.test(screen)) problems.push(`README.md: the first screen (the first 10 lines with text) needs ${what}`);
@@ -78,7 +81,7 @@ export function links(text) {
  * skill, which links the docs on GitHub. */
 export function docFiles(root) {
   const under = (dir) => readdirSync(join(root, dir), { withFileTypes: true }).flatMap((e) => (e.isDirectory() ? under(join(dir, e.name)) : e.name.endsWith(".md") ? [join(dir, e.name)] : []));
-  return [...["README.md", "CHANGELOG.md", "CONTRIBUTING.md", "SECURITY.md", "AGENTS.md"].filter((f) => existsSync(join(root, f))), ...under("docs"), "packages/sage-board/README.md", "packages/sage-claude/skills/sage-help/SKILL.md"].filter((f) => existsSync(join(root, f)));
+  return [...["README.md", "CONTRIBUTING.md", "SECURITY.md", "AGENTS.md"].filter((f) => existsSync(join(root, f))), ...under("docs"), "packages/sage-board/README.md", "packages/sage-claude/skills/sage-help/SKILL.md"].filter((f) => existsSync(join(root, f)));
 }
 
 /** Each relative link that does not resolve: a missing file, or an #anchor that the target page does not have. */
