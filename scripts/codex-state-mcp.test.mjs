@@ -12,7 +12,6 @@ import { ROOT } from "./build.mjs";
 
 const SHA = "1".repeat(40);
 
-/** The built plugin's state server in a scratch folder, with a scratch CODEX_HOME and no SAGE_HOME. */
 async function connect(t, overrides = {}) {
   const dir = realpathSync(mkdtempSync(join(tmpdir(), "sage-state-mcp-")));
   t.after(() => rmSync(dir, { recursive: true, force: true }));
@@ -38,14 +37,8 @@ async function connect(t, overrides = {}) {
   t.after(async () => { child.stdin.end(); assert.equal(await closed, 0); assert.equal(stderr, ""); });
   return {
     dir, project, env, gateOf,
-    /** A proof of this call with this caller, as the gate saves it. */
     writeProof: (name, id, caller) => writeProof({ tool_use_id: id, session_id: "019a0000-0000-7000-8000-0000000000aa", tool_name: `mcp__sage__${name}` }, env, caller),
     tools: async () => (await rpc("tools/list", {})).result.tools,
-    /**
-     * A tool's text, or { error } with the text of a refusal. As in Codex, the built gate first sees the call as
-     * PreToolUse with its id, then the server gets the same id and session in _meta (R1916-2); gate: false skips the gate.
-     * With agent, the call comes from the child at that agent path, and a refusal of the gate is { denied }.
-     */
     call: async (name, args = {}, { gate = true, callId = `call_${++calls}`, agent, sessionId = "019a0000-0000-7000-8000-0000000000aa" } = {}) => {
       let thread = { transcript_path: null };
       if (agent) {
@@ -66,8 +59,6 @@ async function connect(t, overrides = {}) {
 
 test("the state server serves only a call that sage's gate saw: with no hook running, sage records nothing and says why (R1916-2)", async (t) => {
   const s = await connect(t);
-  // T957: the line names the install command of the server's own plugin, because no hook runs before the install. It asks
-  // the user for it, and the chief runs it only after the user's yes (F-T957-19).
   const NO_GATE = `sage's gate is not running. If sage's hooks are not installed yet, tell the user. To install them, the user runs this command in a terminal, or says yes and then the chief runs it (never without that yes): node "${join(s.dir, "plugin/skills/sage/sage.mjs")}" hooks install. Then the user trusts them with /hooks in the Codex CLI (or the app's hook review), and you try again.`;
   assert.deepEqual(await s.call("init", {}, { gate: false }), { error: NO_GATE }, "no proof");
   assert.deepEqual(await s.call("status", {}, { gate: false }), { error: NO_GATE }, "a read too");
@@ -77,7 +68,6 @@ test("the state server serves only a call that sage's gate saw: with no hook run
   assert.deepEqual(await s.call("init", {}, { gate: false, callId: "call_once" }), { error: NO_GATE }, "a proof serves one call");
   s.writeProof("status", "call_other", { role: "chief" });
   assert.deepEqual(await s.call("init", {}, { gate: false, callId: "call_other" }), { error: NO_GATE }, "a proof of another tool");
-  // A proof with no caller, or with a caller in another form, serves no call: a forged proof fails closed (T552).
   for (const [id, caller] of [["no_caller", undefined], ["no_role", {}], ["bad_form", "chief"], ["null", null], ["other_role", { role: "qa", task: "T1", run: "R5" }], ["lead_no_task", { role: "lead", project: s.project }], ["lead_bad_task", { role: "lead", task: "12", project: s.project }],
     ["lead_no_project", { role: "lead", task: "T1" }], ["lead_bad_run", { role: "lead", task: "T1", run: "x", project: s.project }]]) {
     s.writeProof("status", id, caller);
@@ -121,7 +111,6 @@ test("T893: a Codex chief abandons, through task_set with why, a task with no ow
   const { tool } = await import(pathToFileURL(join(s.dir, "plugin/skills/sage/sage.mjs")).href);
   const file = join(tool.storeDir(s.project, s.env), "tasks.tsv");
   const cells = () => { const [head, line] = readFileSync(file, "utf8").split("\n"); return { cols: head.split("\t"), row: line.split("\t") }; };
-  // T1 as the move leaves a Claude task: no owning chief, and its adoption record (version 2).
   const { cols, row } = cells(), adoption = { version: 2, provider: "claude", task: "T7", logbook: join(s.dir, "old"), project: s.project, round: 0, digest: "0".repeat(64) };
   writeFileSync(file, `${cols.join("\t")}\n${row.with(cols.indexOf("chief"), "").with(cols.indexOf("adoption"), JSON.stringify(adoption)).join("\t")}\n`);
   assert.equal((await s.call("task_set", { task: "T1", fields: { state: "abandoned" } })).error, `sage: T1 has no owning chief. Any chief may abandon it, with a reason: add --why "<reason>". Nothing changed.`);
@@ -140,41 +129,33 @@ test("the transfer commands through the server: offer, accept, cancel, unclaim a
   await s.call("link", { separate: true });
   await s.call("task_add", { title: "first", size: "small", priority: "P2" });
   await s.call("task_add", { title: "second", size: "small", priority: "P2" }, as);
-  // T1 goes to C2 by an offer, after a cancelled one.
   const [, first] = /offer ([0-9a-f]{8})/.exec(await s.call("offer", { task: "T1", to: "C2" }));
   assert.match((await s.call("offer", { task: "T1", to: "C2" }, as)).error, /^sage: T1 belongs to chief C1/);
   assert.equal(await s.call("cancel", { task: "T1", offer: first }), `T1 offer ${first} cancelled`);
-  // The recipient declines an offer through the same tool (F-T618-31); the owning chief keeps the task and offers again.
   const [, declined] = /offer ([0-9a-f]{8})/.exec(await s.call("offer", { task: "T1", to: "C2" }));
   assert.equal(await s.call("cancel", { task: "T1", offer: declined }, as), `T1 offer ${declined} declined by C2 · chief C1 keeps T1`);
   const [, offer, version] = /offer ([0-9a-f]{8}) · version ([0-9a-f]{64})/.exec(await s.call("offer", { task: "T1", to: "C2" }));
-  // F-T618-32: the accept tool names a reader that a Codex chief has, and that reader gives the offer's id and the version that accept takes.
   const tools = await s.tools(), describe = (name) => tools.find((one) => one.name === name).description;
   assert.match(describe("accept"), /The CLI's task command gives the offer's id \(in the task's offer cell\) and the version/);
   assert.match(describe("cancel"), /decline an offer that another chief made to you/);
   assert.match((await s.call("accept", { task: "T1", offer: first, version }, as)).error, /has the open offer/);
   assert.match((await s.call("accept", { task: "T1", offer, version })).error, /names C2, not C1/);
-  // T656: accept opens a takeover gate, and the owner's answer gives the task.
   assert.match(await s.call("accept", { task: "T1", offer, version }, as), /^G1 open · Hand T1 from C1 \(codex\) to C2 \(codex\)\? Runs that end as failed: none\. Approve: C2 owns T1\. C1 can no longer write T1\. .* Decline: C1 stays the owning chief, and the offer to C2 ends\. Title of T1: first\nAsk the owner to answer G1, in either chat\. Nothing changes until then\.$/);
   assert.match((await s.call("task_set", { task: "T1", fields: { title: "x" } }, as)).error, /^sage: T1 belongs to chief C1 \(codex\), not to C2\./, "the gate alone gives nothing");
   assert.equal(await s.call("gate_answer", { gate: "G1", option: 1 }), "G1 answered · approve · T1 chief C2");
   assert.equal(await s.call("unclaim", { task: "T2" }, as), "T2 unclaimed · no owning chief. Only C2 claims it back; another chief needs the owner's takeover gate.");
-  // C1 opens the gate on C2's T1; the owner's answer comes through gate_answer, with no chief.
   assert.match(await s.call("run_add", { task: "T1", role: "qa" }, as), /^R1 running/);
   assert.match(await s.call("gate_replace", { task: "T1", to: "C1" }), /^G2 open · Hand T1 from C2 \(codex\) to C1 \(codex\)\? Runs that end as failed: R1 \(qa\)\. Approve: C1 owns T1\. Each of those runs ends as failed, and work that it did not report may be lost\. .* Decline: nothing changes, and C2 stays the owning chief\. Title of T1: first\nAsk the owner to answer G2, in either chat\. Nothing changes until then\.$/);
   assert.equal(await s.call("gate_answer", { gate: "G2", option: 1 }), "G2 answered · approve · T1 chief C1 · R1 failed");
   assert.match((await s.call("task_set", { task: "T1", fields: { title: "x" } }, as)).error, /^sage: T1 belongs to chief C1 \(codex\), not to C2\./);
-  // T656: merge_check judges for the caller's chief, which the server passes: the chief that lost T1 gets the owner refusal.
   assert.match(await s.call("verdict", { task: "T1", kind: "checks-pass", sha: SHA }), /^T1 checks-pass/);
   assert.match((await s.call("merge_check", { sha: SHA }, as)).error, /^sage: T1 belongs to chief C1 \(codex\), not to C2\. Nothing changed\./);
   assert.match((await s.call("merge_check", { sha: SHA })).error, /^sage: T1: 0 of 1 clean cycles on this SHA/, "the owning chief gets the cycle rule");
 });
 
-/** The one refusal of a lead's call off its list, from core's lead policy, as Claude gives it too (T928). */
 const OFF_LIST = (name) => `sage: "${name.replaceAll("_", " ")}" is not on a lead's list. A lead records only its own task, with run add, run done, finding add, finding close, finding triage, verdict, round, pages, and task set of state, branch, pr. Put what else the logbook needs in your report`;
 const BRIEF = ["GOAL", "SCOPE", "CONTEXT", "DECISIONS", "ACCEPTANCE", "VERIFY", "BUDGET", "FORBIDDEN", "REPORT", "STANDING"].map((field) => `${field}: the ${field.toLowerCase()}.`).join("\n");
 const LEAD = "/root/sage_lead_t1_r1";
-/** A project with T1 and T2, each briefed on its branch with a running lead run: R1 on T1, R2 on T2. */
 async function leadWorld(t) {
   const s = await connect(t);
   await s.call("init");
@@ -186,10 +167,6 @@ async function leadWorld(t) {
   const { tool } = await import(pathToFileURL(join(s.dir, "plugin/skills/sage/sage.mjs")).href);
   return { ...s, tool, lead: (name, args, options) => s.call(name, args, { agent: LEAD, ...options }) };
 }
-/**
- * A run of a role that ends done with a kept report, as Codex's stop hook keeps it (T483). Its id. record(run) records the
- * report's findings before the run ends, as the gap rule asks (T956).
- */
 async function reviewed(w, role, text, record = async () => {}) {
   const run = (await w.lead("run_add", { task: "T1", role })).split(" ")[0];
   w.tool.keepReport(w.project, { task: "T1", run, role, sha: SHA, text }, w.env);
@@ -199,16 +176,13 @@ async function reviewed(w, role, text, record = async () => {}) {
 }
 const CLEAN = `STATUS done\nRESULT CLEAN\nEVIDENCE npm test passed\nFINDINGS none\nQUESTIONS none\nNOT VERIFIED none\nBRANCH sage/t1-a head ${SHA}`;
 const FOUND = CLEAN.replace("RESULT CLEAN", "RESULT FINDINGS").replace("FINDINGS none", "FINDINGS\n- K1 medium a.js:1 a bad value\n  proof: npm test\n  saw: not ok 1 a bad value");
-/** A done proof check of T1 (T947): a qa run whose kept report gives each finding key its outcome, on SHA. Its id. */
 const proofCheck = (w, outcomes) => reviewed(w, "qa", CLEAN.replace("RESULT CLEAN", "RESULT PASS").replace("EVIDENCE npm test passed", `EVIDENCE\n${Object.entries(outcomes).map(([key, outcome]) => `- ${key} ${outcome}`).join("\n")}`));
 
 test("T955: run_add gives each Codex role and size the reasoning effort of its model key, never a model, and a role with no effort gets none", async (t) => {
   const s = await connect(t);
   await s.call("init");
-  await s.call("config", { settings: { max_agents: "50" } }); // the runs stay running, so the agent cap needs room for them
+  await s.call("config", { settings: { max_agents: "50" } });
   for (const size of ["tiny", "small", "large"]) await s.call("task_add", { title: size, size, priority: "P2" });
-  // The Balanced defaults: medium (Claude's sonnet) for the UX review, the QA of tiny and small tasks, and the code review
-  // and implementation of tiny tasks; high (Claude's opus) for the rest.
   const expected = {
     T1: { "code-reviewer": "medium", "security-reviewer": "high", "ux-reviewer": "medium", qa: "medium", implementer: "medium", pe: "high", designer: "high" },
     T2: { "code-reviewer": "high", "security-reviewer": "high", "ux-reviewer": "medium", qa: "medium", implementer: "high", pe: "high", designer: "high" },
@@ -221,15 +195,12 @@ test("T955: run_add gives each Codex role and size the reasoning effort of its m
       assert.equal(await s.call("run_add", { task, role, ...(branch && { branch }) }), `R${++r} running · ${role} on ${task}${branch ? ` · ${branch}` : ""} · reasoning_effort ${effort}`, `${role} on ${task}`);
     }
   }
-  // A role with no model key gets no effort, so its spawn has no reasoning_effort field: the session's effort.
   assert.equal(await s.call("run_add", { task: "T2", role: "lead" }), `R${++r} running · lead on T2`);
-  // A key with haiku gives low; fable and inherit give no effort (inherit falls to model.qa, high).
   for (const [value, line] of [["haiku", " · reasoning_effort low"], ["fable", ""], ["inherit", " · reasoning_effort high"]]) {
     assert.match(await s.call("config", { settings: { "model.qa.small": value } }), new RegExp(` model\\.qa\\.small=${value}(?: |$)`));
     assert.equal(await s.call("run_add", { task: "T2", role: "qa" }), `R${++r} running · qa on T2${line}`, value);
   }
   assert.match((await s.call("config", { settings: { "model.qa.small": "gpt-6-sol" } })).error, /^sage: model\.qa\.small is opus, sonnet, haiku, fable, or inherit/, "a key takes no Codex model name");
-  // The logbook keeps no model for a Codex run, so the board shows none: the agent runs on the session's model.
   const { tool } = await import(pathToFileURL(join(s.dir, "plugin/skills/sage/sage.mjs")).href);
   assert.deepEqual([...new Set(tool.read(tool.storeDir(s.project, s.env), "runs").map((run) => run.model))], [""]);
 });
@@ -242,7 +213,6 @@ test("T552: a lead records its own task's cycle through the state server, from a
   assert.equal(await lead("run_done", { run: "R3", status: "done" }), "R3 done");
   assert.match(await lead("task_set", { task: "T1", fields: { state: "reviewing", pr: "5" } }), /^T1 reviewing .* PR 5/);
   const found = await reviewed(w, "code-reviewer", FOUND, async (run) => assert.equal(await lead("finding_add", { task: "T1", source: "code-reviewer", severity: "medium", summary: "a.js:1 a bad value", run, class: "state-edge" }), "F-T1-1 open · medium · T1"));
-  // T947: the proof check reruns the finding's proof before the verdict and the triage.
   const proof = await proofCheck(w, { "F-T1-1": "reproduced" });
   assert.match(await lead("verdict", { task: "T1", kind: "findings", sha: SHA, pr: 5, run: found }), /^T1 findings · 1111111/);
   assert.equal(await lead("finding_triage", { task: "T1", key: "F-T1-1", decision: "fix", proof }), "F-T1-1 open · fix");
@@ -264,7 +234,7 @@ test("T552: each call of a lead on another task is refused with its reason, by t
   await lead("task_set", { task: "T1", fields: { state: "building" } });
   await w.call("task_set", { task: "T2", fields: { state: "building" } });
   await w.call("task_set", { task: "T2", fields: { state: "reviewing" } });
-  await w.call("run_add", { task: "T2", role: "qa" }); // R3
+  await w.call("run_add", { task: "T2", role: "qa" });
   await w.call("finding_add", { task: "T2", source: "qa", severity: "low", summary: "x", run: "R3", class: "other" });
   const before = readFileSync(join(w.env.CODEX_HOME, "sage", readdirSync(join(w.env.CODEX_HOME, "sage")).find((name) => name.startsWith("project-")), "runs.tsv"), "utf8");
   const other = /^sage: (?:T2|R2|R3|F-T2-1) is not of T1, and a lead records only its own task/;
@@ -273,7 +243,6 @@ test("T552: each call of a lead on another task is refused with its reason, by t
     ["verdict", { task: "T2", kind: "qa-pass", sha: SHA, pr: 5, run: "R3" }], ["round", { task: "T2" }], ["pages", { task: "T2" }], ["pages", { task: "T2", run: "R3", text: "x" }], ["task_set", { task: "T2", fields: { state: "verifying" } }]]) {
     const { denied } = await lead(name, args);
     assert.match(String(denied), other, `the gate: ${name} ${JSON.stringify(args)}`);
-    // A proof of a lead of T1 for this call, as if the gate had let it through: the server holds the rule itself.
     const callId = `forced_${name}_${JSON.stringify(args).length}`;
     w.writeProof(name, callId, { role: "lead", task: "T1", run: "R1", project: w.project });
     assert.match(String((await w.call(name, args, { gate: false, callId })).error), other, `the server: ${name} ${JSON.stringify(args)}`);
@@ -309,30 +278,25 @@ test("T552: a lead's own task keeps the rules of the flow: its team, a kept repo
   await refused("verdict", { task: "T1", kind: "evidence-clean", sha: SHA, pr: 5 }, /^sage: the evidence-clean verdict is the chief's/);
   await refused("verdict", { task: "T1", kind: "qa-pass", sha: SHA, pr: 6, run: qa }, /names its task's PR \(pr 5\)/);
   await refused("verdict", { task: "T1", kind: "qa-pass", sha: SHA, pr: 5 }, /names a run of T1 in its current round 0, whose kept report backs it; "no run"/);
-  // A run with no kept report backs no verdict, and the state tool says so.
   const none = (await lead("run_add", { task: "T1", role: "code-reviewer" })).split(" ")[0];
   await lead("run_done", { run: none, status: "done", tokens: 1 });
   assert.match((await lead("verdict", { task: "T1", kind: "review-clean", sha: SHA, pr: 5, run: none })).error, new RegExp(`^sage: ${none} has no kept report`));
-  // A finding: the lead dismisses only a low one, and never one triaged ask.
-  await lead("finding_add", { task: "T1", source: "qa", severity: "medium", summary: "a", run: qa, class: "other" }); // F-T1-1
+  await lead("finding_add", { task: "T1", source: "qa", severity: "medium", summary: "a", run: qa, class: "other" });
   await refused("finding_triage", { task: "T1", key: "F-T1-1", decision: "dismiss", reason: "r" }, /^sage: F-T1-1 is medium: a lead dismisses it only with --proof R<n>/);
   await refused("finding_triage", { task: "T1", key: "F-T1-1", decision: "ask" }, /^sage: a lead asks the owner nothing/);
   await refused("finding_close", { task: "T1", key: "F-T1-1" }, /^sage: F-T1-1 is not triaged fix/);
   await w.call("finding_triage", { task: "T1", key: "F-T1-1", decision: "ask" });
   await refused("finding_triage", { task: "T1", key: "F-T1-1", decision: "fix" }, /^sage: F-T1-1 is triaged ask: only the chief changes it/);
   await w.call("finding_triage", { task: "T1", key: "F-T1-1", decision: "fix" });
-  // A repair goes through round: no close and no verdict on a new commit before it.
   await refused("finding_close", { task: "T1", key: "F-T1-1" }, /^sage: T1 has a medium or high finding triaged fix and is not repairing: run round T1 first/);
   const newer = await reviewed(w, "code-reviewer", CLEAN.replaceAll(SHA, "2".repeat(40)));
   await refused("verdict", { task: "T1", kind: "review-clean", sha: "2".repeat(40), pr: 5, run: newer }, /run round T1 first/);
-  // Round rules: a key that joined after the round waits; a verdict names a run of the current round; a chief's dismissal stays.
   assert.match(await lead("round", { task: "T1" }), /^T1 repairing · round 1/);
-  await lead("finding_add", { task: "T1", source: "qa", severity: "low", summary: "b", run: qa, class: "other" }); // F-T1-2
+  await lead("finding_add", { task: "T1", source: "qa", severity: "low", summary: "b", run: qa, class: "other" });
   await lead("finding_triage", { task: "T1", key: "F-T1-2", decision: "fix" });
   await refused("finding_close", { task: "T1", key: "F-T1-2" }, /^sage: F-T1-2 is not a fix of T1's round/);
   await refused("verdict", { task: "T1", kind: "review-clean", sha: "2".repeat(40), pr: 5, run: newer }, new RegExp(`names a run of T1 in its current round 1, whose kept report backs it; "${newer}"`));
   await refused("finding_triage", { task: "T1", key: "F-T1-1", decision: "dismiss", reason: "r" }, /is medium/);
-  // The chief's calls on the same task stay as they are.
   assert.match(await w.call("log", { task: "T1", decision: "T1 kept", why: "chief" }), /^logged$/);
   assert.match(await w.call("verdict", { task: "T1", kind: "checks-pass", sha: SHA }), /^T1 checks-pass/);
 });
@@ -349,15 +313,12 @@ test("T552: a reviewer, QA, an implementer, a run of another task and a lead tha
     w.writeProof("run_add", `forced_${agent}`, { role: "child" });
     assert.equal((await w.call("run_add", { task: "T1", role: "qa" }, { gate: false, callId: `forced_${agent}` })).error, `${LOGBOOK}.`, "the server holds the rule itself");
   }
-  // A lead's name names its lead run: another run, or a task with no running lead run, records nothing.
   assert.match((await lead("run_add", { task: "T1", role: "qa" }, { agent: "/root/sage_lead_t1_r9" })).denied, /^sage: T1 has no running lead run R9, so this lead records nothing/);
   assert.match(await lead("run_add", { task: "T1", role: "qa" }, { agent: "/root/sage_lead_t1" }), /^R3 running/, "a name with no run: its task's running lead run");
-  // The project: a lead records only the logbook of the folder that Codex gives its thread.
   const elsewhere = join(w.dir, "elsewhere");
   mkdirSync(elsewhere);
   execFileSync("git", ["init", "-q", elsewhere]);
   assert.match((await lead("run_add", { project: elsewhere, task: "T1", role: "qa" })).denied, /^sage: a lead records only the logbook of its own project/);
-  // A held task, and a lead run that the chief ended.
   await w.call("task_set", { task: "T1", fields: { state: "abandoned" } });
   assert.match((await lead("round", { task: "T1" })).denied, /^sage: T1 is abandoned, so its lead records nothing/);
   await w.call("run_done", { run: "R1", status: "failed" });
@@ -389,7 +350,6 @@ test("T803: a Codex lead's CI wait passes the gate, reads only its PR's head and
   const sha = git("rev-parse", "sage/t1-a"), agent = "/root/sage_lead_t1_r1";
   await s.call("task_set", { task: "T1", fields: { state: "building" } }, { agent });
   await s.call("task_set", { task: "T1", fields: { state: "reviewing", pr: "5" } }, { agent });
-  // The fake gh knows only the two reads of the wait; it logs each call. The file mode says what the checks are.
   const bin = join(s.dir, "bin");
   mkdirSync(bin);
   writeFileSync(join(bin, "gh"), `#!/usr/bin/env node
@@ -421,7 +381,6 @@ console.log("build\\t" + mode + "\\t1m\\thttps://example.invalid/runs/1");
   assert.match(wait("none").out, /^CI none · PR 5 · [0-9a-f]{40}\nThe pull request has no checks, so the project has no CI/, "no checks, after the grace for checks that come late");
 });
 
-/** A leadWorld whose T1 is reviewing on PR 5, with a done code-reviewer run (found) whose medium finding is F-T1-1. */
 async function reviewingWorld(t) {
   const w = await leadWorld(t);
   await w.lead("task_set", { task: "T1", fields: { state: "building" } });
@@ -433,14 +392,13 @@ const triage = (w, key, decision = "fix", proof) => w.lead("finding_triage", { t
 
 test("T947: in a cycle, a lead triages a medium or high finding fix, or drops a medium one, only with a proof check; a high one is never its to drop", async (t) => {
   const w = await reviewingWorld(t), { lead } = w;
-  await add(w, "high", "c.js:3 a crash"); // F-T1-2
-  await add(w, "medium", "d.js:4 a leak"); // F-T1-3
+  await add(w, "high", "c.js:3 a crash");
+  await add(w, "medium", "d.js:4 a leak");
   const proof = await proofCheck(w, { "F-T1-1": "not reproduced", "F-T1-2": "not reproduced", "F-T1-3": "reproduced" });
   assert.equal((await triage(w, "F-T1-3")).denied, `sage: F-T1-3 is medium: in a cycle, a lead triages it fix only with --proof R<n>, the done proof check whose report says F-T1-3 reproduced or could not run. Run the proof check first (the proof-check reference)`);
   assert.equal((await triage(w, "F-T1-2")).denied?.startsWith("sage: F-T1-2 is high: in a cycle, a lead triages it fix only with --proof"), true);
   assert.match((await lead("finding_triage", { task: "T1", key: "F-T1-1", decision: "dismiss", reason: "r" })).denied, /^sage: F-T1-1 is medium: a lead dismisses it only with --proof R<n>, the done proof check whose report says F-T1-1 not reproduced/);
   assert.match((await triage(w, "F-T1-2", "dismiss", proof)).denied, /^sage: F-T1-2 is high: a lead never dismisses it, also when the proof check did not reproduce it\. Report it, or triage it fix: the chief decides/);
-  // The server's state tool checks the proof check itself.
   assert.match((await triage(w, "F-T1-3", "dismiss", proof)).error, new RegExp(`^sage: ${proof} says F-T1-3 reproduced, so it is not dismissed: triage it fix`));
   assert.equal(await triage(w, "F-T1-1", "dismiss", proof), "F-T1-1 dismissed · dismiss");
   assert.equal(await triage(w, "F-T1-3", "fix", proof), "F-T1-3 open · fix");
@@ -448,7 +406,7 @@ test("T947: in a cycle, a lead triages a medium or high finding fix, or drops a 
 
 test("F-T552-1: a lead leaves repairing only after it closed each fix key of the round, so a correct repair never ends in replan", async (t) => {
   const w = await reviewingWorld(t), { lead } = w;
-  await add(w, "low", "b.js:2 slow"); // F-T1-2
+  await add(w, "low", "b.js:2 slow");
   await triage(w, "F-T1-1", "fix", await proofCheck(w, { "F-T1-1": "reproduced" }));
   await triage(w, "F-T1-2");
   assert.match(await lead("round", { task: "T1" }), /^T1 repairing · round 1/);
@@ -518,12 +476,12 @@ test("F-T552-2: a lead gives its task no PR that another task has or had", async
 
 test("F-T552-2: a lead dismisses no fix key of a round, of this round or an earlier one", async (t) => {
   const w = await reviewingWorld(t), { lead } = w;
-  await add(w, "low", "b.js:2 slow"); // F-T1-2, a key of the round
-  await add(w, "low", "c.js:3 slow"); // F-T1-3, from before the round
+  await add(w, "low", "b.js:2 slow");
+  await add(w, "low", "c.js:3 slow");
   await triage(w, "F-T1-1");
   await triage(w, "F-T1-2");
   await lead("round", { task: "T1" });
-  await lead("finding_close", { task: "T1", key: "F-T1-1" }); // so the state tool's own rule (a medium finding is open) does not act
+  await lead("finding_close", { task: "T1", key: "F-T1-1" });
   await triage(w, "F-T1-3");
   for (const key of ["F-T1-2", "F-T1-3"]) {
     assert.equal((await lead("finding_triage", { task: "T1", key, decision: "dismiss", reason: "polish" })).denied, `sage: ${key} is a fix key of a round: only the chief dismisses it`);
@@ -575,17 +533,14 @@ test("T956, T970: the gap rule holds a Codex lead at its next step, also its rou
   const calls = [["run_add", { task: "T1", role: "code-reviewer" }], ["run_done", { run, status: "done", tokens: 1 }], ["task_set", { task: "T1", fields: { state: "verifying" } }], ["round", { task: "T1" }]];
   for (const [name, args] of calls) {
     assert.equal((await lead(name, args)).denied, GAP, `the gate: ${name}`);
-    // A proof of the lead for this call, as if the gate had let it through: the server holds the rule itself.
     w.writeProof(name, `gap_${name}`, { role: "lead", task: "T1", run: "R1", project: w.project });
     const error = String((await w.call(name, args, { gate: false, callId: `gap_${name}` })).error);
     assert.ok(error.startsWith(GAP), `the server: ${name}: ${error}`);
   }
-  // A run of another role goes on; a row below the finding's severity does not count.
   assert.match(await lead("run_add", { task: "T1", role: "qa" }), /^R\d+ running · qa on T1/);
   await lead("finding_add", { task: "T1", source: "code-reviewer", severity: "low", summary: "a.js:1 a bad value", run, class: "other" });
   assert.equal((await lead(...calls[0])).denied, GAP, "a low row does not hold a medium finding");
   assert.match(await lead("finding_add", { task: "T1", source: "code-reviewer", severity: "medium", summary: "a.js:1 a bad value", run, class: "state-edge" }), /^F-T1-2 open · medium · T1$/);
-  // K1 has its row, and the low K2 needs none: the lead goes on.
   assert.equal(await lead("run_done", { run, status: "done", tokens: 1 }), `${run} done`);
   assert.match(await lead(...calls[0]), /^R\d+ running · code-reviewer on T1/);
 });
@@ -610,7 +565,6 @@ test("the state server lists one tool for each state-tool command, and marks onl
     "init", "link", "log", "merge_check", "message", "milestone_propose", "milestone_set", "move", "offer", "pages", "release_add", "report_compare", "round", "run_add", "run_done", "standing", "standing_add", "status", "task_add", "task_adopt", "task_set", "unclaim", "verdict", "worktrees"]);
   assert.deepEqual(tools.filter((tool) => tool.annotations.readOnlyHint).map((tool) => tool.name).sort(), ["merge_check", "report_compare", "standing", "status"]);
   assert.ok(tools.every((tool) => tool.inputSchema.required.includes("project") && tool.inputSchema.additionalProperties === false));
-  // T500: a task_add needs its priority, from the scale.
   const add = tools.find((tool) => tool.name === "task_add").inputSchema;
   assert.deepEqual([add.required.sort(), add.properties.priority.enum], [["priority", "project", "size", "title"], ["P0", "P1", "P2", "P3"]]);
 });
@@ -785,7 +739,6 @@ test("T594: the link tool starts a shared logbook or joins one, with the CLI's r
   const shared = realpathSync(mkdtempSync(join(tmpdir(), "sage-state-mcp-shared-")));
   t.after(() => rmSync(shared, { recursive: true, force: true }));
   const s = await connect(t, { SAGE_SHARED_HOME: shared });
-  // The same refusal as the CLI's, with no tool-side rule in front of it.
   const form = /^(?:.*: )?link takes exactly one of --to <folder> or --separate; --separate takes no value\. Nothing changed\.$/;
   assert.match((await s.call("link", {})).error, form);
   assert.match((await s.call("link", { to: "a-123456", separate: true })).error, form);
@@ -806,7 +759,6 @@ test("T594 with T552: a lead's rules read the shared logbook, and only the chief
   await s.call("task_add", { title: "Shared", size: "small", priority: "P2" });
   await s.call("task_set", { task: "T1", fields: { state: "briefed", branch: "sage/t1-a" } });
   await s.call("run_add", { task: "T1", role: "lead" });
-  // The lead's rule finds T1 and its lead run only in the shared logbook: the provider root has none.
   assert.match(await s.call("run_add", { task: "T1", role: "qa" }, { agent: LEAD }), /^R2 running/);
   assert.match(readFileSync(join(folder, "runs.tsv"), "utf8"), /\nR2\tT1\tqa\t/);
   const bindings = readFileSync(join(shared, "bindings.tsv"), "utf8");
@@ -825,11 +777,6 @@ test("the Codex chief's list of tools names the link tool, with the owner's answ
   assert.match(PROJECT_SETUP, /`link`\. Call `link` only after the owner's answer in the chat\./);
 });
 
-/**
- * A project with a Claude logbook and a Codex logbook, both roots and the shared root in scratch: the Codex state server
- * (s), and the Claude state tool in this process (claude), as the Claude plugin runs it. With claudeRow false, the Claude
- * logbook is not made, and plugins.tsv has no Claude row.
- */
 async function moveWorld(t, { claudeRow = true } = {}) {
   const base = realpathSync(mkdtempSync(join(tmpdir(), "sage-state-mcp-move-")));
   t.after(() => rmSync(base, { recursive: true, force: true }));
@@ -859,7 +806,6 @@ const planOf = (preview) => /plan ([0-9a-f]{8})\n/.exec(preview)[1];
 
 test("T658: the Codex move tool moves a project with a Claude and a Codex logbook: preview, gate, the owner's answer, then the move, with the Claude logbook marked", async (t) => {
   const { s, claude, shared, folder, claudeDir, codexDir } = await moveWorld(t);
-  // A run that runs: the preview refuses and changes nothing.
   claude(["run", "add", "T1", "--role", "pe"]);
   assert.match((await s.call("move", { preview: true })).error, /^sage: refused: 1 run is running in this project\n[\s\S]*The move needs zero running runs\. Nothing changed\.$/);
   claude(["run", "done", "R1", "--status", "blocked"]);
@@ -870,18 +816,15 @@ test("T658: the Codex move tool moves a project with a Claude and a Codex logboo
   const id = /^(G\d+) · move · plan /.exec(gate)[1];
   assert.match(gate, /\n1 · move RECOMMENDED\nMoves the project now, exactly as in the preview\.\n2 · keep\n/);
   assert.match(readFileSync(join(codexDir, "gates.tsv"), "utf8"), new RegExp(`\\n${id}\\t\\tmove · plan ${plan}`), "the Codex logbook holds the move gate");
-  // No move before the owner's answer.
   assert.equal((await s.call("move", { gate: id })).error, `sage: refused: ${id} has no answer yet, so nothing moves. Nothing changed. The owner answers it first.`);
   assert.match(await s.call("gate_answer", { gate: id, option: 1 }), new RegExp(`^${id} `));
   const moved = await s.call("move", { gate: id });
   assert.match(moved, /Reconciliation · every count matches the plan/);
-  // The Codex server took the lock and wrote under the Claude root: the marker, the backup and the moved column.
   assert.equal(JSON.parse(readFileSync(join(claudeDir, "moved.json"), "utf8")).folder, folder);
   assert.ok(existsSync(join(claudeDir, "tasks.before-move.tsv")));
   assert.match(readFileSync(join(claudeDir, "tasks.tsv"), "utf8").split("\n")[0], /\tmoved$/);
   assert.ok(existsSync(join(codexDir, "moved.json")));
   assert.match(readFileSync(join(shared, "bindings.tsv"), "utf8"), new RegExp(`\\n${s.project}\\t${folder}\\t`));
-  // Both providers now write the one shared logbook.
   const added = /^(T\d+) /.exec(await s.call("task_add", { title: "after the move", size: "tiny", priority: "P2" }))[1];
   assert.equal(added, "T4", "the new numbers start above both old logbooks: T2 and T3 are the moved tasks");
   assert.equal(claude(["task", added]), "T4 framed · tiny · round 0 · route build · P2 · chief C1", "Claude reads the Codex chief's new task");
@@ -896,12 +839,10 @@ test("T658: the Codex move tool takes only its three forms, and no other text re
   const one = /^(?:.*: )?move takes one of --preview, --plan <plan> \(the 8 hex that the preview printed\) or --gate <G> \(the answered move gate\); --preview takes no value\. Nothing changed\.$/;
   for (const input of [{}, { preview: true, plan: "7c41e09a" }, { plan: "7c41e09a", gate: "G1" }]) assert.match((await s.call("move", input)).error, one, JSON.stringify(input));
   assert.equal(gates(), before, "no refused call opens a gate");
-  // Claude has no plugin row and no logbook here: the gate offers to record Claude as unused, in place of a plain move.
   const preview = await s.call("move", { preview: true });
   assert.match(preview, /What moves {11}Codex\n/);
   const gate = await s.call("move", { plan: planOf(preview) });
   assert.match(gate, /\n1 · move, and record Claude as unused RECOMMENDED\nOnly if you do not use Claude on this project\. Sage writes "Claude: unused" and does not wait for the Claude plugin\. This answer counts for every project of this shared root: a later move or a new project does not wait for the Claude plugin either\.\n2 · keep\n/);
-  // The logbooks change after the gate: the answered gate moves nothing and says what changed, and the old plan opens no new gate.
   const id = /^(G\d+) /.exec(gate)[1];
   await s.call("task_add", { title: "after the preview", size: "tiny", priority: "P2" });
   await s.call("gate_answer", { gate: id, option: 1 });
@@ -914,7 +855,6 @@ test("T658: a move that stopped in Claude refuses every Codex tool of the projec
   const { s, claude, shared, folder, claudeDir } = await moveWorld(t);
   const plan = planOf(claude(["move", "--preview"])), id = /^(G\d+) /.exec(claude(["move", "--plan", plan]))[1];
   claude(["gate", "answer", id, "--option", "1"]);
-  // The Claude session stops after step 3: the old logbooks are marked, and no checkout is linked yet.
   assert.throws(() => claude(["move", "--gate", id], { SAGE_TEST_MOVE_STOP: "3" }), /test stop after step 3/);
   assert.ok(existsSync(join(claudeDir, "moved.json")) && existsSync(join(shared, "moves", `${folder}.json`)));
   const stopped = await s.call("task_add", { title: "while it stopped", size: "tiny", priority: "P2" });
@@ -953,14 +893,12 @@ test("each tool writes the Codex logbook in CODEX_HOME/sage, and returns each re
   assert.match(await call("status"), /^sage · project · \d\d:\d\d UTC\ntasks {3}0\n/);
   assert.match((await call("init", { project: "relative/path" })).error, /^Input validation error: .*project: an absolute path/);
 
-  // A value that starts with -- stays a value: it is not read as an option of the command.
   assert.equal(await call("task_add", { title: "--why=x first", size: "small", priority: "P2" }), "T1 framed · small · route build,code-review,qa · P2");
   assert.match(readFileSync(join(logbook, "tasks.tsv"), "utf8"), /\nT1\t--why=x first\t/);
   assert.equal((await call("task_add", { title: "bad", size: "small", risk: "bogus", priority: "P2" })).error,
     "sage: unknown: bogus. Risks: auth, data, schema, money, secrets, input. Blocks: design, arena, pe, build, code-review, security-review, ux-review, qa, investigate, evidence-review");
   assert.match((await call("task_add", { title: "bad", size: "huge", priority: "P2" })).error, /^Input validation error: .*size/);
   assert.match((await call("task_add", { title: "bad", size: "small", colour: "red", priority: "P2" })).error, /^Input validation error: .*colour/);
-  // T500: the tool needs a priority from the scale, and its refusal says the scale in the state tool's words.
   const scale = "A task needs a priority: P0 the owner's current focus and what blocks it; P1 next: function or safety bugs, work in flight, pre-pilot items; P2 later: polish, hardening lows, follow-ups; P3 parked but kept.";
   for (const input of [{ title: "none", size: "small" }, { title: "bad", size: "small", priority: "P4" }]) {
     const { error } = await call("task_add", input);
@@ -982,8 +920,7 @@ test("each tool writes the Codex logbook in CODEX_HOME/sage, and returns each re
   await call("task_set", { task: "T1", fields: { state: "building" } });
   await call("task_set", { task: "T1", fields: { state: "reviewing" } });
   assert.equal((await call("finding_add", { task: "T9", source: "code-reviewer", severity: "medium", summary: "x" })).error, "sage: no task T9. The latest: T1.");
-  // A review or QA finding needs its run and class (T490): the tool takes both, and returns the refusal without them.
-  for (const role of ["code-reviewer", "qa"]) await call("run_add", { task: "T1", role }); // R2, R3
+  for (const role of ["code-reviewer", "qa"]) await call("run_add", { task: "T1", role });
   for (const run of ["R2", "R3"]) await call("run_done", { run, status: "done", tokens: 1 });
   assert.equal((await call("finding_add", { task: "T1", source: "code-reviewer", severity: "medium", summary: "a.js:1 bad", run: "R2" })).error,
     "sage: code-reviewer is a review or QA role, so finding add needs --run with the run whose report holds the finding and --class with one of state-edge, speed, copy, layout, security, other; it lacks --class. Nothing changed.");
@@ -1032,22 +969,18 @@ test("brief checks a brief's fields, keeps it by task name in the logbook, and t
   const logbook = (await s.call("init")).replace(/^logbook /, "");
   assert.equal((await s.call("brief", { task_name: "sage_implementer_t1", brief: text(["VERIFY"]) })).error,
     "sage: the brief of sage_implementer_t1 has no VERIFY. Every brief has all of GOAL, SCOPE, CONTEXT, DECISIONS, ACCEPTANCE, VERIFY, BUDGET, FORBIDDEN, REPORT, STANDING, each at the start of a line that is not in a list or a code block, with a colon, two spaces or a tab after its name (GOAL: …, GOAL   …), or its name alone on the line. Add them, then run brief again.");
-  // Each form that the message names passes (R1713-2): a colon, two spaces, a tab, and the name alone.
   for (const [form, after] of [["colon", ": "], ["spaces", "  "], ["tab", "\t"]]) {
     const brief = fields.map((f) => `${f}${after}The ${f.toLowerCase()} of T1.`).join("\n");
     assert.equal(await s.call("brief", { task_name: "sage_implementer_t2", brief }), "brief sage_implementer_t2 checked: all 10 fields. Spawn the agent with this task name and this brief.", form);
   }
   assert.equal(await s.call("brief", { task_name: "sage_implementer_t1", brief: text() }), "brief sage_implementer_t1 checked: all 10 fields. Spawn the agent with this task name and this brief.");
-  // The record keeps the time of the check, which the gate reads before the spawn (T950).
   const kept = JSON.parse(readFileSync(join(logbook, "briefs", "sage_implementer_t1.json"), "utf8"));
   assert.deepEqual({ ...kept, checked: typeof kept.checked }, { task: "sage_implementer_t1", text: text(), checked: "number" });
   assert.match((await s.call("brief", { task_name: "../x", brief: text() })).error, /^Input validation error: .*sage_, the role with _ for -/);
   assert.match((await s.call("brief", { task_name: "sage_qa_t1", brief: "x".repeat(32 * 1024 + 1) })).error, /^Input validation error: /);
-  // A second run of a role on the same task: the run id after the task gives it a new name (R1663-2).
   assert.equal(await s.call("brief", { task_name: "sage_code_reviewer_t1_r12", brief: text() }), "brief sage_code_reviewer_t1_r12 checked: all 10 fields. Spawn the agent with this task name and this brief.");
   assert.match((await s.call("brief", { task_name: "sage_code_reviewer_t1_r", brief: text() })).error, /^Input validation error: .*the task, and the run, for example sage_implementer_t12_r40/);
 
-  // The start note of the child reads the same record (the built hook, with the server's CODEX_HOME).
   const meta = join(s.dir, "child.jsonl");
   writeFileSync(meta, JSON.stringify({ type: "session_meta", payload: { id: "c1", agent_path: "/root/sage_implementer_t1" } }) + "\n");
   const start = { session_id: "s1", turn_id: "t1", transcript_path: meta, cwd: s.project, hook_event_name: "SubagentStart", model: "m", permission_mode: "default", agent_id: "c1", agent_type: "default" };
@@ -1091,21 +1024,16 @@ test("the chief's setup text sends only read commands to the state CLI, and name
   assert.doesNotMatch(setup, /no milestone runs in Codex/);
 });
 
-/**
- * T930 (gap G03): the Codex server (s) beside the built Claude state tool on a twin project (claude), each with its own
- * roots in scratch, so that each step can compare the two result lines. claude gives the text, or { error } as the server does.
- */
 async function milestoneWorld(t) {
   const s = await connect(t, { SAGE_SHARED_HOME: join(realpathSync(tmpdir()), `sage-state-mcp-t930-${process.pid}-${Date.now()}`) });
   t.after(() => rmSync(s.env.SAGE_SHARED_HOME, { recursive: true, force: true }));
-  const project = join(s.dir, "claude", "project"); // the same folder name, so that the two logbooks have the same project name
+  const project = join(s.dir, "claude", "project");
   mkdirSync(project, { recursive: true });
   execFileSync("git", ["init", "-q", project]);
   const env = { PATH: process.env.PATH, HOME: join(s.dir, "claude-home"), SAGE_HOME: join(s.dir, "claude-sage"), SAGE_SHARED_HOME: join(s.dir, "claude-shared"),
     GIT_CONFIG_GLOBAL: "/dev/null", GIT_CONFIG_NOSYSTEM: "1", SAGE_TEST_MACHINE_ID: "test-machine" };
   const { sage } = await import(pathToFileURL(join(ROOT, "plugins/sage/skills/sage/sage.mjs")).href);
   const claude = (...args) => { try { return sage([...args, "--project", project], env); } catch (error) { return { error: `sage: ${error.message}` }; } };
-  /** One step on both: the Codex tool's result, which must equal the Claude command's. */
   const both = async (name, input, args) => {
     const codex = await s.call(name, input);
     assert.deepEqual(codex, claude(...args), `${name} ${JSON.stringify(input)}`);
@@ -1151,12 +1079,10 @@ test("T930: config sets the board name, the archive, the cycle counts and max_le
   assert.equal(await both("config", { settings: { name: "", archived: "no" } }, ["config", "name=", "archived=no"]), "name= archived=no start=normal");
   assert.match((await both("config", { settings: { name: "x", max_leads: "4" } }, ["config", "name=x", "max_leads=4"])).error, /^sage: "max_leads" is a key for all projects/);
   assert.match((await both("config", { settings: { "cycles.large": "1" } }, ["config", "cycles.large=1"])).error, /^sage: cycles\.large must be a whole number of 2 or more: 1 is below the floor of 2/);
-  // The counts print with each provider's own models (arena_models and the model keys), so the lines compare without them.
   const counts = (text) => text.replace(/ arena_models=\S+/, "").replace(/ model\..*$/, "");
   const set = await s.call("config", { settings: { "cycles.small": "2", "cycles.large": "3", "cycles.risk": "4", max_leads: "4" } });
   assert.equal(counts(set), counts(s.claude("config", "cycles.small=2", "cycles.large=3", "cycles.risk=4", "max_leads=4")));
   assert.match(set, /^max_agents=10 max_leads=4 cycles\.small=2 cycles\.large=3 cycles\.risk=4 max_rounds=3 /);
-  // The values are kept in the Codex root: the CLI's read (config with no key) prints them.
   const { tool } = await import(pathToFileURL(join(s.dir, "plugin/skills/sage/sage.mjs")).href);
   assert.equal(tool.command(["config", "--project", s.project], s.env).text, set);
   assert.deepEqual(JSON.parse(readFileSync(join(s.env.CODEX_HOME, "sage", "config.json"), "utf8")), { "cycles.small": 2, "cycles.large": 3, "cycles.risk": 4, max_leads: 4 });
@@ -1185,7 +1111,6 @@ test("T952: run_add holds the project's agent cap in Codex as in Claude: the 11t
   }
   const refused = await both("run_add", { task: "T1", role: "code-reviewer" }, ["run", "add", "T1", "--role", "code-reviewer"]);
   assert.equal(refused.error, "sage: the project has 10 running runs, its agent cap (max_agents, or cap.<project>): R1 qa on T2, R2 qa on T3, R3 qa on T1, R4 qa on T2, R5 qa on T3, R6 qa on T1, R7 qa on T2, R8 qa on T3, R9 qa on T1, R10 qa on T2. Wait for one of them to end, or end a run whose agent has stopped (sage run done <R> --status done, blocked, question or failed). Nothing changed.");
-  // The lead's steps name this refusal by the words that it gives (F-T952-1); its wording is the steps' own (F-T952-9).
   const steps = readFileSync(new URL("../plugins/sage-codex/skills/sage/references/lead-steps.md", import.meta.url), "utf8");
   assert.ok(steps.includes(/its (agent cap)/.exec(refused.error)[1]), "the lead's steps name the refusal");
   assert.equal(await both("run_done", { run: "R4", status: "failed" }, ["run", "done", "R4", "--status", "failed"]), "R4 failed");
@@ -1197,7 +1122,7 @@ test("T952: run_add holds the project's agent cap in Codex as in Claude: the 11t
 test("T930: only the chief calls milestone_propose and config, and a lead sets no milestone=, at the gate and at the server", async (t) => {
   const w = await leadWorld(t), { lead } = w;
   const calls = [["milestone_propose", { name: "n", goal: "g", pilot: "T1", tasks: "T2" }], ["config", { settings: { max_leads: "9" } }], ["config", { settings: { name: "Mine" } }],
-    ["release_add", { name: "1.0" }], ["milestone_set", { milestone: "M1", release: "1.0" }]]; // T1003: the release level is the chief's too
+    ["release_add", { name: "1.0" }], ["milestone_set", { milestone: "M1", release: "1.0" }]];
   const LOGBOOK = "sage: role agents report; only the chief records the logbook. Put this in your report";
   const before = readFileSync(join(w.env.CODEX_HOME, "sage", readdirSync(join(w.env.CODEX_HOME, "sage")).find((name) => name.startsWith("project-")), "tasks.tsv"), "utf8");
   for (const [name, args] of calls) {
@@ -1216,10 +1141,6 @@ test("T930: only the chief calls milestone_propose and config, and a lead sets n
   assert.match(await w.call("config", { settings: { max_leads: "9" } }), /^max_agents=10 max_leads=9 /, "the chief sets it");
 });
 
-// R1765 F2: a chief that ended a Codex run with only status done and usage unavailable was refused, and learned the
-// fields only from the refusal; until then the open runs held the merge. The tool description and the chief's dispatch
-// text each give an example call. The chief saves the report with pages (its sandbox cannot write the pages folder, and
-// the hook refuses its apply_patch), then each example, with the run id and the path that pages printed, ends the run.
 test("T506: the chief saves a report with pages, and each run_done example ends a Codex run on the first try", async (t) => {
   const s = await connect(t);
   const runDone = (await s.tools()).find((tool) => tool.name === "run_done");
@@ -1231,7 +1152,6 @@ test("T506: the chief saves a report with pages, and each run_done example ends 
   const examples = { description: runDone.description.match(/for example (\{.*\})\.$/)?.[1], dispatch: chief.match(/`run_done`, no `tokens`, for example `(\{.*?\})`/)?.[1] };
   const usageInterface = JSON.parse(`{${chief.match(/`run_add` `("usage-interface": "[a-z-]+")`/)?.[1]}}`)["usage-interface"];
   assert.equal(usageInterface, "collaboration-tools");
-  // Step 6 sends a run without a token count to the dispatch step (R1798-2).
   assert.match(chief, /`sage run done` with `--tokens` from the agent's usage \(where the host gives no token count, as \*\*Run the route\*\* says\)/);
   assert.match(chief, /\*\*Run the route\.\*\* [^*]*Codex's agent tools give no token count, so at each child's stop the report gate reads it from the child's session record, and `run_done` records it:/);
 
@@ -1240,13 +1160,11 @@ test("T506: the chief saves a report with pages, and each run_done example ends 
     await s.call("task_add", { title: `task ${n}`, size: "small", priority: "P1" });
     await s.call("task_set", { task: `T${n}`, fields: { state: "briefed", branch: `codex/t${n}-a` } });
   }
-  // The call of R1765, without source, evidence and report, is refused, and the run stays running.
   assert.equal(await s.call("run_add", { task: "T1", role: "code-reviewer", "usage-interface": usageInterface }), "R1 running · code-reviewer on T1 · reasoning_effort high");
   assert.equal(await s.call("run_add", { task: "T2", role: "qa" }), "R2 running · qa on T2 · reasoning_effort medium");
   assert.equal((await s.call("run_done", { run: "R1", status: "done", usage: "unavailable" })).error,
     "sage: Unavailable usage needs a running run, its unsupported interface snapshot (or a lead run with a report), a report, source and evidence, without tokens. Nothing changed.");
 
-  // pages saves a report only for a run of its task, only with a text, and builds the path itself.
   const folder = join(s.env.SAGE_WORKTREES, basename(logbook), "pages", "T1");
   const report = "STATUS done\nRESULT PASS\n";
   assert.equal((await s.call("pages", { task: "T1", run: "R1", text: " \n" })).error, "sage: --text is the run's whole report, and it is empty. Nothing changed.");
@@ -1255,7 +1173,6 @@ test("T506: the chief saves a report with pages, and each run_done example ends 
   }
   assert.deepEqual(readdirSync(folder), [], "a refused save writes no file");
 
-  // Each example ends a run: the dispatch text's ends R1, the description's a new run R3. Then no run of T1 still runs.
   for (const [where, example] of Object.entries(examples)) {
     assert.ok(example, `${where} has an example call`);
     const run = where === "dispatch" ? "R1" : "R3";
@@ -1264,7 +1181,6 @@ test("T506: the chief saves a report with pages, and each run_done example ends 
     const path = saved.match(/^page (\/.+) · sha256 [0-9a-f]{64}$/)?.[1];
     assert.equal(path, join(folder, `${run}-report.md`), saved);
     assert.equal(readFileSync(path, "utf8"), `${report}${run}\n`);
-    // An exact retry gives the same page; another text never replaces a saved report.
     assert.equal(await s.call("pages", { task: "T1", run, text: `${report}${run}\n` }), saved);
     assert.equal((await s.call("pages", { task: "T1", run, text: "STATUS blocked\n" })).error, `sage: ${path} already holds another report of ${run}, and a report is saved once. Nothing changed.`);
     const call = JSON.parse(example);
@@ -1294,7 +1210,6 @@ test("T83 sample investigation and independent evidence check retain real output
     const file = join(s.dir, `${run}-sample-transcript.jsonl`);
     writeFileSync(file, JSON.stringify({ type: "session_meta", payload: { id: `sample-${run}`, agent_path: `/root/sage_${role.replaceAll("-", "_")}_t1_${run.toLowerCase()}` } }) + "\n");
     briefHook({ hook_event_name: "SubagentStart", session_id: "sample-root", transcript_path: file, cwd: s.project }, s.env);
-    // Two separate read-only processes: observation, then an independent assertion of the sample's value.
     const code = role === "investigate"
       ? 'process.stdout.write(require("node:fs").readFileSync(process.argv[1], "utf8"))'
       : 'require("node:assert/strict").equal(require("node:fs").readFileSync(process.argv[1], "utf8"), "answer=42\\n"); console.log("PASS answer=42")';
@@ -1307,7 +1222,6 @@ test("T83 sample investigation and independent evidence check retain real output
     assert.equal(typeof page, "string", JSON.stringify(page));
     const path = join(s.env.SAGE_WORKTREES, basename(book), "pages", "T1", `${run}-report.md`);
     assert.equal(readFileSync(path, "utf8"), report);
-    // One token is a sample fixture value, not measured agent usage.
     assert.equal(await s.call("run_done", { run, status: "done", report: path, tokens: 1 }), `${run} done`);
     assert.equal(ledger(), before, "retention and manual records create no verdict");
     reviewRun = run;
@@ -1337,7 +1251,6 @@ test("T586 SYNTHETIC: candidates, a judge and the landing play through the Codex
   assert.equal(typeof pages, "string");
   assert.equal(await s.call("log", { task: "T1", decision: "SAMPLE rubric: smallest change", why: "arena rubric" }), "logged");
 
-  // The chief's hook decisions, by thread: the root thread and a child under its sage task name.
   const hookEvent = (toolName, input, transcript, cwd = s.project) => ({ hook_event_name: "PreToolUse", session_id: "019a0000-0000-7000-8000-0000000000aa", turn_id: "t1",
     transcript_path: transcript, cwd, model: "m", permission_mode: "default", tool_name: toolName, tool_use_id: `hook_${toolName}`, tool_input: input,
     ...(transcript ? { agent_id: "child" } : {}) });
@@ -1345,19 +1258,16 @@ test("T586 SYNTHETIC: candidates, a judge and the landing play through the Codex
   const USAGE = { usage: "unavailable", "usage-source": "codex collaboration-tools", "usage-evidence": "SAMPLE: wait_agent gives no token count" };
   const report = (run, branch, sha) => `STATUS done\nRESULT SYNTHETIC SAMPLE ${run}\nEVIDENCE SYNTHETIC SAMPLE ${run}: fixture commit\nFINDINGS none\nQUESTIONS none\nNOT VERIFIED actual role dispatch, installed hooks\nBRANCH ${branch} head ${sha}\n`;
 
-  // One agent's life as the chief plays it: run_add, the spawn, the start hook, its commit, the stop hook, pages, run_done.
   const play = async (role, branch, candidate, work) => {
     const added = await s.call("run_add", { task: "T1", role, branch, "usage-interface": "collaboration-tools", ...(candidate ? { candidate } : {}) });
     const run = /^R\d+/.exec(added)[0], name = `sage_${role.replaceAll("-", "_")}_t1_${run.toLowerCase()}`;
     assert.match(await s.call("brief", { task_name: name, brief: BRIEF }), /checked: all 10 fields/, "the chief checks the brief before the spawn (T950)");
     assert.equal(await gate(hookEvent("collaborationspawn_agent", { task_name: name, fork_turns: "none", message: "SAMPLE" }, null), sageOn), undefined, "the chief spawns it");
-    // The logbook records this run on its own branch, which differs from the task's.
     const row = tool.logbookView(s.project, s.env).row(run);
     assert.deepEqual([row.branch, row.candidate], [branch, String(candidate ?? "")]);
     const file = join(s.dir, `${run}-synthetic-transcript.jsonl`);
     writeFileSync(file, JSON.stringify({ type: "session_meta", payload: { id: `sample-${run}`, agent_path: `/root/${name}`, source: { subagent: { thread_spawn: {} } } } }) + "\n");
     briefHook({ hook_event_name: "SubagentStart", session_id: "sample-root", transcript_path: file, cwd: s.project }, s.env);
-    // The agent may edit, starts no agent and writes no logbook.
     const edit = await gate(hookEvent("apply_patch", { command: "*** Begin Patch\n*** Add File: sample.txt\n+SAMPLE\n*** End Patch" }, file), sageOn);
     assert.equal(edit, undefined, `${role} writes its own branch`);
     assert.match((await gate(hookEvent("collaborationspawn_agent", { task_name: "sage_qa_t1_r9", message: "SAMPLE" }, file), sageOn)).hookSpecificOutput.permissionDecisionReason, /role agents start no agents/);
@@ -1373,7 +1283,6 @@ test("T586 SYNTHETIC: candidates, a judge and the landing play through the Codex
   };
   const onBranch = (name, from, message) => () => { git("checkout", "-q", "-b", name, from); return commit(message); };
 
-  // A run with no candidate number has no place while the step is open.
   assert.match((await s.call("run_add", { task: "T1", role: "implementer", branch: "sage/t1-extra" })).error, /arena step is open/);
   const one = await play("implementer", "sage/t1-c1", 1, onBranch("sage/t1-c1", base, "SAMPLE candidate 1"));
   const two = await play("implementer", "sage/t1-c2", 2, onBranch("sage/t1-c2", base, "SAMPLE candidate 2"));
@@ -1381,20 +1290,16 @@ test("T586 SYNTHETIC: candidates, a judge and the landing play through the Codex
   writeFileSync(join(pages, `${one.run}-artifact.diff`), "SAMPLE DATA\n");
   assert.match(await s.call("pages", { task: "T1", record: join(pages, `${one.run}-artifact.diff`) }), /sha256 [0-9a-f]{64}$/);
 
-  // Before a judge ends done, nothing lands, also with a checks verdict that a chief records on a candidate's head by mistake.
   await s.call("verdict", { task: "T1", kind: "checks-pass", sha: one.sha, pr: 7 });
   assert.match((await s.call("merge_check", { sha: one.sha, pr: 7, head: "sage/t1-c1" })).error, /a candidate's branch never merges/);
   assert.match((await s.call("merge_check", { sha: one.sha, pr: 7, head: "sage/t1-other" })).error, /arena step is open[\s\S]*Finish a judge/);
 
-  // The judge: the chief names its branch, and it refuses a candidate's branch. The judge grafts from the base's head.
   assert.match((await s.call("run_add", { task: "T1", role: "arena-judge", branch: "sage/t1-c1" })).error, /never shares a branch with a candidate/);
   assert.match(await s.call("task_set", { task: "T1", fields: { branch: "sage/t1-judge" } }), /sage\/t1-judge/);
   const judge = await play("arena-judge", "sage/t1-judge", undefined, onBranch("sage/t1-judge", one.sha, "SAMPLE graft from candidate 2"));
   assert.equal(git("merge-base", "--is-ancestor", one.sha, judge.sha), "", "the judge's branch starts at the base's head");
   assert.equal(git("rev-parse", "sage/t1-c1"), one.sha, "a candidate's branch stays as it is");
 
-  // The chief opens the pull request from the judge's branch (a fixture number here) and moves the task one state at a
-  // time. The reviews read the judge's branch, and it lands. A candidate's head never does.
   const pr = 7;
   for (const fields of [{ state: "briefed" }, { state: "building" }, { state: "reviewing", pr: String(pr) }]) assert.match(await s.call("task_set", { task: "T1", fields }), /^T1 /);
   for (const [kind, role] of [["review-clean", "code-reviewer"], ["qa-pass", "qa"]]) {
@@ -1431,7 +1336,6 @@ test("T85 synthetic designer prototype, separate PE report and chief artifact re
   }
   const prototype = join(folder, "sample-prototype.html");
   const html = '<!doctype html><title>SAMPLE DATA: design fixture</title><h1>SAMPLE DATA</h1><details><summary>Show sample result</summary><p>Sample success</p></details>\n';
-  // This fixture writes sample artifacts itself. It does not dispatch a designer or verify a browser screenshot.
   writeFileSync(prototype, html);
   const { briefHook } = await import(pathToFileURL(join(s.dir, "plugin/hooks/brief-hook.mjs")));
   const { reportGate } = await import(pathToFileURL(join(s.dir, "plugin/hooks/report-gate.mjs")));
@@ -1455,7 +1359,6 @@ test("T85 synthetic designer prototype, separate PE report and chief artifact re
       assert.match(await s.call("pages", { task: "T1", record: prototype }), /^page .*sample-prototype\.html · sha256 [0-9a-f]{64}$/);
       assert.equal(readFileSync(prototype, "utf8"), html, "recording preserves the artifact");
     }
-    // One token is a sample fixture value, not measured agent usage.
     assert.equal(await s.call("run_done", { run, status: "done", report: join(folder, `${run}-report.md`), tokens: 1 }), `${run} done`);
     assert.match((await s.call("verdict", { task: "T1", kind: "review-clean", sha: SHA, run })).error, /backs no review-clean verdict/);
     assert.equal(ledger(), before, "design reports grant no review verdict or design approval");
@@ -1463,7 +1366,6 @@ test("T85 synthetic designer prototype, separate PE report and chief artifact re
   }
   assert.match(await s.call("gate_add", { task: "T1", question: "SAMPLE: approve this design?", options: "approve|change", recommend: "approve" }), /^G1 open/);
   assert.match((await s.call("merge_check", { sha: SHA, pr: 1, head: branch })).error, /no verdicts/);
-  // Chief procedure: only a simulated owner answer in this fixture permits its next build step.
   assert.match(await s.call("gate_answer", { gate: "G1", option: "1" }), /G1/);
   assert.match(await s.call("run_add", { task: "T1", role: "implementer", branch }), /^R3 running/);
   assert.equal(await s.call("run_done", { run: "R3", status: "blocked" }), "R3 blocked");

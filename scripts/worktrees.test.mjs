@@ -1,7 +1,4 @@
-// T927: sage worktrees lists the worktrees of the project's repository with the task of each, and worktrees prune --yes
-// removes only the clean ones of a merged or abandoned task, or of a branch in origin/main. Every repository, logbook and
-// home folder here is a scratch folder: SAGE_HOME and HOME never leave it.
-import "./test-env.mjs"; // first: no variable of the developer's shell changes a result
+import "./test-env.mjs";
 import assert from "node:assert/strict";
 import { execFileSync, spawnSync } from "node:child_process";
 import { existsSync, lstatSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
@@ -16,7 +13,6 @@ const SPY = fileURLToPath(new URL("kill-spy.mjs", import.meta.url));
 const gitEnv = { ...process.env, GIT_AUTHOR_NAME: "t", GIT_AUTHOR_EMAIL: "t@example.com", GIT_COMMITTER_NAME: "t", GIT_COMMITTER_EMAIL: "t@example.com" };
 const git = (cwd, ...args) => execFileSync("git", ["-C", cwd, ...args], { encoding: "utf8", env: gitEnv, stdio: ["ignore", "pipe", "pipe"] }).trim();
 
-/** A scratch project with a bare origin, a logbook in a scratch SAGE_HOME, and the tool's commands on it. */
 function world(t) {
   const base = realpathSync(mkdtempSync(join(tmpdir(), "sage-worktrees-")));
   t.after(() => rmSync(base, { recursive: true, force: true }));
@@ -43,13 +39,11 @@ function world(t) {
     git(cwd, "commit", "-q", "-m", file);
     return git(cwd, "rev-parse", "HEAD");
   };
-  /** A worktree under <base>/wt, on a new branch from start, or detached at start. */
   const add = (name, branch, start = "main") => {
     const path = join(base, "wt", name);
     git(project, "worktree", "add", "-q", ...(branch ? ["-b", branch] : ["--detach"]), path, start);
     return path;
   };
-  /** Sets one cell of a task's row, as a later state of the task would (a merge marks a task merged). */
   const cell = (id, column, value) => {
     const file = join(ok(["logbook"]).replace("<base>", base), "tasks.tsv");
     const [head, ...lines] = readFileSync(file, "utf8").split("\n"), at = head.split("\t").indexOf(column);
@@ -71,20 +65,16 @@ test("T927: worktrees lists each worktree with its branch, task, state and reaso
     wt[id] = w.add(id.toLowerCase(), branch);
     w.ok(["task", id, "set", "state=briefed", `branch=${branch}`]);
   }
-  // T5 names its branch only in a run, so the run's branch matches it.
   wt.T5 = w.add("t5", "claude/t5-run");
   w.ok(["task", "T5", "set", "state=briefed"]);
   w.ok(["task", "T5", "set", "state=building"]);
   w.ok(["run", "add", "T5", "--role", "implementer", "--branch", "claude/t5-run"]);
-  // T1: squash-merged; its remote branch is gone, and only the ledger's verdict on its head covers its commit.
   const one = w.commit(wt.T1, "one.txt");
   git(wt.T1, "push", "-q", "origin", "claude/t1-merged");
   git(project, "push", "-q", "origin", "--delete", "claude/t1-merged");
   w.ok(["verdict", "T1", "--sha", one, "--kind", "checks-pass", "--pr", "1"]);
-  // T2: a commit after its reviewed head was never pushed.
   w.ok(["verdict", "T2", "--sha", w.commit(wt.T2, "two.txt"), "--kind", "checks-pass", "--pr", "2"]);
   w.commit(wt.T2, "late.txt");
-  // T3: abandoned; a remote-tracking ref holds its commit.
   w.commit(wt.T3, "three.txt");
   git(wt.T3, "push", "-q", "origin", "claude/t3-abandoned");
   w.ok(["task", "T4", "set", "state=building"]);
@@ -96,14 +86,14 @@ test("T927: worktrees lists each worktree with its branch, task, state and reaso
   for (const id of ["T3", "T5"]) w.cell(id, "state", "abandoned");
   const unknown = w.add("unknown", "feature/x");
   w.commit(unknown, "x.txt");
-  w.add("old", "old/done", first); // behind origin/main, with no commit of its own: a run may have just started on it (T937)
+  w.add("old", "old/done", first);
   w.add("detached", null);
 
   const main = git(project, "rev-parse", "origin/main");
   const head = `origin/main is ${main.slice(0, 7)} (${git(project, "log", "-1", "--format=%cs", main)}), the local copy: this command does not fetch.`;
   const rows = (text) => text.split("\n").slice(1, -1).sort();
   const listing = w.ok(["worktrees"], wt.T9);
-  t.diagnostic(`sage worktrees\n${listing}`); // the listing, for a reader of the test's output
+  t.diagnostic(`sage worktrees\n${listing}`);
   assert.equal(listing.split("\n")[0], head);
   assert.deepEqual(rows(listing), [
     "<base>/project · main · - · - · unknown · primary checkout",
@@ -124,7 +114,6 @@ test("T927: worktrees lists each worktree with its branch, task, state and reaso
   assert.equal(listing.split("\n").at(-1), "14 worktrees: 7 merged, 0 concluded, 2 abandoned, 0 branch merged, 1 open, 4 unknown. 6 can go when clean, and 1 entries have no folder. To remove them: sage worktrees prune --yes. It removes each clean one, prints each path that it removes or keeps, and deletes no branch.");
   assert.equal(w.ok(["worktrees"], wt.T9), listing, "the listing changes nothing");
 
-  // The prune needs its flag, and takes no other words.
   assert.match(w.no(["worktrees", "prune"], wt.T9), /worktrees prune removes worktrees, so it needs --yes: run sage worktrees first/);
   assert.match(w.no(["worktrees", "--yes"], wt.T9), /^sage: worktrees takes no --yes\./);
   assert.match(w.no(["worktrees", "all"], wt.T9), /^sage: worktrees takes no words, or prune --yes/);
@@ -155,7 +144,6 @@ test("T927: worktrees lists each worktree with its branch, task, state and reaso
   assert.equal(readFileSync(join(wt.T6, "README.md"), "utf8"), "changed");
   assert.equal(git(project, "worktree", "list", "--porcelain").split("\n").filter((l) => l.startsWith("worktree ")).length, 10);
   for (const branch of [...Object.values(branches), "claude/t5-run", "old/done", "feature/x"]) assert.equal(git(project, "rev-parse", "--verify", "--quiet", `refs/heads/${branch}`).length, 40, `${branch} stays`);
-  // A second prune from the primary checkout finds nothing more that may go, except the worktree that the first one ran in.
   const again = w.ok(["worktrees", "prune", "--yes"]);
   assert.deepEqual(again.split("\n").filter((l) => l.startsWith("removed")), ["removed <base>/wt/t9 · merged"]);
 });
@@ -220,17 +208,15 @@ test("T937: the prune removes a clean worktree of a concluded task and of a bran
   }
   w.cell("T1", "state", "concluded");
   for (const id of ["T2", "T3"]) w.cell(id, "state", "merged");
-  // T1 also has an ignored folder that a build makes again: it does not keep the worktree.
   mkdirSync(join(wt.T1, "node_modules", "pkg"), { recursive: true });
   writeFileSync(join(wt.T1, "node_modules", "pkg", "index.js"), "built");
   writeFileSync(join(wt.T2, ".env"), "TOKEN=local");
   for (const name of [".env", "a.log", "b.log", "c.log"]) writeFileSync(join(wt.T3, name), name);
-  // A branch with its own commit, merged into main with a merge commit.
   const merged = w.add("merged", "feature/merged");
   w.commit(merged, "feature.txt");
   git(project, "merge", "-q", "--no-ff", "-m", "merge feature", "feature/merged");
   git(project, "push", "-q", "-u", "origin", "main");
-  const fresh = w.add("fresh", "feature/fresh", "origin/main"); // a run that just started at the tip, before its first edit
+  const fresh = w.add("fresh", "feature/fresh", "origin/main");
   assert.equal(git(fresh, "rev-parse", "HEAD"), git(project, "rev-parse", "origin/main"));
 
   const listing = w.ok(["worktrees"]).split("\n");
@@ -286,7 +272,6 @@ test("T937: a whole ignored folder keeps the worktree, by any pattern; only node
   const shared = join(base, "shared-modules");
   put(join(shared, "pkg", "index.js"), "shared");
   symlinkSync(shared, join(wt.T5, "node_modules"));
-  // A regular file with a rebuilt name is no folder that a build makes again: it keeps the worktree (F-T937-6).
   put(join(wt.T6, "lib", "dist"), "my notes");
   put(join(wt.T6, "sub", "node_modules"), "my notes");
 
@@ -312,7 +297,6 @@ test("T937: a whole ignored folder keeps the worktree, by any pattern; only node
 
 test("T937: the listing and the prune read one line of git for each branch, so a main line longer than git's output buffer works (F-T937-7)", (t) => {
   const w = world(t), { base, project } = w;
-  // 300 commits on main through one git fast-import: their ids alone are about 12 KiB, three times the runner's buffer.
   const stream = Array.from({ length: 300 }, (_, k) => `commit refs/heads/main\ncommitter t <t@example.com> ${1700000000 + k} +0000\ndata ${String(k).length}\n${k}\n`).join("");
   execFileSync("git", ["-C", project, "fast-import", "--quiet"], { input: stream, env: gitEnv });
   const side = w.add("side", "feature/side");
@@ -322,8 +306,7 @@ test("T937: the listing and the prune read one line of git for each branch, so a
   git(project, "merge", "-q", "--no-ff", "-m", "merge feature", "feature/merged");
   git(project, "update-ref", "refs/remotes/origin/main", "main");
   w.add("tip", "feature/tip", "origin/main");
-  w.add("back", "feature/back", "origin/main~150"); // on the main line, 150 commits back: a run may have just started there
-  // The state tool's runner, with a 4 KiB buffer in place of Node's 1 MiB: the reads must stay small for any history.
+  w.add("back", "feature/back", "origin/main~150");
   const runner = (args) => execFileSync("git", args, { encoding: "utf8", maxBuffer: 4096, env: gitEnv, stdio: ["ignore", "pipe", "pipe"] });
   const call = (prune, run = runner) => worktrees({ git: run, root: project, tasks: [], runs: [], ledger: [], here: [project], prune }).replaceAll(base, "<base>").split("\n").slice(1);
   const fresh = "unknown: no task of the logbook names its branch, and the branch adds no commit to origin/main, so a run may have just started on it";
@@ -335,7 +318,6 @@ test("T937: the listing and the prune read one line of git for each branch, so a
     "<base>/wt/side · feature/side · - · - · unknown",
     "<base>/wt/tip · feature/tip · - · - · unknown",
   ]);
-  // A check that git cannot answer keeps the worktree and names git's reason.
   for (const step of [(args) => args.includes("--count") && !args.includes("--not"), (args) => args.some((a) => /~\d+\^\{commit\}$/.test(a))]) {
     const failing = (args) => { if (step(args)) throw Object.assign(new Error("git failed"), { stderr: "fatal: a test failure\n" }); return runner(args); };
     assert.deepEqual(call(true, failing).sort(), [

@@ -1,7 +1,3 @@
-// Standalone browser check of the T305 board: the picker's keyboard and states, the filter bar, the state that a live
-// update keeps, the theme and the live pill, at desktop and 375 px, in light and dark. SAMPLE DATA from board-sample.mjs.
-// It runs in `npm run test:browser`, not in `npm test`, with Playwright's bundled Chromium, or the headless shell at
-// BOARD_BROWSER_PATH; never an installed Chrome.
 import "./test-env.mjs";
 import assert from "node:assert/strict";
 import { chmodSync, mkdtempSync, readdirSync, realpathSync, rmSync } from "node:fs";
@@ -18,14 +14,12 @@ import { expectTheme } from "./fixtures/contrast.mjs";
 const require = createRequire(import.meta.url);
 const { chromium } = require("playwright");
 const NOW = "2026-10-18T12:00:00Z";
-// The real path: the sample script refuses a path through a link, such as /var on macOS.
 const dir = mkdtempSync(join(realpathSync(tmpdir()), "sage-board-picker-"));
 const sources = writeSampleLogbooks(join(dir, "sample"), { now: NOW });
 let browser;
 before(async () => { browser = await chromium.launch({ headless: true, ...(process.env.BOARD_BROWSER_PATH ? { executablePath: process.env.BOARD_BROWSER_PATH } : {}) }); });
 after(async () => { try { await browser?.close(); } finally { rmSync(dir, { recursive: true, force: true }); } });
 
-/** The sample board's model; change(read) may edit the read logbooks first, as a later write of an agent would. */
 function sample(change = () => {}) {
   const read = readBoardSources(sources, { now: Date.parse(NOW) });
   change(read);
@@ -33,7 +27,6 @@ function sample(change = () => {}) {
 }
 const rename = (id, title) => read => { for (const project of read.flatMap(source => source.projects)) for (const task of project.tables.tasks ?? []) if (task.id === id && project.key.startsWith("claude/sage-")) task.title = title; };
 
-/** A page of the board. The theme is dark; theme "light" flips the switch, so the page saves light as a person does. */
 async function open(t, { width = 1440, height = 1000, theme = "dark", system = "light", live = false, html = null, init = null } = {}) {
   const context = await browser.newContext({ viewport: { width, height }, colorScheme: system, reducedMotion: "reduce", ...(width < 700 ? { isMobile: true, hasTouch: true } : {}) });
   t.after(() => context.close());
@@ -44,14 +37,12 @@ async function open(t, { width = 1440, height = 1000, theme = "dark", system = "
   t.after(() => assert.deepEqual(errors, [], "no script error"));
   if (init) await page.addInitScript(init);
   if (live) await page.addInitScript(() => { window.EventSource = class extends EventTarget { constructor() { super(); window.sampleBoardStream = this; } close() {} }; });
-  // A made-up origin, so that the page has its own storage; only the page itself is served, every other request fails.
   page.sampleHtml = html ?? renderBoardHtml(sample(), { snapshot: false, live });
   await context.route("http://board.test/", route => route.fulfill({ status: 200, contentType: "text/html; charset=utf-8", body: page.sampleHtml }));
   await page.goto("http://board.test/");
   if (theme === "light") await page.locator("label[for=flip]").click();
   return page;
 }
-/** Loads the page again with this HTML at the same origin (the hash stays only when it is in the address). */
 async function reload(page, html, address = "http://board.test/") { page.sampleHtml = html; await page.goto("about:blank"); await page.goto(address); }
 const shown = page => page.locator(".card[data-key]:not([hidden])").evaluateAll(cards => cards.map(card => `${card.querySelector(".id").textContent} ${card.querySelector(".proj").textContent}`));
 const focused = page => page.evaluate(() => document.activeElement?.id ?? document.activeElement?.tagName);
@@ -67,7 +58,6 @@ test("T305: the picker opens with /, moves with the arrows, chooses with Enter, 
   assert.equal(await trigger.getAttribute("aria-expanded"), "true");
   assert.equal(await focused(page), "pick-q");
   assert.equal(await input.getAttribute("role"), "combobox");
-  // The list: All projects, then needs you (most first), active, idle; archived folded behind one button.
   const visibleOptions = () => page.locator("#pick-list [role=option]:not([hidden])").evaluateAll(options => options.map(option => option.dataset.name));
   assert.deepEqual(await visibleOptions(), ["All projects", "sage", "Council Record (sample)", "order-chaser", "review-queue", "trip-planner", "trip-planner", "home-lab", "recipes"]);
   assert.deepEqual(await page.locator("#pick-list .grp:not([hidden]) > span:first-child").allTextContents(), ["Needs you", "Active · last 14 days", "Idle"]);
@@ -85,13 +75,11 @@ test("T305: the picker opens with /, moves with the arrows, chooses with Enter, 
   assert.deepEqual(await shown(page), ["T3 Council Record (sample)", "T41 Council Record (sample)"], "the Claude and the Codex task of one repository");
   assert.match(await page.evaluate(() => location.hash), /^#p=product-demos-[0-9a-f]{6}$/);
   assert.match(await page.evaluate(() => localStorage.getItem("board-project")), /^product-demos-[0-9a-f]{6}$/);
-  // Esc closes and gives focus back; the choice stays.
   await page.keyboard.press("/");
   await page.keyboard.press("Escape");
   assert.equal(await trigger.getAttribute("aria-expanded"), "false");
   assert.equal(await focused(page), "pick-trig");
   assert.equal(await page.locator("#pick-name").textContent(), "Council Record (sample)");
-  // A chip for each other project that needs you takes you there in one click.
   await page.locator('#pick-chips [data-pick^="sage-"]').click();
   assert.equal(await page.locator("#pick-name").textContent(), "sage");
   assert.equal(await page.locator("#pick-all").isVisible(), true);
@@ -116,21 +104,18 @@ test("T305: search matches other names and says why; no match, archived and a re
   await page.getByRole("button", { name: "Clear the search" }).click();
   assert.equal(await page.locator("#pick-q").inputValue(), "");
   assert.equal(await focused(page), "pick-q");
-  // A search finds an archived project; the fold shows it too.
   await page.locator("#pick-q").fill("old-site");
   assert.equal(await option.getAttribute("data-name"), "old-site");
   await page.locator("#pick-q").fill("");
   await page.getByRole("button", { name: "Show 1 archived project" }).click();
   await page.locator('#pick-list [data-name="old-site"]').click();
   assert.deepEqual(await shown(page), ["T2 old-site", "T3 old-site"], "an archived project's tasks show when you choose it");
-  // The choice comes back after a reload: from the hash, and from the browser's storage without one.
   const address = await page.evaluate(() => location.href);
   assert.match(address, /#p=old-site-[0-9a-f]{6}$/);
   await reload(page, renderBoardHtml(sample(), { snapshot: false }), address);
   assert.equal(await page.locator("#pick-name").textContent(), "old-site");
   await reload(page, renderBoardHtml(sample(), { snapshot: false }));
   assert.equal(await page.locator("#pick-name").textContent(), "old-site");
-  // A choice whose logbook is gone: the board shows all projects and says so.
   await page.evaluate(() => localStorage.setItem("board-project", "gone-abcdef"));
   await reload(page, renderBoardHtml(sample(), { snapshot: false }));
   assert.equal(await page.locator("#pick-name").textContent(), "All projects");
@@ -162,7 +147,6 @@ test("T305: Who, Priority and Kind filter the cards; a project with no logbook o
 
 test("T305 R1023-1 and R1023-2: a live update keeps the open details, the page and column scroll, the focus and the open picker", async t => {
   const page = await open(t, { live: true, width: 1200, height: 700 });
-  // A narrow board, so that the columns scroll sideways (a style of the test, not of the page).
   await page.addStyleTag({ content: ".board{grid-auto-flow:column!important;grid-template-columns:none!important;grid-auto-columns:240px!important;overflow-x:auto!important}" });
   await page.locator('details[data-key="fold-backlog"] summary').click();
   await page.locator("[data-scroll=board]").evaluate(board => { board.scrollLeft = 300; });
@@ -173,7 +157,6 @@ test("T305 R1023-1 and R1023-2: a live update keeps the open details, the page a
   assert.ok(before.left > 250 && before.y > 350, JSON.stringify(before));
   const nodeBefore = await page.evaluate(() => { window.sampleOldBoard = document.querySelector("main.board"); return true; });
   assert.ok(nodeBefore);
-  // An agent changes another task, and then the focused task itself.
   await push(page, sample(rename("T301", "Sample: one password per tunnel, changed")));
   assert.equal(await page.evaluate(() => window.sampleOldBoard === document.querySelector("main.board")), false, "the content was replaced");
   assert.equal(await page.locator('.card[data-key$="/T301"] .title').textContent(), "Sample: one password per tunnel, changed");
@@ -184,7 +167,6 @@ test("T305 R1023-1 and R1023-2: a live update keeps the open details, the page a
   await push(page, sample(rename("T302", "Sample: the focused task, changed")));
   assert.equal(await page.evaluate(() => document.activeElement?.querySelector(".title")?.textContent), "Sample: the focused task, changed");
 
-  // The open picker keeps its search text and its active row, and its input keeps the focus.
   await page.locator("#pick-trig").click();
   await page.keyboard.type("trip");
   await page.keyboard.press("ArrowDown");
@@ -219,7 +201,6 @@ test("T305 R1023-4, T349: the board is dark on a light and a dark system until y
     assert.equal(await page.locator("html").getAttribute("data-theme"), "light");
     assert.equal(await page.evaluate(() => localStorage.getItem("board-theme")), "light");
     assert.equal(await page.locator("label[for=flip]").innerText(), "Dark theme");
-    // A new load: the head script sets the saved theme before the body exists, so no frame shows the dark default.
     await page.addInitScript(() => {
       window.sampleThemeAtBody = "body not seen";
       new MutationObserver((_, observer) => { if (document.body) { window.sampleThemeAtBody = document.documentElement.dataset.theme ?? "none"; observer.disconnect(); } }).observe(document, { childList: true, subtree: true });
@@ -317,7 +298,6 @@ test("T305: at 375 px the list is a bottom sheet and the chips wrap; at 1024 px 
   }
 });
 
-// R1077: the repairs of round 2 (the picker and the board), as a person sees them. SAMPLE DATA.
 async function choose(page, query) {
   await page.locator("#pick-trig").click();
   await page.locator("#pick-q").fill(query);
@@ -354,7 +334,6 @@ test("R1075-3, R1071-5, R1069-1: the project-gone banner is a status that clears
   assert.equal(await page.locator("#pick-name").textContent(), "old-site");
   assert.equal(await page.locator("#pick-arch").isVisible(), true);
   assert.equal(await page.locator("#pick-arch").textContent(), "Archived");
-  // A click on an archived card opens the task; it is not the Show archived button.
   await page.evaluate(() => window.addEventListener("click", event => { if (event.target.closest("a.card")) event.preventDefault(); }, true));
   await page.locator(".card[data-archived]:not([hidden])").first().click();
   await page.locator("#pick-trig").click();
@@ -374,10 +353,8 @@ test("R1075-5, R1071-4, R1075-6: the list closes when the focus leaves it; only 
   assert.equal(await say.textContent(), "No project matches “zzz sample”");
   await page.locator("#pick-q").fill("recipes");
   assert.equal(await say.textContent(), "1 project matches");
-  // A click on a row still chooses it: the press keeps the focus in the search field.
   await page.locator("#pick-list [role=option]:not([hidden])").filter({ hasText: "recipes" }).click();
   assert.equal(await page.locator("#pick-name").textContent(), "recipes");
-  // Tab out of the list: it closes.
   await page.locator("#pick-trig").click();
   assert.equal(await page.locator("#pick-trig").getAttribute("aria-expanded"), "true");
   const inside = () => page.evaluate(() => !!document.activeElement.closest(".pickwrap"));
@@ -409,9 +386,6 @@ test("R1080-1: at 375 px every touch target on the board and on each task page t
   const small = [];
   for (const key of [null, ...model.tasks.map(task => task.key)]) {
     await reload(phone, renderBoardHtml(model, { snapshot: false, taskKey: key }));
-    // Each visible control (the theme switch is its label; a closed fold hides its content), scrolled to the middle of the
-    // screen. Its box is 44 by 44 px or more, and elementFromPoint shows that no neighbour covers it: a tap reaches it at the
-    // centre, 21 px out on each axis, and 18 px out on both, which a rounded corner of 8 px does not clip.
     small.push(...await phone.evaluate(page => [...document.querySelectorAll("a[href],button,select,input:not(.vh),label[for],summary,[tabindex]:not([tabindex='-1'])")]
       .filter(control => control.checkVisibility({ visibilityProperty: true })).flatMap(control => {
         control.scrollIntoView({ block: "center", inline: "center" });
@@ -426,7 +400,6 @@ test("R1080-1: at 375 px every touch target on the board and on each task page t
 });
 
 test("R1093-1: at 375 px no tall header stays on screen, and at every width a card that Shift+Tab focuses is not under a part that stays on screen", async t => {
-  // The sticky part: every shown element that stays on screen when the page scrolls, as high as its lowest bottom.
   const stuck = page => page.evaluate(() => Math.max(0, ...[...document.querySelectorAll("body *")].filter(e => ["sticky", "fixed"].includes(getComputedStyle(e).position) && e.getClientRects().length).map(e => e.getBoundingClientRect().bottom)));
   for (const [width, theme] of [[375, "light"], [375, "dark"], [800, "light"], [1440, "dark"]]) {
     const page = await open(t, { width, height: 812, theme });
@@ -435,8 +408,6 @@ test("R1093-1: at 375 px no tall header stays on screen, and at every width a ca
       assert.ok(await page.locator("#pick-chips .chip:not([hidden])").count() >= 4, "4 or more need-you chips");
       assert.ok(await stuck(page) < 120, `${label}: the sticky part is ${await stuck(page)} px high`);
     }
-    // A card below the fold: focus the control after it, scroll the card's top (or all of it) off the top of the screen,
-    // then go back with Shift+Tab. Chromium centres a card that is out of view, and puts one that is partly in view at the top.
     const below = await page.locator(".card[data-key]:visible").evaluateAll(cards => cards.findIndex(card => card.getBoundingClientRect().top > innerHeight));
     assert.ok(below >= 0,`${label}: a card below the first screen`);
     const target = page.locator(".card[data-key]:visible").nth(below);
@@ -458,7 +429,6 @@ test("R1093-1: at 375 px no tall header stays on screen, and at every width a ca
 test("R1098-1: a control in the header that is on screen takes focus without a scroll of the page; / far down brings the search into view", async t => {
   for (const width of [800, 1440]) {
     const page = await open(t, { width, height: 800 });
-    // Scrolled so that the highest of the controls (the theme switch and the picker button) is 2 px below the top of the window.
     const y0 = await page.evaluate(() => Math.round(Math.min(...["label.theme", "#pick-trig"].map(s => document.querySelector(s).getBoundingClientRect().top)) - 2));
     assert.ok(y0 >= 8, `${width} px: the page can scroll ${y0} px with the controls on screen`);
     const after = async (label, act) => {
@@ -474,7 +444,6 @@ test("R1098-1: a control in the header that is on screen takes focus without a s
     await page.keyboard.press("Escape");
     await after("/ then Esc", async () => { await page.keyboard.press("/"); await page.keyboard.press("Escape"); });
     assert.equal(await page.evaluate(() => document.activeElement.id), "pick-trig", `${width} px: Esc gives focus back to the button`);
-    // Far down, the header is off the screen: / focuses the search and brings all of it into view, so the typing shows.
     await page.evaluate(() => { document.activeElement?.blur(); scrollTo(0, 700); });
     await page.keyboard.press("/");
     const [id, top, bottom] = await page.evaluate(() => { const box = document.activeElement.getBoundingClientRect(); return [document.activeElement.id, box.top, box.bottom]; });
@@ -483,15 +452,12 @@ test("R1098-1: a control in the header that is on screen takes focus without a s
 });
 
 test("R1103-1: scrolled, Shift+Tab onto a card whose top is 20 px below the top of the window leaves all of the card in view, with nothing over its top", async t => {
-  // Each card that the page can scroll to 20 px below the top of the window, at each width; a card near the top of the
-  // page (the first of a column) and one further down both count.
   const wrong = [], checked = {};
   for (const width of [800, 1440]) {
     const page = await open(t, { width, height: 800 });
     const cards = page.locator(".card[data-key]:visible");
     for (let i = 0, n = await cards.count(); i < n; i++) {
       const target = cards.nth(i), name = `${width} px card ${i}`;
-      // Focus the control after the card without a scroll, then scroll the page so that the card's top is 20 px down.
       const [y, top] = await target.evaluate(card => {
         const all = [...document.querySelectorAll("a[href],button,select,input:not(.vh),summary,[tabindex]:not([tabindex='-1'])")].filter(e => e.checkVisibility());
         all[all.indexOf(card) + 1].focus({ preventScroll: true });
@@ -502,7 +468,6 @@ test("R1103-1: scrolled, Shift+Tab onto a card whose top is 20 px below the top 
       checked[width] = (checked[width] ?? 0) + 1;
       await page.keyboard.press("Shift+Tab");
       if (!await target.evaluate(card => document.activeElement === card)) { wrong.push(`${name}: Shift+Tab does not focus it`); continue; }
-      // All of the card is in the window, and the element at the centre of its top edge is the card (nothing covers it).
       const seen = await target.evaluate(card => { const box = card.getBoundingClientRect(), e = document.elementFromPoint(box.left + box.width / 2, box.top + 1); return `${box.top >= 0 && box.bottom <= innerHeight ? "in view" : `from ${box.top} to ${box.bottom} px`}, at its top ${card.contains(e) ? "the card" : e?.outerHTML.slice(0, 80)}`; });
       if (seen !== "in view, at its top the card") wrong.push(`${name}: ${seen}`);
     }
@@ -512,7 +477,6 @@ test("R1103-1: scrolled, Shift+Tab onto a card whose top is 20 px below the top 
 });
 
 test("R1103-1: no element stays on screen when the page scrolls, except the phone picker sheet while it is open", async t => {
-  // Each shown element whose position is sticky or fixed, by its classes.
   const stays = page => page.evaluate(() => [...document.querySelectorAll("*")].filter(e => ["sticky", "fixed"].includes(getComputedStyle(e).position) && e.getClientRects().length).map(e => e.className || e.tagName.toLowerCase()));
   for (const width of [375, 800, 1440]) {
     const page = await open(t, { width, height: 800 });
@@ -535,7 +499,6 @@ test("R1075-6: a logbook that the board cannot read has a mark and a plain reaso
   assert.equal(await row.getAttribute("class"), "opt warn");
   assert.equal(await row.locator(".sub svg").count(), 1, "the mark");
   assert.equal(await row.locator(".sub").innerText(), "Logbook unreadable: its tasks file has no read permission · Claude");
-  // The banner names the same logbook in the same words; no error code shows anywhere on the page.
   assert.equal(await page.locator(".banner.warn .diag li").filter({ hasText: folder }).innerText(), `claude · claude/${folder} · its tasks file has no read permission`);
   assert.equal(await page.evaluate(() => /\bE[A-Z]{3,}\b/.test(document.body.innerText)), false, "no error code on the page");
 });
@@ -543,7 +506,6 @@ test("R1075-6: a logbook that the board cannot read has a mark and a plain reaso
 test("R1071-3: with a 15 px scroll bar, the board does not scroll sideways at 1181 to 1195 px", async t => {
   for (const width of [1181, 1185, 1190, 1195]) {
     const page = await open(t, { width, height: 900 });
-    // Headless Chromium has overlay scroll bars; a 15 px padding takes the width that a classic scroll bar takes.
     await page.addStyleTag({ content: "html{padding-right:15px}" });
     assert.equal(await page.locator("[data-scroll=board]").evaluate(board => board.scrollWidth - board.clientWidth), 0, `${width} px`);
   }

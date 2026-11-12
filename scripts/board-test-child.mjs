@@ -1,4 +1,3 @@
-// Test-only board process supervisor. Keep every descendant owned until it exits.
 import childProcess from "node:child_process";
 import { syncBuiltinESMExports } from "node:module";
 import { fileURLToPath, pathToFileURL } from "node:url";
@@ -14,9 +13,7 @@ function release() {
 function closeOwn() {
   if (!finished || !serving) return;
   serving = false;
-  // Invoke the CLI's real shutdown handler locally; send no operating-system signal.
   process.emit("SIGTERM");
-  // Disconnect IPC after descendants exit. The CLI's async close keeps the event loop alive.
   release();
 }
 function route(message) {
@@ -39,7 +36,6 @@ childProcess.spawn = (command, args, options) => {
   if (command !== process.execPath || args[1] !== "board") throw new Error("Unexpected test child");
   const child = spawn(command, [runner, ...args], { ...options, stdio: [...options.stdio, "ipc"] });
   children.add(child);
-  // Production detaches the server. Tests retain the handle until the server exits.
   child.unref = () => child;
   child.kill = () => { throw new Error("Real child signals are forbidden in board tests"); };
   child.on("message", message => { if (message.kind === "stop-request") send(message); });
@@ -54,7 +50,6 @@ for (const [stream, capture] of [[process.stdout, text => { stdout += text; }], 
   const write = stream.write.bind(stream);
   stream.write = (chunk, ...rest) => { capture(String(chunk)); return write(chunk, ...rest); };
 }
-// Keep the executable guard true: this runs the exact CLI entry point, not only its exported function.
 process.argv = [process.execPath, cli, ...args];
 await import(pathToFileURL(cli));
 serving = process.listenerCount("SIGTERM") > 0;

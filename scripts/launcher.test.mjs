@@ -1,6 +1,4 @@
-// The hook launcher runs the hook of the sage install that its own plugins tree records now, in fake plugins trees
-// under the temporary folder. It never touches the real ~/.claude/plugins.
-import "./test-env.mjs"; // first: no variable of the developer's shell changes a result
+import "./test-env.mjs";
 import assert from "node:assert/strict";
 import { spawnSync } from "node:child_process";
 import { copyFileSync, cpSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, realpathSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
@@ -12,15 +10,12 @@ import { fileURLToPath } from "node:url";
 const HOOKS = fileURLToPath(new URL("../plugins/sage/hooks", import.meta.url));
 const HOOK = "sage-hook.mjs";
 
-/** The command that a hook file registers for an event, as Claude Code runs it: through a shell, with CLAUDE_PLUGIN_ROOT set. */
 const command = (file, event) => JSON.parse(readFileSync(join(HOOKS, file), "utf8")).hooks[event][0].hooks[0].command;
 const REGISTERED = { [HOOK]: command("claude.json", "Stop") };
 
-/** A fake HOME with two installed versions of sage, each with this tree's hooks folder, its hooks replaced by markers that print the version. */
 function home() {
-  const dir = realpathSync(mkdtempSync(join(tmpdir(), "sage-launcher-"))); // real: macOS puts tmpdir behind a symbolic link
+  const dir = realpathSync(mkdtempSync(join(tmpdir(), "sage-launcher-")));
   const cache = join(dir, ".claude", "plugins", "cache", "sage", "sage");
-  // release: the plugin.json metadata.release of the version; undefined writes a plugin.json without one (release 0).
   const version = (v, withHook = true, release) => {
     mkdirSync(join(cache, v, "hooks"), { recursive: true });
     mkdirSync(join(cache, v, ".claude-plugin"), { recursive: true });
@@ -38,8 +33,6 @@ function home() {
   const newer = version("new");
   const recordFile = join(dir, ".claude", "plugins", "installed_plugins.json");
   const record = (installPath, entries = [{ scope: "user", installPath, version: "x" }]) => writeFileSync(recordFile, JSON.stringify({ version: 2, plugins: { "sage@sage": entries } }));
-  // Runs an event through the OLD version's registered command, as a session that started before the update does. The
-  // timeout only stops a hang, so it is far longer than a node start on a busy machine.
   const exec = (name = HOOK, event = { hook_event_name: "Stop" }, cwd = dir) =>
     spawnSync("sh", ["-c", REGISTERED[name]], { cwd, input: JSON.stringify(event), encoding: "utf8", timeout: 60_000, env: { ...process.env, HOME: dir, CLAUDE_PLUGIN_ROOT: old, SAGE_HOOKS_STATE: join(dir, "state"), SAGE_HOME: join(dir, "home") } });
   const run = (name, event, cwd) => {
@@ -95,8 +88,6 @@ test("the real hook, run through the launcher from an old session, names the new
   assert.match(out.hookSpecificOutput.additionalContext, new RegExp(`The state tool: node ${join(h.newer, "skills/sage/sage.mjs")} <command>`));
 });
 
-// The launcher's cost is one node start per event: it imports the chosen hook into its own process, and never starts a
-// second node. The process ids show that, with no clock: a CPU-time bound broke on a busy machine.
 test("the launcher runs the chosen hook in its own process: one node start per event", () => {
   const h = home();
   h.record(h.newer);
@@ -121,7 +112,7 @@ test("the hook's exit code and stderr reach Claude Code through the launcher", (
 
 test("a path that leaves the cache by a longer folder name or by '..', or a relative path, runs the launcher's own hook", () => {
   const h = home();
-  const evil = join(h.cache, "..", "sage-evil", "v"); // cache/sage/sage-evil starts with the text cache/sage/sage
+  const evil = join(h.cache, "..", "sage-evil", "v");
   mkdirSync(join(evil, "hooks"), { recursive: true });
   writeFileSync(join(evil, "hooks", HOOK), `process.stdout.write(JSON.stringify({ version: "evil" }));\n`);
   h.record(evil);
@@ -146,7 +137,6 @@ test("the record's user entry counts, not its first entry", () => {
 test("a FIFO as the record or as the chosen hook runs the launcher's own hook at once", () => {
   const h = home();
   assert.equal(spawnSync("mkfifo", [h.recordFile]).status, 0);
-  // h.ran fails when the launcher blocks: exec kills it after 5 s, and a killed process has no exit status 0.
   assert.equal(h.ran(), "old");
   rmSync(h.recordFile);
   h.record(h.newer);

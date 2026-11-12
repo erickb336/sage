@@ -1,46 +1,19 @@
-// The board's pages route (T1001): each task's pages folder, read-only, on the Mac only, at
-// /pages/<logbook>/<task>/ (an index) and /pages/<logbook>/<task>/<file>. Agents write these pages, so the route trusts no
-// name and no file: core's pageTaskFolder and pageFile decide which folder and which files it serves (the message
-// command and the index ask the same two), and each response carries a sandbox policy in place of the board's, so a page
-// cannot reach the board.
 import { createHash } from "node:crypto";
 import { readdirSync } from "node:fs";
 import { join } from "node:path";
 import { PAGE_POLICY, PAGE_TYPES, SWITCH_SCRIPT, pageFile, pageTaskFolder, pageType } from "../sage-core/index.mjs";
 
-// The index reads at most SCAN entries and lists at most LIST pages (one task folder holds over 4,000 entries). It reads
-// at most READ bytes of pages to find the ones with scripts of their own; a page past that gets the scripts link too.
 const SCAN = 2000, LIST = 200, READ = 32 * 1024 * 1024;
 const SWITCH = `'sha256-${createHash("sha256").update(SWITCH_SCRIPT).digest("base64")}'`;
 const REST = "default-src 'none'; style-src 'unsafe-inline'; img-src data:; font-src data:; media-src data:; base-uri 'none'; form-action 'none'; frame-ancestors 'none'";
-/**
- * The policy of a page. Its origin is no origin (a sandbox without allow-same-origin), so it reads no storage of the
- * board and the board refuses its requests. It loads no picture, style or frame from a server. No header stops
- * a prerender link (Chromium's NoStatePrefetch) from asking another site for its address when the page opens
- * (F-T1013-5). Only sage's own script runs (a message page's Today switch, see switchOnly), and any other page gets no
- * scripts at all. A sandbox without scripts also stops a meta refresh, and no policy stops a refresh while scripts run
- * (F-T1013-1). With ?scripts=1 the page's own inline scripts run under the same sandbox.
- */
 const pagePolicy = (scripts) => `sandbox${scripts ? " allow-scripts" : ""}; script-src ${scripts === "own" ? "'unsafe-inline'" : SWITCH}; ${REST}`;
-/**
- * The index is the board's own page with no script and no sandbox: it keeps its origin, so that its links are
- * same-origin. Its opener policy cuts the window handle of another site that opened it (F-T1001-6), so that site cannot
- * move the tab or hear a page that the owner then opens with its scripts. A browser refuses that policy with a sandbox.
- */
 const INDEX_POLICY = `script-src 'none'; ${REST}`;
 const PLAIN = "text/plain; charset=utf-8";
 
-/** Is this request for the pages route? */
 export const pagesRequest = (url) => typeof url === "string" && /^\/pages(?:[/?]|$)/.test(url);
 
 const one = (request, name) => { const values = request.headersDistinct[name]; return values?.length === 1 ? values[0] : values ? null : undefined; };
 
-/**
- * The browser boundary of the pages route: the Host and Origin of the board, and a request from the board's own pages or
- * from no page (an address that a person opens). F6: a host app's chat may open a link as a cross-site navigation, so a
- * person's click (a top-level navigation with user activation) may open a page from any site. A page is read-only and
- * sandboxed, and that other site cannot read it. The scripts link (?scripts=1) never opens from another site.
- */
 function permitted(request, scripts) {
   const host = one(request, "host"), origin = one(request, "origin"), site = one(request, "sec-fetch-site");
   if (typeof host !== "string" || origin !== undefined && origin !== `http://${host.toLowerCase()}`) return false;
@@ -48,10 +21,6 @@ function permitted(request, scripts) {
   return !scripts && one(request, "sec-fetch-mode") === "navigate" && one(request, "sec-fetch-dest") === "document" && one(request, "sec-fetch-user") === "?1";
 }
 
-/**
- * The raw path as { logbook, task, file, scripts }, or null: no %, no backslash, one query. The path is never decoded;
- * pageTaskFolder and pageFile judge its parts.
- */
 function parse(url) {
   if (url.length > 1024 || /[%\\]/.test(url)) return null;
   const [path, query, ...more] = url.split("?");
@@ -62,12 +31,6 @@ function parse(url) {
   return !query || file.endsWith(".html") ? { logbook, task, file, scripts: !!query } : null;
 }
 
-/**
- * Has a page a script of its own: a script element or an event attribute in a tag, other than sage's Today switch? A tag
- * runs from its name to the next < or > outside a quoted value, so text and quoted values are not attributes. The scan
- * moves only forward, one tag and one quoted value at a time, so it takes time in line with the page's size and never
- * recurses (F-T1001-24).
- */
 function ownScript(page) {
   const html = page.replaceAll(`<script>${SWITCH_SCRIPT}</script>`, "");
   if (/<script\b/i.test(html)) return true;
@@ -75,36 +38,22 @@ function ownScript(page) {
   while (tag.exec(html)) {
     next.lastIndex = tag.lastIndex;
     for (let m; (m = next.exec(html));) {
-      if (m[0].length > 1) return true; // an event attribute
+      if (m[0].length > 1) return true;
       const end = m[0] === "<" || m[0] === ">" ? -1 : html.indexOf(m[0], next.lastIndex);
-      if (end < 0) { tag.lastIndex = m.index; break; } // the tag ends at a < or a >, or at a quote that never closes
+      if (end < 0) { tag.lastIndex = m.index; break; }
       next.lastIndex = end + 1;
     }
-    if (!next.lastIndex) return false; // no < or > after this tag, so no tag starts after it
+    if (!next.lastIndex) return false;
   }
   return false;
 }
 
-/**
- * May this page run sage's Today switch? Only a page that holds the switch script and has no http-equiv and no srcdoc
- * but in sage's own policy tag, exactly as the message command writes it. A refresh in any case, spacing, quoting or
- * entity spelling needs the attribute name http-equiv, and a browser never decodes an entity in an attribute name. The
- * exact tag holds no text that an author chooses, so it cannot hide another http-equiv (F-T1013-2). A srcdoc value is
- * decoded and read as a new page, so a refresh in it needs no http-equiv in these bytes (F-T1013-6). A tag that this
- * test cannot judge, such as one in a comment, fails closed: the page shows without the switch. So does a message page
- * from a sage whose page policy differs, and a UTF-16 byte order mark, which makes the browser read other characters
- * than these bytes.
- */
 const OWN_TAG = `<meta http-equiv="Content-Security-Policy" content="${PAGE_POLICY}">`;
 const switchOnly = (bytes) => {
   const text = bytes.toString("latin1");
   return text.includes(SWITCH_SCRIPT) && !/^(?:\xfe\xff|\xff\xfe)/.test(text) && !/http-equiv|srcdoc/i.test(text.replaceAll(OWN_TAG, ""));
 };
 
-/**
- * The pages of a task folder, its own files first, then each folder's, at most 3 parts deep: { pages, more }. It lists
- * only the files that the route serves (pageFile), so that each of its links opens.
- */
 function listPages(folder) {
   const pages = [];
   let seen = 0, more = false;
@@ -115,7 +64,6 @@ function listPages(folder) {
     for (const entry of entries) {
       if (++seen > SCAN || pages.length === LIST) { more = true; break; }
       const name = dir ? `${dir}/${entry.name}` : entry.name;
-      // A Dirent is the entry itself, so a link is neither a file nor a folder here.
       if (entry.isDirectory() && name.split("/").length < 3 && pageType(`${name}/x.txt`)) queue.push(name);
       else if (entry.isFile()) { const page = pageFile(folder, name); if (page) pages.push({ name, size: page.size }); }
     }
@@ -130,7 +78,6 @@ function indexHtml(logbook, task, folder) {
   let budget = READ;
   for (const page of pages) if (page.name.endsWith(".html")) {
     budget -= page.size;
-    // A check that fails costs this page only: it gets the scripts link, as a page past the budget does.
     try { page.scripts = budget < 0 || ownScript(pageFile(folder, page.name, true)?.bytes.toString("utf8") ?? ""); } catch { page.scripts = true; }
   }
   const base = `/pages/${logbook}/${task}/`;
@@ -143,11 +90,6 @@ ${pages.some((page) => page.scripts) ? `<p class="w" role="note"><strong>Warning
 ${more ? `<p class="m">The list stops at ${pages.length} pages: the folder holds more files than the index reads.</p>` : ""}</main></body></html>\n`;
 }
 
-/**
- * Serve a request of the pages route. onMac tells whether the request comes from the Mac itself; model is the board's
- * snapshot, whose projects name the logbooks. Pages are never served through a tunnel: off the Mac, every address is
- * not found.
- */
 export function servePages(request, response, { onMac, model }) {
   const send = (status, type, body, policy = pagePolicy(false)) => {
     response.setHeader("Content-Security-Policy", policy);
@@ -169,7 +111,6 @@ export function servePages(request, response, { onMac, model }) {
   if (!target || !logbooks.has(target.logbook)) return missing();
   const folder = pageTaskFolder(target.logbook, target.task);
   if (!folder) return missing();
-  // A folder that the board cannot read (or that changed during the read) is unavailable, never a crash of the board.
   if (!target.file) { try { return send(200, "text/html; charset=utf-8", indexHtml(target.logbook, target.task, folder), INDEX_POLICY); } catch { return send(503, PLAIN, "This index is unavailable.\n"); } }
   const bytes = pageFile(folder, target.file, true)?.bytes;
   if (!bytes) return missing();

@@ -1,22 +1,9 @@
-// The fields of a brief, and the reader that finds them in a brief's text.
 export const BRIEF_FIELDS = Object.freeze(["GOAL", "SCOPE", "CONTEXT", "DECISIONS", "ACCEPTANCE", "VERIFY", "BUDGET", "FORBIDDEN", "REPORT", "STANDING"]);
 
-/**
- * A field's first line: a line that is not indented, whose text after Markdown marks (*, _, #, |, >) is the field's
- * name followed by a colon ("FORBIDDEN: x", "**GOAL:** x"), by two spaces or a tab (the chief's template, "GOAL   x"),
- * or by nothing (the name alone on its line). So a line of another field that starts with a field's word and one space
- * ("FORBIDDEN words are flagged") is text (F-T471-9).
- */
 const HEADER = new RegExp(`^[*_#|>]*[ \\t]*(${BRIEF_FIELDS.join("|")})(?:[*_]*:|[*_]*(?: {2,}|\\t)|[*_ \\t]*$)[*_ \\t]*(.*)$`);
-/** A Markdown list item, as in the Claude brief check: a bullet (-, * or +) or a number (1. or 1)), then a space. */
 const LIST_ITEM = /^[-*+][ \t]|^\d+[.)][ \t]/;
-/** A code fence, as in the Claude brief check: three or more backticks or tildes, indented by at most three spaces. */
 const FENCE = /^ {0,3}(`{3,}|~{3,})(.*)$/;
 
-/**
- * The text of each field that a brief gives, by name. A field runs to the next field; a name given twice is text, and
- * so is a line in a list or a code block (the rule of the Claude brief check).
- */
 export function briefSections(text) {
   const fields = {};
   let field, fence;
@@ -34,7 +21,6 @@ export function briefSections(text) {
   return Object.fromEntries(Object.entries(fields).map(([name, value]) => [name, value.trim()]));
 }
 
-/** The fields that a brief's text does not give, or gives with no text, in BRIEF_FIELDS order. */
 export function missingBriefFields(text) {
   const given = briefSections(text);
   return BRIEF_FIELDS.filter(field => !given[field]);

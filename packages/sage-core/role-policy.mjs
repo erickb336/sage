@@ -1,10 +1,8 @@
 import { AGENT_CAPS } from "./logbook-fields.mjs";
 
-/** The roles that a lead may start. */
 export const TEAM = new Set(["implementer", "code-reviewer", "security-reviewer", "ux-reviewer", "qa"]);
 const ROLES = new Set(["chief-of-staff", "lead", "pe", "designer", "arena-judge", ...TEAM]);
 
-/** Role identity comes from the trusted adapter, not an agent's name or message. */
 export function parseRolePlan(value) {
   if (!value || typeof value !== "object" || Array.isArray(value)
     || Object.keys(value).length !== 2 || !Object.hasOwn(value, "issuerRole") || !Object.hasOwn(value, "role")
@@ -12,7 +10,6 @@ export function parseRolePlan(value) {
   return { issuerRole: value.issuerRole, role: value.role };
 }
 
-/** Evaluate inside the same transaction that consumes project and total capacity. */
 export function checkRoleReservation(reservations, assignment, input) {
   const plan = parseRolePlan(input);
   if (plan.role === "chief-of-staff") throw Error("The chief is the owner session, not a child role");
@@ -31,20 +28,16 @@ export function checkRoleReservation(reservations, assignment, input) {
   return plan;
 }
 
-/** The roles of an investigation: the chief starts them, and they change no project file. */
 const INVESTIGATION = new Set(["investigate", "evidence-review"]);
 
-/** Providers supply verified mode and role. Null names an unmanaged actor. */
 export function roleEditDenied({ sage, role }) {
   if (typeof sage !== "boolean" || (role !== null && !ROLES.has(role) && !INVESTIGATION.has(role)) || (sage && role === null))
     throw Error("Invalid role edit context");
   return sage && !["implementer", "designer", "arena-judge"].includes(role);
 }
 
-/** New reservations enforce ownership; historical records retain their original rules. */
 export function checkLeadOwnership(state, active, assignment, plan, continuingLead) {
   if (plan.role !== "lead") return;
-  // Admission supplies this identity only after checking a completed predecessor.
   const ownTeam = row => continuingLead && row.rolePlan?.issuerRole === "lead"
     && row.assignment.issuer === continuingLead && row.assignment.session === assignment.session
     && row.assignment.epoch === assignment.epoch;

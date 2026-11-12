@@ -2,10 +2,6 @@ import { accessSync, constants, realpathSync, statSync } from "node:fs";
 import { resolve } from "node:path";
 import { programName } from "./program-name.mjs";
 
-/**
- * Programs that run a later word as a program, each with its options that take a value (that value is not the program).
- * A key of two words is a program and its subcommand.
- */
 const PACKAGE_RUNNER = /^-(?:p|c|-package|-call)$/;
 const WRAPPER = new Map([
   ["sudo", /^-(?:[acugpCDrtUTRh]|-(?:auth-type|login-class|user|group|prompt|close-from|chdir|chroot|role|type|other-user|command-timeout|host))$/],
@@ -23,7 +19,6 @@ const WRAPPER = new Map([
   ...["npx", "bunx", "npm exec", "npm x", "pnpm dlx"].map((name) => [name, PACKAGE_RUNNER]),
   ...["nohup", "command", "builtin", "time", "noglob", "nocorrect"].map((name) => [name, undefined]),
 ]);
-// Include flag-only names too, so an abbreviated long option must be unique across the wrapper's options.
 const WRAPPER_LONG_OPTIONS = new Map([
   ["sudo", "background preserve-env edit set-home login remove-timestamp list preserve-groups shell other-user validate askpass auth-type bell close-from login-class chdir group help host reset-timestamp no-update non-interactive prompt chroot role stdin command-timeout type user version"],
   ["env", "argv0 ignore-environment null unset chdir default-signal ignore-signal block-signal list-signal-handling debug split-string help version"],
@@ -44,36 +39,10 @@ function longOptionName(option, names = []) {
   return matches[0];
 }
 
-/** Shell keywords before a command: the command after them runs in the same shell. After for, select or case come words, not a program. */
 const KEYWORD = /^(?:!|\{|\}|if|then|elif|else|fi|while|until|do|done|esac|coproc)$/;
 const LIST = /^(?:for|select|case)$/;
 const SHELLS = /^(?:sh|bash|zsh|dash|ksh|fish)$/;
 
-/**
- * The programs that a command line runs, for the hook's rules on agents (agentProblem) and on the state tool (T83).
- * Each is { word, file, args, dir, path, stdin, piped }, in the order of the command line:
- *   - word: the program as written, after shell keywords (if, while, do, !, {), assignments (X=1), redirections
- *     (2>/dev/null, >out) and wrappers with their options (sudo, env, timeout, xargs, nice, watch, npx, npm exec,
- *     pnpm dlx, bunx and others in WRAPPER). After for, select and case come words, not a program; a case pattern is not one.
- *   - file: the real file that runs, found through PATH (a PATH=… before it, or an earlier export PATH=…) and links,
- *     from dir. Undefined for a bare kill (the shell's builtin, unless a wrapper such as sudo or xargs runs it), for a
- *     word with a variable, ~ or a substitution, and for a program that is not found.
- *   - args: the words after the program, without their quotes and redirections.
- *   - dir: the folder it runs in, after an earlier literal "cd <dir>", "pushd <dir>" or "popd" of the same line (~ is
- *     home, which defaults to HOME). After a cd that the reader cannot follow (cd $X, cd -), the folder is uncertain.
- *   - path: its effective PATH, after assignments and wrappers.
- *   - stdin: its heredoc and here-string bodies, and the words of the command piped into it.
- *   - piped: whether another command supplies its stdin through a pipe; a heredoc alone is not a pipe.
- * It also reads the text that other programs run as commands, up to 3 levels deep: the -c text of a shell (sh, bash,
- * zsh, dash, ksh, fish) and its stdin heredoc when it has no script, the words of eval, PowerShell's -Command text,
- * npx --call, and the program of find -exec. The words after a script (bash ./x.sh kill) are the script's arguments,
- * not programs. Each $( ) or backtick is a command of its own, and so is each <( ) and >( ). It cannot see a program in a
- * variable ($P), in a shell function's call, in watch's or env -S's text, in text piped into a shell, or inside a script.
- * With executableEvidence, also retain external wrappers. With redirectEvidence, return { redirect, dir } and optional
- * uncertainDirectory for each shell redirection. With redirectParts, each redirection also includes its separate
- * operator and target. With contextEvidence, return programs with their wrapper and directory certainty, plus those redirects.
- * Throws when the shell reader cannot read the line (see shellCommands), and for text nested more than 3 levels deep.
- */
 export function programsRun(command, cwd, path = process.env.PATH ?? "", { executableEvidence = false, redirectEvidence = false, contextEvidence = false, uncertainDirectory = false, redirectParts = false, home = process.env.HOME } = {}) {
   const found = { redirects: [], contexts: [], redirectParts, home };
   readPrograms(command, cwd, path, 0, found, uncertainDirectory);
@@ -81,14 +50,11 @@ export function programsRun(command, cwd, path = process.env.PATH ?? "", { execu
   return redirectEvidence ? found.redirects : found.contexts.filter(entry => executableEvidence || !entry.wrapper).map(entry => entry.run);
 }
 
-// npm-exec documents these command, workspace, cache and install options. Values have different roles:
-// call runs shell text; a package or workspace value is data; Boolean options do not take a command word.
 const NPM_OPTIONS = new Map([
   ..."package workspace cache registry loglevel allow-scripts ca".split(" ").map(name => [name, "value"]),
   ...("yes no no-install quiet silent verbose help version parseable offline prefer-offline prefer-online " +
     "workspaces include-workspace-root ignore-scripts strict-allow-scripts dangerously-allow-all-scripts audit fund all long").split(" ").map(name => [name, "flag"]),
   ["call", "call"],
-  // nopt treats unregistered --check as Boolean unless it has =value. npx does not register it as a switch.
   ["check", "unregistered"],
 ]);
 const NPM_ALIASES = { c: "call", w: "workspace", ws: "workspaces", y: "yes", q: "quiet", a: "all", l: "long" };
@@ -96,7 +62,6 @@ const NPM_WRAPPERS = new Set(["npx", "npm", "npm exec", "npm x"]);
 
 const NPM_LOGLEVEL_ALIASES = { quiet: "warn", q: "warn", silent: "silent", verbose: "verbose" };
 
-// npx inserts -- before its first original positional argument, before nopt splits option=value.
 function npxBoundary(words, start) {
   for (let i = start; i < words.length; i++) {
     const option = words[i];
@@ -141,7 +106,7 @@ function npmArguments(words, start, wrapper) {
         continue;
       }
       operands.push(option);
-      continue; // npm reads options anywhere before --; npxBoundary has already placed its delimiter.
+      continue;
     }
     const split = option.indexOf("=");
     if (split >= 0) {
@@ -153,8 +118,6 @@ function npmArguments(words, start, wrapper) {
     const negated = name.startsWith("no-") && NPM_OPTIONS.get(name.slice(3)) === "flag";
     if (negated) name = name.slice(3);
     if (!NPM_OPTIONS.has(name)) {
-      // nopt recognizes exact names, then shorthand clusters, with either one or two dashes.
-      // Do not guess an abbreviation from this bounded option table: npm may have another matching option.
       const cluster = [...raw].map(char => char === "p" ? "parseable" : NPM_ALIASES[char]);
       if (cluster.some(flag => !flag)) throw new Error(`unknown package runner option ${option}`);
       words.splice(next, 0, ...cluster.map(flag => `--${flag}`));
@@ -163,12 +126,10 @@ function npmArguments(words, start, wrapper) {
     const registeredKind = NPM_OPTIONS.get(name);
     const kind = registeredKind === "unregistered" ? (split < 0 ? "flag" : "value") : registeredKind;
     if (/^-{2,}$/.test(words[next] ?? "")) {
-      // nopt keeps the sentinel in argv; a missing call value becomes the string "true".
       if (kind === "call") call = "true";
       continue;
     }
     if (kind === "flag") {
-      // Only accepted Boolean values belong to the option. Other tokens retain their argv role.
       const booleanValue = /^(?:true|false)$/.test(words[next] ?? "") ||
         (words[next] === "null" && /^(?:yes|no|workspaces)$/.test(name));
       if ((negated || !NPM_LOGLEVEL_ALIASES[name]) && booleanValue) next++;
@@ -201,7 +162,6 @@ function wrapperArguments(words, next, wrapper, path, dir) {
   let chdir;
   while (next < words.length) {
     const word = words[next];
-    // sudo resumes option parsing after an assignment. env consumes assignments only after its options.
     if (wrapper === "sudo" && !word.startsWith("-") && word[0] !== "/" && word[0] !== "=" && word.includes("=")) {
       if (/^PATH=/.test(word)) path = pathAssignment(word, path);
       next++;
@@ -229,15 +189,14 @@ function wrapperArguments(words, next, wrapper, path, dir) {
       value ??= words[next++];
       if (value === undefined) throw new Error(`${wrapper} option has no value`);
     } else if (kind === "host-or-help" && value === undefined && option === "-h") {
-      // sudo -h alone is help; exact -h followed by a non-option, non-assignment is a host.
       const following = words[next];
       if (following !== undefined && !following.startsWith("-") &&
           !(following[0] !== "/" && following[0] !== "=" && following.includes("="))) value = words[next++];
-    } // optional-attached values never consume the next command word.
+    }
     if (/^(?:sudo|env)$/.test(wrapper) && (flag === "--chdir" || flag === (wrapper === "sudo" ? "-D" : "-C"))) chdir = value;
     if (wrapper === "env" && flag === "-P") path = value;
   }
-  if (wrapper === "timeout" || wrapper === "gtimeout") next++; // only timeout owns a duration operand
+  if (wrapper === "timeout" || wrapper === "gtimeout") next++;
   if (wrapper === "env" && words[next] === "-") next++;
   if (wrapper === "env") {
     while (words[next]?.includes("=")) {
@@ -265,9 +224,9 @@ function readPrograms(command, dir, path, depth, found, uncertainDirectory = fal
     const words = [...c.words];
     let launched = false;
     let here = path;
-    let at = dir; // a wrapper chdir belongs to this command, not the following shell command
+    let at = dir;
     let viaExec = false;
-    let argv = false; // argv disables assignment/keyword grammar, not same-shell builtin lookup
+    let argv = false;
     let nextDir = dir, nextStack = stack, status, negate = false, nextUncertain = uncertain;
     for (let k = 0; k < words.length; k++) {
       const w = words[k];
@@ -278,10 +237,9 @@ function readPrograms(command, dir, path, depth, found, uncertainDirectory = fal
       if (keyword && w === "!") negate = !negate;
       if (assignment || (keyword && KEYWORD.test(w))) continue;
       if (keyword && LIST.test(w)) break;
-      if (keyword && w === "function" && ++k) continue; // the function name is not a program
+      if (keyword && w === "function" && ++k) continue;
       launched = true;
       const file = program(w, at, here, uncertain);
-      // command/builtin consume argv but still dispatch through this shell. Native wrappers do not.
       const builtinWrapper = !viaExec && /^(?:command|builtin|exec)$/.test(w);
       const shellModifier = !viaExec && keyword && /^(?:time|noglob|nocorrect)$/.test(w);
       const shellWrapper = builtinWrapper || shellModifier;
@@ -304,7 +262,6 @@ function readPrograms(command, dir, path, depth, found, uncertainDirectory = fal
         viaExec ||= !shellWrapper || w === "exec";
         argv = true;
         const wrapped = npm ?? wrapperArguments(words, k + 1, wrapper, here, at);
-        // command -v and -V only look a name up: they run nothing (F-T815-17). command <program> runs it.
         if (wrapper === "command" && words.slice(k + 1, wrapped.next).some((o) => /^-[pvV]*[vV]/.test(o))) break;
         k = wrapped.next - 1;
         here = wrapped.path;
@@ -351,10 +308,6 @@ function readPrograms(command, dir, path, depth, found, uncertainDirectory = fal
   return walkFlow(FLOWS.get(commands), [{ dir, stack: null, path, uncertainDirectory }], execute);
 }
 
-/**
- * Directory changes belong to their execution scope; a branch keeps both possible outcomes. A subshell keeps none. After
- * an if, a loop, a case or a function body (opaque) that changes the folder, the folder is uncertain.
- */
 function walkFlow(flow, initial, execute, opaque = false) {
   const opaqueKind = flow.kind === "opaque" || flow.kind === "function";
   const scope = { opaque: opaque || opaqueKind, directoryEffect: false };
@@ -387,11 +340,10 @@ function walkFlow(flow, initial, execute, opaque = false) {
       const start = k;
       let pipe;
       do {
-        if (!input.length) nodeResult(flow.nodes[k], before); // skipped text still receives policy checks, without changing its caller
+        if (!input.length) nodeResult(flow.nodes[k], before);
         pipe = nodeResult(flow.nodes[k], input);
       } while (flow.nodes[k++].after === "|" && k < flow.nodes.length);
       if (k - start > 1) {
-        // Bash isolates each stage; shells that run the last stage in the parent may retain its directory.
         const possible = unique([...input, ...pipe.yes, ...pipe.no]);
         pipe = { yes: possible, no: possible };
       }
@@ -407,10 +359,8 @@ function walkFlow(flow, initial, execute, opaque = false) {
   return states;
 }
 
-/** A word that starts with an unquoted ~ or ~/, with the home folder in its place when that is a known absolute path. */
 const tilde = (word, quoted, home) => !quoted && /^~(?:\/|$)/.test(word) && typeof home === "string" && home.startsWith("/") ? home + word.slice(1) : word;
 
-/** The folder after cd: a literal folder from dir, or home with no word. Any other form leaves the folder uncertain. */
 function cdDirectory(args, dir, home, uncertain) {
   const unknown = { dir, ok: undefined, uncertain: true };
   let physical = false, k = 0;
@@ -434,10 +384,6 @@ function cdDirectory(args, dir, home, uncertain) {
   return { dir, ok: false, uncertain };
 }
 
-/**
- * pushd <dir> changes the folder as cd does and keeps the old folder on the line's stack; popd goes back to it
- * (F-T815-16). Any other form (pushd alone, +N, -N, popd with a word or past the line's own pushd) leaves the folder unknown.
- */
 function stackDirectory(name, args, dir, stack, home, uncertain) {
   const kept = stack ?? [], unknown = { dir, ok: undefined, uncertain: true, stack: [] };
   if (name === "popd") {
@@ -449,7 +395,6 @@ function stackDirectory(name, args, dir, stack, home, uncertain) {
   return { ...change, stack: change.ok === false ? kept : [...kept, { dir, uncertain: uncertain || change.ok === undefined }] };
 }
 
-/** The text that a shell, eval or PowerShell runs as commands: -c text, eval's words, or stdin when there is no script. */
 export function commandText(name, args, bodies) {
   if (name === "eval") return [args.join(" ")];
   if (/^(?:pwsh|powershell)(?:\.exe)?$/i.test(name)) {
@@ -463,36 +408,25 @@ export function commandText(name, args, bodies) {
   for (; /^[-+]./.test(args[k] ?? "") && args[k] !== "--"; k++) {
     if (/^-[a-zA-Z]*c/.test(args[k]) || args[k] === "--command") text = true;
     if (/^-[a-zA-Z]*s/.test(args[k])) stdin = true;
-    if (/^[-+][a-zA-Z]*[oO]$|^--(?:rcfile|init-file)$/.test(args[k])) k++; // an option with a value: -o pipefail
+    if (/^[-+][a-zA-Z]*[oO]$|^--(?:rcfile|init-file)$/.test(args[k])) k++;
   }
   if (args[k] === "--") k++;
-  if (text) return args[k] === undefined ? [] : [args[k]]; // the words after it are $0, $1, …
-  return stdin || args[k] === undefined ? bodies : []; // with a script, the words and stdin are the script's
+  if (text) return args[k] === undefined ? [] : [args[k]];
+  return stdin || args[k] === undefined ? bodies : [];
 }
 
-/** The real file that a program word runs, through PATH and links; undefined when it has a variable or is not found. */
 function program(word, dir, path, uncertain = false) {
   for (const file of word.includes("/") ? [word] : path.split(":").map((d) => `${d || "."}/${word}`)) {
     if (uncertain && !file.startsWith("/")) return undefined;
-    if (/[$`~]/.test(file)) return undefined; // the shell would expand it, so the hook cannot tell which file runs
+    if (/[$`~]/.test(file)) return undefined;
     try {
-      const real = realpathSync.native(resolve(dir, file)); // native: the name on disk, so "PS" on macOS is ps
+      const real = realpathSync.native(resolve(dir, file));
       if (statSync(real).isFile() && statSync(real).mode & 0o111) return real;
     } catch {}
   }
   return undefined;
 }
 
-/**
- * The simple commands of a shell command line: { words, bodies, host, piped, pipeTo, grouped, writes }. The words lose their
- * quotes and redirections (2>/dev/null, >out, <in, with their targets); syntax retains quote and assignment eligibility; the bodies are the command's heredocs and
- * here-strings, which stay text. The patterns of a case arm ("top)") are not commands. A command substitution, $( ) or a backtick, gives
- * commands of its own, whose host is the command and word they land in (index -1: a heredoc; quoted: true inside double
- * quotes, where the shell does not split the result), and so does a process substitution, <( ) or >( ). Throws when it cannot read the line: an open quote, substitution, heredoc, "(" or case,
- * or a ")" with no "(". The hook's rules then refuse a line that names what they guard (fail closed).
- * With provenance, wordLiterals, bodyLiterals and redirectLiterals identify data without shell expansion; redirectParts separates each
- * operator from its target. A quoted heredoc is literal even when its body contains shell syntax.
- */
 const FLOWS = new WeakMap();
 const COMMAND_CONTEXT = new WeakMap();
 const REDIRECT_PARTS = new WeakMap();
@@ -531,9 +465,9 @@ function readCommands(src, i, close, out, host, flow) {
   let word;
   let quoted = false, assignment = false, literal = true;
   let depth = 0;
-  let target; // after a redirection: its operator, kept with its target in redirects, or "body" for the text of a here-string
-  const cases = []; // each open case: { depth } where it opens, and pattern: true before an arm's ")", false after it
-  const arm = () => (cases.at(-1)?.depth === depth ? cases.at(-1) : undefined); // the case whose arms are read at this depth
+  let target;
+  const cases = [];
+  const arm = () => (cases.at(-1)?.depth === depth ? cases.at(-1) : undefined);
   const heredocs = [];
   const add = (text) => (word = (word ?? "") + text);
   const endWord = () => {
@@ -573,7 +507,7 @@ function readCommands(src, i, close, out, host, flow) {
     if (target) throw new Error("a redirection with no target");
     cmd.grouped ||= depth > 0;
     if ((cmd.words.length || cmd.heredoc || cmd.redirects.length) && !arm()?.pattern) {
-      out.push(cmd); flow.nodes.push({ cmd }); // retain the public flat view and the private execution scope
+      out.push(cmd); flow.nodes.push({ cmd });
     }
     if (COMMAND_CONTEXT.get(cmd).closesScope) {
       COMMAND_CONTEXT.get(cmd).groupOwned = true;
@@ -585,16 +519,16 @@ function readCommands(src, i, close, out, host, flow) {
   const here = () => ({ cmd, index: cmd.words.length });
   while (i < src.length) {
     const c = src[i];
-    const esac = word === "esac" && !quoted && !cmd.words.length; // "esac)" closes a $( ), and "esac |" pipes the case on
-    if (arm()?.pattern && "()|".includes(c) && !esac) { // a case arm: "(a|b)" or "a)"; its pattern runs nothing
+    const esac = word === "esac" && !quoted && !cmd.words.length;
+    if (arm()?.pattern && "()|".includes(c) && !esac) {
       endWord();
-      if (cmd.words.length > 1) throw new Error("a case pattern of more than one word"); // a shell refuses it too
+      if (cmd.words.length > 1) throw new Error("a case pattern of more than one word");
       cmd = fresh();
       if (c === ")") arm().pattern = false;
       i++;
       continue;
     }
-    if (arm()?.pattern === false && c === ";" && ";&".includes(src[i + 1])) { // ;; ;& ;;& end an arm
+    if (arm()?.pattern === false && c === ";" && ";&".includes(src[i + 1])) {
       endCommand();
       arm().pattern = true;
       i += src.startsWith(";;&", i) ? 3 : 2;
@@ -625,7 +559,7 @@ function readCommands(src, i, close, out, host, flow) {
       literal = false;
       i = readCommands(src, i + (c === "`" ? 1 : 2), c === "`" ? "`" : ")", out, here());
       add("$(…)");
-    } else if ((c === "<" || c === ">") && src[i + 1] === "(") { // a process substitution, <( ) or >( ): commands of its own
+    } else if ((c === "<" || c === ">") && src[i + 1] === "(") {
       literal = false;
       i = readCommands(src, i + 2, ")", out, here());
       add("$(…)");
@@ -646,8 +580,6 @@ function readCommands(src, i, close, out, host, flow) {
       endWord();
       i++;
     } else if (c === ">" || c === "<" || (c === "&" && src[i + 1] === ">")) {
-      // A redirection: >, >>, >|, >&, &>, &>>, <, <>, <&, with the number or {name} of its file descriptor before it.
-      // It and its target are not words, so ps>out and 2>/dev/null ps run ps.
       if (!quoted && /^(?:\d+|\{\w+\})$/.test(word ?? "")) word = undefined;
       endWord();
       const op = /^(?:&>>?|>>|>\||>&|<>|<&|>|<)/.exec(src.slice(i, i + 3))[0];
@@ -698,7 +630,6 @@ function readCommands(src, i, close, out, host, flow) {
   return i;
 }
 
-/** Double-quoted text, or a heredoc body that expands (stop ""): its text, and the commands of its substitutions. */
 function readExpanding(src, i, stop, out, host) {
   let text = "";
   while (i < src.length && src[i] !== stop) {
@@ -718,7 +649,6 @@ function readExpanding(src, i, stop, out, host) {
   return { text, i: i + 1 };
 }
 
-/** The delimiter after "<<" or "<<-". A quoted delimiter makes the body plain text, with no substitutions. */
 function readDelimiter(src, i, heredocs, cmd) {
   const strip = src[i] === "-";
   if (strip) i++;
@@ -747,7 +677,6 @@ function readDelimiter(src, i, heredocs, cmd) {
   return i;
 }
 
-/** The bodies of the heredocs that the last line opened, read up to each delimiter line, given to their commands. */
 function readBodies(src, i, heredocs, out) {
   for (const { delimiter, strip, expand, cmd } of heredocs.splice(0)) {
     const lines = [];

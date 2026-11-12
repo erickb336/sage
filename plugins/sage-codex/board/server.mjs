@@ -1,4 +1,3 @@
-// Provider-neutral, read-only board transport. The caller owns configuration and the owner's password record.
 import { createHash, randomBytes, scrypt, timingSafeEqual } from "node:crypto";
 import { lstatSync, readdirSync, watch } from "node:fs";
 import { createServer } from "node:http";
@@ -10,14 +9,9 @@ const MAX_HTML = 8 * 1024 * 1024;
 const MAX_CLIENTS = 16;
 const digest = text => createHash("sha256").update(text).digest();
 const unavailable = [{ source: "board", message: "The board snapshot is unavailable." }];
-// The reload sentence goes only on a page that has no stream (R1534-2): a stream keeps sending its address's page.
 const TOO_LARGE = "The page that you opened is too large to show (over 8 MB), so the board shows this page instead.";
 const NO_STREAM = " This page does not update: reload the address to try again.";
 const own = (object, name) => Object.hasOwn(object, name);
-// The times of the reads after a new watch, in ms. On macOS libuv keeps one file event stream for all watches of a process,
-// and each new watch restarts it on another thread, so a write in that time gives no event for any watch (T348). The restart
-// took under 50 ms on a loaded machine and over 1 s on a starved one, so one read is not enough. This is not polling: the
-// reads end, and only a new watch starts them.
 const SETTLE_READS = [250, 1000, 3000, 7000, 15000];
 
 function authority(value) {
@@ -47,16 +41,10 @@ function taskKey(encoded) {
 function route(target) {
   if (typeof target !== "string" || target.length > 4096) return null;
   if (target === "/") return { task: null, events: false };
-  // The Agents page (T308) and its live stream.
   if (target === "/agents" || target === "/agents?events=1") return { task: null, agents: true, events: target !== "/agents" };
-  // The milestones list and each milestone's page (T233 C9), with their live streams. KEY is the base64url of the milestone key.
-  // The Releases tab (T996) and its live stream.
   if (target === "/releases" || target === "/releases?events=1") return { task: null, releases: true, events: target !== "/releases" };
   if (target === "/milestones" || target === "/milestones?events=1") return { task: null, milestones: true, events: target !== "/milestones" };
   const milestone = /^\/milestone\/([A-Za-z0-9_-]+)(\?events=1)?$/.exec(target);
-  // The addresses from before the rename of program to milestone (T995) move to the new ones, for one version. An old
-  // milestone key (the project and its program id) moves to the page of its milestone (renamed, in the request). The live
-  // stream of an old address, which a tab opened before the update keeps, sends the new page's stream (F-T995-29).
   const old = /^\/program(?:s|\/([A-Za-z0-9_-]+))(\?events=1)?$/.exec(target);
   if (old) { const key = old[1] && taskKey(old[1]); return old[1] && !key ? null : { renamed: key ?? null, events: !!old[2] }; }
   if (milestone) { const key = taskKey(milestone[1]); return key ? { task: null, milestone: key, events: !!milestone[2] } : null; }
@@ -76,7 +64,6 @@ function securityHeaders(response, html = null) {
   response.setHeader("Cross-Origin-Resource-Policy", "same-origin");
 }
 
-// The owner's own board password (T216) is kept only as a salted scrypt hash, with its parameters next to it.
 const b64 = /^[A-Za-z0-9_-]+$/;
 const derive = (password, { N, r, p, salt }) => new Promise((done, fail) => scrypt(password.normalize("NFC"), Buffer.from(salt, "base64url"), 32, { N, r, p, maxmem: 256 * N * r }, (error, key) => error ? fail(error) : done(key)));
 export function validPasswordRecord(record) {
@@ -93,21 +80,10 @@ export async function checkPassword(password, record) {
   return validPasswordRecord(record) && timingSafeEqual(await derive(password, record), Buffer.from(record.hash, "base64url"));
 }
 
-// After a wrong password the next check waits this long; with one check at a time, a guesser gets about one try a second.
 const WRONG_PASSWORD_DELAY = 1000;
-// Headers that a proxy adds. A private HTTPS tunnel connects from 127.0.0.1, may keep a loopback
-// Host and adds X-Forwarded-For, so a request that has any of them came through a proxy, not from the Mac itself.
 const forwarded = name => name === "forwarded" || name.startsWith("x-forwarded-");
 
-/** The 403 text away from the Mac until the owner sets a password. It names no path and no user name (F-T229-7). */
 const OFF = "Access from outside this Mac is off until the owner sets a board password on the Mac.";
-/**
- * The board needs no sign-in on the Mac. Every other request signs in with the owner's password, a record from
- * hashPassword. Until the caller gives one, every other request gets 403 and a fixed text that names no path (F-T229-7):
- * the exact command is only in the output of board --ensure on the Mac. With an id (a non-secret name of the caller's config),
- * a response on the Mac carries the X-Sage-Board header: the id, this process's pid and the time the listener started,
- * so the board command can tell which board answers on the port.
- */
 export function createBoardServer({ sources, password, port = BOARD_PORT, allowedHosts = [], id, clock = () => new Date().toISOString(), settleReads = SETTLE_READS, duringRead = null, providerRoots = [] } = {}) {
   if (!Number.isSafeInteger(port) || port < 1024 || port > 65535) throw new TypeError("board port must be an integer from 1024 through 65535");
   if (typeof clock !== "function") throw new TypeError("the board clock must be a function that gives an ISO time");
@@ -126,13 +102,12 @@ export function createBoardServer({ sources, password, port = BOARD_PORT, allowe
   const local = new Set([`127.0.0.1:${port}`, `localhost:${port}`, `[::1]:${port}`]);
   const hosts = new Set([...local, ...Array.from(allowedHosts, authority)]);
   const origins = new Map([...hosts].map(host => [host, new URL(`${local.has(host) ? "http" : "https"}://${host}`).origin]));
-  let remembered = null; // the digest of the last sign-in that passed the scrypt check, so a page's next requests cost no scrypt
-  let checking = false; // one password check at a time: scrypt is slow on purpose, and the delay after a wrong one counts too
+  let remembered = null;
+  let checking = false;
   let boardHeader = null;
   const watchers = new Map(), watchErrors = new Map(), clients = new Set();
   let model, lastGood, revision = 0, refreshTimer, boundaryTimer, settleTimer, startTimer, startPromise, closePromise, closed = false;
 
-  /** true, false, or "busy" while another password check runs. */
   async function authenticated(request) {
     const value = oneHeader(request, "authorization");
     if (typeof value !== "string" || value.length > 2048) return false;
@@ -153,7 +128,6 @@ export function createBoardServer({ sources, password, port = BOARD_PORT, allowe
     } finally { checking = false; }
   }
 
-  /** On the Mac itself: a loopback peer, a loopback Host, and no header that a proxy adds. */
   function onMac(request) {
     if (!["127.0.0.1", "::1", "::ffff:127.0.0.1"].includes(request.socket.remoteAddress) || !local.has(oneHeader(request, "host").toLowerCase())) return false;
     for (let i = 0; i < request.rawHeaders.length; i += 2) if (forwarded(request.rawHeaders[i].toLowerCase())) return false;
@@ -167,22 +141,12 @@ export function createBoardServer({ sources, password, port = BOARD_PORT, allowe
       (site === undefined || ["none", "same-origin"].includes(site));
   }
 
-  // The checkout paths go only to the Mac's own page (R1069-2).
   const render = (state, view, paths, live = true) => view.agents ? renderAgentsHtml(state, { live, paths }) : view.releases ? renderReleasesHtml(state, { live, paths }) : view.milestones || view.milestone ? renderMilestonesHtml(state, { milestoneKey: view.milestone ?? null, live, paths })
     : renderBoardHtml(state, { taskKey: view.task, snapshot: false, live, paths });
   const fits = html => Buffer.byteLength(html) <= MAX_HTML;
-  /**
-   * A page with its stale mark and its diagnostics. The refresh checks the shared pages (the board, the Agents page and
-   * the milestones list), so a good snapshot has them. One rule for a single page (a task page or a milestone page) that is
-   * too large (T383): its address shows its parent page (the board, or the milestones list) from the same snapshot, with a
-   * note. It needs no older copy, so it holds also at the first start, and one large page never stops the rest of the board.
-   * The page sent to a GET has no stream, so no update of its parent page replaces the note (R1509-2): a reload tries the
-   * address again. A stream (stream: true) keeps sending its address's page, so its note has no reload sentence (R1534-2).
-   */
   function pageFor(view, paths = false, stream = false) {
     const html = render(model, view, paths);
     if (fits(html)) return { html, stale: model.stale, diagnostics: model.diagnostics };
-    // The note is about the page, not a source, so it is its own banner, not a line of Incomplete sources (R1391-3).
     const other = render({ ...model, pageNote: stream ? TOO_LARGE : TOO_LARGE + NO_STREAM }, { milestones: !!view.milestone }, paths, false);
     if (!fits(other)) throw new RangeError("board rendering exceeds the size limit");
     return { html: other, stale: model.stale, diagnostics: model.diagnostics };
@@ -209,8 +173,6 @@ export function createBoardServer({ sources, password, port = BOARD_PORT, allowe
     }
   }
 
-  // A stream gets an update only when its page changed (bug bash R1023-3): each client keeps the digest of what it got last,
-  // so a file event that changes nothing on the page sends nothing, and the page keeps its state.
   function publish(client) {
     try {
       const payload = { revision: String(revision), ...pageFor(client, client.paths, true) };
@@ -227,10 +189,6 @@ export function createBoardServer({ sources, password, port = BOARD_PORT, allowe
     refreshTimer.unref();
   }
 
-  // One plain watch (not recursive) on each real folder of a source, and on the nearest ancestor that exists. A folder's
-  // watch reports each change of a file in it, also of a file that a rename put there. Node's recursive watch on Linux
-  // did not (R1506-F1): up to 24.21 it watched each file's inode, so after a rename the path's watch stayed on the old
-  // file. The same rule runs on macOS. A new folder gets its watch at the next read.
   function watchPlans() {
     const plans = new Map();
     const add = (path, child = null) => {
@@ -273,7 +231,6 @@ export function createBoardServer({ sources, password, port = BOARD_PORT, allowe
       try {
         const item = { plan, watcher: null };
         item.watcher = watch(plan.path, (event, filename) => {
-          // A rename can name only the destination. Recheck the source even when that name differs.
           if (event !== "rename" && !item.plan.all && filename && !item.plan.children.has(String(filename))) return;
           watchErrors.clear(); schedule();
         });
@@ -285,8 +242,6 @@ export function createBoardServer({ sources, password, port = BOARD_PORT, allowe
         watchers.set(key, item); added = true;
       } catch { watchErrors.set(key, { source: "board", message: "File watching is unavailable; the displayed board may be stale." }); }
     }
-    // A new watcher misses the changes made while it starts, for example the files of a logbook just created, and on
-    // macOS the other watchers miss them too. The reads after it see them.
     if (added) settle();
   }
 
@@ -296,9 +251,6 @@ export function createBoardServer({ sources, password, port = BOARD_PORT, allowe
     let next;
     try {
       reconcileWatchers();
-      // A root that does not exist is not set up yet (an owner may use only one provider): a quiet note, not a failure.
-      // The shared root is optional (T306): until a project is shared, it is not there, and the board says nothing about it.
-      // The provider roots beyond the sources, as the one-shot board has them, so both read a sources.tsv row alike (F-T624-13).
       const read = readBoardSources(configured, { duringRead, providerRoots }), notSetUp = [];
       for (const [index, source] of read.entries()) {
         if (lstatSync(configured[index].path, { throwIfNoEntry: false })) continue;
@@ -307,37 +259,28 @@ export function createBoardServer({ sources, password, port = BOARD_PORT, allowe
       }
       next = { ...buildBoardModel(read, { now: clock(), landing }), notSetUp };
       next.diagnostics = [...next.diagnostics, ...watchErrors.values()];
-      // Validate the shared pages before replacing a good snapshot: the board, the Agents page, the milestones list and the Releases tab. A task
-      // page or a milestone page is checked when it is sent (pageFor), so the refresh renders 4 pages, not one per milestone.
       const pages = [() => renderBoardHtml(next, { snapshot: false, live: true }), () => renderAgentsHtml(next, { live: true }), () => renderMilestonesHtml(next, { live: true }), () => renderReleasesHtml(next, { live: true })];
       if (pages.some(render => Buffer.byteLength(render()) > MAX_HTML)) throw new RangeError("board rendering exceeds the size limit");
     } catch { next = { ...buildBoardModel([], { now: clock() }), diagnostics: unavailable }; }
-    // A logbook that kept changing through 3 reads (T306, C8) is no diagnostic: the board keeps its last good read under
-    // the note, not stale, and reads again soon; the next read with no change removes the note.
     const changing = next.changing ?? [];
     if (changing.length && !model?.changing?.length) settle();
     if (!next.diagnostics.length && !changing.length) { lastGood = next; model = { ...next, stale: false }; }
-    // The last good read lost nothing, so its note names no data that changed during the third read.
     else if (!next.diagnostics.length) model = lastGood ? { ...lastGood, stale: false, changing: changing.map(item => ({ project: item.project, at: lastGood.at })) } : { ...next, stale: false };
     else model = { ...(lastGood ?? next), stale: true, diagnostics: next.diagnostics, notSetUp: next.notSetUp, changing };
     revision++;
     for (const client of clients) publish(client);
-    // A clock boundary changes the seven-day column; this never polls files on an interval.
     const now = Date.now(), boundary = model.tasks.reduce((first, task) => {
       const at = task.completedAt === null ? NaN : task.completedAt + 7 * 86400000 + 1;
       return Number.isFinite(at) && at > now ? Math.min(first, at) : first;
-    }, model.agents?.next > now ? model.agents.next : Infinity); // and the next time an agent's state changes with no file event (T308)
+    }, model.agents?.next > now ? model.agents.next : Infinity);
     if (Number.isFinite(boundary)) { boundaryTimer = setTimeout(schedule, Math.min(boundary - now, 2_147_483_647)); boundaryTimer.unref(); }
   }
 
   const server = createServer({ maxHeaderSize: 8192 }, async (request, response) => {
     securityHeaders(response);
-    if (pagesRequest(request.url)) return servePages(request, response, { onMac, model }); // the pages route has its own rules (T1001)
+    if (pagesRequest(request.url)) return servePages(request, response, { onMac, model });
     const fail = (status, text) => { response.writeHead(status, { "Content-Type": "text/plain; charset=utf-8" }); response.end(request.method === "HEAD" ? undefined : `${text}\n`); };
     if (!browserBoundary(request)) return fail(403, "This request is not permitted.");
-    // The owner's decisions (T216, T229): on the Mac itself the board needs no sign-in. Every other request signs in
-    // with the owner's password: also one that a tunnel forwards to the loopback listener, maybe with a loopback Host.
-    // Until the owner sets a password, there is no sign-in, so such a request gets 403 (no sign-in can change it).
     const mac = onMac(request);
     if (mac) { if (boardHeader) response.setHeader("X-Sage-Board", boardHeader); }
     else if (!password) return fail(403, OFF);
@@ -349,7 +292,6 @@ export function createBoardServer({ sources, password, port = BOARD_PORT, allowe
     if (!["GET", "HEAD"].includes(request.method)) { response.setHeader("Allow", "GET, HEAD"); return fail(405, "This method is not permitted."); }
     let selected = route(request.url);
     if (selected?.renamed !== undefined) {
-      // The milestone whose id was that program id (its was, from the logbook's id map); any other key keeps its words.
       const key = selected.renamed && (model.milestones.find(milestone => milestone.was && `${milestone.project}/${milestone.was}` === selected.renamed)?.key ?? selected.renamed);
       if (selected.events) selected = key ? { task: null, milestone: key, events: true } : { task: null, milestones: true, events: true };
       else {
@@ -358,7 +300,6 @@ export function createBoardServer({ sources, password, port = BOARD_PORT, allowe
       }
     }
     if (!selected || selected.task && !model.tasks.some(task => task.key === selected.task)) return fail(404, "This board page does not exist.");
-    // An unknown milestone gets the not-found page of the design, with status 404; its stream does not exist.
     const missing = selected.milestone && !model.milestones.some(milestone => milestone.key === selected.milestone);
     if (missing && selected.events) return fail(404, "This board page does not exist.");
     if (selected.events) {
@@ -393,8 +334,6 @@ export function createBoardServer({ sources, password, port = BOARD_PORT, allowe
           reject(Object.assign(new Error(error.code === "EADDRINUSE" ? `Board port ${port} is already in use.` : "The board listener could not start."), { code: error.code }));
         };
         server.once("error", failed);
-        // The first watchers settle before the listener opens: the second read sees what changed while they started.
-        // The start has its own timer, so a watcher event in these 250 ms cannot cancel it (F-T216-19).
         startTimer = setTimeout(() => {
           if (closed) return failed({});
           refresh();
@@ -412,7 +351,7 @@ export function createBoardServer({ sources, password, port = BOARD_PORT, allowe
       if (closePromise) return closePromise;
       closed = true;
       for (const { watcher } of watchers.values()) watcher.close(); watchers.clear();
-      clearTimeout(refreshTimer); clearTimeout(boundaryTimer); clearTimeout(settleTimer); // a pending start's own timer ends that start
+      clearTimeout(refreshTimer); clearTimeout(boundaryTimer); clearTimeout(settleTimer);
       for (const client of clients) { client.response.destroy(); removeClient(client); }
       closePromise = (async () => {
         if (startPromise) await startPromise.catch(() => {});

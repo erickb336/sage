@@ -1,4 +1,3 @@
-// Report structure only. A complete report does not prove its claims or authorize a verdict.
 export const REPORT_FIELDS = Object.freeze(["STATUS", "RESULT", "EVIDENCE", "FINDINGS", "QUESTIONS", "NOT VERIFIED", "BRANCH"]);
 const header = new RegExp(`^[ \t*_#|>-]*(${REPORT_FIELDS.join("|")})(?=$|[ \t:*_|])[ \t*_]*(?::|\\|)?[ \t]*(.*)$`);
 const refuse = () => { throw Error("A report needs every required field and a valid status"); };

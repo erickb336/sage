@@ -1,15 +1,9 @@
-// sage's Codex hook entries (T957): the fixed list that `hooks install` puts in the user's <CODEX_HOME>/hooks.json, one
-// group for each event, with no matcher, each running the launcher (launch.mjs) with its event. The matchers are in
-// sage's code (dispatch.mjs). Codex hashes each entry's event, matcher, command, timeout, statusMessage, async and
-// additionalContextLimit (hooks discovery.rs, hook_hash), so a change of this list needs the user's trust again; an
-// update of sage's other files does not.
 import { mkdirSync, readFileSync, realpathSync } from "node:fs";
 import { homedir } from "node:os";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { activeVersion, LAUNCHER_VERSION, launchCommand, launcherFolder, planHooks, pluginOff, readText, sageGroup, TIMEOUTS, tomlValue, uninstall, versionsFolder, writeAtomic } from "./launch.mjs";
 
-/** Each event's fields: its timeout (the launcher's TIMEOUTS), and the context limits that the roles need. */
 export const EVENTS = {
   SessionStart: { timeout: TIMEOUTS.SessionStart, additionalContextLimit: 6000 },
   UserPromptSubmit: { timeout: TIMEOUTS.UserPromptSubmit, additionalContextLimit: 6000 },
@@ -21,26 +15,14 @@ export const EVENTS = {
   Stop: { timeout: TIMEOUTS.Stop },
 };
 
-/** sage's groups for a Codex home, by event. */
 export const entries = (codexHome) => Object.fromEntries(Object.entries(EVENTS).map(([event, fields]) =>
   [event, { hooks: [{ type: "command", command: launchCommand(codexHome, event), ...fields }] }]));
 
 const HERE = dirname(fileURLToPath(import.meta.url));
-/** The plugin's state tool, for the install command in each line that asks for it. */
 export const INSTALL = `node "${join(HERE, "..", "skills", "sage", "sage.mjs")}" hooks install`;
-/**
- * How a line asks for the install (F-T957-19): it writes the user's hooks file, so the owner decides. The user runs the
- * command, or says yes and the chief runs it; the chief never runs it on its own.
- */
 export const ASK_INSTALL = `the user runs this command in a terminal, or says yes and then the chief runs it (never without that yes): ${INSTALL}`;
-/** The steps that end a pin of the sage marketplace and install the newest sage: the user runs them in a terminal. */
 export const UNPIN = "codex plugin marketplace remove sage, then codex plugin marketplace add https://github.com/erickb336/sage-stack.git, then codex plugin add sage@sage";
 
-/**
- * The warning when config.toml pins the sage marketplace to one commit ([marketplaces.sage] ref = "<sha>", from
- * `codex plugin marketplace add --ref`), or undefined (T971). An upgrade of a pinned marketplace fetches the same
- * commit, so `codex plugin add sage@sage` keeps the old copy. A ref that names a branch follows it, so only a commit counts.
- */
 export function pinWarning(codexHome) {
   const sha = /^"([0-9a-f]{7,40})"$|^'([0-9a-f]{7,40})'$/i.exec(tomlValue(codexHome, ["marketplaces", "sage", "ref"]) ?? "");
   if (!sha) return undefined;
@@ -48,10 +30,6 @@ export function pinWarning(codexHome) {
 }
 const snake = (event) => event.replace(/(?<!^)([A-Z])/g, "_$1").toLowerCase();
 
-/**
- * The keys that have a trust record in config.toml: [hooks.state."<key>"] tables with a trusted_hash, and not turned off
- * (enabled = false, from /hooks). Codex checks each hash.
- */
 function trustRecords(codexHome) {
   const hashed = new Set(), off = new Set();
   let table = null;
@@ -65,19 +43,12 @@ function trustRecords(codexHome) {
   return new Set([...hashed].filter((key) => !off.has(key)));
 }
 
-/**
- * The state of sage's entries in a Codex home (its real path): for each event of the list, "ok", "changed" or "missing",
- * and how many of the present entries are trusted: an entry that matches, with a trust record that is on. A changed entry
- * keeps the record of its old text, which Codex reports as Modified, so it does not count (F-T957-4). Codex keys a user
- * hook as <hooks.json>:<event>:<group>:<handler>, from CODEX_HOME's real path, or from ~/.codex as it is when CODEX_HOME is
- * not set, so both forms count. Only sage's handler counts in its group: the group's other fields are Codex's matcher.
- */
 export function hookState(codexHome, env = process.env) {
   const file = join(codexHome, "hooks.json");
   let hooks = {};
-  try { hooks = JSON.parse(readText(file) ?? "{}").hooks ?? {}; } catch { /* a broken file: every entry is missing */ }
+  try { hooks = JSON.parse(readText(file) ?? "{}").hooks ?? {}; } catch {}
   const plain = join(env.HOME || homedir(), ".codex");
-  let real; try { real = realpathSync(plain); } catch { /* none */ }
+  let real; try { real = realpathSync(plain); } catch {}
   const sources = [...new Set([file, ...(real === codexHome ? [join(plain, "hooks.json")] : [])])];
   const records = trustRecords(codexHome), wanted = entries(codexHome);
   const events = Object.keys(EVENTS).map((event) => {
@@ -93,20 +64,17 @@ export function hookState(codexHome, env = process.env) {
   return { file, events, present: events.filter((e) => e.state !== "missing").length, trusted: events.filter((e) => e.trusted).length };
 }
 
-/** The version of an installed launcher, from its text, or undefined. */
 function installedLauncher(codexHome) {
   const found = /LAUNCHER_VERSION = (\d+);/.exec(readText(join(launcherFolder(codexHome), "launch.mjs")) ?? "");
   return found ? Number(found[1]) : undefined;
 }
 
-/** Install or update sage's entries and the launcher in a Codex home. It returns the lines to print, and throws on a refusal. */
 export function install(codexHome) {
   if (/["$`\\]/.test(codexHome)) throw new Error(`the Codex home ${JSON.stringify(codexHome)} has a " $ \` or \\ character, which the hook command cannot hold. Use a Codex home without them`);
   const file = join(codexHome, "hooks.json"), text = readText(file);
   let planned;
   try { planned = planHooks(text, codexHome, entries(codexHome)); } catch (error) { throw new Error(`${file}: ${error.message}. Fix or move the file, then run this again. Nothing changed`); }
   const lines = [];
-  // The launcher first, so that no entry runs a missing launcher.
   const source = join(HERE, "launch.mjs"), target = join(launcherFolder(codexHome), "launch.mjs");
   if (readText(target) !== readFileSync(source, "utf8")) {
     mkdirSync(launcherFolder(codexHome), { recursive: true });
@@ -127,7 +95,6 @@ export function install(codexHome) {
   return lines;
 }
 
-/** The lines of `hooks status`. */
 export function status(codexHome, env = process.env) {
   const { file, events, present, trusted } = hookState(codexHome, env);
   const version = activeVersion(codexHome), launcher = installedLauncher(codexHome);
@@ -141,7 +108,6 @@ export function status(codexHome, env = process.env) {
   ];
 }
 
-/** The Codex home whose plugin cache holds this plugin (<home>/plugins/cache/sage/sage/<version>), or undefined. */
 export function pluginHome(root = join(HERE, "..")) {
   let real;
   try { real = realpathSync(root); } catch { return undefined; }
@@ -149,12 +115,6 @@ export function pluginHome(root = join(HERE, "..")) {
   return dirname(real) === versionsFolder(home) ? home : undefined;
 }
 
-/**
- * The `hooks` command of the state tool: install, uninstall or status, for the Codex home that holds this plugin, so that
- * the entries run the version that this home's Codex uses (F-T957-25); for a plugin outside a Codex home (a clone), for
- * CODEX_HOME, or ~/.codex. It refuses when CODEX_HOME names another home than the plugin's, because one of the two is a
- * mistake.
- */
 export function hooksCommand(args, env = process.env, own = pluginHome()) {
   const [word] = args;
   if (!["install", "uninstall", "status"].includes(word) || args.length !== 1) return { code: 1, text: "usage: sage.mjs hooks install|uninstall|status" };

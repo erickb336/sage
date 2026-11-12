@@ -1,8 +1,4 @@
-// T984: sage's messages to the owner. One message model (core's message.mjs), its text form at 46 columns, its page
-// with each picture drawn as an image from its own text, the pure checks, and the state tool's message command.
-// The fixtures in fixtures/messages are the 15 example messages that the owner approved (real content from the logbook
-// of 11 Nov 2026; the confirm message is SAMPLE DATA, as its example page said).
-import "./test-env.mjs"; // first: no variable of the developer's shell changes a result
+import "./test-env.mjs";
 import assert from "node:assert/strict";
 import { execFileSync, spawnSync } from "node:child_process";
 import { createHash } from "node:crypto";
@@ -21,11 +17,9 @@ const FIXTURES = join(HERE, "fixtures", "messages");
 const TOOL = join(HERE, "..", "plugins", "sage", "skills", "sage", "sage.mjs");
 const fixture = (name) => JSON.parse(readFileSync(join(FIXTURES, name), "utf8"));
 const ALL = readdirSync(FIXTURES).filter((f) => f.endsWith(".json")).sort();
-/** A fixture with its Page blocks pointed at a made-up pages folder, as the command does it. */
 const resolved = (msg) => ({ ...msg, blocks: msg.blocks.map((b) => (b.t === "page" ? { ...b, path: `/pages/${b.task}/${b.file}` } : b)) });
 const render = (msg) => renderMessage(resolved(msg), { pagePath: (name) => `/pages/T1/${name}` });
 const unescape = (s) => s.replace(/&lt;/g, "<").replace(/&gt;/g, ">").replace(/&quot;/g, '"').replace(/&#39;/g, "'").replace(/&amp;/g, "&");
-/** The plain-text form that a page holds. */
 const pageText = (html) => unescape(/<pre>([\s\S]*?)<\/pre><\/details>/.exec(html)[1]);
 const pictures = (text) => [...text.matchAll(/^```\n([\s\S]*?)\n```$/gm)].map((m) => m[1].split("\n")).filter((l) => l.some((x) => /[\u2500-\u257f]/u.test(x)));
 
@@ -68,15 +62,12 @@ test("the catch-up frame: boxes inside boxes, each state word from core's state 
   assert.ok(frame.includes("│ │ ╔═ Task: Presentation skill ═════════╗ │ │"));
   assert.ok(frame.includes("│ │ │ Waiting for the presentation skill │ │ │"));
   const word = (node) => frameLines(node, 46).lines[1].slice(2).trim().replace(/ *│$/, "");
-  // A task's recorded state gives its word (taskWord), a wait gives "waiting", an owner's question "needs you".
   assert.equal(word({ box: "task", name: "a", state: "merged" }), "Done");
   assert.equal(word({ box: "task", name: "a", state: "abandoned" }), "Stopped");
   assert.equal(word({ box: "task", name: "a", state: "framed", waits: "the rename" }), "Waiting for the rename");
   assert.equal(word({ box: "task", name: "a", state: "building", needs: "Approve the plan?" }), "Needs you");
   assert.equal(word({ box: "task", name: "a", state: "framed" }), "Not started");
-  // A state that the tool does not write has no word: the box says so.
   assert.equal(word({ box: "task", name: "a", state: "dreaming" }), "State unknown");
-  // A milestone's own state, or its tasks; a release's items.
   assert.equal(word({ box: "milestone", name: "1: a", state: "proposed" }), "Needs you");
   assert.equal(word({ box: "milestone", name: "1: a", items: [{ box: "task", name: "b", state: "merged" }, { box: "task", name: "c", state: "concluded" }] }), "Done");
   assert.equal(word({ box: "release", name: "1.0", items: [{ box: "task", name: "b", state: "abandoned" }] }), "Stopped");
@@ -84,7 +75,6 @@ test("the catch-up frame: boxes inside boxes, each state word from core's state 
   assert.match(frameLines({ box: "task", name: "a very long name that cannot fit into the top edge of its box", state: "framed" }, 46).problems[0], /too long for a box of 46 columns/);
 });
 
-/** The cells of an SVG's text, by row and column, as the renderer placed them (the tags' pills left out). */
 function svgCells(svg) {
   const cells = new Map();
   for (const [, cls, x, y, body] of svg.matchAll(/<text class="([^"]*)" x="([\d.]+)" y="([\d.]+)">(.*?)<\/text>/g)) {
@@ -112,23 +102,18 @@ test("each picture's image is drawn from its text: every letter of the text is i
     }
   }
   assert.ok(checked >= 12, `pictures checked: ${checked}`);
-  // A change of one word in the text changes the image, so an image cannot stay from an older text.
   const lines = ["╭─ Release 1.0 ─╮", "│ In progress   │", "╰───────────────╯"];
   assert.notEqual(pictureSvg(lines), pictureSvg(lines.map((l) => l.replace("In progress", "Done       "))));
 });
 
 test("the checks catch the designer's negative cases: width, tree marks, an image not from the text, outside loads, raw ids", () => {
   const out = render(fixture("10-catch-up.json")), html = out.page.html;
-  // Width: one column too many in a picture.
   const wide = out.text.replace("│ Done: milestones 1 to 4                    │", "│ Done: milestones 1 to 4                     │");
   assert.match(textProblems(wide).join("\n"), /line 21 is 47 columns: a picture has at most 46/);
   assert.deepEqual(textProblems(wide, { width: 66 }).filter((p) => /columns/.test(p)), [], "66 on a long page");
-  // Tree marks, in a picture or in the text.
   assert.match(textProblems(out.text.replace("What changed\n", "What changed\n├─ one\n")).join("\n"), /tree marks/);
-  // An image that is not drawn from the text: the page's text form says one thing, the image another.
   const stale = html.replace(/(<svg class="pic"[\s\S]*?)In progress/, "$1Done");
   assert.match(pageProblems(stale).join("\n"), /1 of the page's 1 images are not drawn from a picture of its text form/);
-  // Loads from outside the page.
   for (const [what, page] of [["an image", html.replace("<main>", '<main><img src="https://example.com/x.png">')],
     ["a style sheet", html.replace("</head>", '<link rel="stylesheet" href="https://example.com/x.css"></head>')],
     ["an import", html.replace("<style>", "<style>@import 'https://example.com/x.css';")],
@@ -136,7 +121,6 @@ test("the checks catch the designer's negative cases: width, tree marks, an imag
     assert.match(pageProblems(page).join("\n"), /the page loads from outside itself/, what);
   assert.match(pageProblems(html.replace("</body>", "<script>fetch('https://example.com')</script></body>")).join("\n"), /2 scripts/);
   assert.match(pageProblems(html.replace(PAGE_POLICY, "default-src *")).join("\n"), /Content-Security-Policy is not sage's/);
-  // Raw ids in the state tool's own forms, also those that the designer's pattern missed (G7, M12, T12345).
   for (const id of ["T12345", "G7", "M12", "R40", "C2", "F-T807-1", "PR 515", "T10"])
     assert.match(textProblems(out.text.replace("Since: 18:00 today.", `Since: 18:00 today, after ${id}.`)).join("\n"), new RegExp(`raw ids in the message: ${id}\\.`), id);
   assert.match(textProblems(out.text.replace("│ In progress · in review                │", "│ In progress · in review T995           │")).join("\n"), /raw ids in the message: T995/, "in a picture too");
@@ -153,7 +137,6 @@ test("F-T984-1: the page check reads only real attributes, not a picture's title
     assert.equal(out.problems, undefined, `${title}: ${out.problems}`);
     assert.ok(out.page.html.includes(`aria-label="${title}"`), title);
   }
-  // Real attributes are still caught, quoted or not.
   const html = render(fixture("05-explainer.json")).page.html;
   assert.match(pageProblems(html.replace('<svg class="pic"', '<svg class="pic" onload="alert(1)"')).join("\n"), /an event attribute/);
   assert.match(pageProblems(html.replace("<main>", "<main><a href=https://example.com>x</a>")).join("\n"), /loads from outside itself/);
@@ -165,7 +148,6 @@ test("F-T984-2: a picture of arrows alone, with no box mark, is a picture: its i
   assert.equal(arrows.problems, undefined, arrows.problems?.join("\n"));
   assert.equal((arrows.page.html.match(/<svg class="pic"/g) ?? []).length, 1);
   assert.deepEqual(pageProblems(arrows.page.html), []);
-  // An architecture needs a picture: one of arrows alone counts, also in the text check.
   const arch = fixture("08-architecture.json");
   const flow = render({ ...arch, blocks: arch.blocks.map((b) => (b.t === "picture" ? { ...b, lines: ["Brief  ▶  Run  ▶  Report"] } : b)) });
   assert.equal(flow.problems, undefined, flow.problems?.join("\n"));
@@ -192,7 +174,6 @@ test("T1005: messageMiss gives the note of a hand-written message that misses it
   assert.deepEqual(miss.names, ["tree marks", "raw ids", "missing: Needed by", "no pick"]);
   assert.deepEqual(miss.note.split("\n").slice(1, -1), textProblems(hand).map((p) => `- ${p}`), "the note lists each problem of the text check");
   assert.match(miss.note, /^sage: your last message names the kind "question"/);
-  // A part out of order, and a missing picture, have names of their own.
   const needed = /\nNeeded by:[^\n]*\n[^\n]*\n/.exec(out)[0];
   assert.deepEqual(messageMiss(out.replace(needed, "\n").replace("\nIf you do not answer:", `${needed}If you do not answer:`)).names, ["out of order: Needed by"]);
   const chart = render(fixture("09-state-chart.json")).text.replace(/```[\s\S]*?```/g, "");
@@ -200,8 +181,6 @@ test("T1005: messageMiss gives the note of a hand-written message that misses it
 });
 
 test("F-T984-11: on the message command's path, a word in code and a product name are not ids, and the state tool's ids are", () => {
-  // renderMessage is what the message command runs. Before T984's repair its text form dropped the code marks, so a word
-  // in code reached the raw-id check bare, and "the M4 Mac" (a milestone's form, the PE's false hit) refused a message.
   const progress = fixture("01-progress-note.json");
   const say = (text) => render({ ...progress, blocks: [progress.blocks[0], { t: "p", text }, ...progress.blocks.slice(1)] });
   for (const text of ["The tests ran on the Mac with the `M4` chip.", "Run `sage show T12` and `gh pr view 40` first.", "A long code span: `node sage.mjs message T12 --file /tmp/sage-message/T12.json` wraps."]) {
@@ -211,7 +190,6 @@ test("F-T984-11: on the message command's path, a word in code and a product nam
   }
   for (const text of ["The tests ran on the M4 Mac.", "It runs on an M2 chip and an M3 Pro.", "The old G5 server is gone.", "Play a C3 chord.", "A MacBook with an M4 Max."])
     assert.equal(say(text).problems, undefined, text);
-  // The state tool's own forms stay ids, also next to a product name that is not right after them.
   for (const [text, id] of [["After G7, the Mac.", "G7"], ["It waits for M12.", "M12"], ["The M4 milestone is done.", "M4"], ["T12345 is next.", "T12345"],
     ["T10 waits.", "T10"], ["See PR 515.", "PR 515"], ["R40 ran.", "R40"], ["C2 owns it.", "C2"], ["F-T807-1 is fixed.", "F-T807-1"], ["The T10 chip.", "T10"]])
     assert.match(say(text).problems?.join("\n") ?? "", new RegExp(`raw ids in the message: ${id}\\.`), text);
@@ -224,7 +202,6 @@ test("a picture drawn by hand: each box that does not close is named, and its ma
   assert.doesNotMatch(svg, /<rect class="pic-box/, "no box is drawn from it");
   assert.match(svg, /<text class="pic-text pic-raw" x="0" y="[\d.]+">╔<\/text>/, "the corner stays in its cell, in a fixed-width font");
   assert.equal((svg.match(/pic-raw/g) ?? []).length, [...lines.join("")].filter((ch) => /[╔╗╚═║]/.test(ch)).length, "every mark of the open box is in the image");
-  // The rail of a state chart is a curve, not a box: ╭─ meets the side of a dashed box.
   assert.deepEqual(openBoxes(fixture("09-state-chart.json").blocks.find((b) => b.t === "picture").lines), []);
   const msg = { ...fixture("08-architecture.json") };
   msg.blocks = msg.blocks.map((b, k) => (k === 1 ? { ...b, lines: [...b.lines.slice(0, -1), "╰────"] } : b));
@@ -247,16 +224,13 @@ test("the shape of each kind holds in code: a missing part, a part out of order,
   const design = structuredClone(fixture("07-design.json"));
   design.blocks = design.blocks.filter((b) => b.t !== "toggle");
   assert.match(render(design).problems.join("\n"), /a design shows its before and after/);
-  // The design's change table: for changes without a screen.
   design.blocks.splice(4, 0, { t: "changes", rows: [{ where: "The status lines", today: "“0 of 8 merged”", after: "“0 of 8 done”", why: "A study that ended counts too." }] });
   const changed = render(design);
   assert.equal(changed.problems, undefined, changed.problems);
   assert.match(changed.text, /\n1\. The status lines\n {3}- Today: “0 of 8 merged”\n {3}- After this change: “0 of 8 done”\n {3}- Why: A study that ended counts too\./);
-  // The text check reads the same shape: a hand-written question with no "Needed by".
   assert.match(textProblems(render(fixture("02-question.json")).text.replace(/\nNeeded by:[^\n]*\n[^\n]*\n/, "\n")).join("\n"), /a question needs "Needed by"/);
 });
 
-/** The problems of a message that the command must refuse: a list, never a throw. */
 const refusal = (msg) => { const out = renderMessage(msg); assert.ok(out.problems, "refused"); return out.problems.join("\n"); };
 
 test("F-T984-3: a kind or a block type that is an inherited name is refused, not a crash", () => {
@@ -273,7 +247,6 @@ test("F-T984-13: a null block, and sections or a frame nested too deep, are refu
   const nest = (n) => { let b = { t: "p", text: "x" }; for (let i = 0; i < n; i++) b = { t: "section", label: "s", body: [b] }; return b; };
   assert.match(refusal({ ...progress, blocks: [...progress.blocks, nest(5000)] }), /sections nest at most 5 deep/);
   assert.match(refusal({ ...progress, blocks: [...progress.blocks, nest(6)] }), /sections nest at most 5 deep/);
-  // Five deep is still a message: a page shows the labels as h2 to h6.
   assert.doesNotMatch(renderMessage({ ...progress, blocks: [...progress.blocks, nest(5)] }).problems?.join("\n") ?? "", /nest/);
   let frame = { box: "task", name: "a", state: "framed" };
   for (let i = 0; i < 5000; i++) frame = { box: "group", name: "g", word: "done", items: [frame] };
@@ -304,13 +277,10 @@ test("F-T984-9: the confirm example is sample data, and its text says so before 
   assert.ok(at > 0 && at < text.indexOf("What I will do"), text);
 });
 
-/** The state word on the first line of a frame's top box. */
 const frameWord = (node) => frameLines(node, 46).lines[1]?.slice(2).trim().replace(/ *│$/, "");
-/** A catch-up with its frame replaced. */
 const withFrame = (frame) => { const c = fixture("10-catch-up.json"); return { ...c, blocks: c.blocks.map((b) => (b.t === "picture" ? { ...b, frame } : b)) }; };
 
 test("F-T984-44: a milestone that the chief marks done reads done; boxes that disagree with it, and a box of text lines alone, are refused", () => {
-  // QA's catch-up (R3325): milestone 4 is done, its tasks one line of text.
   const out = render(withFrame({ box: "release", name: "1.0", items: [
     { box: "milestone", name: "4: Board", state: "done", items: ["All 6 tasks merged"] },
     { box: "milestone", name: "5: Sage feel", items: [{ box: "task", name: "Message command", state: "reviewing", here: true }] }] }));
@@ -319,10 +289,8 @@ test("F-T984-44: a milestone that the chief marks done reads done; boxes that di
   assert.equal(frame[at + 1].slice(4).trim().replace(/ *│ │$/, ""), "Done");
   assert.equal(frameWord({ box: "milestone", name: "4", state: "done" }), "Done");
   assert.equal(frameWord({ box: "milestone", name: "4", state: "done", items: [{ box: "task", name: "b", state: "merged" }] }), "Done");
-  // The chief's state and the boxes inside it disagree: the frame is refused, not shown with either word.
   assert.match(frameLines({ box: "milestone", name: "4", state: "done", items: [{ box: "task", name: "b", state: "building" }] }, 46).problems.join("\n"),
     /^frame is done, but its boxes say in progress: give each task its recorded state/);
-  // A box whose items are only lines of text has nothing to count: it gives its word.
   for (const node of [{ box: "release", name: "1.0", items: ["Done: milestones 1 to 4"] }, { box: "milestone", name: "4", items: ["All 6 tasks merged"] }])
     assert.match(frameLines(node, 46).problems.join("\n"), /^frame has only lines of text, so no box gives its word: give its word/, node.box);
   assert.equal(frameWord({ box: "release", name: "1.0", word: "done", items: ["Done: milestones 1 to 4"] }), "Done");
@@ -334,7 +302,6 @@ test("F-T984-48: a group's own word does not hide the tasks inside it: its box c
   assert.equal(frameWord({ box: "milestone", name: "5", items: [group] }), "In progress");
   assert.equal(frameWord({ box: "release", name: "1.0", items: [{ box: "milestone", name: "5", items: [group] }] }), "In progress");
   assert.equal(frameWord(group), "Waiting", "the group shows its own word");
-  // A group with no boxes inside counts as its own word.
   assert.equal(frameWord({ box: "milestone", name: "5", items: [{ box: "group", name: "g", word: "done" }] }), "Done");
 });
 
@@ -375,7 +342,6 @@ test("F-T984-31: the incident and the design give the cost of the new words that
   const total = [0, 1].map((side) => rows.reduce((t, r) => t + Number(r[1].split(" M")[0].split(" to ")[side]), 0)).join(" to ");
   assert.equal(total, "10.5 to 21");
   for (const name of ["06-incident.json", "07-design.json"]) {
-    // The incident also quotes the old figure that was wrong, 2 to 5 M tokens.
     const said = [...render(fixture(name)).text.replace(/\s+/g, " ").matchAll(/([\d.]+ to [\d.]+) M tokens/g)].map((m) => m[1]).filter((r) => r !== "2 to 5");
     assert.ok(said.length > 0 && said.every((r) => r === total), `${name}: ${said.join(", ")}`);
   }
@@ -413,8 +379,6 @@ test("the text form: one blank line between parts, pictures in fences, a table a
   assert.equal(messageText(prepareMessage(resolved(fixture("07-design.json"))).msg).includes("Today\n"), false, "the chat shows the picture after the change; the page has the Today switch");
 });
 
-// ---------------------------------------------------------------- the state tool's message command
-
 function sandbox() {
   const base = realpathSync(mkdtempSync(join(tmpdir(), "sage-t984-")));
   const env = { ...process.env, HOME: join(base, "home"), SAGE_HOME: join(base, "sage"), SAGE_TEST_PIDS: "{}", SAGE_TEST_KILLS: join(base, "kills"),
@@ -444,14 +408,12 @@ test("the message command prints the text, writes the page of a pictured message
   assert.deepEqual(pageProblems(readFileSync(path, "utf8")), []);
   assert.deepEqual(textProblems(r.out), []);
   assert.equal(sage("message", "T1", "--file", file("catch-up.json", fixture("10-catch-up.json"))).out, r.out, "the same message gives the same page again");
-  // A message with no picture: the text only, and no page.
   const before = readdirSync(folder).length;
   const plain = sage("message", "T1", "--json", JSON.stringify(fixture("01-progress-note.json")));
   assert.equal(plain.status, 0, plain.out);
   assert.match(plain.out, /^PROGRESS\n\nThe new words: the build is done, and four\nchecks run now\n/);
   assert.doesNotMatch(plain.out, /Page · /);
   assert.equal(readdirSync(folder).length, before);
-  // A link that waits at the page's name is replaced, not followed.
   const target = join(base, "outside.txt");
   writeFileSync(target, "keep");
   const html = readFileSync(path, "utf8");
@@ -469,23 +431,18 @@ test("the message command resolves a Page block in a task's pages folder, and re
   const folder = sage("pages", "T1").out;
   writeFileSync(join(folder, "research.html"), "<p>research</p>");
   const local = { ...question, blocks: question.blocks.map((b) => (b.t === "page" ? { ...b, task: "T1" } : b)) };
-  // F-T1001-18: a path through a regular file (research.html is a file) is not there either: the same refusal, not a crash.
   const through = sage("message", "T1", "--json", JSON.stringify({ ...local, blocks: local.blocks.map((b) => (b.t === "page" ? { ...b, file: "research.html/x.html" } : b)) }));
   assert.equal(through.status, 1, through.out);
   assert.match(through.out, /^sage: the page block "Showing visuals in every app" names .*\/research\.html\/x\.html, and it does not exist\. Save the page there first\. Nothing written\./);
   const ok = sage("message", "T1", "--file", file("q.json", local));
   assert.equal(ok.status, 0, ok.out);
-  // T1001: the board's link to the page, between the title and the path: its logbook is the folder above the pages folder.
   const logbook = basename(dirname(dirname(folder)));
   assert.ok(ok.out.endsWith(`Page · Showing visuals in every app\n  http://127.0.0.1:43123/pages/${logbook}/T1/research.html\n  ${join(folder, "research.html")}`), ok.out);
   assert.deepEqual(textProblems(ok.out), [], "the link line is part of the Page block, not the message's own words");
-  // A file that the board does not serve gets no Page block: a path out, a part with a dot first or with two dots inside
-  // (F-T1001-1), a type that is not a page, more than 3 parts.
   for (const page of [{ task: "T1", file: "../T2/x.html" }, { task: "T1", file: "/etc/passwd" }, { task: "../T1", file: "x.html" }, { path: "/etc/passwd" },
     { task: "T1", file: ".research.html" }, { task: "T1", file: "a/.b/x.html" }, { task: "T1", file: "state.json" }, { task: "T1", file: "run.log" }, { task: "T1", file: "a/b/c/x.html" },
     { task: "T1", file: "v1..v2.html" }, { task: "T1", file: "notes..md" }, { task: "T1", file: "a..b/x.html" }])
     assert.match(sage("message", "T1", "--json", JSON.stringify({ ...question, blocks: question.blocks.map((b) => (b.t === "page" ? { t: "page", title: "x", ...page } : b)) })).out, /a page block names its page as \{ t: page, title, task, file \}/, JSON.stringify(page));
-  // A link, a file with a second name, or a link in a folder of the path: the board refuses each, so the command does too.
   writeFileSync(join(folder, "outside.html"), "<p>x</p>");
   symlinkSync(join(folder, "outside.html"), join(folder, "link.html"));
   linkSync(join(folder, "outside.html"), join(folder, "hard.html"));
@@ -504,7 +461,6 @@ test("the message command resolves a Page block in a task's pages folder, and re
 
 test("F-T984-24: on the message command's path, sections nested thousands deep are refused, not a stack overflow", () => {
   const { base, sage } = sandbox();
-  // The JSON is written as text: JSON.stringify itself recurses, and a small stack (as on CI) overflows in the test.
   const deep = `${'{"t":"section","label":"s","body":['.repeat(5000)}{"t":"page","title":"x","task":"T1","file":"x.html"}${"]}".repeat(5000)}`;
   const progress = fixture("01-progress-note.json"), path = join(base, "deep.json");
   writeFileSync(path, JSON.stringify({ ...progress, blocks: [...progress.blocks, "DEEP"] }).replace('"DEEP"', deep));

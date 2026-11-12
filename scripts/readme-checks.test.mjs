@@ -1,5 +1,3 @@
-// The README's limits and the docs' link check (scripts/readme-checks.mjs, T381): literal pages in, problems out; then
-// `npm run check` in a copy of this repository, where a README, a screenshot and its record are broken on purpose.
 import "./test-env.mjs";
 import assert from "node:assert/strict";
 import { spawnSync } from "node:child_process";
@@ -25,7 +23,6 @@ test("a README within its budget, with a link to the releases page and a first s
 test("a missing link to the releases page and a first screen without the pitch, the status or the quick start link are problems", () => {
   assert.deepEqual(readmeProblems(README().replace(`](${RELEASES})`, "](docs/)")), [`README.md: no link to the releases page (${RELEASES}); the release notes list the changes`]);
   assert.deepEqual(readmeProblems(README({ pitch: "**sage is a plugin for Claude Code.**" })), ['README.md: the first screen (the first 10 lines with text) needs one bold sentence that starts "**sage-stack is a"']);
-  // Ten lines of text before the status line push it and its link off the first screen.
   const late = README().replace("**Status:**", `${Array.from({ length: 10 }, (_, i) => `Line ${i}.`).join("\n")}\n**Status:**`);
   assert.deepEqual(readmeProblems(late), ['README.md: the first screen (the first 10 lines with text) needs a status line that starts "**Status:**"', "README.md: the first screen (the first 10 lines with text) needs a link to #quick-start"]);
 });
@@ -59,14 +56,10 @@ test("a list item or a table cell of 4 sentences is a problem at its line (R1406
 });
 
 test("the paragraph rule counts sentences as a reader does, and paragraphs as GitHub does (R1404-2)", () => {
-  // "e.g.", "i.e." and "etc." before a word in lower case end no sentence; "etc." before a capital does.
   assert.deepEqual(paragraphProblems("x.md", "One, e.g. two. Three, i.e. four. Five, etc. and six, etc.\n"), []);
   assert.deepEqual(paragraphProblems("x.md", "One, etc. Two. Three. Four.\n"), ["x.md:1: a paragraph of 4 sentences; keep it at 3 or fewer. Split it, or make it a list or a table"]);
-  // A multi-line HTML comment, and the text of a setext heading, are not prose.
   assert.deepEqual(paragraphProblems("x.md", "<!--\nOne. Two. Three. Four.\n-->\n\nTitle one. Two. Three. Four.\n===\n\nTitle. Two. Three. Four.\n---\n"), []);
-  // A line that starts with an inline tag is prose; a block tag starts an HTML block, which runs to a blank line.
   assert.deepEqual(paragraphProblems("x.md", "<kbd>Ctrl</kbd> one. Two. Three. Four.\n\n<div>\nOne. Two. Three. Four.\n</div>\n"), ["x.md:1: a paragraph of 4 sentences; keep it at 3 or fewer. Split it, or make it a list or a table"]);
-  // A wrapped line that starts with a year and a dot continues the paragraph: only "1." starts a list there.
   assert.deepEqual(paragraphProblems("x.md", "It started in\n2026. Two. Three. Four.\n"), ["x.md:1: a paragraph of 4 sentences; keep it at 3 or fewer. Split it, or make it a list or a table"]);
 });
 
@@ -83,14 +76,11 @@ test("GitHub's anchors: lower case, no punctuation, a hyphen for each space", ()
   assert.equal(slug("1. Where it fits"), "1-where-it-fits");
   assert.equal(slug("Git: pushes, merges and branches"), "git-pushes-merges-and-branches");
   assert.equal(slug("The `sage` skill"), "the-sage-skill");
-  // GitHub keeps an underscore (R1393-1).
   assert.equal(slug("The max_agents cap"), "the-max_agents-cap");
-  // GitHub makes the anchor from the heading's text, so the "_" and "__" of emphasis go; code keeps them (R1398-1).
   assert.equal(slug("The _max_ cap"), "the-max-cap");
   assert.equal(slug("__Bold__ start and _end_"), "bold-start-and-end");
   assert.equal(slug("The _max_agents_ cap"), "the-max_agents-cap");
   assert.equal(slug("The `__init__` file"), "the-__init__-file");
-  // An "_" without its pair is text, and GitHub keeps it (R1404-1).
   assert.equal(slug("The _private field"), "the-_private-field");
   assert.equal(slug("The foo_ variable"), "the-foo_-variable");
   assert.equal(slug("File_.md"), "file_md");
@@ -102,7 +92,6 @@ test("a heading's anchor keeps the text of its code spans (R1420-1)", () => {
 });
 
 test("a repeated heading gets -1, -2, and a heading that already has that slug gets its own suffix, as on GitHub", () => {
-  // GitHub: A → a, A → a-1, A-1 → a-1-1 (a-1 is taken), A → a-2.
   assert.deepEqual([...anchors("# A\n\n## A\n\n## A-1\n\n## A\n")], ["a", "a-1", "a-1-1", "a-2"]);
 });
 
@@ -168,7 +157,6 @@ test("npm run check fails on a README with no link to the releases page, a missi
   cpSync(ROOT, dir, { recursive: true, filter: (src) => ![".git", ".claude", "node_modules"].includes(relative(ROOT, src)) });
   symlinkSync(join(ROOT, "node_modules"), join(dir, "node_modules"), "dir");
   const readme = readFileSync(join(dir, "README.md"), "utf8");
-  // The real README with each link to the releases page pointed elsewhere.
   writeFileSync(join(dir, "README.md"), readme.replaceAll(`](${RELEASES})`, "](docs/README.md)"));
   rmSync(join(dir, "docs/assets/board-dark.png"));
   writeFileSync(join(dir, "docs/assets/board-shots.json"), JSON.stringify({ sample: "0".repeat(64) }));
@@ -182,7 +170,6 @@ test("npm run check fails on a README with no link to the releases page, a missi
   assert.match(r.stderr, /^✗ docs\/assets\/board-shots\.json: the sample logbook changed after the board screenshots; run node scripts\/board-shots\.mjs/m);
 });
 
-// T467: three lines a new reader sees must be true. Each claim is read from the real README and compared with its source.
 const realReadme = () => readFileSync(join(ROOT, "README.md"), "utf8");
 
 test("the README names the system and Node version that CI runs, and the minimum in package.json (T467-1)", () => {
@@ -213,8 +200,6 @@ test("the README defines the on phrase and the update warning in words the reade
   assert.match(readme, /> \*\*Warning:\*\* before you use milestones \(tasks of one goal\) or tasks that wait for other tasks, update sage/);
 });
 
-// T521 (the owner, 2026-10-25): How sage works is in the README, the limits table is gone, and Learn more links the
-// rules page and SECURITY.md, which hold the limits.
 test("the README has How sage works, no Safety and limits section, and links the rules page and SECURITY.md in Learn more (T521)", () => {
   const readme = realReadme();
   assert.deepEqual(readme.match(/^## .*$/gm), ["## Why \"sage\"?", "## Quick start", "## The board", "## What to say", "## How sage works", "## Learn more", "## Credits and licence"]);

@@ -1,8 +1,3 @@
-// Standalone browser check of the T382 board polish batch (T374, T378): the address after needs=1, the Milestone filter
-// after a project change, a live refresh of the milestones pages' Needs you count, the milestone id in a phone's page bar, a
-// long milestone name on a card, a theme change in another tab, the forced colours, the approval band and 320 px task
-// pages. SAMPLE DATA from scripts/fixtures/board-milestones.mjs. It runs in `npm run test:browser`, not in `npm test`,
-// with Playwright's bundled Chromium, or the headless shell at BOARD_BROWSER_PATH; never an installed Chrome.
 import "./test-env.mjs";
 import assert from "node:assert/strict";
 import { createRequire } from "node:module";
@@ -16,11 +11,9 @@ const require = createRequire(import.meta.url);
 const { chromium } = require("playwright");
 const KEY = id => `claude/sage-ff5ee2/${id}`, key = id => Buffer.from(KEY(id)).toString("base64url");
 const model = buildBoardModel([milestonesSource()], { now: NOW });
-// Two projects, each with the sample milestones, so the picker has a project to change to.
 const other = milestonesSource("codex");
 Object.assign(other.projects[0], { key: "codex/other-abc123", name: "other-abc123", checkout: "/sample/other", displayName: "other (sample)" });
 const two = buildBoardModel([milestonesSource(), other], { now: NOW });
-// A milestone name with no space: it must wrap, not push the page sideways.
 const unbroken = milestonesTables();
 unbroken.milestones.find(row => row.id === "M1").name = "Providerneutralboardcoreforalltoolsandeverylogbookthatsagereads";
 const long = buildBoardModel([milestonesSource("claude", unbroken)], { now: NOW });
@@ -41,7 +34,6 @@ const PAGES = {
   [`/task/${key("T41")}`]: () => renderBoardHtml(model, { snapshot: false, taskKey: KEY("T41") }),
   "/snapshot": () => renderBoardHtml(model),
 };
-/** A browser context at a made-up origin; every other request fails. A live page gets a fake event stream. */
 async function context(t, { width = 1280, height = 900 } = {}) {
   const ctx = await browser.newContext({ viewport: { width, height }, colorScheme: "light", reducedMotion: "reduce", ...(width < 700 ? { isMobile: true, hasTouch: true } : {}) });
   t.after(() => ctx.close());
@@ -104,7 +96,6 @@ test("R1371-1: at 375 px the not-found page of a very long milestone id has no s
 });
 
 test("T374-5: a live refresh updates the Needs you count on /milestones and /milestone/KEY", async t => {
-  // The owner approved M3: its breakdown no longer needs you.
   const tables = milestonesTables();
   tables.gates.find(gate => gate.id === "G12").answer = "approve";
   const later = buildBoardModel([milestonesSource("claude", tables)], { now: NOW });
@@ -195,7 +186,6 @@ test("R1481-1: with scripts off, the snapshot's theme switch and its reset work 
   await ctx.route("**/*", route => route.abort());
   await ctx.route("http://board.test/snapshot", route => route.fulfill({ status: 200, contentType: "text/html; charset=utf-8", body: PAGES["/snapshot"]() }));
   const page = await ctx.newPage(), pg1 = `#milestone-${key("M1")}`;
-  // The focused control, and whether the owner sees it: the checkbox itself is visually hidden, so its label shows it.
   const focused = () => page.evaluate(() => { const at = document.activeElement, shown = at.matches(".flip") ? at.labels[0] : at; return [at.id || at.className, shown.checkVisibility()]; });
   await page.goto("http://board.test/snapshot#milestones");
   await page.focus("#flip-milestones");
@@ -204,7 +194,6 @@ test("R1481-1: with scripts off, the snapshot's theme switch and its reset work 
     await expectTheme(page, now, `milestones page: Space flips to ${now}`);
     assert.deepEqual(await focused(), ["flip-milestones", true], `milestones page, ${now}: focus stays on the switch`);
   }
-  // Another page's switch is the reset now: Tab reaches it after the way back, and Space flips the theme back.
   await page.evaluate(hash => { location.hash = hash; }, pg1);
   await page.focus(`${pg1} a.back`);
   for (let tabs = 0; tabs < 4 && !(await focused())[0].includes("unflip"); tabs++) await page.keyboard.press("Tab");
@@ -213,7 +202,6 @@ test("R1481-1: with scripts off, the snapshot's theme switch and its reset work 
   await expectTheme(page, "dark", "the reset flips it back");
   assert.deepEqual(await focused(), ["chip theme unflip", true], "focus stays on the reset");
   assert.equal(await page.locator(`${pg1} .theme:visible`).count(), 1, "one switch shows");
-  // One step back is this page's own switch, which flips the theme again.
   await page.keyboard.press("Shift+Tab");
   await page.keyboard.press("Space");
   await expectTheme(page, "light", "this page's switch flips it");

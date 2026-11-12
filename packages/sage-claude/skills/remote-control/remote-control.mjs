@@ -1,11 +1,4 @@
 #!/usr/bin/env node
-// The remote-control skill's script.
-//   node remote-control.mjs [on|off|status]               Remote Control for every new session (on is the default)
-//   node remote-control.mjs server <folder|off|status>    a Remote Control server in <folder> that starts at each login (macOS)
-// on and off set remoteControlAtStartup in the user's settings file, ~/.claude/settings.json (or $CLAUDE_CONFIG_DIR/settings.json).
-// /config writes the same key to the same file, and Claude Code reads it before the old place, ~/.claude.json.
-// They change only that key, and they write nothing when the file is not valid JSON.
-// server adds a launchd login item that runs `claude remote-control` in the folder, so the phone can start sessions there.
 import { execFileSync } from "node:child_process";
 import { accessSync, constants, existsSync, mkdirSync, readFileSync, renameSync, rmSync, statSync, writeFileSync } from "node:fs";
 import { homedir } from "node:os";
@@ -19,7 +12,6 @@ export function settingsFile(env = process.env) {
   return join(env.CLAUDE_CONFIG_DIR ?? join(homedir(), ".claude"), "settings.json");
 }
 
-/** Sets the key to `value`, or only reads it when `value` is undefined. Returns the value before and after. */
 export function setRemoteControl(file, value) {
   const exists = existsSync(file);
   let settings;
@@ -35,14 +27,12 @@ export function setRemoteControl(file, value) {
   mkdirSync(dirname(file), { recursive: true });
   const tmp = `${file}.${process.pid}`;
   writeFileSync(tmp, JSON.stringify(settings, null, 2) + "\n", { mode: exists ? statSync(file).mode & 0o777 : 0o600 });
-  renameSync(tmp, file); // whole or nothing, because Claude Code reads this file at any time
+  renameSync(tmp, file);
   return { before, after: value };
 }
 
 const label = (v) => (v === true ? "on" : v === false ? "off" : v === undefined ? "not set" : JSON.stringify(v));
 
-// The server: one launchd login item, in the user's GUI session, so that it can read the login from the keychain.
-// The label and the log keep the kit's first name, agent-kit, so that an installed login item stays under control.
 const LABEL = "io.github.erickb336.agent-kit.remote-control";
 const agentFile = () => join(homedir(), "Library/LaunchAgents", `${LABEL}.plist`);
 const logFile = () => join(homedir(), "Library/Logs/agent-kit-remote-control.log");
@@ -70,11 +60,6 @@ function serverState() {
 const xml = (s) => s.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
 const str = (s) => `<string>${xml(s)}</string>`;
 
-/**
- * env -u CLAUDE_CODE_OAUTH_TOKEN: that token (from `claude setup-token`) is inference-only, and Claude Code prefers it to
- * the full login, so the server would refuse to start. Other programs that need the token keep it.
- * --no-create-session-in-dir: a session appears only when the user starts one, not at each login or restart.
- */
 function plist({ folder, claude, path, log }) {
   const command = ["/usr/bin/env", "-u", "CLAUDE_CODE_OAUTH_TOKEN", claude, "remote-control", "--no-create-session-in-dir"];
   return `<?xml version="1.0" encoding="UTF-8"?>
@@ -101,16 +86,13 @@ function findClaude() {
       accessSync(join(dir, "claude"), constants.X_OK);
       return join(dir, "claude");
     } catch {
-      /* not in this folder */
     }
   }
   throw new Error("The claude command is not on PATH, so nothing changed.");
 }
 
-/** The server draws a status screen for a terminal; the log keeps its text without the terminal's control codes. */
 const log = () => (existsSync(logFile()) ? readFileSync(logFile(), "utf8").replace(/\x1b\[[0-9;?]*[A-Za-z]/g, "").trim() : "");
 const lastLines = (n) => log().split("\n").slice(-n).join("\n");
-/** The server writes "Ready" when claude.ai has registered it. Until then the phone cannot see it. */
 const readiness = () => (/\bReady\b/.test(log()) ? "Ready: the phone can start sessions." : `Not ready yet. Its last message:\n${lastLines(3) || "(none)"}`);
 
 function stopServer() {
@@ -132,7 +114,6 @@ function startServer(folderArg) {
   let state;
   try {
     launchctl("bootstrap", `gui/${process.getuid()}`, agentFile());
-    // A server that cannot start (no login, a folder not trusted) stops within a few seconds.
     Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, Number(process.env.AGENT_KIT_SERVER_WAIT_MS ?? 8000));
     state = serverState();
   } catch (err) {

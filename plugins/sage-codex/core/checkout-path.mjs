@@ -9,7 +9,6 @@ export const checkoutContains = (root, path) => {
   return a.length <= b.length && a.every((part, i) => part === b[i]);
 };
 
-/** Resolve in filesystem order. No case folding or Unicode normalization grants access. */
 export function resolveCheckoutPath(path, cwd = "/") {
   if (!valid(path) || !valid(cwd) || !isAbsolute(cwd)) unavailable();
   const absolute = isAbsolute(path) ? path : `${cwd}/${path}`;
@@ -35,7 +34,6 @@ export function resolveCheckoutPath(path, cwd = "/") {
     }
     if (stat.isSymbolicLink()) {
       if (++hops > 64) unavailable();
-      // A dangling link is not a missing suffix supplied by the caller.
       try { realpathSync.native(next); } catch { unavailable(); }
       const link = readlinkSync(next);
       if (!valid(link)) unavailable();
@@ -51,7 +49,6 @@ export function resolveCheckoutPath(path, cwd = "/") {
   return { canonicalTarget: current, traversed, missing, directory: !missing && lstatSync(current).isDirectory() };
 }
 
-/** A marker alone proves nothing. Verify Git's checkout, common directory, and backlink. */
 export function verifiedCheckout(path) {
   try {
     const resolved = resolveCheckoutPath(path);

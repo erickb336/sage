@@ -7,7 +7,6 @@ const ROOT = join(dirname(fileURLToPath(import.meta.url)), "../..");
 const PREFIX = "plugins/sage-codex/";
 const USAGE = "usage: sage.mjs verify-install --commit <full40hexSHA> --project <absolute assigned project>";
 
-/** Validate the whole interface before any repository or package access. Shared with the gate. */
 export function verificationOptions(args) {
   if (args.length !== 5 || args[0] !== "verify-install") return undefined;
   const options = {};
@@ -23,7 +22,6 @@ export function verificationOptions(args) {
 
 const sameFile = (a, b) => a.dev === b.dev && a.ino === b.ino && a.mode === b.mode && a.nlink === b.nlink && a.size === b.size && a.mtimeMs === b.mtimeMs && a.ctimeMs === b.ctimeMs;
 
-/** No link, special file, or unreadable file can supply matching bytes. Recheck identities after the read. */
 function installedBytes(name) {
   const parts = name.split("/");
   const parents = [];
@@ -53,7 +51,7 @@ export function verifyInstall(args, projectRoot) {
   if (!options) throw Error(USAGE);
   const { commit, project } = options;
   let assigned, requested;
-  try { assigned = realpathSync(projectRoot(process.cwd())); requested = realpathSync(projectRoot(project)); } catch { /* fail closed */ }
+  try { assigned = realpathSync(projectRoot(process.cwd())); requested = realpathSync(projectRoot(project)); } catch {}
   if (!assigned || requested !== assigned) throw Error("verify-install requires the assigned project");
   try {
     if (git(project, ["rev-parse", "--verify", "--end-of-options", commit]).toString().trim() !== commit) throw Error("ambiguous reference");
@@ -82,7 +80,6 @@ export function verifyInstall(args, projectRoot) {
     if (!outcome) {
       let expected;
       try {
-        // ls-tree reports the mode's type; typed cat-file can dereference a tag. Check the object itself first.
         if (git(project, ["cat-file", "-t", oid]).toString().trim() !== "blob") throw Error("not a blob");
         expected = git(project, ["cat-file", "blob", oid]);
       } catch { outcome = "errors"; }

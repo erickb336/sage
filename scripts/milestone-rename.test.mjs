@@ -1,8 +1,3 @@
-// T995: the rename of program to milestone, and the one-time migration of a logbook from before it. The fixture mirrors
-// the shape of sage's own logbook on 2026-11-11 (SAMPLE DATA, every title made up): program PG1 "Sage feel" with the pilot
-// T984 and 7 more tasks that wait for T978, which is concluded (so they wait for the pilot only), the floor row of
-// milestones 1 to 4, the approved breakdown gate G140, and a plain answered gate G141. The tool runs as the chief runs it,
-// in a new root for each test.
 import "./test-env.mjs";
 import assert from "node:assert/strict";
 import { spawnSync } from "node:child_process";
@@ -32,17 +27,10 @@ const rowsOf = (dir, table) => {
   return lines.map((line) => Object.fromEntries(line.split("\t").map((v, i) => [head.split("\t")[i], v])));
 };
 const headOf = (dir, table) => readFileSync(join(dir, `${table}.tsv`), "utf8").split("\n")[0].split("\t");
-/** Every file of the logbook folder and its text, so a test sees each change. */
 const snapshot = (dir) => Object.fromEntries(readdirSync(dir).filter((f) => f.endsWith(".tsv")).sort().map((f) => [f, readFileSync(join(dir, f), "utf8")]));
 
-/**
- * A logbook from before the rename, in a new root. answer: G140's answer ("" for an open gate); floor: with the floor row;
- * stopped: the steps of the migration that a stop left done ("decisions", then "milestones"); pr: T985 has a pull request
- * whose checks passed, for the merge check.
- */
 function oldLogbook({ answer = "approve", floor = true, stopped = [], pr = false } = {}) {
   const home = mkdtempSync(join(tmpdir(), "sage-rename-")), project = mkdtempSync(join(tmpdir(), "sage-rename-project-"));
-  // Each command preloads the kill spy and asks SAGE_TEST_PIDS about a lock's holder, so none reads or signals a real process.
   const env = { ...process.env, HOME: home, SAGE_HOME: home, NODE_OPTIONS: `${process.env.NODE_OPTIONS ?? ""} --import=${JSON.stringify(SPY)}`.trim(), SAGE_TEST_KILLS: join(home, "kills"), SAGE_TEST_PIDS: "{}" };
   const run = (...args) => spawnSync("node", [TOOL, ...args, "--project", project], { encoding: "utf8", env, timeout: 60_000 });
   const ok = (...args) => { const r = run(...args); assert.equal(r.status, 0, `sage ${args.join(" ")}: ${r.stderr}`); return r.stdout.trim(); };
@@ -70,7 +58,6 @@ function oldLogbook({ answer = "approve", floor = true, stopped = [], pr = false
   return { dir, run, ok, no };
 }
 
-/** The status lines without the first, which names the logbook's folder. */
 const statusOf = (s) => s.ok("status").split("\n").slice(1).join("\n");
 const SAGE_FEEL = "milestone M5 · in progress · pilot T984: 0 of 8 merged · name: Sage feel";
 
@@ -91,7 +78,6 @@ test("T995: this logbook's shape reads as milestone M5 before any write; the fir
   assert.deepEqual(rowsOf(s.dir, "decisions").filter((d) => d.why === RENAME_WHY).map((d) => d.decision), ["M5 was PG1"], "one map row, after the floor");
   assert.equal(rowsOf(s.dir, "gates").find((g) => g.id === "G140").question, QUESTION, "an answered gate stays as it is");
   assert.equal(statusOf(s), status, "the same lines after the migration: G140 approved, the same waits");
-  // The merge check's rule: a task of M5 takes no build work before its pilot is merged.
   assert.match(s.no("run", "add", "T985", "--role", "implementer"), /T984 \(designing, the pilot of M5\)/);
 });
 
@@ -177,8 +163,6 @@ test("F-T995-24: a word that a plain object has, such as constructor, is no old 
   }
 });
 
-// A task page lists the task's last decision rows as they are written: the old rows of PG1 stay as history there. The
-// milestone page reads them through the id map, in its own short lines.
 test("T995: the chat board and the browser board of an old logbook say milestone, before and after the migration", () => {
   const s = oldLogbook();
   for (const when of ["before", "after"]) {
@@ -191,25 +175,20 @@ test("T995: the chat board and the browser board of an old logbook say milestone
   }
 });
 
-// F-T995-1: an old logbook that lost a table at the update gets the repair that its refusal names. The program column is
-// the old name of the milestone column, never a column of a newer sage, and a lost table does not stop the others' reads.
 test("F-T995-1: an old logbook with programs.tsv that lost decisions.tsv, or tasks.tsv, takes the repair that the refusal names, and the next write migrates it", () => {
   for (const table of ["decisions", "tasks"]) {
     const s = oldLogbook();
     rmSync(join(s.dir, `${table}.tsv`));
-    // Without tasks.tsv the folder is no logbook to a command, as before the rename; the repair still runs.
     if (table === "decisions") assert.ok(s.no("log", "-", "a note", "--why", "w").includes("sage logbook repair --accept-loss decisions --project"));
     assert.match(s.ok("logbook", "repair", "--accept-loss", table), new RegExp(`^${table}\\.tsv started again without rows`), table);
     s.ok("log", "-", "a note", "--why", "the first write after the repair");
     assert.equal(existsSync(join(s.dir, "programs.tsv")), false, table);
-    // The lost floor row went with decisions.tsv, so PG1 takes the first free id then.
     assert.deepEqual(rowsOf(s.dir, "milestones").map((m) => [m.id, m.name]), [[table === "decisions" ? "M1" : "M5", "Sage feel"]], table);
   }
 });
 
 test("F-T995-1: an old logbook with the program column and no programs.tsv that lost gates.tsv takes the repair that the refusal names", () => {
   const s = oldLogbook();
-  // A logbook that never had a program: no programs.tsv and no program cell.
   writeFileSync(join(s.dir, "tasks.tsv"), text(OLD_TASKS, rowsOf(s.dir, "tasks").map((t) => ({ ...t, program: "" }))));
   writeFileSync(join(s.dir, "decisions.tsv"), text(TABLES.decisions, []));
   rmSync(join(s.dir, "programs.tsv"));
@@ -222,8 +201,6 @@ test("F-T995-1: an old logbook with the program column and no programs.tsv that 
   assert.deepEqual([headOf(s.dir, "tasks").includes("program"), headOf(s.dir, "tasks").includes("milestone")], [false, true]);
 });
 
-// F-T995-2, F-T995-9: programs.tsv has every check of a table, before the first write, and it goes only when milestones.tsv
-// holds its rows. A damaged one refuses with the restore line; a restored copy is then read.
 test("F-T995-2, F-T995-9: a programs.tsv of 0 bytes, with a damaged header or with no header, refuses before the first write; a restored copy migrates", () => {
   const good = "id\tname\tgoal\tpilot\tgate\tat\nPG1\tSage feel\tShip how sage works on each kind of task\tT984\tG140\t2026-11-11T03:18:52Z\n";
   for (const [damage, words] of [["", "is empty (0 bytes)"], [good.replace("\tgate\t", "\tgaet\t"), "the header of"], [good.split("\n").slice(1).join("\n"), "the header of"]]) {
@@ -235,7 +212,7 @@ test("F-T995-2, F-T995-9: a programs.tsv of 0 bytes, with a damaged header or wi
       assert.match(refused, words === "the header of" ? /column names id, name, goal, pilot, gate, at/ : /Ask the user to restore it from a copy\. If the user accepts the loss, run: sage logbook repair --accept-loss programs --project/);
     }
     assert.deepEqual(snapshot(s.dir), before, "nothing changed: programs.tsv stays, and no table is migrated");
-    writeFileSync(join(s.dir, "programs.tsv"), good); // the owner restores it from a copy
+    writeFileSync(join(s.dir, "programs.tsv"), good);
     s.ok("log", "-", "a note", "--why", "the first write after the restore");
     assert.deepEqual(rowsOf(s.dir, "milestones").map((m) => [m.id, m.gate]), [["M5", "G140"]]);
     assert.ok(statusOf(s).includes(SAGE_FEEL));
@@ -253,8 +230,6 @@ test("F-T995-2: when the owner accepts the loss of programs.tsv, the repair keep
   assert.ok(statusOf(s).includes("T985 for the breakdown of M5 (the milestone is not in the logbook)"), statusOf(s));
 });
 
-// F-T995-6, F-T995-10: after a migration that stopped after milestones.tsv, an older sage still writes programs.tsv. Its new
-// program and its changed rows count: programs.tsv holds the newest rows until the migration removes it.
 test("F-T995-6: a program that an older sage proposed after a stopped migration becomes the next milestone, with its row", () => {
   const s = oldLogbook({ stopped: ["decisions", "milestones"] });
   const at = "2026-11-12T04:00:00Z", question = ["Approve program PG2? No task builds before you approve.", "Name: Next steps", "Goal: A sample goal", "Pilot, runs first:", "  T993: Sample T993"].join(L);
@@ -273,8 +248,6 @@ test("F-T995-6: a program that an older sage proposed after a stopped migration 
   assert.equal(statusOf(s), status);
 });
 
-// F-T995-11: an answered gate from before the rename is a breakdown gate by its own first line, also without the id map
-// (decisions.tsv started again, or a move to a shared logbook, which does not copy the map rows).
 test("F-T995-11: an answered old breakdown gate answers once, also when the logbook lost its id map", () => {
   const s = oldLogbook();
   s.ok("log", "-", "a note", "--why", "the first write of this version");
@@ -283,7 +256,6 @@ test("F-T995-11: an answered old breakdown gate answers once, also when the logb
   assert.equal(rowsOf(s.dir, "gates").find((g) => g.id === "G140").answer, "approve");
 });
 
-// F-T995-16: an old program id names its milestone through the id map, in the old words and the new ones.
 test("F-T995-16: after the migration, program=PG1, --program PG1 and milestone propose PG1 work on M5, and the line names M5", () => {
   const s = oldLogbook({ answer: "change" });
   s.ok("log", "-", "a note", "--why", "the first write of this version");

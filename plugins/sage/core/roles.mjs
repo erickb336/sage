@@ -1,13 +1,7 @@
 import { readFileSync } from "node:fs";
 
-/** The child roles of sage: each has its instructions in roles/. The state tool records runs of these roles. */
 export const ROLES = new Set(["lead", "implementer", "pe", "designer", "arena-judge", "code-reviewer", "security-reviewer", "ux-reviewer", "qa", "investigate", "evidence-review"]);
 
-/**
- * The principles that each role starts with: the one map (T925). Each name is a file of principles/. A Claude agent file
- * lists the same principles in its skills: list (npm run check compares them), and Codex's role.mjs puts their text in
- * the role's message.
- */
 export const ROLE_PRINCIPLES = Object.freeze({
   "chief-of-staff": ["never-block-on-the-human", "encode-lessons-in-structure", "contextualize-and-write-for-the-reader", "guard-the-context-window"],
   lead: ["never-block-on-the-human", "prove-it-works"],
@@ -32,7 +26,6 @@ const render = (name, bindings) => {
   return text.replace(/\{\{([A-Z_]+)\}\}/g, (_, key) => bindings[key]);
 };
 
-/** Provider bindings are packaged setup instructions, never task text or model arguments. */
 export function renderRoleInstructions(role, bindings = {}) {
   if (!ROLES.has(role)) throw Error("Unknown child role");
   return render(role, bindings);
@@ -42,7 +35,6 @@ export function renderReportInstructions(bindings) {
   return render("report", bindings);
 }
 
-/** The owner adapter supplies packaged bindings; this is not a child role. */
 export function renderChiefInstructions(bindings) {
   return render("chief-of-staff", bindings);
 }

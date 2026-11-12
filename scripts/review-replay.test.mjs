@@ -1,7 +1,4 @@
-// The offline replay of past PRs (scripts/review-replay.mjs, T485): its report on a small sample logbook, as people run
-// it, and proof that it only reads the logbook: it runs on a read-only copy, changes no byte of it, and refuses --out
-// into the logbook folder.
-import "./test-env.mjs"; // first: no variable of the developer's shell changes a result
+import "./test-env.mjs";
 import assert from "node:assert/strict";
 import { spawnSync } from "node:child_process";
 import { chmodSync, cpSync, existsSync, linkSync, mkdtempSync, readFileSync, readdirSync, realpathSync, rmSync, statSync, symlinkSync, unlinkSync } from "node:fs";
@@ -15,12 +12,11 @@ const FIXTURE = join(ROOT, "scripts", "fixtures", "review-replay");
 const replay = (...args) => spawnSync(process.execPath, [SCRIPT, ...args], { encoding: "utf8" });
 const dated = (text) => text.replace(/^Measured \d{4}-\d{2}-\d{2} /m, "Measured <date> ");
 
-/** A read-only copy of the sample logbook (files 0444, folder 0555), and a writable folder for the report. */
 function readOnlyCopy(t) {
   const dir = mkdtempSync(join(realpathSync(tmpdir()), "sage-replay-"));
   const book = join(dir, "logbook"), out = join(dir, "out");
   cpSync(FIXTURE, book, { recursive: true });
-  cpSync(FIXTURE, out, { recursive: true, filter: (src) => src === FIXTURE }); // an empty folder
+  cpSync(FIXTURE, out, { recursive: true, filter: (src) => src === FIXTURE });
   for (const f of readdirSync(book)) chmodSync(join(book, f), 0o444);
   chmodSync(book, 0o555);
   t.after(() => { chmodSync(book, 0o755); rmSync(dir, { recursive: true, force: true }); });
@@ -45,7 +41,7 @@ test("it runs on a read-only copy of the logbook and changes no byte of it", (t)
 
 test("--out into the logbook folder is refused, and no file is made there", (t) => {
   const { book, snapshot } = readOnlyCopy(t);
-  chmodSync(book, 0o755); // writable, so that only the script's own rule can stop the write
+  chmodSync(book, 0o755);
   const before = snapshot();
   const r = replay(book, "--out", join(book, "report.md"));
   assert.equal(r.status, 2);
@@ -55,7 +51,6 @@ test("--out into the logbook folder is refused, and no file is made there", (t) 
   assert.equal(replay(book, "--out", join(book, "..", "logbook", "x.md")).status, 2);
 });
 
-/** A writable copy of the sample logbook, so that only the script's own rule can stop a write (R1720-1). */
 function writableCopy(t) {
   const copy = readOnlyCopy(t);
   chmodSync(copy.book, 0o755);
@@ -75,7 +70,7 @@ test("--out through a link or a hard link to a logbook file is refused, and no l
   assert.equal(hard.status, 2, hard.stderr);
   assert.match(hard.stderr, /^refused: --out .*hard\.md is in the logbook folder, which this script only reads\.$/m);
   assert.deepEqual(snapshot(), before);
-  unlinkSync(join(out, "link.md")); // a plain new file next to them is still written
+  unlinkSync(join(out, "link.md"));
   assert.equal(replay(book, "--out", join(out, "link.md")).status, 0);
   assert.equal(dated(readFileSync(join(out, "link.md"), "utf8")), EXPECTED);
 });
@@ -86,7 +81,6 @@ test("--out with another letter case of the logbook path is refused, and no file
   const upper = join(dirname(book), "LOGBOOK");
   const r = replay(book, "--out", join(upper, "x.md"));
   assert.equal(r.status, 2, r.stderr);
-  // On a case-insensitive disk (macOS by default) the path names the logbook folder; on another disk it does not exist.
   if (existsSync(upper)) assert.match(r.stderr, /^refused: --out .*LOGBOOK\/x\.md is in the logbook folder, which this script only reads\.$/m);
   else assert.equal(r.stderr, `review-replay: ${upper} does not exist.\n`);
   assert.deepEqual(snapshot(), before);
@@ -106,7 +100,6 @@ test("a missing logbook folder, table or --out folder ends with one line that na
 
 test("a moved finding counts once, as kept, on the task and role where a review found it", () => {
   const report = replay(FIXTURE).stdout;
-  // R4-1 (qa, from run R4 of round 0) and F-T1-12 (no run, so round 1) moved from T1 to T5: they count on T1 only.
   assert.match(report, /^\| qa \| 2 \| r0 100k · r1 50k \| 0 · 2 · 0 \| 0 \| r0 1 · r1 1 \|$/m);
   assert.match(report, /^\| security-reviewer \| 1 \| r0 200k · r1 0k \| 0 · 2 · 1 \| 1 \| r0 1 · r1 1 \|$/m);
   assert.match(report, /^- R4-1 · medium · qa · round 0 · untagged · run R4 \(from key\): README step of T1 says the old flag$/m);

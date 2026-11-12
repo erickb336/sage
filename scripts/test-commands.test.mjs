@@ -14,9 +14,9 @@ test("a test file that no test command names is reported by its path, in any fol
     "test:browser": "node --test scripts/b.test.mjs",
   } }));
   for (const path of [
-    "scripts/a.test.mjs", "scripts/b.test.mjs", "pkg/d.test.mjs", "scripts/helper.mjs", // run, or no test file
-    "scripts/c.test.mjs", "scripts/fixtures/e.test.mjs", "pkg/sub/f.test.mjs", // left out
-    "plugins/p.test.mjs", "node_modules/m.test.mjs", "pkg/node_modules/n.test.mjs", ".claude/w.test.mjs", // skipped folders
+    "scripts/a.test.mjs", "scripts/b.test.mjs", "pkg/d.test.mjs", "scripts/helper.mjs",
+    "scripts/c.test.mjs", "scripts/fixtures/e.test.mjs", "pkg/sub/f.test.mjs",
+    "plugins/p.test.mjs", "node_modules/m.test.mjs", "pkg/node_modules/n.test.mjs", ".claude/w.test.mjs",
   ]) write(path);
   assert.deepEqual(unrunTestFiles(root), ["pkg/sub/f.test.mjs", "scripts/c.test.mjs", "scripts/fixtures/e.test.mjs"]);
 });

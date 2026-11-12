@@ -32,7 +32,6 @@ const usage = ['--tokens', '50', '--usage-source', 'export', '--usage-evidence',
 const tables = dir => ['tasks', 'runs', 'decisions'].map(table => readFileSync(join(dir, `${table}.tsv`), 'utf8'));
 const row = (dir, table, id) => tool.read(dir, table).find(value => value.id === id);
 
-/** Stop one write at a file step: before or after the file call of that step, as a crash there would. */
 function stopAt(t, dir, step, after, folder = 'usage-requests') {
   const method = ['intent', 'receipt'].includes(step) ? 'linkSync' : step === 'clear' ? 'unlinkSync' : 'renameSync';
   const original = fs[method]; let hit = false;
@@ -64,7 +63,6 @@ for (const [starter, settler, name] of [[claude, codex, 'Claude to Codex'], [cod
     run(settler, 'task', 'add', '--priority', 'P2', '--title', 'The other provider', '--size', 'tiny');
     assert.equal(existsSync(join(dir, MARKER)), false);
     assert.equal(row(dir, 'tasks', 'T2').title, 'The other provider');
-    // The marker holds the whole receipt, so each stop after the marker rolls forward. Before the marker nothing happened.
     assert.equal(row(dir, 'runs', 'R1').tokens, step === 'intent' && !after ? '' : '50');
     run(settler, 'run', 'usage', 'R1', ...usage);
     assert.equal(row(dir, 'runs', 'R1').tokens, '50');
@@ -103,13 +101,11 @@ for (const [change, value] of [['schema', 99], ['hash', '0'.repeat(64)]]) test(`
   assert.match(two.run(claude, 'task', 'add', '--priority', 'P2', '--title', 'Goes on', '--size', 'tiny'), /T2/);
 });
 
-/** Every file of a logbook folder and its bytes, folders by name. */
 const snapshot = dir => Object.fromEntries(readdirSync(dir, { withFileTypes: true, recursive: true })
   .map(entry => join(entry.parentPath, entry.name))
   .map(file => [file, fs.statSync(file).isDirectory() ? 'folder' : readFileSync(file, 'utf8')]));
 const REPAIR = ['logbook', 'repair', '--accept-change-loss', 'yes'];
 const lostFiles = dir => readdirSync(dir).filter(name => name.startsWith(`${MARKER}.lost-`)).sort();
-/** A saved usage change that cannot finish: its hash no longer matches. The tables are at their "before" text. */
 function stuck(t, f) {
   savedUsage(t, f);
   const file = join(f.dir, MARKER), record = JSON.parse(readFileSync(file, 'utf8'));
@@ -201,7 +197,7 @@ for (const [name, damage] of Object.entries(MARKERS)) test(`T593 the repair move
 test('T593 a table that the stuck change left damaged still fails the check: writes stop, and the table repair is the way on', t => {
   const { one } = fixture(t);
   savedUsage(t, one);
-  writeFileSync(join(one.dir, 'runs.tsv'), ''); // neither its before nor its after text
+  writeFileSync(join(one.dir, 'runs.tsv'), '');
   assert.throws(() => one.run(claude, 'init'), { message: STUCK });
   const out = one.run(claude, ...REPAIR);
   assert.match(out, /The saved change \(request R1\) is lost: .* The logbook check fails, so writes still stop: \S+runs\.tsv is empty \(0 bytes\).*logbook repair --accept-loss runs /);
@@ -316,10 +312,6 @@ test('T593 a logbook moved behind a link: the repair refuses also with the table
   assert.equal(readFileSync(`${file}.lost-1`, 'utf8'), bytes);
 });
 
-/**
- * A shared logbook as sage link makes it: the first checkout's --separate, a clone's --to, and each provider with its own
- * root and no SAGE_HOME, as in production. T1 is on the first checkout. The clone has no logbook of its own.
- */
 function linkedProjects(t) {
   const base = realpathSync(mkdtempSync(join(tmpdir(), 'sage-linked-')));
   t.after(() => rmSync(base, { recursive: true, force: true }));
@@ -331,7 +323,7 @@ function linkedProjects(t) {
   git('init', '-q', '-b', 'main', first);
   git('-C', first, 'commit', '-q', '--allow-empty', '-m', 'first');
   git('clone', '-q', first, second);
-  let actor = []; // a write of a shared logbook names its chief (T604): after the links, each call here acts as one chief
+  let actor = [];
   const checkout = project => ({ project, env, run: (provider, ...args) => provider([...args, '--project', project, ...actor], env) });
   const one = checkout(first), two = checkout(second);
   one.run(codex, 'link', '--separate');
@@ -409,7 +401,6 @@ test('T593 a shared root reached through a link: the repair refuses, and the set
   assert.equal(existsSync(join(dir, MARKER)), false);
 });
 
-/** Write the saved change again with these changes, with a hash that matches. */
 function rewrite(file, change) {
   const { value } = JSON.parse(readFileSync(file, 'utf8'));
   change(value);
@@ -435,8 +426,6 @@ for (const [name, schema] of [['an older unknown schema', 1], ['a schema that is
   assert.deepEqual(lostFiles(one.dir), [`${MARKER}.lost-1`]);
 });
 
-// T914: sage deleted the Codex native runtime, and with it the writers of schemas 2 to 6 and 8. A saved change of one of
-// them cannot finish, so it stops the writes of its logbook until the owner accepts its loss.
 for (const schema of [2, 3, 4, 5, 6, 8]) test(`T914 a saved change of schema ${schema}, a writer that sage removed, stops writes until the change-loss repair`, t => {
   const { one } = fixture(t);
   savedUsage(t, one);
@@ -482,7 +471,6 @@ function passing(f) {
 
 const namedIn = dir => `the merge check refuses this merge: Project ${basename(dir)} holds an incomplete saved change, and its ledger or that change names ${SHA.slice(0, 7)}. Any write in that project finishes it or says what to do. Then check again.`;
 
-/** Open of one file fails with EACCES, as a folder with the wrong permissions does for any user, or with another file error. */
 function denyOpen(t, file, code = 'EACCES') {
   const { openSync: original } = fs;
   t.mock.method(fs, 'openSync', (...args) => {
@@ -583,7 +571,6 @@ test('T578 a read asks for any write, and the CLI prints the short line with no 
   writeFileSync(join(one.dir, MARKER), '{}');
   const stuck = tool.command(['task', 'add', '--priority', 'P2', '--title', 'Stopped', '--size', 'tiny', '--project', one.project], env);
   assert.deepEqual(stuck, { code: 1, text: `sage: ${STUCK}` });
-  // The line sends the owner to this command, so it must work with the stuck marker.
   for (const provider of [claude, codex]) assert.equal(one.run(provider, 'logbook').replace(/^logbook /, '').trim(), one.dir);
 });
 
@@ -611,7 +598,6 @@ for (const [name, request] of [['control characters', 'R1\u001b[2J'], ['an over-
   denied();
 });
 
-// A stop during the settle itself: the next writer starts the settle again from the marker.
 for (const step of ['runs', 'decisions', 'receipt', 'clear']) for (const after of [false, true]) test(`T578 a settle stopped ${after ? 'after' : 'before'} ${step}: the next write finishes the saved change`, t => {
   const { one } = fixture(t);
   savedUsage(t, one);

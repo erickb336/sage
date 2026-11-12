@@ -1,4 +1,3 @@
-// Recoverable logbook writes. Call under the logbook lock; never accept paths from a report.
 import { createHash, randomUUID } from "node:crypto";
 import { closeSync, constants, fsyncSync, fstatSync, linkSync, lstatSync, mkdirSync, openSync, readSync, readdirSync, realpathSync, renameSync, unlinkSync, writeFileSync } from "node:fs";
 import { join, resolve } from "node:path";
@@ -29,7 +28,7 @@ const raw = file => {
     return bytes.subarray(0, used);
   } catch (error) {
     if (error.code === "ENOENT") return undefined;
-    if (error.code === "ELOOP") fail(); // a link where a logbook file must be: a retry cannot pass
+    if (error.code === "ELOOP") fail();
     throw error;
   } finally { if (fd !== undefined) closeSync(fd); }
 };
@@ -66,7 +65,6 @@ function atomic(dir, name, text, immutable = false) {
     if (created && lstatSync(temporary, { throwIfNoEntry: false })) unlinkSync(temporary);
   }
 }
-/** A logbook folder that does not open holds no marker: the reader of that folder names the fault. */
 export function hasPendingWrite(dir) {
   try { return Boolean(lstatSync(join(dir, PENDING), { throwIfNoEntry: false })); }
   catch (error) { if (["ENOTDIR", "ELOOP"].includes(error.code)) return false; throw error; }
@@ -74,12 +72,10 @@ export function hasPendingWrite(dir) {
 export function assertNoPendingWrite(dir) {
   if (hasPendingWrite(dir)) throw new RecordedWriteError("A saved change is incomplete. Any write in this project finishes it or says what to do. Then run this command again.");
 }
-/** Do the marker's bytes hold this text? For a reader that must not settle it. A marker that is gone or not a plain file holds nothing here: its own project refuses it when it settles. Any other read error goes to the caller. */
 export function pendingNames(dir, text) {
   try { return raw(join(dir, PENDING))?.includes(text) ?? false; }
   catch (error) { if (error instanceof RecordedWriteError) return false; throw error; }
 }
-/** The request that a saved change names, as the marker has it, or undefined. A caller checks its form before it prints it. */
 export function pendingRequest(dir) {
   try {
     const { value } = JSON.parse(regular(join(dir, PENDING)));
@@ -87,18 +83,12 @@ export function pendingRequest(dir) {
     return reference.request ?? reference.run;
   } catch { return undefined; }
 }
-/**
- * Step 3 of a write: finish or undo a saved change from the marker alone, by its schema. Call under the logbook lock.
- * The lock holder is the only writer that can work on the marker, so a marker that it sees belongs to a writer that stopped.
- * Settling gives the caller no authority on the task. True when a marker was settled.
- */
 export function settlePendingWrite(dir, writers) {
   if (!hasPendingWrite(dir)) return false;
   const { writer, saved } = savedWrite(dir, writers);
   writer.settle(dir, saved);
   return true;
 }
-/** Can a saved change finish? The checks of settlePendingWrite, with no write: it throws what the settle would throw. Call under the logbook lock. */
 export function verifyPendingWrite(dir, writers) {
   const { writer, saved } = savedWrite(dir, writers);
   writer.verify(dir, saved);
@@ -109,7 +99,6 @@ function savedWrite(dir, writers) {
   if (!Object.hasOwn(writers, String(saved?.schema))) throw Object.assign(new RecordedWriteError(DAMAGED), { schema: saved?.schema });
   return { writer: writers[saved.schema], saved };
 }
-/** Guarded core consumers share one pending marker. Each saved change holds its whole receipt, so any writer publishes it. */
 export function recordedWrites({ schema, tables: TABLES, folder: FOLDER, name: NAME, receiptName, validate }) {
 function recordName(reference) {
   const name = receiptName(reference);
@@ -126,9 +115,7 @@ function receiptNames(folder) {
   try { return readdirSync(folder).filter(name => NAME.test(name)).sort(); }
   catch (error) { if (error.code !== "ENOENT") throw error; return []; }
 }
-/** Immutable receipt names detect a task committed while a reader read the separate tables. */
 function readVersion(dir) {
-  // Read-only merge checks already support logbook aliases. Refuse a redirected receipts folder only.
   const folder = join(dir, FOLDER);
   if (lstatSync(folder, { throwIfNoEntry: false }) && realpathSync(folder) !== join(realpathSync(dir), FOLDER)) fail();
   const names = receiptNames(folder);
@@ -141,7 +128,6 @@ function readReceipt(dir, reference) {
   if (value !== undefined) validate(value);
   return value;
 }
-/** Each receipt of the folder, read and checked as readReceipt does. */
 function history(dir) {
   const folder = receiptFolder(dir);
   return receiptNames(folder).map(file => {
@@ -152,7 +138,6 @@ function history(dir) {
     return value;
   });
 }
-/** Pending intent preserves all before/after bytes. Settling refuses any unrelated table edit. */
 function verify(dir, pending) {
   canonical(dir);
   if (!keys(pending, ["schema", "receipt", "tables"]) || pending.schema !== schema
@@ -164,7 +149,6 @@ function verify(dir, pending) {
     const current = regular(join(dir, `${table}.tsv`));
     if (current !== value.before && current !== value.after) fail();
   }
-  // Validate the complete saved update and its destination before publishing any table.
   validate(pending.receipt, pending.tables);
   const folder = receiptFolder(dir), receipt = encode(pending.receipt);
   const existing = regular(join(folder, recordName(reference)));

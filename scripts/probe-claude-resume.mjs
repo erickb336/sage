@@ -1,9 +1,4 @@
 #!/usr/bin/env node
-// Probe: does a resumed Claude Code session keep one session id? The chief's
-// identity (chiefs.tsv, T604) is the hook's session_id, so a resume that gets a
-// new id would read as a new chief. The probe runs the real CLI with HOME and
-// CLAUDE_CONFIG_DIR in a scratch folder and a fake Messages API on 127.0.0.1,
-// so it needs no login and it reaches no real session or network.
 import { spawnSync, spawn } from 'node:child_process';
 import { appendFileSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, writeFileSync } from 'node:fs';
 import { createServer } from 'node:http';
@@ -11,7 +6,6 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { pathToFileURL } from 'node:url';
 
-// Answer every Messages API call with one short streamed text turn.
 function fakeMessagesApi() {
   const server = createServer((request, response) => {
     let body = '';
@@ -51,7 +45,6 @@ function scratchHome(folder, port) {
   const command = { type: 'command', command: `${JSON.stringify(process.execPath)} ${JSON.stringify(hook)}` };
   const settings = join(folder, 'settings.json');
   writeFileSync(settings, JSON.stringify({ hooks: Object.fromEntries(['SessionStart', 'UserPromptSubmit', 'Stop'].map(event => [event, [{ hooks: [command] }]])) }));
-  // The interactive start asks nothing when these answers are on file.
   const key = 'sage-probe-not-a-key';
   writeFileSync(join(config, '.claude.json'), JSON.stringify({
     hasCompletedOnboarding: true, theme: 'dark', customApiKeyResponses: { approved: [key.slice(-20)], rejected: [] },
@@ -65,7 +58,6 @@ function scratchHome(folder, port) {
   return { env, project, settings, notes };
 }
 
-// spawnSync would stop the event loop that the fake API runs on.
 function run(binary, args, { env, project }) {
   return new Promise(resolve => {
     const child = spawn(binary, args, { cwd: project, env, stdio: ['ignore', 'pipe', 'pipe'] });
@@ -77,9 +69,6 @@ function run(binary, args, { env, project }) {
   });
 }
 
-// The interactive resume, under a pty, because a chief is an interactive session.
-// It types one prompt, then the exit command. Python's pty is the one portable
-// pty here: script(1) needs a real terminal on its own stdin.
 const PTY = `
 import os, pty, select, sys, time
 pid, fd = pty.fork()
@@ -114,8 +103,6 @@ const readNotes = path => {
   catch (error) { if (error.code === 'ENOENT') return []; throw error; }
 };
 
-// Four starts of one session: new, resume by id, continue the latest, and an
-// interactive resume. The interactive run then clears the session.
 export async function probeResume({ binary = 'claude', folder = mkdtempSync(join(tmpdir(), 'sage-resume-probe-')) } = {}) {
   const server = await fakeMessagesApi();
   try {

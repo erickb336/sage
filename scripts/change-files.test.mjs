@@ -1,8 +1,4 @@
-// T1014: the repository keeps no history file, because a fresh agent reads old history as current fact. A pull request
-// says what changed for users in its description, and each release gets notes on the releases page. So `npm run check`
-// fails on a file in a changes/ folder and on a CHANGELOG.md, for example from a branch that was made before T1014, and
-// names the rule.
-import "./test-env.mjs"; // first: no variable of the developer's shell changes a result
+import "./test-env.mjs";
 import assert from "node:assert/strict";
 import { spawnSync } from "node:child_process";
 import { cpSync, existsSync, mkdirSync, mkdtempSync, realpathSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
@@ -12,7 +8,7 @@ import { test } from "node:test";
 import { ROOT } from "./build.mjs";
 
 test("npm run check fails on a change file and a CHANGELOG.md with the rule's text, ignores a dot file, and passes once they are gone", (t) => {
-  const dir = mkdtempSync(join(realpathSync(tmpdir()), "sage-change-files-")); // the real path, so that build.mjs sees that it runs as the script
+  const dir = mkdtempSync(join(realpathSync(tmpdir()), "sage-change-files-"));
   t.after(() => rmSync(dir, { recursive: true, force: true }));
   cpSync(ROOT, dir, { recursive: true, filter: (src) => ![".git", ".claude", "node_modules"].includes(relative(ROOT, src)) });
   symlinkSync(join(ROOT, "node_modules"), join(dir, "node_modules"), "dir");

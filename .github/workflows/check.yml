@@ -7,7 +7,6 @@ permissions:
   contents: read
 jobs:
   static:
-    # Pinned: Playwright 1.55.1 has no headless shell for ubuntu-latest (Ubuntu 26.04 since 2026-10-19).
     runs-on: ubuntu-24.04
     steps:
       - uses: actions/checkout@v7
@@ -16,13 +15,9 @@ jobs:
           node-version: 24
       - run: npm ci --ignore-scripts
       - run: npm run check
-      # The browser tests use the Chromium headless shell of the pinned playwright devDependency.
-      # npm ci downloads no browser; this step does. Playwright advises against a browser cache.
       - run: npx playwright install --with-deps --only-shell chromium
       - run: npm run test:browser
   test:
-    # npm test in 4 parallel parts (T912). node --test sorts the test files by path and gives the k-th file to
-    # part k mod 4, so each file runs in exactly one part. Each part's log lists its test names (spec reporter).
     runs-on: ubuntu-24.04
     strategy:
       fail-fast: false
@@ -39,8 +34,6 @@ jobs:
       - run: npm test
         env:
           TEST_SHARD: ${{ matrix.shard }}/4
-  # Branch protection requires this job by its name. It passes only when every job above passed: a failed, cancelled
-  # or skipped job fails it.
   check:
     if: always()
     needs: [static, test]

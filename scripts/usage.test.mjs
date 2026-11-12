@@ -50,7 +50,7 @@ test('T28 unavailable completion preserves declared binding and supports audited
 test('T28 supported, default and unknown interfaces cannot select unavailable',t=>{
   const s=fixture(t);
   s.run('run','add','T1','--role','qa');
-  s.run('run','done','R1','--status','done','--tokens','8'); // baseline-positive setup
+  s.run('run','done','R1','--status','done','--tokens','8');
   for (const iface of ['made-up','', 'constructor']) s.no('run','add','T1','--role','qa','--usage-interface',iface);
   s.run('run','add','T1','--role','qa','--usage-interface','app-server');
   s.no('run','done','R2','--status','done',...unavailable);
@@ -82,7 +82,6 @@ test('T28 mixed legacy accounting and blocked enrichment preserve terminal facts
   s.no('run','done','R1','--status','done','--tokens','5');
   s.run('run','add','T1','--role','qa');s.run('run','done','R2','--status','done','--tokens','7');
   s.run('run','add','T1','--role','qa',...binding);s.run('run','done','R3','--status','done',...unavailable);
-  // A pre-usage logbook can contain a completed run without tokens.
   const file=join(s.dir,'runs.tsv'),[head,...lines]=readFileSync(file,'utf8').trimEnd().split('\n');
   const keys=head.split('\t'),cells=lines[1].split('\t');cells[keys.indexOf('tokens')]='';cells[keys.indexOf('usage_status')]='';lines[1]=cells.join('\t');writeFileSync(file,[head,...lines].join('\n')+'\n');
   assert.match(s.run('stats'),/usage total · partial measured total; 0 measured, 1 unavailable, 1 legacy-unrecorded/);
@@ -95,7 +94,6 @@ test('T28 declared capability snapshot survives provider registry changes',async
   const before=s.rows()[0];
   const {createStateTool}=await import('../plugins/sage-codex/core/index.mjs');
   const changed=createStateTool({defaultRoot:()=>join(s.dir,'unused'),usageInterfaces:[]});
-  // SAGE_HOME is the same root used by the fixture. No registry reclassification occurs at completion.
   const root=join(s.dir,'..');
   changed.sage(['run','done','R1','--status','done',...unavailable,'--project',join(root,'..','project')],{...process.env,SAGE_HOME:root,SAGE_TEST_PIDS:'{}'});
   assert.equal(s.rows()[0].usage_reason,before.usage_reason);
@@ -110,11 +108,9 @@ test('T28 usage recovery completes one interrupted transaction and refuses a dif
   const after=s.bytes(),folder=join(s.dir,'usage-requests');
   const receipt=JSON.parse(readFileSync(join(folder,readdirSync(folder)[0]),'utf8')).value;
   const tables=Object.fromEntries(['runs','decisions'].map((table,i)=>[table,{before:before[i],after:after[i]}]));
-  // Simulate a crash after runs publishes, before decisions publishes.
   writeFileSync(join(s.dir,'decisions.tsv'),before[1]);
   writeFileSync(join(s.dir,'review-pending.json'),envelope({schema:7,receipt,tables}));
   assert.throws(()=>s.run('status'),/incomplete/);
-  // The next writer settles the saved change from its marker alone, then its own command gets its own answer.
   assert.throws(()=>s.run('run','usage','R1','--tokens','51','--usage-source','export','--usage-evidence','pages/R1.json'),/never changes/);
   assert.deepEqual(s.bytes(),after);
   s.run(...command);assert.deepEqual(s.bytes(),after);
@@ -144,8 +140,6 @@ test('T28 status shows exact per-task measured totals with incomplete accounting
   assert.match(status,/^usage T1 · 1000 measured tokens · 1 measured, 0 unavailable, 0 legacy-unrecorded$/m);
   assert.match(status,/^usage T2 · 2400 measured tokens · partial measured total; 1 measured, 1 unavailable, 0 legacy-unrecorded$/m);
 });
-// T954: no Claude lead run had tokens (41 of 41 in a shared logbook), because the chief ended each with run done --status
-// done and no --tokens, and nothing refused it. A lead that gave a report now gives its own tokens, as a review run does.
 test('T954 a Claude lead run that ends with a report needs its tokens; a lead with no report ends without them',async t=>{
   const claude=await import('../plugins/sage/skills/sage/sage.mjs');
   const base=realpathSync(mkdtempSync(join(tmpdir(),'sage-usage-lead-')));t.after(()=>rmSync(base,{recursive:true,force:true}));
@@ -162,10 +156,8 @@ test('T954 a Claude lead run that ends with a report needs its tokens; a lead wi
   const failed=run('run','add','T1','--role','lead').split(' ')[0];
   assert.equal(run('run','done',failed,'--status','failed'),`${failed} failed`);
   assert.deepEqual(tokens(),['108973','108973','108973','']);
-  assert.match(run('status'),/about 109k tokens · 1 measured, 0 unavailable, 0 legacy-unrecorded/); // the totals count done runs only
+  assert.match(run('status'),/about 109k tokens · 1 measured, 0 unavailable, 0 legacy-unrecorded/);
 });
-// T969 (F-T954-2): a Claude lead that ends with a report, but whose notice gave no usage (for example after a restart), could
-// end only as failed. It now ends with its status and usage unavailable, with the reason; a lead with no report gets none.
 test('T969 a Claude lead with a report and no usage in its notice ends as unavailable, with its reason',async t=>{
   const claude=await import('../plugins/sage/skills/sage/sage.mjs');
   const base=realpathSync(mkdtempSync(join(tmpdir(),'sage-usage-lead-')));t.after(()=>rmSync(base,{recursive:true,force:true}));
@@ -182,12 +174,11 @@ test('T969 a Claude lead with a report and no usage in its notice ends as unavai
     assert.throws(()=>run('run','done',id,'--status',status,...why.slice(0,-2)),/Unavailable usage needs/,'a report is needed');
     assert.equal(run('run','done',id,'--status',status,...why),`${id} ${status}`);
   }
-  // A lead with no report ends as failed, with no usage claim; and a review run still needs its tokens.
   const failed=run('run','add','T1','--role','lead').split(' ')[0];
   assert.throws(()=>run('run','done',failed,'--status','failed',...why),/Unavailable usage needs/);
   const qa=run('run','add','T1','--role','qa').split(' ')[0];
   assert.throws(()=>run('run','done',qa,'--status','done',...why),/Unavailable usage needs/);
   assert.deepEqual(rows().filter(r=>ids.includes(r.id)).map(r=>[r.status,r.tokens,r.usage_status,r.usage_source,r.usage_evidence,r.report]),
     ['done','blocked','question'].map(status=>[status,'','unavailable','claude task notice','the notice had no usage after a restart','pages/lead.md']));
-  assert.match(run('status'),/partial measured total; 0 measured, 1 unavailable, 0 legacy-unrecorded/); // the totals count done runs only
+  assert.match(run('status'),/partial measured total; 0 measured, 1 unavailable, 0 legacy-unrecorded/);
 });

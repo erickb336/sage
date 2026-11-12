@@ -3,7 +3,6 @@ import { REPORT_FIELDS } from "./report.mjs";
 
 export const REVIEW_ROLES = Object.freeze(["code-reviewer", "security-reviewer", "ux-reviewer", "qa"]);
 
-/** Immutable review scope, separate from the report's claims and any accepted verdict. */
 export function parseReviewTarget(value) {
   const keys = ["branch", "sha", "round", "cycle"];
   if (!value || typeof value !== "object" || Array.isArray(value) || Object.keys(value).length !== keys.length
@@ -19,7 +18,6 @@ const exactKeys = (value, keys) => value && typeof value === "object" && !Array.
   && Object.keys(value).length === keys.length && keys.every(key => Object.hasOwn(value, key));
 const detail = value => typeof value === "string" && value.trim() && !/[\x00-\x08\x0b\x0c\x0e-\x1f\x7f]/.test(value);
 
-/** Decode review claims only. The chief must still accept them against the current recorded assignment. */
 export function parseReviewReport(report, role, target) {
   const fail = () => { throw Error("The review report does not match its target or findings"); };
   parseReviewTarget(target);

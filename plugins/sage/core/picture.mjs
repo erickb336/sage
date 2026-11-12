@@ -1,21 +1,12 @@
-// Pictures in sage's messages (T984). A picture is fixed-width text first: lines of at most 46 columns (66 on a long
-// page), with sage's box rules. The image is drawn from the same lines, so the two forms cannot differ (T999).
-//   Boxes: rounded ╭ ╮ ╰ ╯ for a part, double ╔ ╗ ╚ ╝ for the part in focus, dashed ┄ ┆ for a group.
-//   Arrows: a line (│ ─) with one head (▼ ▲ ▶ ◀). ● is a start, ━ a bar. No tree marks (├ └ ┬ ┴ ┼).
-// Pure functions: no file access.
 import { createHash } from "node:crypto";
 
-/** East Asian wide and full-width code points take two columns in a terminal; box marks count one (F7: a known limit). */
 const wide = (cp) => (cp >= 0x1100 && cp <= 0x115f) || (cp >= 0x2e80 && cp <= 0xa4cf) || (cp >= 0xac00 && cp <= 0xd7a3) || (cp >= 0xf900 && cp <= 0xfaff)
   || (cp >= 0xfe30 && cp <= 0xfe4f) || (cp >= 0xff00 && cp <= 0xff60) || (cp >= 0xffe0 && cp <= 0xffe6) || (cp >= 0x1f300 && cp <= 0x1faff);
-/** The columns that a terminal gives a line. */
 export const columns = (s) => [...String(s)].reduce((n, ch) => n + (wide(ch.codePointAt(0)) ? 2 : 1), 0);
 const padTo = (s, n) => s + " ".repeat(Math.max(0, n - columns(s)));
 export const escapeHtml = (s) => String(s).replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;").replace(/"/g, "&quot;").replace(/'/g, "&#39;");
-/** The source mark of a picture: the first 16 hex of the sha256 of its lines. */
 export const sourceOf = (lines) => createHash("sha256").update(lines.join("\n")).digest("hex").slice(0, 16);
 
-/** Wrap words to a width. A word longer than the width stays whole on its own line. */
 export function wrap(text, width) {
   const out = [];
   for (const para of String(text).split("\n")) {
@@ -33,10 +24,6 @@ export function wrap(text, width) {
 
 const STYLES = { round: "╭╮╰╯─│", double: "╔╗╚╝═║", dashed: "╭╮╰╯┄┆" };
 
-/**
- * A box of exactly w columns, with its title on the top edge. Each item is a text (wrapped to the inside) or an array of
- * rows that goes in as it is (a nested box). Throws a plain message when a title or a row does not fit.
- */
 export function box({ w, title = "", lines = [], style = "round" }) {
   const [tl, tr, bl, br, h, v] = [...STYLES[style]];
   const inner = w - 4;
@@ -53,19 +40,15 @@ export function box({ w, title = "", lines = [], style = "round" }) {
   return out;
 }
 
-// ---------------------------------------------------------------- reading the text: the boxes
-
 const TL = "╭╔", TR = "╮╗", BL = "╰╚", BR = "╯╝", CORNERS = TL + TR + BL + BR;
 const HEDGE = "─┄═", VEDGE = "│┆║";
-const CROSS_H = "│┆▼▲"; // a vertical connector that crosses a top or bottom edge
-const CROSS_V = "─┄▶◀"; // a horizontal connector that crosses a side edge
+const CROSS_H = "│┆▼▲";
+const CROSS_V = "─┄▶◀";
 const CONNECT = "│─┆┄╭╮╰╯▼▲▶◀●━";
 const BOX_MARKS = /[─-╿]/u;
-/** The six state words (T1002), as a box's first line starts with them, and the class that colours them. */
 const STATE_CLASS = [["Not started", "st-not"], ["Waiting", "st-wait"], ["Needs you", "st-need"], ["In progress", "st-prog"], ["Done", "st-done"], ["Stopped", "st-stop"]];
 
 const grid = (lines) => {
-  // A reduce, not Math.max(...): a picture of very many lines overflows the stack as call arguments (F-T1004-5).
   const W = lines.reduce((w, l) => Math.max(w, [...l].length), 0);
   return { W, H: lines.length, g: lines.map((l) => [...l, ...Array(W - [...l].length).fill(" ")]) };
 };
@@ -92,10 +75,6 @@ function findBoxes({ g, W, H }) {
   return boxes;
 }
 
-/**
- * The boxes that do not close, by row and column (1-based), so that an agent who draws a picture by hand can fix it (C6).
- * A corner that starts a top edge of two or more marks, or a title, must start a whole box. A lone ╭ or ╰ is a curve.
- */
 export function openBoxes(lines) {
   const at = grid(lines), boxes = findBoxes(at), problems = [];
   for (let r = 0; r < at.H; r++) for (let c = 0; c < at.W; c++) {
@@ -106,16 +85,9 @@ export function openBoxes(lines) {
   return problems;
 }
 
-// ---------------------------------------------------------------- the image: SVG from the text
-
-const CW = 9, CH = 19; // one cell, in SVG units
+const CW = 9, CH = 19;
 const DIGITLESS_TAG = /\[(new|was: [^\]]+)\]/g;
 
-/**
- * The SVG of a text picture. The lines are its only source: boxes become rectangles, connectors lines and heads, and
- * every other character text at its own column. A mark that the reader does not understand (a corner of a box that
- * does not close) stays as fixed-width text in its cell, so the image loses nothing of the text (C6).
- */
 export function pictureSvg(lines, { title = "" } = {}) {
   const at = grid(lines), { g, W, H } = at;
   const used = g.map((row) => row.map(() => false));
@@ -167,7 +139,6 @@ export function pictureSvg(lines, { title = "" } = {}) {
     out.push(`<rect class="pic-labelbg ${b.style} d${b.depth % 2}" x="${x(b.labelCol) - 3}" y="${y(b.r) + 3}" width="${columns(b.label) * CW * 0.75 + 6}" height="${CH - 6}" rx="3"/>`);
     out.push(`<text class="pic-text pic-label${b.style === "double" ? " here" : ""}" x="${x(b.labelCol)}" y="${base(b.r)}">${escapeHtml(b.label)}</text>`);
   }
-  // Text: runs of characters, split at two spaces or at a drawn cell. A box mark left in a run is fixed-width text.
   for (let r = 0; r < H; r++) {
     for (let c = 0; c < W;) {
       if (used[r][c] || g[r][c] === " ") { c++; continue; }
@@ -182,7 +153,6 @@ export function pictureSvg(lines, { title = "" } = {}) {
   return `<svg class="pic" viewBox="0 0 ${W * CW} ${H * CH}" width="${W * CW}" role="img" aria-label="${escapeHtml(title)}" data-source="${sourceOf(lines)}" xmlns="http://www.w3.org/2000/svg">${out.join("")}</svg>`;
 }
 
-/** One run of text: plain words, the change tags [new] and [was: …] as pills, and box marks as fixed-width cells. */
 function textRun(out, text, c, r, { first, x, y, base }) {
   const chars = [...text];
   const plain = (from, to) => {
@@ -199,7 +169,6 @@ function textRun(out, text, c, r, { first, x, y, base }) {
   const tags = [...joined.matchAll(DIGITLESS_TAG)].map((m) => ({ from: [...joined.slice(0, m.index)].length, len: [...m[0]].length, tag: m[1] }));
   let from = 0;
   const flush = (to) => {
-    // Box marks inside the run are drawn one cell each, in a fixed-width font.
     let start = from;
     for (let i = from; i < to; i++) {
       if (!BOX_MARKS.test(chars[i])) continue;

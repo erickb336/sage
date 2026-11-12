@@ -1,5 +1,3 @@
-// Standalone browser check. It runs in `npm run test:browser`, not in `npm test`, with Playwright's bundled Chromium,
-// or the headless shell at BOARD_BROWSER_PATH; never an installed Chrome.
 import "./test-env.mjs";
 import assert from "node:assert/strict";
 import { mkdirSync, mkdtempSync, readFileSync, renameSync, rmSync, writeFileSync } from "node:fs";
@@ -31,7 +29,6 @@ function model({ gamma = null, delta = false, current = false, rich = false } = 
     const head = "a".repeat(40);
     projects[0].tables.tasks[1].pr = "7";
     projects[0].tables.runs = [{ id: "R1", task: "T2", role: "code-reviewer", status: "running", started: NOW, tokens: "1200" }];
-    // T2 has an open gate, so its step needs you; T4's build runs now (R1077: running now only with a live run).
     projects[1].tables.runs = [{ id: "R3", task: "T4", role: "implementer", status: "running", started: NOW }];
     projects[0].observations = { records: [
       { id: "O1", task: "T2", kind: "pr", source: "Sample recorder", observedAt: NOW, data: { number: 7, state: "open", head, repository: "https://example.test/sample/sage" } },
@@ -39,11 +36,9 @@ function model({ gamma = null, delta = false, current = false, rich = false } = 
     ] };
   }
   if (rich) {
-    // A full backlog (its fold), a PR with no recorded head, and a decision: each shows faint text.
     projects[0].tables.tasks.push(...Array.from({ length: 7 }, (_, i) => task(`T${10 + i}`, `Sample alpha queued ${10 + i}`, "framed")));
     projects[1].tables.tasks[1].pr = "9";
     projects[0].tables.decisions = [{ at: NOW, task: "T2", decision: "Sample decision", why: "sample" }];
-    // An earlier head in the evidence, and a second source, whose agents get the alternate pill colour.
     projects[0].tables.ledger = [{ task: "T2", pr: "7", sha: "b".repeat(40), kind: "checks-fail", cycle: "1", at: NOW }, { task: "T2", pr: "7", sha: "a".repeat(40), kind: "checks-pass", cycle: "1", at: NOW }];
   }
   if (gamma) projects.push(project("gamma", [task("T5", "Sample gamma work", gamma)], gamma === "held" ? [{ id: "G3", task: "T5", question: "Sample: go on?", answer: "" }] : []));
@@ -60,7 +55,6 @@ async function pageFor(t, { live = false, snapshot = !live, scripts = true, phon
   await context.route("**/*", route => route.abort());
   const page = await context.newPage();
   if (live) {
-    // Only the transport is a fixture. The renderer's actual script handles the event and changes the real DOM.
     await page.evaluate(() => {
       window.EventSource = class extends EventTarget {
         constructor() { super(); window.sampleBoardStream = this; }
@@ -81,7 +75,6 @@ async function update(page, data) {
   assert.equal(await page.locator("#live-state").textContent(), "Live · updated 20:00");
 }
 
-/** Chooses a project in the picker by its shown name (T305: the picker replaces the row of project chips). */
 async function pick(page, name) {
   await page.locator("#pick-trig").click();
   await page.locator(`#pick-list [role=option][data-name="${name}"]`).click();
@@ -100,22 +93,20 @@ test("T205, T305: real DOM keeps the chosen project, the needs filter and the th
   await update(page, model({ gamma: "held" }));
   assert.equal(await picked(page), "alpha");
   assert.equal(await needsButton(page).getAttribute("aria-pressed"), "true");
-  assert.equal(await needsButton(page).textContent(), "Needs you 1"); // T217: the count follows the chosen project (alpha)
+  assert.equal(await needsButton(page).textContent(), "Needs you 1");
   assert.equal(await summary(page), "1 needs you 0 agents at work 1 in review 1 tasks");
   assert.deepEqual(await visibleCards(page), ["T2 · Sample alpha review"]);
   assert.equal(await page.locator("html").getAttribute("data-theme"), "light");
   assert.equal(await page.locator("body").evaluate(body => getComputedStyle(body).getPropertyValue("--bg").trim()), themeToken("light", "--bg"));
 
-  // This option did not exist when the script first ran; a direct listener on the old options cannot handle it.
   await pick(page, "gamma");
   assert.deepEqual(await visibleCards(page), ["T5 · Sample gamma work"]);
   await update(page, model({ gamma: "building" }));
-  assert.equal(await needsButton(page).textContent(), "Needs you 0"); // gamma has no task that needs you now
+  assert.equal(await needsButton(page).textContent(), "Needs you 0");
   assert.deepEqual(await visibleCards(page), []);
   await needsButton(page).click();
   assert.deepEqual(await visibleCards(page), ["T5 · Sample gamma work"]);
 
-  // T305 "project gone": the chosen project has no logbook now. The board shows all projects and says so.
   await update(page, model({ delta: true }));
   assert.equal(await page.locator('#pick-list [data-name="gamma"]').count(), 0);
   assert.equal(await picked(page), "All projects");
@@ -211,7 +202,6 @@ test("T218 F-T218-8 and F-T218-10: faint text and skipped loop steps meet 4.5 co
 test("T349, R1347-1: every text on the board, a task page, the milestones list, a milestone page, the Agents page and the snapshot's task and milestone pages meets AA contrast, dark and light, at 375 and 1280 px", async t => {
   const { pages, targets } = contrastPages(), low = [], seen = new Set();
   for (const width of [375, 1280]) {
-    // A dark system: the measure does not depend on the default theme, which other tests check.
     const context = await browser.newContext({ viewport: { width, height: 900 }, colorScheme: "dark", reducedMotion: "reduce" });
     t.after(() => context.close());
     await context.route("**/*", route => route.abort());
@@ -222,7 +212,6 @@ test("T349, R1347-1: every text on the board, a task page, the milestones list, 
         await page.evaluate(() => { location.hash = ""; });
         if (theme === "light") await page.locator("label[for=flip]").click();
         assert.equal((await shownTheme(page))[0], theme);
-        // The snapshot's own pages open by their hash, after the switch: an open page hides the board header.
         for (const [view, hash] of [[name, ""], ...(name === "snapshot" ? Object.entries(targets) : [])]) {
           await page.evaluate(value => { location.hash = value; }, hash);
           for (const item of await page.evaluate(measureContrast)) {
@@ -235,11 +224,9 @@ test("T349, R1347-1: every text on the board, a task page, the milestones list, 
   }
   assert.deepEqual(low, []);
   assert.ok(["snapshot task h3", "snapshot milestones h3", "snapshot milestone div.band"].every(kind => seen.has(kind)), [...seen].filter(kind => kind.startsWith("snapshot ")).join(", "));
-  // The texts of the two contrast bugs that T349 fixed are among the measured ones.
   assert.ok(["agents span.ptag.ptag-claude", "agents span.ptag.ptag-codex", "agents span.faint", "board span.n", "milestone div.band"].every(kind => seen.has(kind)), [...seen].filter(kind => kind.startsWith("agents")).join(", "));
 });
 
-// R1349-1, R1349-2: each control, and the chosen tab and Who pill, stands out 3:1 from what is behind it (WCAG 1.4.11).
 const CONTROLS = [["theme switch", "label.theme", "edge"], ["project picker", ".trigger", "edge"], ["filter", "select", "edge"], ["chosen tab", ".boardtabs a[aria-current=page]", "edge"], ["chosen Who pill", ".seg button[aria-pressed=true]", "edge"]];
 test("R1349-1, R1349-2: the theme switch, the picker, the filters, the chosen tab and the chosen Who pill reach 3:1 against their shell or tray, dark and light", async t => {
   const { pages } = contrastPages(), low = [], seen = new Set();
@@ -252,7 +239,6 @@ test("R1349-1, R1349-2: the theme switch, the picker, the filters, the chosen ta
     for (const theme of ["dark", "light"]) {
       if (theme === "light") await page.locator("label[for=flip]").click();
       assert.equal((await shownTheme(page))[0], theme);
-      // The milestones list has no filters: it shows the switch, the picker and the tabs.
       const list = CONTROLS.filter(([, selector]) => name === "board" || ["label.theme", ".trigger", ".boardtabs a[aria-current=page]"].includes(selector));
       for (const item of (await page.evaluate(measureContrast, list)).flat()) {
         seen.add(item.kind);
@@ -273,7 +259,6 @@ test("R1347-3: in forced colours, the cards, task page sections, milestone cards
   for (const [name, selector] of [["board", "a.card:not(.needs)"], ["board", "a.card.needs"], ["task", ".detail section"], ["milestones", "a.prog"], ["agents", ".rules"]]) {
     await page.setContent(pages[name]);
     const edge = await page.locator(selector).first().evaluate(element => { const style = getComputedStyle(element); return { shadow: style.boxShadow, border: `${style.borderTopWidth} ${style.borderTopStyle}`, color: style.borderTopColor, outline: `${style.outlineWidth} ${style.outlineStyle}` }; });
-    // The emulation is real: the browser drops each box shadow, so only a border or an outline draws an edge.
     assert.equal(edge.shadow, "none", `${name} ${selector}: forced colours drop the shadow`);
     assert.equal(edge.border, "1px solid", `${name} ${selector}: a border`);
     assert.ok(!/rgba\(0, 0, 0, 0\)|transparent/.test(edge.color), `${name} ${selector}: the border shows (${edge.color})`);
@@ -320,7 +305,6 @@ test("T218 F-T218-9, F-T218-7 and F-T218-13: chips only with scripts, the stand-
     assert.equal(await page.locator("label[for=flip]").isVisible(), true, "the theme switch needs no script");
     const sentence = "a stand-in value: the logbook does not record the real one.";
     assert.equal(await page.locator(".legend").getByText(sentence, { exact: false }).isVisible(), true);
-    // F-T218-16: one legend pill for each pill colour, named by its source.
     assert.deepEqual(await page.locator(".legend .agent").evaluateAll(pills => pills.map(pill => `${pill.className}: ${pill.parentElement.textContent}`)), ["agent: Sample source · role an agent at work now", "agent alt: Codex · role the same for Codex"]);
     assert.equal(await page.locator(".card .agent.alt").textContent(), "Codex (Stand-in: the logbook's source. The run does not record its provider.) · implementer", "the reason is in the text for screen readers (R1075-7)");
     await page.setContent(renderBoardHtml(data, { snapshot: false, taskKey: task.key }));
@@ -381,7 +365,6 @@ test("T205: real browser authenticates pages and live streams, watches files, an
   };
   for (const [name, header] of Object.entries(headers)) writeFileSync(join(project, `${name}.tsv`), `${header.replaceAll(" ", "\t")}\n`);
   const taskFile = join(project, "tasks.tsv");
-  // The held task has an open gate, so it needs you (R1077).
   writeFileSync(join(project, "gates.tsv"), `${headers.gates.replaceAll(" ", "\t")}\nG1\tT2\tSample: go on?\t\t\t\t\t\n`);
   const table = title => `${headers.tasks.replaceAll(" ", "\t")}\nT1\t${title}\tsmall\t\tbuild\tbuilding\tcodex/sample\t\t0\t\nT2\tSample held task\tsmall\t\tbuild\theld\tcodex/sample-held\t\t0\t\n`;
   const replaceTasks = title => {
@@ -403,9 +386,7 @@ test("T205: real browser authenticates pages and live streams, watches files, an
     }
   });
   await server.start();
-  // On the Mac (a loopback Host) the board needs no sign-in, so the browser sends no credentials.
   context = await browser.newContext({ colorScheme: "dark" });
-  // Only this isolated server may receive requests.
   await context.route("**/*", route => new URL(route.request().url()).origin === origin ? route.continue() : route.abort());
   const page = await context.newPage(), responses = [];
   page.on("response", response => {

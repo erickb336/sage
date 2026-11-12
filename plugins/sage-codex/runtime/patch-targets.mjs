@@ -1,6 +1,5 @@
 const refuse = () => { throw Error("Codex patch targets are unavailable"); };
 
-/** Parse the supported direct patch form. Advice extraction is not authorization. */
 export function patchTargets(patch) {
   if (typeof patch !== "string" || patch.length > 1024 * 1024) refuse();
   const lines = patch.replaceAll("\r\n", "\n").trim().split("\n");
@@ -8,7 +7,6 @@ export function patchTargets(patch) {
   const paths = [];
   let kind, body = false, moved = false;
   const target = value => {
-    // Native Codex trims header endings. Refuse ambiguous targets before path checks.
     if (!value || value.length > 4096 || /\p{Cc}/u.test(value) || /\p{White_Space}$/u.test(value)) refuse();
     paths.push(value);
     if (paths.length > 4096) refuse();

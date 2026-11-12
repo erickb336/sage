@@ -1,6 +1,4 @@
-// The prior-art rule (T1016): npm run check fails when one of the texts that must ask for the prior art loses its line,
-// and names that text. The real texts pass.
-import "./test-env.mjs"; // first: no variable of the developer's shell changes a result
+import "./test-env.mjs";
 import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
 import { join } from "node:path";
@@ -25,7 +23,6 @@ test("a text whose prior-art line is gone is a problem that names it, and only i
 
 test("F-T1016-6: a text that loses its asking line is a problem, also when the words \"prior art\" stay elsewhere in it", () => {
   for (const lost of PRIOR_ART_TEXTS) {
-    // The asking line is the one that asks for 2 or 3 existing stacks, products or tools; a sentence elsewhere keeps the words.
     const read = (path) => path === lost
       ? `${real(path).split("\n").filter((line) => !/2 or 3 existing/.test(line)).join("\n")}\nThe report names the prior art.\n`
       : real(path);

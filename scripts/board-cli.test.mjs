@@ -74,7 +74,6 @@ test("standalone setup and installation stay explicit, with no service operation
   const install = join(dir, "installed"), plist = join(dir, "login/board.plist");
   await assert.rejects(runBoardCli(["board", "--install", "--install-dir", install, "--login-file", join(root, "board.plist"), "--config", config]), /outside logbook roots/);
   assert.equal(existsSync(install), false);
-  // The login file names Node through a stable PATH command, so a fixture PATH replaces the machine's PATH.
   const bin = join(dir, "bin"), stableNode = join(bin, "node"), savedPath = process.env.PATH;
   mkdirSync(bin); symlinkSync(process.execPath, stableNode);
   process.env.PATH = join(dir, "empty-bin");

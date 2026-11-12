@@ -152,7 +152,6 @@ test('T48: invalid approvals refuse the whole update; legacy allowances still co
     s.no('task', 'T1', 'set', 'state=building', `approval=${approval}`);
     assert.deepEqual(snapshot(s.dest), before);
   }
-  // Simulate a saved allowance from the older tool, which had no approval record.
   const [head, first, other] = readFileSync(file, 'utf8').trimEnd().split('\n');
   const cells = first.split('\t'), cols = head.split('\t');
   cells[cols.indexOf('state')] = 'reviewing'; cells[cols.indexOf('hold')] = ''; cells[cols.indexOf('extra')] = '2';
@@ -188,7 +187,6 @@ test('adoption refuses another task claim and another project', t => {
   before = s.bytes(s.dest); assert.match(s.no(...s.adopt), /project/); assert.deepEqual(s.bytes(s.dest), before);
 });
 
-/** A source T95 on codex/t95-x, and a destination T95 of another feature: the same number, from the other provider's count. */
 function overlap(t, state = 'framed') {
   const s = fixture(t, 'T95', OVERLAP);
   s.ok('task', 'add', '--title', 'Unrelated destination task', '--size', 'tiny', '--priority', 'P1');
@@ -198,7 +196,6 @@ function overlap(t, state = 'framed') {
   writeFileSync(file, `${[head, ...rows].map(row => row.join('\t')).join('\n')}\n`);
   return s;
 }
-/** Takes the adopted T1 through fresh reviews and QA on the branch, to the point where the merge check judges the head. */
 function reviewed(s, branch) {
   for (const state of ['briefed', 'building', 'reviewing']) s.ok('task', 'T1', 'set', `state=${state}`);
   s.ok('verdict', 'T1', '--sha', SHA, '--pr', '362', '--kind', 'checks-pass');
@@ -305,11 +302,6 @@ test('an ended blocked preparation does not prevent adoption or become review pr
   assert.equal(tool.read(s.dest, 'ledger').length, 0);
 });
 
-/**
- * T641: the adoption record of a moved task, version 2, as the move will write it: the old provider, task and logbook,
- * with pr and branch optional and the task's own version 1 record in from. Only the reader exists yet, so the test puts
- * the cell in place.
- */
 function adoptedV2(s, record) {
   const v1 = JSON.parse(s.task().adoption), file = join(s.dest, 'tasks.tsv');
   const [head, ...rows] = readFileSync(file, 'utf8').trimEnd().split('\n'), cols = head.split('\t');

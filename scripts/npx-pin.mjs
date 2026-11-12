@@ -9,7 +9,6 @@ const OWN = /^scripts\/npx-pin(\.test)?\.mjs$/;
 
 export const pinnedVersion = (read = (path) => readFileSync(join(ROOT, path), "utf8")) => JSON.parse(read("package.json")).devDependencies["@ast-grep/cli"];
 
-/** The problems in one source text: each line that runs ast-grep through npx without the pinned package, and each other version of @ast-grep/cli. */
 export function npxAstGrepProblems(path, text, pin) {
   const problems = [];
   text.split("\n").forEach((line, i) => {

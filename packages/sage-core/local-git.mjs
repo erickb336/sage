@@ -2,10 +2,6 @@ import { execFileSync } from "node:child_process";
 import { lstatSync, realpathSync } from "node:fs";
 import { dirname } from "node:path";
 
-/** Fixed system locations only: never PATH, cwd, or a caller-selected executable.
- * macOS uses the actual developer-tools binary, not /usr/bin/git's environment-sensitive launcher.
- * Resolve symlinks, then require root ownership and no group/other writes for the file and every parent.
- */
 function trustedGit() {
   const candidates = process.platform === "darwin"
     ? ["/Library/Developer/CommandLineTools/usr/bin/git", "/Applications/Xcode.app/Contents/Developer/usr/bin/git"]
@@ -20,16 +16,11 @@ function trustedGit() {
         if (path === dirname(path)) break;
       }
       return executable;
-    } catch { /* Try the next fixed system location; never fall back to PATH. */ }
+    } catch {}
   }
   throw Error("no trusted system Git executable is available");
 }
 
-/**
- * Local repository reads must not inherit selectors, fetch missing objects, or run transport helpers. They read each
- * commit's parents from the commit itself: no replace refs, no info/grafts (an empty graft file) and no commit-graph,
- * whose parents a clone can forge (F-T805-8). input, when given, is git's stdin.
- */
 export function readLocalGit(project, args, input) {
   const env = Object.fromEntries(Object.entries(process.env).filter(([key]) => !key.startsWith("GIT_")));
   Object.assign(env, {

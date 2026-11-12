@@ -30,7 +30,6 @@ function populate(root, title = "Sample first task") {
   return project;
 }
 
-// The production listener requires a fixed port. Reserve a free test port once, then use that exact port.
 async function freePort() {
   const socket = createServer();
   await new Promise((accept, reject) => { socket.once("error", reject); socket.listen(0, "127.0.0.1", accept); });
@@ -39,19 +38,14 @@ async function freePort() {
   return port;
 }
 
-// Guards against a hang, not time checks. An event wait passes the server's last read after a new watch (15 s), because a
-// write that the file watcher loses reaches the board only through those reads (T348). A request has a longer guard: a
-// password check is scrypt work, and on a starved machine one check took over 30 s and still ended.
 const EVENT_GUARD = 30_000, REQUEST_GUARD = 120_000;
 
-// A sample password only, hashed once for the file: no test uses a real password.
 const PASSWORD = "sample board pass 01", RECORD = await hashPassword(PASSWORD);
 
-/** A board server on a free port. password: null is a board with no password set yet (T229). */
 async function fixture(t, { missing = false, allowedHosts = [], password = RECORD, id, clock, before, settleReads } = {}) {
   const dir = mkdtempSync(join(tmpdir(), "sage-board-server-")), root = join(dir, "source"), port = await freePort();
   if (!missing) populate(root);
-  before?.(join(root, "project-abcdef")); // a change of the logbook before the first start
+  before?.(join(root, "project-abcdef"));
   const sources = [{ id: "sample", path: root, label: "Sample source" }];
   const server = createBoardServer({ sources, ...(password ? { password } : {}), port, allowedHosts, id, ...(clock ? { clock } : {}), ...(settleReads ? { settleReads } : {}) });
   t.after(async () => { await server.close(); rmSync(dir, { recursive: true, force: true }); });
@@ -70,8 +64,6 @@ function read(f, path = "/", { method = "GET", headers = {}, rawHeaders } = {}) 
   });
 }
 
-// With no reads after a new watch, only a watcher event updates the board. On macOS each new watch restarts the file
-// event stream, and a write in that time gives no event (T348), so the write repeats until the board shows it.
 async function keepWriting(write, seen) {
   write();
   const again = setInterval(write, 200);
@@ -169,7 +161,6 @@ test("T216: on the Mac itself (a loopback Host) the board needs no sign-in, and 
 });
 
 test("T216, T229: a request that a private HTTPS tunnel forwards signs in, also with a loopback Host (probe 4)", async t => {
-  // A tunnel such as tailscale serve connects from 127.0.0.1, keeps the client's Host and adds X-Forwarded-For.
   const f = await fixture(t, { allowedHosts: ["sample.tailnet.ts.net"], id: "0123456789abcdef" });
   const loopback = `127.0.0.1:${f.port}`;
   for (const proxy of [["X-Forwarded-For", "100.64.0.7"], ["X-Forwarded-Host", loopback], ["X-Forwarded-Proto", "https"], ["Forwarded", "for=100.64.0.7"]]) {
@@ -188,7 +179,6 @@ test("R1069-2: the checkout's full path is a search term only on the Mac's own p
   const f = await fixture(t, { allowedHosts: ["sample.tailnet.ts.net"] }), checkout = join(f.dir, "work", "sample-checkout-folder");
   mkdirSync(checkout, { recursive: true }); writeFileSync(join(f.project, "checkout.txt"), `${checkout}\n`);
   const loopback = `127.0.0.1:${f.port}`;
-  // The board reads the logbooks again on a file event; wait until the Mac's page names the checkout's folder.
   let mac;
   for (let i = 0; i < 600 && !(mac = await read(f, "/", { rawHeaders: ["Host", loopback] })).body.includes("folder sample-checkout-folder"); i++) await new Promise(wake => setTimeout(wake, 50));
   assert.ok(mac.body.includes(checkout), "the Mac's own page can search by the path");
@@ -201,11 +191,9 @@ test("R1069-2: the checkout's full path is a search term only on the Mac's own p
 
 test("T229: a generic proxy that adds only X-Forwarded-For needs the password, and the board knows no vendor's headers", async t => {
   const f = await fixture(t, { id: "0123456789abcdef" }), loopback = `127.0.0.1:${f.port}`;
-  // A proxy of any vendor: a loopback peer, a loopback Host and one X-Forwarded-For header, nothing else.
   const proxied = await read(f, "/", { rawHeaders: ["Host", loopback, "X-Forwarded-For", "203.0.113.9"] });
   assert.equal(proxied.status, 401); assert.match(proxied.headers["www-authenticate"], /^Basic realm="Sage board"/); assert.doesNotMatch(proxied.body, /Sample first task/);
   assert.equal((await read(f, "/", { rawHeaders: ["Host", loopback, "X-Forwarded-For", "203.0.113.9", "Authorization", f.authorization] })).status, 200);
-  // A header name of one vendor is no proxy sign: the board does not depend on Tailscale (least coupling).
   const vendor = await read(f, "/", { rawHeaders: ["Host", loopback, "Tailscale-User-Login", "sample@example.test"] });
   assert.equal(vendor.status, 200); assert.match(vendor.headers["x-sage-board"], /^id=0123456789abcdef; /);
 });
@@ -232,7 +220,6 @@ test("T216: the server checks one password at a time and waits after a wrong one
   assert.deepEqual([first.status, second.status].sort(), [401, 429]);
   const busy = first.status === 429 ? first : second;
   assert.equal(busy.headers["retry-after"], "1"); assert.doesNotMatch(busy.body, /Sample first task/);
-  // A lower bound only: the fixed one-second delay after a wrong password can make a reply later, never sooner.
   assert.ok(Date.now() - began >= 900, "a wrong password waits");
   assert.equal((await read(f, "/", { rawHeaders: as("sample board pass 01") })).status, 200, "the check is free again after the delay");
 });
@@ -253,7 +240,6 @@ test("board server rejects foreign, duplicate and mismatched browser authority h
   assert.equal((await read(f, "/", { headers: { Host: "sample.tailnet.ts.net", Origin: "https://sample.tailnet.ts.net", "Sec-Fetch-Site": "same-origin" } })).status, 200);
 });
 
-/** A hook slot of the sample project (T308): one empty file per mark, as sage-hook.mjs writes it. */
 function slot(root, name, marks) {
   const dir = join(root, ".hooks", "slots", name); mkdirSync(dir, { recursive: true });
   for (const mark of [...marks, "ok"]) writeFileSync(join(dir, mark), "");
@@ -269,9 +255,7 @@ test("T308: the Agents page is a route with the same sign-in, CSP and browser ch
   assert.match(mac.body, /<a href="\/agents" aria-current="page">Agents \(1\)<\/a>/); assert.match(mac.body, /<span class="role">qa<\/span><span class="id">R1<\/span>/);
   assert.match(mac.body, /new EventSource\("\/agents\?events=1"\)/);
   for (const [tag, content] of [...mac.body.matchAll(/<(script|style)>([\s\S]*?)<\/\1>/g)].map(m => [m[1], m[2]])) assert.ok(mac.headers["content-security-policy"].includes(`'sha256-${createHash("sha256").update(content).digest("base64")}'`), tag);
-  // The task board names the page with its count.
   assert.match((await read(f, "/", { rawHeaders: ["Host", loopback] })).body, /<a href="\/" aria-current="page">Task board<\/a><a href="\/milestones">Milestones<\/a><a href="\/agents">Agents \(1\)<\/a>/);
-  // Away from the Mac, the page and its stream need the password.
   for (const path of ["/agents", "/agents?events=1"]) {
     const refused = await read(f, path, { rawHeaders: ["Host", "sample.tailnet.ts.net"] });
     assert.equal(refused.status, 401, path); assert.doesNotMatch(refused.body, /Sample first task/);
@@ -280,7 +264,6 @@ test("T308: the Agents page is a route with the same sign-in, CSP and browser ch
     assert.equal((await read(f, path, { rawHeaders: ["Host", loopback, "Origin", "https://attacker.test"] })).status, 403, path);
   }
   for (const path of ["/agents/", "/agents?events=1&task=x", "/agents?x=1", "/Agents"]) assert.equal((await read(f, path)).status, 404, path);
-  // The stream sends the Agents page, and a new slot of the hook sends the page again with it.
   const stream = events(f, "/agents?events=1"); t.after(() => stream.close());
   assert.match((await stream.next()).html, /Agents \(1\)/);
   writeFileSync(join(f.project, "runs.tsv"), `${readFileSync(join(f.project, "runs.tsv"), "utf8")}R2\tT1\tcode-reviewer\t0\t\t\trunning\t\t\t${new Date().toISOString()}\t\n`);
@@ -321,17 +304,13 @@ test("board event streams deliver initial and atomic file updates for the select
   const updatedTask = await task.next(p => p.html.includes("Sample replaced title") && !p.stale);
   assert.ok(Number(updated.revision) > Number(first.revision)); assert.match(updatedTask.html, /class="detail"/);
   const reconnect = events(f); t.after(() => reconnect.close());
-  // A read after a new watch can add a revision here, so the snapshot has this revision or a later one.
   const snapshot = await reconnect.next(); assert.ok(Number(snapshot.revision) >= Number(updated.revision)); assert.match(snapshot.html, /Sample replaced title/);
 });
 
 test("T305 R1023-3: a file event that does not change the page sends nothing; the next change sends the new page", async t => {
-  // A fixed clock, so the page's built time does not change between the two refreshes.
   const f = await fixture(t, { clock: () => "2026-10-18T12:00:00Z" }), stream = events(f); t.after(() => stream.close());
   const first = await stream.next(); assert.match(first.html, /Sample first task/);
   writeFileSync(join(f.project, "unrelated.txt"), "sample\n");
-  // Time for the watcher and its 20 ms debounce. A slower machine merges the two events, so the test still passes; it
-  // can never fail for time. On the old server this file event alone sent the same page again.
   await new Promise(wake => setTimeout(wake, 1000));
   const temporary = join(f.project, "tasks.pending"); writeFileSync(temporary, tasks(row("Sample changed title"))); renameSync(temporary, join(f.project, "tasks.tsv"));
   const next = await stream.next();
@@ -351,9 +330,6 @@ test("board event streams keep the last valid content while an incomplete write 
 });
 
 test("R1506-F1: a table written in place after an earlier rename onto it still updates the board, on Linux too", async t => {
-  // Node's recursive fs.watch on Linux (24.21) watched each file's inode. After the rename, the path's watch stayed on the
-  // old inode and its folder's event named a known file, so the in-place writes below sent nothing (CI run 40140060375).
-  // No reads after a new watch: this test proves that a watcher event alone reaches the board (T348).
   const f = await fixture(t, { settleReads: [] }), stream = events(f); t.after(() => stream.close());
   assert.equal((await stream.next()).stale, false);
   const target = join(f.project, "tasks.tsv"), temporary = join(f.project, "tasks.pending");
@@ -365,7 +341,6 @@ test("R1506-F1: a table written in place after an earlier rename onto it still u
 });
 
 test("T348: a write that no watcher reports still reaches the board through the reads after a new watch", async t => {
-  // On macOS a write while a new watch restarts the file event stream gives no event at all. These watchers give none.
   const original = fs.watch;
   fs.watch = () => Object.assign(new EventEmitter(), { close() {} });
   syncBuiltinESMExports();
@@ -392,7 +367,6 @@ test("F-T216-19: a root that appears while the board starts does not stop the st
   const dir = mkdtempSync(join(tmpdir(), "sage-board-server-")), root = join(dir, "source"), port = await freePort();
   t.after(() => rmSync(dir, { recursive: true, force: true }));
   const server = createBoardServer({ sources: [{ id: "sample", path: root, label: "Sample source" }], port });
-  // A generous deadlock guard, not a latency assertion: before the fix, start never settled.
   const within = (promise, what) => Promise.race([promise, new Promise((_, reject) => setTimeout(() => reject(new Error(`${what} did not finish`)), 10_000).unref())]);
   const started = server.start();
   await new Promise(wake => setTimeout(wake, 30));
@@ -404,7 +378,6 @@ test("F-T216-19: a root that appears while the board starts does not stop the st
 
 test("board watches a missing root and reattaches after root replacement without polling", async t => {
   const f = await fixture(t, { missing: true }), stream = events(f); t.after(() => stream.close());
-  // T216: a root that does not exist is not set up yet (an owner who uses one provider only): a quiet note, no failure.
   const missing = await stream.next(); assert.equal(missing.stale, false); assert.deepEqual(missing.diagnostics, []);
   assert.match(missing.html, /Not set up yet: Sample source\./); assert.doesNotMatch(missing.html, /Incomplete sources/);
   const page = await read(f); assert.match(page.body, /Not set up yet: Sample source\./); assert.doesNotMatch(page.body, /Incomplete sources/);
@@ -438,7 +411,6 @@ test("board watcher errors publish a stale diagnostic and recover on an observed
 
 test("a parent rename that names only the destination refreshes the missing board root", async t => {
   const original = fs.watch, captured = [];
-  // Simulate the allowed rename notification with no old-name event. No real watcher delivers extra events.
   fs.watch = (path, callback) => {
     const watcher = new EventEmitter(); watcher.close = () => { watcher.closed = true; };
     captured.push({ path, callback, watcher });
@@ -446,7 +418,6 @@ test("a parent rename that names only the destination refreshes the missing boar
   };
   syncBuiltinESMExports();
   let f;
-  // No reads after a new watch: only the callback below can update the board.
   try { f = await fixture(t, { settleReads: [] }); } finally { fs.watch = original; syncBuiltinESMExports(); }
   const stream = events(f); t.after(() => stream.close());
   await stream.next(p => !p.stale);
@@ -454,7 +425,6 @@ test("a parent rename that names only the destination refreshes the missing boar
   const parent = captured.find(entry => entry.path === f.dir);
   assert.ok(parent);
   parent.callback("rename", "renamed-source");
-  // T216: a missing root is a quiet note, not a stale board.
   const missing = await stream.next(p => p.html.includes("Not set up yet: Sample source"));
   assert.equal(missing.stale, false); assert.doesNotMatch(missing.html, /Sample first task/);
   populate(f.root, "Sample recreated source");
@@ -462,7 +432,6 @@ test("a parent rename that names only the destination refreshes the missing boar
   await stream.next(p => !p.stale && p.html.includes("Sample recreated source"));
 });
 
-// T368 (T233 C9): the milestones list and each milestone's page. SAMPLE DATA: one milestone of two tasks, its pilot merged.
 function milestones(project, goal = "Sample goal of M1.", pilot = "Sample pilot") {
   writeFileSync(join(project, "tasks.tsv"), `${HEADERS.tasks.replaceAll(" ", "\t")}\twaits\tmilestone\nT1\t${pilot}\tsmall\t\tbuild\tmerged\t\t\t0\t\t\tM1\nT2\tSample second\tsmall\t\tbuild\tframed\t\t\t0\t\tT1\tM1\n`);
   writeFileSync(join(project, "gates.tsv"), `${HEADERS.gates.replaceAll(" ", "\t")}\nG1\tT1\tApprove milestone M1? No task builds before you approve.\tapprove|change|drop\tapprove\t\tapprove\t\n`);
@@ -504,7 +473,6 @@ test("T368 C9: /milestones and /milestone/KEY are routes with the same sign-in a
   for (const [tag, content] of [...list.body.matchAll(/<(script|style)>([\s\S]*?)<\/\1>/g)].map(m => [m[1], m[2]])) assert.ok(list.headers["content-security-policy"].includes(`'sha256-${createHash("sha256").update(content).digest("base64")}'`), tag);
   const page = await read(f, `/milestone/${milestoneKey("M1")}`);
   assert.equal(page.status, 200); assert.ok(page.body.includes("Sample goal of M1.") && page.body.includes("<h1 class=\"ptitle\"><span aria-hidden=\"true\">◫</span> Sample milestone</h1>"), page.body.slice(-3000));
-  // The board names the page, and the task page links its milestone.
   assert.match((await read(f, "/")).body, /<a href="\/" aria-current="page">Task board<\/a><a href="\/milestones">Milestones<\/a><a href="\/agents">Agents \(0\)<\/a>/);
   assert.ok((await read(f, `/task/${Buffer.from("sample/project-abcdef/T2").toString("base64url")}`)).body.includes(`<a class="back plink" href="/milestone/${milestoneKey("M1")}" title="Sample milestone">◫ <span class="cn">Sample milestone</span><span class="pid">M1</span></a>`));
   const missing = await read(f, `/milestone/${milestoneKey("M9")}`);
@@ -514,13 +482,11 @@ test("T368 C9: /milestones and /milestone/KEY are routes with the same sign-in a
   for (const path of ["/milestone/", "/milestone/_w", `/milestone/${milestoneKey("M1")}=`, `/milestone/${milestoneKey("M1")}/`, `/milestone/${milestoneKey("M1")}?events=2`, "/milestones/", "/milestones?x=1", "/Milestones", `/milestone/${Buffer.from("a\nb").toString("base64url")}`]) {
     const result = await read(f, path); assert.equal(result.status, 404, path); assert.doesNotMatch(result.body, /Sample milestone/, path);
   }
-  // T995: the addresses from before the rename move to the new ones for one version, behind the same sign-in.
   for (const [old, to] of [["/programs", "/milestones"], [`/program/${milestoneKey("M1")}`, `/milestone/${milestoneKey("M1")}`]]) {
     const moved = await read(f, old);
     assert.deepEqual([moved.status, moved.headers.location], [301, to], old);
     assert.equal((await read(f, old, { rawHeaders: ["Host", "sample.tailnet.ts.net"] })).status, 401, `${old}: away from the Mac, the password comes first`);
   }
-  // F-T995-29: a tab opened before the update keeps its old stream address, and gets the new page's stream, so it updates.
   for (const [old, text] of [["/programs?events=1", "1 of 2 merged"], [`/program/${milestoneKey("M1")}?events=1`, "Sample goal of M1."]]) {
     assert.equal((await read(f, old, { rawHeaders: ["Host", "sample.tailnet.ts.net"] })).status, 401, `${old}: away from the Mac, the password comes first`);
     const stream = events(f, old); t.after(() => stream.close());
@@ -528,13 +494,11 @@ test("T368 C9: /milestones and /milestone/KEY are routes with the same sign-in a
   }
   for (const path of ["/program/", "/programs/", "/programs?events=2", `/program/${milestoneKey("M1")}?events=1&task=x`]) assert.equal((await read(f, path)).status, 404, path);
   assert.equal((await read(f, `/program/${milestoneKey("M9")}?events=1`)).status, 404, "no stream for an unknown milestone, also at its old address");
-  // Away from the Mac, the pages and their streams need the password.
   for (const path of ["/milestones", "/milestones?events=1", `/milestone/${milestoneKey("M1")}`, `/milestone/${milestoneKey("M1")}?events=1`]) {
     const refused = await read(f, path, { rawHeaders: ["Host", "sample.tailnet.ts.net"] });
     assert.equal(refused.status, 401, path); assert.doesNotMatch(refused.body, /Sample milestone/);
     assert.equal((await read(f, path, { method: "HEAD", rawHeaders: ["Host", "sample.tailnet.ts.net", "Authorization", f.authorization] })).status, 200, path);
   }
-  // The milestone's stream sends its page, and a change of the logbook sends it again.
   const stream = events(f, `/milestone/${milestoneKey("M1")}?events=1`); t.after(() => stream.close());
   assert.ok((await stream.next()).html.includes("Sample goal of M1."));
   milestones(f.project, "Sample changed goal.");
@@ -543,14 +507,12 @@ test("T368 C9: /milestones and /milestone/KEY are routes with the same sign-in a
 
 test("F-T995-4: an old milestone page's address, with its program id, moves to the page of its milestone through the id map, before and after the migration", async t => {
   const f = await fixture(t);
-  // Before the migration: programs.tsv and the program column, and the floor row of milestones 1 to 4, so PG1 reads as M5.
   writeFileSync(join(f.project, "tasks.tsv"), `${HEADERS.tasks.replaceAll(" ", "\t")}\twaits\tprogram\nT1\tSample pilot\tsmall\t\tbuild\tmerged\t\t\t0\t\t\tPG1\nT2\tSample second\tsmall\t\tbuild\tframed\t\t\t0\t\tT1\tPG1\n`);
   writeFileSync(join(f.project, "gates.tsv"), `${HEADERS.gates.replaceAll(" ", "\t")}\nG1\tT1\tApprove program PG1? No task builds before you approve.\tapprove|change|drop\tapprove\t\tapprove\t\n`);
   writeFileSync(join(f.project, "decisions.tsv"), `${HEADERS.decisions.replaceAll(" ", "\t")}\n2026-10-10T09:00:00Z\tM4\tM4 is the last of milestones 1 to 4\tsample floor\n`);
   writeFileSync(join(f.project, "programs.tsv"), "id\tname\tgoal\tpilot\tgate\tat\nPG1\tSample milestone\tSample goal of PG1.\tT1\tG1\t\n");
   for (const when of ["before", "after"]) {
     if (when === "after") {
-      // After the migration: milestones.tsv, the milestone column and the map row M5 was PG1.
       rmSync(join(f.project, "programs.tsv"));
       writeFileSync(join(f.project, "milestones.tsv"), "id\tname\tgoal\tpilot\tgate\tat\nM5\tSample milestone\tSample goal of PG1.\tT1\tG1\t\n");
       writeFileSync(join(f.project, "tasks.tsv"), `${HEADERS.tasks.replaceAll(" ", "\t")}\twaits\tmilestone\nT1\tSample pilot\tsmall\t\tbuild\tmerged\t\t\t0\t\t\tM5\nT2\tSample second\tsmall\t\tbuild\tframed\t\t\t0\t\tT1\tM5\n`);
@@ -560,7 +522,6 @@ test("F-T995-4: an old milestone page's address, with its program id, moves to t
     assert.equal(page.status, 200, when);
     const moved = await read(f, `/program/${milestoneKey("PG1")}`);
     assert.deepEqual([moved.status, moved.headers.location], [301, `/milestone/${milestoneKey("M5")}`], when);
-    // F-T995-29: the old page's stream, with its program id, sends the page of its milestone.
     const stream = events(f, `/program/${milestoneKey("PG1")}?events=1`); t.after(() => stream.close());
     assert.ok((await stream.next()).html.includes("Sample goal of PG1."), when);
   }
@@ -570,7 +531,6 @@ test("T368 C9: the size check covers the milestones list: a goal that makes it t
   const f = await fixture(t);
   milestones(f.project);
   await until(f, "/milestones", "Sample goal of M1.");
-  // A logbook file is at most 4 MB, but each "<" of the goal is 4 bytes of HTML: the milestones list passes 8 MB, the task board does not.
   milestones(f.project, "<".repeat(3.9 * 1024 * 1024));
   const page = await until(f, "/milestones", "The board snapshot is unavailable.");
   assert.ok(page.body.includes("The board snapshot is unavailable.") && page.body.includes("Sample goal of M1.") && !page.body.includes("&lt;&lt;&lt;&lt;"), "the last good page, with the reason");
@@ -584,7 +544,6 @@ test("R1334-3, T383 items 15 and 16: a milestone page that is too large shows th
   await until(f, path, "Sample pilot");
   const stream = events(f, `${path}?events=1`); t.after(() => stream.close());
   assert.equal((await stream.next()).stale, false);
-  // The merged pilot T1 is not on the board, and the milestones list does not name it; its milestone page lists it, and each "<" is 4 bytes of HTML.
   milestones(f.project, "Sample changed goal.", "<".repeat(3.9 * 1024 * 1024));
   const page = await until(f, path, "too large to show");
   assert.equal(page.status, 200);
@@ -593,14 +552,12 @@ test("R1334-3, T383 items 15 and 16: a milestone page that is too large shows th
   const sent = await stream.next(p => p.html.includes("too large to show"));
   assert.ok(sent.html.includes("Sample changed goal.") && !sent.html.includes("&lt;&lt;&lt;&lt;") && sent.stale === false, "the stream stays open and sends the same page");
   assert.ok(page.body.includes("This page does not update: reload the address to try again.") && !sent.html.includes("does not update"), "R1534-2: only the page without a stream says that it does not update; the stream does update it");
-  // The refresh checks only the shared pages, so they show the new logbook, live (T383): no page is stale.
   const list = await read(f, "/milestones");
   assert.ok(list.body.includes("Sample changed goal.") && !list.body.includes("too large to show") && !list.body.includes("The board snapshot is unavailable."), "the milestones list is live");
   assert.ok(!(await read(f, "/")).body.includes("The board snapshot is unavailable."), "the board is live");
 });
 
 test("T383 item 16: a task page that is too large shows the board with a note, by the same rule, also at the first start; the board stays live", async t => {
-  // Each "<" of a finding's summary is 4 bytes of HTML: the task page passes 8 MB, the board does not (a card shows no summary).
   const finding = project => writeFileSync(join(project, "findings.tsv"), `${HEADERS.findings.replaceAll(" ", "\t")}\nT1\tF-1\t1\tcode-review\tlow\t${"<".repeat(3.9 * 1024 * 1024)}\t\t\topen\n`);
   const f = await fixture(t);
   await until(f, `/task/${key}`, "Sample first task");
@@ -612,7 +569,6 @@ test("T383 item 16: a task page that is too large shows the board with a note, b
   assert.ok(page.body.includes("This page does not update: reload the address to try again.") && !page.body.includes("new EventSource("), "R1509-2: the page with the note opens no stream, so no update of the board removes the note");
   const board = await read(f, "/");
   assert.ok(board.body.includes("Sample first task") && !board.body.includes("too large to show") && !board.body.includes("The board snapshot is unavailable."), "the board is live");
-  // The first start: the rule needs no older copy.
   const first = await fixture(t, { before: finding });
   const fallback = await read(first, `/task/${key}`);
   assert.equal(fallback.status, 200);

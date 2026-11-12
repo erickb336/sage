@@ -10,9 +10,6 @@ import { BRIEF_LIMIT, NAME_RULE, recordBrief } from "../hooks/brief-hook.mjs";
 import { callerRefusal, CHILD_READS, NO_GATE, takeProof } from "../hooks/gate-hook.mjs";
 import { TASK_NAME } from "../hooks/report-gate.mjs";
 
-// The state tool as MCP tools. Codex starts this server outside the shell sandbox, so it can write the logbook
-// ($CODEX_HOME/sage, or SAGE_HOME) while agent shells under workspace-write cannot. Each tool runs one command of the
-// same state tool as the CLI, with the same checks, and returns its text; a refusal is a tool error with its reason.
 const id = (letter, what) => z.string().regex(new RegExp(`^${letter}[1-9]\\d*$`), `${what}, for example ${letter}7`).describe(what);
 const task = id("T", "the task id");
 const word = z.string().regex(/^(?!--)/, "a value that does not start with --");
@@ -23,10 +20,6 @@ const version = z.string().regex(/^[0-9a-f]{64}$/).describe("the task's current 
 const chief = id("C", "the id of a chief of this logbook");
 const offerId = z.string().describe("the id of the open offer");
 
-/**
- * Each tool: its description, its input fields, and the command words with the positional fields (pos). Every other
- * field is an option of the command, given as --field=value so that a value that starts with -- stays a value.
- */
 export const TOOLS = {
   init: { describe: "Make the project's logbook and its standing orders, or check an existing one. Run it once for a new project.", argv: () => ["init"] },
   link: {
@@ -210,7 +203,6 @@ export const TOOLS = {
   },
 };
 
-/** The state tool's arguments for one call of a tool: its words, then its options, then the project. */
 export function argvFor(name, input) {
   const { pos = [], argv } = TOOLS[name];
   const options = Object.entries(input).filter(([key, v]) => key !== "project" && !pos.includes(key) && v !== undefined);
@@ -219,9 +211,6 @@ export function argvFor(name, input) {
 
 export function createStateServer({ env = process.env } = {}) {
   const server = new McpServer({ name: "sage", version: "0.1.0" });
-  // Each tool runs only for a call that sage's gate saw (R1916-2): Codex runs no hook that the user has not installed
-  // (hooks install, T957) and trusted, and then no sage rule holds; the refusal names the install command. The proof
-  // names the caller, whose rule the server applies itself: a lead serves only its own task (T552).
   const registerTool = (name, spec, run) => server.registerTool(name, spec, async (input, extra) => {
     const caller = takeProof(extra?.mcpReq?._meta, name, env, input);
     const why = caller ? callerRefusal(caller, name, input, env) : NO_GATE;
@@ -236,8 +225,6 @@ export function createStateServer({ env = process.env } = {}) {
     }, async (input, caller, native) => {
       if (name === "pages" && input.record !== undefined && (input.run !== undefined || input.text !== undefined))
         return { isError: true, content: [{ type: "text", text: "sage: pages takes record or inline run and text, not both. Nothing saved." }] };
-      // Admission above still owns role/task access. Compare only an inline report, never a caller-selected file.
-      // Missing capture keeps the existing page behavior; it still cannot back a verdict without a retained report.
       if (name === "pages" && input.record === undefined && input.run !== undefined && input.text?.trim()
         && Buffer.byteLength(input.text) <= 16 * 1024 * 1024) {
         try {
@@ -247,12 +234,10 @@ export function createStateServer({ env = process.env } = {}) {
             ? `sage: ${input.run} text does not match the retained report. Nothing saved. Give the helper's exact report, including Markdown, spaces and newlines.`
             : `sage: ${input.run} retained report is damaged. Nothing saved. Report this limitation; do not replace the retained report.` }] };
         } catch (error) {
-          // Let the existing page command explain malformed or foreign run input; it still refuses before a save.
           if (!/^Invalid retained report comparison (?:input|task or run association)\.$/.test(error.message))
             return { isError: true, content: [{ type: "text", text: `sage: ${error.message}` }] };
         }
       }
-      // The session id is the root's on the root, a lead and a helper (T554): a shared logbook's chief is the root.
       const { code, text } = tool.command(argvFor(name, input), env, { project: input.project, native, leadTask: caller.role === "lead" ? caller.task : undefined });
       return { ...(code ? { isError: true } : {}), content: [{ type: "text", text }] };
     });
@@ -265,8 +250,6 @@ export function createStateServer({ env = process.env } = {}) {
     try { return { content: [{ type: "text", text: JSON.stringify(tool.compareRetainedReport(input, env)) }] }; }
     catch (error) { return { isError: true, content: [{ type: "text", text: `sage: ${error.message}` }] }; }
   });
-  // The brief check (T462): no state-tool command, because the hooks read the record by task name, and the gate refuses a
-  // sage spawn without a check of the last 30 minutes (T950).
   registerTool("brief", {
     description: `Check a role agent's brief before you spawn it: it names each missing field of ${BRIEF_FIELDS.join(", ")}, and keeps the brief for the agent's start note. Fix the brief and run it again until no field is missing, then spawn the agent with the same task name and brief. The gate starts a sage_ agent only in the 30 minutes after its brief is checked.`,
     inputSchema: z.object({ project, task_name: z.string().regex(TASK_NAME, NAME_RULE).describe("the task_name of the spawn"),
@@ -284,5 +267,5 @@ export function createStateServer({ env = process.env } = {}) {
 }
 
 let entry;
-try { if (process.argv[1]) entry = realpathSync(process.argv[1]); } catch { /* Import only. */ }
+try { if (process.argv[1]) entry = realpathSync(process.argv[1]); } catch {}
 if (entry === fileURLToPath(import.meta.url)) serveStdio(() => createStateServer());

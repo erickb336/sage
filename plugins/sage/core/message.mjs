@@ -1,10 +1,3 @@
-// One message model for sage's messages to the owner (T984), and its text form. The chief gives a message as JSON:
-//   { kind, title, status (an incident only), blocks: [block], ref, long: { title, main } }
-// The kinds and their parts are the formats that the owner approved (the example pages of T984, the owner's settled
-// catch-up, question and report, and the chief's choices). The text form is plain text at 46 columns that a terminal
-// and a chat that reads Markdown both show as it is: pictures in fences, one blank line between the parts.
-// The page of a message (message-page.mjs) draws the same blocks, with each picture as an image from its own text.
-// Pure functions: no file access.
 import { box, columns, openBoxes, wrap } from "./picture.mjs";
 import { milestoneWord, releaseWord, taskWord } from "./state-words.mjs";
 
@@ -14,11 +7,6 @@ const QUESTION_HEAD = ["Answer", "What happens next", "Cost"];
 const REPORT_HEAD = ["Piece of work", "What changes for you", "How I know it works", "Cost", "You must act"];
 const LESSON_HEAD = ["Where the lesson lives now", "What it holds", "State"];
 
-/**
- * The kinds. head: the first line of the message. parts: in order; a label is a field or a section, other words are
- * block types. "?" before a part: optional. "*" after it: any number; "+": one or more. A paragraph (p) may stand
- * anywhere. use: when the chief sends it, for the skill.
- */
 export const KINDS = {
   progress: { head: "PROGRESS", use: "While a task runs: one short note when it moves to a new step, with nothing for the owner to do.",
     parts: ["Where this is", "?Since my last note", "What changed", "Next", "?Cost so far", "What I need from you"] },
@@ -50,10 +38,7 @@ export const KINDS = {
     parts: ["What happened", "picture*", "The lesson", "Has it happened before", "table", "What changes for you", "What I need from you"] },
 };
 
-/** The first line of a message: its kind's head, and an incident's status. */
 export const headOf = (msg) => `${KINDS[msg.kind].head}${msg.status ? ` · ${msg.status}` : ""}`;
-
-// ---------------------------------------------------------------- the input: types first, then the shape
 
 const isText = (v) => typeof v === "string" && v.trim() !== "";
 const texts = (v) => Array.isArray(v) && v.every((s) => typeof s === "string");
@@ -81,28 +66,19 @@ const SHAPES = {
 
 const LEVELS = ["release", "milestone", "task", "group"];
 const MIN_BOX = 8;
-// A page shows a section's label as h2 to h6, so sections nest at most 5 deep; the limit also keeps the walk off the stack.
 export const MAX_SECTIONS = 5;
 const WORDS = ["not started", "waiting", "needs you", "in progress", "done", "stopped"];
 const cap = (s) => s.charAt(0).toUpperCase() + s.slice(1);
 
-/**
- * The lines of a catch-up frame: boxes inside boxes, each with its title and, on its first line, its state word. A
- * task's word comes from its recorded state (taskWord), a milestone's from its state and its items (milestoneWord), a
- * release's from its items (releaseWord); a group gives its word, and its box counts the tasks inside it. A box that
- * the chief marks done is done. here: the count of boxes that are "here", each a double box.
- */
 export function frameLines(node, width) {
   const problems = [];
   let here = 0;
   const lay = (n, w, path) => {
     if (!n || typeof n !== "object" || !LEVELS.includes(n.box)) { problems.push(`${path} is a box: { box: ${LEVELS.join(" | ")}, name, … }`); return { rows: [], counts: [] }; }
-    // Each level takes 4 columns, so a frame nests only as deep as its width allows: stop before the stack does.
     if (w < MIN_BOX) { problems.push(`${path} is nested too deep for a box of ${width} columns`); return { rows: [], counts: [] }; }
     if (n.here) here++;
     const items = Array.isArray(n.items) ? n.items : [];
     const kids = items.map((item, k) => (typeof item === "string" ? null : lay(item, w - 4, `${path}.items[${k}]`)));
-    // The words that the box counts: a group stands for the boxes inside it, so its own word hides none of them.
     const words = kids.filter(Boolean).flatMap((kid) => kid.counts);
     let word = null;
     if (n.word !== undefined) {
@@ -111,13 +87,11 @@ export function frameLines(node, width) {
     } else if (n.box === "task") word = taskWord({ state: n.state, reasons: isText(n.needs) ? [{ kind: "owner", text: n.needs }] : [], waitLine: isText(n.waits) ? { text: n.waits } : null }).word;
     else if (n.box === "group") problems.push(`${path} is a group: give its word, one of: ${WORDS.join(", ")}`);
     else if (n.box === "milestone" && n.state === "done") {
-      // The chief's state wins, and the boxes inside it must agree: a word never contradicts the chief's input.
       const from = releaseWord(words).word;
       if (words.length && from !== "done") problems.push(`${path} is done, but its boxes say ${from}: give each task its recorded state, or the milestone its state`);
       else word = "done";
     } else if (!words.length && items.length) problems.push(`${path} has only lines of text, so no box gives its word: give its word, one of: ${WORDS.join(", ")}, or its tasks as boxes`);
     else word = (n.box === "milestone" ? milestoneWord({ state: n.state ?? "active" }, words) : releaseWord(words)).word;
-    // A state that the tool does not write has no word: the box says so, and keeps its place.
     const first = `${word ? cap(word) : "State unknown"}${word === "waiting" && isText(n.waits) ? ` for ${n.waits}` : ""}${isText(n.note) ? ` · ${n.note}` : ""}`;
     const title = isText(n.title) ? n.title : { release: `Release ${n.name}`, milestone: `Milestone ${n.name}`, task: `Task: ${n.name}`, group: `${n.name}` }[n.box];
     let rows = [];
@@ -130,15 +104,9 @@ export function frameLines(node, width) {
   return { lines: rows, problems, here };
 }
 
-/**
- * The message with each picture's lines (a frame laid out), and the problems that stop it: a type, a part that is
- * missing or out of order, a picture that is too wide, has tree marks or a box that does not close. width: 46, or 66
- * for the page of a long message.
- */
 export function prepareMessage(input) {
   const problems = [];
   const msg = input && typeof input === "object" && !Array.isArray(input) ? input : {};
-  // Own names only: "constructor" or "__proto__" is not a kind.
   const kind = typeof msg.kind === "string" && Object.hasOwn(KINDS, msg.kind) ? KINDS[msg.kind] : undefined;
   if (!kind) return { problems: [`kind is one of: ${Object.keys(KINDS).join(", ")}; not ${JSON.stringify(msg.kind ?? "")}`] };
   const long = msg.long !== undefined;
@@ -169,7 +137,6 @@ export function prepareMessage(input) {
     return b;
   });
   const blocks = walk(msg.blocks, "blocks");
-  // The checks below read each block: a block that is not one stops here.
   if (problems.length) return { problems };
   problems.push(...shapeProblems(msg.kind, blocks, { long }));
   const tables = blocks.filter((b) => b.t === "table");
@@ -182,7 +149,6 @@ export function prepareMessage(input) {
   return problems.length ? { problems } : { problems, msg: { ...msg, blocks }, width };
 }
 
-/** The faults of one picture's lines: width, tree marks, boxes that do not close. */
 export function pictureProblems(lines, width = WIDTH) {
   const out = [];
   lines.forEach((l, i) => { if (columns(l) > width) out.push(`line ${i + 1} is ${columns(l)} columns: a picture has at most ${width}`); });
@@ -191,7 +157,6 @@ export function pictureProblems(lines, width = WIDTH) {
 }
 export const TREE = /[├└┬┴┼┤┌┐┘]/;
 
-/** The parts of a kind, read: { label or type, need, many }. */
 export const partsOf = (kind) => KINDS[kind].parts.map((p) => {
   const m = /^(\?)?(.+?)([*+])?$/.exec(p);
   return { name: m[2], need: !m[1] && m[3] !== "*", many: !!m[3] };
@@ -208,7 +173,6 @@ function shapeProblems(kind, blocks, { long }) {
     let k = at;
     while (k < parts.length && parts[k].name !== name) k++;
     if (k === parts.length) {
-      // A long page may add its own sections; the chat message holds only its main point.
       if (long && b.t === "section") continue;
       problems.push(parts.some((p) => p.name === name) ? `"${name}" is out of order in a ${kind}. The parts, in order: ${list}` : `"${name}" is not a part of a ${kind}. The parts, in order: ${list}`);
       continue;
@@ -221,41 +185,21 @@ function shapeProblems(kind, blocks, { long }) {
   return problems;
 }
 
-// ---------------------------------------------------------------- the text form
-
-// The text form drops the marks of bold, and keeps a code span's marks: they show code in a terminal and in a chat
-// that reads Markdown, and they tell the checks that a word in code is not an id.
 const plain = (s) => String(s).replace(/\*\*(.+?)\*\*/g, "$1");
 const FENCE = "```";
 
-/** The board's port on the Mac: its default, and the port of every Page link. Nothing reads the board's config for it. */
 export const BOARD_PORT = 43123;
-/** The largest page: 16 MiB, the size limit of a published page. pages record reads and the board serves at most this. */
 export const PAGE_MAX = 16 * 1024 * 1024;
-/** The files that the board's pages route serves (T1001), by type, with the type that it sends: md and txt as plain text. */
 export const PAGE_TYPES = Object.freeze({ html: "text/html; charset=utf-8", pdf: "application/pdf", png: "image/png", jpg: "image/jpeg", gif: "image/gif", webp: "image/webp", svg: "image/svg+xml", md: "text/plain; charset=utf-8", txt: "text/plain; charset=utf-8" });
 const PAGE_PART = /^(?!.*\.\.)[A-Za-z0-9_-][A-Za-z0-9._-]{0,127}$/;
-/**
- * The type that the board sends for a file name in a task's pages folder, or null when the board does not serve that
- * name: 1 to 3 parts of letters, digits and . _ -, no part that starts with a dot or holds "..", and a type of PAGE_TYPES.
- * The board, its index and the message command read this one rule (through pageFile), so that a Page link never names a
- * file that the board refuses.
- */
 export const pageType = (file) => {
   const parts = String(file).split("/"), type = /\.([a-z0-9]+)$/.exec(parts.at(-1))?.[1];
   return parts.length <= 3 && parts.every((part) => PAGE_PART.test(part)) && Object.hasOwn(PAGE_TYPES, type) ? PAGE_TYPES[type] : null;
 };
-/** The board's link to a page: its logbook (the folder name, for example sage-43265b), its task and its file. */
 export const pageUrl = (logbook, task, file) => `http://127.0.0.1:${BOARD_PORT}/pages/${logbook}/${task}/${file}`;
 
-/** The Page block: what the page is, the board's link to it (when it has one), then its file path. */
 export const pageBlock = ({ title, url, path, file }, width = WIDTH) => [...wrap(`Page · ${plain(title)}`, width), ...(url ? [`  ${url}`] : []), `  ${path ?? file}`];
 
-/**
- * The text form of a prepared message (prepareMessage's msg), at its width. page: { title, path } of the message's own
- * page, when it has one; its Page block comes last, before the Ref line. A long message gives only its main point here,
- * unless full: the whole message, as its page holds it. A design's Today pictures are only on the page (today).
- */
 export function messageText(msg, { width = WIDTH, page, full = false, today = false } = {}) {
   const own = page ? [pageBlock(page)] : [], ref = msg.ref ? [[`Ref: ${msg.ref}`]] : [];
   const parts = msg.long !== undefined && !full
@@ -272,7 +216,6 @@ function blockText(b, width, today = false) {
     case "field": return wrap(`${b.label}: ${plain(b.text)}`, width);
     case "p": return wrap(plain(b.text), width);
     case "section": {
-      // Fields in a section read as a list; other blocks follow one by one.
       const body = b.body.map((x) => (x.t === "field" ? bullet(`${x.label}: ${x.text}`, width) : blockText(x, width, today)));
       return [b.label, "", ...body.flatMap((rows, k) => (k && !(b.body[k].t === "field" && b.body[k - 1].t === "field") ? ["", ...rows] : rows))];
     }

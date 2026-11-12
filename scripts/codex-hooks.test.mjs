@@ -1,6 +1,3 @@
-// sage's Codex hooks in the user's hooks.json (T957): the fixed entries, the dispatcher, the launcher in
-// <CODEX_HOME>/sage-hooks and the hooks install, uninstall and status commands. Every Codex home is a scratch folder
-// under the temporary folder: no test reads or writes the real ~/.codex. No test runs Codex.
 import "./test-env.mjs";
 import assert from "node:assert/strict";
 import { spawnSync } from "node:child_process";
@@ -16,7 +13,6 @@ import { planHooks } from "../plugins/sage-codex/hooks/launch.mjs";
 const PLUGIN = join(ROOT, "plugins/sage-codex");
 const MERGE = `gh pr merge 41 --squash --match-head-commit ${"a".repeat(40)}`;
 
-/** A scratch HOME with a Codex home in it, and SAGE_HOME beside it. */
 function scratch(t) {
   const dir = realpathSync(mkdtempSync(join(tmpdir(), "sage-codex-hooks-")));
   t.after(() => rmSync(dir, { recursive: true, force: true }));
@@ -24,16 +20,12 @@ function scratch(t) {
   mkdirSync(codex);
   const { SAGE_HOME, CODEX_HOME, ...inherited } = process.env;
   const env = { ...inherited, HOME: dir, CODEX_HOME: codex, SAGE_HOME: join(dir, "sage-home") };
-  /** The state tool's hooks command, as the owner runs it: node <plugin>/skills/sage/sage.mjs hooks <word>. */
   const hooks = (word, plugin = PLUGIN) => spawnSync(process.execPath, [join(plugin, "skills/sage/sage.mjs"), "hooks", word], { cwd: dir, env, encoding: "utf8" });
-  /** A copy of the built plugin as Codex installs it, in plugins/cache/sage/sage/<version>. */
   const version = (name, from = PLUGIN) => { const root = join(codex, "plugins/cache/sage/sage", name); mkdirSync(join(root, ".."), { recursive: true }); cpSync(from, root, { recursive: true }); return root; };
-  /** One event through the installed launcher, as Codex runs the entry's command (without a shell: node and its arguments). */
   const launch = (event, input, launcher = join(codex, "sage-hooks/launch.mjs")) => spawnSync(process.execPath, [launcher, event], { cwd: dir, env, input: typeof input === "string" ? input : JSON.stringify(input), encoding: "utf8" });
   return { dir, codex, env, hooks, version, launch, file: join(codex, "hooks.json") };
 }
 
-/** A fake installed version whose dispatcher prints its version and what it got. */
 function marker(s, name) {
   const root = join(s.codex, "plugins/cache/sage/sage", name);
   mkdirSync(join(root, "hooks"), { recursive: true });
@@ -58,11 +50,9 @@ test("the dispatcher runs each hook only for the sources and tools that its matc
   const deny = await dispatch("PreToolUse", pre("Bash", MERGE), {});
   assert.equal(deny.hookSpecificOutput.permissionDecision, "deny");
   assert.match(deny.hookSpecificOutput.permissionDecisionReason, /^sage: in Codex, only sage's merge command merges/);
-  // A tool that the gate's matcher did not name: no hook, no answer, also for a merge text.
   for (const tool of ["read_file", "web_search", "Edit"]) assert.equal(await dispatch("PreToolUse", pre(tool, MERGE), {}), undefined, tool);
   assert.equal(await dispatch("PermissionRequest", { ...pre("apply_patch", "x"), hook_event_name: "PermissionRequest" }, {}), undefined);
   assert.equal(await dispatch("PostToolUse", { ...pre("Bash", "ls"), hook_event_name: "PostToolUse" }, {}), undefined);
-  // An input that is not JSON reaches the gate, which refuses it, as before.
   assert.match((await dispatch("PreToolUse", undefined, {})).hookSpecificOutput.permissionDecisionReason, /could not read this tool call/);
   assert.deepEqual(await dispatch("SubagentStop", undefined, {}), { systemMessage: "sage: the report check could not read this agent's stop, so it did not check its report." });
   assert.equal(await dispatch("PreCompact", {}, {}), undefined, "an event that is not in the list");
@@ -76,15 +66,12 @@ test("planHooks keeps the user's groups and their places, appends a missing sage
   assert.deepEqual(first.data.hooks.PreToolUse, [USER.hooks.PreToolUse[0], wanted.PreToolUse], "the user's group keeps index 0; sage's goes at the end");
   assert.deepEqual(first.data.hooks.Stop, [USER.hooks.Stop[0], wanted.Stop], "the user's Stop group keeps index 0; sage's goes at the end");
   assert.equal(planHooks(JSON.stringify(first.data), home, wanted).changed, false, "a second plan changes nothing");
-  // A changed sage group (another timeout) is replaced where it is; a second sage group of the same event goes.
   const old = structuredClone(first.data);
   old.hooks.PreToolUse = [{ ...wanted.PreToolUse, hooks: [{ ...wanted.PreToolUse.hooks[0], timeout: 5 }] }, USER.hooks.PreToolUse[0], wanted.PreToolUse];
   assert.deepEqual(planHooks(JSON.stringify(old), home, wanted).data.hooks.PreToolUse, [wanted.PreToolUse, USER.hooks.PreToolUse[0]]);
-  // Not wanted any more: removed, and an event left with no group goes.
   const fewer = planHooks(JSON.stringify(first.data), home, { PreToolUse: wanted.PreToolUse });
   assert.deepEqual(Object.keys(fewer.data.hooks), ["PreToolUse", "Stop"]);
   assert.deepEqual(planHooks(JSON.stringify(first.data), home, {}).data, USER, "removing every sage group gives the user's file back");
-  // The group of another Codex home is not sage's here.
   assert.deepEqual(planHooks(JSON.stringify(first.data), "/other", {}).data, first.data);
   for (const text of ["{", "[]", '{"hooks":[]}', '{"hooks":{"PreToolUse":{}}}']) assert.throws(() => planHooks(text, home, wanted), undefined, text);
   assert.deepEqual(planHooks(undefined, home, wanted).data, { hooks: Object.fromEntries(Object.entries(wanted).map(([e, g]) => [e, [g]])) }, "no file yet");
@@ -128,7 +115,6 @@ test("hooks install refuses a hooks.json that does not parse and a Codex home wi
     assert.match(bad.stderr, /which the hook command cannot hold/, name);
     assert.equal(existsSync(join(home, "hooks.json")), false, name);
   }
-  // A [hooks] table in config.toml: a note, and the install still runs. Trust records alone are no such table.
   writeFileSync(s.file, "{}");
   writeFileSync(join(s.codex, "config.toml"), '[hooks.state."x:pre_tool_use:0:0"]\ntrusted_hash = "sha256:00"\n');
   assert.doesNotMatch(s.hooks("install").stdout, /\[hooks\] table/);
@@ -144,7 +130,6 @@ test("hooks uninstall, and the launcher's --uninstall, remove only sage's entrie
   assert.equal(r.status, 0, r.stderr);
   assert.deepEqual(JSON.parse(readFileSync(s.file, "utf8")), USER);
   assert.equal(existsSync(join(s.codex, "sage-hooks")), false);
-  // After codex plugin remove, the plugin is gone: the launcher removes itself.
   assert.equal(s.hooks("install").status, 0);
   const own = spawnSync(process.execPath, [join(s.codex, "sage-hooks/launch.mjs"), "--uninstall"], { env: s.env, encoding: "utf8" });
   assert.equal(own.status, 0, own.stderr);
@@ -197,14 +182,12 @@ test("the launcher refuses only a Bash merge or push when the dispatcher fails t
   assert.deepEqual([other.status, other.stdout], [0, ""]);
   assert.match(other.stderr, /could not load \(broken\)/);
   assert.equal(call(MERGE, "apply_patch").stdout, "", "only Bash");
-  // A dispatcher that links out of the cache folder does not load.
   const outside = join(s.dir, "outside.mjs");
   writeFileSync(outside, "export const dispatch = () => ({ ran: 'outside' });\n");
   rmSync(join(root, "hooks/dispatch.mjs"));
   symlinkSync(outside, join(root, "hooks/dispatch.mjs"));
   assert.match(refused(call(MERGE)).permissionDecisionReason, /is not a file inside/);
   assert.match(call("ls").stderr, /is not a file inside/);
-  // A version folder that is a link is no version for Codex, so none for the launcher.
   rmSync(root, { recursive: true });
   symlinkSync(join(s.dir), root);
   assert.deepEqual([call(MERGE).stdout, call(MERGE).stderr], ["", ""]);
@@ -219,14 +202,12 @@ test("end to end: hooks install, then the installed launcher gives the real star
   const status = () => JSON.parse(s.launch("SessionStart", start).stdout).hookSpecificOutput.additionalContext;
   assert.match(status(), /^sage 0\.1\.0 is installed\. Codex version unknown\. sage hooks: 0 of 8 are trusted \(by their trust records; Codex checks each hash\)\./);
   assert.match(status(), /sage: 8 of the 8 sage hooks are not trusted or turned off, so they do not run\. To trust them or turn them on, type \/hooks in the Codex CLI\./);
-  // An update: Codex installs the new version folder and removes the old one. The entries stay byte for byte.
   const next = s.version("0.2.0");
   const manifest = join(next, ".codex-plugin/plugin.json");
   writeFileSync(manifest, JSON.stringify({ ...JSON.parse(readFileSync(manifest, "utf8")), version: "0.2.0" }));
   rmSync(join(s.codex, "plugins/cache/sage/sage/0.1.0"), { recursive: true });
   assert.match(status(), /^sage 0\.2\.0 is installed\./);
   assert.deepEqual(readFileSync(s.file), bytes, "an update changes no entry, so it needs no new trust");
-  // A rename of the folder (Codex's own swap) too.
   renameSync(next, join(s.codex, "plugins/cache/sage/sage/0.3.0"));
   assert.match(status(), /^sage 0\.2\.0 is installed\./, "the manifest's version, from the folder that Codex uses");
   assert.deepEqual(readFileSync(s.file), bytes);
@@ -240,18 +221,15 @@ test("the start status names each missing or changed entry, each entry without a
   writeFileSync(join(s.codex, "config.toml"), keys.map((key) => `[hooks.state."${s.file}:${key}:0:0"]\ntrusted_hash = "sha256:00"\n`).join("\n"));
   const start = { hook_event_name: "SessionStart", source: "startup", session_id: "s1", cwd: s.dir, transcript_path: join(s.dir, "none.jsonl") };
   const warning = () => JSON.parse(s.launch("SessionStart", start).stdout).systemMessage;
-  // All 8 entries match and have a record: no line names an entry, a trust or the launcher (the case below shows those lines).
   assert.deepEqual(warning().split("\n").filter((line) => /hook entries|not trusted|launcher/.test(line)), [], "all 8 entries match and have a record");
   const install = `node "${join(root, "skills/sage/sage.mjs")}" hooks install`;
   const ask = `the user runs this command in a terminal, or says yes and then the chief runs it (never without that yes): ${install}`;
-  // One entry gone, one with another timeout (a hand edit), and an old launcher.
   const data = JSON.parse(readFileSync(s.file, "utf8"));
   delete data.hooks.SubagentStop;
   data.hooks.PostToolUse[0].hooks[0].timeout = 99;
   writeFileSync(s.file, JSON.stringify(data));
   const launcher = join(s.codex, "sage-hooks/launch.mjs");
   writeFileSync(launcher, readFileSync(launcher, "utf8").replace(/LAUNCHER_VERSION = \d+;/, "LAUNCHER_VERSION = 0;"));
-  // F-T957-4: the changed entry keeps the record of its old text, which Codex reports as Modified, so it is not trusted.
   assert.deepEqual(warning().split("\n").slice(0, 3), [
     `sage: 2 of the 8 sage hook entries in ${s.file} are missing or changed, so some sage rules do not run. To fix them, ${ask}`,
     "sage: 1 of the 8 sage hooks is not trusted or turned off, so it does not run. To trust it or turn it on, type /hooks in the Codex CLI.",
@@ -270,7 +248,6 @@ test("the start status names each missing or changed entry, each entry without a
   assert.equal(s.hooks("install", root).status, 0);
   assert.equal(warning().split("\n")[0], "sage: 4 of the 8 sage hooks are not trusted or turned off, so they do not run. To trust them or turn them on, type /hooks in the Codex CLI.", "fixed: only the trust is left");
   assert.match(s.hooks("status", root).stdout, /: 8 of 8 match this sage version\. 4 of 8 are trusted \(by their trust records\)\.\nLauncher: version 2 in /);
-  // F-T957-4: a record that /hooks turned off (enabled = false) does not count.
   writeFileSync(join(s.codex, "config.toml"), keys.map((key, i) => `[hooks.state."${s.file}:${key}:0:0"]\ntrusted_hash = "sha256:00"\n${i === 2 ? "enabled = false\n" : ""}`).join("\n"));
   assert.match(s.hooks("status", root).stdout, /\. 7 of 8 are trusted \(by their trust records\)\./);
 });
@@ -351,7 +328,7 @@ test("F-T957-9: the launcher does nothing for each TOML form that turns the plug
     '[plugins."sage@sage".x]\nenabled = false\n',
     '[plugins]\n"sage@sage" = { enabled = true }\n[other]\nenabled = false\n',
     '[[profiles]]\nplugins."sage@sage".enabled = false\n',
-    '[plugins."sage\\u0040sage"]\nenabled = false\n', // an escape in the key: the reader is not sure, so the hooks run
+    '[plugins."sage\\u0040sage"]\nenabled = false\n',
   ];
   for (const text of on) {
     writeFileSync(config, text);
@@ -366,10 +343,8 @@ test("F-T957-5: the launcher refuses a Bash merge or push when the dispatcher gi
   const launcher = join(s.codex, "sage-hooks/launch.mjs");
   const call = (command) => spawnSync(process.execPath, [launcher, "PreToolUse"], { cwd: s.dir, env: s.env, encoding: "utf8", timeout: 10000,
     input: JSON.stringify({ hook_event_name: "PreToolUse", tool_name: "Bash", tool_input: { command } }) });
-  // An answer in time: the 30 s entry's timer goes, so the process ends long before the timer would fire (24 s).
   const quick = call(MERGE);
   assert.deepEqual([quick.status, quick.signal, JSON.parse(quick.stdout).version], [0, null, "0.1.0"]);
-  // A dispatcher that never answers and holds the process open; the test's copy of the launcher has a 0.5 s timeout.
   writeFileSync(join(root, "hooks/dispatch.mjs"), "export const dispatch = () => new Promise(() => { setInterval(() => {}, 1000); });\n");
   writeFileSync(launcher, readFileSync(launcher, "utf8").replace(/\bPreToolUse: 30\b/, "PreToolUse: 0.5"));
   for (const command of [MERGE, "git push origin HEAD"]) {
@@ -423,17 +398,13 @@ test("F-T957-25: hooks install writes the Codex home that holds the plugin, not 
 test("F-T957-2, F-T957-10: install and uninstall keep a handler that the user put inside sage's group", (t) => {
   const home = "/h/.codex", wanted = entries(home), sage = wanted.PreToolUse.hooks[0];
   const mine = { type: "command", command: "echo mine" };
-  // The user's handler after sage's, in sage's group: install changes nothing, uninstall keeps the user's handler.
   const shared = { hooks: { PreToolUse: [{ hooks: [sage, mine] }] } };
   assert.deepEqual(planHooks(JSON.stringify(shared), home, { PreToolUse: wanted.PreToolUse }), { data: shared, changed: false });
   assert.deepEqual(planHooks(JSON.stringify(shared), home, {}).data, { hooks: { PreToolUse: [{ hooks: [mine] }] } });
-  // A changed sage handler is replaced in place, beside the user's.
   const old = { hooks: { PreToolUse: [{ hooks: [mine, { ...sage, timeout: 5 }] }] } };
   assert.deepEqual(planHooks(JSON.stringify(old), home, { PreToolUse: wanted.PreToolUse }).data, { hooks: { PreToolUse: [{ hooks: [mine, sage] }] } });
-  // sage's handler in a group with a matcher: the user's group stays as it is, and sage's group goes at the end.
   const matched = { hooks: { PreToolUse: [{ matcher: "Bash", hooks: [mine, sage] }] } };
   assert.deepEqual(planHooks(JSON.stringify(matched), home, { PreToolUse: wanted.PreToolUse }).data, { hooks: { PreToolUse: [{ matcher: "Bash", hooks: [mine] }, wanted.PreToolUse] } });
-  // Through the commands, in a scratch Codex home: the status counts the shared group as sage's entry.
   const s = scratch(t);
   assert.equal(s.hooks("install").status, 0);
   const data = JSON.parse(readFileSync(s.file, "utf8"));
@@ -500,7 +471,6 @@ test("F-T957-17: local wins over a name that sorts after it, and a trust record 
   assert.equal(JSON.parse(s.launch("SubagentStop", { hook_event_name: "SubagentStop" }).stdout).version, "zz", "without local, the highest name");
   marker(s, "local");
   assert.equal(JSON.parse(s.launch("SubagentStop", { hook_event_name: "SubagentStop" }).stdout).version, "local");
-  // ~/.codex is a link to the real Codex home, and CODEX_HOME is not set: Codex keys the hooks by the plain path.
   const home = join(s.dir, "home2");
   mkdirSync(home);
   symlinkSync(s.codex, join(home, ".codex"));
@@ -554,13 +524,11 @@ test("T971: a sage marketplace pinned to one commit gets a warning in the start 
   const sha = "06d98f689984132d0185ed3dff0e4171b8bd838a";
   const pin = `sage: ${config} pins the sage marketplace to the commit ${sha}, so an upgrade gets no newer sage. To get updates, the user runs in a terminal: ` +
     "codex plugin marketplace remove sage, then codex plugin marketplace add https://github.com/erickb336/sage-stack.git, then codex plugin add sage@sage. Then start a new session.";
-  // The text that `codex plugin marketplace add https://github.com/erickb336/sage.git --ref <sha>` writes (Codex 0.164.0).
   const marketplace = (ref) => `[marketplaces.sage]\nsource_type = "git"\nsource = "https://github.com/erickb336/sage.git"\n${ref === undefined ? "" : `ref = ${ref}\n`}`;
   writeFileSync(config, marketplace(`"${sha}"`));
   for (const [i, found] of lines().entries()) assert.ok(found.includes(pin), `${["start status", "hooks status"][i]}: ${found.join("\n")}`);
   writeFileSync(config, `[marketplaces]\nsage = { source = "x", ref = '${sha.slice(0, 8)}' }\n`);
   assert.ok(lines()[1].includes(pin.replace(sha, sha.slice(0, 8))), "another TOML form and a short commit");
-  // No pin: a ref that names a branch follows it, and a marketplace without a ref follows its default branch.
   for (const ref of ['"main"', undefined]) {
     writeFileSync(config, marketplace(ref));
     for (const found of lines()) assert.ok(!found.some((line) => line.includes("pins the sage marketplace")), String(ref));

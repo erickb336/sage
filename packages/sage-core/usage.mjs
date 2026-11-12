@@ -1,6 +1,5 @@
 import { HIDDEN } from "./logbook-fields.mjs";
 
-// Usage declarations describe observation, not native authority or review approval.
 export const USAGE_FIELDS = ["usage_provider", "usage_interface", "usage_capability", "usage_binding", "usage_reason", "usage_basis", "usage_status", "usage_source", "usage_evidence"];
 export const tokenCount = value => /^[1-9]\d{0,11}$/.test(value ?? "");
 export const usageText = value => typeof value === "string" && value.length > 0 && value.length <= 2048 && value.trim() === value && value.replace(HIDDEN, "") === value && !/[\p{Cc}\p{Cf}\u2028\u2029]/u.test(value);
