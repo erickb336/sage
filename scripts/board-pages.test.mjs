@@ -15,6 +15,7 @@ import { basename, dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { createBoardServer, hashPassword } from "../packages/sage-board/server.mjs";
 import { SWITCH_SCRIPT } from "../packages/sage-core/message-page.mjs";
+import { renderMessage } from "../packages/sage-core/message-checks.mjs";
 
 const HERE = dirname(fileURLToPath(import.meta.url));
 const TOOL = join(HERE, "..", "plugins", "sage", "skills", "sage", "sage.mjs");
@@ -165,6 +166,32 @@ test("the pages route serves each page type with its own type and the sandbox po
   assert.equal([...many.body.matchAll(/<li>/g)].length, 200);
   assert.match(many.body, /The list stops at 200 pages/);
   assert.doesNotMatch(many.body, /open with its scripts/i, "no scripts warning when no page has a script");
+});
+
+test("F-T1013-1: a page with sage's switch and an http-equiv refresh in any spelling gets no scripts; sage's own message page keeps its switch", async (t) => {
+  const f = await fixture(t);
+  const policy = async (name, text) => { writeFileSync(join(f.t1, name), text); return (await get(f, `/pages/${LOGBOOK}/T1/${name}`)).headers["content-security-policy"]; };
+  const none = await policy("plain.html", "<!DOCTYPE html><title>plain</title><p>SAMPLE</p>");
+  assert.match(none, /^sandbox; /);
+  // A message page as the message command writes it: its own policy tag (an http-equiv), its style and its switch.
+  const design = JSON.parse(readFileSync(join(HERE, "fixtures", "messages", "07-design.json"), "utf8"));
+  const page = renderMessage(design, { pagePath: (name) => join(f.base, name) }).page?.html;
+  assert.match(page ?? "", /<meta http-equiv="Content-Security-Policy"/, "the message page names its own policy");
+  assert.equal(await policy("design.html", page), none.replace(/^sandbox;/, "sandbox allow-scripts;"));
+  const url = "0;url=http://other.example.test/?data=SAMPLE";
+  const refreshes = {
+    quoted: `<meta http-equiv="refresh" content="${url}">`,
+    "odd case and spacing": `<META  HTTP-EQUIV = 'Refresh' CONTENT='${url}'>`,
+    "no quotes": `<meta http-equiv=refresh content=${url}>`,
+    "new lines and tabs": `<meta\n\thttp-equiv\n=\n"REFRESH"\tcontent="${url}">`,
+    "an entity": `<meta http-equiv="&#x72;efresh" content="${url}">`,
+    "a second meta after sage's policy tag": `<meta http-equiv="Content-Security-Policy" content="default-src 'none'"><meta http-equiv="refresh" content="${url}">`,
+    "inside a value that looks like sage's policy tag": `<p title='<meta http-equiv="Content-Security-Policy" content="'><meta http-equiv=refresh content=${url}>">x</p>`,
+    "in a comment (fails closed)": `<!-- <meta http-equiv="refresh" content="${url}"> -->`,
+  };
+  for (const [kind, meta] of Object.entries(refreshes)) assert.equal(await policy("refresh.html", `${page.replace("<title>", `${meta}<title>`)}`), none, kind);
+  // A UTF-16 byte order mark makes the browser read other characters than the bytes that hold the switch.
+  assert.equal(await policy("utf16.html", Buffer.concat([Buffer.from([0xff, 0xfe]), Buffer.from(page)])), none, "a UTF-16 byte order mark");
 });
 
 test("F-T1001-24: a tag with millions of quoted values keeps the index whole: no link for its quoted values, a link for an event attribute after them", async (t) => {

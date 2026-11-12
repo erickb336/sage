@@ -1,7 +1,7 @@
 // T1001: the board's pages route in a browser. A hostile page cannot fetch the board, read the board's storage, submit
 // a form or reach another server, and runs no script of its own unless the owner opens it with ?scripts=1; a sage
-// message page's Today switch works; the task index links its pages; and a person's click on another site opens a page,
-// while a navigation that no person started does not (F6). It starts the real board server on a free loopback port
+// message page's Today switch works, but no meta refresh moves a page that holds it (F-T1013-1); the task index links
+// its pages; and a person's click on another site opens a page, while a navigation that no person started does not (F6). It starts the real board server on a free loopback port
 // (never 4173 or 43123) over a SAMPLE logbook and a SAMPLE pages folder in a temporary folder, and a second server on
 // another free port that stands for another site and counts each request that reaches it. It runs in
 // `npm run test:browser`, not in `npm test`, with Playwright's bundled Chromium, or the headless shell at
@@ -18,6 +18,7 @@ import { after, before, test } from "node:test";
 import { fileURLToPath } from "node:url";
 import { createBoardServer } from "../packages/sage-board/server.mjs";
 import { renderMessage } from "../packages/sage-core/message-checks.mjs";
+import { SWITCH_SCRIPT } from "../packages/sage-core/message-page.mjs";
 
 const require = createRequire(import.meta.url);
 const { chromium } = require("playwright");
@@ -86,6 +87,13 @@ before(async () => {
   const message = renderMessage({ ...design, blocks: design.blocks.map((b) => (b.t === "page" ? { ...b, path: `/pages/${b.task}/${b.file}` } : b)) }, { pagePath: (name) => join(pages, name) });
   assert.ok(message.page, "the design message has a page");
   writeFileSync(join(pages, "design.html"), message.page.html);
+  // F-T1013-1: sage's own message page, with its exact switch script, and a meta refresh to the other site added.
+  const refresh = (meta) => message.page.html.replace("<title>", `${meta}<title>`);
+  writeFileSync(join(pages, "switch-refresh.html"), refresh(`<meta http-equiv="refresh" content="0;url=${otherSite}/switch-refresh?data=SAMPLE">`));
+  writeFileSync(join(pages, "switch-odd.html"), refresh(`<META\n  HTTP-EQUIV = 'Refresh' CONTENT='0;url=${otherSite}/switch-odd?data=SAMPLE'>`));
+  writeFileSync(join(pages, "switch-entity.html"), refresh(`<meta http-equiv=&#x72;efresh content=0;url=${otherSite}/switch-entity?data=SAMPLE>`));
+  // A UTF-16 byte order mark: the browser reads the refresh in UTF-16, while the switch script's bytes stay in UTF-8.
+  writeFileSync(join(pages, "switch-utf16.html"), Buffer.concat([Buffer.from([0xff, 0xfe]), Buffer.from(`<!DOCTYPE html><meta http-equiv="refresh" content="0;url=${otherSite}/switch-utf16?data=SAMPLE"><p>SAMPLE</p>`, "utf16le"), Buffer.from(`<script>${SWITCH_SCRIPT}</script>`)]));
   // The other site: it counts each request, and serves a page with a link to the board's page and a script that moves to it.
   other = createHttpServer((request, response) => {
     if (request.url === "/" || request.url === "/auto") {
@@ -168,6 +176,19 @@ test("a sage message page's Today switch works under the sandbox", async (t) => 
   assert.equal(await page.locator(".tg-today").first().isVisible(), true);
   assert.equal(await page.locator(".tg-after").first().isVisible(), false);
   assert.deepEqual(errors, []);
+});
+
+test("F-T1013-1: a page with sage's switch script and a meta refresh, in any spelling, stays on the Mac and reaches nothing", async (t) => {
+  const { page } = await context(t);
+  for (const name of ["switch-refresh.html", "switch-odd.html", "switch-entity.html", "switch-utf16.html"]) {
+    reached.length = 0;
+    const response = await page.goto(at(name));
+    assert.equal(response.status(), 200, name);
+    await page.waitForTimeout(500); // the refresh's 0 s, and time for any request to arrive; the page must stay
+    assert.deepEqual(reached, [], `${name}: nothing reached the other site`);
+    assert.equal(page.url(), at(name), `${name}: the refresh did not move the page`);
+    assert.match(response.headers()["content-security-policy"], /^sandbox; /, `${name}: the page runs no script`);
+  }
 });
 
 test("the task index opens its pages, and its scripts link runs a page's own script", async (t) => {

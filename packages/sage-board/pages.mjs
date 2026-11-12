@@ -15,9 +15,10 @@ const SWITCH = `'sha256-${createHash("sha256").update(SWITCH_SCRIPT).digest("bas
 const REST = "default-src 'none'; style-src 'unsafe-inline'; img-src data:; font-src data:; media-src data:; base-uri 'none'; form-action 'none'; frame-ancestors 'none'";
 /**
  * The policy of a page. Its origin is no origin (a sandbox without allow-same-origin), so it reads no storage of the
- * board and the board refuses its requests; nothing loads. Only sage's own script runs (a message page's Today switch),
- * and a page without that script gets no scripts at all, so it cannot move itself with a meta refresh either. With
- * ?scripts=1 the page's own inline scripts run under the same sandbox.
+ * board and the board refuses its requests; nothing loads. Only sage's own script runs (a message page's Today switch,
+ * see switchOnly), and any other page gets no scripts at all. A sandbox without scripts also stops a meta refresh, and
+ * no policy stops a refresh while scripts run (F-T1013-1). With ?scripts=1 the page's own inline scripts run under the
+ * same sandbox.
  */
 const pagePolicy = (scripts) => `sandbox${scripts ? " allow-scripts" : ""}; script-src ${scripts === "own" ? "'unsafe-inline'" : SWITCH}; ${REST}`;
 /**
@@ -82,6 +83,19 @@ function ownScript(page) {
   }
   return false;
 }
+
+/**
+ * May this page run sage's Today switch? Only a page that holds the switch script and has no http-equiv meta tag but
+ * sage's own policy tag, as the message command writes it. That tag's value holds no quote, < or >, so a policy tag that
+ * the test leaves out cannot hold another tag. A refresh in any case, spacing, quoting or entity spelling
+ * needs the attribute name http-equiv, which no entity hides. A tag that this test cannot judge, such as one in a
+ * comment, fails closed: the page shows without the switch. A UTF-16 byte order mark makes the browser read other
+ * characters than these bytes, so it fails closed too.
+ */
+const switchOnly = (bytes) => {
+  const text = bytes.toString("latin1");
+  return text.includes(SWITCH_SCRIPT) && !/^(?:\xfe\xff|\xff\xfe)/.test(text) && !/http-equiv/i.test(text.replace(/<meta http-equiv="Content-Security-Policy" content="[^"<>]*">/g, ""));
+};
 
 /**
  * The pages of a task folder, its own files first, then each folder's, at most 3 parts deep: { pages, more }. It lists
@@ -156,5 +170,5 @@ export function servePages(request, response, { onMac, model }) {
   const bytes = pageFile(folder, target.file, true)?.bytes;
   if (!bytes) return missing();
   const type = pageType(target.file), html = type === PAGE_TYPES.html;
-  return send(200, type, bytes, pagePolicy(target.scripts ? "own" : html && bytes.includes(SWITCH_SCRIPT)));
+  return send(200, type, bytes, pagePolicy(target.scripts ? "own" : html && switchOnly(bytes)));
 }
