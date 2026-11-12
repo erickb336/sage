@@ -101,7 +101,7 @@ The server also shows each task's pages folder, read-only, at `/pages/<logbook>/
 
 It reads the raw path and never joins it onto a folder: it refuses `%`, `..`, a part that starts with a dot, any query but `?scripts=1`, a logbook that the board does not show, and a link or a file with a second name anywhere in the path. It serves only web pages, PDFs, pictures, and Markdown and text as plain text, at most 3 parts deep and 16 MiB.
 
-Each response has a sandbox policy in place of the board's: the page has no origin, loads nothing, and runs only sage's own script (the switch of a message page); with `?scripts=1`, its own inline scripts also run, in the same sandbox. A page cannot fetch the board, read its storage or send a form. A person's click on another site may open a page (a host app's chat may send its links so); a move that no person started, and `?scripts=1` from another site, get 403.
+Each page's response has a sandbox policy in place of the board's: the page has no origin, loads nothing, and runs only sage's own script (the switch of a message page); with `?scripts=1`, its own inline scripts also run, in the same sandbox. The index runs no script and has no sandbox, so that its opener policy cuts the window handle of another site that opened it. A page cannot fetch the board, read its storage or send a form. A person's click on another site may open a page (a host app's chat may send its links so); a move that no person started, and `?scripts=1` from another site, get 403.
 
 Limits of the pages route:
 
