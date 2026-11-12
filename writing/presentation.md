@@ -76,6 +76,6 @@ In the text of a field, a list or a cell, `**bold**` and a code span show on the
 
 ## The kinds
 
-A playbook (`core/references/playbooks.md` in the plugin's folder) names the kind of each moment where the owner answers, for example `question` for the case table of an undecided case. Use the kind that the playbook names.
+A playbook (a file in `core/references/playbooks/` in the plugin's folder) names the kind of each moment where the owner answers, for example `question` for the case table of an undecided case. Use the kind that the playbook names.
 
 <!-- sage-core-message-kinds -->
