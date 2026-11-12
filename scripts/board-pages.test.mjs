@@ -167,6 +167,17 @@ test("the pages route serves each page type with its own type and the sandbox po
   assert.doesNotMatch(many.body, /open with its scripts/i, "no scripts warning when no page has a script");
 });
 
+test("F-T1001-24: a tag with millions of quoted values keeps the index whole: no link for its quoted values, a link for an event attribute after them", async (t) => {
+  const f = await fixture(t), t3 = join(f.root, LOGBOOK, "pages", "T3"), values = "\"x\" ".repeat(3_000_000); // 11.4 MiB in one tag
+  mkdirSync(t3);
+  writeFileSync(join(t3, "quoted.html"), `<a ${values}>`);
+  writeFileSync(join(t3, "handler.html"), `<a ${values} onclick=1>`);
+  const index = await get(f, `/pages/${LOGBOOK}/T3/`);
+  assert.equal(index.status, 200, index.body);
+  assert.deepEqual([...index.body.matchAll(/<a href="\/pages\/project-abcdef\/T3\/([^"?]+)">/g)].map((m) => m[1]), ["handler.html", "quoted.html"]);
+  assert.deepEqual([...index.body.matchAll(/href="([^"]+\?scripts=1)"/g)].map((m) => m[1]), [`/pages/${LOGBOOK}/T3/handler.html?scripts=1`]);
+});
+
 test("the pages route refuses each path that leaves a task's pages, a link, a second name, a type, a depth and a size", async (t) => {
   const f = await fixture(t);
   const refused = {

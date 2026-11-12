@@ -62,10 +62,26 @@ function parse(url) {
 
 /**
  * Has a page a script of its own: a script element or an event attribute in a tag, other than sage's Today switch? A tag
- * runs from its name to the next < or > outside a quoted value, so text and quoted values are not attributes. Each part
- * of the pattern stops at a different character, so the test takes time in line with the page's size.
+ * runs from its name to the next < or > outside a quoted value, so text and quoted values are not attributes. The scan
+ * moves only forward, one tag and one quoted value at a time, so it takes time in line with the page's size and never
+ * recurses (F-T1001-24).
  */
-const ownScript = (html) => /<script\b|<[a-z][^<>"']*(?:(?:"[^"]*"|'[^']*')[^<>"']*)*[\s/]on[a-z]+\s*=/i.test(html.replaceAll(`<script>${SWITCH_SCRIPT}</script>`, ""));
+function ownScript(page) {
+  const html = page.replaceAll(`<script>${SWITCH_SCRIPT}</script>`, "");
+  if (/<script\b/i.test(html)) return true;
+  const tag = /<[a-z]/gi, next = /["'<>]|[\s/]on[a-z]+\s*=/gi;
+  while (tag.exec(html)) {
+    next.lastIndex = tag.lastIndex;
+    for (let m; (m = next.exec(html));) {
+      if (m[0].length > 1) return true; // an event attribute
+      const end = m[0] === "<" || m[0] === ">" ? -1 : html.indexOf(m[0], next.lastIndex);
+      if (end < 0) { tag.lastIndex = m.index; break; } // the tag ends at a < or a >, or at a quote that never closes
+      next.lastIndex = end + 1;
+    }
+    if (!next.lastIndex) return false; // no < or > after this tag, so no tag starts after it
+  }
+  return false;
+}
 
 /**
  * The pages of a task folder, its own files first, then each folder's, at most 3 parts deep: { pages, more }. It lists
@@ -96,7 +112,8 @@ function indexHtml(logbook, task, folder) {
   let budget = READ;
   for (const page of pages) if (page.name.endsWith(".html")) {
     budget -= page.size;
-    page.scripts = budget < 0 || ownScript(pageFile(folder, page.name, true)?.bytes.toString("utf8") ?? "");
+    // A check that fails costs this page only: it gets the scripts link, as a page past the budget does.
+    try { page.scripts = budget < 0 || ownScript(pageFile(folder, page.name, true)?.bytes.toString("utf8") ?? ""); } catch { page.scripts = true; }
   }
   const base = `/pages/${logbook}/${task}/`;
   const rows = pages.map((page) => `<li><a href="${base}${page.name}">${page.name}</a> <span class="m">${sizeText(page.size)}</span>${page.scripts ? ` · <a href="${base}${page.name}?scripts=1" aria-label="Open ${page.name} with its scripts">open with its scripts</a>` : ""}</li>`).join("");
