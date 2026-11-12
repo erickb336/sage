@@ -234,7 +234,7 @@ test("F-T996-10: a box of waiting tasks that wait for different tasks keeps its 
 
 /** A logbook on disk whose releases table cannot be read: line 2 has 2 cells, and the header has 3 (SAMPLE DATA). */
 const damagedReleases = t => logbookOnDisk(t, { releases: [["name", "goal", "at"], ["1.0", "Sample goal."]] });
-/** A logbook on disk (SAMPLE DATA): T1 not in a release, T2 a single task of release 1.0; sheets replace its tables. */
+/** A logbook on disk (SAMPLE DATA): T1 not in a release, T2 a single task of release 1.0; sheets replace its tables (null: no file). */
 function logbookOnDisk(t, sheets) {
   const root = mkdtempSync(join(tmpdir(), "sage-board-releases-")), project = join(root, "sample-abcdef");
   t.after(() => rmSync(root, { recursive: true, force: true }));
@@ -243,7 +243,7 @@ function logbookOnDisk(t, sheets) {
   sheet("tasks", [["id", "title", "size", "risk", "route", "state", "branch", "pr", "round", "keys", "milestone", "release"], ["T1", "Sample first", "small", "", "build", "framed", "", "", "0", "", "", ""], ["T2", "Sample single", "small", "", "build", "framed", "", "", "0", "", "", "1.0"]]);
   for (const [name, header] of Object.entries({ runs: "id task role round candidate branch status tokens report started ended", findings: "task key round source severity summary triage reason status", ledger: "task pr sha kind cycle run at", gates: "id task question options recommendation default answer at", decisions: "at task decision why", milestones: "id name goal pilot gate at" })) sheet(name, [header.split(" ")]);
   sheet("releases", [["name", "goal", "at"], ["1.0", "Sample goal.", ""]]);
-  for (const [name, rows] of Object.entries(sheets)) sheet(name, rows);
+  for (const [name, rows] of Object.entries(sheets)) if (rows) sheet(name, rows); else rmSync(join(project, `${name}.tsv`));
   return readBoardSources([{ id: "sample", path: root, label: "Sample source" }])[0];
 }
 
@@ -284,6 +284,81 @@ test("F-T996-11: the Releases tab says that a releases table cannot be read, per
   const both = main(buildBoardModel([damaged, releasesSource()], { now: NOW }));
   assert.ok(both.includes(banner) && both.includes("Release 1.0") && !both.includes("No releases yet"), both);
   assert.match(both, /<div class="banner warn" data-rproject="sample-abcdef">/);
+});
+
+/** The Releases tab's main part, and the board's links to it, on the web and in the snapshot. */
+const releasesViews = data => {
+  const tab = renderReleasesHtml(data), web = renderBoardHtml(data, { snapshot: false }), snapshot = renderBoardHtml(data);
+  return { main: tab.slice(tab.indexOf('<main class="page open" aria-label="Releases">')), webLink: web.includes('<a href="/releases">Releases</a>'), snapshotLink: snapshot.includes('<a href="#releases">Releases</a>'), snapshotPage: snapshot.includes('<section class="page" id="releases"') };
+};
+const NO_RELEASE_TASKS = [TASKS_HEADER, ["T1", "Sample first", "small", "", "build", "framed", "", "", "0", "", "M1", ""], ["T2", "Sample single", "small", "", "build", "merged", "", "", "0", "", "", ""]];
+const DAMAGED_MILESTONES = [["id", "name", "goal", "pilot", "gate", "at", "release"], ["M1", "Sample milestone"]];
+
+test("F-T996-37: a project with no releases says \"No releases yet\" when its milestones table cannot be read, never that its releases cannot be read", t => {
+  // SAMPLE DATA: no release row, and no task names a release; line 2 of milestones.tsv has 2 cells.
+  const data = buildBoardModel([logbookOnDisk(t, { releases: [["name", "goal", "at"]], tasks: NO_RELEASE_TASKS, milestones: DAMAGED_MILESTONES })], { now: NOW });
+  const { main, webLink } = releasesViews(data);
+  assert.ok(main.includes("<b>No releases yet.</b>") && !main.includes("cannot be read"), main);
+  assert.ok(!webLink, "no release to show, and none hidden: no Releases tab");
+  // Needs you still says that the milestones table cannot be read.
+  assert.ok(renderBoardText(data).includes("**1 · The milestones table cannot be read**"));
+});
+
+test("F-T996-40: when a damaged table hides the releases, the board links to the Releases tab, which says why", t => {
+  // SAMPLE DATA: release 1.0 holds milestone M1 and T2; line 2 of milestones.tsv has 2 cells (as F-T996-28).
+  const tasks = [TASKS_HEADER, ["T1", "Sample first", "small", "", "build", "framed", "", "", "0", "", "M1", ""], ["T2", "Sample single", "small", "", "build", "merged", "", "", "0", "", "", "1.0"]];
+  const data = buildBoardModel([logbookOnDisk(t, { tasks, milestones: DAMAGED_MILESTONES })], { now: NOW });
+  assert.deepEqual(data.releases, [], "no release shows");
+  const { main, webLink, snapshotLink, snapshotPage } = releasesViews(data);
+  assert.ok(webLink && snapshotLink && snapshotPage, "the web board, the snapshot's tabs and its pages reach the Releases tab");
+  assert.ok(snapshotLink && main.includes("<b>The releases of sample cannot be read.</b> milestones.tsv line 2 has 2 cells, and its header has 7."), main);
+});
+
+test("F-T996-42: the Releases tab says nothing cannot be read above the releases that it shows, when an old logbook of the project is damaged", () => {
+  // SAMPLE DATA: the live logbook's releases read; the project's old, read-only logbook (after the move) has a damaged tasks table.
+  const live = releasesSource(), old = releasesSource({ milestones: [], releases: [], gates: [], decisions: [] }, "codex");
+  Object.assign(old.projects[0], { key: "codex/sage-old111", name: "sage-old111", checkout: null, displayName: null, old: { provider: "codex", of: live.projects[0].key }, diagnostics: ["tasks: line 2 has 2 cells, and its header has 12"] });
+  const data = buildBoardModel([live, old], { now: NOW }), { main } = releasesViews(data);
+  assert.ok(data.milestoneNeeds.some(need => need.kind === "logbook"), "Needs you still says that the old logbook cannot be read");
+  assert.ok(main.includes("Release 1.0") && !main.includes("cannot be read"), main);
+});
+
+test("F-T996-36: an older logbook with programs.tsv (before the rename, T995) and a damaged milestones or tasks table gives no release", t => {
+  // SAMPLE DATA: programs.tsv has only its header, as after a stopped migration.
+  const programs = [["id", "name", "goal", "pilot", "gate", "at", "release"]];
+  const tasks = [TASKS_HEADER, ["T1", "Sample first", "small", "", "build", "framed", "", "", "0", "", "M1", ""], ["T2", "Sample single", "small", "", "build", "merged", "", "", "0", "", "", "1.0"]];
+  noReleaseFrom(logbookOnDisk(t, { programs, tasks, milestones: DAMAGED_MILESTONES }), "The milestones table cannot be read", "milestones.tsv line 2 has 2 cells, and its header has 7.");
+  noReleaseFrom(logbookOnDisk(t, { programs, tasks: [TASKS_HEADER, ["T1", "Sample first"]] }), "The Sample source logbook cannot be read", "tasks.tsv line 2 has 2 cells, and its header has 12.", "sample-abcdef");
+});
+
+test("F-T1012-1, F-T1012-2: a damaged programs.tsv is the milestones table's problem: Needs you and one Releases banner name programs.tsv", t => {
+  // SAMPLE DATA: an older logbook (before the rename, T995) with no milestones.tsv; line 2 of programs.tsv has 1 cell.
+  const programs = [["id", "name", "goal", "pilot", "gate", "at", "release"], ["P1"]];
+  const reason = "programs.tsv line 2 has 1 cell, and its header has 7.";
+  noReleaseFrom(logbookOnDisk(t, { programs, milestones: null }), "The milestones table cannot be read", reason);
+  // T1 names milestone M1 too, so milestones.tsv is missing as well: one problem with the milestones, one item and one banner.
+  const tasks = [TASKS_HEADER, ["T1", "Sample first", "small", "", "build", "framed", "", "", "0", "", "M1", ""], ["T2", "Sample single", "small", "", "build", "framed", "", "", "0", "", "", "1.0"]];
+  const data = buildBoardModel([logbookOnDisk(t, { programs, tasks, milestones: null })], { now: NOW });
+  assert.deepEqual(data.milestoneNeeds.map(need => [need.kind, need.text]), [["milestones", `milestones.tsv is missing. ${reason} The board shows the tasks without their milestones. Ask the chief to repair the logbook.`]]);
+  const { main } = releasesViews(data);
+  assert.equal(main.match(/<div class="banner warn" data-rproject=/g)?.length, 1, main);
+  assert.ok(main.includes(`<b>The releases of sample cannot be read.</b> milestones.tsv is missing. ${reason}`), main);
+});
+
+test("F-T996-41: a damaged tasks or gates table makes no milestone advice that guesses: Needs you names the table and asks for a repair", () => {
+  // SAMPLE DATA: the sample logbook, with its tasks table (then its gates table) that the reader could not read.
+  for (const [table, header] of [["tasks", 18], ["gates", 8]]) {
+    const tables = releasesTables(), source = releasesSource(tables);
+    delete tables[table];
+    source.projects[0].diagnostics.push(`${table}: line 2 has 2 cells, and its header has ${header}`);
+    const data = buildBoardModel([source], { now: NOW }), text = renderBoardText(data);
+    const needs = text.split("### 🔴 Needs you\n")[1].split("\n### ")[0], strip = renderBoardHtml(data, { snapshot: false }).split('id="needstrip"')[1].split("</section>")[0];
+    for (const view of [needs, strip]) assert.ok(!view.includes("Choose a new pilot") && !view.includes("propose M5 again") && !view.includes("drop the milestone"), view);
+    // Each milestone's item names the table that the board cannot read, and asks the chief to repair the logbook.
+    const m5 = data.milestoneNeeds.find(need => need.milestone === "M5");
+    assert.ok(m5 && m5.text.includes(`${table}.tsv`) && m5.text.endsWith("Ask the chief to repair the logbook."), JSON.stringify(m5));
+    assert.ok(!strip.includes("Answer in the chat."), strip);
+  }
 });
 
 test("F-T996-12, F-T996-15, F-T996-16: owner text names a milestone by its level, never by its raw id", () => {

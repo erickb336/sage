@@ -755,7 +755,11 @@ function milestonesOf(source, project, group, graph, cards) {
     const open = ordered.filter(task => !ENDED.includes(task.state)).map(card).filter(Boolean);
     const moving = open.filter(item => item.waits.every(wait => wait.met)), waiting = open.filter(item => item.waitLine);
     const first = state === "active" ? moving[0] : null;
-    const need = state === "stuck" ? { kind: "stuck", title: `${milestoneName(milestone)} is stuck`, text: `The pilot ${milestone.pilot} ${pilotState ? "was abandoned" : "is not in the logbook"}. Choose a new pilot, or drop the milestone.` }
+    // A stuck milestone's advice reads the tasks table (its pilot), and a lost one's the gates table (its gate). When that
+    // table cannot be read, the board guesses no state: it names the table and asks for the repair (F-T996-41, as F-T996-28).
+    const unread = { stuck: "tasks", lost: "gates" }[state], damaged = unread && cannotRead(project, unread);
+    const need = damaged ? { kind: "unread", title: `${milestoneName(milestone)}: its state cannot be read`, text: `The board cannot read ${unread}.tsv. Ask the chief to repair the logbook.` }
+      : state === "stuck" ? { kind: "stuck", title: `${milestoneName(milestone)} is stuck`, text: `The pilot ${milestone.pilot} ${pilotState ? "was abandoned" : "is not in the logbook"}. Choose a new pilot, or drop the milestone.` }
       // A lost milestone whose gate is open on a card in Needs you says so on that gate (card), so the problem counts once.
       : state === "lost" && !(gates.get(milestone.gate) && !gates.get(milestone.gate).answer && inNeeds(card({ id: gates.get(milestone.gate).task }))) ? { kind: "lost", title: lostWhy(milestone), text: title(LOST_FIX(milestone.id)) }
       : null;
@@ -771,6 +775,20 @@ function milestonesOf(source, project, group, graph, cards) {
 
 const wordOf = ({ word, reason }) => ({ word, reason });
 /**
+ * A table that the board cannot read: it is not in the read, or a diagnostic names it. An older logbook's rename (T995)
+ * fills in a table that it could not read, so only the diagnostic shows it then (F-T996-36). programs.tsv holds that
+ * logbook's milestones.
+ */
+const cannotRead = (project, name) => !project.tables[name] || project.diagnostics.some(message => message.startsWith(`${name}: `) || name === "milestones" && message.startsWith("programs: "));
+/** A release's count reads these tables (F-T996-28, F-T996-29). */
+const RELEASE_TABLES = ["releases", "milestones", "tasks"];
+/**
+ * A logbook whose releases a table that the board cannot read hides (F-T996-37, F-T996-42): it has a release (a row, or a
+ * cell that the board reads names one), or its releases table cannot be read. An old logbook (the move) shows no releases.
+ */
+const releasesHidden = project => !project.old && RELEASE_TABLES.some(name => cannotRead(project, name))
+  && (cannotRead(project, "releases") || project.tables.releases.length > 0 || [...project.tables.milestones ?? [], ...project.tables.tasks ?? []].some(row => row.release));
+/**
  * The releases of one logbook (T996, the T995 design B), or null when it has none: no row and no cell that names one, so
  * the board shows as before. Each release in row order (releasesOf, the state tool's rule) with its word, its counts and
  * the keys of its milestones and single tasks; then loose, the milestones and single tasks in no release. A cell that
@@ -781,7 +799,7 @@ function releasesOfBook(project, group, graph, byKey) {
   // A releases table that cannot be read gives no releases, as a damaged milestones table gives no milestones: Needs you
   // says why (logbookNeeds), and no release that a cell names shows as "not in the logbook" (F-T996-1). So does a milestones
   // or tasks table that cannot be read: a release's count needs both, else it reads done or "0 of 0" (F-T996-28, F-T996-29).
-  if (project.old || !project.tables.releases || !project.tables.milestones || !project.tables.tasks) return null;
+  if (project.old || RELEASE_TABLES.some(name => cannotRead(project, name))) return null;
   const releases = releasesOf(project.tables.releases ?? [], graph, task => byKey.get(`${project.key}/${task.id}`)?.word);
   if (!releases.length) return null;
   const key = id => `${project.key}/${id}`, ids = new Set(), names = new Map();
@@ -827,40 +845,45 @@ function sourceNeeds(source) {
 }
 
 // A logbook problem that needs the owner (R1307-1, R1307-2): a milestones or releases table (F-T996-1) that the board cannot
-// read, and a logbook that it cannot read (its folder, or a table but those two). An observation, an artifact or a checkout file that cannot be
+// read, and a logbook that it cannot read (its folder, or a table but those two). An older logbook's programs.tsv holds its
+// milestones (T995), so its problem is the milestones table's (F-T1012-1). An observation, an artifact or a checkout file that cannot be
 // read is a line under the board only: every task shows. Each reason says the file and the line, as the reader gives them.
 const TABLE_NAMES = ["tasks", "runs", "findings", "ledger", "gates", "decisions", "milestones"];
-const TABLE_FILE = new RegExp(`^(${[...TABLE_NAMES, "releases"].join("|")}): (.*)$`);
-const unreadable = project => project.diagnostics.filter(message => !/^(milestones|releases|observations|checkout|bindings|chiefs|sources|artifact [^:]*): /.test(message));
+const TABLE_FILE = new RegExp(`^(${[...TABLE_NAMES, "releases", "programs"].join("|")}): (.*)$`);
+const unreadable = project => project.diagnostics.filter(message => !/^(milestones|programs|releases|observations|checkout|bindings|chiefs|sources|artifact [^:]*): /.test(message));
 function reasonOf(message) {
   const [, name, rest] = TABLE_FILE.exec(message) ?? [];
   if (!name) return title(plainProblem(message));
   return /^E[A-Z]+$/.test(rest) ? `${name}.tsv ${PLAIN[rest] ?? "cannot be read"}` : /^line \d/.test(rest) ? `${name}.tsv ${rest}` : `${name}.tsv: ${rest}`;
 }
 function logbookNeeds(source, project, group) {
-  const item = (kind, needTitle, text) => ({ kind, title: needTitle, text, key: `${project.key}/${kind}`, source: source.id, sourceLabel: source.label, projectName: group.name, group: group.key, archived: group.archived });
-  const milestones = project.diagnostics.find(message => message.startsWith("milestones: ")), lost = unreadable(project);
+  // hidesReleases: the item is why the logbook's releases do not show, so the Releases tab gives it (F-T996-37, F-T996-40).
+  const item = (kind, needTitle, text, hidesReleases = false) => ({ kind, title: needTitle, text, key: `${project.key}/${kind}`, source: source.id, sourceLabel: source.label, projectName: group.name, group: group.key, archived: group.archived, ...(hidesReleases && { hidesReleases }) });
+  const milestones = project.diagnostics.filter(message => /^(milestones|programs): /.test(message)), lost = unreadable(project);
   const releases = project.old ? null : project.diagnostics.find(message => message.startsWith("releases: "));
-  const others = group.books.filter(book => book.project !== project && book.project.tables.tasks).map(book => title(book.source.label));
+  const others = group.books.filter(book => book.project !== project && !cannotRead(book.project, "tasks")).map(book => title(book.source.label));
   const tables = lost.map(message => TABLE_FILE.exec(message)?.[1]).filter(Boolean);
   // With no tasks, the board shows no milestone either: one item says why, with the milestones table's reason too (T383).
-  const noTasks = project.tables.tasks === undefined, why = [...lost, ...(noTasks && milestones ? [milestones] : [])];
+  const noTasks = cannotRead(project, "tasks"), why = [...lost, ...(noTasks ? milestones : [])], hides = releasesHidden(project);
   const shows = noTasks ? others.length ? `The board shows only the ${others.join(" and ")} logbook of ${group.name}.` : `The board shows no task of ${group.name}.`
     : `The board shows its tasks without the rows of ${tables.map(name => `${name}.tsv`).join(", ")}.`;
   // Every table with one error code (a folder with no read permission): the folder is the reason, once.
   const codes = new Set(why.map(message => TABLE_FILE.exec(message)?.[2]));
-  const folder = why.length === TABLE_NAMES.length && codes.size === 1 && /^E[A-Z]+$/.test([...codes][0]) ? `Its folder ${PLAIN[[...codes][0]] ?? "cannot be read"}` : null;
+  const folder = TABLE_NAMES.every(name => why.some(message => message.startsWith(`${name}: `))) && codes.size === 1 && /^E[A-Z]+$/.test([...codes][0]) ? `Its folder ${PLAIN[[...codes][0]] ?? "cannot be read"}` : null;
   // An open move gate has no task, so no card shows it: it needs the owner here (F-T640-41, the owner's option a).
   const moves = project.old ? [] : (project.tables.gates ?? []).filter(gate => !gate.answer && !gate.task && /^move · plan [0-9a-f]{8}$/.test(String(gate.question ?? "").split(LINE)[0]));
   return [
     ...moves.map(gate => ({ ...item("move", `The move gate ${gate.id} waits for your answer`, `${String(gate.question).split(LINE)[1] ?? "Move the project into one shared logbook?"} Answer the gate in the chat: the chief puts it to you word for word, with its options and its recommendation.`), key: `${project.key}/${gate.id}` })),
-    ...(milestones && !noTasks ? [item("milestones", "The milestones table cannot be read", `${reasonOf(milestones)}. The board shows the tasks without their milestones. Ask the chief to repair the logbook.`)] : []),
-    ...(releases && !noTasks ? [item("releases", "The releases table cannot be read", `${reasonOf(releases)}. The board shows the tasks without their releases. Ask the chief to repair the logbook.`)] : []),
-    ...(lost.length ? [{ ...item("logbook", `The ${title(source.label)} logbook cannot be read`, `${folder ?? why.map(reasonOf).join(". ")}. ${shows} Ask the chief to repair the logbook.`), ...(noTasks && { noTasks }) }] : []),
+    ...(milestones.length && !noTasks ? [item("milestones", "The milestones table cannot be read", `${milestones.map(reasonOf).join(". ")}. The board shows the tasks without their milestones. Ask the chief to repair the logbook.`, hides)] : []),
+    ...(releases && !noTasks ? [item("releases", "The releases table cannot be read", `${reasonOf(releases)}. The board shows the tasks without their releases. Ask the chief to repair the logbook.`, hides)] : []),
+    ...(lost.length ? [item("logbook", `The ${title(source.label)} logbook cannot be read`, `${folder ?? why.map(reasonOf).join(". ")}. ${shows} Ask the chief to repair the logbook.`, hides && why.some(message => /^(tasks|programs|milestones): /.test(message)))] : []),
   ];
 }
-/** A logbook whose milestones table cannot be read shows its tasks with no milestone (R1307-1): no tag, and no milestone wait. */
-const withoutMilestones = project => project.tables.milestones || !project.tables.tasks ? project : { ...project, tables: { ...project.tables, tasks: project.tables.tasks.map(task => ({ ...task, milestone: "" })) } };
+/**
+ * A logbook whose milestones table cannot be read shows its tasks with no milestone (R1307-1): no tag, and no milestone wait.
+ * An older logbook's rename (T995) fills in that table from programs.tsv, so it gives no milestone either (F-T996-36).
+ */
+const withoutMilestones = project => !cannotRead(project, "milestones") || !project.tables.tasks ? project : { ...project, tables: { ...project.tables, milestones: undefined, tasks: project.tables.tasks.map(task => ({ ...task, milestone: "" })) } };
 
 /**
  * The projects whose logbook kept changing through the reader's 3 reads (T306, F9): each once, with the time of its read,

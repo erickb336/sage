@@ -724,6 +724,9 @@ test("T383 item 7: when tasks.tsv and milestones.tsv of one logbook both fail, o
   const folder = broken(["tasks", "runs", "findings", "ledger", "gates", "decisions", "milestones"].map(name => `${name}: EACCES`));
   assert.deepEqual(needsOf(folder), [["logbook", "The Claude logbook cannot be read", "Its folder has no read permission. The board shows no task of sage-ff5ee2. Ask the chief to repair the logbook."]]);
   assert.equal(folder.counts.needsOwner, 1);
+  // The reader's own list for such a folder (F-T1012-1): an older logbook's programs.tsv and the files that no task needs fail too.
+  const read = broken(["tasks", "runs", "findings", "ledger", "gates", "decisions", "milestones", "releases", "programs", "chiefs", "observations", "checkout"].map(name => `${name}: EACCES`));
+  assert.deepEqual(needsOf(read), needsOf(folder));
   // With its tasks readable, the milestones table keeps its own item.
   const source = milestonesSource(); source.projects[0].diagnostics = ["milestones: line 2: the pilot of M1 is not a task id"]; delete source.projects[0].tables.milestones;
   assert.deepEqual(needsOf(buildBoardModel([source], { now: MILESTONES_NOW })).map(([kind]) => kind), ["milestones"]);
