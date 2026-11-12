@@ -7,6 +7,9 @@ import { TASK_ID } from "./milestone-rules.mjs";
 import { LOGBOOK_FOLDER } from "./shared-root.mjs";
 import { pagesFolder, worktreeRoot } from "./worktrees.mjs";
 
+// macOS refuses O_NOFOLLOW_ANY (0x20000000) together with O_NOFOLLOW, which it includes.
+const OPEN = constants.O_RDONLY | constants.O_NONBLOCK | (process.platform === "darwin" ? 0x20000000 : constants.O_NOFOLLOW);
+
 /**
  * The real folder of one task's pages (<worktree root>/<logbook>/pages/<task>), or null. The worktree root also holds
  * task checkouts and run folders, so only this folder is ever read: the logbook and the task have their own name rules,
@@ -22,18 +25,19 @@ export function pageTaskFolder(logbook, task, env = process.env) {
 
 /**
  * A file of a task's pages folder that the board serves, as { size } (and its bytes when read is true), or null. Its
- * name follows pageType. The open follows no link at the end and never waits (a named pipe), so the board must be able to
- * open it. It is a regular file with one name (a hard link could name any file of the owner's), of at most PAGE_MAX
- * bytes, and the file at its real path, so a link in any folder of the path is refused too. The checks of the opened
- * file hold before and after the path check, and its change time does not move between them: a name that is added or
- * removed during the checks (F-T1001-7) is refused.
+ * name follows pageType. The open never waits (a named pipe), so the board must be able to open it. It is a regular file
+ * with one name (a hard link could name any file of the owner's), of at most PAGE_MAX bytes, and the file at its real
+ * path. The checks of the opened file hold before and after the path check, and its change time does not move between
+ * them: a name that is added or removed during the checks (F-T1001-7) is refused. The open follows no link at the end,
+ * and on macOS no link in any folder of the path (O_NOFOLLOW_ANY), so a folder that flips between a link and a folder
+ * during the path check (F-T1001-14) is refused too. Other systems have no such flag: there the path check is the guard.
  */
 export function pageFile(folder, file, read = false) {
   if (!pageType(file)) return null;
   const want = join(folder, file);
   let fd;
   try {
-    fd = openSync(want, constants.O_RDONLY | constants.O_NOFOLLOW | constants.O_NONBLOCK);
+    fd = openSync(want, OPEN);
     const opened = () => { const info = fstatSync(fd, { bigint: true }); return info.isFile() && info.nlink === 1n && info.size <= BigInt(PAGE_MAX) ? info : null; };
     const first = opened(), at = first && realpathSync(want) === want ? statSync(want, { bigint: true }) : null, last = at && opened();
     if (!last || at.dev !== last.dev || at.ino !== last.ino || last.ctimeNs !== first.ctimeNs) return null;

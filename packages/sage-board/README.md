@@ -106,6 +106,7 @@ Each page's response has a sandbox policy in place of the board's: the page has 
 Limits of the pages route:
 
 - A page can still send its own content out: through a link that you click in it, and, in a page that runs a script, through a move or a meta refresh. A page with no script of sage's runs no script and no refresh.
+- On macOS, the board opens a page with no link in any folder of its path (`O_NOFOLLOW_ANY`). Other systems have no such flag, so there a folder that flips between a link and a folder during the board's checks can pass them.
 - The Page link always names port 43123. A board on another port shows the pages there, but the link in a message does not reach them.
 - The folder of the pages comes from `SAGE_WORKTREES`, or else `~/sage-worktrees`. A board that launchd starts gets no `SAGE_WORKTREES` from your shell, so it shows the pages under `~/sage-worktrees` only.
 

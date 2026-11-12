@@ -252,6 +252,37 @@ test("a page whose names change while the board checks it is refused: a hard lin
   }
 });
 
+/**
+ * F-T1001-14: an agent may make a folder of a task's pages a link to a folder of the owner's, and flip it between a link
+ * and a real folder while the board checks the page: a real folder at the board's path check, and the link again at its
+ * stat of the path. The test flips at the board's own calls: to a real folder at the check of the opened file, and back
+ * to the link at the stat of the path. macOS refuses the link at the open; other systems have no such flag.
+ */
+test("a page whose folder flips between a link and a folder while the board checks it is refused", { skip: process.platform !== "darwin" && "the board refuses a link in the path at the open on macOS only" }, async (t) => {
+  const f = await fixture(t);
+  const owner = join(f.base, "owner-docs"), decoy = join(f.base, "decoy"), flip = join(f.t1, "flip"), want = join(flip, "notes.md");
+  mkdirSync(owner); mkdirSync(decoy);
+  writeFileSync(join(owner, "notes.md"), "OWNER SECRET");
+  writeFileSync(join(decoy, "notes.md"), "decoy");
+  symlinkSync(owner, flip);
+  const { ino } = statSync(join(owner, "notes.md"));
+  assert.equal((await get(f, `/pages/${LOGBOOK}/T1/flip/notes.md`)).status, 404, "a link in the path, with no flip");
+  const fstat = fs.fstatSync, stat = fs.statSync;
+  let flipped = false;
+  const mocks = [
+    test.mock.method(fs, "fstatSync", (fd, options) => { if (!flipped && fstat(fd).ino === ino) { flipped = true; unlinkSync(flip); fs.renameSync(decoy, flip); } return fstat(fd, options); }),
+    test.mock.method(fs, "statSync", (path, options) => { if (path === want && flipped) { fs.renameSync(flip, decoy); symlinkSync(owner, flip); } return stat(path, options); }),
+  ];
+  syncBuiltinESMExports();
+  let r;
+  try { r = await get(f, `/pages/${LOGBOOK}/T1/flip/notes.md`); } finally { for (const mock of mocks) mock.mock.restore(); syncBuiltinESMExports(); }
+  assert.equal(r.status, 404);
+  assert.doesNotMatch(r.body, /OWNER SECRET/);
+  unlinkSync(flip);
+  fs.renameSync(decoy, flip);
+  assert.equal((await get(f, `/pages/${LOGBOOK}/T1/flip/notes.md`)).body, "decoy", "a real folder in the path");
+});
+
 test("the pages route answers only on the Mac, only GET and HEAD, and only to the board's own pages or a person's click", async (t) => {
   const f = await fixture(t);
   const page = `/pages/${LOGBOOK}/T1/research.html`, authorization = `Basic ${Buffer.from(`sage:${PASSWORD}`).toString("base64")}`;
