@@ -2,7 +2,7 @@ import { createHash } from "node:crypto";
 import { basename } from "node:path";
 import { githubRepository, hookProvider } from "./board-reader.mjs";
 import { LINE, PRIORITIES, TASK_KINDS, agentCaps, proposalOf } from "./logbook-fields.mjs";
-import { ENDED, MET, breakdownGate, dead, gateLines, lostWhy, milestoneWordOf, namedText, progressOf, progressText, shownGraph, shownMilestoneState, shownWaits, waitGraph, waitsOf } from "./milestone-rules.mjs";
+import { ENDED, MET, breakdownGate, dead, gateLines, lostWhy, milestoneName, milestoneWordOf, namedText, progressOf, progressText, releasesOf, shownGraph, shownMilestoneState, shownWaits, waitGraph, waitsOf } from "./milestone-rules.mjs";
 import { taskWord } from "./state-words.mjs";
 import { offerOf, replaceOf } from "./chiefs.mjs";
 import { checkoutLabel, plainName } from "./shared-root.mjs";
@@ -266,12 +266,13 @@ const waitsFor = (task, graph) => shownWaits(task, graph).map(wait =>
   // A wait of a loop of waits (a hand edit) is never met, as no task of the loop can start first.
   // Its word is the state word of the task that it waits for (namedWaits), once each card has its word.
   : { id: wait.id, state: wait.state ?? null, pilot: !!wait.pilot, met: MET.includes(wait.state), never: dead(wait.state) || !!wait.loop, ...(wait.loop && { loop: true }) });
+// The owner reads "milestone 6", not its id M6 (F-T996-12); the gate's own text names what its row names (namedText).
 const BREAKDOWN_WAIT = {
-  proposed: (id, gate) => `your approval of the ${id} breakdown (gate ${gate})`,
-  changing: (id, gate) => `the new breakdown of ${id}: you asked for changes (gate ${gate})`,
-  dropped: (id, gate) => `the ${id} breakdown, which you dropped (gate ${gate})`,
+  proposed: (id, gate) => `your approval of ${milestoneName({ id }, true)} (gate ${gate})`,
+  changing: (id, gate) => `the new breakdown of ${milestoneName({ id }, true)}: you asked for changes (gate ${gate})`,
+  dropped: (id, gate) => `the breakdown of ${milestoneName({ id }, true)}, which you dropped (gate ${gate})`,
 };
-const waitName = wait => wait.breakdown ? BREAKDOWN_WAIT[wait.breakdown.state]?.(wait.breakdown.id, wait.breakdown.gate) ?? `the ${wait.breakdown.id} breakdown, ${wait.breakdown.missing ? "which is not in the logbook" : !wait.breakdown.gate ? "whose milestone names no breakdown gate" : wait.breakdown.named !== undefined ? `whose gate ${wait.breakdown.gate} ${namedText(wait.breakdown.named, wait.breakdown.id)}` : wait.breakdown.gateFound ? `whose gate ${wait.breakdown.gate} is not a breakdown gate` : `whose gate ${wait.breakdown.gate} is not in the logbook`}`
+const waitName = wait => wait.breakdown ? BREAKDOWN_WAIT[wait.breakdown.state]?.(wait.breakdown.id, wait.breakdown.gate) ?? `the breakdown of ${milestoneName({ id: wait.breakdown.id }, true)}, ${wait.breakdown.missing ? "which is not in the logbook" : !wait.breakdown.gate ? "whose milestone names no breakdown gate" : wait.breakdown.named !== undefined ? `whose gate ${wait.breakdown.gate} ${namedText(wait.breakdown.named, wait.breakdown.id)}` : wait.breakdown.gateFound ? `whose gate ${wait.breakdown.gate} is not a breakdown gate` : `whose gate ${wait.breakdown.gate} is not in the logbook`}`
   : `${wait.id}${wait.pilot || wait.word ? ` (${[wait.pilot && "pilot", wait.word].filter(Boolean).join(", ")})` : ""}`;
 /**
  * The owner's state words (state-words.mjs, T997): each card's word, then each wait names the word of the task that it
@@ -754,18 +755,46 @@ function milestonesOf(source, project, group, graph, cards) {
     const open = ordered.filter(task => !ENDED.includes(task.state)).map(card).filter(Boolean);
     const moving = open.filter(item => item.waits.every(wait => wait.met)), waiting = open.filter(item => item.waitLine);
     const first = state === "active" ? moving[0] : null;
-    const need = state === "stuck" ? { kind: "stuck", title: `${milestone.id} ${milestone.name} is stuck`, text: `The pilot ${milestone.pilot} ${pilotState ? "was abandoned" : "is not in the logbook"}. Choose a new pilot, or drop the milestone.` }
+    const need = state === "stuck" ? { kind: "stuck", title: `${milestoneName(milestone)} is stuck`, text: `The pilot ${milestone.pilot} ${pilotState ? "was abandoned" : "is not in the logbook"}. Choose a new pilot, or drop the milestone.` }
       // A lost milestone whose gate is open on a card in Needs you says so on that gate (card), so the problem counts once.
       : state === "lost" && !(gates.get(milestone.gate) && !gates.get(milestone.gate).answer && inNeeds(card({ id: gates.get(milestone.gate).task }))) ? { kind: "lost", title: lostWhy(milestone), text: title(LOST_FIX(milestone.id)) }
       : null;
     return { key: `${project.key}/${milestone.id}`, id: milestone.id, name: milestone.name, goal: milestone.goal, pilot: milestone.pilot, pilotState: pilotState ?? null, gate: milestone.gate, gateFound: milestone.gateFound, questions: questions.get(milestone.id) ?? [], ...(milestone.named !== undefined && { named: milestone.named }), ...(was.has(milestone.id) && { was: was.get(milestone.id) }), open: open.length,
       // An old logbook's milestone names that logbook, not the shared root that the board reads it through (F-T624-19).
       source: source.id, sourceLabel: project.old ? `Old ${title(project.old.provider)}` : source.label, project: project.key, group: group.key, projectName: group.name, archived: group.archived,
-      state, word: milestoneWordOf(milestone, graph).word, progress, progressText: progressText(progress), tasks: ordered.map(task => `${project.key}/${task.id}`), depths: layered.map(([, depth]) => depth),
+      state, ...wordOf(milestoneWordOf(milestone, graph)), progress, progressText: progressText(progress), tasks: ordered.map(task => `${project.key}/${task.id}`), depths: layered.map(([, depth]) => depth),
       next: first ? { key: first.key, id: first.id, word: first.word, pilot: first.id === milestone.pilot } : null,
       waiting: waiting.filter(item => !item.waitLine.never).length, cannotStart: waiting.filter(item => item.waitLine.never).map(item => item.id),
       need: need && { ...need, key: `${project.key}/${milestone.id}`, milestone: milestone.id, source: source.id, sourceLabel: source.label, projectName: group.name, group: group.key, archived: group.archived } };
   }).filter(milestone => !project.old || ["done", "dropped"].includes(milestone.state) && !milestone.open);
+}
+
+const wordOf = ({ word, reason }) => ({ word, reason });
+/**
+ * The releases of one logbook (T996, the T995 design B), or null when it has none: no row and no cell that names one, so
+ * the board shows as before. Each release in row order (releasesOf, the state tool's rule) with its word, its counts and
+ * the keys of its milestones and single tasks; then loose, the milestones and single tasks in no release. A cell that
+ * names a release that the table lacks gives a stand-in (missing). Each single task's card gets its release: its name, or
+ * null in no release. An old logbook (the move) is history: it shows no releases.
+ */
+function releasesOfBook(project, group, graph, byKey) {
+  // A releases table that cannot be read gives no releases, as a damaged milestones table gives no milestones: Needs you
+  // says why (logbookNeeds), and no release that a cell names shows as "not in the logbook" (F-T996-1). So does a milestones
+  // or tasks table that cannot be read: a release's count needs both, else it reads done or "0 of 0" (F-T996-28, F-T996-29).
+  if (project.old || !project.tables.releases || !project.tables.milestones || !project.tables.tasks) return null;
+  const releases = releasesOf(project.tables.releases ?? [], graph);
+  if (!releases.length) return null;
+  const key = id => `${project.key}/${id}`, ids = new Set(), names = new Map();
+  const out = releases.map(release => {
+    for (const task of release.singles) names.set(task.id, release.name);
+    for (const milestone of release.milestones) ids.add(milestone.id);
+    return { name: release.name, goal: release.goal ?? "", ...(release.missing && { missing: true }), word: release.state, done: release.done, stopped: release.stopped, total: release.total,
+      milestones: release.milestones.map(milestone => key(milestone.id)), singles: release.singles.map(task => key(task.id)) };
+  });
+  const singles = [...graph.byId.values()].filter(task => !task.milestone);
+  for (const task of singles) { const card = byKey.get(key(task.id)); if (card) card.release = names.get(task.id) ?? null; }
+  return { key: project.key, group: group.key, projectName: group.name, archived: group.archived, releases: out,
+    loose: { milestones: [...graph.milestones.keys()].filter(id => !ids.has(id)).map(key), singles: singles.filter(task => !names.has(task.id)).map(task => key(task.id)) } };
 }
 
 /** A card in Needs you when it has a reason: one on a column (not ended, or done in the last 7 days), as needsOwner reads it. */
@@ -797,12 +826,12 @@ function sourceNeeds(source) {
     key: `${source.id}/source`, source: source.id, sourceLabel: source.label, projectName: "every project", group: null, archived: false }] : [];
 }
 
-// A logbook problem that needs the owner (R1307-1, R1307-2): a milestones table that the board cannot read, and a logbook
-// that it cannot read (its folder, or a table but milestones). An observation, an artifact or a checkout file that cannot be
+// A logbook problem that needs the owner (R1307-1, R1307-2): a milestones or releases table (F-T996-1) that the board cannot
+// read, and a logbook that it cannot read (its folder, or a table but those two). An observation, an artifact or a checkout file that cannot be
 // read is a line under the board only: every task shows. Each reason says the file and the line, as the reader gives them.
 const TABLE_NAMES = ["tasks", "runs", "findings", "ledger", "gates", "decisions", "milestones"];
-const TABLE_FILE = new RegExp(`^(${TABLE_NAMES.join("|")}): (.*)$`);
-const unreadable = project => project.diagnostics.filter(message => !/^(milestones|observations|checkout|bindings|chiefs|sources|artifact [^:]*): /.test(message));
+const TABLE_FILE = new RegExp(`^(${[...TABLE_NAMES, "releases"].join("|")}): (.*)$`);
+const unreadable = project => project.diagnostics.filter(message => !/^(milestones|releases|observations|checkout|bindings|chiefs|sources|artifact [^:]*): /.test(message));
 function reasonOf(message) {
   const [, name, rest] = TABLE_FILE.exec(message) ?? [];
   if (!name) return title(plainProblem(message));
@@ -811,6 +840,7 @@ function reasonOf(message) {
 function logbookNeeds(source, project, group) {
   const item = (kind, needTitle, text) => ({ kind, title: needTitle, text, key: `${project.key}/${kind}`, source: source.id, sourceLabel: source.label, projectName: group.name, group: group.key, archived: group.archived });
   const milestones = project.diagnostics.find(message => message.startsWith("milestones: ")), lost = unreadable(project);
+  const releases = project.old ? null : project.diagnostics.find(message => message.startsWith("releases: "));
   const others = group.books.filter(book => book.project !== project && book.project.tables.tasks).map(book => title(book.source.label));
   const tables = lost.map(message => TABLE_FILE.exec(message)?.[1]).filter(Boolean);
   // With no tasks, the board shows no milestone either: one item says why, with the milestones table's reason too (T383).
@@ -825,7 +855,8 @@ function logbookNeeds(source, project, group) {
   return [
     ...moves.map(gate => ({ ...item("move", `The move gate ${gate.id} waits for your answer`, `${String(gate.question).split(LINE)[1] ?? "Move the project into one shared logbook?"} Answer the gate in the chat: the chief puts it to you word for word, with its options and its recommendation.`), key: `${project.key}/${gate.id}` })),
     ...(milestones && !noTasks ? [item("milestones", "The milestones table cannot be read", `${reasonOf(milestones)}. The board shows the tasks without their milestones. Ask the chief to repair the logbook.`)] : []),
-    ...(lost.length ? [item("logbook", `The ${title(source.label)} logbook cannot be read`, `${folder ?? why.map(reasonOf).join(". ")}. ${shows} Ask the chief to repair the logbook.`)] : []),
+    ...(releases && !noTasks ? [item("releases", "The releases table cannot be read", `${reasonOf(releases)}. The board shows the tasks without their releases. Ask the chief to repair the logbook.`)] : []),
+    ...(lost.length ? [{ ...item("logbook", `The ${title(source.label)} logbook cannot be read`, `${folder ?? why.map(reasonOf).join(". ")}. ${shows} Ask the chief to repair the logbook.`), ...(noTasks && { noTasks }) }] : []),
   ];
 }
 /** A logbook whose milestones table cannot be read shows its tasks with no milestone (R1307-1): no tag, and no milestone wait. */
@@ -860,6 +891,7 @@ export function buildBoardModel(input,{ now = new Date().toISOString(), landing 
   const byKey = new Map(tasks.map(task => [task.key, task]));
   namedWaits(tasks, byKey);
   const milestones = sources.flatMap(source => source.projects.flatMap(project => milestonesOf(source, project, groupOf.get(project.key), graphs.get(project.key), byKey)));
+  const releases = sources.flatMap(source => source.projects.map(project => releasesOfBook(project, groupOf.get(project.key), graphs.get(project.key), byKey)).filter(Boolean));
   // What needs the owner that no card shows: a stuck milestone, a lost breakdown gate, a table or a logbook that the board
   // cannot read. An archived project's leave the counts, as its tasks do.
   const milestoneNeeds = [...milestones.filter(milestone => milestone.need).map(milestone => milestone.need),
@@ -887,5 +919,5 @@ export function buildBoardModel(input,{ now = new Date().toISOString(), landing 
   // its name, its folder (the map page is move-map.html there, on the Mac), the time and the cards with an old number.
   const moved = sources.flatMap(source => source.projects.filter(project => project.movedAt && at - Date.parse(project.movedAt) >= 0 && at - Date.parse(project.movedAt) <= 7 * 86400000 && !groupOf.get(project.key)?.archived)
     .map(project => ({ project: groupOf.get(project.key)?.name ?? project.name, folder: project.name, at: project.movedAt, tasks: tasks.filter(task => task.project === project.key && task.was && task.column !== "done").length, finished: tasks.filter(task => task.project === project.key && task.was && task.column === "done").length })));
-  return { at: new Date(at).toISOString(), tasks, milestones, milestoneNeeds: liveNeeds, projects, notes, agents, moved, columns: COLUMNS.map(([key, name]) => ({ key, name, tasks: columnOf(key, visible), archivedTasks: columnOf(key, shown.filter(task => task.archived)), needsOwner: visible.some(task => task.column === key && task.reasons.length) })), needsOwner: visible.filter(task => task.reasons.length), archived, counts: { tasks: visible.length, needsOwner: visible.filter(task => task.reasons.length).length + liveNeeds.length, recordedAgents: visible.reduce((n, task) => n + task.agents.filter(agent => !agent.stale).length, 0), inferredWork: visible.filter(task => task.inferredWork).length, inReview: visible.filter(task => task.column === "review").length }, sources: sources.map(source => ({ id: source.id, label: source.label, standIn: standIn(source), diagnostics: source.diagnostics, ...(source.shared && { shared: true }) })), changing: changingOf(sources, groupOf), diagnostics: sources.flatMap(source => [...source.diagnostics.map(message => ({ source: source.id, message: plainProblem(message) })), ...source.projects.flatMap(project => project.diagnostics.map(message => ({ source: source.id, project: project.key, message: plainProblem(message) })))]), warnings: sources.flatMap(source => source.projects.flatMap(project => (project.warnings ?? []).map(message => ({ source: source.id, project: project.key, message: plainProblem(message) })))) };
+  return { at: new Date(at).toISOString(), tasks, milestones, releases, milestoneNeeds: liveNeeds, projects, notes, agents, moved, columns: COLUMNS.map(([key, name]) => ({ key, name, tasks: columnOf(key, visible), archivedTasks: columnOf(key, shown.filter(task => task.archived)), needsOwner: visible.some(task => task.column === key && task.reasons.length) })), needsOwner: visible.filter(task => task.reasons.length), archived, counts: { tasks: visible.length, needsOwner: visible.filter(task => task.reasons.length).length + liveNeeds.length, recordedAgents: visible.reduce((n, task) => n + task.agents.filter(agent => !agent.stale).length, 0), inferredWork: visible.filter(task => task.inferredWork).length, inReview: visible.filter(task => task.column === "review").length }, sources: sources.map(source => ({ id: source.id, label: source.label, standIn: standIn(source), diagnostics: source.diagnostics, ...(source.shared && { shared: true }) })), changing: changingOf(sources, groupOf), diagnostics: sources.flatMap(source => [...source.diagnostics.map(message => ({ source: source.id, message: plainProblem(message) })), ...source.projects.flatMap(project => project.diagnostics.map(message => ({ source: source.id, project: project.key, message: plainProblem(message) })))]), warnings: sources.flatMap(source => source.projects.flatMap(project => (project.warnings ?? []).map(message => ({ source: source.id, project: project.key, message: plainProblem(message) })))) };
 }

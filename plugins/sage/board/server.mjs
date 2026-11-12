@@ -3,7 +3,7 @@ import { createHash, randomBytes, scrypt, timingSafeEqual } from "node:crypto";
 import { lstatSync, readdirSync, watch } from "node:fs";
 import { createServer } from "node:http";
 import { dirname, isAbsolute, join, resolve, sep } from "node:path";
-import { readBoardSources, buildBoardModel, landingRule, renderBoardHtml, renderAgentsHtml, renderMilestonesHtml } from "../core/index.mjs";
+import { readBoardSources, buildBoardModel, landingRule, renderBoardHtml, renderAgentsHtml, renderMilestonesHtml, renderReleasesHtml } from "../core/index.mjs";
 
 const MAX_HTML = 8 * 1024 * 1024;
 const MAX_CLIENTS = 16;
@@ -49,6 +49,8 @@ function route(target) {
   // The Agents page (T308) and its live stream.
   if (target === "/agents" || target === "/agents?events=1") return { task: null, agents: true, events: target !== "/agents" };
   // The milestones list and each milestone's page (T233 C9), with their live streams. KEY is the base64url of the milestone key.
+  // The Releases tab (T996) and its live stream.
+  if (target === "/releases" || target === "/releases?events=1") return { task: null, releases: true, events: target !== "/releases" };
   if (target === "/milestones" || target === "/milestones?events=1") return { task: null, milestones: true, events: target !== "/milestones" };
   const milestone = /^\/milestone\/([A-Za-z0-9_-]+)(\?events=1)?$/.exec(target);
   // The addresses from before the rename of program to milestone (T995) move to the new ones, for one version. An old
@@ -165,7 +167,7 @@ export function createBoardServer({ sources, password, port = 43123, allowedHost
   }
 
   // The checkout paths go only to the Mac's own page (R1069-2).
-  const render = (state, view, paths, live = true) => view.agents ? renderAgentsHtml(state, { live, paths }) : view.milestones || view.milestone ? renderMilestonesHtml(state, { milestoneKey: view.milestone ?? null, live, paths })
+  const render = (state, view, paths, live = true) => view.agents ? renderAgentsHtml(state, { live, paths }) : view.releases ? renderReleasesHtml(state, { live, paths }) : view.milestones || view.milestone ? renderMilestonesHtml(state, { milestoneKey: view.milestone ?? null, live, paths })
     : renderBoardHtml(state, { taskKey: view.task, snapshot: false, live, paths });
   const fits = html => Buffer.byteLength(html) <= MAX_HTML;
   /**
@@ -304,9 +306,9 @@ export function createBoardServer({ sources, password, port = 43123, allowedHost
       }
       next = { ...buildBoardModel(read, { now: clock(), landing }), notSetUp };
       next.diagnostics = [...next.diagnostics, ...watchErrors.values()];
-      // Validate the shared pages before replacing a good snapshot: the board, the Agents page and the milestones list. A task
-      // page or a milestone page is checked when it is sent (pageFor), so the refresh renders 3 pages, not one per milestone.
-      const pages = [() => renderBoardHtml(next, { snapshot: false, live: true }), () => renderAgentsHtml(next, { live: true }), () => renderMilestonesHtml(next, { live: true })];
+      // Validate the shared pages before replacing a good snapshot: the board, the Agents page, the milestones list and the Releases tab. A task
+      // page or a milestone page is checked when it is sent (pageFor), so the refresh renders 4 pages, not one per milestone.
+      const pages = [() => renderBoardHtml(next, { snapshot: false, live: true }), () => renderAgentsHtml(next, { live: true }), () => renderMilestonesHtml(next, { live: true }), () => renderReleasesHtml(next, { live: true })];
       if (pages.some(render => Buffer.byteLength(render()) > MAX_HTML)) throw new RangeError("board rendering exceeds the size limit");
     } catch { next = { ...buildBoardModel([], { now: clock() }), diagnostics: unavailable }; }
     // A logbook that kept changing through 3 reads (T306, C8) is no diagnostic: the board keeps its last good read under
@@ -362,7 +364,7 @@ export function createBoardServer({ sources, password, port = 43123, allowedHost
       response.writeHead(200, { "Content-Type": "text/event-stream; charset=utf-8", "X-Accel-Buffering": "no" });
       if (request.method === "HEAD") return response.end();
       response.flushHeaders();
-      const client = { response, task: selected.task, agents: !!selected.agents, milestones: !!selected.milestones, milestone: selected.milestone ?? null, paths: mac, blocked: false, pending: null, deadline: null, sent: null };
+      const client = { response, task: selected.task, agents: !!selected.agents, releases: !!selected.releases, milestones: !!selected.milestones, milestone: selected.milestone ?? null, paths: mac, blocked: false, pending: null, deadline: null, sent: null };
       clients.add(client); response.once("close", () => removeClient(client)); publish(client);
       return;
     }
