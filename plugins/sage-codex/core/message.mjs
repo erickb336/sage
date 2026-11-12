@@ -276,8 +276,8 @@ function blockText(b, width, today = false, card = false) {
     case "p": return wrap(plain(b.text), width);
     case "section": {
       // Fields in a section read as a list; other blocks follow one by one.
-      const body = b.body.map((x) => (x.t === "field" ? bullet(`${x.label}: ${x.text}`, width) : blockText(x, width, today)));
-      return [b.label, "", ...body.flatMap((rows, k) => (k && !(b.body[k].t === "field" && b.body[k - 1].t === "field") ? ["", ...rows] : rows))];
+      const body = b.body.map((x) => (x.t === "field" ? bullet(`${x.label}: ${x.text}`, width) : blockText(x, width, today, card)));
+      return [...(card ? [`**${b.label}**`] : [b.label, ""]), ...body.flatMap((rows, k) => (k && !(b.body[k].t === "field" && b.body[k - 1].t === "field") ? ["", ...rows] : rows))];
     }
     case "list": return b.items.flatMap((item, i) => bullet(item, width, b.ordered ? `${i + 1}. ` : "- "));
     case "table": return [...(b.caption ? [b.caption, ""] : []), ...b.rows.flatMap((r, i) => [

@@ -436,6 +436,27 @@ test("T1023: a question or confirm in its fallback text form gives each part und
   assert.match(messagePage(prepareMessage(fixture("13-confirm.json")).msg, ""), /<table><thead><tr><th>Folder<\/th>/);
 });
 
+test("T1023: a section in a question or a confirm has the same bold label on its own line, and the check passes it", () => {
+  const asSection = (msg, label) => ({ ...msg, blocks: msg.blocks.filter((b) => b.t !== "page").map((b) => (b.label === label ? { t: "section", label, body: [{ t: "p", text: b.text }] } : b)) });
+  for (const [msg, label] of [[fixture("02-question.json"), "The one real choice in it"], [fixture("13-confirm.json"), "What stays"]]) {
+    const out = render(asSection(msg, label));
+    assert.equal(out.problems, undefined, `${label}: ${out.problems}`);
+    assert.match(out.text, new RegExp(`\\n\\n\\*\\*${label}\\*\\*\\n\\S`), "the label alone on its line, the text right under it");
+    assert.equal(messageMiss(out.text), undefined);
+  }
+});
+
+test("T1023: a hand-written question may keep a colon with its bold label, and may hold a table of short data", () => {
+  const question = render(fixture("02-question.json")).text;
+  assert.equal(messageMiss(question.replace("**Needed by**\n", "**Needed by:**\n")), undefined, "the colon inside the bold");
+  assert.equal(messageMiss(question.replace("**Needed by**\n", "**Needed by**:\n")), undefined, "the colon after the bold");
+  const data = "\n\n| Folder | Size |\n| --- | --- |\n| pages | 12 MB |";
+  assert.equal(messageMiss(question.replace("\n\n**If you do not answer**", `${data}\n\n**If you do not answer**`)), undefined, "a table of short data");
+  // A table of answers gets the note also when no row holds the pick: its head names the answers.
+  const answers = "\n\n| Answer | What happens next | Cost |\n| --- | --- | --- |\n| Keep | Some open in the chat. | Small. |";
+  assert.deepEqual(messageMiss(question.replace("\n\n**If you do not answer**", `${answers}\n\n**If you do not answer**`)).names, ["table"]);
+});
+
 test("T1023: the presentation skill's before and after example: the check notes the run-together question with a table, and passes the fallback", () => {
   const skill = readFileSync(join(HERE, "..", "writing", "presentation.md"), "utf8");
   const example = skill.slice(skill.indexOf("### Before and after"), skill.indexOf("## The kinds"));
