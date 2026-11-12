@@ -1,0 +1,162 @@
+{
+  "kind": "report",
+  "title": "The chief removes the folders that agents leave, and saves its own pages",
+  "long": {
+    "title": "The clean-up change is merged; the full description is on its page",
+    "main": "the chief can now remove the leftover folders that agents leave, and save its own pages. Task worktrees stay safe. It works after you update sage."
+  },
+  "blocks": [
+    {
+      "t": "field",
+      "label": "Where this is",
+      "text": "sage-stack › Release 1.0 › single task from your request of 7 Nov for fewer restrictions › merged on 10 Nov"
+    },
+    {
+      "t": "section",
+      "label": "Why this change",
+      "body": [
+        {
+          "t": "p",
+          "text": "In sage mode the chief changes no files of the project. An earlier change also refused the chief's shell writes outside the temp folder. So the chief could not remove the empty folders that its agents left in ~/sage-worktrees, and it could not save its own pages."
+        },
+        {
+          "t": "p",
+          "text": "You decided on 7 Nov that the chief may do both."
+        }
+      ]
+    },
+    {
+      "t": "picture",
+      "title": "What the chief may do in your worktrees folder",
+      "key": "Key: the same frame twice; each change says (new). An arrow is a command of the chief, and its label says what the hook does with it.",
+      "lines": [
+        "Before: the sage you run now      After: once you update",
+        "╭──────────────────────────────╮  ╭──────────────────────────────╮",
+        "│ The chief, in sage mode      │  │ The chief, in sage mode      │",
+        "╰──────────────────────────────╯  ╰──────────────────────────────╯",
+        "   │ rm, rmdir: refused outside      │ rm, rmdir: run in the",
+        "   │ the temp folder                 │ worktrees folder (new)",
+        "   ▼                                 ▼",
+        "╭──────────────────────────────╮  ╭──────────────────────────────╮",
+        "│ Leftover folders, no git     │  │ Leftover folders, no git     │",
+        "│ They stay. You remove them   │  │ The chief removes them       │",
+        "│ by hand.                     │  │ itself (new).                │",
+        "╰──────────────────────────────╯  ╰──────────────────────────────╯",
+        "   │ rm -rf of a task worktree       │ rm -rf of a task worktree",
+        "   │ refused                         │ refused",
+        "   ▼                                 ▼",
+        "╭──────────────────────────────╮  ╭──────────────────────────────╮",
+        "│ Task worktrees               │  │ Task worktrees               │",
+        "│ Safe: only git can remove    │  │ Safe: only git can remove    │",
+        "│ one, and git refuses one     │  │ one, and git refuses one     │",
+        "│ with changes.                │  │ with changes.                │",
+        "╰──────────────────────────────╯  ╰──────────────────────────────╯"
+      ]
+    },
+    {
+      "t": "table",
+      "head": [
+        "Piece of work",
+        "What changes for you",
+        "How I know it works",
+        "Cost",
+        "You must act"
+      ],
+      "rows": [
+        [
+          "Clean-up of leftover folders",
+          "The chief removes leftover folders in ~/sage-worktrees itself. A folder that holds a git work tree stays: only git worktree remove works there, and git refuses a worktree with changes.",
+          "Tests in both apps. The first review found that the chief could remove a live task folder; the repair added the git rule and a test.",
+          "1.4 M tokens and about 2.5 h of agent time for the whole pull request (measured)",
+          "Yes: update sage"
+        ],
+        [
+          "The chief's own pages and scratch files",
+          "The chief writes its pages into the task's pages folder, and its scratch files into the temp folder.",
+          "Tests in both apps; one clean cycle: code review clean, QA pass, checks pass.",
+          "In the row above",
+          "Yes: update sage"
+        ],
+        [
+          "Chains of state commands",
+          "None: the hook already let them run.",
+          "A new test proves it in both apps.",
+          "In the row above",
+          "No"
+        ]
+      ]
+    },
+    {
+      "t": "section",
+      "label": "The rules, command by command",
+      "body": [
+        {
+          "t": "table",
+          "head": [
+            "Command of the chief",
+            "Decision",
+            "Reason"
+          ],
+          "rows": [
+            [
+              "rmdir or rm -rf of a leftover folder in ~/sage-worktrees that holds no git work tree",
+              "Runs",
+              "The chief cleans up what its runs left."
+            ],
+            [
+              "git worktree remove of a task worktree",
+              "Runs",
+              "git refuses a worktree with changes, so no work is lost."
+            ],
+            [
+              "rm -rf of a git work tree, a write into one, or git worktree remove --force",
+              "Refused",
+              "A work tree holds repository files and maybe work that is not committed."
+            ],
+            [
+              "A write of a page into the task's pages folder (cat, tee, cp, touch)",
+              "Runs",
+              "The chief saves its own research pages and notes."
+            ],
+            [
+              "rm, mv and cp inside the temp folder",
+              "Runs",
+              "Scratch work."
+            ],
+            [
+              "Any write with a target in the project",
+              "Refused",
+              "Repository files stay with an implementer."
+            ],
+            [
+              "A write into ~/.claude, another home folder, or the logbook",
+              "Refused",
+              "Only the scratch places count; the logbook rule stays."
+            ],
+            [
+              "A path with a variable or a pattern (rm $TMPDIR/x, rm /tmp/x/*)",
+              "Refused",
+              "The hook cannot name every target, so it refuses. Write the literal path."
+            ]
+          ]
+        }
+      ]
+    },
+    {
+      "t": "field",
+      "label": "What I did not check",
+      "text": "the rules in a live session: they run only after you update sage."
+    },
+    {
+      "t": "field",
+      "label": "Weak points",
+      "text": "seven small findings stay on the polish list. For example: git's forced remove still runs when its option name is shortened, and mkdir runs in every folder."
+    },
+    {
+      "t": "field",
+      "label": "What you need to do",
+      "text": "update sage in Claude Code and in Codex, and start new sessions."
+    }
+  ],
+  "ref": "T807 · PR 514 · merge commit 3d9eacbd"
+}

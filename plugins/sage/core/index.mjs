@@ -24,6 +24,8 @@ export { buildBoardModel } from "./board-model.mjs";
 export { taskWord, milestoneWord, releaseWord } from "./state-words.mjs";
 export { renderBoardHtml, renderAgentsHtml, renderMilestonesHtml, renderBoardText, renderTaskText, renderBoardStatus } from "./board-render.mjs";
 export { boardView, landingRule } from "./board-view.mjs";
+export { KINDS, pageBlock } from "./message.mjs";
+export { kindOf, pageProblems, renderMessage, textProblems } from "./message-checks.mjs";
 export { parseBoardIntent, boardNote, BOARD_PHRASES } from "./board-intent.mjs";
 
 export { REPORT_FIELDS, parseReport } from "./report.mjs";

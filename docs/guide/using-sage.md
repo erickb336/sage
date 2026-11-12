@@ -113,6 +113,27 @@ Engineering choices, such as file formats and names, are the chief's. It decides
 
 You answer in your own words, or pick an option. When you do not answer, the work behind the question waits; the rest goes on.
 
+## Sage's messages
+
+Each message from the chief has one kind, and its first line names it: for example `QUESTION`, `REPORT`, `CATCH-UP` or `INCIDENT · Resolved`. Each kind has a fixed shape, so you find the same part in the same place each time:
+
+- **A question** has the question as its title, then where the work is, what you approve, the one real choice, a table with one row for each answer (my pick marked, what happens next, the cost), what happens if you do not answer, and when the answer is needed.
+- **A report** has a title that says what happened and what it needs, a table with one row for each piece of work (what changes for you, how the chief knows that it works, the cost, whether you must act), what the chief did not check, the weak points, and what you need to do.
+- **A catch-up** draws the release, its milestones and its tasks as boxes inside boxes, each with its state word: not started, waiting, needs you, in progress, done or stopped. The task that runs now is in a double box. Then it says what changed since a time, what the chief does if a thing happens, and what it needs from you.
+
+The other kinds are a progress note, a request understood, an explainer, an incident, a design, an architecture picture, a state chart, an estimate, steps for you, a confirm before an act that cannot be undone, and a lesson kept. The presentation skill lists the parts of each kind. Task and pull request numbers go only in a small Ref line at the end.
+
+A picture is plain text first, at most 46 columns wide, so it reads the same in a terminal and in the app. A message with a picture, or a message that is too long for the chat, also names its page:
+
+- The Page block is `Page ·` and a title, then a file path on your Mac. In the Claude desktop app, a click on the path opens the page in the Browser pane.
+- The page shows the whole message, with each picture drawn as an image from the same text.
+- A design's page has a switch between the picture after the change and today's picture.
+
+Known limits:
+
+- A page loads nothing and runs only its own switch, but a page that you open can still send its own content out, for example through a link in it.
+- A terminal with an East Asian wide setting draws the box marks two columns wide, so a picture there can look broken.
+
 ## The lead and the models
 
 Each task with a build gets one lead. The chief records a lead run and starts the lead in the background with the name `lead-T<n>` (in the desktop app, the first word of its description). An investigation has no pull request, so the chief runs it without a lead.

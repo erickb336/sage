@@ -1,0 +1,206 @@
+{
+  "kind": "design",
+  "title": "See where the work stands: release › milestone › task, with six state words",
+  "blocks": [
+    {
+      "t": "field",
+      "label": "Where this is",
+      "text": "Release 1.0 › single task: the new words, part 1 of 3 › step: design"
+    },
+    {
+      "t": "field",
+      "label": "Try it",
+      "text": "the design page, with sample data and every case:"
+    },
+    {
+      "t": "page",
+      "title": "Release, milestone, state words",
+      "task": "T995",
+      "file": "design.html"
+    },
+    {
+      "t": "field",
+      "label": "How you will use it",
+      "text": "you ask for the board. Above the columns, a “Where we are” frame shows the release, the milestone and the task that runs now. Each task card has one of six words: not started, waiting, needs you, in progress, done, stopped."
+    },
+    {
+      "t": "toggle",
+      "after": [
+        {
+          "title": "The board",
+          "lines": [
+            "╭─ The board ────────────────────────────────╮",
+            "│ Tabs: Task board · Releases · Agents       │",
+            "│                    [was: Programs]         │",
+            "│ Where we are  [new]                        │",
+            "│ ╭─ Release 1.0 ──────────────────────────╮ │",
+            "│ │ In progress · 1 of 10 tasks done       │ │",
+            "│ │ ╭─ Milestone 5: Sage feel ───────────╮ │ │",
+            "│ │ │ In progress · 0 of 8 tasks done    │ │ │",
+            "│ │ │ Now: Presentation skill            │ │ │",
+            "│ │ ╰────────────────────────────────────╯ │ │",
+            "│ ╰────────────────────────────────────────╯ │",
+            "│ ╭─ Building ─────────────────────────────╮ │",
+            "│ │ Presentation skill  In progress  [new] │ │",
+            "│ │ ✓ Plan › Build (now) › Review › Merge  │ │",
+            "│ │ ◫ Milestone 5: Sage feel · pilot       │ │",
+            "│ │   [was: ◫ Sage feel]                   │ │",
+            "│ ╰────────────────────────────────────────╯ │",
+            "│ ╭─ Backlog ──────────────────────────────╮ │",
+            "│ │ Playbook: a bug fix     Waiting  [new] │ │",
+            "│ │ Waits for the pilot                    │ │",
+            "│ │ ◫ Milestone 5: Sage feel               │ │",
+            "│ ╰────────────────────────────────────────╯ │",
+            "╰────────────────────────────────────────────╯"
+          ]
+        },
+        {
+          "title": "The approval question and the status lines",
+          "lines": [
+            "╭─ The approval question ────────────────────╮",
+            "│ Approve milestone 5: Sage feel? No task    │",
+            "│ builds before you approve.                 │",
+            "│ [was: Approve program …?]                  │",
+            "│ Release: 1.0  [was: Name: Sage feel]       │",
+            "│ Goal: Make sage clear and calm to read     │",
+            "│ after time away.                           │",
+            "╰────────────────────────────────────────────╯",
+            "╭─ The status lines ─────────────────────────╮",
+            "│ release 1.0 · in progress · 1 of 10 tasks  │",
+            "│ done  [new]                                │",
+            "│ milestone … · release 1.0 · pilot …: 0 of  │",
+            "│ 8 done · name: Sage feel                   │",
+            "│ [was: program … · 0 of 8 merged]           │",
+            "╰────────────────────────────────────────────╯"
+          ]
+        }
+      ],
+      "today": [
+        {
+          "title": "The board",
+          "lines": [
+            "╭─ The board ────────────────────────────────╮",
+            "│ Tabs: Task board · Programs · Agents       │",
+            "│ ╭┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄╮ │",
+            "│ ┆                                        ┆ │",
+            "│ ┆ Nothing here today                     ┆ │",
+            "│ ┆ You see the program only as a tag      ┆ │",
+            "│ ┆ on each card.                          ┆ │",
+            "│ ┆                                        ┆ │",
+            "│ ┆                                        ┆ │",
+            "│ ╰┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄╯ │",
+            "│ ╭─ Building ─────────────────────────────╮ │",
+            "│ │ Presentation skill                     │ │",
+            "│ │ ✓ Plan › Build (now) › Review › Merge  │ │",
+            "│ │ ◫ Sage feel · pilot                    │ │",
+            "│ ╰────────────────────────────────────────╯ │",
+            "│ ╭─ Backlog ──────────────────────────────╮ │",
+            "│ │ Playbook: a bug fix                    │ │",
+            "│ │ Waits for the pilot                    │ │",
+            "│ │ ◫ Sage feel                            │ │",
+            "│ ╰────────────────────────────────────────╯ │",
+            "╰────────────────────────────────────────────╯"
+          ]
+        },
+        {
+          "title": "The approval question and the status lines",
+          "lines": [
+            "╭─ The approval question ────────────────────╮",
+            "│ Approve program …? No task builds before   │",
+            "│ you approve.                               │",
+            "│ Name: Sage feel                            │",
+            "│ Goal: Make sage clear and calm to read     │",
+            "│ after time away.                           │",
+            "╰────────────────────────────────────────────╯",
+            "╭─ The status lines ─────────────────────────╮",
+            "│ program … · pilot …: 0 of 8 merged         │",
+            "│ · name: Sage feel                          │",
+            "╰────────────────────────────────────────────╯"
+          ]
+        }
+      ]
+    },
+    {
+      "t": "section",
+      "label": "Key",
+      "body": [
+        {
+          "t": "list",
+          "items": [
+            "A **new** tag: the part is not there today.",
+            "A **was:** tag: the words that this place shows today.",
+            "“…” marks a number that the tool prints there, such as a task's number; it does not change."
+          ]
+        }
+      ]
+    },
+    {
+      "t": "section",
+      "label": "Why each change matters",
+      "body": [
+        {
+          "t": "list",
+          "ordered": true,
+          "items": [
+            "**Where we are** (new): you see the release, the milestone and the task that runs now, at once.",
+            "**The state word on each card** (new): each card says its state in your words.",
+            "**The tag on a card** (was: ◫ Sage feel): it names the level and its number.",
+            "**The tab** (was: Programs): it starts at the top level and answers “how far is 1.0?”.",
+            "**The approval question** (was: Approve program …?): you see the name and the release before you say yes.",
+            "**The status lines** (new release line; “done” was “merged”): a study that ended counts too."
+          ]
+        }
+      ]
+    },
+    {
+      "t": "p",
+      "text": "**What stays the same:** the six columns from Backlog to Done, the step line on each card, the order of the cards, your three answers (approve, change, drop) and the tool's own task states."
+    },
+    {
+      "t": "field",
+      "label": "Goals",
+      "text": "you see where the work stands in your words, at once."
+    },
+    {
+      "t": "field",
+      "label": "Non-goals",
+      "text": "dates; new kinds of work. The tool keeps its own 15 states."
+    },
+    {
+      "t": "section",
+      "label": "The choices, and the options I dropped",
+      "body": [
+        {
+          "t": "list",
+          "items": [
+            "Where: a frame above the board's columns. Dropped: words on the cards only; columns by state word. Why: one picture, the same as the catch-up.",
+            "Word: milestone for a group of tasks. Dropped: program as a level above milestones. Why: they are the same thing, and program also means a computer program.",
+            "Storage: the logbook files use the new word too. Dropped: new words on screen only. Why: agents read the files, so the files must use your word.",
+            "Build: three pull requests. Dropped: one. Why: a rename of about 1,700 lines would hide about 500 lines of new rules from the reviewers."
+          ],
+          "ordered": true
+        }
+      ]
+    },
+    {
+      "t": "field",
+      "label": "Why we might not do this",
+      "text": "it costs 10.5 to 21 M tokens and 13 to 26 h of agent time, and every logbook moves once to the new words."
+    },
+    {
+      "t": "field",
+      "label": "Safety and cost",
+      "text": "the move of the logbook is a one-time migration, so the route adds the security review. Cost as above (estimate, from the engineer's check)."
+    },
+    {
+      "t": "field",
+      "label": "Open questions",
+      "text": "seven, each with my pick, on the design page."
+    },
+    {
+      "t": "field",
+      "label": "What you approve",
+      "text": "the levels, the six words, the board frame, the chat board, the status lines, the approval question and the command words."
+    }
+  ]
+}

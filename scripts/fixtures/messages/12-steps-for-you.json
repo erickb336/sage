@@ -1,0 +1,63 @@
+{
+  "kind": "steps for you",
+  "title": "Update sage in Claude Code and in Codex: about 5 minutes",
+  "blocks": [
+    {
+      "t": "field",
+      "label": "When",
+      "text": "after the three pull requests for the new words merge. I tell you when the last one merges."
+    },
+    {
+      "t": "field",
+      "label": "Why",
+      "text": "your sessions run the sage that you installed. The new words reach the board and the chat only after the update."
+    },
+    {
+      "t": "p",
+      "text": "**Warning:** start new sessions after the update. A session that is already open keeps its old instructions."
+    },
+    {
+      "t": "steps",
+      "items": [
+        {
+          "text": "In a terminal, update sage for Claude Code:",
+          "cmd": [
+            "claude plugin update sage@sage"
+          ],
+          "see": "Then start a new Claude Code session."
+        },
+        {
+          "text": "In a terminal, update sage for Codex:",
+          "cmd": [
+            "codex plugin marketplace upgrade sage",
+            "codex plugin add sage@sage"
+          ],
+          "see": "Then start a new Codex session."
+        },
+        {
+          "text": "If Codex shows “Hooks need review”, choose “Trust all and continue”. If it warns that sage hooks are changed or not trusted, run the command that the warning names, then type /hooks and trust the 7 sage hooks.",
+          "see": "If you see no sage line at all after the update, type /hooks anyway: when no sage hook is trusted, none runs, so none can warn you."
+        },
+        {
+          "text": "Ask for the board. If its line says that a restart is needed, run the stop command that it gives, then ask for the board again."
+        }
+      ]
+    },
+    {
+      "t": "field",
+      "label": "How you know it worked",
+      "text": "the board names “Milestone 5: Sage feel”, and each task has a state word such as “in progress”."
+    },
+    {
+      "t": "field",
+      "label": "Your time",
+      "text": "about 5 minutes of human time (estimate, 3 to 10: four commands and two new sessions)."
+    },
+    {
+      "t": "field",
+      "label": "If a step fails",
+      "text": "tell me the step and what you see."
+    }
+  ],
+  "ref": "after T995 · T996 · T997"
+}

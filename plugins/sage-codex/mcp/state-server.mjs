@@ -187,6 +187,12 @@ export const TOOLS = {
       run: optional("a run of the task, with text: whose report to save"), text: optional("the run's whole report, with run: the text to save") },
     pos: ["task", "record"], argv: (i) => ["pages", i.task, ...(i.record === undefined ? (i.text === undefined && i.run === undefined ? [] : ["record"]) : ["record", String(i.record)])],
   },
+  message: {
+    describe: "Print a message to the owner in the shape of its kind, from its JSON (the presentation skill gives each kind and its parts), and write its page in the task's pages folder when it has a picture or is long. "
+      + "Show the printed text to the owner word for word: a pictured message ends with its Page block. A message that is not in its kind's shape is refused with each problem.",
+    input: { task, message: z.record(z.string(), z.unknown()).describe("the message: { kind, title, blocks, ref }, as the presentation skill gives it") },
+    pos: ["task", "message"], argv: (i) => ["message", i.task, `--json=${JSON.stringify(i.message)}`],
+  },
   gate_add: {
     describe: "Park a question for the owner, with options, a recommendation and a default.",
     input: { task, question: z.string(), options: z.string().describe("the options joined by |, for example yes|no"), recommend: z.string().describe("the recommended option"),

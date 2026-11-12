@@ -1,0 +1,92 @@
+{
+  "kind": "incident",
+  "title": "My cost estimate for the new words was too low",
+  "status": "Resolved",
+  "blocks": [
+    {
+      "t": "field",
+      "label": "Where this is",
+      "text": "Release 1.0 › single tasks: the new words, parts 1 to 3 › before the build"
+    },
+    {
+      "t": "field",
+      "label": "What happened",
+      "text": "I told you that the new words would cost 2 to 5 M tokens. The engineer's check, based on a past large task, gave 10.5 to 21 M tokens for the three pull requests: about four times more."
+    },
+    {
+      "t": "section",
+      "label": "What I told you, and what is true",
+      "body": [
+        {
+          "t": "field",
+          "label": "I said (11 Nov, before the design)",
+          "text": "2 to 5 M tokens."
+        },
+        {
+          "t": "field",
+          "label": "True",
+          "text": "10.5 to 21 M tokens and 13 to 26 h of agent time for all three pull requests (estimate, from the engineer's check)."
+        },
+        {
+          "t": "field",
+          "label": "If you acted on it",
+          "text": "you approved the three pull requests at 18:43, after the check. Parts 2 and 3 have not started, so you can still change that answer."
+        }
+      ]
+    },
+    {
+      "t": "field",
+      "label": "What it changed for you",
+      "text": "nothing to undo. The work costs more than I told you. Part 1 has used 1.0 M tokens so far."
+    },
+    {
+      "t": "field",
+      "label": "What I did",
+      "text": "recorded the corrected range and its basis in the logbook, and used it in the estimate for the three pull requests."
+    },
+    {
+      "t": "section",
+      "label": "Why it could happen",
+      "body": [
+        {
+          "t": "list",
+          "items": [
+            "My first number had no basis in measured runs. The engineer's check used a past large task: 8.1 M tokens and 11 h.",
+            "The rule to give a basis is an instruction only. No check holds it."
+          ],
+          "ordered": true
+        }
+      ]
+    },
+    {
+      "t": "field",
+      "label": "Has it happened before",
+      "text": "not that the logbook shows. The logbook does not keep my estimates, so a repeat would not show either."
+    },
+    {
+      "t": "section",
+      "label": "What stops it next time",
+      "body": [
+        {
+          "t": "list",
+          "items": [
+            "Each estimate names its basis: measured runs of past tasks of the same size. prevent · todo (the estimate format)",
+            "I record each estimate that I give you, so the logbook can compare it with the measured cost. prevent · todo"
+          ],
+          "ordered": true
+        }
+      ]
+    },
+    {
+      "t": "field",
+      "label": "What you need to do",
+      "text": "nothing. If 10.5 to 21 M tokens is too much for the new words, tell me: parts 2 and 3 can wait."
+    },
+    {
+      "t": "field",
+      "label": "Next update",
+      "text": "none. This case is closed; the estimate format carries the fix."
+    }
+  ],
+  "ref": "T995 · T996 · T997"
+}

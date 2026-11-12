@@ -1,0 +1,104 @@
+{
+  "kind": "catch-up",
+  "title": "Release 1.0: the presentation skill is in design, and the new words are in review",
+  "blocks": [
+    {
+      "t": "picture",
+      "title": "Where the work is",
+      "key": "Key: each box has its level and its state word. Double box: you are here.",
+      "frame": {
+        "box": "release",
+        "name": "1.0",
+        "items": [
+          {
+            "box": "task",
+            "name": "New words, part 1",
+            "state": "reviewing",
+            "note": "in review"
+          },
+          {
+            "box": "milestone",
+            "name": "5: Sage feel",
+            "note": "0 of 8 tasks done",
+            "items": [
+              {
+                "box": "task",
+                "name": "Presentation skill",
+                "state": "designing",
+                "note": "you are here",
+                "here": true
+              },
+              {
+                "box": "group",
+                "name": "7 tasks: the playbooks",
+                "word": "waiting",
+                "waits": "the presentation skill"
+              }
+            ]
+          },
+          {
+            "box": "group",
+            "name": "2 tasks: new words, parts 2, 3",
+            "word": "waiting",
+            "waits": "part 1"
+          },
+          {
+            "box": "group",
+            "name": "3 tasks: research for the skill",
+            "word": "in progress",
+            "note": "1 of 3 done"
+          },
+          "Done: milestones 1 to 4"
+        ]
+      }
+    },
+    {
+      "t": "section",
+      "label": "Each box",
+      "body": [
+        {
+          "t": "list",
+          "items": [
+            "**Release 1.0**: the version you ship next. Milestones 1 to 4 are done.",
+            "**New words, part 1**: renames program to milestone in the code, the README and the docs. Its four checks run now.",
+            "**Milestone 5, Sage feel**: how sage talks to you and works on each kind of task, as skills and playbooks. You approved its plan of 8 tasks.",
+            "**Presentation skill**: the pilot of milestone 5: how every message reaches you. It is in its design step: one example page for each kind of message. Its build waits for part 1.",
+            "**The playbooks**: how sage works on each kind of task: design, architecture, study, debugging, feature, refactor, milestone. They start after the pilot merges.",
+            "**New words, parts 2 and 3**: the release level, then the six state words on the board. Each waits for the part before it.",
+            "**Research for the skill**: proven text formats (done), picture formats (in its evidence review), one way to show visuals (in a repair round)."
+          ]
+        }
+      ]
+    },
+    {
+      "t": "field",
+      "label": "Since",
+      "text": "18:00 today."
+    },
+    {
+      "t": "section",
+      "label": "What changed",
+      "body": [
+        {
+          "t": "list",
+          "items": [
+            "You approved the design for the new words and its three pull requests (18:43).",
+            "Part 1 was built (19:55). Its code review, security review, UX review and QA run now.",
+            "The text formats research ended. The other two studies are in their reviews."
+          ]
+        }
+      ]
+    },
+    {
+      "t": "field",
+      "label": "If this happens",
+      "text": "if a review of part 1 finds a high finding, I start a repair round and do not ask you."
+    },
+    {
+      "t": "field",
+      "label": "What I need from you",
+      "text": "nothing now. Next: look at the example pages and tell me what to change."
+    }
+  ],
+  "ref": "T984 · T995 to T997 · T998 to T1000"
+}

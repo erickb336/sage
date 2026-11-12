@@ -1,0 +1,95 @@
+{
+  "kind": "architecture",
+  "title": "How sage is built, at two zoom levels",
+  "blocks": [
+    {
+      "t": "p",
+      "text": "Zoom 1 shows what sage talks to. Zoom 2 shows the parts inside sage. Each picture has 6 boxes or fewer."
+    },
+    {
+      "t": "picture",
+      "title": "Sage, zoom 1 of 2: what it talks to",
+      "key": "Key: [type] of each part. Double box: the system that this picture is about. Each arrow goes one way, and its label says what it does. Left out: the board page, which you open in a browser on your Mac (zoom 2 shows the board).",
+      "lines": [
+        "╭────────────────────────────────────────────╮",
+        "│ You [person]                               │",
+        "│ Ask for work, answer questions, review     │",
+        "│ results, not code                          │",
+        "╰────────────────────────────────────────────╯",
+        "    │ type requests           ▲ show the",
+        "    │ and answers             │ chief's",
+        "    ▼                         │ messages",
+        "╭────────────────────────────────────────────╮",
+        "│ Claude Code or Codex [chat app]            │",
+        "│ The desktop app or a terminal              │",
+        "╰────────────────────────────────────────────╯",
+        "    │ runs sage as a plugin",
+        "    │",
+        "    ▼",
+        "╔════════════════════════════════════════════╗",
+        "║ Sage [software system]                     ║",
+        "║ A chief and a team of agents that design,  ║",
+        "║ build, review and prove each change        ║",
+        "╚════════════════════════════════════════════╝",
+        "    │ pushes branches, opens pull requests,",
+        "    │ reads the checks, merges",
+        "    │",
+        "    ▼",
+        "╭────────────────────────────────────────────╮",
+        "│ GitHub [external system]                   │",
+        "│ Holds the code and runs the checks         │",
+        "╰────────────────────────────────────────────╯"
+      ]
+    },
+    {
+      "t": "picture",
+      "title": "Sage, zoom 2 of 2: the parts inside",
+      "key": "Key: [type] of each part. Double box: the part that you talk to. Left out: the hooks that check each command; the designer and the engineer's check, which the chief starts before the lead; the lead's own records in the logbook.",
+      "lines": [
+        "You [person]",
+        "   │ requests and answers",
+        "   │",
+        "   ▼",
+        "╔════════════════════════════════════════════╗",
+        "║ Chief [the main session]                   ║",
+        "║ Frames tasks, writes briefs, asks you, and ║",
+        "║ merges when autopilot is on. It changes    ║",
+        "║ no files.                                  ║",
+        "╚════════════════════════════════════════════╝",
+        "   │ starts one lead        │ records tasks,",
+        "   │ for each pull          │ questions and",
+        "   │ request                │ verdicts",
+        "   ▼                        ▼",
+        "╭────────────────────╮  ╭────────────────────╮",
+        "│ Lead [agent]       │  │ Logbook [files]    │",
+        "│ Runs the build,    │  │ One for each       │",
+        "│ reviews and QA of  │  │ project, kept on   │",
+        "│ one pull request   │  │ your Mac           │",
+        "╰────────────────────╯  ╰────────────────────╯",
+        "   │ briefs up to 9         ▲",
+        "   │ helpers at once        │ reads",
+        "   │                        │",
+        "   ▼                        │",
+        "╭────────────────────╮  ╭────────────────────╮",
+        "│ Helpers [agents]   │  │ Board [web page]   │",
+        "│ Build, review and  │  │ Shows what needs   │",
+        "│ test the change    │  │ you, and each task │",
+        "╰────────────────────╯  ╰────────────────────╯",
+        "   │ push the branch and open the pull",
+        "   │ request",
+        "   ▼",
+        "GitHub [external system]"
+      ]
+    },
+    {
+      "t": "field",
+      "label": "What changes for you",
+      "text": "nothing. This is the map that later design questions start from."
+    },
+    {
+      "t": "field",
+      "label": "What I need from you",
+      "text": "nothing. Tell me if a box or an arrow is wrong."
+    }
+  ]
+}

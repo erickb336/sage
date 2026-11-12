@@ -1,0 +1,59 @@
+{
+  "kind": "confirm",
+  "title": "Remove 3 folders that no run of mine made? This cannot be undone.",
+  "blocks": [
+    {
+      "t": "p",
+      "text": "SAMPLE CONTENT: an example, not a real request. The folders are made up, and nothing is deleted."
+    },
+    {
+      "t": "field",
+      "label": "What I will do",
+      "text": "delete these 3 folders from your worktrees folder, with all the files in them. They do not go to the Trash."
+    },
+    {
+      "t": "table",
+      "head": [
+        "Folder",
+        "What is in it",
+        "Why I ask"
+      ],
+      "rows": [
+        [
+          "~/sage-worktrees/old-board-shots",
+          "41 pictures, 12 MB, last changed 20 Oct",
+          "No run in the logbook made it."
+        ],
+        [
+          "~/sage-worktrees/notes-copy",
+          "6 text files, 3 MB, last changed 26 Oct",
+          "No run in the logbook made it."
+        ],
+        [
+          "~/sage-worktrees/tmp-pages",
+          "2 pages, 40 KB, last changed 2 Nov",
+          "No run in the logbook made it."
+        ]
+      ]
+    },
+    {
+      "t": "field",
+      "label": "What stays",
+      "text": "every task worktree, every branch and pull request, and each task's pages folder. The 9 empty folders that my own runs left: I remove those without asking, by your rule of 24 Oct."
+    },
+    {
+      "t": "field",
+      "label": "If you say yes",
+      "text": "I delete the 3 folders and tell you what I deleted."
+    },
+    {
+      "t": "field",
+      "label": "If you say no, or nothing",
+      "text": "nothing is deleted. I do not ask again."
+    },
+    {
+      "t": "p",
+      "text": "Reply “yes, delete them”, “no”, or name the folders to keep."
+    }
+  ]
+}

@@ -1,0 +1,100 @@
+{
+  "kind": "state chart",
+  "title": "The life of a task, in the six state words",
+  "blocks": [
+    {
+      "t": "p",
+      "text": "Each dashed box is one of the six words that you see. Each rounded box inside it is a state that the tool records. An arrow from a group's edge works from every state in that group."
+    },
+    {
+      "t": "picture",
+      "title": "The life of a task, in the six state words",
+      "key": "Key: ● is the start. Left out: replan (a round that fixed nothing goes back to a new brief) and pr-ready (like verified). A study goes from verifying to concluded. Verified shows as in progress when autopilot merges it. 13 of the 15 states are drawn.",
+      "lines": [
+        "       ● the chief writes the task",
+        "       │",
+        "  ╭┄┄┄┄▼┄┄ Not started ┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄╮",
+        "  ┆ ╭────────╮  It shows as waiting while it ┆",
+        "╭─┆ │ framed │  waits for another task first ┆",
+        "│ ┆ ╰────────╯                               ┆",
+        "│ ╰┄┄┄┄┄│┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄╯",
+        "│       │ an agent starts",
+        "│ ╭┄┄┄┄┄▼┄┄┄ In progress ┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄╮",
+        "│ ┆ ╭───────────╮  ╭─────────╮  ╭──────────╮ ┆",
+        "│ ┆ │ designing │─▶│ briefed │─▶│ building │ ┆",
+        "│ ┆ ╰───────────╯  ╰─────────╯  ╰──────────╯ ┆",
+        "│ ┆                                  │ built ┆",
+        "│ ┆                                  ▼       ┆",
+        "│ ┆ ╭───────────╮   findings   ╭───────────╮ ┆",
+        "│ ┆ │ repairing │◀─────────────│ reviewing │ ┆",
+        "│─┆ │           │─────────────▶│           │ ┆",
+        "│ ┆ ╰───────────╯  next round  ╰───────────╯ ┆",
+        "│ ┆                                  │ clean ┆",
+        "│ ┆                                  ▼       ┆",
+        "│ ┆                            ╭───────────╮ ┆",
+        "│ ┆                            │ verifying │ ┆",
+        "│ ┆                            ╰───────────╯ ┆",
+        "│ ╰┄┄┄│┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄▲┄┄┄┄┄┄┄┄┄┄┄┄│┄┄┄┄┄┄┄╯",
+        "│     │ waits for you   │ your answer│ ready",
+        "│ ╭┄┄┄▼┄┄┄┄┄ Needs you ┄│┄┄┄┄┄┄┄┄┄┄┄┄▼┄┄┄┄┄┄┄╮",
+        "│ ┆ ╭──────────────╮ ╭──────╮  ╭───────────╮ ┆",
+        "│─┆ │ awaiting-you │ │ held │  │ verified  │ ┆",
+        "│ ┆ ╰──────────────╯ ╰──────╯  ╰───────────╯ ┆",
+        "│ ╰┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄│┄┄┄┄┄┄┄╯",
+        "│ you stop it,      you merge it, or │",
+        "│ from any state    autopilot does   │",
+        "│ ╭┄ Stopped ┄┄┄┄╮ ╭┄ Done ┄┄┄┄┄┄┄┄┄┄▼┄┄┄┄┄┄┄╮",
+        "│ ┆ ╭───────────╮┆ ┆ ╭───────────╮ ╭────────╮┆",
+        "╰▶┆ │ abandoned │┆ ┆ │ concluded │ │ merged │┆",
+        "  ┆ ╰───────────╯┆ ┆ ╰───────────╯ ╰────────╯┆",
+        "  ╰┄┄┄┄┄┄┄┄┄┄┄┄┄┄╯ ╰┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄╯"
+      ]
+    },
+    {
+      "t": "table",
+      "head": [
+        "Word",
+        "Recorded states",
+        "What it means"
+      ],
+      "caption": "Every state and its word",
+      "rows": [
+        [
+          "Not started",
+          "framed",
+          "A task exists, and no agent works on it."
+        ],
+        [
+          "Waiting",
+          "framed (or briefed) with a wait that is not met",
+          "It waits for another task first."
+        ],
+        [
+          "Needs you",
+          "awaiting-you, held; verified and pr-ready when you merge",
+          "Your answer or your merge comes next."
+        ],
+        [
+          "In progress",
+          "designing, briefed, building, reviewing, repairing, replan, verifying; verified and pr-ready when autopilot merges",
+          "Agents or the chief work on it."
+        ],
+        [
+          "Done",
+          "merged, concluded",
+          "Merged, or a study that ended."
+        ],
+        [
+          "Stopped",
+          "abandoned",
+          "Stopped for good, from any state."
+        ]
+      ]
+    },
+    {
+      "t": "field",
+      "label": "What I need from you",
+      "text": "nothing. The board's words follow this map."
+    }
+  ]
+}
