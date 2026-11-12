@@ -2124,6 +2124,18 @@ const milestoneDecision = (task, was, at, why, { milestones }) => {
 };
 
 /**
+ * A task that leaves milestone m for no milestone keeps m's release as its own release (F-T1003-21): it was in that release
+ * through m, and nothing moves a task out of a release by itself. Sets the task's cell; gives its decision row, or none when
+ * the cell does not change (m has no release).
+ */
+const keptRelease = (task, m, at) => {
+  const was = task.release ?? "", to = m?.release ?? "";
+  if (!m || to === was) return [];
+  task.release = to;
+  return [{ at, task: task.id, decision: `release ${was || "none"} → ${to || "none"}`, why: `${task.id} left milestone ${m.id}, and keeps its release` }];
+};
+
+/**
  * A release value as a release cell holds it (T1003): the release's own name, also when the value has another case or
  * width, or "" for none (none or an empty value takes the item out). It refuses a name that the logbook does not have,
  * and two names: who (a milestone or a task) is in at most one release.
@@ -2267,6 +2279,10 @@ function planTaskChanges(before, id, changes, at, facts) {
         note += ` · leaves the release ${oneLine(task.release)}: a task of ${task.milestone} is in the release of ${task.milestone}`;
         task.release = "";
       }
+      // A task that leaves a milestone keeps the milestone's release as its own, so it leaves no release by itself (F-T1003-21).
+      const kept = was && !task.milestone ? keptRelease(task, graph.milestones.get(was), at) : [];
+      decided.push(...kept);
+      if (kept.length && task.release) note += ` · keeps the release ${oneLine(task.release)} of ${was}`;
     } else if (k === "release") {
       if (task.milestone) refuse(`${task.id} is in ${task.milestone}, and a task of a milestone is in its milestone's release. Set the release of ${task.milestone} (sage milestone ${task.milestone} set release=<name>), or take ${task.id} out of ${task.milestone} first (sage task ${task.id} set milestone=none). Nothing changed.`);
       const was = task.release ?? "", to = releaseValue(v, facts.releases, task.id);
@@ -3788,13 +3804,15 @@ function act(cmd, pos, opt, dir, env, skip, project) {
         const to = /^(?:milestone|program) \S+ → (\S+)$/.exec(d.decision)?.[1] ?? ([PROPOSE, "program propose"].includes(d.why) ? /^((?:M|PG)[1-9]\d*) proposed /.exec(d.decision)?.[1] : undefined);
         if (to) logged.set(d.task, to === "none" ? "" : (renamed.get(to) ?? to));
       }
-      const rowsOfMoves = tasks.filter((t) => t !== pilot).map((t) => [t, stopped ? (logged.get(t.id) ?? "") : (t.milestone ?? ""), toOf(t)])
-        .filter(([, from, to]) => from !== to && (from === pid || to === pid))
-        .map(([t, from, to]) => ({ at, task: t.id, decision: `milestone ${from || "none"} → ${to || "none"}`, why: PROPOSE }));
+      const moves = tasks.filter((t) => t !== pilot).map((t) => [t, stopped ? (logged.get(t.id) ?? "") : (t.milestone ?? ""), toOf(t)])
+        .filter(([, from, to]) => from !== to && (from === pid || to === pid));
+      const rowsOfMoves = moves.map(([t, from, to]) => ({ at, task: t.id, decision: `milestone ${from || "none"} → ${to || "none"}`, why: PROPOSE }));
       for (const { t, to } of moved) t.milestone = to;
       // A task that joins the milestone is in the milestone's release: its own release goes (T1003).
       const unreleased = tasks.filter((t) => t.milestone === pid && t.release).map((t) => ({ at, task: t.id, decision: `release ${t.release} → none`, why: `${t.id} joins ${pid}, and a task of a milestone is in its milestone's release` }));
       for (const t of tasks) if (t.milestone === pid && t.release) t.release = "";
+      // A task that leaves it keeps its release as its own (F-T1003-21).
+      const kept = moves.filter(([, from]) => from === pid).flatMap(([t]) => keptRelease(t, old, at));
       const graph = waitGraph(tasks, after, gates, decisions);
       noLoop(pilot, graph, { oldPilot: old?.pilot }); // each new wait is a wait for the pilot, so a new loop goes through it
       apartFromPilot(pilot, graph, decisions, read(dir, "ledger"), "propose");
@@ -3804,7 +3822,7 @@ function act(cmd, pos, opt, dir, env, skip, project) {
       write(dir, "milestones", after);
       write(dir, "tasks", tasks);
       write(dir, "gates", [...gates, g]);
-      write(dir, "decisions", [...decisions, ...rowsOfMoves, ...unreleased, { at, task: pilot.id, decision, why: PROPOSE }]);
+      write(dir, "decisions", [...decisions, ...rowsOfMoves, ...unreleased, ...kept, { at, task: pilot.id, decision, why: PROPOSE }]);
       return `${pid} proposed${round > 1 ? ` (round ${round})` : ""} · pilot ${pilot.id} · ${others.length ? `tasks ${others.map((t) => t.id).join(", ")}` : "no other task"} · ${g.id} open: ask the owner to approve, change or drop it. To say what to change, the owner may answer in own words. Until the owner approves, no task of ${pid} builds.`;
     }
     case "release": {
