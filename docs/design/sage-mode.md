@@ -128,7 +128,7 @@ flowchart TB
   T["New task"] --> S{"Size and risk"}
   S -->|"tiny: one obvious edit"| T1["Build + checks · the chief checks the receipts"]
   S -->|"small: one bounded change"| T2["Build → code review (+ security if a risk flag) → QA"]
-  S -->|"large: new screens, flows, data"| T3["Design → PE → you approve → Build → code, security, UX review → repair → QA live"]
+  S -->|"large: new screens, flows, data"| T3["Design → PE → your answer → Build → code, security, UX review → repair → QA live"]
   S -->|"cause unknown"| T4["Investigate, no changes → evidence review → a proposal to you"]
   S -->|"milestone: many tasks, days"| T5["Plan → PE → pilot one unit → tracks in a rolling window"]
 ```
@@ -164,10 +164,10 @@ For a design with no clear answer, or for an implementation that's hard to undo,
 3. **The arena judge** (Opus) scores each candidate and picks the base. The chief names a new branch at `run add`, in the form `sage/t<n>-judge`. The judge makes that branch from the base's head, and it stops if the branch exists. It grafts the best parts of the others onto that branch by hand. If all candidates converge, it keeps the shared shape. If they diverge on the product, it stops and reports both choices with a recommendation: the chief asks you, and a new judge run goes on with the resolved brief. If no candidate is usable, there is no winner and no result, and the chief resolves the brief.
 
 4. **The final version** then follows one of two paths:
-   - A build: the judge opens a draft pull request from its branch, and a lead takes it through reviews and QA like any build. A build arena runs only on a tiny or small task, or on a briefed task after an approved design.
-   - A design: the judge saves the final design as a page in the pages folder, under the name that the chief gives it, and its report gives the path. The chief records the page, the PE checks it, and you approve that page. The build then starts on a new task branch from main, so that the prototype stays out of main. The judge's branch stays as the design.
+   - A build: the judge opens a draft pull request from its branch, and a lead takes it through reviews and QA like any build. A build arena runs only on a tiny or small task, or on a briefed task whose design may go ahead.
+   - A design: the judge saves the final design as a page in the pages folder, under the name that the chief gives it, and its report gives the path. The chief records the page, the PE checks it, and the page goes to you. It waits for your approval when it changes what you see or data that you keep; an internal shape goes ahead as recommended when you do not answer. The build then starts on a new task branch from main, so that the prototype stays out of main. The judge's branch stays as the design.
 
-An arena on a large task is a design arena: it stands for the route's Design block, and its order is arena, PE, your approval, build. While a task's arena step is open (its route has the arena block or it has a candidate run, and no judge of it ended done), it does not reach you as ready, and an investigation does not conclude. A judge that fails gets a new run on a new branch name. A task that needs no arena after all is abandoned and framed again: an abandoned task has no open step. A tiny arena gets the code review, with no QA, because a graft is new code that nobody read. After a judge ends done, the chief shows you its scores, base, grafts, rejections and empty candidates.
+An arena on a large task is a design arena: it stands for the route's Design block, and its order is arena, PE, your answer on the design, build. While a task's arena step is open (its route has the arena block or it has a candidate run, and no judge of it ended done), it does not reach you as ready, and an investigation does not conclude. A judge that fails gets a new run on a new branch name. A task that needs no arena after all is abandoned and framed again: an abandoned task has no open step. A tiny arena gets the code review, with no QA, because a graft is new code that nobody read. After a judge ends done, the chief shows you its scores, base, grafts, rejections and empty candidates.
 
 ```mermaid
 flowchart TB
@@ -179,7 +179,7 @@ flowchart TB
   C3 --> J
   J -->|"base + grafts, on the judge's own branch"| G["The arena judge makes the final version"]
   G -->|"a build"| N["Normal route: review, QA, land"]
-  G -->|"a design"| P["PE, your approval, then the build on a new branch"]
+  G -->|"a design"| P["PE, your answer on the design, then the build on a new branch"]
   J -.->|"screenshots and scores"| T[("Trail")]
 ```
 

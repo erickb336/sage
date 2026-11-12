@@ -225,7 +225,7 @@ function stepLine({ task, route, cycles, required, head, judged, reasons, merge,
   const after = at + 1 < required ? reviewName(at + 2) : NAME.merge;
   const NEXT = {
     framed: route.includes("design") ? "The design." : `${cap(NAME.build)}.`,
-    designing: "You approve the design.",
+    designing: "The design goes to you. It waits for your answer only when it changes what you see or data that you keep.",
     "awaiting-you": answered ? `The chief briefs ${NAME.build}.` : `${cap(NAME.build)} is briefed after your answer.`,
     briefed: `${cap(NAME.build)}.`,
     building: build ? `Review cycle 1 of ${required}, ${task.pr ? "on the PR's last commit" : "when the PR opens"}.` : `${cap(reviewName(1))}.`,

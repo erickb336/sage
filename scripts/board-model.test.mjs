@@ -410,6 +410,9 @@ test("R1075-1, R1071-1: a step runs now only while a run of the task runs; a gat
   const gate = { gates: [{ id: "G3", task: "T1", question: "Sample: which layout?", recommendation: "the first", answer: "" }] };
   const designing = oneTask(task("T1", "designing", { route: "design,build,code-review,qa" }), { ...gate, runs: [{ id: "R7", task: "T1", role: "designer", status: "running", started: "2026-10-08T19:20:00Z" }] });
   assert.deepEqual([line(designing)[0], designing.loop.steps[0].parts[1], designing.loop.now.needs, designing.loop.next], ["Plan: need", ["design", "need"], true, "The design goes on after your answer."], "an open gate: the plan needs you, not 'running now'");
+  const drawing = oneTask(task("T1", "designing", { route: "design,pe,build,code-review,qa" }), { runs: [{ id: "R7", task: "T1", role: "designer", status: "running", started: "2026-10-08T19:20:00Z" }] });
+  assert.deepEqual([line(drawing)[0], drawing.loop.now.needs, drawing.loop.next], ["Plan: run", false, "The design goes to you. It waits for your answer only when it changes what you see or data that you keep."],
+    "F-T1016-5: with no open gate, Next does not say that you approve every design");
   const stale = oneTask(task("T1", "building"), { runs: [{ id: "R5", task: "T1", role: "implementer", status: "running", started: "2026-10-05T08:00:00Z" }] });
   assert.deepEqual(line(stale)[1], "Build: stale");
   assert.deepEqual(stale.loop.now, { needs: false, stale: true, text: "No news from the implementer since 5 Oct. The run may have stopped, so ask the chief to check it." });
