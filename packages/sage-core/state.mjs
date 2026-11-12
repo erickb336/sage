@@ -3325,10 +3325,12 @@ function guard(dir, cmd, pos, opt, project, env) {
   if (!lead && !chiefs(dir).some((r) => r.id === chief)) refuse(`${visible(chief)} is not a chief of this logbook (${join(dir, "chiefs.tsv")}). Nothing changed.`);
   const tasks = need.kind === "any" ? [] : read(dir, "tasks");
   // A milestone proposed again: its pilot and each of its tasks, as each can leave it, and each task that the command names.
-  // An old program id names its milestone as in act (F-T995-25).
+  // An old program id names its milestone as in act (F-T995-25). An ended task is history that propose never moves, so it
+  // needs no owner; act refuses an ended task that the command names (F-T995-31).
   const old = need.kind === "milestone" ? read(dir, "milestones").find((p) => p.id === askedMilestone(pos[1], renamedIds(read(dir, "decisions")))) : undefined;
   const ids = need.kind === "milestone"
     ? [opt.pilot, old?.pilot, ...tasks.filter((t) => old && t.milestone === old.id).map((t) => t.id), ...(opt.tasks === undefined || opt.tasks === "none" ? [] : waitWords(opt.tasks))]
+      .filter((id) => !ENDED.includes(tasks.find((t) => t.id === id)?.state))
     : [need.task ?? (need.run && read(dir, "runs").find((r) => r.id === need.run)?.task)];
   const named = ids.filter(Boolean); // a task or a run that the logbook lacks gets the command's own refusal
   if (need.kind !== "any") for (const id of new Set(named)) {

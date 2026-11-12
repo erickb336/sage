@@ -278,6 +278,28 @@ for (const [name, own, other] of pairs) {
     assert.match(w.owner("program", "propose", "PG1", "--goal", "g2"), /^M1 proposed \(round 2\) /);
   });
 
+  // An ended task stays in its milestone as history: propose never moves it, so it needs no owner (F-T995-31).
+  for (const [ended, chief] of [["merged", ""], ["concluded", "C2"], ["abandoned", ""], ["abandoned", "C2"]]) {
+    const whose = chief ? "of another chief" : "with no owning chief";
+    for (const [id, args] of [["T2", ["--tasks", "T3,T4"]], ["T2", ["--pilot", "T3", "--tasks", "T4"]], ["T1", ["--pilot", "T3", "--tasks", "T4"]]]) {
+      test(`${name}: F-T995-31: the owning chief proposes its milestone again (${args.join(" ")}) while it holds ${id === "T1" ? "an old pilot" : "a task"} that is ${ended}, ${whose}`, (t) => {
+        const w = world(t, own, other);
+        for (const title of ["a", "b", "c", "d"]) w.owner("task", "add", "--title", title, ...ADD);
+        w.owner("milestone", "propose", "--name", "n", "--goal", "g", "--pilot", "T1", "--tasks", "T2,T3");
+        own.sage(["gate", "answer", "G1", "--option", "1", "--project", w.project], w.env);
+        setCells(w.dir, "tasks", (l) => l.startsWith(`${id}\t`), "state", ended);
+        setCells(w.dir, "tasks", (l) => l.startsWith(`${id}\t`), "chief", chief);
+        assert.match(w.owner("milestone", "propose", "M1", ...args), /^M1 proposed \(round 2\) /);
+        assert.equal(row(w.cells("tasks"), id).milestone, "M1", `${id} stays in M1 as history`);
+        // A task that the command does change still needs its owner: T4 of another chief, while it has not ended.
+        setCells(w.dir, "tasks", (l) => l.startsWith("T4\t"), "chief", "C2");
+        const before = w.tables();
+        assert.throws(() => w.owner("milestone", "propose", "M1", ...args), /T4 belongs to chief C2 /);
+        assert.equal(w.tables(), before, "nothing changed");
+      });
+    }
+  }
+
   test(`${name}: any chief of the project runs the commands that change no task; a command with no chief refuses`, (t) => {
     const w = world(t, own, other);
     w.owner("task", "add", "--title", "a", ...ADD);
