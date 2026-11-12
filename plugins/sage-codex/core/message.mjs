@@ -228,8 +228,28 @@ function shapeProblems(kind, blocks, { long }) {
 const plain = (s) => String(s).replace(/\*\*(.+?)\*\*/g, "$1");
 const FENCE = "```";
 
-/** The Page block: what the page is, then its file path (C4: the board's page link comes with T1001). */
-export const pageBlock = ({ title, path, file }, width = WIDTH) => [...wrap(`Page · ${plain(title)}`, width), `  ${path ?? file}`];
+/** The board's port on the Mac: its default, and the port of every Page link. Nothing reads the board's config for it. */
+export const BOARD_PORT = 43123;
+/** The largest page: 16 MiB, the size limit of a published page. pages record reads and the board serves at most this. */
+export const PAGE_MAX = 16 * 1024 * 1024;
+/** The files that the board's pages route serves (T1001), by type, with the type that it sends: md and txt as plain text. */
+export const PAGE_TYPES = Object.freeze({ html: "text/html; charset=utf-8", pdf: "application/pdf", png: "image/png", jpg: "image/jpeg", gif: "image/gif", webp: "image/webp", svg: "image/svg+xml", md: "text/plain; charset=utf-8", txt: "text/plain; charset=utf-8" });
+const PAGE_PART = /^(?!.*\.\.)[A-Za-z0-9_-][A-Za-z0-9._-]{0,127}$/;
+/**
+ * The type that the board sends for a file name in a task's pages folder, or null when the board does not serve that
+ * name: 1 to 3 parts of letters, digits and . _ -, no part that starts with a dot or holds "..", and a type of PAGE_TYPES.
+ * The board, its index and the message command read this one rule (through pageFile), so that a Page link never names a
+ * file that the board refuses.
+ */
+export const pageType = (file) => {
+  const parts = String(file).split("/"), type = /\.([a-z0-9]+)$/.exec(parts.at(-1))?.[1];
+  return parts.length <= 3 && parts.every((part) => PAGE_PART.test(part)) && Object.hasOwn(PAGE_TYPES, type) ? PAGE_TYPES[type] : null;
+};
+/** The board's link to a page: its logbook (the folder name, for example sage-43265b), its task and its file. */
+export const pageUrl = (logbook, task, file) => `http://127.0.0.1:${BOARD_PORT}/pages/${logbook}/${task}/${file}`;
+
+/** The Page block: what the page is, the board's link to it (when it has one), then its file path. */
+export const pageBlock = ({ title, url, path, file }, width = WIDTH) => [...wrap(`Page · ${plain(title)}`, width), ...(url ? [`  ${url}`] : []), `  ${path ?? file}`];
 
 /**
  * The text form of a prepared message (prepareMessage's msg), at its width. page: { title, path } of the message's own

@@ -205,6 +205,30 @@ A releases table that the board cannot read is an item in Needs you, with the fi
 
 Every line that the owner reads names a milestone by its level: "Milestone 6: Faster reviews", or "milestone 6" inside a sentence ("Waits for your approval of milestone 6"). Two places keep the id: the Milestone filter list, and the text of a gate, which comes from the gate's row.
 
+## The pages of a task
+
+Agents save each task's pages (research, designs, the pages of the chief's messages) in the task's pages folder. The board server also shows these pages, read-only, on the Mac only:
+
+- `http://127.0.0.1:43123/pages/<logbook>/<task>/` is the task's index: a list of its pages, with the size of each.
+- `http://127.0.0.1:43123/pages/<logbook>/<task>/<file>` opens one page. For example: `http://127.0.0.1:43123/pages/sage-43265b/T1000/research.html`.
+
+The Page block of a message gives this link between its title and its file path ([sage's messages](using-sage.md#sages-messages)). So one link opens the page in the same way in each app: in the Browser pane of the Claude desktop app, in the built-in browser of the Codex app, and in your default browser from a terminal.
+
+The board shows web pages, PDFs, pictures (PNG, JPEG, GIF, WebP and SVG), and Markdown and text files as plain text. It shows no other file: no logbook file, JSON, log, hidden file or link.
+
+A page can be at most 3 parts deep in the task's folder (for example `designs/final/index.html`) and at most 16 MiB. The index lists at most 200 pages.
+
+Each page opens in a sandbox: it cannot read the board or your files, load anything, or send a form. Only sage's own script runs, the switch of a design's page.
+
+Two warning lines in the index tell you the rest:
+
+- A page may link to sites outside this Mac. When you click such a link, your browser opens that site, and the site gets everything in the link's address.
+- The link "open with its scripts" (in the index, for a page with a script of its own) runs the page's own scripts. They cannot read the board or your files, but they can send the page's content to another site. Use it only for a page that you trust.
+
+A link in a page to another page of the board, or to the index, opens when you click it: the board opens a page by a person's click from any site. A page cannot load or fetch anything from the board.
+
+A site that moves you to a page by itself gets "not permitted", and so does a link to "open with its scripts" in a page or on another site: open it from the index. When another site opens the index in a new tab, the index cuts that site's hold on the tab, so the site cannot move the tab or read what a page sends to it.
+
 ## The board server
 
 The board server only reads your logbooks. It does not make or change a logbook, fetch from GitHub, or decide whether a pull request may merge. The state tool still records each change and applies the merge rules.

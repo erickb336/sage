@@ -8,7 +8,7 @@ import { request } from "node:http";
 import { homedir } from "node:os";
 import { dirname, isAbsolute, join, relative, resolve, sep } from "node:path";
 import { fileURLToPath } from "node:url";
-import { boardView, sharedRoot } from "../core/index.mjs";
+import { BOARD_PORT, boardView, sharedRoot } from "../core/index.mjs";
 import { installBoard, stableNodePath, writeLoginFile } from "./install.mjs";
 import { createBoardServer, hashPassword, validPasswordRecord } from "./server.mjs";
 
@@ -56,7 +56,7 @@ export function validateBoardConfig(config, configPath = null) {
     if (!source || !/^[a-zA-Z0-9_-]{1,80}$/.test(source.id ?? "") || ids.has(source.id) || Object.keys(source).some(key => !["id", "label", "path", "provider"].includes(key))) throw new TypeError("board sources need distinct ids and known fields");
     ids.add(source.id); return { ...source, path: boundedPath(source.path) };
   });
-  const port = config.port ?? 43123;
+  const port = config.port ?? BOARD_PORT;
   if (!Number.isInteger(port) || port < 1024 || port > 65535) throw new TypeError("board port must be from 1024 to 65535");
   // T229: the board has no random secret. A "secret" of an older config still loads, but nothing reads it, so it signs no one in.
   if (config.password !== undefined && !validPasswordRecord(config.password)) throw new TypeError("the board password in the config is not a valid record: set it again with board --set-password");
@@ -65,7 +65,7 @@ export function validateBoardConfig(config, configPath = null) {
   if (configPath && !outsideRoots(resolve(configPath), sources) || pagesDir && !outsideRoots(pagesDir, sources)) throw new TypeError("board config and exported pages must stay outside logbook roots");
   return { version: 1, sources, port, allowedHosts: config.allowedHosts ?? [], ...(config.password ? { password: config.password } : {}), ...(pagesDir ? { pagesDir } : {}) };
 }
-export function createBoardConfig(path, { sources, port = 43123, allowedHosts = [], pagesDir } = {}) {
+export function createBoardConfig(path, { sources, port = BOARD_PORT, allowedHosts = [], pagesDir } = {}) {
   path = boundedPath(path);
   const config = validateBoardConfig({ version: 1, sources, port, allowedHosts, ...(pagesDir ? { pagesDir } : {}) }, path);
   noLinkedParents(path);
@@ -269,7 +269,7 @@ export async function runBoardCli(argv, { output = line => process.stdout.write(
   if (options.setup || missing) {
     if (value !== "all" || options.sources?.length > 65536 || options.project || options.out || options["install-dir"] || options["login-file"]) throw new TypeError("setup takes --config, with optional sources, port, pages and allowed-hosts");
     if (options.port && !/^[1-9]\d*$/.test(options.port)) throw new TypeError("port must be a positive integer");
-    createBoardConfig(options.config, { sources: options.sources ? parseJson(options.sources) : standardSources(env), port: options.port ? Number(options.port) : 43123, pagesDir: options.pages, allowedHosts: options["allowed-hosts"] ? parseJson(options["allowed-hosts"]) : [] });
+    createBoardConfig(options.config, { sources: options.sources ? parseJson(options.sources) : standardSources(env), port: options.port ? Number(options.port) : BOARD_PORT, pagesDir: options.pages, allowedHosts: options["allowed-hosts"] ? parseJson(options["allowed-hosts"]) : [] });
     if (options.setup) { output(`Board config created: ${boundedPath(options.config)}. Access from outside this Mac stays off until you set a board password: run in a terminal ${boardCommand("--set-password", boundedPath(options.config), env, explicit)}`); return null; }
   } else if (options.sources || options.pages || options.port || options["allowed-hosts"]) throw new TypeError(options.ensure ? existingConfig(boundedPath(options.config)) : "source and service settings require --setup");
   if (options.ensure) {

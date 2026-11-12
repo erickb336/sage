@@ -97,4 +97,17 @@ Claude owner phrases can request the board and task views. Codex uses the manual
 
 The server has four pages: the task board (`/`, with a page for each task at `/task/<id>`), the Releases tab (`/releases`, T996), the milestones list (`/milestones`, with a page for each milestone at `/milestone/<id>`) and the Agents page (`/agents`). Each page has its live stream (`/?events=1`, `/releases?events=1`, `/milestones?events=1`, `/milestone/<id>?events=1` and `/agents?events=1`), with the same sign-in. A task or milestone id in a route is the base64url of its key; an unknown milestone gives a not-found page with status 404. The Agents page also reads the hook's agent slots and helper notes under each logbook root (`.hooks/slots` and `.hooks/helpers`), by name and change time only. It refreshes by itself when an agent's state changes with time (30 min with no activity, or running long), as no file changes then.
 
+The server also shows each task's pages folder, read-only, at `/pages/<logbook>/<task>/` (an index) and `/pages/<logbook>/<task>/<file>` (T1001). It serves these only to a request from the Mac itself, never through a tunnel.
+
+It reads the raw path and never joins it onto a folder: it refuses `%`, `..`, a part that starts with a dot, any query but `?scripts=1`, a logbook that the board does not show, and a link or a file with a second name anywhere in the path. It serves only web pages, PDFs, pictures, and Markdown and text as plain text, at most 3 parts deep and 16 MiB.
+
+Each page's response has a sandbox policy in place of the board's: the page has no origin, loads nothing, and runs only sage's own script (the switch of a message page); with `?scripts=1`, its own inline scripts also run, in the same sandbox. The index runs no script and has no sandbox, so that its opener policy cuts the window handle of another site that opened it. A page cannot fetch the board, read its storage or send a form. A person's click on another site may open a page (a host app's chat may send its links so); a move that no person started, and `?scripts=1` from another site, get 403.
+
+Limits of the pages route:
+
+- A page can still send its own content out: through a link that you click in it, and, in a page that runs a script, through a move or a meta refresh. A page with no script of sage's runs no script and no refresh.
+- On macOS, the board opens a page with no link in any folder of its path (`O_NOFOLLOW_ANY`). Other systems have no such flag, so there a folder that flips between a link and a folder during the board's checks can pass them.
+- The Page link always names port 43123. A board on another port shows the pages there, but the link in a message does not reach them.
+- The folder of the pages comes from `SAGE_WORKTREES`, or else `~/sage-worktrees`. A board that launchd starts gets no `SAGE_WORKTREES` from your shell, so it shows the pages under `~/sage-worktrees` only.
+
 Local tests exercise the sign-in, file updates, task routes, the Agents page, reconnects, offline export, and stable installation. Phone access, login startup, and browser appearance still need direct checks.
