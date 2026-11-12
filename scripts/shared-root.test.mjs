@@ -1566,7 +1566,7 @@ test("a milestone moves with its tasks: new number, pilot and breakdown gate, an
   assert.deepEqual(rowsIn(join(dir, "tasks.tsv")).map((r) => [r.id, r.milestone]), [["T4", "M2"], ["T5", ""], ["T6", ""]]);
   const breakdown = rowsIn(join(dir, "gates.tsv")).find((g) => g.id === "G5");
   assert.deepEqual([breakdown.task, /^Approve milestone M2[ ?]/.test(breakdown.question), breakdown.answer], ["T4", true, "approve"]);
-  assert.match(w.claude("status"), /\nmilestone M2 · pilot T4: 0 of 1 merged · name: Two steps\n/, "approved, as before the move");
+  assert.match(w.claude("status"), /\nmilestone M2 · not started · pilot T4: 0 of 1 merged · name: Two steps\n/, "approved, as before the move");
 });
 
 test("an older plugin stops at the moved logbook's milestone column, and a repair of the decisions keeps the move's floors (F-T641-4, F-T641-8, T995)", (t) => {
@@ -1716,7 +1716,7 @@ test("a milestone whose pilot a task of the other logbook adopted moves whole: i
   assert.equal(milestone.pilot, "T3");
   const breakdown = gates.find((g) => g.id === milestone.gate);
   assert.deepEqual([breakdown?.task, breakdown?.answer, breakdown?.question.startsWith(`Approve milestone ${milestone.id}`)], ["T3", "approve", true], "the milestone's gate cell names its moved breakdown gate");
-  assert.match(w.claude("status"), new RegExp(`\\nmilestone ${milestone.id} · pilot T3: 0 of 2 merged · name: Two\\n`), "approved, as before the move");
+  assert.match(w.claude("status"), new RegExp(`\\nmilestone ${milestone.id} · not started · pilot T3: 0 of 2 merged · name: Two\\n`), "approved, as before the move");
 });
 
 test("a moved repair approval gate names the new task, so the owner's approve answer still resumes it (F-T640-3)", (t) => {
@@ -2074,7 +2074,7 @@ test("a milestone whose pilot merged moves whole: the pilot as a merged task, it
   w.claude("milestone", "propose", "--name", "Two", "--goal", "Both land.", "--pilot", "T4", "--tasks", "T5");
   w.claude("gate", "answer", "G2", "--option", "1");
   setStates(w.claudeDir, { T4: "merged" });
-  assert.match(w.claude("status"), /\nmilestone M1 · pilot T4: 1 of 2 merged · name: Two\n/);
+  assert.match(w.claude("status"), /\nmilestone M1 · in progress · pilot T4: 1 of 2 merged · name: Two\n/);
   const preview = w.claude("move", "--preview");
   // The merged pilot takes T8, between the open tasks, so the range leaves it out (F-T647-3).
   assert.match(preview, /\nopen tasks          3  T6–T7, T9      1  T10\n/);
@@ -2086,7 +2086,7 @@ test("a milestone whose pilot merged moves whole: the pilot as a merged task, it
   assert.deepEqual(rowsIn(join(dir, "tasks.tsv")).map((r) => [r.id, r.title, r.state, r.milestone]), [
     ["T6", "claude open", "framed", ""], ["T7", "claude verified", "reviewing", ""], ["T8", "pilot", "merged", "M2"], ["T9", "member", "framed", "M2"], ["T10", "codex open", "framed", ""]]);
   assert.equal(rowsIn(join(dir, "gates.tsv")).find((g) => g.id === "G5").answer, "approve", "the breakdown approval holds");
-  assert.match(w.claude("status"), /\nmilestone M2 · pilot T8: 1 of 2 merged · name: Two\n/, "the same done count as before the move");
+  assert.match(w.claude("status"), /\nmilestone M2 · in progress · pilot T8: 1 of 2 merged · name: Two\n/, "the same done count as before the move");
   assert.deepEqual(rowsIn(join(w.claudeDir, "tasks.tsv")).map((r) => [r.id, r.moved]), [["T1", ""], ["T2", "T6"], ["T3", "T7"], ["T4", "T8"], ["T5", "T9"]]);
   assert.equal(boardOf(w).tasks.filter((task) => task.title === "pilot").length, 1, "the pilot shows once, in the shared logbook");
 });

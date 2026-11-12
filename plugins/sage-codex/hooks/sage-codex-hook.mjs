@@ -10,6 +10,8 @@
 //     turn as developer context.
 //   - A board phrase (core's parseBoardIntent), in any mode: the chief gets core's board note, as in the Claude hook,
 //     with Codex's commands (CODEX_BOARD, T921).
+//   - The note of the shape check (T1005): when the chief's last message named its kind and missed its shape, the next
+//     prompt of the main thread gives the chief the note that message-check.mjs kept at Stop, while sage mode is on.
 //   - SessionStart with source compact: a compaction can drop the role, so the hook gives it again while sage mode is on.
 //   - SessionStart with source fork: a fork has a new session id, and Codex does not give the hook the parent's id.
 //     So a fork starts with sage mode off, and the hook tells the chief so, because its history can show the role.
@@ -29,6 +31,7 @@ import { readdirSync, readFileSync, realpathSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { boardNote, exactPhrase, MODE_DAMAGED, parseBoardIntent, PHRASES, protectionNote, readModeFile, renderChiefInstructions, ROLE_PRINCIPLES, switchModes } from "../core/index.mjs";
+import { takeNote } from "./message-check.mjs";
 import { NEW_ON, onCanCount, readRecord } from "./owner-record.mjs";
 import { modeDirectory, privateDirectory, readState, saveState, stateKey } from "./hook-state.mjs";
 import { sessionMeta } from "./report-gate.mjs";
@@ -235,7 +238,12 @@ function threadAnswer(input, env) {
     const before = JSON.stringify(state);
     const output = handle(input, state, env);
     if (JSON.stringify(state) !== before) saveState(file, state);
-    return output;
+    // The note of the shape check (message-check.mjs): a prompt of the main thread takes it, and the chief gets it only
+    // while sage mode is on.
+    const note = known(input) && input.hook_event_name === "UserPromptSubmit" && !("agent_id" in input) ? takeNote(dir, key) : undefined;
+    if (!note || !state.sage) return output;
+    const given = output?.hookSpecificOutput?.additionalContext;
+    return { ...output, ...context("UserPromptSubmit", given ? `${given}\n\n---\n\n${note}` : note) };
   } catch {
     // Fail closed: no switch and no role. The next prompt tries again.
     return { systemMessage: `sage: the sage hook could not read or save the sage mode of this session, so it switched no mode. Check the folder ${dir}.` };

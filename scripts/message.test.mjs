@@ -13,7 +13,7 @@ import { test } from "node:test";
 import { fileURLToPath } from "node:url";
 import { KINDS, frameLines, messageText, prepareMessage } from "../packages/sage-core/message.mjs";
 import { PAGE_POLICY, SWITCH_SCRIPT, messagePage } from "../packages/sage-core/message-page.mjs";
-import { kindOf, pageProblems, renderMessage, shapeMiss, textProblems } from "../packages/sage-core/message-checks.mjs";
+import { kindOf, messageMiss, pageProblems, renderMessage, shapeMiss, textProblems } from "../packages/sage-core/message-checks.mjs";
 import { columns, openBoxes, pictureSvg } from "../packages/sage-core/picture.mjs";
 
 const HERE = dirname(fileURLToPath(import.meta.url));
@@ -180,6 +180,23 @@ test("the raw-id check has none of the false hits that the PE found: the Ref lin
   assert.deepEqual(textProblems(out.text.replace("Since: 18:00 today.", "Since: 18:00 today. R2-D2, MT5, T-10 and 4K are words.")), []);
   assert.deepEqual(textProblems(`${out.text}\n\n**sage board** · built 2026-11-11 20:00 UTC\n### 🔴 Needs you\n**1 · T10 a task** · G7`), [], "the board's text is not the message's own");
   assert.deepEqual(textProblems("The board: T10 waits for G7 in M4, and ├─ marks a tree."), [], "a message that names no kind is not checked");
+});
+
+test("T1005: messageMiss gives the note of a hand-written message that misses its kind's shape, with each problem, and names with no word of the message", () => {
+  const out = render(fixture("02-question.json")).text;
+  assert.equal(messageMiss(out), undefined, "a message that fits");
+  assert.equal(messageMiss("Done: T10 merged.\n├─ next"), undefined, "a message with no kind");
+  const hand = out.replace(/\nNeeded by:[^\n]*\n[^\n]*\n/, "\n").replace(/\(my\s+pick\)/, "").replace("Where this is:", "Where this is: T4242, and\n├─ a tree.");
+  const miss = messageMiss(hand);
+  assert.equal(miss.kind, "question");
+  assert.deepEqual(miss.names, ["tree marks", "raw ids", "missing: Needed by", "no pick"]);
+  assert.deepEqual(miss.note.split("\n").slice(1, -1), textProblems(hand).map((p) => `- ${p}`), "the note lists each problem of the text check");
+  assert.match(miss.note, /^sage: your last message names the kind "question"/);
+  // A part out of order, and a missing picture, have names of their own.
+  const needed = /\nNeeded by:[^\n]*\n[^\n]*\n/.exec(out)[0];
+  assert.deepEqual(messageMiss(out.replace(needed, "\n").replace("\nIf you do not answer:", `${needed}If you do not answer:`)).names, ["out of order: Needed by"]);
+  const chart = render(fixture("09-state-chart.json")).text.replace(/```[\s\S]*?```/g, "");
+  assert.deepEqual(messageMiss(chart).names, ["missing picture"]);
 });
 
 test("F-T984-11: on the message command's path, a word in code and a product name are not ids, and the state tool's ids are", () => {

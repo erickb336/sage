@@ -72,30 +72,54 @@ const labelAt = (line, label) => {
  * outside the Ref line and the Page block, and a part of its kind that is missing or out of order. Only a message that
  * names its kind on its first line is checked: a message with no kind gives no problem.
  */
-export function textProblems(text, { width = WIDTH } = {}) {
+export const textProblems = (text, options) => namedProblems(text, options).problems.map(([, problem]) => problem);
+
+/**
+ * The kind of a text and its problems, each as [name, text]. A name has no word of the message, only words of sage's
+ * checks and of the kind's parts, so that a count of the misses keeps no message text.
+ */
+function namedProblems(text, { width = WIDTH } = {}) {
   const kind = kindOf(text);
-  if (!kind) return [];
+  if (!kind) return { kind, problems: [] };
   const { lines, pictures } = partsOfText(text), problems = [];
-  pictures.forEach((pic, k) => problems.push(...pictureProblems(pic, width).map((p) => `picture ${k + 1}: ${p}`)));
-  if (lines.some((l) => TREE.test(l))) problems.push("the message has tree marks (├ └ ┬ ┴ ┼ ┤ ┌ ┐ ┘): draw boxes inside boxes, or write a list");
+  pictures.forEach((pic, k) => problems.push(...pictureProblems(pic, width).map((p) => ["picture", `picture ${k + 1}: ${p}`])));
+  if (lines.some((l) => TREE.test(l))) problems.push(["tree marks", "the message has tree marks (├ └ ┬ ┴ ┼ ┤ ┌ ┐ ┘): draw boxes inside boxes, or write a list"]);
   // A word in code is not an id: the text form keeps each code span's marks.
   const ids = [...new Set([ownWords(lines).join("\n").replace(CODE_SPAN, ""), ...pictures.flat()].flatMap((l) => [...l.matchAll(RAW_ID)].map((m) => m[0])))];
-  if (ids.length) problems.push(`raw ids in the message: ${ids.join(", ")}. Name the work in words; put its ids in the Ref line`);
+  if (ids.length) problems.push(["raw ids", `raw ids in the message: ${ids.join(", ")}. Name the work in words; put its ids in the Ref line`]);
   // The parts, in order: each labelled part that the kind needs, at the start of a line. A long message gives its main
   // point and its Page block: its parts are on its page.
-  if (lines.some((l) => /^Main point:/.test(l)) && lines.some((l) => /^Page · /.test(l))) return problems;
+  if (lines.some((l) => /^Main point:/.test(l)) && lines.some((l) => /^Page · /.test(l))) return { kind, problems };
   let at = 0;
   for (const part of partsOf(kind).filter((p) => p.need)) {
     if (!/^[A-Z]/.test(part.name)) {
-      if (part.name === "picture" && !pictures.length) problems.push(`a ${kind} needs a picture, in a fenced block`);
+      if (part.name === "picture" && !pictures.length) problems.push(["missing picture", `a ${kind} needs a picture, in a fenced block`]);
       continue;
     }
     const found = lines.findIndex((l, i) => i >= at && labelAt(l, part.name));
-    if (found < 0) problems.push(lines.some((l) => labelAt(l, part.name)) ? `"${part.name}" is out of order in a ${kind}` : `a ${kind} needs "${part.name}"`);
-    else at = found + 1;
+    if (found >= 0) at = found + 1;
+    else if (lines.some((l) => labelAt(l, part.name))) problems.push([`out of order: ${part.name}`, `"${part.name}" is out of order in a ${kind}`]);
+    else problems.push([`missing: ${part.name}`, `a ${kind} needs "${part.name}"`]);
   }
-  if (KINDS[kind].pick && !/\(my\s+pick\)/i.test(text)) problems.push(`a ${kind} marks your pick with "(my pick)"`);
-  return problems;
+  if (KINDS[kind].pick && !/\(my\s+pick\)/i.test(text)) problems.push(["no pick", `a ${kind} marks your pick with "(my pick)"`]);
+  return { kind, problems };
+}
+
+/**
+ * The check of a message that the chief wrote by hand, for a hook in note mode (T1004, T1005): undefined when the text
+ * names no kind or fits its kind's shape, else { kind, names, note }. names are the problems' names, with no word of
+ * the message, for the count of the misses. note is the line for the chief at its next prompt: the kind, and each problem.
+ */
+export function messageMiss(text) {
+  const { kind, problems } = namedProblems(text);
+  if (!problems.length) return undefined;
+  return {
+    kind,
+    names: [...new Set(problems.map(([name]) => name))],
+    note: [`sage: your last message names the kind "${kind}" on its first line, but it misses the shape of that kind:`,
+      ...problems.map(([, problem]) => `- ${problem}`),
+      "Fix this in your next message of that kind: the presentation skill gives each kind's parts, and sage's message command prints a message in its kind's shape."].join("\n"),
+  };
 }
 
 // A short name for each form of textProblems, for the count of misses: it has no text of the message, so a raw id or a

@@ -18,6 +18,7 @@ export const EVENTS = {
   PostToolUse: { timeout: TIMEOUTS.PostToolUse },
   SubagentStart: { timeout: TIMEOUTS.SubagentStart, additionalContextLimit: 16000 },
   SubagentStop: { timeout: TIMEOUTS.SubagentStop },
+  Stop: { timeout: TIMEOUTS.Stop },
 };
 
 /** sage's groups for a Codex home, by event. */
