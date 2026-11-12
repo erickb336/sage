@@ -69,10 +69,12 @@ const numberOf = (id) => BigInt(id.replace(/^\D+/, ""));
 /**
  * A logbook's rows as this version reads them, and as the migration writes them (T995). tables: the rows of tasks,
  * decisions and gates, milestones (undefined when milestones.tsv is missing) and programs (undefined when programs.tsv is
- * missing). It adds a map row for each old id that has none yet (at: its time), takes the milestones from programs.tsv
- * when milestones.tsv is missing, moves each task's program cell to its milestone cell through the map, and gives each
- * open breakdown gate the new first line, so the owner's answer to it still counts once. An answered gate and the old
- * decision rows stay as they are: proposalOf reads them through the map. A logbook after the rename reads as it is.
+ * missing). It adds a map row for each old id that has none yet (at: its time), takes each row of programs.tsv as its
+ * milestone, moves each task's program cell to its milestone cell through the map, and gives each open breakdown gate the
+ * new first line, so the owner's answer to it still counts once. While programs.tsv is there, its rows are the newest:
+ * only a migration copies them to milestones.tsv, and an older sage may change or add one after a stopped migration
+ * (F-T995-6), so a milestones row of the same id gives way to it. An answered gate and the old decision rows stay as
+ * they are: proposalOf reads them through the map. A logbook after the rename reads as it is.
  */
 export function renameRows({ tasks, decisions, gates, milestones, programs }, at) {
   const renamed = renamedIds(decisions);
@@ -82,9 +84,10 @@ export function renameRows({ tasks, decisions, gates, milestones, programs }, at
   const added = [...old].filter((id) => OLD_ID.test(id ?? "") && !renamed.has(id)).sort((a, b) => (numberOf(a) < numberOf(b) ? -1 : 1))
     .map((id) => { renamed.set(id, `M${++top}`); return { at, task: "", decision: `M${top} was ${id}`, why: RENAME_WHY }; });
   const to = (id) => renamed.get(id) ?? id;
+  const carried = (programs ?? []).map((p) => ({ ...p, id: to(p.id) })), ids = new Set(carried.map((m) => m.id));
   return {
     decisions: added.length ? [...decisions, ...added] : decisions,
-    milestones: milestones ?? (programs ?? []).map((p) => ({ ...p, id: to(p.id) })),
+    milestones: [...carried, ...(milestones ?? []).filter((m) => !ids.has(m.id))],
     tasks: tasks.map(({ program, ...task }) => (program === undefined ? task : { ...task, milestone: task.milestone || to(program) })),
     gates: gates.map((g) => (g.answer ? g : { ...g, question: String(g.question ?? "").replace(/^Approve program (PG[1-9]\d*)(?=[ ?])/, (_, id) => (renamed.has(id) ? `Approve milestone ${renamed.get(id)}` : _)) })),
   };

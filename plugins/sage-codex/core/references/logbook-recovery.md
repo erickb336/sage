@@ -19,6 +19,8 @@ After a repair of tasks.tsv, the verdicts of its lost tasks stay in ledger.tsv. 
 
 The milestones table came after the others. A logbook made before it has no milestones.tsv: that reads as a table with no rows while no task names a milestone, and `milestone propose` writes the file. When a task names a milestone and the file is missing, its rows are lost, as for any table.
 
+A logbook from before the rename of program to milestone (T995) keeps its milestones in programs.tsv until its first write of this version, which moves them to milestones.tsv. programs.tsv has the same checks as every table, and the refusal of a damaged one names `logbook repair --accept-loss programs`, which this logbook takes while it has the file.
+
 Limit: a table cut to only its header line is a table without rows. The check cannot tell it from a new table.
 
 A folder without tasks.tsv is no logbook: `init` has not finished it. `init` finishes it when its tables have no rows. When they have rows, its task list is lost, and `init` refuses: restore tasks.tsv, or repair it.

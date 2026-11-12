@@ -53,6 +53,8 @@ export const HIDDEN = /[\0-\x08\x0b-\x1f\x7f-\x9f\u061c\u200b\u200e\u200f\u2060\
 export const LINE = "\u2028";
 /** Every line break: line feed, carriage return, next line (U+0085) and the line and paragraph separators. A text of one line has none. */
 export const BREAKS = /[\n\r\u0085\u2028\u2029]/g;
+/** The first line of a breakdown gate's question: "Approve milestone M<n>", or "Approve program PG<n>" from before the rename (T995). */
+const FIRST_LINE = /^Approve (?:milestone (M[1-9]\d*)|program (PG[1-9]\d*))[ ?]/;
 /**
  * The milestone of a breakdown gate, from its question's fixed first line, which only milestone propose writes (gate add
  * refuses it). It survives a stop between writes and a lost milestones or decisions table (R1240-2). A gate or a decision
@@ -60,9 +62,14 @@ export const BREAKS = /[\n\r\u0085\u2028\u2029]/g;
  * milestone; without the map, it names none.
  */
 export const proposalOf = (gate, renamed) => {
-  const [, id, old] = /^Approve (?:milestone (M[1-9]\d*)|program (PG[1-9]\d*))[ ?]/.exec(gate?.question ?? "") ?? [];
+  const [, id, old] = FIRST_LINE.exec(gate?.question ?? "") ?? [];
   return id ?? renamed?.get(old);
 };
+/**
+ * Does a gate's question start with a breakdown gate's first line, in either form? It needs no id map, so an answered
+ * gate from before the rename answers once also after a lost decisions table or a move (F-T995-11).
+ */
+export const breakdownLine = (gate) => FIRST_LINE.test(gate?.question ?? "");
 /**
  * The characters that show as nothing although Unicode gives them a visible class: the combining grapheme joiner (U+034F),
  * the Hangul fillers (U+115F, U+1160, U+3164, U+FFA0) and the braille blank (U+2800). Also the line and paragraph

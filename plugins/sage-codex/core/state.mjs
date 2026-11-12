@@ -22,7 +22,7 @@ import { PR, pullRequestHead } from "./pull-request.mjs";
 import { REPORT_FIELDS } from "./report.mjs";
 import { cleanReport, fieldsOf, proofResults, readReport } from "./report-reader.mjs";
 import { ROLES } from "./roles.mjs";
-import { AGENT_CAPS, BREAKS, FINDING_CLASSES, HIDDEN, LINE, NAME_MAX, PRIORITIES, PRIORITY_SCALE, START_SAGE_MODE, TABLES as PLAIN_TABLES, TASK_KINDS, countOf, nameProblem, proposalOf } from "./logbook-fields.mjs";
+import { AGENT_CAPS, BREAKS, FINDING_CLASSES, HIDDEN, LINE, NAME_MAX, PRIORITIES, PRIORITY_SCALE, START_SAGE_MODE, TABLES as PLAIN_TABLES, TASK_KINDS, breakdownLine, countOf, nameProblem, proposalOf } from "./logbook-fields.mjs";
 import { BREAKDOWN, ENDED, GATE_ID, MET, MILESTONE_ID, TASK_ID, breakdownGate, renameRows, renamedIds, byIds, dead, droppedBy, gateLines, lostClause, milestoneState, progressOf, progressText, shownGraph, shownWaits, unmetWaits, waitGraph, waitWords, waitsOf, waitsWithState } from "./milestone-rules.mjs";
 import { OBSERVATIONS_MAX_BYTES, OBSERVATION_DATA_MAX_BYTES, validateObservation, validateObservations } from "./observations.mjs";
 import { MOVES, PLAN_MAX, checkoutGone, createSharedRoot, sharedRoot, unreadableFolder } from "./shared-root.mjs";
@@ -531,37 +531,56 @@ const lost = (dir, table, what, also = []) => {
  * and CRLF line ends read as a plain file.
  */
 function sheet(dir, table, also = [], max = Infinity) {
-  return RENAMED_TABLES.includes(table) && lstatSync(join(dir, "programs.tsv"), { throwIfNoEntry: false }) ? renamedSheet(dir, table, also, max) : fileSheet(dir, table, also, max);
+  if (!RENAMED_TABLES.includes(table)) return fileSheet(dir, table, also, max);
+  // A logbook from before the rename (T995) has programs.tsv, or the old program column in tasks.tsv: its renamed tables
+  // read as the migration writes them, and the program column is the old name of the milestone column, not a newer one.
+  const file = table === "tasks" ? fileSheet(dir, table, also, max) : undefined;
+  return lstatSync(join(dir, "programs.tsv"), { throwIfNoEntry: false }) || file?.cols.includes("program") ? renamedSheet(dir, table, also, max) : (file ?? fileSheet(dir, table, also, max));
 }
 /** The tables that the rename of program to milestone changes (T995), in the order that its migration writes them: the decisions first, so a stop leaves the id map. */
 const RENAMED_TABLES = ["decisions", "milestones", "tasks", "gates"];
 /**
- * A renamed table of a logbook from before the rename (T995), as a read gives it in memory and the migration of the next
- * write gives it on disk (renameRows), so the two agree: for programs.tsv, the milestones with their new ids; for
- * tasks.tsv, the milestone column in place of the program column. A missing milestones table with no programs table
- * keeps fileSheet's rule.
+ * The table of a logbook from before the rename (T995) that no table of this version has: programs.tsv, the milestones
+ * table of then, with the same columns. Its read has every check of a table, and a repair can start it again.
  */
-function renamedSheet(dir, table, also, max) {
+const OLD_TABLES = { programs: TABLES.milestones };
+const tableCols = (table) => TABLES[table] ?? OLD_TABLES[table];
+/**
+ * A renamed table of a logbook from before the rename (T995), as a read gives it in memory and the migration of the next
+ * write gives it on disk (renameRows), so the two agree: the milestones from programs.tsv with their new ids, the
+ * milestone column of tasks.tsv in place of the program column. The table itself is read with every check, and for the
+ * milestones also programs.tsv (unless a repair starts it again: also). The other tables give only the id map and the
+ * old ids: one that fails its own check adds nothing here, so its own read refuses it, and a repair of it reads the rest
+ * (F-T995-1). A missing milestones.tsv or programs.tsv has no rows here.
+ */
+function renamedSheet(dir, table, also = [], max = Infinity) {
   const exists = (t) => lstatSync(join(dir, `${t}.tsv`), { throwIfNoEntry: false });
-  if (table === "milestones" && !exists("programs") && !exists("milestones")) return fileSheet(dir, table, also, max);
-  const own = (t) => fileSheet(dir, t, also, max), rows = (t) => (t === "programs" ? rowsOf(sheetText(readRegular(join(dir, "programs.tsv"), { max }) ?? "")) : rowsOf(own(t)));
-  const out = renameRows({ ...Object.fromEntries(["tasks", "decisions", "gates"].map((t) => [t, rows(t)])), milestones: exists("milestones") ? rows("milestones") : undefined, programs: exists("programs") ? rows("programs") : undefined }, now())[table];
-  const cols = table === "milestones" && !exists("milestones") ? PLAIN_TABLES.milestones : own(table).cols.filter((c) => c !== "program");
+  const own = (t) => (exists(t) || !["milestones", "programs"].includes(t) ? fileSheet(dir, t, also, max) : undefined);
+  const other = (t) => {
+    try { return own(t); } catch (e) { if (e instanceof Refusal) return undefined; throw e; }
+  };
+  const mine = (t) => t === table || (table === "milestones" && t === "programs" && !also.includes(t));
+  const sheets = Object.fromEntries([...RENAMED_TABLES, "programs"].map((t) => [t, mine(t) ? own(t) : other(t)]));
+  const rows = (t) => (sheets[t] ? rowsOf(sheets[t]) : ["milestones", "programs"].includes(t) ? undefined : []);
+  const out = renameRows({ tasks: rows("tasks"), decisions: rows("decisions"), gates: rows("gates"), milestones: rows("milestones"), programs: rows("programs") }, now())[table];
+  const cols = (sheets[table]?.cols ?? TABLES.milestones).filter((c) => c !== "program");
   if (table === "tasks" && !cols.includes("milestone")) cols.push("milestone");
   return { cols, lines: out.map((row) => cols.map((c) => row[c] ?? "").join("\t")) };
 }
 /**
  * The migration of the rename (T995): once, at the first write of this version, under the write lock, before the
- * integrity check. It writes each renamed table as a read gives it (renamedSheet), the decisions first, then removes
- * programs.tsv; the milestones table only from programs.tsv, so a lost table stays lost. A stop between two writes
- * leaves the id map in the decisions, so the next write finishes it with the same ids, and a read before it gives the
- * same rows. A logbook with no program column and no programs.tsv is not changed, so a second run changes nothing. A
- * repair of lost tables (skip) runs first: the next write migrates.
+ * integrity check. It reads each renamed table as a read gives it (renamedSheet), so a damaged table, programs.tsv too,
+ * refuses before the first write (F-T995-2). Then it writes them, the decisions first, and removes programs.tsv last,
+ * when milestones.tsv holds each of its rows; the milestones table only from programs.tsv, so a lost table stays lost. A
+ * stop between two writes leaves the id map in the decisions, so the next write finishes it with the same ids, and a
+ * read before it gives the same rows. A logbook with no program column and no programs.tsv is not changed, so a second
+ * run changes nothing. A repair of lost tables (skip) runs first: the next write migrates.
  */
 function renameLogbook(dir, skip) {
   const programs = join(dir, "programs.tsv"), old = lstatSync(programs, { throwIfNoEntry: false });
   if (skip.length || (!old && !programColumn(dir))) return;
-  for (const table of RENAMED_TABLES.filter((t) => old || t !== "milestones")) write(dir, table, rowsIn(table, renamedSheet(dir, table)));
+  const tables = RENAMED_TABLES.filter((t) => old || t !== "milestones").map((t) => [t, rowsIn(t, renamedSheet(dir, t))]);
+  for (const [table, rows] of tables) write(dir, table, rows);
   if (old) unlinkSync(programs);
 }
 /** Does tasks.tsv have the program column of a logbook from before the rename? A file that cannot be read has none here: the integrity check refuses it. */
@@ -582,7 +601,7 @@ function fileSheet(dir, table, also = [], max = Infinity) {
   if (text === undefined) throw lost(dir, table, "is missing or is a link to nothing", also);
   const { cols, lines } = sheetText(text);
   if (!cols.length) throw lost(dir, table, text ? "has only blank lines" : "is empty (0 bytes)", also);
-  if (!TABLES[table].every((c) => cols.includes(c) || ADDED[table]?.includes(c))) refuse(`the header of ${file} is damaged: its first line must be the column names ${PLAIN_TABLES[table].join(", ")}, separated by tabs. Ask the user to fix or add that line.`);
+  if (!tableCols(table).every((c) => cols.includes(c) || ADDED[table]?.includes(c))) refuse(`the header of ${file} is damaged: its first line must be the column names ${(PLAIN_TABLES[table] ?? OLD_TABLES[table]).join(", ")}, separated by tabs. Ask the user to fix or add that line.`);
   return { cols, lines };
 }
 
@@ -594,7 +613,7 @@ function fileSheet(dir, table, also = [], max = Infinity) {
  */
 function namesMilestone(dir, max) {
   try {
-    return rowsOf(sheet(dir, "tasks", [], max)).some((t) => t.milestone || t.program); // a program cell of a logbook from before the rename (T995)
+    return rowsOf(sheet(dir, "tasks", [], max)).some((t) => t.milestone); // a program cell reads as its milestone cell (T995)
   } catch {
     return false;
   }
@@ -1138,7 +1157,7 @@ function branchTip(project, branch, env = process.env) {
 }
 
 /** The columns that a write gives a table: all, but a sparse column only when a row has it. */
-const columnsOf = (table, rows) => TABLES[table].filter((c) => !SPARSE[table]?.includes(c) || rows.some((r) => Object.hasOwn(r, c)));
+const columnsOf = (table, rows) => tableCols(table).filter((c) => !SPARSE[table]?.includes(c) || rows.some((r) => Object.hasOwn(r, c)));
 function tableText(table, rows, cols = columnsOf(table, rows)) {
   return [cols.join("\t"), ...rows.map((r) => cols.map((c) => cell(r[c])).join("\t"))].join("\n") + "\n";
 }
@@ -2056,8 +2075,9 @@ const notStarted = (task, pid, runs, when = "the owner approves its breakdown") 
  * joining one before its pilot is merged (notStarted), the pilot leaving its milestone (unless the owner dropped it), and
  * any task leaving a milestone before the owner approves or drops it (R1204-1). The caller then refuses a loop through the pilot.
  */
-function milestoneValue(task, value, { milestones, byId }, runs = []) {
-  const id = value === "none" ? "" : value;
+function milestoneValue(task, value, { milestones, byId, renamed }, runs = []) {
+  // An old program id names its milestone through the logbook's id map (T995, F-T995-16): the line then names the new id.
+  const id = value === "none" ? "" : (renamed.get(value) ?? value);
   const nothing = " Nothing changed.";
   if (id === (task.milestone ?? "")) return id;
   if (ENDED.includes(task.state)) refuse(`${task.id} is ${task.state}: an ended task joins no milestone and leaves none, so its milestone keeps it in its count.${nothing}`);
@@ -3029,7 +3049,8 @@ function sageCommand(argv, env) {
   const place = locate(project, env), { dir } = place;
   const repair = cmd === "logbook" && pos[0] === "repair";
   const skip = repair ? [...new Set(list(opt["accept-loss"]))] : [];
-  const odd = skip.filter((t) => !Object.hasOwn(TABLES, t));
+  // programs.tsv of a logbook from before the rename (T995) starts again too, while it is there: its refusal names it.
+  const odd = skip.filter((t) => !Object.hasOwn(TABLES, t) && !(Object.hasOwn(OLD_TABLES, t) && lstatSync(join(dir, `${t}.tsv`), { throwIfNoEntry: false })));
   const changeLoss = repair && opt["accept-change-loss"] !== undefined;
   if (changeLoss && opt["accept-change-loss"] !== "yes") refuse("--accept-change-loss takes only yes. Run it only after the owner accepts the loss of the saved change.");
   if (repair && (odd.length || (!skip.length && !changeLoss))) refuse(`logbook repair needs --accept-loss with the tables whose rows the user accepts to lose, joined by a comma: ${Object.keys(TABLES).join(", ")}.${odd.length ? ` Not ${odd.join(", ")}.` : ""}`);
@@ -3612,10 +3633,12 @@ function act(cmd, pos, opt, dir, env, skip, project) {
       if (sub !== "propose" || more.length) refuse("milestone takes: propose --name <name> --goal <goal> --pilot <T> --tasks <T,T>, or propose <M> with --name, --goal, --pilot or --tasks to propose it again");
       const [tasks, milestones, gates, runs, decisions] = ["tasks", "milestones", "gates", "runs", "decisions"].map((t) => read(dir, t));
       const nothing = " Nothing changed.";
+      // An old program id names its milestone through the logbook's id map (T995, F-T995-16): the line names the new id.
+      const renamed = renamedIds(decisions), asked = id === undefined ? undefined : (renamed.get(id) ?? id);
       // A milestone of that name whose gate is not in the logbook is a propose that stopped before it wrote the gate: the
       // same command finishes it (R1246-2).
       const unfinished = id === undefined && opt.name !== undefined ? milestones.find((p) => looks(p.name) === looks(opt.name) && !gates.some((g) => g.id === p.gate)) : undefined;
-      const old = unfinished ?? (id === undefined ? undefined : (milestones.find((p) => p.id === id) ?? missing(`milestone ${id}`, milestones.map((p) => p.id))));
+      const old = unfinished ?? (asked === undefined ? undefined : (milestones.find((p) => p.id === asked) ?? missing(`milestone ${asked}`, milestones.map((p) => p.id))));
       // A propose that stopped before it wrote its gate wrote no decision rows either (stopped).
       const stopped = old && !gates.some((g) => g.id === old.gate);
       const state = old && milestoneState(gates.find((g) => g.id === old.gate), old, droppedBy(decisions));
@@ -3649,7 +3672,7 @@ function act(cmd, pos, opt, dir, env, skip, project) {
         notStarted(t, pid, runs);
       }
       const at = now();
-      const renamed = renamedIds(decisions), round = gates.filter((g) => proposalOf(g, renamed) === pid).length + 1;
+      const round = gates.filter((g) => proposalOf(g, renamed) === pid).length + 1;
       // Each task that joins or leaves; the pilot's move is the proposal's own.
       const members = new Set([pilot.id, ...others.map((t) => t.id)]);
       const toOf = (t) => (members.has(t.id) ? pid : t.milestone === pid ? "" : (t.milestone ?? ""));
@@ -3967,7 +3990,7 @@ function act(cmd, pos, opt, dir, env, skip, project) {
         // same options takes a new answer, as other gates do (R1212-2).
         // A move gate answers once too: its answer covers one plan, and a new answer needs a new preview (the design's "kept").
         if (g.answer && moveOf(g)) refuse(`${g.id} is a move gate, and the owner answered it already (${visible(g.answer)}): a move gate answers once. To move later, run the preview again: sage move --preview. Nothing changed.`);
-        if (g.answer && proposalOf(g, renamedIds(read(dir, "decisions")))) refuse(`${g.id} is a breakdown gate, and the owner answered it already (${visible(g.answer)}): a breakdown gate answers once. For a change of mind, the sage proposes the milestone again (sage milestone propose <M>) and the owner answers the new gate. A dropped milestone does not come back: propose a new one. Nothing changed.`);
+        if (g.answer && breakdownLine(g)) refuse(`${g.id} is a breakdown gate, and the owner answered it already (${visible(g.answer)}): a breakdown gate answers once. For a change of mind, the sage proposes the milestone again (sage milestone propose <M>) and the owner answers the new gate. A dropped milestone does not come back: propose a new one. Nothing changed.`);
         // By number only, as the board numbers the options: no agent-written text goes into the command. The owner's own
         // words come as the hex of their UTF-8 bytes, so no text of theirs is in the command either, and are kept with
         // "other: " before them, so they never pass for one of the options.
