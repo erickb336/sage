@@ -128,13 +128,16 @@ const findingsLine = (line) => FINDINGS_AT.test(line.trimStart().replace(/^(?:[-
  *   - result: the first word of RESULT, in upper case; when RESULT has no text on its line, the first word of the next
  *     line with text ("## RESULT", then "PASS") (F-T289-39);
  *   - severities: the severity of each finding line under FINDINGS (lineOf), each with any detail on indented lines
- *     under it (F-T289-29). FINDINGS is either none alone (NONE_LINE) or finding lines.
+ *     under it (F-T289-29). FINDINGS is either none alone (NONE_LINE) or finding lines. A finding line is a finding at
+ *     any indent (T1008): the report skill's layout lines up the second finding under the first, which is on the FINDINGS
+ *     line. So an indented "- K2 high" under a low finding counts as high, and an indented "- K2 medium" under a high one
+ *     still counts: as detail, either one would hide a finding.
  * The report is unreadable (problem) when a field is given twice (F-T289-20), also FINDINGS as an indented line or a list
  * item outside a code block (F-T289-52); when RESULT or FINDINGS is missing; when RESULT does not start with one of
  * RESULT_WORDS; when FINDINGS is empty, has none and findings, or none with RESULT FINDINGS or FAIL (F-T289-48); or when
  * a line under FINDINGS is longer than LINE_MAX, or is not none, a finding or detail: an unindented line, an indented
- * one with no finding above it (F-T289-25), or an indented line that is severe (F-T289-46, F-T289-54), with or
- * without a list mark (F-T964-2).
+ * one with no finding above it (F-T289-25), or an indented line that is severe (F-T289-46, F-T289-54), such as a
+ * second finding without a list mark (F-T964-2).
  * The severity rule (F-T289-60, F-T289-62, F-T289-63, F-T298-1, F-T964-1): it is unreadable too when a line of FINDINGS
  * has a severity word (stated) above the severity of its own finding: a finding line and the lines under it compare
  * with that finding. (A line above the first finding is none or makes the report unreadable before this rule.) So a
@@ -160,9 +163,9 @@ export function readReport(text, { requireComplete = false } = {}) {
     if (line.length > LINE_MAX) { long = true; continue; }
     const text = line.trim(), indented = /^\s/.test(line), { severity, severe, key } = lineOf(text);
     if (!text) continue;
-    if (severity && !indented) severities.push(severity), findings.push({ key, severity });
+    if (severity) severities.push(severity), findings.push({ key, severity });
     else if (NONE_LINE.test(text)) none = true;
-    else if (!(indented && severities.length && !severity && !severe)) odd ??= text;
+    else if (!(indented && severities.length && !severe)) odd ??= text;
     else proofLine(findings.at(-1), text);
     if (severities.length) owned.push([text, LEVEL[severities.at(-1)]]);
   }
