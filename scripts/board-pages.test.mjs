@@ -188,6 +188,10 @@ test("F-T1013-1: a page with sage's switch and an http-equiv refresh in any spel
     "a second meta after sage's policy tag": `<meta http-equiv="Content-Security-Policy" content="default-src 'none'"><meta http-equiv="refresh" content="${url}">`,
     "inside a value that looks like sage's policy tag": `<p title='<meta http-equiv="Content-Security-Policy" content="'><meta http-equiv=refresh content=${url}>">x</p>`,
     "in a comment (fails closed)": `<!-- <meta http-equiv="refresh" content="${url}"> -->`,
+    // F-T1013-2: the browser reads the policy-like tag as the value of a, and http-equiv=refresh as the outer meta's.
+    "a single-quoted value that holds a policy-like tag": `<meta a='<meta http-equiv="Content-Security-Policy" content="' http-equiv=refresh content='${url}'">`,
+    // F-T1013-6: a srcdoc value is decoded and read as a new page, so its refresh needs no http-equiv in these bytes.
+    "in an iframe srcdoc, as entities": `<iframe srcdoc="&lt;meta http&#45;equiv=&quot;refresh&quot; content=&quot;${url}&quot;&gt;"></iframe>`,
   };
   for (const [kind, meta] of Object.entries(refreshes)) assert.equal(await policy("refresh.html", `${page.replace("<title>", `${meta}<title>`)}`), none, kind);
   // A UTF-16 byte order mark makes the browser read other characters than the bytes that hold the switch.

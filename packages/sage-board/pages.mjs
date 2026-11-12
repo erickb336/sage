@@ -6,7 +6,7 @@
 import { createHash } from "node:crypto";
 import { readdirSync } from "node:fs";
 import { join } from "node:path";
-import { PAGE_TYPES, SWITCH_SCRIPT, pageFile, pageTaskFolder, pageType } from "../sage-core/index.mjs";
+import { PAGE_POLICY, PAGE_TYPES, SWITCH_SCRIPT, pageFile, pageTaskFolder, pageType } from "../sage-core/index.mjs";
 
 // The index reads at most SCAN entries and lists at most LIST pages (one task folder holds over 4,000 entries). It reads
 // at most READ bytes of pages to find the ones with scripts of their own; a page past that gets the scripts link too.
@@ -15,10 +15,11 @@ const SWITCH = `'sha256-${createHash("sha256").update(SWITCH_SCRIPT).digest("bas
 const REST = "default-src 'none'; style-src 'unsafe-inline'; img-src data:; font-src data:; media-src data:; base-uri 'none'; form-action 'none'; frame-ancestors 'none'";
 /**
  * The policy of a page. Its origin is no origin (a sandbox without allow-same-origin), so it reads no storage of the
- * board and the board refuses its requests; nothing loads. Only sage's own script runs (a message page's Today switch,
- * see switchOnly), and any other page gets no scripts at all. A sandbox without scripts also stops a meta refresh, and
- * no policy stops a refresh while scripts run (F-T1013-1). With ?scripts=1 the page's own inline scripts run under the
- * same sandbox.
+ * board and the board refuses its requests. It loads no picture, style, frame or script from a server. No header stops
+ * a prerender link (Chromium's NoStatePrefetch) from asking another site for its address when the page opens
+ * (F-T1013-5). Only sage's own script runs (a message page's Today switch, see switchOnly), and any other page gets no
+ * scripts at all. A sandbox without scripts also stops a meta refresh, and no policy stops a refresh while scripts run
+ * (F-T1013-1). With ?scripts=1 the page's own inline scripts run under the same sandbox.
  */
 const pagePolicy = (scripts) => `sandbox${scripts ? " allow-scripts" : ""}; script-src ${scripts === "own" ? "'unsafe-inline'" : SWITCH}; ${REST}`;
 /**
@@ -85,16 +86,19 @@ function ownScript(page) {
 }
 
 /**
- * May this page run sage's Today switch? Only a page that holds the switch script and has no http-equiv meta tag but
- * sage's own policy tag, as the message command writes it. That tag's value holds no quote, < or >, so a policy tag that
- * the test leaves out cannot hold another tag. A refresh in any case, spacing, quoting or entity spelling
- * needs the attribute name http-equiv, which no entity hides. A tag that this test cannot judge, such as one in a
- * comment, fails closed: the page shows without the switch. A UTF-16 byte order mark makes the browser read other
- * characters than these bytes, so it fails closed too.
+ * May this page run sage's Today switch? Only a page that holds the switch script and has no http-equiv and no srcdoc
+ * but in sage's own policy tag, exactly as the message command writes it. A refresh in any case, spacing, quoting or
+ * entity spelling needs the attribute name http-equiv, and a browser never decodes an entity in an attribute name. The
+ * exact tag holds no text that an author chooses, so it cannot hide another http-equiv (F-T1013-2). A srcdoc value is
+ * decoded and read as a new page, so a refresh in it needs no http-equiv in these bytes (F-T1013-6). A tag that this
+ * test cannot judge, such as one in a comment, fails closed: the page shows without the switch. So does a message page
+ * from a sage whose page policy differs, and a UTF-16 byte order mark, which makes the browser read other characters
+ * than these bytes.
  */
+const OWN_TAG = `<meta http-equiv="Content-Security-Policy" content="${PAGE_POLICY}">`;
 const switchOnly = (bytes) => {
   const text = bytes.toString("latin1");
-  return text.includes(SWITCH_SCRIPT) && !/^(?:\xfe\xff|\xff\xfe)/.test(text) && !/http-equiv/i.test(text.replace(/<meta http-equiv="Content-Security-Policy" content="[^"<>]*">/g, ""));
+  return text.includes(SWITCH_SCRIPT) && !/^(?:\xfe\xff|\xff\xfe)/.test(text) && !/http-equiv|srcdoc/i.test(text.replaceAll(OWN_TAG, ""));
 };
 
 /**
