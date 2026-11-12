@@ -2,7 +2,8 @@
 //   { kind, title, status (an incident only), blocks: [block], ref, long: { title, main } }
 // The kinds and their parts are the formats that the owner approved (the example pages of T984, the owner's settled
 // catch-up, question and report, and the chief's choices). The text form is plain text at 46 columns that a terminal
-// and a chat that reads Markdown both show as it is: pictures in fences, one blank line between the parts.
+// and a chat that reads Markdown both show as it is: pictures in fences, one blank line between the parts. A kind that
+// the chief asks on the choice card (card) gives each part under a bold label on its own line (owner, T1023).
 // The page of a message (message-page.mjs) draws the same blocks, with each picture as an image from its own text.
 // Pure functions: no file access.
 import { box, columns, openBoxes, wrap } from "./picture.mjs";
@@ -15,14 +16,15 @@ const REPORT_HEAD = ["Piece of work", "What changes for you", "How I know it wor
 const LESSON_HEAD = ["Where the lesson lives now", "What it holds", "State"];
 
 /**
- * The kinds. head: the first line of the message. parts: in order; a label is a field or a section, other words are
+ * The kinds. head: the first line of the message. card: the chief asks it on the host's choice card, and its text form is
+ * the fallback, with each part under its bold label. parts: in order; a label is a field or a section, other words are
  * block types. "?" before a part: optional. "*" after it: any number; "+": one or more. A paragraph (p) may stand
  * anywhere. use: when the chief sends it, for the skill.
  */
 export const KINDS = {
   progress: { head: "PROGRESS", use: "While a task runs: one short note when it moves to a new step, with nothing for the owner to do.",
     parts: ["Where this is", "?Since my last note", "What changed", "Next", "?Cost so far", "What I need from you"] },
-  question: { head: "QUESTION", use: "When work waits for the owner's choice. The title is the question. Ask it on the choice card (see above); this text form is the fallback.", tableHead: QUESTION_HEAD, pick: true,
+  question: { head: "QUESTION", use: "When work waits for the owner's choice. The title is the question. Ask it on the choice card (see above); this text form is the fallback. Each part goes under a bold label on its own line. The answers are a numbered list, never a table.", tableHead: QUESTION_HEAD, pick: true, card: true,
     parts: ["Where this is", "What you approve", "The one real choice in it", "table", "If you do not answer", "Needed by", "?Judged by", "?The bad side of my pick", "After you answer", "?page"] },
   report: { head: "REPORT", use: "When work ends: a pull request merged, or a study concluded. The title says what happened and what it needs.", tableHead: REPORT_HEAD,
     parts: ["Where this is", "?Why this change", "picture*", "table", "What I did not check", "Weak points", "What you need to do", "?page"] },
@@ -44,7 +46,7 @@ export const KINDS = {
     parts: ["What it covers", "table", "picture*", "Basis", "How sure", "?What would change it", "?So far", "?Your time", "What I need from you"] },
   "steps for you": { head: "STEPS FOR YOU", use: "When only the owner can do something: an install, an update, a setting, a sign-in. A warning goes before the steps it is about.",
     parts: ["When", "Why", "steps", "How you know it worked", "Your time", "If a step fails"] },
-  confirm: { head: "CONFIRM", use: "Just before an act that cannot be undone: a delete, a publish, a message to other people. The title names the act and says that it cannot be undone. Ask it on the choice card too.",
+  confirm: { head: "CONFIRM", use: "Just before an act that cannot be undone: a delete, a publish, a message to other people. The title names the act and says that it cannot be undone. Ask it on the choice card too; its text form is the fallback, with each part under a bold label.", card: true,
     parts: ["What I will do", "table", "What stays", "If you say yes", "If you say no, or nothing"] },
   "lesson kept": { head: "LESSON KEPT", use: "When a mistake teaches sage something: the lesson once, and where it now lives.", tableHead: LESSON_HEAD,
     parts: ["What happened", "picture*", "The lesson", "Has it happened before", "table", "What changes for you", "What I need from you"] },
@@ -260,16 +262,17 @@ export function messageText(msg, { width = WIDTH, page, full = false, today = fa
   const own = page ? [pageBlock(page)] : [], ref = msg.ref ? [[`Ref: ${msg.ref}`]] : [];
   const parts = msg.long !== undefined && !full
     ? [[headOf(msg)], wrap(plain(msg.long.title), WIDTH), wrap(`Main point: ${plain(msg.long.main)}`, WIDTH), ...own, ...ref]
-    : [[headOf(msg)], wrap(plain(msg.title), width), ...msg.blocks.map((b) => blockText(b, width, today)), ...own, ...ref];
+    : [[headOf(msg)], wrap(plain(msg.title), width), ...msg.blocks.map((b) => blockText(b, width, today, KINDS[msg.kind].card)), ...own, ...ref];
   return parts.map((p) => p.join("\n")).join("\n\n");
 }
 
 const indentRows = (rows, n) => rows.map((r) => (r ? " ".repeat(n) + r : r));
 const bullet = (text, width, mark = "- ", ind = 0) => wrap(plain(text), width - ind - mark.length).map((l, j) => " ".repeat(ind) + (j ? " ".repeat(mark.length) : mark) + l);
 
-function blockText(b, width, today = false) {
+// card: the part's label in bold on its own line, and its text under it, so that each part stands apart (owner, T1023).
+function blockText(b, width, today = false, card = false) {
   switch (b.t) {
-    case "field": return wrap(`${b.label}: ${plain(b.text)}`, width);
+    case "field": return card ? [`**${b.label}**`, ...wrap(cap(plain(b.text)), width)] : wrap(`${b.label}: ${plain(b.text)}`, width);
     case "p": return wrap(plain(b.text), width);
     case "section": {
       // Fields in a section read as a list; other blocks follow one by one.

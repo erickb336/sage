@@ -186,15 +186,15 @@ test("T1005: messageMiss gives the note of a hand-written message that misses it
   const out = render(fixture("02-question.json")).text;
   assert.equal(messageMiss(out), undefined, "a message that fits");
   assert.equal(messageMiss("Done: T10 merged.\n├─ next"), undefined, "a message with no kind");
-  const hand = out.replace(/\nNeeded by:[^\n]*\n[^\n]*\n/, "\n").replace(/\(my\s+pick\)/, "").replace("Where this is:", "Where this is: T4242, and\n├─ a tree.");
+  const hand = out.replace(/\n\n\*\*Needed by\*\*\n[\s\S]*?(?=\n\n)/, "").replace(/\(my\s+pick\)/, "").replace("**Where this is**\n", "**Where this is**\nT4242, and\n├─ a tree.\n");
   const miss = messageMiss(hand);
   assert.equal(miss.kind, "question");
   assert.deepEqual(miss.names, ["tree marks", "raw ids", "missing: Needed by", "no pick"]);
   assert.deepEqual(miss.note.split("\n").slice(1, -1), textProblems(hand).map((p) => `- ${p}`), "the note lists each problem of the text check");
   assert.match(miss.note, /^sage: your last message names the kind "question"/);
   // A part out of order, and a missing picture, have names of their own.
-  const needed = /\nNeeded by:[^\n]*\n[^\n]*\n/.exec(out)[0];
-  assert.deepEqual(messageMiss(out.replace(needed, "\n").replace("\nIf you do not answer:", `${needed}If you do not answer:`)).names, ["out of order: Needed by"]);
+  const needed = /\n\n\*\*Needed by\*\*\n[\s\S]*?(?=\n\n)/.exec(out)[0];
+  assert.deepEqual(messageMiss(out.replace(needed, "").replace("\n\n**If you do not answer**", `${needed}\n\n**If you do not answer**`)).names, ["out of order: Needed by"]);
   const chart = render(fixture("09-state-chart.json")).text.replace(/```[\s\S]*?```/g, "");
   assert.deepEqual(messageMiss(chart).names, ["missing picture"]);
 });
@@ -253,7 +253,7 @@ test("the shape of each kind holds in code: a missing part, a part out of order,
   assert.equal(changed.problems, undefined, changed.problems);
   assert.match(changed.text, /\n1\. The status lines\n {3}- Today: “0 of 8 merged”\n {3}- After this change: “0 of 8 done”\n {3}- Why: A study that ended counts too\./);
   // The text check reads the same shape: a hand-written question with no "Needed by".
-  assert.match(textProblems(render(fixture("02-question.json")).text.replace(/\nNeeded by:[^\n]*\n[^\n]*\n/, "\n")).join("\n"), /a question needs "Needed by"/);
+  assert.match(textProblems(render(fixture("02-question.json")).text.replace(/\n\n\*\*Needed by\*\*\n[\s\S]*?(?=\n\n)/, "")).join("\n"), /a question needs "Needed by"/);
 });
 
 /** The problems of a message that the command must refuse: a list, never a throw. */
@@ -401,16 +401,39 @@ test("the page escapes every text, loads nothing, and allows only its own style 
   assert.equal(messagePage(prepareMessage(resolved(msg)).msg, "").includes("<script>alert"), false);
 });
 
-test("the text form: one blank line between parts, pictures in fences, a table as numbered rows, and no Markdown marks", () => {
+test("the text form: one blank line between parts, pictures in fences, a table as numbered rows, and no Markdown marks but a card kind's bold labels", () => {
   const text = render(fixture("02-question.json")).text;
-  assert.match(text, /^QUESTION\n\nShould sage stop sending pages through the\nClaude app's file tool\?\n\nWhere this is: /);
+  assert.match(text, /^QUESTION\n\nShould sage stop sending pages through the\nClaude app's file tool\?\n\n\*\*Where this is\*\*\nRelease 1\.0 › /);
   assert.match(text, /\n\n1\. Stop: use the link to your Mac only \(my\n {3}pick\)\n {3}- What happens next: Every page reaches you\n/);
-  assert.doesNotMatch(text, /\*\*/);
+  assert.deepEqual(text.split("\n").filter((l) => l.includes("**")), ["Where this is", "What you approve", "The one real choice in it", "If you do not answer", "Needed by", "Judged by", "The bad side of my pick", "After you answer"].map((label) => `**${label}**`), "only the labels are bold, the bold of a cell is dropped");
   const report = render(fixture("03-report.json")).text;
   assert.match(report, /\n {3}- You must act: Yes: update sage\n/);
+  assert.match(report, /\n\nWhere this is: /, "a kind that is not on the choice card keeps its labels in the line");
+  assert.doesNotMatch(report, /\*\*/);
   const steps = render(fixture("12-steps-for-you.json")).text;
   assert.match(steps, /\n1\. In a terminal, update sage for Claude Code:\n\n {3}```\n {3}claude plugin update sage@sage\n {3}```\n\n {3}Then start a new Claude Code session\.\n/);
   assert.equal(messageText(prepareMessage(resolved(fixture("07-design.json"))).msg).includes("Today\n"), false, "the chat shows the picture after the change; the page has the Today switch");
+});
+
+test("T1023: a question or confirm in its fallback text form gives each part under a bold label on its own line and the answers as a list; the check notes an inline label and a table", () => {
+  const question = render(fixture("02-question.json")).text, confirm = render(fixture("13-confirm.json")).text;
+  assert.match(question, /\n\n\*\*What you approve\*\*\nHow pages reach you in the Claude desktop app\.\n/, "the label alone on its line, the text under it");
+  assert.match(confirm, /\n\n\*\*What I will do\*\*\nDelete these 3 folders/);
+  assert.equal(question.split("\n").some((l) => l.trimStart().startsWith("|")), false, "the answers are a numbered list, not a table");
+  assert.equal(messageMiss(question), undefined);
+  assert.equal(messageMiss(confirm), undefined);
+  // The same question with one label in the line, or with its answers as a Markdown table: one note each.
+  assert.deepEqual(messageMiss(question.replace("**Needed by**\n", "Needed by: ")).names, ["inline label: Needed by"]);
+  assert.deepEqual(messageMiss(confirm.replace("**What stays**\n", "What stays: ")).names, ["inline label: What stays"]);
+  const table = question.replace(/\n\n1\. [\s\S]*?(?=\n\n\*\*If you do not answer)/, "\n\n| Answer | What happens next | Cost |\n| --- | --- | --- |\n| Stop (my pick) | Pages go by link. | None. |\n| Keep | Some open in the chat. | Small. |");
+  assert.deepEqual(messageMiss(table).names, ["table"]);
+  // A table of short data in a kind with no answers stays allowed.
+  assert.equal(messageMiss(confirm.replace("\n\n**What stays**", "\n\n| Folder | Size |\n| --- | --- |\n| a | 12 MB |\n\n**What stays**")), undefined);
+  // The page draws the answers as a list too, the pick marked; a table with no pick stays a table.
+  const page = messagePage(prepareMessage(resolved(fixture("02-question.json"))).msg, "");
+  assert.match(page, /<ol class="m-answers"><li class="pick"><p class="m-label"><strong>Stop: use the link to your Mac only<\/strong> <span class="pick-mark">\(my pick\)<\/span><\/p><p><span class="m-label">What happens next:<\/span> Every page/);
+  assert.doesNotMatch(page, /<table/);
+  assert.match(messagePage(prepareMessage(fixture("13-confirm.json")).msg, ""), /<table><thead><tr><th>Folder<\/th>/);
 });
 
 // ---------------------------------------------------------------- the state tool's message command

@@ -21,6 +21,7 @@ const CODE_SPAN = /`(?:[^`\n]|\n(?!\s*\n))*`/g;
 const HEADS = Object.entries(KINDS).map(([kind, k]) => [kind, k.head]);
 const BOX_MARK = /[─-╿]/u;
 const FENCE = /^\s*(`{3,}|~{3,})/;
+const TABLE_ROW = /^\s*\|.*\|\s*$/;
 /** The most problems that a note lists, and the most ids that the raw-id problem lists: the rest are "and N more". */
 const SHOWN = 20;
 
@@ -106,6 +107,12 @@ function namedProblems(text, { width = WIDTH } = {}) {
     else problems.push([`missing: ${part.name}`, `a ${kind} needs "${part.name}"`]);
   }
   if (KINDS[kind].pick && !/\(my\s+pick\)/i.test(text)) problems.push(["no pick", `a ${kind} marks your pick with "(my pick)"`]);
+  // The owner's rules for a kind on the choice card (T1023): each part apart, under its bold label on its own line, and
+  // the answers as a list, because a table makes long answers hard to read.
+  if (KINDS[kind].card) for (const part of partsOf(kind)) {
+    if (/^[A-Z]/.test(part.name) && lines.some((l) => labelAt(l, part.name) && l.trim() !== `**${part.name}**`)) problems.push([`inline label: ${part.name}`, `"${part.name}" goes in bold on its own line, with its text under it`]);
+  }
+  if (KINDS[kind].pick && lines.some((l) => TABLE_ROW.test(l))) problems.push(["table", `a ${kind} gives its answers as a numbered list, not a table: put what happens next and the cost under each answer`]);
   return { kind, problems };
 }
 
