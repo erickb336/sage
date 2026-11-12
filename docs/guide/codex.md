@@ -15,7 +15,7 @@ The design of the two provider plugins is in [Separate provider packages](../des
 | Principles and the writing skills | Yes | Yes: the same skills, including the `sage` skill for manual logbook commands |
 | The principles of each role | Yes: each agent file preloads them | Yes: `role.mjs` puts them in each role's text. A lead gets the path of each one to read, and the mode hook gives the chief the paths of its principles |
 | The logbook and the board | Yes | Yes: the plugin's `sage` MCP tools write the logbook, and the board phrases show the board ([The board in Codex](#the-board-in-codex)) |
-| Programs (one goal, several tasks, a breakdown gate) | Yes | Yes: the `program_propose` tool opens the breakdown gate, and `task_set` with `program=` puts a task in a program or takes it out ([The logbook tools](#the-logbook-tools)) |
+| Milestones (one goal, several tasks, a breakdown gate) | Yes | Yes: the `milestone_propose` tool opens the breakdown gate, and `task_set` with `milestone=` puts a task in a milestone or takes it out ([The logbook tools](#the-logbook-tools)) |
 | The settings: cycle counts, `max_leads`, the model keys, the project's board name and archive, and its start in sage mode | Yes | Yes: the `config` tool, when you ask the chief. A model key gives a Codex agent a reasoning effort, not a model ([Model keys in Codex](#model-keys-in-codex)) |
 | sage mode: the chief's role | Yes | Yes: the `sage mode` phrase gives it, and it comes back after a compaction |
 | Start every session of a project in sage mode | Yes: `config start=sage-mode`, or the `"agent"` line ([Start every session in sage mode](using-sage.md#start-every-session-in-sage-mode)) | Yes: the same `config start=sage-mode` setting turns sage mode on at each new session (one setting for both, with a shared logbook) |
@@ -324,9 +324,9 @@ The plugin starts a local MCP server, `sage`, in the desktop app and in the CLI.
 | `link` | `link --to <folder>`, `link --separate`: [shared logbooks](using-sage.md#shared-logbooks), only after your answer |
 | `move` | `move --preview`, `move --plan <plan>`, `move --gate <G>`: [move an existing project](using-sage.md#move-an-existing-project), with `gate` only after your answer |
 | `claim` | `claim <T>`: take a task with no owning chief in a [shared logbook](using-sage.md#shared-logbooks) |
-| `offer`, `cancel`, `accept`, `release` | `offer <T>`, `cancel <T>`, `accept <T>`, `release <T>`: [hand a task to another chief](using-sage.md#shared-logbooks) |
+| `offer`, `cancel`, `accept`, `unclaim` | `offer <T>`, `cancel <T>`, `accept <T>`, `unclaim <T>`: [hand a task to another chief](using-sage.md#shared-logbooks) |
 | `task_add`, `task_set` | `task add`, `task <T> set` |
-| `program_propose` | `program propose`, `program propose <PG>`: [a program](using-sage.md#waits-and-programs) and its breakdown gate. A task joins or leaves with `task_set` `program=` |
+| `milestone_propose` | `milestone propose`, `milestone propose <M>`: [a milestone](using-sage.md#waits-and-milestones) and its breakdown gate. A task joins or leaves with `task_set` `milestone=` |
 | `config` | `config key=value ...`: the cycle counts, `max_leads`, the other counts and the model keys for all projects, the project's board name and archive (`name=`, `archived=`), and its start in sage mode (`start=sage-mode` or `start=normal`) |
 | `task_adopt` | `task-adopt <T>`: adopt another provider's task and PR from a separate logbook, with fresh destination reviews. In a shared logbook it refuses: use the takeover gate |
 | `run_add`, `run_done` | `run add`, `run done` |
@@ -387,7 +387,7 @@ The chief follows designer → PE → owner’s design approval → build. It re
 
 The trusted start and stop hooks retain the matching direct child’s exact report, with an optional SHA. Retention grants no verdict or design approval. Preserve `blocked`, `question` and PE `CHANGE` outcomes.
 
-Ordinary open design gates do not generally prevent merge in code. The chief must obtain the owner’s actual design approval before dependent implementation. Missing-review and program-wait checks remain unchanged.
+Ordinary open design gates do not generally prevent merge in code. The chief must obtain the owner’s actual design approval before dependent implementation. Missing-review and milestone-wait checks remain unchanged.
 
 Generated-package tests use labelled synthetic artifacts and hook events. Installed acceptance still needs the reviewed package, updated hook trust, both role texts, actual child runs, permission refusals, report retention and the saved prototype.
 

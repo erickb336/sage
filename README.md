@@ -25,7 +25,7 @@ In *Naruto*, a sage stays still to gather natural energy. In Sage Mode, the sage
 
 - **The chief of staff stays still.** It changes no files. It frames the work, writes the briefs and keeps the logbook.
 - **It gathers natural energy.** Here, that energy is the team's work: agents work in parallel, each in its own git worktree.
-- **It sees the whole.** It groups the tasks of one goal into a program, makes a task wait for the tasks that it builds on, and gives a mistake that comes back a lasting fix.
+- **It sees the whole.** It groups the tasks of one goal into a milestone, makes a task wait for the tasks that it builds on, and gives a mistake that comes back a lasting fix.
 
 The idea of a mode that you turn on by name comes from pstack's **poteto mode**.
 
@@ -61,7 +61,7 @@ To stop a task or uninstall sage, see [Using sage](docs/guide/using-sage.md). To
 claude plugin update sage@sage
 ```
 
-> **Warning:** before you use programs (tasks of one goal) or tasks that wait for other tasks, update sage and restart every session that was already open. An older session still merges a waiting task, or a task of a program that you did not approve.
+> **Warning:** before you use milestones (tasks of one goal) or tasks that wait for other tasks, update sage and restart every session that was already open. An older session still merges a waiting task, or a task of a milestone that you did not approve.
 
 ### In Codex
 
@@ -84,10 +84,10 @@ Send `show board` to see what needs you, the agents at work, and each task in it
 
 <picture>
   <source media="(prefers-color-scheme: dark)" srcset="docs/assets/board-dark.png">
-  <img alt="The board page on a laptop screen, with SAMPLE DATA: the project picker, the filter bar, a Needs you box with two program items, and six columns side by side, from Backlog to Done. The first card of the Backlog column asks you to approve a program." src="docs/assets/board-light.png" width="100%">
+  <img alt="The board page on a laptop screen, with SAMPLE DATA: the project picker, the filter bar, a Needs you box with two milestone items, and six columns side by side, from Backlog to Done. The first card of the Backlog column asks you to approve a milestone." src="docs/assets/board-light.png" width="100%">
 </picture>
 
-*Sample data: every task and program in the screenshot is made up. The screenshot shows the first screen of the board on a laptop (1280 by 800 pixels): the project picker, the filters, the Needs you box and the columns, from Backlog to Done. The [board guide](docs/guide/board.md) describes the full board.*
+*Sample data: every task and milestone shown is made up. The screenshot shows the first screen of the board on a laptop (1280 by 800 pixels): the project picker, the filters, the Needs you box and the columns, from Backlog to Done. The [board guide](docs/guide/board.md) describes the full board.*
 
 ## What to say
 

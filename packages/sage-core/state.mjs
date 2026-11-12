@@ -23,7 +23,7 @@ import { REPORT_FIELDS } from "./report.mjs";
 import { cleanReport, fieldsOf, proofResults, readReport } from "./report-reader.mjs";
 import { ROLES } from "./roles.mjs";
 import { AGENT_CAPS, BREAKS, FINDING_CLASSES, HIDDEN, LINE, NAME_MAX, PRIORITIES, PRIORITY_SCALE, START_SAGE_MODE, TABLES as PLAIN_TABLES, TASK_KINDS, countOf, nameProblem, proposalOf } from "./logbook-fields.mjs";
-import { BREAKDOWN, ENDED, GATE_ID, MET, PROGRAM_ID, TASK_ID, breakdownGate, byIds, dead, droppedBy, gateLines, lostClause, programState, progressOf, progressText, shownGraph, shownWaits, unmetWaits, waitGraph, waitWords, waitsOf, waitsWithState } from "./program-rules.mjs";
+import { BREAKDOWN, ENDED, GATE_ID, MET, MILESTONE_ID, TASK_ID, breakdownGate, renameRows, renamedIds, byIds, dead, droppedBy, gateLines, lostClause, milestoneState, progressOf, progressText, shownGraph, shownWaits, unmetWaits, waitGraph, waitWords, waitsOf, waitsWithState } from "./milestone-rules.mjs";
 import { OBSERVATIONS_MAX_BYTES, OBSERVATION_DATA_MAX_BYTES, validateObservation, validateObservations } from "./observations.mjs";
 import { MOVES, PLAN_MAX, checkoutGone, createSharedRoot, sharedRoot, unreadableFolder } from "./shared-root.mjs";
 import { changedText, countsOf, endText, gateQuestion, gateText, localTime, mapHtml, mismatchText, previewText, providersOf, reconciliationText, startText, stepText, stoppedText, title } from "./move-text.mjs";
@@ -120,7 +120,7 @@ const CAP = /^cap\.[a-z0-9][a-z0-9-]*$/;
 const MODEL = new RegExp(`^model\\.(${MODEL_ROLES.join("|")})(\\.(tiny|small|large|investigate|risk))?$`);
 const KEYS = "max_agents, max_leads, cycles.small, cycles.large, cycles.risk, max_rounds, arena and cap_total as key=number, cap.<project>=number for one project's cap, model.<role>.<size>=<model>, model.<role>.risk=<model> or model.<role>=<model> for an agent role's model";
 /** The columns that a later version added: an older table without them reads with them empty, and its next write adds them. */
-const FILLED = { runs: ["model", ...USAGE_FIELDS], tasks: ["hold", "extra", "priority", "kind", "waits", "program", "adoption", "approvals"], findings: ["run", "class"] };
+const FILLED = { runs: ["model", ...USAGE_FIELDS], tasks: ["hold", "extra", "priority", "kind", "waits", "milestone", "adoption", "approvals"], findings: ["run", "class"] };
 /**
  * The column that only a table with a chief row has: a table without it reads as it is, so its rows and their task
  * versions stay. An older sage refuses to write a table with a column that it does not know, so a legacy logbook never
@@ -138,7 +138,7 @@ TABLES.gates = [...TABLES.gates, "kind"];
 const ADDED = { ...FILLED, runs: [...FILLED.runs, ...SPARSE.runs], tasks: [...FILLED.tasks, ...SPARSE.tasks], gates: SPARSE.gates };
 /** The status of a run that ended. Any other status is an active or an unknown run. */
 const RUN_ENDS = ["done", "blocked", "question", "failed"];
-const COMMANDS = ["init", "logbook", "standing", "pages", "task", "task-adopt", "program", "round", "run", "finding", "verdict", "gate", "log", "status", "stats", "merge-check", "config", "projects", "board", "observe", "link", "claim", "offer", "cancel", "accept", "release", "move", "worktrees"];
+const COMMANDS = ["init", "logbook", "standing", "pages", "task", "task-adopt", "milestone", "round", "run", "finding", "verdict", "gate", "log", "status", "stats", "merge-check", "config", "projects", "board", "observe", "link", "claim", "offer", "cancel", "accept", "unclaim", "move", "worktrees"];
 /** The options of each command, by its name or by its name and first word. Every command also takes --project. */
 const OPTIONS = {
   "logbook repair": ["accept-loss", "accept-change-loss"],
@@ -150,11 +150,11 @@ const OPTIONS = {
   accept: ["offer", "version"],
   "gate replace": ["to"],
   "projects rebuild": ["accept-listing"],
-  "task add": ["title", "size", "risk", "add", "why", "priority", "kind", "waits", "program"],
+  "task add": ["title", "size", "risk", "add", "why", "priority", "kind", "waits", "milestone"],
   task: ["why"], // task <T> set state=abandoned --why <reason>
   round: ["why"], // round <T> --why <reason>: the chief's extra round in autopilot (T804)
   "task-adopt": ["source-logbook", "source-provider", "source-task", "pr", "branch"],
-  "program propose": ["name", "goal", "pilot", "tasks"],
+  "milestone propose": ["name", "goal", "pilot", "tasks"],
   "run add": ["role", "branch", "candidate", "usage-interface"],
   observe: ["kind", "source", "basis", "observed-at", "data-hex"],
   "run done": ["status", "tokens", "report", "usage", "usage-source", "usage-evidence"],
@@ -531,6 +531,45 @@ const lost = (dir, table, what, also = []) => {
  * and CRLF line ends read as a plain file.
  */
 function sheet(dir, table, also = [], max = Infinity) {
+  return RENAMED_TABLES.includes(table) && lstatSync(join(dir, "programs.tsv"), { throwIfNoEntry: false }) ? renamedSheet(dir, table, also, max) : fileSheet(dir, table, also, max);
+}
+/** The tables that the rename of program to milestone changes (T995), in the order that its migration writes them: the decisions first, so a stop leaves the id map. */
+const RENAMED_TABLES = ["decisions", "milestones", "tasks", "gates"];
+/**
+ * A renamed table of a logbook from before the rename (T995), as a read gives it in memory and the migration of the next
+ * write gives it on disk (renameRows), so the two agree: for programs.tsv, the milestones with their new ids; for
+ * tasks.tsv, the milestone column in place of the program column. A missing milestones table with no programs table
+ * keeps fileSheet's rule.
+ */
+function renamedSheet(dir, table, also, max) {
+  const exists = (t) => lstatSync(join(dir, `${t}.tsv`), { throwIfNoEntry: false });
+  if (table === "milestones" && !exists("programs") && !exists("milestones")) return fileSheet(dir, table, also, max);
+  const own = (t) => fileSheet(dir, t, also, max), rows = (t) => (t === "programs" ? rowsOf(sheetText(readRegular(join(dir, "programs.tsv"), { max }) ?? "")) : rowsOf(own(t)));
+  const out = renameRows({ ...Object.fromEntries(["tasks", "decisions", "gates"].map((t) => [t, rows(t)])), milestones: exists("milestones") ? rows("milestones") : undefined, programs: exists("programs") ? rows("programs") : undefined }, now())[table];
+  const cols = table === "milestones" && !exists("milestones") ? PLAIN_TABLES.milestones : own(table).cols.filter((c) => c !== "program");
+  if (table === "tasks" && !cols.includes("milestone")) cols.push("milestone");
+  return { cols, lines: out.map((row) => cols.map((c) => row[c] ?? "").join("\t")) };
+}
+/**
+ * The migration of the rename (T995): once, at the first write of this version, under the write lock, before the
+ * integrity check. It writes each renamed table as a read gives it (renamedSheet), the decisions first, then removes
+ * programs.tsv; the milestones table only from programs.tsv, so a lost table stays lost. A stop between two writes
+ * leaves the id map in the decisions, so the next write finishes it with the same ids, and a read before it gives the
+ * same rows. A logbook with no program column and no programs.tsv is not changed, so a second run changes nothing. A
+ * repair of lost tables (skip) runs first: the next write migrates.
+ */
+function renameLogbook(dir, skip) {
+  const programs = join(dir, "programs.tsv"), old = lstatSync(programs, { throwIfNoEntry: false });
+  if (skip.length || (!old && !programColumn(dir))) return;
+  for (const table of RENAMED_TABLES.filter((t) => old || t !== "milestones")) write(dir, table, rowsIn(table, renamedSheet(dir, table)));
+  if (old) unlinkSync(programs);
+}
+/** Does tasks.tsv have the program column of a logbook from before the rename? A file that cannot be read has none here: the integrity check refuses it. */
+function programColumn(dir) {
+  try { return sheetText(readRegular(join(dir, "tasks.tsv")) ?? "").cols.includes("program"); } catch { return false; }
+}
+/** A table of a logbook as its file holds it (sheet). */
+function fileSheet(dir, table, also = [], max = Infinity) {
   const file = join(dir, `${table}.tsv`);
   let text;
   try {
@@ -539,7 +578,7 @@ function sheet(dir, table, also = [], max = Infinity) {
     if (e instanceof Refusal || !e.code) throw e;
     refuse(`${file} cannot be read (${e.code}). ${fixIt(file, e.code)}`);
   }
-  if (text === undefined && table === "programs" && !namesProgram(dir, max)) return { cols: TABLES.programs, lines: [] };
+  if (text === undefined && table === "milestones" && !namesMilestone(dir, max)) return { cols: TABLES.milestones, lines: [] };
   if (text === undefined) throw lost(dir, table, "is missing or is a link to nothing", also);
   const { cols, lines } = sheetText(text);
   if (!cols.length) throw lost(dir, table, text ? "has only blank lines" : "is empty (0 bytes)", also);
@@ -548,14 +587,14 @@ function sheet(dir, table, also = [], max = Infinity) {
 }
 
 /**
- * Does a task of the logbook name a program? The programs table came later (T337): a logbook made before it has no
- * programs.tsv, and that reads as a table with no rows while no task names a program. Once one does, the file is
- * missing rows, and a missing file is a loss as for any table. The first program propose writes it. A tasks table that
+ * Does a task of the logbook name a milestone? The milestones table came later (T337): a logbook made before it has no
+ * milestones.tsv, and that reads as a table with no rows while no task names a milestone. Once one does, the file is
+ * missing rows, and a missing file is a loss as for any table. The first milestone propose writes it. A tasks table that
  * cannot be read names none here: its own check refuses it.
  */
-function namesProgram(dir, max) {
+function namesMilestone(dir, max) {
   try {
-    return rowsOf(sheet(dir, "tasks", [], max)).some((t) => t.program);
+    return rowsOf(sheet(dir, "tasks", [], max)).some((t) => t.milestone || t.program); // a program cell of a logbook from before the rename (T995)
   } catch {
     return false;
   }
@@ -584,10 +623,10 @@ const check = (dir, skip = [], max = Infinity) => {
   const receipts = () => replaceWrites.readVersion(dir);
   const version = receipts();
   const tables = Object.fromEntries(Object.keys(TABLES).filter((t) => !skip.includes(t)).map((t) => [t, sheet(dir, t, skip, max)]));
-  // A program's id is on one row: with two, a line could read the wrong one (R1208-3).
+  // A milestone's id is on one row: with two, a line could read the wrong one (R1208-3).
   const seen = new Set();
-  const twice = (tables.programs ? rowsOf(tables.programs) : []).find(({ id }) => seen.has(id) || !seen.add(id))?.id;
-  if (twice !== undefined) refuse(`${join(dir, "programs.tsv")} has two rows for ${visible(twice)}, but a program's id is on one row. Ask the user to fix the file: keep one row of ${visible(twice)}.`);
+  const twice = (tables.milestones ? rowsOf(tables.milestones) : []).find(({ id }) => seen.has(id) || !seen.add(id))?.id;
+  if (twice !== undefined) refuse(`${join(dir, "milestones.tsv")} has two rows for ${visible(twice)}, but a milestone's id is on one row. Ask the user to fix the file: keep one row of ${visible(twice)}.`);
   if (receipts() !== version) refuse("A Replace receipt was created while this logbook was read. Retry the read.");
   return tables;
 };
@@ -609,6 +648,7 @@ function ready(dir, env, skip = []) {
   // writer that waited here must not change it, or the move cannot finish. So a plan that names this logbook refuses too (T647).
   if (env) for (const { file, plan } of movePlans(rootOf(env))) if (!plan || plan.sources?.some((s) => sameDir(s?.dir, dir))) refuse(stoppedText(plan, file));
   settle(dir);
+  renameLogbook(dir, skip);
   for (const file of ["status.md", "standing.md"]) target(join(dir, file));
   if (!skip.includes("tasks") && !lstatSync(join(dir, "tasks.tsv"), { throwIfNoEntry: false })) {
     if (skip.length || hasRows(dir)) throw lost(dir, "tasks", "is missing", skip);
@@ -1108,7 +1148,7 @@ function write(dir, table, rows) {
 
 const now = () => new Date().toISOString().slice(0, 19) + "Z";
 /** The cells that hold ids: each table's own id, the columns that name the id of another row, and a decision's subject. */
-const IDS = { tasks: ["id", "keys", "waits", "program"], runs: ["id", "task"], findings: ["task", "key", "run"], ledger: ["task", "run"], gates: ["id", "task"], decisions: ["task"], programs: ["id", "pilot", "gate"] };
+const IDS = { tasks: ["id", "keys", "waits", "milestone"], runs: ["id", "task"], findings: ["task", "key", "run"], ledger: ["task", "run"], gates: ["id", "task"], decisions: ["task"], milestones: ["id", "pilot", "gate"] };
 /**
  * A new id: the highest whole number after the prefix that any id cell of the logbook names, plus 1. So an id never
  * comes back, also when its own row is lost while another row (a verdict's or a finding's run, a decision, a round's keys) still names
@@ -1132,7 +1172,7 @@ function nextId(dir, prefix) {
   return `${prefix}${max + 1n}`;
 }
 /** The words of each id floor that the move writes: the prefixes that count across the whole logbook. A finding's key counts within its task. */
-const FLOORS = { T: "task", R: "run", G: "gate", PG: "program" };
+const FLOORS = { T: "task", R: "run", G: "gate", M: "milestone" };
 /**
  * The move's id floors (T641): for each prefix, one decision row in the new logbook whose first word is the highest id
  * of the old logbooks, so that nextId, also an older sage's, never gives an old number again. sources are the old
@@ -1266,7 +1306,7 @@ function movePlan(scope, env, gate) {
   const named = (b, id) => `${title(b.provider)} ${id}`;
   // Only the chief of a logbook's provider writes that logbook, so a refusal that names a command says whose (F-T640-60).
   const chief = (b) => `the ${title(b.provider)} chief runs it`;
-  // A damaged adoption cell, of an open task or of a finished task that moves with its program, names its file and row (F-T647-2).
+  // A damaged adoption cell, of an open task or of a finished task that moves with its milestone, names its file and row (F-T647-2).
   const damaged = (b, t) => refuse(`refused: ${visible(join(b.dir, "tasks.tsv"))} has a damaged adoption cell in the row of ${visible(t.id)}, so the move cannot keep the task's record. Nothing changed. Ask the owner to fix that row.`);
   const running = books.flatMap((b) => b.rows.runs.filter((r) => !RUN_ENDS.includes(r.status)).map((r) => ({ b, r })));
   if (running.length) refuse([`refused: ${running.length === 1 ? "1 run is" : `${running.length} runs are`} running in this project`, ...running.map(({ b, r }) => `  ${title(b.provider).padEnd(8)}${visible(r.id).padEnd(7)}${visible(r.task).padEnd(6)}${visible(r.role).padEnd(11)}started ${localTime(r.started).clock}`), "The move needs zero running runs. Nothing changed."].join("\n"));
@@ -1316,11 +1356,11 @@ function movePlan(scope, env, gate) {
     if (seen.includes(k)) { const [i, id] = k.split(" "); refuse(`refused: ${named(books[i], id)} is in a loop of adoptions, so no task of the loop moves. Nothing changed. Ask the owner to fix their adoption records.`); }
     return adopter(adopted.get(k), [...seen, k]);
   };
-  // A program moves whole: its finished tasks, the pilot too, move with its open ones as finished rows, so that its pilot,
+  // A milestone moves whole: its finished tasks, the pilot too, move with its open ones as finished rows, so that its pilot,
   // its breakdown approval and its done condition hold (F-T640-59).
   const going = (b, t) => !ENDED.includes(t.state) || adopted.has(`${b.i} ${t.id}`);
-  const whole = new Set(books.flatMap((b) => b.rows.tasks.filter((t) => t.program && going(b, t)).map((t) => `${b.i} ${t.program}`)));
-  const moves = (b, t) => (going(b, t) || whole.has(`${b.i} ${t.program}`)) && !adopted.has(`${b.i} ${t.id}`);
+  const whole = new Set(books.flatMap((b) => b.rows.tasks.filter((t) => t.milestone && going(b, t)).map((t) => `${b.i} ${t.milestone}`)));
+  const moves = (b, t) => (going(b, t) || whole.has(`${b.i} ${t.milestone}`)) && !adopted.has(`${b.i} ${t.id}`);
   // New numbers: Claude's first, then Codex's, each logbook's in old-number order (F5, F12: one map, made once).
   const ids = new Map(), moving = [];
   for (const b of books) for (const t of b.rows.tasks.filter((t) => moves(b, t)).sort(byIdNumber)) {
@@ -1329,17 +1369,17 @@ function movePlan(scope, env, gate) {
   }
   for (const from of adopted.keys()) ids.set(from, ids.get(adopter(from)));
   // Every old task that moves, as "<book> <id>": the moved tasks, then the adopted ones, whose rows (gates, findings, a
-  // program) move with the task that adopted them (F-T640-1, F-T640-18).
+  // milestone) move with the task that adopted them (F-T640-1, F-T640-18).
   const rowOf = (k) => { const [i, id] = k.split(" "); return { b: books[i], t: books[i].rows.tasks.find((t) => t.id === id) }; };
-  const programIds = new Map();
-  for (const b of books) for (const p of b.rows.programs.filter((p) => [...ids.keys()].some((k) => rowOf(k).b === b && rowOf(k).t.program === p.id)).sort(byIdNumber)) programIds.set(`${b.i} ${p.id}`, next("PG"));
-  for (const k of ids.keys()) { const { b, t } = rowOf(k); if (t.program && !programIds.has(`${b.i} ${t.program}`)) refuse(`refused: ${named(b, t.id)} names the program ${visible(t.program)}, which its logbook lacks, so the move cannot map it. Nothing changed. Ask the owner to fix its program cell.`); }
-  for (const [k] of programIds) {
-    const [i, id] = k.split(" "), b = books[i], p = b.rows.programs.find((x) => x.id === id);
+  const milestoneIds = new Map();
+  for (const b of books) for (const p of b.rows.milestones.filter((p) => [...ids.keys()].some((k) => rowOf(k).b === b && rowOf(k).t.milestone === p.id)).sort(byIdNumber)) milestoneIds.set(`${b.i} ${p.id}`, next("M"));
+  for (const k of ids.keys()) { const { b, t } = rowOf(k); if (t.milestone && !milestoneIds.has(`${b.i} ${t.milestone}`)) refuse(`refused: ${named(b, t.id)} names the milestone ${visible(t.milestone)}, which its logbook lacks, so the move cannot map it. Nothing changed. Ask the owner to fix its milestone cell.`); }
+  for (const [k] of milestoneIds) {
+    const [i, id] = k.split(" "), b = books[i], p = b.rows.milestones.find((x) => x.id === id);
     const state = b.rows.tasks.find((t) => t.id === p.pilot)?.state;
-    if (!ids.has(`${i} ${p.pilot}`)) refuse(`refused: ${named(b, id)}'s pilot ${visible(p.pilot)} ${state ? `is ${state}, but not a task of ${id}` : "is not in the logbook"}, so ${id} would lose its pilot. Nothing changed. Ask the owner to fix the pilot's program cell, or take the open tasks out of ${id} (sage task <T> set program=none; ${chief(b)}), then run the preview again.`);
+    if (!ids.has(`${i} ${p.pilot}`)) refuse(`refused: ${named(b, id)}'s pilot ${visible(p.pilot)} ${state ? `is ${state}, but not a task of ${id}` : "is not in the logbook"}, so ${id} would lose its pilot. Nothing changed. Ask the owner to fix the pilot's milestone cell, or take the open tasks out of ${id} (sage task <T> set milestone=none; ${chief(b)}), then run the preview again.`);
   }
-  // Gates: each gate of a moved task, answered ones too (approvals and a program's gate name them), and each open gate
+  // Gates: each gate of a moved task, answered ones too (approvals and a milestone's gate name them), and each open gate
   // with no task. A move gate stays. The open gates take the first numbers, so the owner's new gates are in one range.
   // An open gate of a finished task would stay in its old logbook, which is read-only after the move: no one could answer
   // it, and the board would not show it (F-T640-27). So the owner answers it first.
@@ -1367,9 +1407,9 @@ function movePlan(scope, env, gate) {
     }
   }
   // The ids in a moved gate's question get their new numbers, as its task cell does: a repair approval names its task, a
-  // breakdown gate its program and tasks (F-T640-3), and a move approval its finding (F-T640-23). A whole finding key maps
+  // breakdown gate its milestone and tasks (F-T640-3), and a move approval its finding (F-T640-23). A whole finding key maps
   // first, through keys, because its new number is not its old one; a finding key that does not move stays whole. Then
-  // the task and program ids. An id that does not move keeps its number. A key is unique only per task (finding add), so
+  // the task and milestone ids. An id that does not move keeps its number. A key is unique only per task (finding add), so
   // a key maps through the gate's own task first, then through the one task of the logbook that has it; a key that two
   // other tasks have stays whole (F-T640-32).
   const keyTasks = books.map((b) => b.rows.findings.reduce((m, f) => m.set(f.key, [...(m.get(f.key) ?? []), f.task]), new Map()));
@@ -1378,9 +1418,9 @@ function movePlan(scope, env, gate) {
     return tasks && (keys.get(`${b.i} ${owner} ${word}`) ?? word);
   };
   const renumber = (b, task, text) => String(text).replace(/[\w-]+/g, (word) => keyOf(b, task, word)
-    || word.replace(/\b(?:PG|T)[1-9]\d*\b/g, (id) => (id.startsWith("PG") ? programIds : ids).get(`${b.i} ${id}`) ?? id));
-  // A task with no program takes the program of a task that it adopted, so the pilot of that program is in it.
-  const adoptedProgram = (b, t) => [...adopted.keys()].filter((from) => adopter(from) === `${b.i} ${t.id}`).map(rowOf).find(({ t: o }) => o.program);
+    || word.replace(/\b(?:M|T)[1-9]\d*\b/g, (id) => (id.startsWith("M") ? milestoneIds : ids).get(`${b.i} ${id}`) ?? id));
+  // A task with no milestone takes the milestone of a task that it adopted, so the pilot of that milestone is in it.
+  const adoptedMilestone = (b, t) => [...adopted.keys()].filter((from) => adopter(from) === `${b.i} ${t.id}`).map(rowOf).find(({ t: o }) => o.milestone);
   const met = [], back = [], was = [], waits = {};
   const tasks = moving.map(({ b, t }) => {
     const id = ids.get(`${b.i} ${t.id}`), on = [], metHere = [], { ids: wanted, odd } = waitsOf(t);
@@ -1388,7 +1428,7 @@ function movePlan(scope, env, gate) {
     for (const w of wanted) {
       const to = ids.get(`${b.i} ${w}`), state = b.rows.tasks.find((x) => x.id === w)?.state;
       if (to) on.push(to);
-      // A finished task of a program waits for nothing more, so its other waits stay as text in its decision row.
+      // A finished task of a milestone waits for nothing more, so its other waits stay as text in its decision row.
       else if (MET.includes(state) || ENDED.includes(t.state)) metHere.push(`${w} (${state ?? "not in the logbook"})`);
       else refuse(`refused: ${named(b, t.id)} waits for ${w}, which ${state ? "was abandoned" : "is not in the logbook"}, so it can never start. Nothing changed. Change its waits first (sage task ${t.id} set waits=<task ids>; ${chief(b)}), then run the preview again.`);
     }
@@ -1420,16 +1460,16 @@ function movePlan(scope, env, gate) {
     // decisions takes them again from this record, so no new finding takes one (F-T648-7).
     if (closed.length) record.carried = closed.map((c) => c.decision.split(" ")[0]);
     was.push({ at: "", task: id, decision: `${id} was ${named(b, t.id)}`, why: [`the move from the ${title(b.provider)} logbook ${basename(b.dir)}`, `its pages stay in ${basename(b.dir)}/pages/${t.id} of the worktree root`, metHere.length && `waits met before the move: ${metHere.join(", ")}`, BACK.includes(t.state) && `${t.state} → reviewing, because its verdicts stay in the old logbook`].filter(Boolean).join("; ") }, ...closed);
-    const via = !t.program && adoptedProgram(b, t);
-    return keepColumns("tasks", { ...t, id, state: BACK.includes(t.state) ? "reviewing" : t.state, keys: round.join(","), waits: on.join(","), program: t.program ? programIds.get(`${b.i} ${t.program}`) : via ? programIds.get(`${via.b.i} ${via.t.program}`) : "", approvals: list(t.approvals).map((g) => gateIds.get(`${b.i} ${g}`)).filter(Boolean).join(","), adoption: JSON.stringify(record), chief: "", offer: "" });
+    const via = !t.milestone && adoptedMilestone(b, t);
+    return keepColumns("tasks", { ...t, id, state: BACK.includes(t.state) ? "reviewing" : t.state, keys: round.join(","), waits: on.join(","), milestone: t.milestone ? milestoneIds.get(`${b.i} ${t.milestone}`) : via ? milestoneIds.get(`${via.b.i} ${via.t.milestone}`) : "", approvals: list(t.approvals).map((g) => gateIds.get(`${b.i} ${g}`)).filter(Boolean).join(","), adoption: JSON.stringify(record), chief: "", offer: "" });
   });
   const findings = findingRows.map(({ b, f, key: k }) => keepColumns("findings", { ...f, task: ids.get(`${b.i} ${f.task}`), key: k, run: "", summary: `${f.summary} (was ${named(b, f.key)})` }));
   const gates = gateRows.map(({ b, g }) => keepColumns("gates", { ...g, id: gateIds.get(`${b.i} ${g.id}`), task: g.task ? ids.get(`${b.i} ${g.task}`) : "", question: renumber(b, g.task, g.question) }));
-  const programs = [...programIds].map(([k, id]) => {
-    const [i, old] = k.split(" "), p = books[i].rows.programs.find((x) => x.id === old);
-    // A gate that its logbook lost gets a new number that names no gate, so the program stays as it was (its gate not in
+  const milestones = [...milestoneIds].map(([k, id]) => {
+    const [i, old] = k.split(" "), p = books[i].rows.milestones.find((x) => x.id === old);
+    // A gate that its logbook lost gets a new number that names no gate, so the milestone stays as it was (its gate not in
     // the logbook) and its row stays one that the board reads: a gate cell is never empty (F-T640-38).
-    return keepColumns("programs", { ...p, id, pilot: ids.get(`${i} ${p.pilot}`), gate: gateIds.get(`${i} ${p.gate}`) ?? next("G") });
+    return keepColumns("milestones", { ...p, id, pilot: ids.get(`${i} ${p.pilot}`), gate: gateIds.get(`${i} ${p.gate}`) ?? next("G") });
   });
   // prHistory reads a task's PR decisions, so a moved task stays in the merge check of each PR that it ever had.
   const decisions = [...moving.flatMap(({ b, t }) => b.rows.decisions.filter((d) => d.task === t.id && /^PR (\S+) → (\S+)$/.test(d.decision)).map((d) => ({ ...d, task: ids.get(`${b.i} ${t.id}`) }))), ...was];
@@ -1471,16 +1511,16 @@ function movePlan(scope, env, gate) {
   const marks = books.map((b) => Object.fromEntries([...ids].filter(([k]) => k.startsWith(`${b.i} `)).map(([k, v]) => [k.slice(String(b.i).length + 1), v])));
   const finished = {};
   for (const b of books) finished[b.provider] = (finished[b.provider] ?? 0) + b.rows.tasks.filter((t) => ENDED.includes(t.state) && !ids.has(`${b.i} ${t.id}`)).length;
-  // The finished tasks that move with their program (F-T640-59): the preview and the end check count them apart from the open ones.
+  // The finished tasks that move with their milestone (F-T640-59): the preview and the end check count them apart from the open ones.
   const done = moving.filter(({ t }) => ENDED.includes(t.state));
   const map = {
     tasks: [...ids].map(([k, id]) => { const [i, old] = k.split(" "), t = books[i].rows.tasks.find((x) => x.id === old); return { provider: books[i].provider, old, new: id, title: oneLine(t.title), adopted: adopted.has(k), ...(!adopted.has(k) && ENDED.includes(t.state) && { finished: true }) }; }),
     findings: findingRows.map(({ b, f, key: k }) => ({ provider: b.provider, task: f.task, old: f.key, new: k })),
     gates: gateRows.map(({ b, g, open }) => ({ provider: b.provider, old: g.id, new: gateIds.get(`${b.i} ${g.id}`), open })),
-    programs: [...programIds].map(([k, id]) => ({ provider: books[k.split(" ")[0]].provider, old: k.split(" ")[1], new: id })),
+    milestones: [...milestoneIds].map(([k, id]) => ({ provider: books[k.split(" ")[0]].provider, old: k.split(" ")[1], new: id })),
     standing: parts, waits, finished,
   };
-  const rows = { tasks, findings, gates, programs, decisions };
+  const rows = { tasks, findings, gates, milestones, decisions };
   // The board reads at most 4 MiB a file and 16 MiB in one read: the new logbook and its old logbooks must fit (F-T641).
   const sizes = Object.entries(rows).map(([t, r]) => [t, Buffer.byteLength(tableText(t, r))]);
   const old = books.reduce((n, b) => n + RAW.reduce((m, f) => m + (statSync(join(b.dir, f), NO)?.size ?? 0), 0), 0);
@@ -1489,7 +1529,7 @@ function movePlan(scope, env, gate) {
   if (large || total > 16 * 1024 * 1024) refuse(`refused: the board could not read the moved project: ${large ? `its ${large[0]}.tsv would be ${(large[1] / 1048576).toFixed(1)} MiB, and the board reads at most 4 MiB a file` : `it and its old logbooks hold ${(total / 1048576).toFixed(1)} MiB, and the board reads at most 16 MiB`}. Nothing changed. Ask the owner to abandon finished work in an old logbook first.`);
   const content = {
     version: 1, folder, checkout: key, sources: books.map(({ provider: p, dir, checkout }) => ({ provider: p, dir, checkout })), checkouts: scope.checkouts,
-    floors: Object.fromEntries(Object.entries(floors).map(([k, v]) => [k, String(v)])), next: { T: `T${counter.T + 1n}`, R: `R${counter.R + 1n}`, G: `G${counter.G + 1n}`, PG: `PG${counter.PG + 1n}` },
+    floors: Object.fromEntries(Object.entries(floors).map(([k, v]) => [k, String(v)])), next: { T: `T${counter.T + 1n}`, R: `R${counter.R + 1n}`, G: `G${counter.G + 1n}`, M: `M${counter.M + 1n}` },
     rows, standing: `${standing}\n`, config: Object.keys(merged).length ? merged : null, marks, map,
   };
   const plan = { ...content, digest: planDigest(content) };
@@ -1519,7 +1559,7 @@ function movePlan(scope, env, gate) {
     ...(back.length ? [["note", `${back.length === 1 ? "1 task" : `${back.length} tasks`} in ${BACK.filter((s) => back.includes(s)).join(" or ")} ${back.length === 1 ? "goes" : "go"} back to reviewing`]] : []),
     ...[...branches.values()].filter((g) => g.length > 1).map((g) => ["note", `${[...new Set(g.map(({ b }) => b.provider))].map((p) => `${title(p)} ${g.filter(({ b }) => b.provider === p).map(({ t }) => t.id).join(" and ")}`).join(" and ")} share one branch: ${g.length === 2 ? "two" : g.length} tasks`]),
     ...[...adopted].map(([from, to]) => ["note", `${named(books[from.split(" ")[0]], from.split(" ")[1])} is adopted by ${named(books[to.split(" ")[0]], to.split(" ")[1])}, so it moves with it`]),
-    ...(done.length ? [["note", `${done.length === 1 ? "1 finished task moves" : `${done.length} finished tasks move`} with ${done.length === 1 ? "its program" : "their programs"}, as ${done.length === 1 ? "it is" : "they are"}: ${done.map(({ b, t }) => `${named(b, t.id)} (${t.state})`).join(", ")}`]] : []),
+    ...(done.length ? [["note", `${done.length === 1 ? "1 finished task moves" : `${done.length} finished tasks move`} with ${done.length === 1 ? "its milestone" : "their milestones"}, as ${done.length === 1 ? "it is" : "they are"}: ${done.map(({ b, t }) => `${named(b, t.id)} (${t.state})`).join(", ")}`]] : []),
   ];
   return { plan, checks, norow, finished: Object.values(finished).reduce((n, k) => n + k, 0) };
 }
@@ -1704,7 +1744,7 @@ function moveSteps(plan, file, env, resumed) {
       rmSync(temp, { recursive: true, force: true }); // an unfinished build of an earlier run: the plan builds it again
       mkdirSync(join(temp, "briefs"), { recursive: true });
       mkdirSync(join(temp, "reports"));
-      for (const t of ["runs", "ledger", "findings", "gates", "programs"]) write(temp, t, plan.rows[t] ?? []);
+      for (const t of ["runs", "ledger", "findings", "gates", "milestones"]) write(temp, t, plan.rows[t] ?? []);
       write(temp, "decisions", stamp(plan.rows.decisions));
       writeIdFloors(temp, plan.sources); // under the old logbooks' locks, once for each build (F-T641-3)
       put(join(temp, "standing.md"), plan.standing.replaceAll(DAY, localTime(at).day));
@@ -1770,20 +1810,20 @@ const MOVED_BY = "moved this project to the shared logbook";
 
 /**
  * The end check: the counts of the new logbook, by provider, read again from its own rows and the old logbooks' marks.
- * A task counts under the provider of its adoption record; a finding, a gate and a program under the provider of the
+ * A task counts under the provider of its adoption record; a finding, a gate and a milestone under the provider of the
  * logbook that it came from, as the plan counts them, also when it moved with a task of the other provider (F-T640-1).
  * missing: each record of the plan that the new logbook lacks, as "<new> (was <provider> <old>)".
  */
 function recount(plan, dir) {
   const tasks = read(dir, "tasks"), providerOf = new Map(tasks.map((t) => [t.id, adoptionOf(t)?.provider]));
   const from = (rows) => new Map(rows.map((m) => [m.new, m.provider]));
-  const findingOf = from(plan.map.findings), gateOf = from(plan.map.gates), programOf = from(plan.map.programs);
-  const found = Object.fromEntries(providersOf(plan).map((p) => [p, { tasks: 0, findings: 0, gates: 0, programs: 0, standing: 0, notes: 0, waits: 0, marked: 0 }]));
+  const findingOf = from(plan.map.findings), gateOf = from(plan.map.gates), milestoneOf = from(plan.map.milestones);
+  const found = Object.fromEntries(providersOf(plan).map((p) => [p, { tasks: 0, findings: 0, gates: 0, milestones: 0, standing: 0, notes: 0, waits: 0, marked: 0 }]));
   const add = (p, k, n = 1) => { if (found[p]) found[p][k] += n; };
   for (const t of tasks) { if (!ENDED.includes(t.state)) add(providerOf.get(t.id), "tasks"); add(providerOf.get(t.id), "waits", waitsOf(t).ids.length); }
   for (const f of read(dir, "findings")) if (f.status === "open") add(findingOf.get(f.key), "findings");
   for (const g of read(dir, "gates")) if (!g.answer) add(gateOf.get(g.id), "gates");
-  for (const p of read(dir, "programs")) add(programOf.get(p.id), "programs");
+  for (const p of read(dir, "milestones")) add(milestoneOf.get(p.id), "milestones");
   const parts = plan.map.standing.filter((s) => s.base || s.count || s.notes);
   // Only a heading that the move wrote starts a part: an owner's own heading "## From the …" stays in its part (F-T640-48).
   (readRegular(join(dir, "standing.md")) ?? "").split(MOVED_HEADING).forEach((text, k) => {
@@ -1796,7 +1836,7 @@ function recount(plan, dir) {
     // The old id is an old logbook's cell: it prints through visible(), as every logbook text of the move does (F-T640-24).
     return maps.filter((m) => !have.has(m.new)).map((m) => visible(`${m.new} (was ${title(m.provider)} ${m.old})`));
   };
-  const missing = [...lacking("tasks", plan.map.tasks.filter((m) => !m.adopted)), ...lacking("findings", plan.map.findings, "key"), ...lacking("gates", plan.map.gates), ...lacking("programs", plan.map.programs)];
+  const missing = [...lacking("tasks", plan.map.tasks.filter((m) => !m.adopted)), ...lacking("findings", plan.map.findings, "key"), ...lacking("gates", plan.map.gates), ...lacking("milestones", plan.map.milestones)];
   return { found, missing };
 }
 /** The next free name beside a file that a repair moves aside, under the logbook lock: an old file stays, however fast two repairs run. */
@@ -1868,7 +1908,7 @@ const shell = (word) => (/^[\w./-]+$/.test(word) ? word : `'${word.replaceAll("'
  */
 const notHeld = (task, what) => task.state === "held" && refuse(`${task.id} is held, so it takes no ${what}: only the sage moves a held task (sage task ${task.id} set state=building or briefed), then ${what} again.`);
 
-/** The roles of build work, which a task with an unmet wait does not take (program-rules.mjs has the rules of waits). */
+/** The roles of build work, which a task with an unmet wait does not take (milestone-rules.mjs has the rules of waits). */
 const WAIT_ROLES = ["lead", "implementer", "investigate", "arena-judge"];
 const WAITS_MAX = 20;
 /**
@@ -1879,43 +1919,43 @@ const WAITS_MAX = 20;
 const flat = (text) => cell(String(text ?? "").replace(BREAKS, " ")).replace(/ {2,}/g, " ");
 const oneLine = (text) => flat(text) || "(no title)";
 /**
- * Does a question read as a breakdown gate's first line to the owner: "Approve program", in any case and Unicode form,
- * also after a list mark or another mark or symbol (R1270-1)? Look-alike letters of another script and filler letters
- * (U+115F, U+3164, U+FFA0) are a limit (T909, F-T909-4).
+ * Does a question read as a breakdown gate's first line to the owner: "Approve milestone", or the old "Approve program"
+ * (T995), in any case and Unicode form, also after a list mark or another mark or symbol (R1270-1)? Look-alike letters
+ * of another script and filler letters (U+115F, U+3164, U+FFA0) are a limit (T909, F-T909-4).
  */
-const readsAsBreakdown = (question) => /^approve program\b/.test(looks(question).replace(/^[^\p{L}\p{N}]+/u, ""));
-/** The why of each decision row that program propose writes. */
-const PROPOSE = "program propose";
-/** Has the owner not yet approved or dropped the program's breakdown? Then no task joins it once its build has begun, and none leaves it. */
-const unanswered = (program) => ["proposed", "changing"].includes(program?.state);
-const graphOf = (dir) => waitGraph(...["tasks", "programs", "gates", "decisions"].map((t) => read(dir, t)));
+const readsAsBreakdown = (question) => /^approve (?:milestone|program)\b/.test(looks(question).replace(/^[^\p{L}\p{N}]+/u, ""));
+/** The why of each decision row that milestone propose writes. */
+const PROPOSE = "milestone propose";
+/** Has the owner not yet approved or dropped the milestone's breakdown? Then no task joins it once its build has begun, and none leaves it. */
+const unanswered = (milestone) => ["proposed", "changing"].includes(milestone?.state);
+const graphOf = (dir) => waitGraph(...["tasks", "milestones", "gates", "decisions"].map((t) => read(dir, t)));
 const ODD = "the waits cell has text that is not a task id";
-/** A program's breakdown that is not approved, for a waits line. */
-const breakdownOf = (program) => `the breakdown of ${program.id} (${{ proposed: `open, gate ${program.gate}`, changing: `changes asked, gate ${program.gate}`, dropped: `dropped, gate ${program.gate}` }[program.state] ?? lostClause(program)})`;
-const waitList = (open) => open.map(({ id, state, odd, pilot, program, loop }) => (odd ? ODD : program ? breakdownOf(program) : `${id} (${state ?? "not in the logbook"}${pilot ? `, the pilot of ${pilot}` : ""}${loop ? ", in a loop of waits, never met" : dead(state) ? ", never met" : ""})`)).join(", ");
+/** A milestone's breakdown that is not approved, for a waits line. */
+const breakdownOf = (milestone) => `the breakdown of ${milestone.id} (${{ proposed: `open, gate ${milestone.gate}`, changing: `changes asked, gate ${milestone.gate}`, dropped: `dropped, gate ${milestone.gate}` }[milestone.state] ?? lostClause(milestone)})`;
+const waitList = (open) => open.map(({ id, state, odd, pilot, milestone, loop }) => (odd ? ODD : milestone ? breakdownOf(milestone) : `${id} (${state ?? "not in the logbook"}${pilot ? `, the pilot of ${pilot}` : ""}${loop ? ", in a loop of waits, never met" : dead(state) ? ", never met" : ""})`)).join(", ");
 /**
  * When a task with these unmet waits goes on: after its tasks are merged or concluded, and after the owner approves its
  * breakdown. A dropped or lost breakdown is never approved, so it gives no clause, and "" is a task that never goes on (R1206-2).
  */
 const until = (open) => {
-  const program = open.find((w) => w.program)?.program;
-  return [open.some((w) => !w.program) && `each ${program ? "task" : "of them"} is merged or concluded`, unanswered(program) && `the owner approves the breakdown of ${program.id}`].filter(Boolean).join(", and ");
+  const milestone = open.find((w) => w.milestone)?.milestone;
+  return [open.some((w) => !w.milestone) && `each ${milestone ? "task" : "of them"} is merged or concluded`, unanswered(milestone) && `the owner approves the breakdown of ${milestone.id}`].filter(Boolean).join(", and ");
 };
 /** The fix for a wait that is never met: its task was abandoned or is lost, the cell has text that is not a task id, or the breakdown is not approved. */
 const waitFix = (task, open) => {
-  const gone = open.filter(({ state, odd, pilot, program }) => !odd && !pilot && !program && dead(state)).map(({ id }) => id);
+  const gone = open.filter(({ state, odd, pilot, milestone }) => !odd && !pilot && !milestone && dead(state)).map(({ id }) => id);
   const pilot = open.find(({ state, pilot }) => pilot && dead(state));
-  const program = open.find((w) => w.program)?.program;
+  const milestone = open.find((w) => w.milestone)?.milestone;
   const how = `sage task ${task.id} set waits=<ids>, or waits= to clear it`;
-  const out = `take ${task.id} out of it (sage task ${task.id} set program=none), or ask the owner.`;
+  const out = `take ${task.id} out of it (sage task ${task.id} set milestone=none), or ask the owner.`;
   return [
     gone.length ? ` ${gone.join(", ")} ${gone.length === 1 ? "is" : "are"} abandoned or not in the logbook, so ${gone.length === 1 ? "that wait is" : "those waits are"} never met: remove or change the wait (${how}), or ask the owner.` : "",
-    pilot ? ` ${pilot.id}, the pilot of ${pilot.pilot}, is abandoned or not in the logbook, so no other task of ${pilot.pilot} builds: propose a new pilot (sage program propose ${pilot.pilot} --pilot <T>), or ${out}` : "",
-    !program ? "" : {
-      proposed: ` No task of ${program.id} builds before the owner approves its breakdown: ask the owner to answer gate ${program.gate}.`,
-      changing: ` The owner asked for changes to the breakdown of ${program.id}: propose it again (sage program propose ${program.id}, with --name, --goal or --pilot when they change), and the owner answers the new gate.`,
-      dropped: ` The owner dropped ${program.id}, so its breakdown is never approved: ${out}`,
-    }[program.state] ?? ` The breakdown of ${program.id} is never approved: ${program.pilot === task.id ? `propose it again (sage program propose ${program.id}), or ask the owner.` : out}`,
+    pilot ? ` ${pilot.id}, the pilot of ${pilot.pilot}, is abandoned or not in the logbook, so no other task of ${pilot.pilot} builds: propose a new pilot (sage milestone propose ${pilot.pilot} --pilot <T>), or ${out}` : "",
+    !milestone ? "" : {
+      proposed: ` No task of ${milestone.id} builds before the owner approves its breakdown: ask the owner to answer gate ${milestone.gate}.`,
+      changing: ` The owner asked for changes to the breakdown of ${milestone.id}: propose it again (sage milestone propose ${milestone.id}, with --name, --goal or --pilot when they change), and the owner answers the new gate.`,
+      dropped: ` The owner dropped ${milestone.id}, so its breakdown is never approved: ${out}`,
+    }[milestone.state] ?? ` The breakdown of ${milestone.id} is never approved: ${milestone.pilot === task.id ? `propose it again (sage milestone propose ${milestone.id}), or ask the owner.` : out}`,
     open.some(({ odd }) => odd) ? ` A hand edit put that text there: set the waits again (${how}).` : "",
   ].join("");
 };
@@ -1930,7 +1970,7 @@ const waitsMet = (task, graph, what) => {
 /** The wait graph of a logbook as the printers show it (shownGraph), for the task line: the same waits as the board and status. */
 const shownOf = (dir, tasks) => {
   const gates = read(dir, "gates");
-  return shownGraph(waitGraph(tasks, read(dir, "programs"), gates, read(dir, "decisions")), gates);
+  return shownGraph(waitGraph(tasks, read(dir, "milestones"), gates, read(dir, "decisions")), gates);
 };
 /** A task's unmet waits as the printers show them (shownWaits), so the status waits line and the task line say what the board says. */
 const shownOpen = (task, graph) => shownWaits(task, graph).filter(({ state }) => !MET.includes(state));
@@ -1938,7 +1978,7 @@ const shownOpen = (task, graph) => shownWaits(task, graph).filter(({ state }) =>
 const waitsText = (task, graph) => {
   const all = shownWaits(task, graph), open = shownOpen(task, graph);
   if (!all.length) return "";
-  return ` · waits ${waitList(all)} · ${open.length ? `unmet ${open.map(({ id, odd, program }) => (odd ? "the odd text" : program ? `the breakdown of ${program.id}` : id)).join(", ")}` : "all met"}`;
+  return ` · waits ${waitList(all)} · ${open.length ? `unmet ${open.map(({ id, odd, milestone }) => (odd ? "the odd text" : milestone ? `the breakdown of ${milestone.id}` : id)).join(", ")}` : "all met"}`;
 };
 /**
  * A waits value as its cell holds it: task ids joined by commas, "" for none (an empty value or none clears it). The ids may
@@ -1959,9 +1999,9 @@ function waitsValue(task, value, tasks) {
   if (lost) refuse(`no task ${lost} in this logbook: a task waits only for a task of its own logbook.${nothing}`);
   return ids.join(",");
 }
-/** The tasks that a task waits for in the loop check: its waits, and the pilot of its program, also before the approval, which would close the loop. */
-const edgesOf = (task, programs) => {
-  const pilot = programs.get(task?.program)?.pilot;
+/** The tasks that a task waits for in the loop check: its waits, and the pilot of its milestone, also before the approval, which would close the loop. */
+const edgesOf = (task, milestones) => {
+  const pilot = milestones.get(task?.milestone)?.pilot;
   return [...waitsOf(task).ids, ...(pilot && pilot !== task.id ? [pilot] : [])];
 };
 /**
@@ -1970,24 +2010,24 @@ const edgesOf = (task, programs) => {
  * the fix: each written wait of the loop to clear (R1209-4). own: the task's waits are the change, so they are not written
  * yet. oldPilot: the pilot that a new proposal replaces.
  */
-function noLoop(task, { byId, programs }, { own = false, oldPilot } = {}) {
+function noLoop(task, { byId, milestones }, { own = false, oldPilot } = {}) {
   const of = (id) => (id === task.id ? task : byId.get(id));
   const seen = new Set();
   const back = (id, path) => {
     if (id === task.id) return path;
     if (seen.has(id)) return undefined;
     seen.add(id);
-    for (const n of edgesOf(of(id), programs)) {
+    for (const n of edgesOf(of(id), milestones)) {
       const found = back(n, [...path, n]);
       if (found) return found;
     }
     return undefined;
   };
-  for (const id of edgesOf(task, programs)) {
+  for (const id of edgesOf(task, milestones)) {
     const loop = back(id, [task.id, id]);
     if (!loop) continue;
     const [from, to] = loop.slice(1).map((b, i) => [loop[i], b]).find(([a, b]) => !waitsOf(of(a)).ids.includes(b)) ?? [];
-    const pilot = from ? ` ${from} waits for ${to} as the pilot of ${of(from).program}: each task of a program waits for its pilot.` : "";
+    const pilot = from ? ` ${from} waits for ${to} as the pilot of ${of(from).milestone}: each task of a milestone waits for its pilot.` : "";
     const written = loop.slice(1).map((b, i) => [loop[i], b]).filter(([a, b]) => !(own && a === task.id) && waitsOf(of(a)).ids.includes(b));
     const clear = ([a, b]) => `${a} waits for ${b === oldPilot ? `the old pilot ${b}` : b}: clear that wait first (sage task ${a} set waits=${waitsOf(of(a)).ids.filter((x) => x !== b).join(",") || "none"})`;
     const fix = written.length ? ` ${written.map(clear).join("; or ")}.` : ` Give ${task.id} other waits.`;
@@ -2001,8 +2041,8 @@ const waitsDecision = (task, was, at, why) => {
   return [{ at, task: task.id, decision: `waits ${[...ids, ...(odd ? ["(text that is not a task id)"] : [])].join(",") || "none"} → ${task.waits || "none"}`, why }];
 };
 /**
- * Refuses a task that joins a program after its build has begun (past briefed, or with a lead, implementer, investigate
- * or arena-judge run that runs) until when: until the owner approves the breakdown (R1208-2), and in an approved program
+ * Refuses a task that joins a milestone after its build has begun (past briefed, or with a lead, implementer, investigate
+ * or arena-judge run that runs) until when: until the owner approves the breakdown (R1208-2), and in an approved milestone
  * until its pilot is merged or concluded, so the pilot runs end to end first (R1217-1).
  */
 const notStarted = (task, pid, runs, when = "the owner approves its breakdown") => {
@@ -2010,34 +2050,34 @@ const notStarted = (task, pid, runs, when = "the owner approves its breakdown") 
   if (run || !["framed", "briefed"].includes(task.state)) refuse(`${task.id} ${run ? `has ${run.id} (${run.role}) running` : `is ${task.state}`}, so it joins ${pid} only after ${when}: before that, a task joins only while it is framed or briefed, with no lead, implementer, investigate or arena-judge run that runs. Nothing changed.`);
 };
 /**
- * A program value as its cell holds it: a PG<n> of this logbook, or "" (none or an empty value takes the task out). It
- * refuses another word, a program that the logbook does not have or that the owner dropped, an ended task joining or
+ * A milestone value as its cell holds it: a M<n> of this logbook, or "" (none or an empty value takes the task out). It
+ * refuses another word, a milestone that the logbook does not have or that the owner dropped, an ended task joining or
  * leaving one (R1242-3), any task joining one whose breakdown gate is open, as its question would not name the task (R1215-1), a started task
- * joining one before its pilot is merged (notStarted), the pilot leaving its program (unless the owner dropped it), and
- * any task leaving a program before the owner approves or drops it (R1204-1). The caller then refuses a loop through the pilot.
+ * joining one before its pilot is merged (notStarted), the pilot leaving its milestone (unless the owner dropped it), and
+ * any task leaving a milestone before the owner approves or drops it (R1204-1). The caller then refuses a loop through the pilot.
  */
-function programValue(task, value, { programs, byId }, runs = []) {
+function milestoneValue(task, value, { milestones, byId }, runs = []) {
   const id = value === "none" ? "" : value;
   const nothing = " Nothing changed.";
-  if (id === (task.program ?? "")) return id;
-  if (ENDED.includes(task.state)) refuse(`${task.id} is ${task.state}: an ended task joins no program and leaves none, so its program keeps it in its count.${nothing}`);
-  const was = programs.get(task.program);
-  if (was?.pilot === task.id && was.state !== "dropped") refuse(`${task.id} is the pilot of ${was.id}, so it stays in ${was.id}: propose a new pilot first (sage program propose ${was.id} --pilot <T>).${nothing}`);
+  if (id === (task.milestone ?? "")) return id;
+  if (ENDED.includes(task.state)) refuse(`${task.id} is ${task.state}: an ended task joins no milestone and leaves none, so its milestone keeps it in its count.${nothing}`);
+  const was = milestones.get(task.milestone);
+  if (was?.pilot === task.id && was.state !== "dropped") refuse(`${task.id} is the pilot of ${was.id}, so it stays in ${was.id}: propose a new pilot first (sage milestone propose ${was.id} --pilot <T>).${nothing}`);
   if (unanswered(was)) refuse(`${task.id} is in ${was.id}, and the owner has not approved or dropped its breakdown (gate ${was.gate}), so ${task.id} stays in it. To leave ${task.id} out, propose ${was.id} again after a change answer, with --tasks that do not name it.${nothing}`);
   if (!id) return "";
-  if (!PROGRAM_ID.test(id)) refuse(`program takes a program id such as PG1, or none to take the task out; not "${visible(id)}".${nothing}`);
-  const program = programs.get(id) ?? missing(`program ${id}`, [...programs.keys()]);
-  if (program.state === "dropped") refuse(`the owner dropped ${id} (gate ${program.gate}), so it takes no task. Propose a new program (sage program propose --name <name> --goal <goal> --pilot <T> --tasks <T,T>).${nothing}`);
-  if (program.state === "proposed") refuse(`the breakdown gate ${program.gate} of ${id} is open, and its question does not name ${task.id}, so no task joins ${id} before the owner answers it. Ask the owner to answer change, then propose ${id} again with --tasks that name ${task.id}.${nothing}`);
-  if (program.state !== "active") notStarted(task, id, runs);
-  else if (!MET.includes(byId.get(program.pilot)?.state)) notStarted(task, id, runs, `its pilot ${program.pilot} is merged or concluded`);
+  if (!MILESTONE_ID.test(id)) refuse(`milestone takes a milestone id such as M1, or none to take the task out; not "${visible(id)}".${nothing}`);
+  const milestone = milestones.get(id) ?? missing(`milestone ${id}`, [...milestones.keys()]);
+  if (milestone.state === "dropped") refuse(`the owner dropped ${id} (gate ${milestone.gate}), so it takes no task. Propose a new milestone (sage milestone propose --name <name> --goal <goal> --pilot <T> --tasks <T,T>).${nothing}`);
+  if (milestone.state === "proposed") refuse(`the breakdown gate ${milestone.gate} of ${id} is open, and its question does not name ${task.id}, so no task joins ${id} before the owner answers it. Ask the owner to answer change, then propose ${id} again with --tasks that name ${task.id}.${nothing}`);
+  if (milestone.state !== "active") notStarted(task, id, runs);
+  else if (!MET.includes(byId.get(milestone.pilot)?.state)) notStarted(task, id, runs, `its pilot ${milestone.pilot} is merged or concluded`);
   return id;
 }
-/** The decision row of a changed program, and the note for the chief when a task joins or leaves after the breakdown approval: no new gate, so the owner hears of it (the owner, 2026-10-19). */
-const programDecision = (task, was, at, why, { programs }) => {
-  if (was === (task.program ?? "")) return { rows: [], note: "" };
-  const after = [[was, "leaves"], [task.program, "joins"]].filter(([p]) => p && programs.get(p)?.state === "active").map(([p, verb]) => ` · ${verb} ${p} after the owner approved its breakdown: no new gate, so tell the owner`).join("");
-  return { rows: [{ at, task: task.id, decision: `program ${was || "none"} → ${task.program || "none"}`, why: `${why}${after ? "; after the breakdown approval" : ""}` }], note: after };
+/** The decision row of a changed milestone, and the note for the chief when a task joins or leaves after the breakdown approval: no new gate, so the owner hears of it (the owner, 2026-10-19). */
+const milestoneDecision = (task, was, at, why, { milestones }) => {
+  if (was === (task.milestone ?? "")) return { rows: [], note: "" };
+  const after = [[was, "leaves"], [task.milestone, "joins"]].filter(([p]) => p && milestones.get(p)?.state === "active").map(([p, verb]) => ` · ${verb} ${p} after the owner approved its breakdown: no new gate, so tell the owner`).join("");
+  return { rows: [{ at, task: task.id, decision: `milestone ${was || "none"} → ${task.milestone || "none"}`, why: `${why}${after ? "; after the breakdown approval" : ""}` }], note: after };
 };
 
 /** The most repair rounds that the chief gives itself in autopilot, with a reason; above it only the owner's gate gives one (T804). */
@@ -2084,7 +2124,7 @@ function planTaskChanges(before, id, changes, at, facts) {
   const matches = tasks.filter(row => row.id === id);
   if (matches.length !== 1) refuse("The task is missing or ambiguous.");
   let note = "";
-  const task = matches[0], decided = [], graph = waitGraph(tasks, facts.programs, facts.gates, decisions), had = prsOf(task, decisions, facts.ledger);
+  const task = matches[0], decided = [], graph = waitGraph(tasks, facts.milestones, facts.gates, decisions), had = prsOf(task, decisions, facts.ledger);
   const approvals = changes.filter(kv => kv.startsWith("approval="));
   const states = changes.filter(kv => kv.startsWith("state="));
   const resume = task.state === "held" && task.hold === "round" && states.some(kv => kv !== "state=abandoned");
@@ -2153,20 +2193,20 @@ function planTaskChanges(before, id, changes, at, facts) {
     else if (k === "waits") {
       const was = task.waits ?? "";
       task.waits = waitsValue(task, v, tasks);
-      const program = graph.programs.get(task.program); // the next proposal shows a change made while the owner asks for changes (R1277-2)
-      if (program?.state === "proposed" && task.waits !== was) refuse(`${task.id} is in ${program.id}, and the question of its breakdown gate ${program.gate} shows the waits of each task, so they do not change while the gate is open. ${program.id} has an open breakdown gate: ask the owner to answer change, then propose again. Nothing changed.`);
+      const milestone = graph.milestones.get(task.milestone); // the next proposal shows a change made while the owner asks for changes (R1277-2)
+      if (milestone?.state === "proposed" && task.waits !== was) refuse(`${task.id} is in ${milestone.id}, and the question of its breakdown gate ${milestone.gate} shows the waits of each task, so they do not change while the gate is open. ${milestone.id} has an open breakdown gate: ask the owner to answer change, then propose again. Nothing changed.`);
       if (task.waits && ENDED.includes(task.state)) refuse(`${task.id} is ${task.state}: an ended task waits for nothing, so it takes no new wait. waits= clears a wait. Nothing changed.`);
       noLoop(task, graph, { own: true });
       decided.push(...waitsDecision(task, was, at, "task set"));
-    } else if (k === "program") {
-      const was = task.program ?? "";
-      task.program = programValue(task, v, graph, runs);
+    } else if (k === "milestone") {
+      const was = task.milestone ?? "";
+      task.milestone = milestoneValue(task, v, graph, runs);
       noLoop(task, graph);
       apartFromPilot(task, graph, [...decisions, ...decided], facts.ledger, "join");
-      const { rows, note: joined } = programDecision(task, was, at, "task set", graph);
+      const { rows, note: joined } = milestoneDecision(task, was, at, "task set", graph);
       decided.push(...rows);
       note += joined;
-    } else refuse(`task set takes state=, branch=, pr=, title=, priority=, kind=, waits=, program= or approval=`);
+    } else refuse(`task set takes state=, branch=, pr=, title=, priority=, kind=, waits=, milestone= or approval=`);
   }
   return { task, tasks, runs, decisions: [...decisions, ...decided], note };
 }
@@ -2201,8 +2241,8 @@ function frame(dir, title, size, risk, add, tags = {}) {
   write(dir, "tasks", [...read(dir, "tasks"), task]);
   return task;
 }
-/** A task's priority, kind and program for a printed line: nothing when it has none. */
-const tagsOf = (task) => `${task.priority ? ` · ${task.priority}` : ""}${task.kind ? ` · kind ${task.kind}` : ""}${task.program ? ` · program ${task.program}` : ""}${task.chief ? ` · chief ${task.chief}` : ""}${offerOf(task) ? ` · offer ${offerOf(task).id} to ${offerOf(task).to} · version ${taskVersion(task)}` : ""}`;
+/** A task's priority, kind and milestone for a printed line: nothing when it has none. */
+const tagsOf = (task) => `${task.priority ? ` · ${task.priority}` : ""}${task.kind ? ` · kind ${task.kind}` : ""}${task.milestone ? ` · milestone ${task.milestone}` : ""}${task.chief ? ` · chief ${task.chief}` : ""}${offerOf(task) ? ` · offer ${offerOf(task).id} to ${offerOf(task).to} · version ${taskVersion(task)}` : ""}`;
 const framed = (task) => `${task.id} framed · ${task.size}${task.risk ? ` · risk ${task.risk}` : ""} · route ${task.route}${tagsOf(task)}${task.waits ? ` · waits ${task.waits.replaceAll(",", ", ")}` : ""}`;
 
 function move(task, to) {
@@ -2230,27 +2270,27 @@ function setPr(task, pr, why, at = now()) {
 const prsOf = (task, decisions, ledger) =>
   new Set([task.pr, ...decisions.filter((d) => d.task === task.id).flatMap((d) => /^PR (\S+) → (\S+)$/.exec(d.decision)?.slice(1) ?? []), ...ledger.filter((r) => r.task === task.id && r.sha).map((r) => r.pr)].map(prNumber).filter((n) => PR.test(n ?? "")));
 /**
- * Refuses a task of a program and its pilot that have or ever had one PR, before the pilot is merged or concluded, in
- * every state of the program but dropped (R1279-1): a task that was ever on a PR stays in its merge check, and the task
- * builds only after its pilot, so that PR could never merge (R1273-1). task is the task whose PR or program changed: a
+ * Refuses a task of a milestone and its pilot that have or ever had one PR, before the pilot is merged or concluded, in
+ * every state of the milestone but dropped (R1279-1): a task that was ever on a PR stays in its merge check, and the task
+ * builds only after its pilot, so that PR could never merge (R1273-1). task is the task whose PR or milestone changed: a
  * member, whose PRs meet the pilot's, or the pilot, whose PRs meet each member's. how names the way out: "pr" (task set
- * pr= or verdict --pr), "join" (task set program=) or "propose" (program propose). had (for "pr") is the PRs of task
+ * pr= or verdict --pr), "join" (task set milestone=) or "propose" (milestone propose). had (for "pr") is the PRs of task
  * before the command, which a new PR cannot take out.
  */
-function apartFromPilot(task, { byId, programs }, decisions, ledger, how, had) {
-  const program = programs.get(task.program);
-  const pilot = program && (program.pilot === task.id ? task : byId.get(program.pilot));
-  if (!pilot || program.state === "dropped" || MET.includes(pilot.state)) return;
+function apartFromPilot(task, { byId, milestones }, decisions, ledger, how, had) {
+  const milestone = milestones.get(task.milestone);
+  const pilot = milestone && (milestone.pilot === task.id ? task : byId.get(milestone.pilot));
+  if (!pilot || milestone.state === "dropped" || MET.includes(pilot.state)) return;
   const pilotPrs = prsOf(pilot, decisions, ledger);
-  const members = pilot === task ? [...byId.values()].filter((t) => t.program === program.id && t.id !== pilot.id) : [task];
+  const members = pilot === task ? [...byId.values()].filter((t) => t.milestone === milestone.id && t.id !== pilot.id) : [task];
   for (const m of members) {
     const n = [...prsOf(m, decisions, ledger)].find((n) => pilotPrs.has(n));
     if (n === undefined) continue;
-    const out = unanswered(program) ? `propose ${program.id} again after a change answer, with --tasks that do not name ${m.id}` : `sage task ${m.id} set program=none`;
+    const out = unanswered(milestone) ? `propose ${milestone.id} again after a change answer, with --tasks that do not name ${m.id}` : `sage task ${m.id} set milestone=none`;
     // A PR that the logbook already has for the task stays in its history, so another PR does not help (R1285-2).
-    const pr = !had?.has(n) ? `Give ${task.id} another PR, or take ${m.id} out of ${program.id} (${out}).` : `${task.id} had PR ${n} before, and that stays, so another PR does not help: take ${m.id} out of ${program.id} (${out}).`;
-    const way = { pr, join: `${m.id} joins ${program.id} only after ${pilot.id} is merged or concluded.`, propose: `Leave ${m.id} out of --tasks, or name another pilot with --pilot.` }[how];
-    refuse(`${m.id} and ${pilot.id}, the pilot of ${program.id}, have or had PR ${n}, and ${m.id} builds only after ${pilot.id} is merged or concluded. A task that was ever on a PR stays in its merge check, so PR ${n} could never merge. ${way} Nothing changed.`);
+    const pr = !had?.has(n) ? `Give ${task.id} another PR, or take ${m.id} out of ${milestone.id} (${out}).` : `${task.id} had PR ${n} before, and that stays, so another PR does not help: take ${m.id} out of ${milestone.id} (${out}).`;
+    const way = { pr, join: `${m.id} joins ${milestone.id} only after ${pilot.id} is merged or concluded.`, propose: `Leave ${m.id} out of --tasks, or name another pilot with --pilot.` }[how];
+    refuse(`${m.id} and ${pilot.id}, the pilot of ${milestone.id}, have or had PR ${n}, and ${m.id} builds only after ${pilot.id} is merged or concluded. A task that was ever on a PR stays in its merge check, so PR ${n} could never merge. ${way} Nothing changed.`);
   }
 }
 /** The ids of the tasks that are or ever were on PR pr: by the tasks' pr, the decision rows of setPr, and their verdicts on a commit of the PR. */
@@ -2583,7 +2623,7 @@ function judgeMerge(sha, env, { cycles, pr, readOnly, head, project, locked, ses
       // A shared head branch (T439): each task that owns it must be a task of the PR too, so a task that joins another
       // task's branch cannot merge that task's work on its own verdicts (F-T273-8).
       if (head !== undefined && ofPr.size) absent.push(...tasks.filter((t) => !ofPr.has(t.id) && owns(t.id)).map((t) => ({ name: `${visible(dir)} ${t.id}`, how: how(t.id) })));
-      const graph = waitGraph(tasks, book ? rowsOf(book.programs) : [], book ? rowsOf(book.gates) : [], decisions);
+      const graph = waitGraph(tasks, book ? rowsOf(book.milestones) : [], book ? rowsOf(book.gates) : [], decisions);
       const chief = basename(dir) !== mine ? undefined : merger ?? (session !== undefined ? chiefFor(project, session, env) : undefined);
       const checked =[...new Set([...rows.map((r) => r.task), ...ofPr])].map((id) => {
         // The cycles of an earlier head of the task count after clean merges of main, in the merged project's git only (T805).
@@ -2642,9 +2682,9 @@ function judgeMerge(sha, env, { cycles, pr, readOnly, head, project, locked, ses
       return checked.map((r) => {
         const task = byId.get(r.id), open = task ? unmetWaits(task, graph, (u) => passes(task, u)) : [];
         if (!open.length || task.state === "held") return r;
-        const program = open.some((w) => w.program), same = open.some((w) => !w.program && !w.pilot);
-        const when = program ? until(open) : `${open.length === 1 ? "that task is" : "each of them is"} merged or concluded`;
-        const after = when && `: it merges after ${when}${same ? `, or ${program ? "each such task passes" : "passes"} in this same merge on the same PR` : ""}`;
+        const milestone = open.some((w) => w.milestone), same = open.some((w) => !w.milestone && !w.pilot);
+        const when = milestone ? until(open) : `${open.length === 1 ? "that task is" : "each of them is"} merged or concluded`;
+        const after = when && `: it merges after ${when}${same ? `, or ${milestone ? "each such task passes" : "passes"} in this same merge on the same PR` : ""}`;
         return { ...r, ok: false, reason: `${r.id} waits for ${waitList(open)}${after}.${waitFix(task, open)}${offPr(task, open)}` };
       });
     });
@@ -2680,24 +2720,24 @@ function judgeMerge(sha, env, { cycles, pr, readOnly, head, project, locked, ses
 }
 
 /**
- * The program lines of status, one for each program: its progress (progressText: its merged or concluded tasks of all its
+ * The milestone lines of status, one for each milestone: its progress (progressText: its merged or concluded tasks of all its
  * tasks, and each abandoned task by id, the owner's Q3), its pilot and what it waits for, then its name last, after a
- * label, so the name cannot pass for the status. A done or dropped program keeps its name and count, and a dropped one
- * names the next step for its tasks that have not ended. A program whose pilot is abandoned or lost is stuck, also before
- * its approval, as on the board. The graph has the tasks by program (shownGraph), so the lines are linear in the tasks (R1208-5).
+ * label, so the name cannot pass for the status. A done or dropped milestone keeps its name and count, and a dropped one
+ * names the next step for its tasks that have not ended. A milestone whose pilot is abandoned or lost is stuck, also before
+ * its approval, as on the board. The graph has the tasks by milestone (shownGraph), so the lines are linear in the tasks (R1208-5).
  */
-function programsLine({ byId, programs, byProgram }) {
-  const each = [...programs.values()].map((p) => {
-    const own = byProgram.get(p.id) ?? [], progress = progressOf(own), text = progressText(progress);
+function milestonesLine({ byId, milestones, byMilestone }) {
+  const each = [...milestones.values()].map((p) => {
+    const own = byMilestone.get(p.id) ?? [], progress = progressOf(own), text = progressText(progress);
     const open = own.filter((t) => !ENDED.includes(t.state)).length;
     const pilot = byId.get(p.pilot)?.state;
-    // The board's words for each state (F-T233-11), and why a lost program is lost (F-T233-2).
+    // The board's words for each state (F-T233-11), and why a lost milestone is lost (F-T233-2).
     const why = { proposed: ` · breakdown waits for you (${p.gate})`, changing: ` · you asked for changes (${p.gate}): the chief revises the breakdown`, lost: ` · ${lostClause(p)}` }[p.state] ?? "";
-    const line = p.state === "dropped" ? `dropped${open ? `: ${open} ${open === 1 ? "task" : "tasks"} still in it, take each out with program=none` : ""}`
+    const line = p.state === "dropped" ? `dropped${open ? `: ${open} ${open === 1 ? "task" : "tasks"} still in it, take each out with milestone=none` : ""}`
       : p.state === "active" && progress.done ? `done, ${text}`
-      : ["active", "proposed", "changing"].includes(p.state) && dead(pilot) ? `${text} · pilot ${p.pilot} ${pilot ?? "not in the logbook"}: choose a new pilot, or drop the program`
+      : ["active", "proposed", "changing"].includes(p.state) && dead(pilot) ? `${text} · pilot ${p.pilot} ${pilot ?? "not in the logbook"}: choose a new pilot, or drop the milestone`
       : `pilot ${p.pilot}: ${text}${why}`;
-    return `program ${p.id} · ${line} · name: ${oneLine(p.name)}`;
+    return `milestone ${p.id} · ${line} · name: ${oneLine(p.name)}`;
   });
   return each;
 }
@@ -2706,12 +2746,12 @@ function programsLine({ byId, programs, byProgram }) {
  * A gate's question on the status line: a breakdown gate's first line and its count of tasks (each task line starts with
  * two spaces), as the board shows it whole. Only the data rule (breakdownGate) marks a breakdown gate, never its text.
  */
-const gateShort = (g, programs) => {
-  const [first, ...rest] = gateLines(g, programs);
+const gateShort = (g, { milestones, renamed }) => {
+  const [first, ...rest] = gateLines(g, milestones, renamed);
   const n = rest.filter((l) => l.startsWith("  ")).length;
   // A move gate's first two lines: its plan and its question, as a breakdown gate shows its first line (F-T640-55).
   if (moveOf(g)) return String(g.question).split(LINE).slice(0, 2).join(" · ");
-  return breakdownGate(g, programs) ? `${first} (breakdown, ${n} ${n === 1 ? "task" : "tasks"})` : first;
+  return breakdownGate(g, milestones, renamed) ? `${first} (breakdown, ${n} ${n === 1 ? "task" : "tasks"})` : first;
 };
 /** The status lines. With save, also status.md: only a command that holds the lock saves, so status.md never lags. */
 function status(dir, save) {
@@ -2720,7 +2760,7 @@ function status(dir, save) {
   const runs = read(dir, "runs");
   const all = read(dir, "gates"), gates = all.filter((g) => !g.answer);
   // The graph as the boards show it (shownGraph): a breakdown waits for the owner only on its breakdown gate by the data rule.
-  const graph = shownGraph(waitGraph(tasks, read(dir, "programs"), all, read(dir, "decisions")), all);
+  const graph = shownGraph(waitGraph(tasks, read(dir, "milestones"), all, read(dir, "decisions")), all);
   const count = {};
   for (const t of tasks) count[t.state] = (count[t.state] ?? 0) + 1;
   const tokens = runs.reduce((n, r) => n + (r.status === "done" && tokenCount(r.tokens) ? Number(r.tokens) : 0), 0);
@@ -2728,16 +2768,16 @@ function status(dir, save) {
     // The name that the board shows (T305): the display name, the upstream's or origin's repository, the checkout's folder.
     `sage · ${shownName({ name: basename(dir), ...logbookIdentity(dir) })} · ${now().slice(11, 16)} UTC`,
     `tasks   ${tasks.length}${Object.entries(count).map(([s, n]) => ` · ${s} ${n}`).join("")}`,
-    `gates   ${gates.length} open${gates.map((g) => ` · ${g.id} ${gateShort(g, graph.programs)} (default: ${g.default || "none"})`).join("")}`,
+    `gates   ${gates.length} open${gates.map((g) => ` · ${g.id} ${gateShort(g, graph)} (default: ${g.default || "none"})`).join("")}`,
     `agents  ${runs.length} runs · ${runs.filter((r) => r.status === "running").length} running · about ${Math.round(tokens / 1000)}k tokens · ${usageSummary(runs)}`,
   ];
-  // The open tasks that wait, each with its unmet waits: a line only when one waits. Then the programs: a line only when there is one.
+  // The open tasks that wait, each with its unmet waits: a line only when one waits. Then the milestones: a line only when there is one.
   const waiting = tasks.filter((t) => !ENDED.includes(t.state)).map((t) => [t, shownOpen(t, graph)]).filter(([, open]) => open.length);
   if (waiting.length) lines.push(`waits   ${waiting.length} waiting${waiting.map(([t, open]) => ` · ${t.id} for ${waitList(open)}`).join("")}`);
   // The open tasks with no priority (T500): older rows stay valid, so status names them for the chief to set.
   const none = tasks.filter((t) => !ENDED.includes(t.state) && !t.priority).map((t) => t.id);
   if (none.length) lines.push(`priority ${none.length} open task${none.length === 1 ? " has" : "s have"} none: ${none.slice(0, 10).join(", ")}${none.length > 10 ? `, and ${none.length - 10} more` : ""} · set them with task <T> set priority=<P0 to P3>`);
-  lines.push(...programsLine(graph));
+  lines.push(...milestonesLine(graph));
   // The runs by task, once, so the usage lines are linear in the runs.
   const runsOf = new Map();
   for (const r of runs) (runsOf.get(r.task) ?? runsOf.set(r.task, []).get(r.task)).push(r);
@@ -2904,7 +2944,24 @@ function folderHere() {
   }
 }
 
+/** The old words of the renames of T995, kept for one version: program (now milestone) and release (now unclaim). */
+const OLD_WORDS = { program: "milestone", release: "unclaim" };
+/**
+ * A command with an old word runs as its new form: the command program or release, the option --program and a task set
+ * key program=. Its output ends with a note that names the new word, so the chief learns it.
+ */
 function sage(argv, env = process.env) {
+  const [cmd, ...rest] = argv, old = [];
+  const words = [OLD_WORDS[cmd] ? (old.push(`${cmd} is ${OLD_WORDS[cmd]} now`), OLD_WORDS[cmd]) : cmd, ...rest.map((word, i) => {
+    if (/^--program(?:=|$)/.test(word)) return old.push("--program is --milestone now"), word.replace("--program", "--milestone");
+    if (cmd === "task" && rest[1] === "set" && i > 1 && word.startsWith("program=")) return old.push("program= is milestone= now"), `milestone=${word.slice(8)}`;
+    return word;
+  })];
+  const out = sageCommand(words, env);
+  return old.length ? `${out}\nnote: ${old.join("; ")}. The old words work for one more version.` : out;
+}
+/** One command, in this version's words (sage). */
+function sageCommand(argv, env) {
   const [cmd, ...rest] = argv;
   if (!COMMANDS.includes(cmd)) refuse(`unknown command "${cmd ?? ""}". Commands: ${COMMANDS.join(", ")}`);
   const { pos, opt } = parse(cmd, rest);
@@ -3168,11 +3225,11 @@ function branchHeld(project, branch, to, env) {
   return `\n${branch} is checked out in the worktree ${holder}, and git checks out a branch in one worktree only. To free it, with its files kept, run this command:\ngit -C '${holder.replaceAll("'", "'\\''")}' switch --detach\n${then}`;
 }
 /**
- * Who held a task with no owning chief last: the chief that released it, or the provider of the logbook that the move
+ * Who held a task with no owning chief last: the chief that unclaimed it (an older row says released), or the provider of the logbook that the move
  * brought it from (the adoption record of version 2). Empty for a task that no chief held.
  */
 function heldLast(dir, task) {
-  const released = read(dir, "decisions").filter((d) => d.task === task.id).map((d) => /^T[1-9]\d* released by (C[1-9]\d*)$/.exec(d.decision)?.[1]).filter(Boolean).at(-1);
+  const released = read(dir, "decisions").filter((d) => d.task === task.id).map((d) => /^T[1-9]\d* (?:unclaimed|released) by (C[1-9]\d*)$/.exec(d.decision)?.[1]).filter(Boolean).at(-1);
   const moved = adoptionOf(task);
   return released ? { released } : moved?.version === 2 ? { moved: moved.provider } : {};
 }
@@ -3201,7 +3258,7 @@ function takeoverGate(dir, task, to, offered = false) {
  */
 function claimBar(dir, task, chief) {
   const held = heldLast(dir, task);
-  if (held.released) return held.released === chief ? "" : `${chiefLabel(dir, held.released)} released ${task.id} last`;
+  if (held.released) return held.released === chief ? "" : `${chiefLabel(dir, held.released)} unclaimed ${task.id} last`;
   return "moved" in held && held.moved !== chiefs(dir).find((r) => r.id === chief)?.provider ? `${task.id} came in the move from the ${held.moved} logbook` : "";
 }
 
@@ -3243,9 +3300,9 @@ function guard(dir, cmd, pos, opt, project, env) {
   const chief = lead?.chief ?? opt.chief ?? refuse(`this logbook is shared, and a command with no chief only reads: add --chief <your C id> to ${name}. Nothing changed. Only a chief's session writes here. In a Claude session, run this write again as one command of its own, and the hook names your id. A Codex chief writes through the sage tools, which add its id. A terminal with no chief session only reads.`);
   if (!lead && !chiefs(dir).some((r) => r.id === chief)) refuse(`${visible(chief)} is not a chief of this logbook (${join(dir, "chiefs.tsv")}). Nothing changed.`);
   const tasks = need.kind === "any" ? [] : read(dir, "tasks");
-  const old = need.kind === "program" ? read(dir, "programs").find((p) => p.id === pos[1]) : undefined;
-  const ids = need.kind === "program"
-    ? [opt.pilot ?? old?.pilot, ...(opt.tasks === undefined ? tasks.filter((t) => old && t.program === old.id).map((t) => t.id) : opt.tasks === "none" ? [] : waitWords(opt.tasks))]
+  const old = need.kind === "milestone" ? read(dir, "milestones").find((p) => p.id === pos[1]) : undefined;
+  const ids = need.kind === "milestone"
+    ? [opt.pilot ?? old?.pilot, ...(opt.tasks === undefined ? tasks.filter((t) => old && t.milestone === old.id).map((t) => t.id) : opt.tasks === "none" ? [] : waitWords(opt.tasks))]
     : [need.task ?? (need.run && read(dir, "runs").find((r) => r.id === need.run)?.task)];
   const named = ids.filter(Boolean); // a task or a run that the logbook lacks gets the command's own refusal
   if (need.kind !== "any") for (const id of new Set(named)) {
@@ -3417,14 +3474,14 @@ function act(cmd, pos, opt, dir, env, skip, project) {
       // The owner decides each change of owning chief (T656): accept asks through a takeover gate, and the answer moves the task (replaceChief).
       return takeoverGate(dir, task, opt.chief, true);
     }
-    case "release": {
+    case "unclaim": {
       const { tasks, task } = taskOf(dir, need(sub, "the task id")), open = offerOf(task);
       if (open) refuse(`${task.id} has the open offer ${open.id} to ${open.to}: cancel it first. Nothing changed.`);
-      runsBar(dir, task, "release", opt.chief);
+      runsBar(dir, task, "unclaim", opt.chief);
       task.chief = "";
       write(dir, "tasks", tasks);
-      ownership(dir, task.id, `released by ${opt.chief}`, "release");
-      return `${task.id} released · no owning chief. Only ${opt.chief} claims it back; another chief needs the owner's takeover gate.`;
+      ownership(dir, task.id, `unclaimed by ${opt.chief}`, "unclaim");
+      return `${task.id} unclaimed · no owning chief. Only ${opt.chief} claims it back; another chief needs the owner's takeover gate.`;
     }
     case "init":
       // A new logbook's tables, tasks.tsv last: the merge check takes a folder with it for a whole logbook. An existing
@@ -3521,10 +3578,10 @@ function act(cmd, pos, opt, dir, env, skip, project) {
         const tags = { priority: priorityOf(opt.priority), ...(opt.kind !== undefined ? { kind: tag("kind", opt.kind) } : {}), ...chiefTag(opt) };
         const graph = graphOf(dir), next = { id: nextId(dir, "T"), state: "framed" };
         if (opt.waits !== undefined) tags.waits = waitsValue(next, opt.waits, [...graph.byId.values()]);
-        if (opt.program !== undefined) tags.program = programValue(next, opt.program, graph); // no loop: no task or pilot cell names a new id (IDS)
+        if (opt.milestone !== undefined) tags.milestone = milestoneValue(next, opt.milestone, graph); // no loop: no task or pilot cell names a new id (IDS)
         const task = frame(dir, need(opt.title, "--title"), size, risk, list(opt.add), tags);
         checkout(dir, project, env);
-        const at = now(), joined = programDecision(task, "", at, "task add", graph);
+        const at = now(), joined = milestoneDecision(task, "", at, "task add", graph);
         const decided = [...(opt.add ? [{ at, task: task.id, decision: `added ${opt.add}`, why }] : []), ...waitsDecision(task, "", at, "task add"), ...joined.rows];
         if (decided.length) write(dir, "decisions", [...read(dir, "decisions"), ...decided]);
         return `${framed(task)}${joined.note}`;
@@ -3536,7 +3593,7 @@ function act(cmd, pos, opt, dir, env, skip, project) {
       const why = opt.why === undefined ? undefined : [cell(opt.why), opt.chief && `abandoned by ${opt.chief}${task.chief ? "" : ", with no owning chief"}`].filter(Boolean).join(" · ");
       if (id === "set") {
         const before = { tasks, runs: read(dir, "runs"), decisions: read(dir, "decisions") };
-        const planned = planTaskChanges(before, task.id, more, now(), { ...Object.fromEntries(["findings", "ledger", "gates", "programs"].map((t) => [t, read(dir, t)])), maxRounds: config(env, dir).max_rounds, why });
+        const planned = planTaskChanges(before, task.id, more, now(), { ...Object.fromEntries(["findings", "ledger", "gates", "milestones"].map((t) => [t, read(dir, t)])), maxRounds: config(env, dir).max_rounds, why });
         const bar = moveBar(more, planned); // after the plan, so that a branch= in the same command counts, in either order
         if (bar) refuse(bar);
         if (JSON.stringify(planned.decisions) !== JSON.stringify(before.decisions)) write(dir, "decisions", planned.decisions);
@@ -3547,56 +3604,56 @@ function act(cmd, pos, opt, dir, env, skip, project) {
       }
       return `${task.id} ${task.state} · ${task.size} · round ${task.round} · route ${task.route}${task.branch ? ` · ${task.branch}` : ""}${task.pr ? ` · PR ${task.pr}` : ""}${tagsOf(task)}${waitsText(task, shownOf(dir, tasks))}${note}${keptLines(dir, task.id)}`;
     }
-    case "program": {
-      // program propose writes a program, puts its pilot and its other tasks in it, and opens its breakdown gate on the
+    case "milestone": {
+      // milestone propose writes a milestone, puts its pilot and its other tasks in it, and opens its breakdown gate on the
       // pilot task, where the board shows it under Needs you. The gate's question names each task and what it waits for
-      // (R1205-1). program propose <PG> proposes it again, after the owner's change or for a new pilot: a new gate, with
-      // the program's tasks (or a new --tasks list) and its round.
-      if (sub !== "propose" || more.length) refuse("program takes: propose --name <name> --goal <goal> --pilot <T> --tasks <T,T>, or propose <PG> with --name, --goal, --pilot or --tasks to propose it again");
-      const [tasks, programs, gates, runs, decisions] = ["tasks", "programs", "gates", "runs", "decisions"].map((t) => read(dir, t));
+      // (R1205-1). milestone propose <M> proposes it again, after the owner's change or for a new pilot: a new gate, with
+      // the milestone's tasks (or a new --tasks list) and its round.
+      if (sub !== "propose" || more.length) refuse("milestone takes: propose --name <name> --goal <goal> --pilot <T> --tasks <T,T>, or propose <M> with --name, --goal, --pilot or --tasks to propose it again");
+      const [tasks, milestones, gates, runs, decisions] = ["tasks", "milestones", "gates", "runs", "decisions"].map((t) => read(dir, t));
       const nothing = " Nothing changed.";
-      // A program of that name whose gate is not in the logbook is a propose that stopped before it wrote the gate: the
+      // A milestone of that name whose gate is not in the logbook is a propose that stopped before it wrote the gate: the
       // same command finishes it (R1246-2).
-      const unfinished = id === undefined && opt.name !== undefined ? programs.find((p) => looks(p.name) === looks(opt.name) && !gates.some((g) => g.id === p.gate)) : undefined;
-      const old = unfinished ?? (id === undefined ? undefined : (programs.find((p) => p.id === id) ?? missing(`program ${id}`, programs.map((p) => p.id))));
+      const unfinished = id === undefined && opt.name !== undefined ? milestones.find((p) => looks(p.name) === looks(opt.name) && !gates.some((g) => g.id === p.gate)) : undefined;
+      const old = unfinished ?? (id === undefined ? undefined : (milestones.find((p) => p.id === id) ?? missing(`milestone ${id}`, milestones.map((p) => p.id))));
       // A propose that stopped before it wrote its gate wrote no decision rows either (stopped).
       const stopped = old && !gates.some((g) => g.id === old.gate);
-      const state = old && programState(gates.find((g) => g.id === old.gate), old, droppedBy(decisions));
+      const state = old && milestoneState(gates.find((g) => g.id === old.gate), old, droppedBy(decisions));
       if (state === "proposed") refuse(`the breakdown gate ${old.gate} of ${old.id} is still open: the owner answers it first. To change the breakdown, the owner answers change, then propose it again.${nothing}`);
-      if (state === "dropped") refuse(`the owner dropped ${old.id}${stopped ? "" : ` (gate ${old.gate})`}, and a dropped program does not come back. Propose a new program.${nothing}`);
+      if (state === "dropped") refuse(`the owner dropped ${old.id}${stopped ? "" : ` (gate ${old.gate})`}, and a dropped milestone does not come back. Propose a new milestone.${nothing}`);
       const name = opt.name ?? old?.name ?? need(undefined, "--name");
       const goal = opt.goal ?? old?.goal ?? need(undefined, "--goal");
-      const pid = old?.id ?? nextId(dir, "PG");
+      const pid = old?.id ?? nextId(dir, "M");
       const nameWhy = nameProblem(name), goalWhy = nameProblem(goal, 300);
-      if (nameWhy) refuse(`the program's name ${nameWhy}.${nothing}`);
-      if (goalWhy) refuse(`the program's goal ${goalWhy}.${nothing}`);
-      if (/^pg\d+$/.test(looks(name))) refuse(`the program's name looks like a program id (${visible(name)}), so a line could name the wrong program: give it a name of words, such as Codex support.${nothing}`);
-      const twin = programs.find((p) => p.id !== pid && looks(p.name) === looks(name));
-      if (twin) refuse(`${twin.id} has that name already: give each program its own name.${nothing}`);
+      if (nameWhy) refuse(`the milestone's name ${nameWhy}.${nothing}`);
+      if (goalWhy) refuse(`the milestone's goal ${goalWhy}.${nothing}`);
+      if (/^m\d+$/.test(looks(name))) refuse(`the milestone's name looks like a milestone id (${visible(name)}), so a line could name the wrong milestone: give it a name of words, such as Codex support.${nothing}`);
+      const twin = milestones.find((p) => p.id !== pid && looks(p.name) === looks(name));
+      if (twin) refuse(`${twin.id} has that name already: give each milestone its own name.${nothing}`);
       const byId = byIds(tasks);
       const pilot = byId.get(opt.pilot ?? old?.pilot ?? need(undefined, "--pilot")) ?? missing(`task ${visible(opt.pilot ?? old.pilot)}`, tasks.map((t) => t.id));
-      if (ENDED.includes(pilot.state)) refuse(`${pilot.id} is ${pilot.state}: an ended task is no pilot, as it runs nothing more. Name a task that has not ended with --pilot${old ? ` (sage program propose ${old.id} --pilot <T>)` : ""}.${nothing}`);
-      // The other tasks: --tasks names each of them (none for no other task); without it, the program keeps its tasks. An
-      // ended task of the program stays in it either way, so the count keeps it and the question lists it (R1219-1).
+      if (ENDED.includes(pilot.state)) refuse(`${pilot.id} is ${pilot.state}: an ended task is no pilot, as it runs nothing more. Name a task that has not ended with --pilot${old ? ` (sage milestone propose ${old.id} --pilot <T>)` : ""}.${nothing}`);
+      // The other tasks: --tasks names each of them (none for no other task); without it, the milestone keeps its tasks. An
+      // ended task of the milestone stays in it either way, so the count keeps it and the question lists it (R1219-1).
       const words = opt.tasks === undefined ? undefined : opt.tasks === "none" ? [] : waitWords(opt.tasks);
       const odd = words?.find((w) => !TASK_ID.test(w));
       if (odd !== undefined) refuse(`--tasks takes task ids such as T7, separated by commas or spaces, or none; not "${visible(odd)}".${nothing}`);
       const twice = words?.find((w, i) => words.indexOf(w) !== i);
       if (twice) refuse(`--tasks names ${twice} twice: give each task once.${nothing}`);
-      if (words?.includes(pilot.id)) refuse(`${pilot.id} is the pilot: --tasks names the other tasks of the program.${nothing}`);
+      if (words?.includes(pilot.id)) refuse(`${pilot.id} is the pilot: --tasks names the other tasks of the milestone.${nothing}`);
       const named = words && new Set(words.map((w) => byId.get(w) ?? missing(`task ${w}`, tasks.map((t) => t.id))));
-      const others = tasks.filter((t) => t !== pilot && (named?.has(t) || (t.program === pid && (!named || ENDED.includes(t.state)))));
-      for (const t of [pilot, ...others].filter((t) => t.program !== pid)) {
-        if (ENDED.includes(t.state)) refuse(`${t.id} is ${t.state}: an ended task joins no program. Leave it out of --tasks.${nothing}`); // before the program check, as an ended task takes no program=none (R1248-1)
-        if (t.program) refuse(`${t.id} is in ${t.program}, and a task is in one program: take it out first (sage task ${t.id} set program=none)${t === pilot ? ", or give another pilot" : ", or leave it out of --tasks"}.${nothing}`);
+      const others = tasks.filter((t) => t !== pilot && (named?.has(t) || (t.milestone === pid && (!named || ENDED.includes(t.state)))));
+      for (const t of [pilot, ...others].filter((t) => t.milestone !== pid)) {
+        if (ENDED.includes(t.state)) refuse(`${t.id} is ${t.state}: an ended task joins no milestone. Leave it out of --tasks.${nothing}`); // before the milestone check, as an ended task takes no milestone=none (R1248-1)
+        if (t.milestone) refuse(`${t.id} is in ${t.milestone}, and a task is in one milestone: take it out first (sage task ${t.id} set milestone=none)${t === pilot ? ", or give another pilot" : ", or leave it out of --tasks"}.${nothing}`);
         notStarted(t, pid, runs);
       }
       const at = now();
-      const round = gates.filter((g) => proposalOf(g) === pid).length + 1;
+      const renamed = renamedIds(decisions), round = gates.filter((g) => proposalOf(g, renamed) === pid).length + 1;
       // Each task that joins or leaves; the pilot's move is the proposal's own.
       const members = new Set([pilot.id, ...others.map((t) => t.id)]);
-      const toOf = (t) => (members.has(t.id) ? pid : t.program === pid ? "" : (t.program ?? ""));
-      const moved = tasks.map((t) => ({ t, to: toOf(t) })).filter(({ t, to }) => to !== (t.program ?? ""));
+      const toOf = (t) => (members.has(t.id) ? pid : t.milestone === pid ? "" : (t.milestone ?? ""));
+      const moved = tasks.map((t) => ({ t, to: toOf(t) })).filter(({ t, to }) => to !== (t.milestone ?? ""));
       // The question, one part on each line: the fixed text first, then each free text after a fixed label or a task id
       // (the owner, 2026-10-19). An ended task's state or its waits but the pilot come in brackets after the id, and a
       // colon ends the fixed part, so a title cannot pass for a tag (R1249-3): "  T3 [merged]: Fix it", "  T4: Add it".
@@ -3604,30 +3661,31 @@ function act(cmd, pos, opt, dir, env, skip, project) {
       const wait = (w, state = byId.get(w)?.state) => (dead(state) ? `${w} (${state ?? "not in the logbook"}, never met)` : w);
       const tag = (t, waits = waitsOf(t).ids.filter((w) => w !== pilot.id)) => (ENDED.includes(t.state) ? t.state : waits.length ? `waits for ${waits.map((w) => wait(w)).join(", ")}` : "");
       const item = (t) => `  ${t.id}${tag(t) ? ` [${tag(t)}]` : ""}: ${oneLine(t.title)}`;
-      const question = [`Approve program ${pid}${round > 1 ? ` (round ${round})` : ""}? No task builds before you approve.`, `Name: ${oneLine(name)}`, `Goal: ${oneLine(goal)}`,
+      const question = [`Approve milestone ${pid}${round > 1 ? ` (round ${round})` : ""}? No task builds before you approve.`, `Name: ${oneLine(name)}`, `Goal: ${oneLine(goal)}`,
         "Pilot, runs first:", item(pilot), ...(others.length ? [`Then, each after ${pilot.id}:`, ...others.map(item)] : [])].join(LINE);
       const g = { id: nextId(dir, "G"), task: pilot.id, question, options: BREAKDOWN, recommendation: "approve", default: "", at };
       const row = { id: pid, name, goal, pilot: pilot.id, gate: g.id, at: old?.at ?? at };
-      const after = old ? programs.map((p) => (p.id === pid ? row : p)) : [...programs, row];
-      // A row for each task but the pilot whose program changes (R1269-3): from its cell before this command. After a stopped
+      const after = old ? milestones.map((p) => (p.id === pid ? row : p)) : [...milestones, row];
+      // A row for each task but the pilot whose milestone changes (R1269-3): from its cell before this command. After a stopped
       // proposal, which changed cells but wrote no rows, from what the decision rows say: a task's last move row, or a
       // proposal row on it as the pilot (R1255-2, R1266-2).
       const logged = new Map();
       for (const d of decisions) {
-        const to = /^program \S+ → (\S+)$/.exec(d.decision)?.[1] ?? (d.why === PROPOSE ? /^(PG[1-9]\d*) proposed /.exec(d.decision)?.[1] : undefined);
-        if (to) logged.set(d.task, to === "none" ? "" : to);
+        // A row from before the rename (T995) reads program and PG<n>: the map gives its milestone.
+        const to = /^(?:milestone|program) \S+ → (\S+)$/.exec(d.decision)?.[1] ?? ([PROPOSE, "program propose"].includes(d.why) ? /^((?:M|PG)[1-9]\d*) proposed /.exec(d.decision)?.[1] : undefined);
+        if (to) logged.set(d.task, to === "none" ? "" : (renamed.get(to) ?? to));
       }
-      const rowsOfMoves = tasks.filter((t) => t !== pilot).map((t) => [t, stopped ? (logged.get(t.id) ?? "") : (t.program ?? ""), toOf(t)])
+      const rowsOfMoves = tasks.filter((t) => t !== pilot).map((t) => [t, stopped ? (logged.get(t.id) ?? "") : (t.milestone ?? ""), toOf(t)])
         .filter(([, from, to]) => from !== to && (from === pid || to === pid))
-        .map(([t, from, to]) => ({ at, task: t.id, decision: `program ${from || "none"} → ${to || "none"}`, why: PROPOSE }));
-      for (const { t, to } of moved) t.program = to;
+        .map(([t, from, to]) => ({ at, task: t.id, decision: `milestone ${from || "none"} → ${to || "none"}`, why: PROPOSE }));
+      for (const { t, to } of moved) t.milestone = to;
       const graph = waitGraph(tasks, after, gates, decisions);
       noLoop(pilot, graph, { oldPilot: old?.pilot }); // each new wait is a wait for the pilot, so a new loop goes through it
       apartFromPilot(pilot, graph, decisions, read(dir, "ledger"), "propose");
       const decision = round > 1 ? `${pid} proposed again with gate ${g.id}, round ${round}` : `${pid} proposed with gate ${g.id}, pilot ${pilot.id}, tasks ${others.map((t) => t.id).join(",") || "none"}, name: ${oneLine(name)}`;
-      // The program's row first: until the gate's row is written, the program is lost, so a stop between two writes leaves
-      // no task of it free to build while its gate is open, also on a new proposal of an approved program (R1235-1).
-      write(dir, "programs", after);
+      // The milestone's row first: until the gate's row is written, the milestone is lost, so a stop between two writes leaves
+      // no task of it free to build while its gate is open, also on a new proposal of an approved milestone (R1235-1).
+      write(dir, "milestones", after);
       write(dir, "tasks", tasks);
       write(dir, "gates", [...gates, g]);
       write(dir, "decisions", [...decisions, ...rowsOfMoves, { at, task: pilot.id, decision, why: PROPOSE }]);
@@ -3887,9 +3945,9 @@ function act(cmd, pos, opt, dir, env, skip, project) {
         if (options.some((o) => /^other ?:/.test(looks(o)))) refuse(`an option may not start with "other:": it marks an answer in the owner's own words.`);
         const pick = (raw, what, v = flat(raw)) => options.find((o) => o === v) ?? options.find((o) => looks(o) === looks(v)) ?? (/^[1-9]\d*$/.test(v) ? options[Number(v) - 1] : undefined) ?? refuse(`${what} is one of the options, by its text or its number (1 to ${options.length}): ${options.map((o) => JSON.stringify(o)).join(", ")}.`);
         const recommendation = pick(need(opt.recommend, "--recommend"), "--recommend");
-        // Only program propose writes the first line of a breakdown gate, which marks the gate as one (proposalOf).
+        // Only milestone propose writes the first line of a breakdown gate, which marks the gate as one (proposalOf).
         const question = flat(need(opt.question, "--question")); // one line, as a title: only a breakdown gate's question has lines (R1249-1)
-        if (readsAsBreakdown(question)) refuse(`a question that starts with "Approve program" is a breakdown gate, and only program propose opens one. Ask it in other words.`);
+        if (readsAsBreakdown(question)) refuse(`a question that starts with "Approve milestone" or "Approve program" is a breakdown gate, and only milestone propose opens one. Ask it in other words.`);
         if (looks(question).startsWith("move · plan")) refuse(`a question that starts with "move · plan" is a move gate, and only sage move --plan opens one. Ask it in other words.`);
         const g = { id: nextId(dir, "G"), task: id ?? "", question: need(question, "--question"), options: flatOptions, recommendation, default: opt.default === undefined ? "" : pick(opt.default, "--default"), at: now() };
         write(dir, "gates", [...gates, g]);
@@ -3909,7 +3967,7 @@ function act(cmd, pos, opt, dir, env, skip, project) {
         // same options takes a new answer, as other gates do (R1212-2).
         // A move gate answers once too: its answer covers one plan, and a new answer needs a new preview (the design's "kept").
         if (g.answer && moveOf(g)) refuse(`${g.id} is a move gate, and the owner answered it already (${visible(g.answer)}): a move gate answers once. To move later, run the preview again: sage move --preview. Nothing changed.`);
-        if (g.answer && proposalOf(g)) refuse(`${g.id} is a breakdown gate, and the owner answered it already (${visible(g.answer)}): a breakdown gate answers once. For a change of mind, the sage proposes the program again (sage program propose <PG>) and the owner answers the new gate. A dropped program does not come back: propose a new one. Nothing changed.`);
+        if (g.answer && proposalOf(g, renamedIds(read(dir, "decisions")))) refuse(`${g.id} is a breakdown gate, and the owner answered it already (${visible(g.answer)}): a breakdown gate answers once. For a change of mind, the sage proposes the milestone again (sage milestone propose <M>) and the owner answers the new gate. A dropped milestone does not come back: propose a new one. Nothing changed.`);
         // By number only, as the board numbers the options: no agent-written text goes into the command. The owner's own
         // words come as the hex of their UTF-8 bytes, so no text of theirs is in the command either, and are kept with
         // "other: " before them, so they never pass for one of the options.

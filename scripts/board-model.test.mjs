@@ -5,8 +5,8 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { buildBoardModel } from "../packages/sage-core/board-model.mjs";
 import { readBoardSources } from "../packages/sage-core/board-reader.mjs";
-import { NOW as PROGRAMS_NOW, programsSource, programsTables } from "./fixtures/board-programs.mjs";
-import { shownGraph, unmetWaits, waitGraph } from "../packages/sage-core/program-rules.mjs";
+import { NOW as MILESTONES_NOW, milestonesSource, milestonesTables } from "./fixtures/board-milestones.mjs";
+import { shownGraph, unmetWaits, waitGraph } from "../packages/sage-core/milestone-rules.mjs";
 const now = "2026-10-08T20:00:00.000Z";
 const head = "a".repeat(40), old = "b".repeat(40);
 const task = (id, state, extra = {}) => ({ id, title: "Sample", size: "small", risk: "", route: "build,code-review,qa", state, branch: "", pr: "", round: "0", keys: "", ...extra });
@@ -565,47 +565,47 @@ test("T305: the picker's list puts needs you first, then active in the last 14 d
   assert.equal(withActivity.projects[0].problem, "tasks: damaged table header", "an unreadable logbook is named by its folder, with the reason");
 });
 
-// T233: programs on the board. SAMPLE DATA from scripts/fixtures/board-programs.mjs.
-const programsModel = (sources = [programsSource()]) => buildBoardModel(sources, { now: PROGRAMS_NOW });
+// T233: milestones on the board. SAMPLE DATA from scripts/fixtures/board-milestones.mjs.
+const milestonesModel = (sources = [milestonesSource()]) => buildBoardModel(sources, { now: MILESTONES_NOW });
 const cardOf = (model, id) => model.tasks.find(item => item.id === id);
-const programOf = (model, id) => model.programs.find(item => item.id === id);
+const milestoneOf = (model, id) => model.milestones.find(item => item.id === id);
 
 test("T233: each wait on a card has its state, and the wait line names the unmet ones: a task, the pilot, the breakdown, never met, and odd text that it never shows", () => {
-  const model = programsModel();
+  const model = milestonesModel();
   const line = id => cardOf(model, id).waitLine;
   assert.deepEqual(line("T13"), { never: false, text: "Waits for T12 (in review)." }, "not met");
   assert.deepEqual(line("T11"), { never: true, text: "Waits for T10 (abandoned): it cannot start." }, "never met: abandoned; the met pilot wait is not named");
   assert.deepEqual(cardOf(model, "T11").waits, [{ id: "T10", state: "abandoned", word: "abandoned", pilot: false, met: false, never: true }, { id: "T1", state: "merged", word: "merged", pilot: true, met: true, never: false }]);
   assert.deepEqual(line("T22"), { never: true, text: "Waits for T21 (pilot, abandoned): it cannot start." }, "the pilot wait");
   assert.deepEqual(line("T41"), { never: false, text: "Waits for T40 (pilot, building). Design and PE may run." }, "a task in design may run its design and PE");
-  assert.deepEqual(line("T32"), { never: false, text: "Waits for your approval of the PG3 breakdown (gate G12)." }, "the breakdown wait, alone, although T32 also waits for T31");
-  assert.deepEqual(line("T90"), { never: false, text: "Waits for the new breakdown of PG9: you asked for changes (gate G9)." });
-  assert.deepEqual(line("T60"), { never: true, text: "Waits for the PG6 breakdown, which you dropped (gate G20): it cannot start." });
-  assert.deepEqual(line("T75"), { never: true, text: "Waits for the PG7 breakdown, whose gate G30 is not in the logbook: it cannot start." });
+  assert.deepEqual(line("T32"), { never: false, text: "Waits for your approval of the M3 breakdown (gate G12)." }, "the breakdown wait, alone, although T32 also waits for T31");
+  assert.deepEqual(line("T90"), { never: false, text: "Waits for the new breakdown of M9: you asked for changes (gate G9)." });
+  assert.deepEqual(line("T60"), { never: true, text: "Waits for the M6 breakdown, which you dropped (gate G20): it cannot start." });
+  assert.deepEqual(line("T75"), { never: true, text: "Waits for the M7 breakdown, whose gate G30 is not in the logbook: it cannot start." });
   assert.deepEqual(line("T83"), { never: true, text: "It cannot start. Its waits cell has text that is not a task id: the chief sets its waits again." });
   assert.ok(!JSON.stringify(cardOf(model, "T83")).includes("soon"), "the odd text is not in the model");
   for (const id of ["T1", "T10", "T12", "T40", "T70"]) assert.equal(line(id), null, `${id}: nothing waits, or the task ended`);
-  assert.deepEqual(cardOf(model, "T30").program, { key: "claude/sage-ff5ee2/PG3", id: "PG3", name: "Board programs", pilot: true });
-  assert.equal(cardOf(model, "T70").program, null);
+  assert.deepEqual(cardOf(model, "T30").milestone, { key: "claude/sage-ff5ee2/M3", id: "M3", name: "Board milestones", pilot: true });
+  assert.equal(cardOf(model, "T70").milestone, null);
 });
 
-test("T233: each program's state and progress (Q3), and what moves next (Q4: only a task with no unmet wait; the waiting tasks are a count)", () => {
-  const model = programsModel();
-  const view = id => { const p = programOf(model, id); return [p.state, p.progressText, p.next && `${p.next.id} ${p.next.word}${p.next.pilot ? " pilot" : ""}`, p.waiting, p.cannotStart]; };
-  assert.deepEqual(view("PG1"), ["active", "3 of 7 merged · T10 abandoned", "T12 in review", 1, ["T11"]]);
-  assert.deepEqual(view("PG2"), ["stuck", "0 of 3 merged · T21 abandoned", null, 0, ["T22", "T23"]]);
-  assert.deepEqual(view("PG3"), ["proposed", "0 of 3 merged", null, 3, []]);
-  assert.deepEqual(view("PG4"), ["active", "0 of 3 merged", "T40 building pilot", 2, []]);
-  assert.deepEqual(view("PG5"), ["done", "2 of 3 merged · T52 abandoned", null, 0, []], "done: a concluded task counts as merged");
-  assert.deepEqual(view("PG6"), ["dropped", "0 of 1 merged", null, 0, ["T60"]], "dropped by the decision row of the owner's answer, after its gate row was lost");
-  assert.deepEqual(view("PG7"), ["lost", "0 of 1 merged", null, 0, ["T75"]]);
-  assert.deepEqual(view("PG9"), ["changing", "0 of 1 merged", null, 1, []]);
-  assert.equal(programOf(model, "PG1").key, "claude/sage-ff5ee2/PG1");
-  assert.deepEqual(programOf(model, "PG1").tasks.map(key => key.split("/").at(-1)), ["T1", "T2", "T3", "T10", "T12", "T11", "T13"], "the pilot first, then each task after what it waits for, then by id");
+test("T233: each milestone's state and progress (Q3), and what moves next (Q4: only a task with no unmet wait; the waiting tasks are a count)", () => {
+  const model = milestonesModel();
+  const view = id => { const p = milestoneOf(model, id); return [p.state, p.progressText, p.next && `${p.next.id} ${p.next.word}${p.next.pilot ? " pilot" : ""}`, p.waiting, p.cannotStart]; };
+  assert.deepEqual(view("M1"), ["active", "3 of 7 merged · T10 abandoned", "T12 in review", 1, ["T11"]]);
+  assert.deepEqual(view("M2"), ["stuck", "0 of 3 merged · T21 abandoned", null, 0, ["T22", "T23"]]);
+  assert.deepEqual(view("M3"), ["proposed", "0 of 3 merged", null, 3, []]);
+  assert.deepEqual(view("M4"), ["active", "0 of 3 merged", "T40 building pilot", 2, []]);
+  assert.deepEqual(view("M5"), ["done", "2 of 3 merged · T52 abandoned", null, 0, []], "done: a concluded task counts as merged");
+  assert.deepEqual(view("M6"), ["dropped", "0 of 1 merged", null, 0, ["T60"]], "dropped by the decision row of the owner's answer, after its gate row was lost");
+  assert.deepEqual(view("M7"), ["lost", "0 of 1 merged", null, 0, ["T75"]]);
+  assert.deepEqual(view("M9"), ["changing", "0 of 1 merged", null, 1, []]);
+  assert.equal(milestoneOf(model, "M1").key, "claude/sage-ff5ee2/M1");
+  assert.deepEqual(milestoneOf(model, "M1").tasks.map(key => key.split("/").at(-1)), ["T1", "T2", "T3", "T10", "T12", "T11", "T13"], "the pilot first, then each task after what it waits for, then by id");
 });
 
 test("T233 C5, T383: a loop of waits from a hand edit ends: the order marks each task once; each task of the loop cannot start, with a repair line", () => {
-  const model = programsModel(), loop = programOf(model, "PG8");
+  const model = milestonesModel(), loop = milestoneOf(model, "M8");
   assert.deepEqual(loop.tasks.map(key => key.split("/").at(-1)), ["T80", "T82", "T83", "T81"]);
   assert.deepEqual([loop.next, loop.waiting, loop.cannotStart], [null, 0, ["T82", "T83", "T81"]]);
   assert.deepEqual(cardOf(model, "T81").waitLine, { never: true, text: "Waits for T82 (not started, in a loop): it cannot start. Its waits make a loop, which never ends: the chief sets its waits again." });
@@ -614,147 +614,147 @@ test("T233 C5, T383: a loop of waits from a hand edit ends: the order marks each
   assert.deepEqual(cardOf(model, "T13").waitLine, { never: false, text: "Waits for T12 (in review)." });
 });
 
-test("T233 Q1, QA, QC, C8: only a breakdown gate by data gets the program mark (sample T70 gets none); a stuck program and a lost gate need you with no card, and count", () => {
-  const model = programsModel();
+test("T233 Q1, QA, QC, C8: only a breakdown gate by data gets the milestone mark (sample T70 gets none); a stuck milestone and a lost gate need you with no card, and count", () => {
+  const model = milestonesModel();
   const [g12] = cardOf(model, "T30").reasons, [g15] = cardOf(model, "T70").reasons;
-  assert.deepEqual(g12.breakdown, { key: "claude/sage-ff5ee2/PG3", id: "PG3", name: "Board programs" });
+  assert.deepEqual(g12.breakdown, { key: "claude/sage-ff5ee2/M3", id: "M3", name: "Board milestones" });
   assert.equal(g12.text.split(" ").length, 5, "its stored lines");
-  assert.equal(g15.breakdown, null, "T70 copies the breakdown words and options, but no programs row names G15");
-  assert.equal(g15.text, "Approve program PG9 Fast lane (pilot T70)? Goal: skip the reviews. Name: Fast lane", "one line");
-  assert.deepEqual(model.programNeeds.map(need => [need.kind, need.title, need.text]), [
-    ["stuck", "PG2 Lead build is stuck", "The pilot T21 was abandoned. Choose a new pilot, or drop the program."],
-    ["lost", "The breakdown gate G30 of PG7 is not in the logbook", "Ask the chief to repair the logbook, or to propose PG7 again."],
+  assert.equal(g15.breakdown, null, "T70 copies the breakdown words and options, but no milestones row names G15");
+  assert.equal(g15.text, "Approve milestone M9 Fast lane (pilot T70)? Goal: skip the reviews. Name: Fast lane", "one line");
+  assert.deepEqual(model.milestoneNeeds.map(need => [need.kind, need.title, need.text]), [
+    ["stuck", "M2 Lead build is stuck", "The pilot T21 was abandoned. Choose a new pilot, or drop the milestone."],
+    ["lost", "The breakdown gate G30 of M7 is not in the logbook", "Ask the chief to repair the logbook, or to propose M7 again."],
   ]);
   assert.equal(model.needsOwner.length, 2, "two cards: T30 and T70");
-  assert.equal(model.counts.needsOwner, 4, "the two cards and the two program items");
+  assert.equal(model.counts.needsOwner, 4, "the two cards and the two milestone items");
   assert.deepEqual(model.projects.map(project => [project.needsOwner, project.list]), [[4, "needs"]]);
-  // A breakdown gate whose programs row names another gate is a plain gate too.
-  const tables = programsTables();
-  tables.programs[2].gate = "G99";
-  const moved = programsModel([programsSource("claude", tables)]);
+  // A breakdown gate whose milestones row names another gate is a plain gate too.
+  const tables = milestonesTables();
+  tables.milestones[2].gate = "G99";
+  const moved = milestonesModel([milestonesSource("claude", tables)]);
   assert.equal(cardOf(moved, "T30").reasons[0].breakdown, null);
   assert.equal(cardOf(moved, "T30").reasons[0].text.split(" ").length, 1);
-  // A pilot that the logbook lost makes the program stuck, with its own words.
-  const gone = programsTables();
+  // A pilot that the logbook lost makes the milestone stuck, with its own words.
+  const gone = milestonesTables();
   gone.tasks = gone.tasks.filter(item => item.id !== "T40");
-  assert.equal(programsModel([programsSource("claude", gone)]).programNeeds.find(need => need.program === "PG4").text, "The pilot T40 is not in the logbook. Choose a new pilot, or drop the program.");
-  // An archived project's program items leave the counts, as its cards do.
-  const archived = programsSource();
+  assert.equal(milestonesModel([milestonesSource("claude", gone)]).milestoneNeeds.find(need => need.milestone === "M4").text, "The pilot T40 is not in the logbook. Choose a new pilot, or drop the milestone.");
+  // An archived project's milestone items leave the counts, as its cards do.
+  const archived = milestonesSource();
   archived.projects[0].archived = true;
-  const folded = programsModel([archived]);
-  assert.deepEqual([folded.counts.needsOwner, folded.programNeeds.length], [0, 0]);
+  const folded = milestonesModel([archived]);
+  assert.deepEqual([folded.counts.needsOwner, folded.milestoneNeeds.length], [0, 0]);
 });
 
-test("T233 C4: PG1 in the Claude and the Codex logbook of one project stays two programs, and a wait resolves only in its own logbook", () => {
-  const codex = { tasks: [{ ...programsTables().tasks[0], id: "T2", state: "framed", program: "PG1", waits: "T1" }, { ...programsTables().tasks[0], id: "T5", state: "framed", program: "PG1" }],
-    gates: [{ id: "G1", task: "T5", question: "Approve program PG1? No task builds before you approve.", options: "approve|change|drop", recommendation: "approve", default: "", answer: "approve", at: "" }],
-    programs: [{ id: "PG1", name: "Codex own", goal: "g", pilot: "T5", gate: "G1", at: "" }], decisions: [] };
-  const model = programsModel([programsSource("claude"), programsSource("codex", codex)]);
+test("T233 C4: M1 in the Claude and the Codex logbook of one project stays two milestones, and a wait resolves only in its own logbook", () => {
+  const codex = { tasks: [{ ...milestonesTables().tasks[0], id: "T2", state: "framed", milestone: "M1", waits: "T1" }, { ...milestonesTables().tasks[0], id: "T5", state: "framed", milestone: "M1" }],
+    gates: [{ id: "G1", task: "T5", question: "Approve milestone M1? No task builds before you approve.", options: "approve|change|drop", recommendation: "approve", default: "", answer: "approve", at: "" }],
+    milestones: [{ id: "M1", name: "Codex own", goal: "g", pilot: "T5", gate: "G1", at: "" }], decisions: [] };
+  const model = milestonesModel([milestonesSource("claude"), milestonesSource("codex", codex)]);
   assert.equal(model.projects.length, 1, "one project: one checkout");
-  const both = model.programs.filter(item => item.id === "PG1");
-  assert.deepEqual(both.map(item => [item.key, item.name, item.progressText]), [["claude/sage-ff5ee2/PG1", "Codex support", "3 of 7 merged · T10 abandoned"], ["codex/sage-ff5ee2/PG1", "Codex own", "0 of 2 merged"]]);
+  const both = model.milestones.filter(item => item.id === "M1");
+  assert.deepEqual(both.map(item => [item.key, item.name, item.progressText]), [["claude/sage-ff5ee2/M1", "Codex support", "3 of 7 merged · T10 abandoned"], ["codex/sage-ff5ee2/M1", "Codex own", "0 of 2 merged"]]);
   assert.deepEqual(model.tasks.find(item => item.key === "codex/sage-ff5ee2/T2").waitLine, { never: true, text: "Waits for T1 (not in the logbook) and T5 (pilot, not started): it cannot start." }, "the Claude logbook's merged T1 meets no wait of the Codex logbook");
 });
 
 test("F-T233-5: a long chain of waits with no loop, in reverse order, gives its order with no stack overflow, and the loop guard still holds", () => {
   // 6000 tasks: T6000 waits for T5999, … T2 waits for T1, the pilot. The rows come last task first, so the walk starts at the deep end.
-  const one = programsTables().tasks[0], N = 6000;
-  const tasks = Array.from({ length: N }, (_, i) => ({ ...one, id: `T${N - i}`, state: "framed", program: "PG1", waits: N - i > 1 ? `T${N - i - 1}` : "" }));
-  const tables = { tasks, gates: [{ id: "G1", task: "T1", question: "Approve program PG1? No task builds before you approve.", options: "approve|change|drop", recommendation: "approve", default: "", answer: "approve", at: "" }],
-    programs: [{ id: "PG1", name: "Chain", goal: "g", pilot: "T1", gate: "G1", at: "" }], decisions: [] };
-  const chain = programOf(programsModel([programsSource("claude", tables)]), "PG1");
+  const one = milestonesTables().tasks[0], N = 6000;
+  const tasks = Array.from({ length: N }, (_, i) => ({ ...one, id: `T${N - i}`, state: "framed", milestone: "M1", waits: N - i > 1 ? `T${N - i - 1}` : "" }));
+  const tables = { tasks, gates: [{ id: "G1", task: "T1", question: "Approve milestone M1? No task builds before you approve.", options: "approve|change|drop", recommendation: "approve", default: "", answer: "approve", at: "" }],
+    milestones: [{ id: "M1", name: "Chain", goal: "g", pilot: "T1", gate: "G1", at: "" }], decisions: [] };
+  const chain = milestoneOf(milestonesModel([milestonesSource("claude", tables)]), "M1");
   assert.equal(chain.tasks.length, N);
   assert.deepEqual([chain.tasks[0], chain.tasks[1], chain.tasks.at(-1)].map(key => key.split("/").at(-1)), ["T1", "T2", `T${N}`]);
   assert.ok(chain.tasks.every((key, i) => key.endsWith(`/T${i + 1}`)), "each task after the task that it waits for");
   assert.equal(chain.next.id, "T1");
   // The loop guard of C5 still holds with the walk: the sample loop T81 ↔ T82 keeps its order.
-  assert.deepEqual(programOf(programsModel(), "PG8").tasks.map(key => key.split("/").at(-1)), ["T80", "T82", "T83", "T81"]);
+  assert.deepEqual(milestoneOf(milestonesModel(), "M8").tasks.map(key => key.split("/").at(-1)), ["T80", "T82", "T83", "T81"]);
 });
 
-test("F-T233-2, F-T233-3: the model counts a lost program whose gate is open on a card once, on that gate; with the gate row gone it is its own item", () => {
-  const plain = programsTables();
+test("F-T233-2, F-T233-3: the model counts a lost milestone whose gate is open on a card once, on that gate; with the gate row gone it is its own item", () => {
+  const plain = milestonesTables();
   plain.gates.find(gate => gate.id === "G12").options = "yes|no";
-  const model = programsModel([programsSource("claude", plain)]);
-  assert.deepEqual([programOf(model, "PG3").state, programOf(model, "PG3").gateFound], ["lost", true]);
-  assert.deepEqual(model.programNeeds.map(need => need.program), ["PG2", "PG7"], "no item of its own for PG3");
-  assert.equal(cardOf(model, "T30").reasons[0].text.split("\u2028").at(-1), "The gate G12 of PG3 is not a breakdown gate on its pilot T30: ask the chief to repair the logbook, or to propose PG3 again.");
+  const model = milestonesModel([milestonesSource("claude", plain)]);
+  assert.deepEqual([milestoneOf(model, "M3").state, milestoneOf(model, "M3").gateFound], ["lost", true]);
+  assert.deepEqual(model.milestoneNeeds.map(need => need.milestone), ["M2", "M7"], "no item of its own for M3");
+  assert.equal(cardOf(model, "T30").reasons[0].text.split("\u2028").at(-1), "The gate G12 of M3 is not a breakdown gate on its pilot T30: ask the chief to repair the logbook, or to propose M3 again.");
   assert.equal(model.counts.needsOwner, 4);
   // A hand edit of the question alone (F-T233-3): the state tool's state is proposed, but every printer reads lost.
-  const edited = programsTables();
+  const edited = milestonesTables();
   edited.gates.find(gate => gate.id === "G12").question = "Ship it?";
-  const shown = programsModel([programsSource("claude", edited)]);
-  assert.equal(programOf(shown, "PG3").state, "lost");
-  assert.deepEqual(cardOf(shown, "T32").waitLine, { never: true, text: "Waits for the PG3 breakdown, whose gate G12 names no program in its question: it cannot start." }, "T383 item 12: the reason names the question");
-  // The gate answered: no card holds it, so the program is its own item, with the same words.
-  const answered = programsTables();
+  const shown = milestonesModel([milestonesSource("claude", edited)]);
+  assert.equal(milestoneOf(shown, "M3").state, "lost");
+  assert.deepEqual(cardOf(shown, "T32").waitLine, { never: true, text: "Waits for the M3 breakdown, whose gate G12 names no milestone in its question: it cannot start." }, "T383 item 12: the reason names the question");
+  // The gate answered: no card holds it, so the milestone is its own item, with the same words.
+  const answered = milestonesTables();
   Object.assign(answered.gates.find(gate => gate.id === "G12"), { options: "yes|no", answer: "yes" });
-  assert.deepEqual(programsModel([programsSource("claude", answered)]).programNeeds.find(need => need.program === "PG3").title, "The gate G12 of PG3 is not a breakdown gate on its pilot T30");
+  assert.deepEqual(milestonesModel([milestonesSource("claude", answered)]).milestoneNeeds.find(need => need.milestone === "M3").title, "The gate G12 of M3 is not a breakdown gate on its pilot T30");
 });
 
-// T383: the board's data rules on damaged or hand-edited logbooks, and its cost on large ones. SAMPLE DATA from scripts/fixtures/board-programs.mjs.
-const needsOf = model => model.programNeeds.map(need => [need.kind, need.title, need.text]);
-const STUCK_PG2 = ["stuck", "PG2 Lead build is stuck", "The pilot T21 was abandoned. Choose a new pilot, or drop the program."];
-const LOST_PG7 = ["lost", "The breakdown gate G30 of PG7 is not in the logbook", "Ask the chief to repair the logbook, or to propose PG7 again."];
-const edited = edit => { const tables = programsTables(); edit(tables); return programsModel([programsSource("claude", tables)]); };
+// T383: the board's data rules on damaged or hand-edited logbooks, and its cost on large ones. SAMPLE DATA from scripts/fixtures/board-milestones.mjs.
+const needsOf = model => model.milestoneNeeds.map(need => [need.kind, need.title, need.text]);
+const STUCK_M2 = ["stuck", "M2 Lead build is stuck", "The pilot T21 was abandoned. Choose a new pilot, or drop the milestone."];
+const LOST_M7 = ["lost", "The breakdown gate G30 of M7 is not in the logbook", "Ask the chief to repair the logbook, or to propose M7 again."];
+const edited = edit => { const tables = milestonesTables(); edit(tables); return milestonesModel([milestonesSource("claude", tables)]); };
 
-test("T383 item 2: a lost program whose gate is open on an abandoned task stays in Needs you, as no card in Needs you holds that gate", () => {
+test("T383 item 2: a lost milestone whose gate is open on an abandoned task stays in Needs you, as no card in Needs you holds that gate", () => {
   const model = edited(tables => {
     tables.gates.find(gate => gate.id === "G12").options = "yes|no";
     tables.tasks.find(task => task.id === "T30").state = "abandoned";
   });
-  assert.deepEqual(needsOf(model), [STUCK_PG2, ["lost", "The gate G12 of PG3 is not a breakdown gate on its pilot T30", "Ask the chief to repair the logbook, or to propose PG3 again."], LOST_PG7]);
+  assert.deepEqual(needsOf(model), [STUCK_M2, ["lost", "The gate G12 of M3 is not a breakdown gate on its pilot T30", "Ask the chief to repair the logbook, or to propose M3 again."], LOST_M7]);
   assert.equal(model.counts.needsOwner, 4, "T70 and the three items; T30 is abandoned, so it has no card in Needs you");
 });
 
-test("T383 items 4 and 13: a proposed or changing program whose pilot is abandoned or not in the logbook is stuck: a Needs you item, not a breakdown that waits for you", () => {
+test("T383 items 4 and 13: a proposed or changing milestone whose pilot is abandoned or not in the logbook is stuck: a Needs you item, not a breakdown that waits for you", () => {
   const abandoned = edited(tables => { tables.tasks.find(task => task.id === "T30").state = "abandoned"; });
-  assert.equal(programOf(abandoned, "PG3").state, "stuck");
-  assert.deepEqual(needsOf(abandoned), [STUCK_PG2, ["stuck", "PG3 Board programs is stuck", "The pilot T30 was abandoned. Choose a new pilot, or drop the program."], LOST_PG7]);
+  assert.equal(milestoneOf(abandoned, "M3").state, "stuck");
+  assert.deepEqual(needsOf(abandoned), [STUCK_M2, ["stuck", "M3 Board milestones is stuck", "The pilot T30 was abandoned. Choose a new pilot, or drop the milestone."], LOST_M7]);
   const missing = edited(tables => { tables.tasks = tables.tasks.filter(task => task.id !== "T30"); });
-  assert.deepEqual(needsOf(missing)[1], ["stuck", "PG3 Board programs is stuck", "The pilot T30 is not in the logbook. Choose a new pilot, or drop the program."]);
+  assert.deepEqual(needsOf(missing)[1], ["stuck", "M3 Board milestones is stuck", "The pilot T30 is not in the logbook. Choose a new pilot, or drop the milestone."]);
   const changing = edited(tables => { tables.tasks.find(task => task.id === "T90").state = "abandoned"; });
-  assert.equal(programOf(changing, "PG9").state, "stuck", "changing too");
-  assert.equal(programOf(programsModel(), "PG3").state, "proposed", "a live pilot keeps its program proposed");
+  assert.equal(milestoneOf(changing, "M9").state, "stuck", "changing too");
+  assert.equal(milestoneOf(milestonesModel(), "M3").state, "proposed", "a live pilot keeps its milestone proposed");
 });
 
-test("T383 item 7: when tasks.tsv and programs.tsv of one logbook both fail, or every table has one error code, one item says why", () => {
-  const broken = diagnostics => { const source = programsSource(); Object.assign(source.projects[0], { tables: {}, diagnostics }); return buildBoardModel([source], { now: PROGRAMS_NOW }); };
-  assert.deepEqual(needsOf(broken(["tasks: line 14 has 9 cells, and its header has 16", "programs: line 2: the pilot of PG1 is not a task id"])), [
-    ["logbook", "The Claude logbook cannot be read", "tasks.tsv line 14 has 9 cells, and its header has 16. programs.tsv line 2: the pilot of PG1 is not a task id. The board shows no task of sage-ff5ee2. Ask the chief to repair the logbook."]]);
-  const folder = broken(["tasks", "runs", "findings", "ledger", "gates", "decisions", "programs"].map(name => `${name}: EACCES`));
+test("T383 item 7: when tasks.tsv and milestones.tsv of one logbook both fail, or every table has one error code, one item says why", () => {
+  const broken = diagnostics => { const source = milestonesSource(); Object.assign(source.projects[0], { tables: {}, diagnostics }); return buildBoardModel([source], { now: MILESTONES_NOW }); };
+  assert.deepEqual(needsOf(broken(["tasks: line 14 has 9 cells, and its header has 16", "milestones: line 2: the pilot of M1 is not a task id"])), [
+    ["logbook", "The Claude logbook cannot be read", "tasks.tsv line 14 has 9 cells, and its header has 16. milestones.tsv line 2: the pilot of M1 is not a task id. The board shows no task of sage-ff5ee2. Ask the chief to repair the logbook."]]);
+  const folder = broken(["tasks", "runs", "findings", "ledger", "gates", "decisions", "milestones"].map(name => `${name}: EACCES`));
   assert.deepEqual(needsOf(folder), [["logbook", "The Claude logbook cannot be read", "Its folder has no read permission. The board shows no task of sage-ff5ee2. Ask the chief to repair the logbook."]]);
   assert.equal(folder.counts.needsOwner, 1);
-  // With its tasks readable, the programs table keeps its own item.
-  const source = programsSource(); source.projects[0].diagnostics = ["programs: line 2: the pilot of PG1 is not a task id"]; delete source.projects[0].tables.programs;
-  assert.deepEqual(needsOf(buildBoardModel([source], { now: PROGRAMS_NOW })).map(([kind]) => kind), ["programs"]);
+  // With its tasks readable, the milestones table keeps its own item.
+  const source = milestonesSource(); source.projects[0].diagnostics = ["milestones: line 2: the pilot of M1 is not a task id"]; delete source.projects[0].tables.milestones;
+  assert.deepEqual(needsOf(buildBoardModel([source], { now: MILESTONES_NOW })).map(([kind]) => kind), ["milestones"]);
 });
 
-test("T383 item 9: a live task whose program row is missing, or whose program cell is not a program id, is a Needs you item; an ended one is not", () => {
+test("T383 item 9: a live task whose milestone row is missing, or whose milestone cell is not a milestone id, is a Needs you item; an ended one is not", () => {
   const model = edited(tables => {
     const one = tables.tasks[0];
-    tables.tasks.push({ ...one, id: "T95", state: "framed", program: "PG20" }, { ...one, id: "T96", state: "building", program: "PG20" }, { ...one, id: "T97", state: "framed", program: "?" }, { ...one, id: "T98", state: "merged", program: "PG21" });
+    tables.tasks.push({ ...one, id: "T95", state: "framed", milestone: "M20" }, { ...one, id: "T96", state: "building", milestone: "M20" }, { ...one, id: "T97", state: "framed", milestone: "?" }, { ...one, id: "T98", state: "merged", milestone: "M21" });
   });
   assert.deepEqual(needsOf(model).slice(2), [
     // R1391-4: T96 is building, so "cannot go on", not "cannot start".
-    ["missing", "The program PG20 is not in the logbook", "T95 and T96 name PG20, so they cannot go on. Ask the chief to repair the logbook, or to take each task out of the program."],
-    ["missing", "A program cell is not a program id", "The program cell of T97 is not a program id, so it cannot go on. Ask the chief to repair the logbook, or to take the task out of the program."]]);
+    ["missing", "The milestone M20 is not in the logbook", "T95 and T96 name M20, so they cannot go on. Ask the chief to repair the logbook, or to take each task out of the milestone."],
+    ["missing", "A milestone cell is not a milestone id", "The milestone cell of T97 is not a milestone id, so it cannot go on. Ask the chief to repair the logbook, or to take the task out of the milestone."]]);
   assert.equal(model.counts.needsOwner, 6);
 });
 
 test("T383 item 10: a provider root that cannot be read is a counted Needs you item; a root that does not exist is not", () => {
   const root = (diagnostics) => ({ id: "codex", label: "codex", provider: null, config: {}, diagnostics, projects: [], hooks: { present: false, slots: [], helpers: [], problem: null } });
-  const model = buildBoardModel([programsSource(), root(["EACCES"])], { now: PROGRAMS_NOW });
+  const model = buildBoardModel([milestonesSource(), root(["EACCES"])], { now: MILESTONES_NOW });
   assert.deepEqual(needsOf(model).at(-1), ["source", "The Codex logbooks cannot be read", "Its folder has no read permission. The board shows no Codex logbook. Check that the board can read the folder."]);
-  assert.equal(model.counts.needsOwner, 5, "T30, T70, two program items and the root");
-  for (const quiet of [["ENOENT"], ["config: invalid JSON"]]) assert.equal(buildBoardModel([programsSource(), root(quiet)], { now: PROGRAMS_NOW }).counts.needsOwner, 4, quiet[0]);
+  assert.equal(model.counts.needsOwner, 5, "T30, T70, two milestone items and the root");
+  for (const quiet of [["ENOENT"], ["config: invalid JSON"]]) assert.equal(buildBoardModel([milestonesSource(), root(quiet)], { now: MILESTONES_NOW }).counts.needsOwner, 4, quiet[0]);
 });
 
-test("T383 item 12: a gate on the pilot with the breakdown options, whose question names no program or another, is lost by its question, in those words", () => {
-  const other = edited(tables => { tables.gates.find(gate => gate.id === "G12").question = "Approve program PG4? No task builds before you approve."; });
-  assert.equal(cardOf(other, "T30").reasons[0].text.split("\u2028").at(-1), "The gate G12 of PG3 names PG4 in its question, not PG3: ask the chief to repair the logbook, or to propose PG3 again.");
-  assert.deepEqual(cardOf(other, "T32").waitLine, { never: true, text: "Waits for the PG3 breakdown, whose gate G12 names PG4 in its question, not PG3: it cannot start." });
+test("T383 item 12: a gate on the pilot with the breakdown options, whose question names no milestone or another, is lost by its question, in those words", () => {
+  const other = edited(tables => { tables.gates.find(gate => gate.id === "G12").question = "Approve milestone M4? No task builds before you approve."; });
+  assert.equal(cardOf(other, "T30").reasons[0].text.split("\u2028").at(-1), "The gate G12 of M3 names M4 in its question, not M3: ask the chief to repair the logbook, or to propose M3 again.");
+  assert.deepEqual(cardOf(other, "T32").waitLine, { never: true, text: "Waits for the M3 breakdown, whose gate G12 names M4 in its question, not M3: it cannot start." });
   const none = edited(tables => { Object.assign(tables.gates.find(gate => gate.id === "G12"), { question: "Ship it?", answer: "yes" }); });
-  assert.deepEqual(none.programNeeds.find(need => need.program === "PG3").title, "The gate G12 of PG3 names no program in its question");
+  assert.deepEqual(none.milestoneNeeds.find(need => need.milestone === "M3").title, "The gate G12 of M3 names no milestone in its question");
 });
 
 /**
@@ -774,41 +774,41 @@ function work(fn) {
   try { fn(); } finally { for (let i = saved.length - 1; i >= 0; i--) saved[i][0][saved[i][1]] = saved[i][2]; }
   return units;
 }
-/** A large SAMPLE logbook: n tasks in n/2 programs, half approved and half proposed (an odd task is the pilot), with a run, a verdict, a decision and a finding each. */
+/** A large SAMPLE logbook: n tasks in n/2 milestones, half approved and half proposed (an odd task is the pilot), with a run, a verdict, a decision and a finding each. */
 function large(n) {
-  const one = programsTables().tasks[0], at = "2026-10-20T10:00:00Z", tasks = [], gates = [], programs = [], runs = [], ledger = [], decisions = [], findings = [];
+  const one = milestonesTables().tasks[0], at = "2026-10-20T10:00:00Z", tasks = [], gates = [], milestones = [], runs = [], ledger = [], decisions = [], findings = [];
   for (let i = 1; i <= n; i++) {
-    const pg = `PG${Math.ceil(i / 2)}`, pilot = i % 2 === 1;
-    tasks.push({ ...one, id: `T${i}`, state: pilot ? "merged" : "reviewing", pr: String(i), program: pg, waits: i > 2 && !pilot ? `T${i - 2}` : "" });
+    const pg = `M${Math.ceil(i / 2)}`, pilot = i % 2 === 1;
+    tasks.push({ ...one, id: `T${i}`, state: pilot ? "merged" : "reviewing", pr: String(i), milestone: pg, waits: i > 2 && !pilot ? `T${i - 2}` : "" });
     if (pilot) {
-      gates.push({ id: `G${i}`, task: `T${i}`, question: `Approve program ${pg}? No task builds before you approve.`, options: "approve|change|drop", recommendation: "approve", default: "", answer: i % 4 === 1 ? "approve" : "", at });
-      programs.push({ id: pg, name: `Sample ${pg}`, goal: "g", pilot: `T${i}`, gate: `G${i}`, at });
+      gates.push({ id: `G${i}`, task: `T${i}`, question: `Approve milestone ${pg}? No task builds before you approve.`, options: "approve|change|drop", recommendation: "approve", default: "", answer: i % 4 === 1 ? "approve" : "", at });
+      milestones.push({ id: pg, name: `Sample ${pg}`, goal: "g", pilot: `T${i}`, gate: `G${i}`, at });
     }
     runs.push({ id: `R${i}`, task: `T${i}`, role: "implementer", round: "0", candidate: "", branch: "", status: "done", tokens: "1000", report: "", started: at, ended: at });
     ledger.push({ task: `T${i}`, pr: String(i), sha: "a".repeat(40), kind: "checks-pass", cycle: "1", run: `R${i}`, at });
     decisions.push({ at, task: `T${i}`, decision: "state reviewing", why: "sample" });
     findings.push({ task: `T${i}`, key: "F-1", round: "1", source: "code-review", severity: "low", summary: "Sample", triage: "", reason: "", status: "open" });
   }
-  return { tasks, gates, programs, runs, ledger, decisions, findings };
+  return { tasks, gates, milestones, runs, ledger, decisions, findings };
 }
 
 /** The large logbook as a source, with an observed PR for each task, so the records index is in the work too (R1390-2). */
 function largeSource(n) {
-  const source = programsSource("claude", large(n));
+  const source = milestonesSource("claude", large(n));
   source.projects[0].observations.records = source.projects[0].tables.tasks.map(row => observation("pr", { number: Number(row.pr), head, state: "open" }, { id: `O${row.pr}`, task: row.id }));
   return source;
 }
 // Four times the rows: linear work is about 4 times, a quadratic step about 16 times. A scan of the records or of the
-// programs for each card (in place of the records and byGate indexes) passes 5 (R1390-2); 5 leaves room for fixed costs.
+// milestones for each card (in place of the records and byGate indexes) passes 5 (R1390-2); 5 leaves room for fixed costs.
 test("T383 item 14: the board model is linear in a large logbook: four times the rows is about four times the work", () => {
-  const board = n => work(() => buildBoardModel([largeSource(n)], { now: PROGRAMS_NOW }));
+  const board = n => work(() => buildBoardModel([largeSource(n)], { now: MILESTONES_NOW }));
   const [small, big] = [board(400), board(1600)];
   assert.ok(big / small < 5, `the board's work: ${small} units for 400 tasks, ${big} for 1600 (linear is about 4 times)`);
 });
 
 test("T383 item 14: the printers' wait graph (status and the task line) is linear in a large logbook", () => {
   // The status line and the task line read the waits with the same rules: the graph, and each task's unmet waits.
-  const rules = n => { const t = large(n); return work(() => { const graph = shownGraph(waitGraph(t.tasks, t.programs, t.gates, t.decisions), t.gates); for (const task of t.tasks) unmetWaits(task, graph); }); };
+  const rules = n => { const t = large(n); return work(() => { const graph = shownGraph(waitGraph(t.tasks, t.milestones, t.gates, t.decisions), t.gates); for (const task of t.tasks) unmetWaits(task, graph); }); };
   const [few, many] = [rules(400), rules(800)];
   assert.ok(many / few < 2.5, `the rules' work: ${few} units for 400 tasks, ${many} for 800`);
 });

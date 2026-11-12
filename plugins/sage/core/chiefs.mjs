@@ -18,7 +18,7 @@ const onTask = (task) => ({ kind: "task", task });
  *   read: no guard. owner: the owner's own act, so no chief: a gate answer, which a hook checks, a logbook repair or
  *   projects rebuild, which the owner may run in a terminal with no hook, and the move, which the move gate's answer starts. any: any chief. new: a chief that gets the task.
  *   task: the owning chief of task, or of the task of run; with recipient, also the chief that the task's open offer
- *   names, so that it can decline the offer. program: the owning chief of each task that it names.
+ *   names, so that it can decline the offer. milestone: the owning chief of each task that it names.
  * A task on an any class is only the place of a lead: such a command changes no task. link is a read here, because a
  * checkout has no chief until it has a row.
  */
@@ -26,11 +26,11 @@ export function writerClass(cmd, [sub, id] = []) {
   switch (cmd) {
     case "task": return sub === "add" ? NEW : id === "set" ? onTask(sub) : READ;
     case "claim": case "accept": return NEW;
-    case "offer": case "release": return onTask(sub);
+    case "offer": case "unclaim": case "release": return onTask(sub); // release: the old word of unclaim, for one version (T995)
     case "cancel": return { ...onTask(sub), recipient: true };
     case "task-adopt": case "round": case "verdict": return onTask(sub);
     case "finding": return onTask(id);
-    case "program": return { kind: "program" };
+    case "milestone": case "program": return { kind: "milestone" }; // program: the old word of milestone, for one version (T995)
     case "run": return sub === "add" ? onTask(id) : sub === "done" ? { kind: "task", run: id } : sub === "usage" ? ANY : READ;
     case "gate": return sub === "answer" ? OWNER : sub === "replace" ? ANY : sub === "add" ? (id === undefined ? ANY : onTask(id)) : READ;
     case "log": return TASK.test(sub ?? "") ? onTask(sub) : ANY;
@@ -47,7 +47,7 @@ export function writerClass(cmd, [sub, id] = []) {
 }
 
 /** A command that only a shared logbook has: it moves a task between chiefs. */
-export const chiefOnly = (cmd, [sub] = []) => ["claim", "offer", "cancel", "accept", "release"].includes(cmd) || (cmd === "gate" && sub === "replace");
+export const chiefOnly = (cmd, [sub] = []) => ["claim", "offer", "cancel", "accept", "unclaim", "release"].includes(cmd) || (cmd === "gate" && sub === "replace");
 
 /** The open offer of a task's row: { id, from, to }. An empty cell has none, and so has a cell that does not read as one. */
 export function offerOf(task) {
@@ -62,7 +62,7 @@ export function offerOf(task) {
 /**
  * A takeover gate's question (the gate kind "replace"), which only gate replace and accept write, on one line, in the
  * design's words (T656). The owner decides from it with no other page, and the answer reads it back (replaceOf). An empty
- * from is a task with no owning chief: then released names the chief that released it last, or moved the provider of the
+ * from is a task with no owning chief: then released names the chief that unclaimed it last, or moved the provider of the
  * logbook that the move brought it from. fresh: the new chief runs one fresh cycle before it merges (its provider's rule).
  * offered: an accept of the open offer opened the gate, so a decline ends that offer too (F-T656-28). pr is a plain
  * number or empty, so that replaceOf reads the question back (F-T656-21). Only ids and fixed words come before the
@@ -70,7 +70,7 @@ export function offerOf(task) {
  */
 export const replaceQuestion = ({ from, to, task, pr, title, runs, label, released, moved, fresh, offered }) => {
   const what = `${task}${pr ? ` and PR ${pr}` : ""}`;
-  const ask = from ? `Hand ${what} from ${label(from)} to ${label(to)}?` : `Hand ${what} to ${label(to)}? ${task} has no owning chief${released ? `: ${label(released)} released it last` : moved ? `: it came in the move from the ${moved} logbook` : ""}.`;
+  const ask = from ? `Hand ${what} from ${label(from)} to ${label(to)}?` : `Hand ${what} to ${label(to)}? ${task} has no owning chief${released ? `: ${label(released)} unclaimed it last` : moved ? `: it came in the move from the ${moved} logbook` : ""}.`;
   const approve = [`${to} owns ${task}.`, runs.length ? "Each of those runs ends as failed, and work that it did not report may be lost." : "", from ? `${from} can no longer write ${task}.` : "", "The answer clears an open offer.",
     `The branch keeps its name${pr ? `, and PR ${pr} keeps its number` : ""}.`, fresh ? `The verdicts stay, and ${to} runs one fresh cycle on its head before it merges.` : "The verdicts on its head still count."].filter(Boolean).join(" ");
   const decline = offered ? `${from} stays the owning chief, and ${OFFER_ENDS(to)}` : `nothing changes, and ${from ? `${from} stays the owning chief` : `${task} stays with no owning chief`}`;
@@ -81,12 +81,12 @@ const OFFER_ENDS = (to) => `the offer to ${to} ends`;
 /** The options of a takeover gate: the first one moves the task. A gate of T618 to T656 has replace|keep, and still answers. */
 export const TAKEOVER_OPTIONS = "approve|decline";
 const ID = (c) => `(?<${c}>C[1-9]\\d*)(?: \\((?<${c}P>\\S+)\\))?`, RUNS = "(?<runs>none|R[1-9]\\d* \\([^)]*\\)(?:, R[1-9]\\d* \\([^)]*\\))*)";
-const HAND = new RegExp(`^Hand T[1-9]\\d*(?: and PR [1-9]\\d*)? (?:from ${ID("from")} to ${ID("to")}\\?|to ${ID("to2")}\\? T[1-9]\\d* has no owning chief(?:: (?:${ID("rel")} released it last|it came in the move from the (?<moved>\\S+) logbook))?\\.) Runs that end as failed: ${RUNS}\\. Approve: (?<approve>.*?) Decline: (?<decline>[^.]*)\\. `);
+const HAND = new RegExp(`^Hand T[1-9]\\d*(?: and PR [1-9]\\d*)? (?:from ${ID("from")} to ${ID("to")}\\?|to ${ID("to2")}\\? T[1-9]\\d* has no owning chief(?:: (?:${ID("rel")} (?:unclaimed|released) it last|it came in the move from the (?<moved>\\S+) logbook))?\\.) Runs that end as failed: ${RUNS}\\. Approve: (?<approve>.*?) Decline: (?<decline>[^.]*)\\. `);
 const REPLACE = new RegExp(`^Replace chief ${ID("from")} of T[1-9]\\d* with ${ID("to")}\\? Runs that end as failed: ${RUNS}\\. Replace: `);
 /**
  * The chiefs, their providers when the question names them, the runs, the fresh-cycle rule and the offer of a takeover
  * question; also of the decision row of its answer. fromProvider is the provider of the chief that held the task last:
- * the owning chief, or for a task with no owning chief the chief that released it, or the logbook that the move brought
+ * the owning chief, or for a task with no owning chief the chief that unclaimed it (an older question says released), or the logbook that the move brought
  * it from. offered: a decline ends the open offer from that chief to the new one, because an accept of it opened the gate.
  */
 export function replaceOf(gate) {

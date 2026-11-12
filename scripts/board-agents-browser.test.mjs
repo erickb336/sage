@@ -75,7 +75,7 @@ test("T308: the keyboard reaches the page tabs and every task link in order, and
     await page.keyboard.press("Tab");
     order.push(await page.evaluate(() => document.activeElement.tagName === "A" ? `${document.activeElement.getAttribute("href")}|${document.activeElement.textContent.trim()}` : document.activeElement.id || document.activeElement.tagName));
   }
-  assert.deepEqual(order.slice(0, 4), ["/|Task board", "/programs|Programs", "/agents|Agents (13)", "flip"], "the tabs come first, then the theme switch");
+  assert.deepEqual(order.slice(0, 4), ["/|Task board", "/milestones|Milestones", "/agents|Agents (13)", "flip"], "the tabs come first, then the theme switch");
   const links = await page.locator("a.t").evaluateAll(links => links.map(link => `${link.getAttribute("href")}|${link.textContent.trim()}`));
   assert.equal(links.length, 12, "each agent with a task has a link; the slot with no run has none");
   assert.deepEqual(order.slice(4, 4 + links.length), links, "the task links follow in the page's order");

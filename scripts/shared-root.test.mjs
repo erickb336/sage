@@ -1172,7 +1172,7 @@ test("the id floors of the move make nextId give the next number above both old 
   w.codex("init");
   w.codex("task", "add", "--title", "old codex task", "--size", "tiny", "--priority", "P2");
   w.codex("gate", "add", "T1", "--question", "Go?", "--options", "yes|no", "--recommend", "yes");
-  w.codex("log", "-", "PG4 was planned", "--why", "a program id in a decision counts");
+  w.codex("log", "-", "M4 was planned", "--why", "a milestone id in a decision counts");
   renumber(w.codexRoot, { T: "T95", R: "R1", G: "G200" });
   const fresh = w.repo("fresh");
   w.claude("init", "--project", fresh);
@@ -1183,7 +1183,7 @@ test("the id floors of the move make nextId give the next number above both old 
     ["", "T644 is the task floor of the move from claude and codex"],
     ["", "R2469 is the run floor of the move from claude and codex"],
     ["", "G200 is the gate floor of the move from claude and codex"],
-    ["", "PG4 is the program floor of the move from claude and codex"],
+    ["", "M4 is the milestone floor of the move from claude and codex"],
   ]);
   assert.equal(floors.length, 4);
   assert.match(w.claude("task", "add", "--title", "new", "--size", "tiny", "--priority", "P2", "--project", fresh), /^T645 /);
@@ -1288,7 +1288,7 @@ const MOVED_COUNTS = RECONCILED([
   "tasks (open)        2     2        1     1   match",
   "findings (open)     1     1        0     0   match",
   "gates (open)        1     1        0     0   match",
-  "programs            0     0        0     0   match",
+  "milestones          0     0        0     0   match",
   "standing orders     5     5        5     5   match",
   "wait links          0     0        0     0   match",
   "old rows marked     2     2        1     1   match",
@@ -1306,13 +1306,13 @@ test("the move takes the open tasks of both old logbooks into one shared logbook
     "open tasks          2  T4–T5          1  T6",
     "open findings       1  new keys       0  new keys",
     "open gates          1  G3             0  none",
-    "programs            0  none           0  none",
+    "milestones          0  none           0  none",
     "standing orders     5  keep 1–5       5  become 6–10",
     "",
     `What stays (read-only, "Old" on the board)`,
     "finished tasks      1                 1",
     "runs, verdicts and kept reports never move",
-    "next numbers      T7 · R1 · G4 · PG1",
+    "next numbers      T7 · R1 · G4 · M1",
     "",
     "Checks",
     "ok    no running runs",
@@ -1539,23 +1539,23 @@ test("an adopted task moves with the task that adopted it: its old row gets that
   assert.throws(() => w.claude("task", "T4", "set", "pr=8"), /T4's adoption keeps PR 7/);
 });
 
-test("a program moves with its tasks: new number, pilot and breakdown gate, and its approval holds (T640)", (t) => {
+test("a milestone moves with its tasks: new number, pilot and breakdown gate, and its approval holds (T640)", (t) => {
   const w = moveWorld(t);
-  w.claude("program", "propose", "--name", "Two steps", "--goal", "Both land.", "--pilot", "T2");
+  w.claude("milestone", "propose", "--name", "Two steps", "--goal", "Both land.", "--pilot", "T2");
   w.claude("gate", "answer", "G2", "--option", "1");
   const { id } = w.ask();
   assert.equal(id, "G3");
   w.claude("move", "--gate", id);
   const dir = join(w.shared, w.folder());
   // The open gates take the first numbers (G1 of T2 is G4), then the answered ones (the breakdown gate G2 is G5).
-  assert.deepEqual(rowsIn(join(dir, "programs.tsv")).map((p) => [p.id, p.name, p.pilot, p.gate]), [["PG2", "Two steps", "T4", "G5"]]);
-  assert.deepEqual(rowsIn(join(dir, "tasks.tsv")).map((r) => [r.id, r.program]), [["T4", "PG2"], ["T5", ""], ["T6", ""]]);
+  assert.deepEqual(rowsIn(join(dir, "milestones.tsv")).map((p) => [p.id, p.name, p.pilot, p.gate]), [["M2", "Two steps", "T4", "G5"]]);
+  assert.deepEqual(rowsIn(join(dir, "tasks.tsv")).map((r) => [r.id, r.milestone]), [["T4", "M2"], ["T5", ""], ["T6", ""]]);
   const breakdown = rowsIn(join(dir, "gates.tsv")).find((g) => g.id === "G5");
-  assert.deepEqual([breakdown.task, /^Approve program PG2[ ?]/.test(breakdown.question), breakdown.answer], ["T4", true, "approve"]);
-  assert.match(w.claude("status"), /\nprogram PG2 · pilot T4: 0 of 1 merged · name: Two steps\n/, "approved, as before the move");
+  assert.deepEqual([breakdown.task, /^Approve milestone M2[ ?]/.test(breakdown.question), breakdown.answer], ["T4", true, "approve"]);
+  assert.match(w.claude("status"), /\nmilestone M2 · pilot T4: 0 of 1 merged · name: Two steps\n/, "approved, as before the move");
 });
 
-test("an older plugin that writes the moved logbook gives ids above the move's floors, and a repair of the decisions keeps them (F-T641-4, F-T641-8)", (t) => {
+test("an older plugin stops at the moved logbook's milestone column, and a repair of the decisions keeps the move's floors (F-T641-4, F-T641-8, T995)", (t) => {
   const w = moveWorld(t);
   for (let i = 0; i < 3; i++) w.claude("run", "add", "T2", "--role", "qa");
   rewrite(join(w.claudeDir, "runs.tsv"), (text) => text.replaceAll("\trunning\t", "\tdone\t"));
@@ -1568,9 +1568,13 @@ test("an older plugin that writes the moved logbook gives ids above the move's f
   execFileSync("tar", ["-x", "-C", old], { input: execFileSync("git", ["-C", REPO, "archive", "0e13a3ff", "plugins/sage/core", "plugins/sage/skills/sage"], { maxBuffer: 64 * 1024 * 1024 }) });
   w.claude("task", "add", "--title", "a chief's first write", "--size", "tiny", "--priority", "P2");
   const chief = rowsIn(join(dir, "chiefs.tsv"))[0].id;
-  const older = (...args) => execFileSync(process.execPath, [join(old, "plugins/sage/skills/sage/sage.mjs"), ...args, "--chief", chief, "--project", w.project], { env: { ...w.env, NODE_TEST_CONTEXT: "child" }, encoding: "utf8" }).trim();
-  assert.match(older("task", "add", "--title", "older", "--size", "tiny", "--priority", "P2"), /^T8 /);
-  assert.match(older("run", "add", "T8", "--role", "qa"), /^R4 /, "the run floor holds for an older plugin");
+  const older = (...args) => spawnSync(process.execPath, [join(old, "plugins/sage/skills/sage/sage.mjs"), ...args, "--chief", chief, "--project", w.project], { env: { ...w.env, NODE_TEST_CONTEXT: "child" }, encoding: "utf8" });
+  // T995: the moved logbook's tasks table has the milestone column, which an older plugin does not know, so it writes
+  // nothing there and so takes no id under the move's floors (F-T641-4). It still reads the logbook.
+  const refused = older("task", "add", "--title", "older", "--size", "tiny", "--priority", "P2");
+  assert.equal(refused.status, 1);
+  assert.match(refused.stderr, /tasks\.tsv has columns that this version of sage does not know \(milestone\): a newer sage wrote this logbook/);
+  assert.equal(older("status").status, 0);
   // A lost decisions table: the repair takes the floors again from the old logbooks. Each old logbook holds the floors of
   // the move's map too (F-T640-47), so the repair's floors are the map's highest numbers: T6 and the moved gate G3.
   writeFileSync(join(dir, "decisions.tsv"), "");
@@ -1677,28 +1681,28 @@ test("an adopted task's open gate and finding move with the task that adopted it
   assert.deepEqual([card.findings.filter((f) => f.status === "open").length, card.gates.filter((g) => !g.answer).length], [2, 2]);
 });
 
-test("a program whose pilot a task of the other logbook adopted moves whole: its pilot, its breakdown gate and its members (F-T640-1)", (t) => {
+test("a milestone whose pilot a task of the other logbook adopted moves whole: its pilot, its breakdown gate and its members (F-T640-1)", (t) => {
   const w = twoRoots(t), claudeDir = join(w.claudeRoot, w.folder()), codexDir = join(w.codexRoot, w.folder());
   w.claude("init");
   w.claude("task", "add", "--title", "claude adopter", "--size", "small", "--priority", "P2");
   w.codex("init");
   w.codex("task", "add", "--title", "codex pilot", "--size", "small", "--priority", "P2");
   w.codex("task", "add", "--title", "codex member", "--size", "small", "--priority", "P2");
-  w.codex("program", "propose", "--name", "Two", "--goal", "Both.", "--pilot", "T1", "--tasks", "T2");
+  w.codex("milestone", "propose", "--name", "Two", "--goal", "Both.", "--pilot", "T1", "--tasks", "T2");
   w.codex("gate", "answer", rowsIn(join(codexDir, "gates.tsv")).at(-1).id, "--option", "1");
   setCells(codexDir, "T1", { branch: "sage/t1-shared", pr: "7" });
   setCells(claudeDir, "T1", { branch: "sage/t1-shared", pr: "7", adoption: JSON.stringify(adoptionV1(codexDir, w.project, "T1")) });
   const out = w.claude("move", "--gate", askPlain(w));
   assert.match(out, /\nReconciliation · every count matches the plan\n/);
-  assert.match(out, /\nprograms            0     0        1     1   match\n/, "the program counts under the logbook that it came from");
+  assert.match(out, /\nmilestones          0     0        1     1   match\n/, "the milestone counts under the logbook that it came from");
   assert.deepEqual(readdirSync(join(w.shared, "moves")), [], "the plan is gone: the move finished");
   const dir = join(w.shared, w.folder());
-  const [program] = rowsIn(join(dir, "programs.tsv")), gates = rowsIn(join(dir, "gates.tsv"));
-  assert.deepEqual(rowsIn(join(dir, "tasks.tsv")).map((r) => [r.id, r.title, r.program]), [["T3", "claude adopter", program.id], ["T4", "codex member", program.id]], "the adopter takes the program of the task that it adopted");
-  assert.equal(program.pilot, "T3");
-  const breakdown = gates.find((g) => g.id === program.gate);
-  assert.deepEqual([breakdown?.task, breakdown?.answer, breakdown?.question.startsWith(`Approve program ${program.id}`)], ["T3", "approve", true], "the program's gate cell names its moved breakdown gate");
-  assert.match(w.claude("status"), new RegExp(`\\nprogram ${program.id} · pilot T3: 0 of 2 merged · name: Two\\n`), "approved, as before the move");
+  const [milestone] = rowsIn(join(dir, "milestones.tsv")), gates = rowsIn(join(dir, "gates.tsv"));
+  assert.deepEqual(rowsIn(join(dir, "tasks.tsv")).map((r) => [r.id, r.title, r.milestone]), [["T3", "claude adopter", milestone.id], ["T4", "codex member", milestone.id]], "the adopter takes the milestone of the task that it adopted");
+  assert.equal(milestone.pilot, "T3");
+  const breakdown = gates.find((g) => g.id === milestone.gate);
+  assert.deepEqual([breakdown?.task, breakdown?.answer, breakdown?.question.startsWith(`Approve milestone ${milestone.id}`)], ["T3", "approve", true], "the milestone's gate cell names its moved breakdown gate");
+  assert.match(w.claude("status"), new RegExp(`\\nmilestone ${milestone.id} · pilot T3: 0 of 2 merged · name: Two\\n`), "approved, as before the move");
 });
 
 test("a moved repair approval gate names the new task, so the owner's approve answer still resumes it (F-T640-3)", (t) => {
@@ -1897,7 +1901,7 @@ test("a resumed plan must name the old logbook of this repository that holds its
   mkdirSync(join(w.shared, "other-abcdef"), { recursive: true });
   writeFileSync(join(w.shared, "other-abcdef", "tasks.tsv"), `${readFileSync(join(w.claudeDir, "tasks.tsv"), "utf8").split("\n")[0]}\n`);
   // A planted plan for another folder that links this checkout and moves no logbook: the old code linked the checkout to it.
-  const planted = { version: 1, folder: "other-abcdef", checkout: realpathSync(w.project), sources: [], checkouts: [{ root: realpathSync(w.project), commits: "" }], gate: { id, dir: w.claudeDir }, step: 3, saved: "2026-11-03T00:00:00Z", at: "2026-11-03T00:00:00Z", digest: "0".repeat(64), raw: {}, marks: [], map: { tasks: [], findings: [], gates: [], programs: [], standing: [], waits: {}, finished: {} } };
+  const planted = { version: 1, folder: "other-abcdef", checkout: realpathSync(w.project), sources: [], checkouts: [{ root: realpathSync(w.project), commits: "" }], gate: { id, dir: w.claudeDir }, step: 3, saved: "2026-11-03T00:00:00Z", at: "2026-11-03T00:00:00Z", digest: "0".repeat(64), raw: {}, marks: [], map: { tasks: [], findings: [], gates: [], milestones: [], standing: [], waits: {}, finished: {} } };
   mkdirSync(dirname(file), { recursive: true });
   writeFileSync(file, JSON.stringify(planted));
   const check = "Nothing changed. Ask the owner to check that file: sage never guesses a move.";
@@ -2049,26 +2053,26 @@ test("an owner's own heading that starts with \"## From the \" stays in its part
   assert.match(out, /\nstanding orders     5     5        5     5   match\nstanding notes      0     0        1     1   match\n/);
 });
 
-test("a program whose pilot merged moves whole: the pilot as a merged task, its breakdown approval and its done count (F-T640-59)", (t) => {
+test("a milestone whose pilot merged moves whole: the pilot as a merged task, its breakdown approval and its done count (F-T640-59)", (t) => {
   const w = moveWorld(t), dir = join(w.shared, w.folder());
   w.claude("task", "add", "--title", "pilot", "--size", "small", "--priority", "P1");
   w.claude("task", "add", "--title", "member", "--size", "small", "--priority", "P1");
-  w.claude("program", "propose", "--name", "Two", "--goal", "Both land.", "--pilot", "T4", "--tasks", "T5");
+  w.claude("milestone", "propose", "--name", "Two", "--goal", "Both land.", "--pilot", "T4", "--tasks", "T5");
   w.claude("gate", "answer", "G2", "--option", "1");
   setStates(w.claudeDir, { T4: "merged" });
-  assert.match(w.claude("status"), /\nprogram PG1 · pilot T4: 1 of 2 merged · name: Two\n/);
+  assert.match(w.claude("status"), /\nmilestone M1 · pilot T4: 1 of 2 merged · name: Two\n/);
   const preview = w.claude("move", "--preview");
   // The merged pilot takes T8, between the open tasks, so the range leaves it out (F-T647-3).
   assert.match(preview, /\nopen tasks          3  T6–T7, T9      1  T10\n/);
   assert.match(preview, /\nfinished tasks      1                 1\n/);
-  assert.match(preview, /\nnote  1 finished task moves with its program, as it is: Claude T4 \(merged\)$/);
+  assert.match(preview, /\nnote  1 finished task moves with its milestone, as it is: Claude T4 \(merged\)$/);
   const out = w.claude("move", "--gate", w.ask().id);
   assert.match(out, /\nReconciliation · every count matches the plan\n/, out);
-  assert.deepEqual(rowsIn(join(dir, "programs.tsv")).map((p) => [p.id, p.pilot, p.gate]), [["PG2", "T8", "G5"]]);
-  assert.deepEqual(rowsIn(join(dir, "tasks.tsv")).map((r) => [r.id, r.title, r.state, r.program]), [
-    ["T6", "claude open", "framed", ""], ["T7", "claude verified", "reviewing", ""], ["T8", "pilot", "merged", "PG2"], ["T9", "member", "framed", "PG2"], ["T10", "codex open", "framed", ""]]);
+  assert.deepEqual(rowsIn(join(dir, "milestones.tsv")).map((p) => [p.id, p.pilot, p.gate]), [["M2", "T8", "G5"]]);
+  assert.deepEqual(rowsIn(join(dir, "tasks.tsv")).map((r) => [r.id, r.title, r.state, r.milestone]), [
+    ["T6", "claude open", "framed", ""], ["T7", "claude verified", "reviewing", ""], ["T8", "pilot", "merged", "M2"], ["T9", "member", "framed", "M2"], ["T10", "codex open", "framed", ""]]);
   assert.equal(rowsIn(join(dir, "gates.tsv")).find((g) => g.id === "G5").answer, "approve", "the breakdown approval holds");
-  assert.match(w.claude("status"), /\nprogram PG2 · pilot T8: 1 of 2 merged · name: Two\n/, "the same done count as before the move");
+  assert.match(w.claude("status"), /\nmilestone M2 · pilot T8: 1 of 2 merged · name: Two\n/, "the same done count as before the move");
   assert.deepEqual(rowsIn(join(w.claudeDir, "tasks.tsv")).map((r) => [r.id, r.moved]), [["T1", ""], ["T2", "T6"], ["T3", "T7"], ["T4", "T8"], ["T5", "T9"]]);
   assert.equal(boardOf(w).tasks.filter((task) => task.title === "pilot").length, 1, "the pilot shows once, in the shared logbook");
 });
@@ -2393,12 +2397,12 @@ test("rule 3: a repository with no commit yet starts shared, and its row gets th
 
 // T645: the follow-ups of the move (T640, T647, T648), the fork leave-out (T646) and rule 3's edge cases (T649).
 
-/** A move world whose Claude logbook has a program PG1 with a merged pilot T4 and an open member T5 (as in F-T640-59). */
-function programWorld(t) {
+/** A move world whose Claude logbook has a milestone M1 with a merged pilot T4 and an open member T5 (as in F-T640-59). */
+function milestoneWorld(t) {
   const w = moveWorld(t);
   w.claude("task", "add", "--title", "pilot", "--size", "small", "--priority", "P1");
   w.claude("task", "add", "--title", "member", "--size", "small", "--priority", "P1");
-  w.claude("program", "propose", "--name", "Two", "--goal", "Both land.", "--pilot", "T4", "--tasks", "T5");
+  w.claude("milestone", "propose", "--name", "Two", "--goal", "Both land.", "--pilot", "T4", "--tasks", "T5");
   w.claude("gate", "answer", "G2", "--option", "1");
   setStates(w.claudeDir, { T4: "merged" });
   return w;
@@ -2447,24 +2451,24 @@ test("a stopped move whose saved plan rows changed by hand does not match its fi
   assert.equal(existsSync(join(w.claudeDir, "moved.json")), false);
 });
 
-test("a damaged adoption cell, of an open task or of a finished task of a program, refuses the preview and names its file and row (F-T647-2)", (t) => {
+test("a damaged adoption cell, of an open task or of a finished task of a milestone, refuses the preview and names its file and row (F-T647-2)", (t) => {
   for (const id of ["T2", "T4"]) {
-    const w = programWorld(t);
+    const w = milestoneWorld(t);
     setCells(w.claudeDir, id, { adoption: "{not json" });
     assert.equal(refusalOf(() => w.claude("move", "--preview")), `sage: refused: ${join(w.claudeDir, "tasks.tsv")} has a damaged adoption cell in the row of ${id}, so the move cannot keep the task's record. Nothing changed. Ask the owner to fix that row.`, id);
   }
 });
 
-test("a program whose breakdown gate its logbook lost moves with a gate number that names no gate, and the board reads its programs (F-T640-38)", (t) => {
-  const w = programWorld(t), dir = join(w.shared, w.folder());
+test("a milestone whose breakdown gate its logbook lost moves with a gate number that names no gate, and the board reads its milestones (F-T640-38)", (t) => {
+  const w = milestoneWorld(t), dir = join(w.shared, w.folder());
   rewrite(join(w.claudeDir, "gates.tsv"), (text) => text.split("\n").filter((line) => !line.startsWith("G2\t")).join("\n"));
   w.claude("move", "--gate", w.ask().id);
-  const [program] = rowsIn(join(dir, "programs.tsv"));
-  assert.match(program.gate, /^G\d+$/, "never an empty gate cell");
-  assert.equal(rowsIn(join(dir, "gates.tsv")).some((g) => g.id === program.gate), false, "it names no gate, as before the move");
+  const [milestone] = rowsIn(join(dir, "milestones.tsv"));
+  assert.match(milestone.gate, /^G\d+$/, "never an empty gate cell");
+  assert.equal(rowsIn(join(dir, "gates.tsv")).some((g) => g.id === milestone.gate), false, "it names no gate, as before the move");
   const shared = readBoardSources([{ id: "shared", path: w.shared }, { id: "claude", path: w.claudeRoot, provider: "claude" }, { id: "codex", path: w.codexRoot, provider: "codex" }]).find((r) => r.id === "shared");
-  assert.deepEqual(shared.projects[0].diagnostics.filter((d) => d.startsWith("programs")), [], "the board reads programs.tsv");
-  assert.deepEqual(shared.projects[0].tables.programs.map((p) => p.id), [program.id]);
+  assert.deepEqual(shared.projects[0].diagnostics.filter((d) => d.startsWith("milestones")), [], "the board reads milestones.tsv");
+  assert.deepEqual(shared.projects[0].tables.milestones.map((p) => p.id), [milestone.id]);
 });
 
 /** A move after a key of T2's repair round closed: T4 carries the key F-T4-2 with no finding (as in F-T640-61). */
@@ -2526,27 +2530,27 @@ test("a waits refusal names the chief of the logbook's provider that runs the co
 test("an open move gate shows under Needs you on the board, and no longer after its answer (F-T640-41)", (t) => {
   const w = moveWorld(t), plan = w.planOf(w.claude("move", "--preview"));
   w.claude("move", "--plan", plan);
-  const need = boardOf(w).programNeeds.find((n) => n.kind === "move");
+  const need = boardOf(w).milestoneNeeds.find((n) => n.kind === "move");
   assert.deepEqual([need?.title, need?.text], ["The move gate G2 waits for your answer", "Move the project project into one shared logbook? Answer the gate in the chat: the chief puts it to you word for word, with its options and its recommendation."]);
   assert.match(renderBoardText(boardOf(w)), /The move gate G2 waits for your answer/);
   w.claude("gate", "answer", "G2", "--option", "2");
-  assert.equal(boardOf(w).programNeeds.some((n) => n.kind === "move"), false);
+  assert.equal(boardOf(w).milestoneNeeds.some((n) => n.kind === "move"), false);
 });
 
-test("the move banner says that the finished tasks of a moved program have new numbers too (F-T647-5)", (t) => {
-  const w = programWorld(t);
+test("the move banner says that the finished tasks of a moved milestone have new numbers too (F-T647-5)", (t) => {
+  const w = milestoneWorld(t);
   w.claude("move", "--gate", w.ask().id);
   const model = boardOf(w);
   assert.deepEqual(model.moved.map((m) => [m.tasks, m.finished]), [[4, 1]]);
-  assert.match(renderBoardHtml(model), /Finished tasks stay in Done as Old and read-only, except 1 finished task of a program, which moved with its program and has a new number too\./);
+  assert.match(renderBoardHtml(model), /Finished tasks stay in Done as Old and read-only, except 1 finished task of a milestone, which moved with its milestone and has a new number too\./);
 });
 
-test("the map page lists a finished task of a moved program and says that it moved with its program (F-T645-9)", (t) => {
-  const w = programWorld(t);
+test("the map page lists a finished task of a moved milestone and says that it moved with its milestone (F-T645-9)", (t) => {
+  const w = milestoneWorld(t);
   w.claude("move", "--gate", w.ask().id);
   const page = readFileSync(join(w.shared, w.folder(), "move-map.html"), "utf8");
   assert.match(page, /<td>Claude T4<\/td><td><b>T\d+<\/b><\/td><td>pilot<\/td>/, "the merged pilot has a row");
-  const finished = "A finished task stays on the board under its old number, unless its program moved: then it moved with its program, and this page lists it.";
+  const finished = "A finished task stays on the board under its old number, unless its milestone moved: then it moved with its milestone, and this page lists it.";
   assert.ok(page.includes(` Each moved row has a new number. ${finished}</p>`), "the intro");
   assert.ok(page.includes(`>No row has this number. ${finished}</p>`), "the line of a search with no row");
   assert.equal(page.includes("A finished task did not move"), false);

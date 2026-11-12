@@ -3,7 +3,7 @@ import { createHash, randomBytes, scrypt, timingSafeEqual } from "node:crypto";
 import { lstatSync, readdirSync, watch } from "node:fs";
 import { createServer } from "node:http";
 import { dirname, isAbsolute, join, resolve, sep } from "node:path";
-import { readBoardSources, buildBoardModel, landingRule, renderBoardHtml, renderAgentsHtml, renderProgramsHtml } from "../core/index.mjs";
+import { readBoardSources, buildBoardModel, landingRule, renderBoardHtml, renderAgentsHtml, renderMilestonesHtml } from "../core/index.mjs";
 
 const MAX_HTML = 8 * 1024 * 1024;
 const MAX_CLIENTS = 16;
@@ -48,10 +48,13 @@ function route(target) {
   if (target === "/") return { task: null, events: false };
   // The Agents page (T308) and its live stream.
   if (target === "/agents" || target === "/agents?events=1") return { task: null, agents: true, events: target !== "/agents" };
-  // The programs list and each program's page (T233 C9), with their live streams. KEY is the base64url of the program key.
-  if (target === "/programs" || target === "/programs?events=1") return { task: null, programs: true, events: target !== "/programs" };
-  const program = /^\/program\/([A-Za-z0-9_-]+)(\?events=1)?$/.exec(target);
-  if (program) { const key = taskKey(program[1]); return key ? { task: null, program: key, events: !!program[2] } : null; }
+  // The milestones list and each milestone's page (T233 C9), with their live streams. KEY is the base64url of the milestone key.
+  if (target === "/milestones" || target === "/milestones?events=1") return { task: null, milestones: true, events: target !== "/milestones" };
+  const milestone = /^\/milestone\/([A-Za-z0-9_-]+)(\?events=1)?$/.exec(target);
+  // The addresses from before the rename of program to milestone (T995) move to the new ones, for one version.
+  const old = /^\/program(s|\/[A-Za-z0-9_-]+)$/.exec(target);
+  if (old) return { redirect: `/milestone${old[1]}` };
+  if (milestone) { const key = taskKey(milestone[1]); return key ? { task: null, milestone: key, events: !!milestone[2] } : null; }
   const page = /^\/task\/([A-Za-z0-9_-]+)$/.exec(target);
   if (page) { const key = taskKey(page[1]); return key ? { task: key, events: false } : null; }
   const stream = /^\/\?events=1(?:&task=([A-Za-z0-9_-]+))?$/.exec(target);
@@ -160,13 +163,13 @@ export function createBoardServer({ sources, password, port = 43123, allowedHost
   }
 
   // The checkout paths go only to the Mac's own page (R1069-2).
-  const render = (state, view, paths, live = true) => view.agents ? renderAgentsHtml(state, { live, paths }) : view.programs || view.program ? renderProgramsHtml(state, { programKey: view.program ?? null, live, paths })
+  const render = (state, view, paths, live = true) => view.agents ? renderAgentsHtml(state, { live, paths }) : view.milestones || view.milestone ? renderMilestonesHtml(state, { milestoneKey: view.milestone ?? null, live, paths })
     : renderBoardHtml(state, { taskKey: view.task, snapshot: false, live, paths });
   const fits = html => Buffer.byteLength(html) <= MAX_HTML;
   /**
    * A page with its stale mark and its diagnostics. The refresh checks the shared pages (the board, the Agents page and
-   * the programs list), so a good snapshot has them. One rule for a single page (a task page or a program page) that is
-   * too large (T383): its address shows its parent page (the board, or the programs list) from the same snapshot, with a
+   * the milestones list), so a good snapshot has them. One rule for a single page (a task page or a milestone page) that is
+   * too large (T383): its address shows its parent page (the board, or the milestones list) from the same snapshot, with a
    * note. It needs no older copy, so it holds also at the first start, and one large page never stops the rest of the board.
    * The page sent to a GET has no stream, so no update of its parent page replaces the note (R1509-2): a reload tries the
    * address again. A stream (stream: true) keeps sending its address's page, so its note has no reload sentence (R1534-2).
@@ -175,7 +178,7 @@ export function createBoardServer({ sources, password, port = 43123, allowedHost
     const html = render(model, view, paths);
     if (fits(html)) return { html, stale: model.stale, diagnostics: model.diagnostics };
     // The note is about the page, not a source, so it is its own banner, not a line of Incomplete sources (R1391-3).
-    const other = render({ ...model, pageNote: stream ? TOO_LARGE : TOO_LARGE + NO_STREAM }, { programs: !!view.program }, paths, false);
+    const other = render({ ...model, pageNote: stream ? TOO_LARGE : TOO_LARGE + NO_STREAM }, { milestones: !!view.milestone }, paths, false);
     if (!fits(other)) throw new RangeError("board rendering exceeds the size limit");
     return { html: other, stale: model.stale, diagnostics: model.diagnostics };
   }
@@ -299,9 +302,9 @@ export function createBoardServer({ sources, password, port = 43123, allowedHost
       }
       next = { ...buildBoardModel(read, { now: clock(), landing }), notSetUp };
       next.diagnostics = [...next.diagnostics, ...watchErrors.values()];
-      // Validate the shared pages before replacing a good snapshot: the board, the Agents page and the programs list. A task
-      // page or a program page is checked when it is sent (pageFor), so the refresh renders 3 pages, not one per program.
-      const pages = [() => renderBoardHtml(next, { snapshot: false, live: true }), () => renderAgentsHtml(next, { live: true }), () => renderProgramsHtml(next, { live: true })];
+      // Validate the shared pages before replacing a good snapshot: the board, the Agents page and the milestones list. A task
+      // page or a milestone page is checked when it is sent (pageFor), so the refresh renders 3 pages, not one per milestone.
+      const pages = [() => renderBoardHtml(next, { snapshot: false, live: true }), () => renderAgentsHtml(next, { live: true }), () => renderMilestonesHtml(next, { live: true })];
       if (pages.some(render => Buffer.byteLength(render()) > MAX_HTML)) throw new RangeError("board rendering exceeds the size limit");
     } catch { next = { ...buildBoardModel([], { now: clock() }), diagnostics: unavailable }; }
     // A logbook that kept changing through 3 reads (T306, C8) is no diagnostic: the board keeps its last good read under
@@ -339,16 +342,17 @@ export function createBoardServer({ sources, password, port = 43123, allowedHost
     }
     if (!["GET", "HEAD"].includes(request.method)) { response.setHeader("Allow", "GET, HEAD"); return fail(405, "This method is not permitted."); }
     const selected = route(request.url);
+    if (selected?.redirect) { response.writeHead(301, { Location: selected.redirect }); return response.end(); }
     if (!selected || selected.task && !model.tasks.some(task => task.key === selected.task)) return fail(404, "This board page does not exist.");
-    // An unknown program gets the not-found page of the design, with status 404; its stream does not exist.
-    const missing = selected.program && !model.programs.some(program => program.key === selected.program);
+    // An unknown milestone gets the not-found page of the design, with status 404; its stream does not exist.
+    const missing = selected.milestone && !model.milestones.some(milestone => milestone.key === selected.milestone);
     if (missing && selected.events) return fail(404, "This board page does not exist.");
     if (selected.events) {
       if (clients.size >= MAX_CLIENTS && request.method !== "HEAD") return fail(503, "There are too many open board streams.");
       response.writeHead(200, { "Content-Type": "text/event-stream; charset=utf-8", "X-Accel-Buffering": "no" });
       if (request.method === "HEAD") return response.end();
       response.flushHeaders();
-      const client = { response, task: selected.task, agents: !!selected.agents, programs: !!selected.programs, program: selected.program ?? null, paths: mac, blocked: false, pending: null, deadline: null, sent: null };
+      const client = { response, task: selected.task, agents: !!selected.agents, milestones: !!selected.milestones, milestone: selected.milestone ?? null, paths: mac, blocked: false, pending: null, deadline: null, sent: null };
       clients.add(client); response.once("close", () => removeClient(client)); publish(client);
       return;
     }

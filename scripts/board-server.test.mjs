@@ -270,7 +270,7 @@ test("T308: the Agents page is a route with the same sign-in, CSP and browser ch
   assert.match(mac.body, /new EventSource\("\/agents\?events=1"\)/);
   for (const [tag, content] of [...mac.body.matchAll(/<(script|style)>([\s\S]*?)<\/\1>/g)].map(m => [m[1], m[2]])) assert.ok(mac.headers["content-security-policy"].includes(`'sha256-${createHash("sha256").update(content).digest("base64")}'`), tag);
   // The task board names the page with its count.
-  assert.match((await read(f, "/", { rawHeaders: ["Host", loopback] })).body, /<a href="\/" aria-current="page">Task board<\/a><a href="\/programs">Programs<\/a><a href="\/agents">Agents \(1\)<\/a>/);
+  assert.match((await read(f, "/", { rawHeaders: ["Host", loopback] })).body, /<a href="\/" aria-current="page">Task board<\/a><a href="\/milestones">Milestones<\/a><a href="\/agents">Agents \(1\)<\/a>/);
   // Away from the Mac, the page and its stream need the password.
   for (const path of ["/agents", "/agents?events=1"]) {
     const refused = await read(f, path, { rawHeaders: ["Host", "sample.tailnet.ts.net"] });
@@ -462,83 +462,90 @@ test("a parent rename that names only the destination refreshes the missing boar
   await stream.next(p => !p.stale && p.html.includes("Sample recreated source"));
 });
 
-// T368 (T233 C9): the programs list and each program's page. SAMPLE DATA: one program of two tasks, its pilot merged.
-function programs(project, goal = "Sample goal of PG1.", pilot = "Sample pilot") {
-  writeFileSync(join(project, "tasks.tsv"), `${HEADERS.tasks.replaceAll(" ", "\t")}\twaits\tprogram\nT1\t${pilot}\tsmall\t\tbuild\tmerged\t\t\t0\t\t\tPG1\nT2\tSample second\tsmall\t\tbuild\tframed\t\t\t0\t\tT1\tPG1\n`);
-  writeFileSync(join(project, "gates.tsv"), `${HEADERS.gates.replaceAll(" ", "\t")}\nG1\tT1\tApprove program PG1? No task builds before you approve.\tapprove|change|drop\tapprove\t\tapprove\t\n`);
-  writeFileSync(join(project, "programs.tsv"), `id\tname\tgoal\tpilot\tgate\tat\nPG1\tSample program\t${goal}\tT1\tG1\t\n`);
+// T368 (T233 C9): the milestones list and each milestone's page. SAMPLE DATA: one milestone of two tasks, its pilot merged.
+function milestones(project, goal = "Sample goal of M1.", pilot = "Sample pilot") {
+  writeFileSync(join(project, "tasks.tsv"), `${HEADERS.tasks.replaceAll(" ", "\t")}\twaits\tmilestone\nT1\t${pilot}\tsmall\t\tbuild\tmerged\t\t\t0\t\t\tM1\nT2\tSample second\tsmall\t\tbuild\tframed\t\t\t0\t\tT1\tM1\n`);
+  writeFileSync(join(project, "gates.tsv"), `${HEADERS.gates.replaceAll(" ", "\t")}\nG1\tT1\tApprove milestone M1? No task builds before you approve.\tapprove|change|drop\tapprove\t\tapprove\t\n`);
+  writeFileSync(join(project, "milestones.tsv"), `id\tname\tgoal\tpilot\tgate\tat\nM1\tSample milestone\t${goal}\tT1\tG1\t\n`);
 }
-const programKey = id => Buffer.from(`sample/project-abcdef/${id}`).toString("base64url");
+const milestoneKey = id => Buffer.from(`sample/project-abcdef/${id}`).toString("base64url");
 async function until(f, path, text) {
   let page;
   for (let i = 0; i < 600 && !(page = await read(f, path)).body.includes(text); i++) await new Promise(wake => setTimeout(wake, 50));
   return page;
 }
 
-test("T368 C9: /programs and /program/KEY are routes with the same sign-in and CSP; an unknown key is the not-found page with 404; a bad key is 404", async t => {
+test("T368 C9: /milestones and /milestone/KEY are routes with the same sign-in and CSP; an unknown key is the not-found page with 404; a bad key is 404", async t => {
   const f = await fixture(t, { allowedHosts: ["sample.tailnet.ts.net"] });
-  programs(f.project);
-  const list = await until(f, "/programs", "Sample program");
+  milestones(f.project);
+  const list = await until(f, "/milestones", "Sample milestone");
   assert.equal(list.status, 200); assert.match(list.headers["content-type"], /^text\/html/);
-  assert.match(list.body, /<a href="\/programs" aria-current="page">Programs<\/a>/);
-  assert.ok(list.body.includes(`<a class="prog" href="/program/${programKey("PG1")}">`) && list.body.includes("1 of 2 merged"));
-  assert.match(list.body, /new EventSource\("\/programs\?events=1"\)/);
+  assert.match(list.body, /<a href="\/milestones" aria-current="page">Milestones<\/a>/);
+  assert.ok(list.body.includes(`<a class="prog" href="/milestone/${milestoneKey("M1")}">`) && list.body.includes("1 of 2 merged"));
+  assert.match(list.body, /new EventSource\("\/milestones\?events=1"\)/);
   for (const [tag, content] of [...list.body.matchAll(/<(script|style)>([\s\S]*?)<\/\1>/g)].map(m => [m[1], m[2]])) assert.ok(list.headers["content-security-policy"].includes(`'sha256-${createHash("sha256").update(content).digest("base64")}'`), tag);
-  const page = await read(f, `/program/${programKey("PG1")}`);
-  assert.equal(page.status, 200); assert.ok(page.body.includes("Sample goal of PG1.") && page.body.includes("<h1 class=\"ptitle\"><span aria-hidden=\"true\">◫</span> Sample program</h1>"), page.body.slice(-3000));
-  // The board names the page, and the task page links its program.
-  assert.match((await read(f, "/")).body, /<a href="\/" aria-current="page">Task board<\/a><a href="\/programs">Programs<\/a><a href="\/agents">Agents \(0\)<\/a>/);
-  assert.ok((await read(f, `/task/${Buffer.from("sample/project-abcdef/T2").toString("base64url")}`)).body.includes(`<a class="back plink" href="/program/${programKey("PG1")}" title="Sample program">◫ <span class="cn">Sample program</span><span class="pid">PG1</span></a>`));
-  const missing = await read(f, `/program/${programKey("PG9")}`);
-  assert.equal(missing.status, 404); assert.match(missing.headers["content-type"], /^text\/html/); assert.ok(missing.body.includes("<b>No program PG9 on the board.</b>"));
-  assert.equal((await read(f, `/program/${programKey("PG9")}`, { method: "HEAD" })).status, 404);
-  assert.equal((await read(f, `/program/${programKey("PG9")}?events=1`)).status, 404, "no stream for an unknown program");
-  for (const path of ["/program/", "/program/_w", `/program/${programKey("PG1")}=`, `/program/${programKey("PG1")}/`, `/program/${programKey("PG1")}?events=2`, "/programs/", "/programs?x=1", "/Programs", `/program/${Buffer.from("a\nb").toString("base64url")}`]) {
-    const result = await read(f, path); assert.equal(result.status, 404, path); assert.doesNotMatch(result.body, /Sample program/, path);
+  const page = await read(f, `/milestone/${milestoneKey("M1")}`);
+  assert.equal(page.status, 200); assert.ok(page.body.includes("Sample goal of M1.") && page.body.includes("<h1 class=\"ptitle\"><span aria-hidden=\"true\">◫</span> Sample milestone</h1>"), page.body.slice(-3000));
+  // The board names the page, and the task page links its milestone.
+  assert.match((await read(f, "/")).body, /<a href="\/" aria-current="page">Task board<\/a><a href="\/milestones">Milestones<\/a><a href="\/agents">Agents \(0\)<\/a>/);
+  assert.ok((await read(f, `/task/${Buffer.from("sample/project-abcdef/T2").toString("base64url")}`)).body.includes(`<a class="back plink" href="/milestone/${milestoneKey("M1")}" title="Sample milestone">◫ <span class="cn">Sample milestone</span><span class="pid">M1</span></a>`));
+  const missing = await read(f, `/milestone/${milestoneKey("M9")}`);
+  assert.equal(missing.status, 404); assert.match(missing.headers["content-type"], /^text\/html/); assert.ok(missing.body.includes("<b>No milestone M9 on the board.</b>"));
+  assert.equal((await read(f, `/milestone/${milestoneKey("M9")}`, { method: "HEAD" })).status, 404);
+  assert.equal((await read(f, `/milestone/${milestoneKey("M9")}?events=1`)).status, 404, "no stream for an unknown milestone");
+  for (const path of ["/milestone/", "/milestone/_w", `/milestone/${milestoneKey("M1")}=`, `/milestone/${milestoneKey("M1")}/`, `/milestone/${milestoneKey("M1")}?events=2`, "/milestones/", "/milestones?x=1", "/Milestones", `/milestone/${Buffer.from("a\nb").toString("base64url")}`]) {
+    const result = await read(f, path); assert.equal(result.status, 404, path); assert.doesNotMatch(result.body, /Sample milestone/, path);
   }
+  // T995: the addresses from before the rename move to the new ones for one version, behind the same sign-in; a stream does not move.
+  for (const [old, to] of [["/programs", "/milestones"], [`/program/${milestoneKey("M1")}`, `/milestone/${milestoneKey("M1")}`]]) {
+    const moved = await read(f, old);
+    assert.deepEqual([moved.status, moved.headers.location], [301, to], old);
+    assert.equal((await read(f, old, { rawHeaders: ["Host", "sample.tailnet.ts.net"] })).status, 401, `${old}: away from the Mac, the password comes first`);
+  }
+  for (const path of ["/programs?events=1", "/program/", "/programs/", `/program/${milestoneKey("M1")}?events=1`]) assert.equal((await read(f, path)).status, 404, path);
   // Away from the Mac, the pages and their streams need the password.
-  for (const path of ["/programs", "/programs?events=1", `/program/${programKey("PG1")}`, `/program/${programKey("PG1")}?events=1`]) {
+  for (const path of ["/milestones", "/milestones?events=1", `/milestone/${milestoneKey("M1")}`, `/milestone/${milestoneKey("M1")}?events=1`]) {
     const refused = await read(f, path, { rawHeaders: ["Host", "sample.tailnet.ts.net"] });
-    assert.equal(refused.status, 401, path); assert.doesNotMatch(refused.body, /Sample program/);
+    assert.equal(refused.status, 401, path); assert.doesNotMatch(refused.body, /Sample milestone/);
     assert.equal((await read(f, path, { method: "HEAD", rawHeaders: ["Host", "sample.tailnet.ts.net", "Authorization", f.authorization] })).status, 200, path);
   }
-  // The program's stream sends its page, and a change of the logbook sends it again.
-  const stream = events(f, `/program/${programKey("PG1")}?events=1`); t.after(() => stream.close());
-  assert.ok((await stream.next()).html.includes("Sample goal of PG1."));
-  programs(f.project, "Sample changed goal.");
-  assert.ok((await stream.next(p => p.html.includes("Sample changed goal."))).html.includes("Sample program"));
+  // The milestone's stream sends its page, and a change of the logbook sends it again.
+  const stream = events(f, `/milestone/${milestoneKey("M1")}?events=1`); t.after(() => stream.close());
+  assert.ok((await stream.next()).html.includes("Sample goal of M1."));
+  milestones(f.project, "Sample changed goal.");
+  assert.ok((await stream.next(p => p.html.includes("Sample changed goal."))).html.includes("Sample milestone"));
 });
 
-test("T368 C9: the size check covers the programs list: a goal that makes it too large keeps the last good board, marked stale", async t => {
+test("T368 C9: the size check covers the milestones list: a goal that makes it too large keeps the last good board, marked stale", async t => {
   const f = await fixture(t);
-  programs(f.project);
-  await until(f, "/programs", "Sample goal of PG1.");
-  // A logbook file is at most 4 MB, but each "<" of the goal is 4 bytes of HTML: the programs list passes 8 MB, the task board does not.
-  programs(f.project, "<".repeat(3.9 * 1024 * 1024));
-  const page = await until(f, "/programs", "The board snapshot is unavailable.");
-  assert.ok(page.body.includes("The board snapshot is unavailable.") && page.body.includes("Sample goal of PG1.") && !page.body.includes("&lt;&lt;&lt;&lt;"), "the last good page, with the reason");
+  milestones(f.project);
+  await until(f, "/milestones", "Sample goal of M1.");
+  // A logbook file is at most 4 MB, but each "<" of the goal is 4 bytes of HTML: the milestones list passes 8 MB, the task board does not.
+  milestones(f.project, "<".repeat(3.9 * 1024 * 1024));
+  const page = await until(f, "/milestones", "The board snapshot is unavailable.");
+  assert.ok(page.body.includes("The board snapshot is unavailable.") && page.body.includes("Sample goal of M1.") && !page.body.includes("&lt;&lt;&lt;&lt;"), "the last good page, with the reason");
   assert.ok(Buffer.byteLength(page.body) < 8 * 1024 * 1024);
 });
 
-test("R1334-3, T383 items 15 and 16: a program page that is too large shows the programs list with a note, and keeps its stream; the rest of the board stays live", async t => {
+test("R1334-3, T383 items 15 and 16: a milestone page that is too large shows the milestones list with a note, and keeps its stream; the rest of the board stays live", async t => {
   const f = await fixture(t);
-  programs(f.project);
-  const path = `/program/${programKey("PG1")}`;
+  milestones(f.project);
+  const path = `/milestone/${milestoneKey("M1")}`;
   await until(f, path, "Sample pilot");
   const stream = events(f, `${path}?events=1`); t.after(() => stream.close());
   assert.equal((await stream.next()).stale, false);
-  // The merged pilot T1 is not on the board, and the programs list does not name it; its program page lists it, and each "<" is 4 bytes of HTML.
-  programs(f.project, "Sample changed goal.", "<".repeat(3.9 * 1024 * 1024));
+  // The merged pilot T1 is not on the board, and the milestones list does not name it; its milestone page lists it, and each "<" is 4 bytes of HTML.
+  milestones(f.project, "Sample changed goal.", "<".repeat(3.9 * 1024 * 1024));
   const page = await until(f, path, "too large to show");
   assert.equal(page.status, 200);
-  assert.ok(page.body.includes("so the board shows this page instead") && page.body.includes("Sample changed goal.") && !page.body.includes("&lt;&lt;&lt;&lt;"), "the programs list of the new snapshot, with the reason");
-  assert.ok(!page.body.includes("new EventSource("), "R1509-2: the page with the note opens no stream, so no update of the programs list removes the note");
+  assert.ok(page.body.includes("so the board shows this page instead") && page.body.includes("Sample changed goal.") && !page.body.includes("&lt;&lt;&lt;&lt;"), "the milestones list of the new snapshot, with the reason");
+  assert.ok(!page.body.includes("new EventSource("), "R1509-2: the page with the note opens no stream, so no update of the milestones list removes the note");
   const sent = await stream.next(p => p.html.includes("too large to show"));
   assert.ok(sent.html.includes("Sample changed goal.") && !sent.html.includes("&lt;&lt;&lt;&lt;") && sent.stale === false, "the stream stays open and sends the same page");
   assert.ok(page.body.includes("This page does not update: reload the address to try again.") && !sent.html.includes("does not update"), "R1534-2: only the page without a stream says that it does not update; the stream does update it");
   // The refresh checks only the shared pages, so they show the new logbook, live (T383): no page is stale.
-  const list = await read(f, "/programs");
-  assert.ok(list.body.includes("Sample changed goal.") && !list.body.includes("too large to show") && !list.body.includes("The board snapshot is unavailable."), "the programs list is live");
+  const list = await read(f, "/milestones");
+  assert.ok(list.body.includes("Sample changed goal.") && !list.body.includes("too large to show") && !list.body.includes("The board snapshot is unavailable."), "the milestones list is live");
   assert.ok(!(await read(f, "/")).body.includes("The board snapshot is unavailable."), "the board is live");
 });
 

@@ -46,28 +46,28 @@ export const TOOLS = {
       gate: id("G", "the move gate's id").optional() },
     pos: ["preview"], argv: (i) => ["move", ...(i.preview ? ["--preview"] : [])],
   },
-  status: { describe: "Print the status lines of the project's logbook: tasks, runs, gates and programs.", argv: () => ["status"] },
+  status: { describe: "Print the status lines of the project's logbook: tasks, runs, gates and milestones.", argv: () => ["status"] },
   task_add: {
     describe: "Frame a task and its route. The size gives the least route; a risk flag adds the security review.",
     input: { title: z.string(), size: z.enum(Object.keys(tool.SIZES)), risk: optional(`risk flags joined by a comma: ${tool.RISKS.join(", ")}`),
       add: optional("added blocks, joined by a comma (needs why)"), why: optional("the reason for the added blocks"),
       priority: z.enum(PRIORITIES, { error: PRIORITY_SCALE }).describe(PRIORITY_SCALE), kind: optional("the task's main kind"), waits: optional("the task ids that it waits for, joined by a comma"),
-      program: optional("the program id, for example PG1") },
+      milestone: optional("the milestone id, for example M1") },
     argv: () => ["task", "add"],
   },
   task_set: {
-    describe: "Change a task: its state, branch, pr, priority, kind, waits or program. Resuming a round hold needs approval=<G>, an unused owner-approved repair gate for this task and round limit. The tool refuses a move that the route does not allow. Any chief may abandon a task with no owning chief: fields {\"state\": \"abandoned\"} alone, with why.",
+    describe: "Change a task: its state, branch, pr, priority, kind, waits or milestone. Resuming a round hold needs approval=<G>, an unused owner-approved repair gate for this task and round limit. The tool refuses a move that the route does not allow. Any chief may abandon a task with no owning chief: fields {\"state\": \"abandoned\"} alone, with why.",
     input: { task, fields: z.record(z.string().regex(/^[a-z]+$/), z.string()).describe('the keys and values to set, for example {"state": "building", "branch": "codex/t7-name"}'),
       why: optional("the reason of an abandon, only with the state abandoned; needed to abandon a task with no owning chief") },
     pos: ["task", "fields"],
     argv: (i) => ["task", i.task, "set", ...Object.entries(i.fields).map(([k, v]) => `${k}=${v}`)],
   },
-  program_propose: {
-    describe: "Propose a program: one goal, a pilot task and the program's other tasks, framed first. It opens the breakdown gate on the pilot (approve, change or drop): put its question to the owner. "
-      + "A new program needs name, goal, pilot and tasks. After the owner's change, or for a new pilot, give program, the program's id, with name, goal, pilot or tasks when they change. A task joins or leaves a program with task_set program=<PG> or program=none.",
-    input: { program: id("PG", "the program's id, to propose it again").optional(), name: optional("the program's name"), goal: optional("the program's goal"),
-      pilot: id("T", "the pilot task's id").optional(), tasks: optional("the program's other task ids, joined by a comma") },
-    pos: ["program"], argv: (i) => ["program", "propose", ...(i.program ? [i.program] : [])],
+  milestone_propose: {
+    describe: "Propose a milestone: one goal, a pilot task and the milestone's other tasks, framed first. It opens the breakdown gate on the pilot (approve, change or drop): put its question to the owner. "
+      + "A new milestone needs name, goal, pilot and tasks. After the owner's change, or for a new pilot, give milestone, the milestone's id, with name, goal, pilot or tasks when they change. A task joins or leaves a milestone with task_set milestone=<M> or milestone=none.",
+    input: { milestone: id("M", "the milestone's id, to propose it again").optional(), name: optional("the milestone's name"), goal: optional("the milestone's goal"),
+      pilot: id("T", "the pilot task's id").optional(), tasks: optional("the milestone's other task ids, joined by a comma") },
+    pos: ["milestone"], argv: (i) => ["milestone", "propose", ...(i.milestone ? [i.milestone] : [])],
   },
   config: {
     describe: "Set config keys, only when the owner asks, and print the values. name (the project's name on the board; an empty value removes it), archived (yes or no) and start (sage-mode: each new session of the project starts in sage mode, also in Claude when the two share the logbook; normal: it starts off) are keys of this project's logbook: set them in a call of their own. "
@@ -128,7 +128,7 @@ export const TOOLS = {
     pos: ["task"], argv: (i) => ["verdict", i.task],
   },
   claim: {
-    describe: "Take a task with no owning chief in a shared logbook: one that you released, or one that your provider started. The version is the one that the refusal of your last write printed. A task that another chief released last, or that came from the other provider's logbook, needs the owner's takeover gate (gate_replace).",
+    describe: "Take a task with no owning chief in a shared logbook: one that you unclaimed, or one that your provider started. The version is the one that the refusal of your last write printed. A task that another chief unclaimed last, or that came from the other provider's logbook, needs the owner's takeover gate (gate_replace).",
     input: { task, version }, pos: ["task"], argv: (i) => ["claim", i.task],
   },
   offer: {
@@ -143,9 +143,9 @@ export const TOOLS = {
     describe: "Ask for a task that another chief offered to you: it opens a takeover gate, and the task is yours only after the owner's answer approve. No run of the task may be active. The CLI's task command gives the offer's id (in the task's offer cell) and the version; so does the line that the offer printed.",
     input: { task, offer: offerId, version }, pos: ["task"], argv: (i) => ["accept", i.task],
   },
-  release: {
+  unclaim: {
     describe: "Give up your task. Only you claim it back; another chief takes it through the owner's takeover gate. The task needs no open offer and no active run. Its work and reports stay.",
-    input: { task }, pos: ["task"], argv: (i) => ["release", i.task],
+    input: { task }, pos: ["task"], argv: (i) => ["unclaim", i.task],
   },
   round: { describe: "Start a repair round on the open findings marked fix, also on low findings only. It names the roles to run again. Past max_rounds it holds the task; while autopilot is on, the chief gives the next round itself with why, up to 5 rounds in all, also from that hold.",
     input: { task, why: optional("the chief's reason for an extra round past max_rounds") }, pos: ["task"], argv: (i) => ["round", i.task] },

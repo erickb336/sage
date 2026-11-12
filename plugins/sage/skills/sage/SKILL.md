@@ -12,7 +12,7 @@ Run it as `node ${CLAUDE_SKILL_DIR}/sage.mjs <command> --project <path to the pr
 
 Each option takes a value: `--name value`, or `--name=value` for a value that starts with `--`. A command refuses an option that it does not take, and names the options that it takes. It refuses an option given twice.
 
-In a shared logbook, each write names its actor: the chief adds `--chief C<n>`, and a lead adds `--lead R<n>`, its own lead run. The hook names the id at the first write and refuses another chief's id, also when a value is in quotes. It reads a write that is one command of its own: after `cd` or in a pipe, it names no id. A write on a task of another chief refuses and names that chief. A command with no chief only reads. A legacy logbook refuses both options, `claim`, `offer`, `cancel`, `accept`, `release` and `gate replace`.
+In a shared logbook, each write names its actor: the chief adds `--chief C<n>`, and a lead adds `--lead R<n>`, its own lead run. The hook names the id at the first write and refuses another chief's id, also when a value is in quotes. It reads a write that is one command of its own: after `cd` or in a pipe, it names no id. A write on a task of another chief refuses and names that chief. A command with no chief only reads. A legacy logbook refuses both options, `claim`, `offer`, `cancel`, `accept`, `unclaim` and `gate replace`.
 
 A reference path in this skill, such as `skills/sage/references/<name>.md` or `core/references/<name>.md`, is a file in the sage plugin's folder: your start text names that folder, and it is also two folders above this skill's own folder. Read a reference only when its trigger holds.
 
@@ -30,7 +30,7 @@ Read `skills/sage/references/commands.md` for the full row of a command before y
 | --- | --- |
 | `init` | Makes the project's logbook and its standing orders. |
 | `standing` · `standing add "<order>"` | Prints the standing orders as written, or adds one. |
-| `task add --title "<t>" --size tiny\|small\|large\|investigate [--risk auth,data,schema,money,secrets,input] [--add <blocks> --why "<reason>"] --priority P0\|P1\|P2\|P3 [--kind <kind>] [--waits <T,T>] [--program <PG>]` | Frames a task and its route. |
+| `task add --title "<t>" --size tiny\|small\|large\|investigate [--risk auth,data,schema,money,secrets,input] [--add <blocks> --why "<reason>"] --priority P0\|P1\|P2\|P3 [--kind <kind>] [--waits <T,T>] [--milestone <M>]` | Frames a task and its route. |
 | `task <T> set priority=P0\|P1\|P2\|P3` · `task <T> set kind=<kind>\|none` | Sets the task's priority, or sets or clears (`none`) its kind, from the lists of `task add`. |
 | `task <T> set waits=<T,T>` · `waits=` (or `waits=none`) | Sets or clears the tasks that this task waits for. |
 | `config name="<name>"` · `config archived=yes\|no` · `config start=sage-mode\|normal` | Sets a key of the project's own logbook, in `config.json` of its logbook folder (not the config for all projects). |
@@ -57,14 +57,14 @@ Read `core/references/logbook-recovery.md` before any `logbook repair`, and when
 | --- | --- |
 | `logbook` · `logbook repair --accept-loss <table>[,<table>...]` · `logbook repair --accept-change-loss yes` | Prints the logbook's folder. |
 
-### Programs
+### Milestones
 
-Read `skills/sage/references/programs.md` before you propose a program, put a task in one or take it out, and when a program refuses a step.
+Read `skills/sage/references/milestones.md` before you propose a milestone, put a task in one or take it out, and when a milestone refuses a step.
 
 | Command | Does |
 | --- | --- |
-| `program propose --name "<name>" --goal "<goal>" --pilot <T> --tasks <T,T>` · `program propose <PG> [--name "<name>"] [--goal "<goal>"] [--pilot <T>] [--tasks <T,T>\|none]` | Writes a program (`PG1`, `PG2`, …) for a request of two or more tasks with one goal. |
-| `task <T> set program=<PG>` · `program=none` (or `program=`) | Puts the task in a program, or takes it out, for a task that joins later. |
+| `milestone propose --name "<name>" --goal "<goal>" --pilot <T> --tasks <T,T>` · `milestone propose <M> [--name "<name>"] [--goal "<goal>"] [--pilot <T>] [--tasks <T,T>\|none]` | Writes a milestone (`M1`, `M2`, …) for a request of two or more tasks with one goal. |
+| `task <T> set milestone=<M>` · `milestone=none` (or `milestone=`) | Puts the task in a milestone, or takes it out, for a task that joins later. |
 
 ### The merge check and the config
 
@@ -77,7 +77,7 @@ Read `skills/sage/references/merge-check-and-config.md` before a merge check of 
 
 ### A shared logbook
 
-Read `skills/sage/references/shared-logbook.md` before you run `link`, `move`, `claim`, `offer`, `cancel`, `accept`, `release`, `gate replace` or `projects rebuild`, and when a command refuses for another chief.
+Read `skills/sage/references/shared-logbook.md` before you run `link`, `move`, `claim`, `offer`, `cancel`, `accept`, `unclaim`, `gate replace` or `projects rebuild`, and when a command refuses for another chief.
 
 ## References
 
