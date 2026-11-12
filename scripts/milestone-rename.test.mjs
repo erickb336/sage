@@ -168,6 +168,15 @@ test("T995: the old words program, --program and program= still work for one ver
   assert.match(s.ok("program", "propose", "--name", "Next steps", "--goal", "g", "--pilot", "T993", "--tasks", "none"), /^M6 proposed [\s\S]*\nnote: program is milestone now\. The old words work for one more version\.$/, "the next id after M5");
 });
 
+test("F-T995-24: a word that a plain object has, such as constructor, is no old word: it is an unknown command, by its own name", () => {
+  const s = oldLogbook();
+  for (const word of ["constructor", "toString", "__proto__", "hasOwnProperty"]) {
+    const why = s.no(word);
+    assert.match(why, new RegExp(`unknown command "${word}"\\. Commands: `), word);
+    assert.doesNotMatch(why, /function|\[native code\]|note:/, word);
+  }
+});
+
 // A task page lists the task's last decision rows as they are written: the old rows of PG1 stay as history there. The
 // milestone page reads them through the id map, in its own short lines.
 test("T995: the chat board and the browser board of an old logbook say milestone, before and after the migration", () => {

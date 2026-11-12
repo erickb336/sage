@@ -2965,14 +2965,14 @@ function folderHere() {
 }
 
 /** The old words of the renames of T995, kept for one version: program (now milestone) and release (now unclaim). */
-const OLD_WORDS = { program: "milestone", release: "unclaim" };
+const OLD_WORDS = new Map([["program", "milestone"], ["release", "unclaim"]]); // a Map, so constructor is no old word (F-T995-24)
 /**
  * A command with an old word runs as its new form: the command program or release, the option --program and a task set
  * key program=. Its output ends with a note that names the new word, so the chief learns it.
  */
 function sage(argv, env = process.env) {
   const [cmd, ...rest] = argv, old = [];
-  const words = [OLD_WORDS[cmd] ? (old.push(`${cmd} is ${OLD_WORDS[cmd]} now`), OLD_WORDS[cmd]) : cmd, ...rest.map((word, i) => {
+  const words = [OLD_WORDS.has(cmd) ? (old.push(`${cmd} is ${OLD_WORDS.get(cmd)} now`), OLD_WORDS.get(cmd)) : cmd, ...rest.map((word, i) => {
     if (/^--program(?:=|$)/.test(word)) return old.push("--program is --milestone now"), word.replace("--program", "--milestone");
     if (cmd === "task" && rest[1] === "set" && i > 1 && word.startsWith("program=")) return old.push("program= is milestone= now"), `milestone=${word.slice(8)}`;
     return word;
@@ -3303,6 +3303,9 @@ function leadProblem(view, lead, request, project, env = process.env) {
   return leadPolicy(request, { lead, view, ofTask, branchOfTask, head });
 }
 
+/** The milestone id that milestone propose names: an old program id (PG<n>) through the logbook's id map (T995). guard and act both read it. */
+const askedMilestone = (id, renamed) => (id === undefined ? undefined : (renamed.get(id) ?? id));
+
 /**
  * The one guard of a shared logbook: step 5 of every writer. It gives the chief that this command acts for, or refuses.
  * The check prevents mistakes by normal agents; it does not stop an agent that gives another chief's id (F4). A lead acts
@@ -3321,9 +3324,11 @@ function guard(dir, cmd, pos, opt, project, env) {
   const chief = lead?.chief ?? opt.chief ?? refuse(`this logbook is shared, and a command with no chief only reads: add --chief <your C id> to ${name}. Nothing changed. Only a chief's session writes here. In a Claude session, run this write again as one command of its own, and the hook names your id. A Codex chief writes through the sage tools, which add its id. A terminal with no chief session only reads.`);
   if (!lead && !chiefs(dir).some((r) => r.id === chief)) refuse(`${visible(chief)} is not a chief of this logbook (${join(dir, "chiefs.tsv")}). Nothing changed.`);
   const tasks = need.kind === "any" ? [] : read(dir, "tasks");
-  const old = need.kind === "milestone" ? read(dir, "milestones").find((p) => p.id === pos[1]) : undefined;
+  // A milestone proposed again: its pilot and each of its tasks, as each can leave it, and each task that the command names.
+  // An old program id names its milestone as in act (F-T995-25).
+  const old = need.kind === "milestone" ? read(dir, "milestones").find((p) => p.id === askedMilestone(pos[1], renamedIds(read(dir, "decisions")))) : undefined;
   const ids = need.kind === "milestone"
-    ? [opt.pilot ?? old?.pilot, ...(opt.tasks === undefined ? tasks.filter((t) => old && t.milestone === old.id).map((t) => t.id) : opt.tasks === "none" ? [] : waitWords(opt.tasks))]
+    ? [opt.pilot, old?.pilot, ...tasks.filter((t) => old && t.milestone === old.id).map((t) => t.id), ...(opt.tasks === undefined || opt.tasks === "none" ? [] : waitWords(opt.tasks))]
     : [need.task ?? (need.run && read(dir, "runs").find((r) => r.id === need.run)?.task)];
   const named = ids.filter(Boolean); // a task or a run that the logbook lacks gets the command's own refusal
   if (need.kind !== "any") for (const id of new Set(named)) {
@@ -3634,7 +3639,7 @@ function act(cmd, pos, opt, dir, env, skip, project) {
       const [tasks, milestones, gates, runs, decisions] = ["tasks", "milestones", "gates", "runs", "decisions"].map((t) => read(dir, t));
       const nothing = " Nothing changed.";
       // An old program id names its milestone through the logbook's id map (T995, F-T995-16): the line names the new id.
-      const renamed = renamedIds(decisions), asked = id === undefined ? undefined : (renamed.get(id) ?? id);
+      const renamed = renamedIds(decisions), asked = askedMilestone(id, renamed);
       // A milestone of that name whose gate is not in the logbook is a propose that stopped before it wrote the gate: the
       // same command finishes it (R1246-2).
       const unfinished = id === undefined && opt.name !== undefined ? milestones.find((p) => looks(p.name) === looks(opt.name) && !gates.some((g) => g.id === p.gate)) : undefined;

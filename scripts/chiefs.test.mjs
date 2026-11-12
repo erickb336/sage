@@ -12,6 +12,7 @@ import { fileURLToPath, pathToFileURL } from "node:url";
 import { shellCommands } from "../plugins/sage/core/command-reader.mjs";
 import { landingRule } from "../plugins/sage/core/board-view.mjs";
 import { writerClass } from "../plugins/sage/core/chiefs.mjs";
+import { RENAME_WHY } from "../plugins/sage/core/milestone-rules.mjs";
 import * as claude from "../plugins/sage/skills/sage/sage.mjs";
 import { tool as codex } from "../plugins/sage-codex/skills/sage/sage.mjs";
 import { modeDirectory, stateKey } from "../plugins/sage-codex/hooks/hook-state.mjs";
@@ -255,6 +256,26 @@ for (const [name, own, other] of pairs) {
     assert.throws(() => w.owner("milestone", "propose", "--name", "n", "--goal", "g", "--pilot", "T1", "--tasks", "T2"), /T2 belongs to chief C2/);
     w.owner("milestone", "propose", "--name", "n", "--goal", "g", "--pilot", "T1", "--tasks", "none");
     assert.throws(() => w.intruder("milestone", "propose", "M1"), /T1 belongs to chief C1/);
+  });
+
+  test(`${name}: F-T995-25: a milestone proposed again by its old program id, with either old word, checks the same tasks; so does a new pilot, for each task that leaves`, (t) => {
+    const w = world(t, own, other);
+    w.owner("task", "add", "--title", "a", ...ADD);
+    w.owner("task", "add", "--title", "b", ...ADD);
+    w.owner("milestone", "propose", "--name", "n", "--goal", "g", "--pilot", "T1", "--tasks", "T2");
+    own.sage(["gate", "answer", "G1", "--option", "1", "--project", w.project], w.env);
+    w.intruder("task", "add", "--title", "c", ...ADD);
+    // The id map of a logbook that the rename migrated (T995): M1 was PG1.
+    const file = join(w.dir, "decisions.tsv"), cols = readFileSync(file, "utf8").split("\n")[0].split("\t");
+    writeFileSync(file, readFileSync(file, "utf8") + cols.map((c) => ({ at: "2026-11-11T00:00:00Z", decision: "M1 was PG1", why: RENAME_WHY })[c] ?? "").join("\t") + "\n");
+    const before = w.tables();
+    for (const args of [["milestone", "propose", "PG1"], ["program", "propose", "PG1"], ["milestone", "propose", "PG1", "--tasks", "T3"], ["program", "propose", "PG1", "--pilot", "T3", "--tasks", "none"],
+      ["milestone", "propose", "M1", "--pilot", "T3", "--tasks", "none"], ["milestone", "propose", "M1", "--tasks", "T3"]]) {
+      assert.throws(() => w.intruder(...args), /T[12] belongs to chief C1 /, args.join(" "));
+    }
+    assert.equal(w.tables(), before, "nothing changed");
+    // The owning chief proposes it again by its old id: the line names M1.
+    assert.match(w.owner("program", "propose", "PG1", "--goal", "g2"), /^M1 proposed \(round 2\) /);
   });
 
   test(`${name}: any chief of the project runs the commands that change no task; a command with no chief refuses`, (t) => {
