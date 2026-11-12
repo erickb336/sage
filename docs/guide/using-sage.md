@@ -208,14 +208,15 @@ The board shows each milestone on its Milestones tab: see [Milestones on the boa
 
 A release is a version that you ship, such as 1.0. It holds milestones and single tasks (tasks outside a milestone). A release is optional.
 
-> **Warning:** before you put a milestone or a task in a release, update sage in each Claude Code and Codex session. After that, an older session reads the logbook but refuses to write it.
+> **Warning:** before you put the first milestone or task in a release, update sage (see [To update sage](#to-update-sage)) in each Claude Code and Codex session. That first one puts a release column in the logbook, and the column stays, also after you take each milestone and task out of its release. While the column is there, an older session reads the logbook but refuses every write.
 
 - Tell the chief to add a release, for example "add release 1.0". The chief runs `sage release add --name "1.0"`.
 - Tell the chief which release a milestone or a task goes in. The chief runs `sage milestone M5 set release=1.0`, or `sage task T12 set release=1.0` for a single task.
+- To take a milestone or a single task out of its release, tell the chief. The chief runs the same command with `release=none`.
 - A task of a milestone is in its milestone's release. A task that joins a milestone leaves its own release.
-- Nothing moves to another release by itself. When you say that a release ships, the chief moves each open item to the next release, one command each, with a decision row.
+- Nothing moves to another release by itself. When you say that a release ships, the chief moves each open milestone and single task to the next release, one command each, with a decision row.
 
-`status` shows one line for each release, in the order that you added them: its state (not started, in progress, done or stopped) and how many of its tasks are done. For example: `release 1.0 · in progress · 1 of 10 tasks done · milestones M5 · single tasks T993, T996`. The board does not show releases yet.
+`status` shows one line for each release, in the order that you added them: its state (not started, in progress, done or stopped) and how many of its tasks are done. For example: `release 1.0 · in progress · 1 of 10 tasks done · milestones M5 · single tasks T993, T996`. The board does not show releases yet, and the full rules are in [Rules held in code](../design/rules-in-code.md#waits-and-milestones).
 
 ## Start every session in sage mode
 

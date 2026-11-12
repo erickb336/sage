@@ -59,7 +59,7 @@ Read `core/references/logbook-recovery.md` before any `logbook repair`, and when
 
 ### Milestones and releases
 
-Read `skills/sage/references/milestones.md` before you propose a milestone, put a task in one or take it out, add a release or put an item in one, and when a milestone or a release refuses a step.
+Read `skills/sage/references/milestones.md` before you propose a milestone, put a task in one or take it out, add a release or put a milestone or a single task in one, and when a milestone or a release refuses a step.
 
 | Command | Does |
 | --- | --- |
