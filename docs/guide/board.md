@@ -220,13 +220,15 @@ The board shows web pages, PDFs, pictures (PNG, JPEG, GIF, WebP and SVG), and Ma
 
 A page can be at most 3 parts deep in the task's folder (for example `designs/final/index.html`) and at most 16 MiB. The index lists at most 200 pages.
 
-Each page opens in a sandbox. A page cannot read the board or your files, load a picture, a style or a script from the board or from another site, or send a form.
+Each page opens in a sandbox. A page cannot read the board or your files, load a picture, a style or a frame from the board or from another site, or send a form.
+
+A script from another site does not run, but if its `integrity` hash matches the switch, your browser still asks that site for it before it checks the hash. A frame to another site stays blocked, but your browser still opens a connection to that site, and the connection sends its host name.
 
 Only sage's own script runs: the Today switch of a message's page. A page that holds this switch and also an `http-equiv` (for example a refresh) or a `srcdoc` outside sage's own policy tag gets no script, so that a refresh cannot move it: it shows without its switch. When the board cannot judge a page, the page also shows without its switch.
 
 The usual way out of a page is a link that you click in it. Two ways out need no click:
 
-- When a page opens, it can make your browser ask another site for an address, for example with a prerender link. The address can hold any text of the page, so that text can leave the Mac. The board found no header that stops this in Chromium.
+- When a page opens, it can make your browser ask another site for an address, for example with a prerender link. The address can hold any text of the page, so that text can leave the Mac, and the request carries the cookies of that site that `SameSite=Lax` lets through. The board found no header that stops this in Chromium.
 - A page that you open with "open with its scripts" (`?scripts=1`) can move itself to another site, by its script or by a meta refresh.
 
 Two warning lines in the index tell you the rest:
