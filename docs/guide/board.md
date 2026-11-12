@@ -212,6 +212,8 @@ Agents save each task's pages (research, designs, the pages of the chief's messa
 - `http://127.0.0.1:43123/pages/<logbook>/<task>/` is the task's index: a list of its pages, with the size of each.
 - `http://127.0.0.1:43123/pages/<logbook>/<task>/<file>` opens one page. For example: `http://127.0.0.1:43123/pages/sage-43265b/T1000/research.html`.
 
+On the Mac, a task page links its index: its top line has the link **Pages** when the task has a pages folder. Through a tunnel, the task page has no such link, because the board serves no page there.
+
 The Page block of a message gives this link between its title and its file path ([sage's messages](using-sage.md#sages-messages)). So one link opens the page in the same way in each app: in the Browser pane of the Claude desktop app, in the built-in browser of the Codex app, and in your default browser from a terminal.
 
 The board shows web pages, PDFs, pictures (PNG, JPEG, GIF, WebP and SVG), and Markdown and text files as plain text. It shows no other file: no logbook file, JSON, log, hidden file or link.

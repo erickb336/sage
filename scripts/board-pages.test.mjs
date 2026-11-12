@@ -16,6 +16,7 @@ import { fileURLToPath } from "node:url";
 import { createBoardServer, hashPassword } from "../packages/sage-board/server.mjs";
 import { SWITCH_SCRIPT } from "../packages/sage-core/message-page.mjs";
 import { renderMessage } from "../packages/sage-core/message-checks.mjs";
+import { pageUrl } from "../packages/sage-core/message.mjs";
 
 const HERE = dirname(fileURLToPath(import.meta.url));
 const TOOL = join(HERE, "..", "plugins", "sage", "skills", "sage", "sage.mjs");
@@ -36,12 +37,12 @@ async function freePort() {
   }
 }
 
-/** A logbook folder with one task, in root/<name>. */
+/** A logbook folder in root/<name> with three tasks: T1 has a pages folder, T4 has none, and T7's is a link (sampleRoot). */
 function logbook(root, name) {
   const dir = join(root, name);
   mkdirSync(dir, { recursive: true });
   NAMES.forEach((table, i) => writeFileSync(join(dir, `${table}.tsv`), `${HEADERS[i].replaceAll(" ", "\t")}\n`));
-  writeFileSync(join(dir, "tasks.tsv"), `${HEADERS[0].replaceAll(" ", "\t")}\nT1\tSample task\tsmall\t\tbuild\tframed\tsample/t1\t\t0\t\n`);
+  writeFileSync(join(dir, "tasks.tsv"), `${HEADERS[0].replaceAll(" ", "\t")}\n${["T1", "T4", "T7"].map((id) => `${id}\tSample task\tsmall\t\tbuild\tframed\tsample/${id.toLowerCase()}\t\t0\t\n`).join("")}`);
 }
 
 /**
@@ -326,6 +327,34 @@ test("a page whose folder flips between a link and a folder while the board chec
   unlinkSync(flip);
   fs.renameSync(decoy, flip);
   assert.equal((await get(f, `/pages/${LOGBOOK}/T1/flip/notes.md`)).body, "decoy", "a real folder in the path");
+});
+
+test("T1010: a task page links the task's pages index with core's URL, on the Mac only, and only when the route serves the task's folder", async (t) => {
+  const f = await fixture(t);
+  const taskPage = (id, options) => get(f, `/task/${Buffer.from(`sample/${LOGBOOK}/${id}`).toString("base64url")}`, options);
+  const pagesHref = (body) => [...body.matchAll(/<a href="([^"]+)"[^>]*>Pages<\/a>/g)].map((m) => m[1]);
+  const authorization = `Basic ${Buffer.from(`sage:${PASSWORD}`).toString("base64")}`;
+  // On the Mac: one link, with core's URL, and its path opens the index on this board.
+  const mac = await taskPage("T1");
+  assert.equal(mac.status, 200);
+  assert.deepEqual(pagesHref(mac.body), [pageUrl(LOGBOOK, "T1", "")]);
+  const index = await get(f, new URL(pageUrl(LOGBOOK, "T1", "")).pathname);
+  assert.equal(index.status, 200);
+  assert.match(index.body, /<h1>Pages of T1<\/h1>/);
+  // Off the Mac (signed in through a tunnel), where the route answers 404: the same task page has no link.
+  for (const options of [{ headers: { "X-Forwarded-For": "203.0.113.9", Authorization: authorization } }, { raw: { Host: "board.example.test", Authorization: authorization } }]) {
+    const off = await taskPage("T1", options);
+    assert.equal(off.status, 200, JSON.stringify(options));
+    assert.match(off.body, /Sample task/);
+    assert.deepEqual(pagesHref(off.body), [], JSON.stringify(options));
+  }
+  // On the Mac, a task without a pages folder, or whose folder is a link that the route refuses: no link.
+  for (const id of ["T4", "T7"]) {
+    const r = await taskPage(id);
+    assert.equal(r.status, 200, id);
+    assert.deepEqual(pagesHref(r.body), [], id);
+    assert.equal((await get(f, new URL(pageUrl(LOGBOOK, id, "")).pathname)).status, 404, `${id}: the route serves no index either`);
+  }
 });
 
 test("the pages route answers only on the Mac, only GET and HEAD, and only to the board's own pages or a person's click", async (t) => {
