@@ -475,6 +475,24 @@ async function until(f, path, text) {
   return page;
 }
 
+test("T996: /releases is a route with the CSP and a live stream; the board shows its tab only when a logbook has releases", async t => {
+  const f = await fixture(t);
+  milestones(f.project);
+  assert.ok(!(await until(f, "/", "Sample milestone")).body.includes('href="/releases"'), "no releases: no tab");
+  writeFileSync(join(f.project, "releases.tsv"), "name\tgoal\tat\n1.0\tSample release goal.\t\n");
+  writeFileSync(join(f.project, "milestones.tsv"), "id\tname\tgoal\tpilot\tgate\tat\trelease\nM1\tSample milestone\tSample goal of M1.\tT1\tG1\t\t1.0\n");
+  const list = await until(f, "/releases", "Sample release goal.");
+  assert.equal(list.status, 200); assert.match(list.headers["content-type"], /^text\/html/);
+  assert.match(list.body, /<a href="\/releases" aria-current="page">Releases<\/a>/);
+  assert.ok(list.body.includes("Release 1.0") && list.body.includes("1 of 2 tasks done") && list.body.includes("Milestone 1: Sample milestone"), list.body.slice(-3000));
+  assert.match(list.body, /new EventSource\("\/releases\?events=1"\)/);
+  for (const [tag, content] of [...list.body.matchAll(/<(script|style)>([\s\S]*?)<\/\1>/g)].map(m => [m[1], m[2]])) assert.ok(list.headers["content-security-policy"].includes(`'sha256-${createHash("sha256").update(content).digest("base64")}'`), tag);
+  const board = (await read(f, "/")).body;
+  assert.match(board, /<a href="\/" aria-current="page">Task board<\/a><a href="\/releases">Releases<\/a><a href="\/milestones">Milestones<\/a>/);
+  assert.ok(board.includes('<section class="where"'), "the frame is on the board");
+  for (const path of ["/releases/", "/releases?x=1", "/Releases"]) assert.equal((await read(f, path)).status, 404, path);
+});
+
 test("T368 C9: /milestones and /milestone/KEY are routes with the same sign-in and CSP; an unknown key is the not-found page with 404; a bad key is 404", async t => {
   const f = await fixture(t, { allowedHosts: ["sample.tailnet.ts.net"] });
   milestones(f.project);

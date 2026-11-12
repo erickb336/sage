@@ -21,6 +21,7 @@ const TABLES = {
   gates: "id task question options recommendation default answer at",
   decisions: "at task decision why",
   milestones: "id name goal pilot gate at",
+  releases: "name goal at",
 };
 
 function regularBytes(file, budget) {
@@ -204,7 +205,9 @@ function readLogbook(directory, project, budget, { now, bound, chiefs = true, du
       // A logbook from before milestones has no milestones table: that is a table with no rows while no task names a
       // milestone (the state tool's namedBy rule). Once one does, a missing table is a diagnostic, as for any table.
       // A program cell names a milestone too, when its logbook from before the rename (T995) lost programs.tsv.
-      if (name === "milestones" && error.code === "ENOENT" && !(project.tables.tasks ?? []).some(task => task.milestone || (task.program && !lstatSync(join(directory, "programs.tsv"), { throwIfNoEntry: false })))) project.tables.milestones = [], none = true;
+      // A logbook with no releases table has no releases (T1003): a cell that names one shows the release as not in the logbook.
+      if (name === "releases" && error.code === "ENOENT") project.tables.releases = [];
+      else if (name === "milestones" && error.code === "ENOENT" && !(project.tables.tasks ?? []).some(task => task.milestone || (task.program && !lstatSync(join(directory, "programs.tsv"), { throwIfNoEntry: false })))) project.tables.milestones = [], none = true;
       else project.diagnostics.push(`${name}: ${error.code ?? error.message}`);
     }
   }

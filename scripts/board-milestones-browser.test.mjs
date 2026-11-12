@@ -8,8 +8,9 @@ import assert from "node:assert/strict";
 import { createRequire } from "node:module";
 import { after, before, test } from "node:test";
 import { buildBoardModel } from "../packages/sage-core/board-model.mjs";
-import { renderBoardHtml, renderMilestonesHtml } from "../packages/sage-core/board-render.mjs";
+import { renderBoardHtml, renderMilestonesHtml, renderReleasesHtml } from "../packages/sage-core/board-render.mjs";
 import { NOW, milestonesSource, milestonesTables } from "./fixtures/board-milestones.mjs";
+import { NOW as RELEASES_NOW, releasesSource } from "./fixtures/board-releases.mjs";
 import { expectTheme } from "./fixtures/contrast.mjs";
 
 const require = createRequire(import.meta.url);
@@ -164,5 +165,21 @@ test("R1334-1, R1334-2: at 375 px, a 41- and a 108-character milestone name make
     assert.ok(theme.x >= 0 && theme.x + theme.width <= client, `${path}: the theme switch ends at ${theme.x + theme.width}, past ${client}`);
     if (full[path]) assert.equal(await page.locator(".pagebar a.plink").getAttribute("title"), full[path], `${path}: the title has the full name`);
     else assert.ok((await page.locator("#f-milestone option").allTextContents()).some(text => text.includes(LONG)), "the Milestone filter lists the full name");
+  }
+});
+
+// T996: two projects with releases (SAMPLE DATA from scripts/fixtures/board-releases.mjs); the picker keeps one project's frame.
+const otherReleases = releasesSource(undefined, "codex");
+Object.assign(otherReleases.projects[0], { key: "codex/other-abc123", name: "other-abc123", checkout: "/sample/other", displayName: "other (sample)" });
+const released = buildBoardModel([releasesSource(), otherReleases], { now: RELEASES_NOW });
+const RELEASED = { "/": () => renderBoardHtml(released, { snapshot: false }), "/releases": () => renderReleasesHtml(released) };
+test("T996: the project picker keeps the chosen project's frame on the board and its releases on the Releases tab, with no sideways scroll", async t => {
+  const shown = page => page.locator("[data-rproject]:not([hidden])").evaluateAll(list => list.map(e => e.dataset.rproject));
+  for (const path of Object.keys(RELEASED)) {
+    assert.deepEqual(await shown(await open(t, path, { pages: RELEASED })), ["sage-ff5ee2", "other-abc123"], `${path}: all projects`);
+    const page = await open(t, path, { pages: RELEASED, project: "other-abc123", width: 375, height: 812 });
+    assert.deepEqual(await shown(page), ["other-abc123"], `${path}: one project`);
+    const { scroll, client } = await page.evaluate(() => ({ scroll: document.documentElement.scrollWidth, client: document.documentElement.clientWidth }));
+    assert.ok(scroll <= client, `${path}: ${scroll} > ${client}`);
   }
 });
