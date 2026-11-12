@@ -1188,8 +1188,11 @@ const IDS = { tasks: ["id", "keys", "waits", "milestone"], runs: ["id", "task"],
  * first word ("F-T2-1 opened again", "G1 was answered by phone"), and in a move, also the new task and key ("F-T1-1 moved
  * to T2 as F-T2-1: …"). Only digits count ("Infinity" does not), and BigInt keeps a long number exact.
  */
-/** The ids a decision is about: its first word, and the new task and key of a move (the form that finding move writes). */
-const subjects = (decision) => /^(\S+) moved to (\S+) as (\S+):/.exec(decision)?.slice(1) ?? [decision];
+/**
+ * The ids a decision is about: its first word, and the new task and key of a move. Only finding move writes the move form,
+ * and its why says "the follow-up task", so free text in another row, such as a release's name, takes no id (T1003).
+ */
+const subjects = ({ decision, why }) => (why.startsWith("the follow-up task") && /^(\S+) moved to (\S+) as (\S+):/.exec(decision)?.slice(1)) || [decision];
 function nextId(dir, prefix) {
   let max = 0n;
   const take = (text, re) => {
@@ -1198,7 +1201,7 @@ function nextId(dir, prefix) {
   for (const [table, cols] of Object.entries(IDS)) {
     for (const row of read(dir, table)) {
       for (const c of cols) take(row[c], new RegExp(`(?<![A-Za-z0-9])${prefix}(\\d+)`, "g"));
-      if (table === "decisions") for (const word of subjects(row.decision)) take(word, new RegExp(`^${prefix}(\\d+)(?![A-Za-z0-9])`, "g"));
+      if (table === "decisions") for (const word of subjects(row)) take(word, new RegExp(`^${prefix}(\\d+)(?![A-Za-z0-9])`, "g"));
     }
   }
   return `${prefix}${max + 1n}`;

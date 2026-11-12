@@ -123,6 +123,16 @@ test("T1003: a milestone that is proposed again keeps its release, with no relea
   kept("the end of a stopped proposal");
 });
 
+test("T1003: a release name in the form of a finding move does not move the id floor of the next task", () => {
+  const s = logbook(1);
+  const name = "moved to T999999 as x:";
+  s.ok("release", "add", "--name", name);
+  s.ok("task", "T1", "set", `release=${name}`);
+  s.ok("task", "T1", "set", "release=none");
+  assert.deepEqual(rowsOf(s.dir, "decisions").filter((d) => d.task === "T1").map((d) => d.decision).slice(-2), [`release none → ${name}`, `release ${name} → none`]);
+  assert.match(s.ok("task", "add", "--title", "Sample task 2", "--size", "tiny", "--priority", "P3"), /^T2 framed /);
+});
+
 test("T1003: a single task goes into a release; a task of a milestone is refused with the way out; a task that joins a milestone leaves its own release, with a decision row", () => {
   const s = logbook(4);
   s.ok("release", "add", "--name", "1.0");
