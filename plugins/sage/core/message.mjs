@@ -234,11 +234,12 @@ export const BOARD_PORT = 43123;
 export const PAGE_MAX = 16 * 1024 * 1024;
 /** The files that the board's pages route serves (T1001), by type, with the type that it sends: md and txt as plain text. */
 export const PAGE_TYPES = Object.freeze({ html: "text/html; charset=utf-8", pdf: "application/pdf", png: "image/png", jpg: "image/jpeg", gif: "image/gif", webp: "image/webp", svg: "image/svg+xml", md: "text/plain; charset=utf-8", txt: "text/plain; charset=utf-8" });
-const PAGE_PART = /^[A-Za-z0-9_-][A-Za-z0-9._-]{0,127}$/;
+const PAGE_PART = /^(?!.*\.\.)[A-Za-z0-9_-][A-Za-z0-9._-]{0,127}$/;
 /**
  * The type that the board sends for a file name in a task's pages folder, or null when the board does not serve that
- * name: 1 to 3 parts of letters, digits and . _ -, no part that starts with a dot, and a type of PAGE_TYPES. The board
- * and the message command read this one rule, so that a Page link never names a file that the board refuses.
+ * name: 1 to 3 parts of letters, digits and . _ -, no part that starts with a dot or holds "..", and a type of PAGE_TYPES.
+ * The board, its index and the message command read this one rule (through pageFile), so that a Page link never names a
+ * file that the board refuses.
  */
 export const pageType = (file) => {
   const parts = String(file).split("/"), type = /\.([a-z0-9]+)$/.exec(parts.at(-1))?.[1];

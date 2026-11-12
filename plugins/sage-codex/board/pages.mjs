@@ -1,14 +1,13 @@
 // The board's pages route (T1001): each task's pages folder, read-only, on the Mac only, at
 // /pages/<logbook>/<task>/ (an index) and /pages/<logbook>/<task>/<file>. Agents write these pages, so the route trusts no
-// name and no file: it reads the raw path itself and never joins it onto a folder, it opens no link and no file with a
-// second name, and each response carries a sandbox policy in place of the board's, so a page cannot reach the board.
+// name and no file: core's pageTaskFolder and pageFile decide which folder and which files it serves (the message
+// command and the index ask the same two), and each response carries a sandbox policy in place of the board's, so a page
+// cannot reach the board.
 import { createHash } from "node:crypto";
-import { closeSync, constants, fstatSync, lstatSync, openSync, readSync, readdirSync, realpathSync, statSync } from "node:fs";
-import { dirname, join } from "node:path";
-import { PAGE_MAX, PAGE_TYPES, SWITCH_SCRIPT, pageType, pagesFolder } from "../core/index.mjs";
+import { readdirSync } from "node:fs";
+import { join } from "node:path";
+import { PAGE_TYPES, SWITCH_SCRIPT, pageFile, pageTaskFolder, pageType } from "../core/index.mjs";
 
-const LOGBOOK = /^[a-z0-9-]+-[0-9a-f]{6}$/;
-const TASK = /^T[1-9]\d{0,8}$/;
 // The index reads at most SCAN entries and lists at most LIST pages (one task folder holds over 4,000 entries). It reads
 // at most READ bytes of pages to find the ones with scripts of their own; a page past that gets the scripts link too.
 const SCAN = 2000, LIST = 200, READ = 32 * 1024 * 1024;
@@ -21,8 +20,12 @@ const REST = "default-src 'none'; style-src 'unsafe-inline'; img-src data:; font
  * ?scripts=1 the page's own inline scripts run under the same sandbox.
  */
 const pagePolicy = (scripts) => `sandbox${scripts ? " allow-scripts" : ""}; script-src ${scripts === "own" ? "'unsafe-inline'" : SWITCH}; ${REST}`;
-// The index is the board's own page with no script: it keeps its origin, so that its links are same-origin.
-const INDEX_POLICY = `sandbox allow-same-origin; script-src 'none'; ${REST}`;
+/**
+ * The index is the board's own page with no script and no sandbox: it keeps its origin, so that its links are
+ * same-origin. Its opener policy cuts the window handle of another site that opened it (F-T1001-6), so that site cannot
+ * move the tab or hear a page that the owner then opens with its scripts. A browser refuses that policy with a sandbox.
+ */
+const INDEX_POLICY = `script-src 'none'; ${REST}`;
 const PLAIN = "text/plain; charset=utf-8";
 
 /** Is this request for the pages route? */
@@ -43,52 +46,27 @@ function permitted(request, scripts) {
   return !scripts && one(request, "sec-fetch-mode") === "navigate" && one(request, "sec-fetch-dest") === "document" && one(request, "sec-fetch-user") === "?1";
 }
 
-/** The raw path as { logbook, task, file, scripts }, or null. No %, no .., no part that starts with a dot, one query. */
+/**
+ * The raw path as { logbook, task, file, scripts }, or null: no %, no backslash, one query. The path is never decoded;
+ * pageTaskFolder and pageFile judge its parts.
+ */
 function parse(url) {
-  if (url.length > 1024 || /[%\\]/.test(url) || url.includes("..")) return null;
+  if (url.length > 1024 || /[%\\]/.test(url)) return null;
   const [path, query, ...more] = url.split("?");
   if (more.length || query !== undefined && query !== "scripts=1") return null;
   const [logbook, task, ...rest] = path.split("/").slice(2);
-  if (!LOGBOOK.test(logbook ?? "") || !TASK.test(task ?? "")) return null;
   const file = rest.join("/");
   if (!file) return query ? null : { logbook, task, file: null };
-  return pageType(file) && (!query || file.endsWith(".html")) ? { logbook, task, file, scripts: !!query } : null;
-}
-
-/**
- * The real task folder, or null. The worktree root also holds task checkouts and run folders; only <logbook>/pages/<task>
- * under it is ever read, and none of the three may be a link.
- */
-function taskFolder(logbook, task) {
-  const pages = pagesFolder(logbook), want = join(realpathSync(dirname(dirname(pages))), logbook, "pages", task);
-  return realpathSync(want) === want && lstatSync(want).isDirectory() ? want : null;
-}
-
-/**
- * The bytes of a page, or null. The open follows no link at the end and never waits (a named pipe), the file must be a
- * regular file with one name (a hard link could name any file of the owner's) and at most PAGE_MAX bytes, and it must be
- * the file at its real path: so a link in any folder of the path is refused too.
- */
-function readPage(folder, file) {
-  const want = join(folder, file);
-  let fd;
-  try {
-    fd = openSync(want, constants.O_RDONLY | constants.O_NOFOLLOW | constants.O_NONBLOCK);
-    const info = fstatSync(fd);
-    if (!info.isFile() || info.nlink !== 1 || info.size > PAGE_MAX) return null;
-    const at = realpathSync(want) === want ? statSync(want) : null;
-    if (!at || at.dev !== info.dev || at.ino !== info.ino) return null;
-    const bytes = Buffer.alloc(info.size);
-    let got = 0, n;
-    while (got < bytes.length && (n = readSync(fd, bytes, got, bytes.length - got, got)) > 0) got += n;
-    return bytes.subarray(0, got);
-  } catch { return null; } finally { if (fd !== undefined) closeSync(fd); }
+  return !query || file.endsWith(".html") ? { logbook, task, file, scripts: !!query } : null;
 }
 
 /** Has a page a script of its own: a script element or an event attribute, other than sage's Today switch? */
 const ownScript = (html) => /<script\b|\son[a-z]+\s*=/i.test(html.replaceAll(`<script>${SWITCH_SCRIPT}</script>`, ""));
 
-/** The pages of a task folder, its own files first, then each folder's, at most 3 parts deep: { pages, more }. */
+/**
+ * The pages of a task folder, its own files first, then each folder's, at most 3 parts deep: { pages, more }. It lists
+ * only the files that the route serves (pageFile), so that each of its links opens.
+ */
 function listPages(folder) {
   const pages = [];
   let seen = 0, more = false;
@@ -101,10 +79,7 @@ function listPages(folder) {
       const name = dir ? `${dir}/${entry.name}` : entry.name;
       // A Dirent is the entry itself, so a link is neither a file nor a folder here.
       if (entry.isDirectory() && name.split("/").length < 3 && pageType(`${name}/x.txt`)) queue.push(name);
-      else if (entry.isFile() && pageType(name)) {
-        const info = lstatSync(join(folder, name), { throwIfNoEntry: false });
-        if (info?.isFile() && info.nlink === 1 && info.size <= PAGE_MAX) pages.push({ name, size: info.size });
-      }
+      else if (entry.isFile()) { const page = pageFile(folder, name); if (page) pages.push({ name, size: page.size }); }
     }
   }
   return { pages, more };
@@ -117,15 +92,15 @@ function indexHtml(logbook, task, folder) {
   let budget = READ;
   for (const page of pages) if (page.name.endsWith(".html")) {
     budget -= page.size;
-    page.scripts = budget < 0 || ownScript(readPage(folder, page.name)?.toString("utf8") ?? "");
+    page.scripts = budget < 0 || ownScript(pageFile(folder, page.name, true)?.bytes.toString("utf8") ?? "");
   }
   const base = `/pages/${logbook}/${task}/`;
-  const rows = pages.map((page) => `<li><a href="${base}${page.name}">${page.name}</a> <span class="m">${sizeText(page.size)}</span>${page.scripts ? ` · <a href="${base}${page.name}?scripts=1">open with its scripts</a>` : ""}</li>`).join("");
+  const rows = pages.map((page) => `<li><a href="${base}${page.name}">${page.name}</a> <span class="m">${sizeText(page.size)}</span>${page.scripts ? ` · <a href="${base}${page.name}?scripts=1" aria-label="Open ${page.name} with its scripts">open with its scripts</a>` : ""}</li>`).join("");
   return `<!DOCTYPE html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1"><title>Pages of ${task}</title>
-<style>:root{color-scheme:light dark}body{margin:0;font:15px/1.55 -apple-system,BlinkMacSystemFont,"Segoe UI",system-ui,sans-serif}main{max-width:860px;margin:0 auto;padding:22px 20px 48px}h1{font-size:22px;margin:4px 0 8px}.m{color:GrayText;font-size:13px}li{margin:4px 0;overflow-wrap:anywhere}.w{border-left:3px solid #c99a00;padding:4px 10px;margin:8px 0}</style></head>
+<style>:root{color-scheme:light dark}body{margin:0;font:15px/1.55 -apple-system,BlinkMacSystemFont,"Segoe UI",system-ui,sans-serif}main{max-width:860px;margin:0 auto;padding:22px 20px 48px}h1{font-size:22px;margin:4px 0 8px}.m{color:#595959;font-size:13px}@media (prefers-color-scheme:dark){.m{color:#b3b3b3}}li{margin:4px 0;overflow-wrap:anywhere}.w{border-left:3px solid #c99a00;padding:4px 10px;margin:8px 0}</style></head>
 <body><main><h1>Pages of ${task}</h1><p class="m">Logbook ${logbook} · read-only, on this Mac only</p>
-<p class="w">A page may link to sites outside this Mac. A link that you click in a page sends you, and what the link carries, to that site.</p>
-${pages.some((page) => page.scripts) ? `<p class="w">"Open with its scripts" runs the page's own scripts. They cannot read the board or your files, but they can send the page's own content to another site. Use it only for a page that you trust.</p>\n` : ""}${pages.length ? `<ul>${rows}</ul>` : "<p>This task has no pages yet.</p>"}
+<p class="w" role="note"><strong>Warning:</strong> a page may link to sites outside this Mac. When you click such a link, your browser opens that site, and the site gets everything in the link's address.</p>
+${pages.some((page) => page.scripts) ? `<p class="w" role="note"><strong>Warning:</strong> the link "open with its scripts" runs the page's own scripts. They cannot read the board or your files, but they can send the page's content to another site. Use it only for a page that you trust.</p>\n` : ""}${pages.length ? `<ul>${rows}</ul>` : "<p>This task has no pages yet.</p>"}
 ${more ? `<p class="m">The list stops at ${pages.length} pages: the folder holds more files than the index reads.</p>` : ""}</main></body></html>\n`;
 }
 
@@ -137,6 +112,7 @@ ${more ? `<p class="m">The list stops at ${pages.length} pages: the folder holds
 export function servePages(request, response, { onMac, model }) {
   const send = (status, type, body, policy = pagePolicy(false)) => {
     response.setHeader("Content-Security-Policy", policy);
+    if (policy === INDEX_POLICY) response.setHeader("Cross-Origin-Opener-Policy", "same-origin");
     response.setHeader("X-DNS-Prefetch-Control", "off");
     response.setHeader("Cache-Control", "no-store");
     response.setHeader("Referrer-Policy", "no-referrer");
@@ -152,12 +128,11 @@ export function servePages(request, response, { onMac, model }) {
   if (!["GET", "HEAD"].includes(request.method)) { response.setHeader("Allow", "GET, HEAD"); return send(405, PLAIN, "This method is not permitted.\n"); }
   const logbooks = new Set((model?.projects ?? []).flatMap((project) => project.books ?? []).map((key) => key.slice(key.indexOf("/") + 1)));
   if (!target || !logbooks.has(target.logbook)) return missing();
-  let folder;
-  try { folder = taskFolder(target.logbook, target.task); } catch {}
+  const folder = pageTaskFolder(target.logbook, target.task);
   if (!folder) return missing();
   // A folder that the board cannot read (or that changed during the read) is unavailable, never a crash of the board.
   if (!target.file) { try { return send(200, "text/html; charset=utf-8", indexHtml(target.logbook, target.task, folder), INDEX_POLICY); } catch { return send(503, PLAIN, "This index is unavailable.\n"); } }
-  const bytes = readPage(folder, target.file);
+  const bytes = pageFile(folder, target.file, true)?.bytes;
   if (!bytes) return missing();
   const type = pageType(target.file), html = type === PAGE_TYPES.html;
   return send(200, type, bytes, pagePolicy(target.scripts ? "own" : html && bytes.includes(SWITCH_SCRIPT)));

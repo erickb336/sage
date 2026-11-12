@@ -80,6 +80,8 @@ before(async () => {
   writeFileSync(join(pages, "hostile.html"), hostile(otherSite));
   writeFileSync(join(pages, "refresh.html"), `<!DOCTYPE html><title>SAMPLE</title><meta http-equiv="refresh" content="0; url=${otherSite}/refresh?data=SAMPLE"><p>SAMPLE refresh</p>`);
   writeFileSync(join(pages, "research.html"), "<!DOCTYPE html><title>SAMPLE research</title><p>SAMPLE research page</p>");
+  writeFileSync(join(pages, "notes.txt"), "SAMPLE notes");
+  writeFileSync(join(pages, "links.html"), `<!DOCTYPE html><title>SAMPLE links</title><a id="index" href="${at("")}">index</a> <a id="txt" href="${at("notes.txt")}">notes</a> <a id="scripts" href="${at("hostile.html")}?scripts=1">scripts</a>`);
   const design = JSON.parse(readFileSync(join(HERE, "fixtures", "messages", "07-design.json"), "utf8"));
   const message = renderMessage({ ...design, blocks: design.blocks.map((b) => (b.t === "page" ? { ...b, path: `/pages/${b.task}/${b.file}` } : b)) }, { pagePath: (name) => join(pages, name) });
   assert.ok(message.page, "the design message has a page");
@@ -88,7 +90,7 @@ before(async () => {
   other = createHttpServer((request, response) => {
     if (request.url === "/" || request.url === "/auto") {
       response.writeHead(200, { "Content-Type": "text/html; charset=utf-8" });
-      return response.end(`<!DOCTYPE html><title>other site</title><a id="go" href="${at("research.html")}">page</a> <a id="scripts" href="${at("hostile.html")}?scripts=1">scripts</a>${request.url === "/auto" ? `<script>setTimeout(() => { location.href = ${JSON.stringify(at("research.html"))}; }, 50)</script>` : ""}`);
+      return response.end(`<!DOCTYPE html><title>other site</title><a id="go" href="${at("research.html")}">page</a> <a id="scripts" href="${at("hostile.html")}?scripts=1">scripts</a> <a id="index" target="_blank" rel="opener" href="${at("")}">index</a>${request.url === "/auto" ? `<script>setTimeout(() => { location.href = ${JSON.stringify(at("research.html"))}; }, 50)</script>` : ""}`);
     }
     reached.push(request.url);
     response.writeHead(204); response.end();
@@ -192,4 +194,51 @@ test("F6: a person's click on another site opens a page; a move that no person s
   assert.equal(scripts.status(), 403);
   const [auto] = await Promise.all([page.waitForResponse(at("research.html")), page.goto(`http://localhost:${otherPort}/auto`)]);
   assert.equal(auto.status(), 403);
+});
+
+test("a click on a link in a page opens another page of the board or the index, but not the scripts link", async (t) => {
+  const { page } = await context(t);
+  for (const [id, url, status] of [["#index", at(""), 200], ["#txt", at("notes.txt"), 200], ["#scripts", `${at("hostile.html")}?scripts=1`, 403]]) {
+    await page.goto(at("links.html"));
+    const [response] = await Promise.all([page.waitForResponse(url), page.click(id)]);
+    assert.equal(response.status(), status, id);
+  }
+});
+
+test("F-T1001-6: the index cuts the handle of another site that opened it, also for a page that it then opens with its scripts", async (t) => {
+  const { ctx, page } = await context(t);
+  await page.goto(`http://localhost:${otherPort}/`);
+  const [index] = await Promise.all([ctx.waitForEvent("page"), page.click("#index")]);
+  await index.waitForLoadState();
+  assert.match(await index.textContent("h1"), /Pages of T1/);
+  assert.equal(await index.evaluate(() => window.opener === null), true, "the index has no opener");
+  await Promise.all([index.waitForURL(`${at("hostile.html")}?scripts=1`), index.locator(`a[href="/pages/${LOGBOOK}/T1/hostile.html?scripts=1"]`).click()]);
+  await index.waitForFunction(() => document.body.dataset.done === "yes");
+  assert.equal(await index.evaluate(() => window.opener === null), true, "the page that runs its scripts has no opener");
+});
+
+test("the index's warnings are notes that start with Warning, each scripts link names its page, and its small text has a contrast of at least 4.5:1", async (t) => {
+  const { page } = await context(t);
+  for (const colorScheme of ["light", "dark"]) {
+    await page.emulateMedia({ colorScheme });
+    await page.goto(at(""));
+    const notes = page.getByRole("note");
+    assert.equal(await notes.count(), 2, colorScheme);
+    for (const text of await notes.allTextContents()) assert.match(text, /^Warning: /);
+    const scripts = page.getByRole("link", { name: "Open hostile.html with its scripts", exact: true });
+    assert.equal(await scripts.count(), 1, "the scripts link has its page in its name");
+    assert.ok((await notes.nth(1).textContent()).includes(`"${await scripts.textContent()}"`), "the warning quotes the link as it reads");
+    // WCAG 2 contrast of each small grey text against the page's own background (the Canvas colour of its scheme).
+    const ratios = await page.evaluate(() => {
+      const lum = (color) => { const [r, g, b] = color.match(/[\d.]+/g).slice(0, 3).map((v) => { v /= 255; return v <= 0.03928 ? v / 12.92 : ((v + 0.055) / 1.055) ** 2.4; }); return 0.2126 * r + 0.7152 * g + 0.0722 * b; };
+      const probe = document.createElement("div");
+      probe.style.background = "Canvas";
+      document.body.append(probe);
+      const bg = lum(getComputedStyle(probe).backgroundColor);
+      probe.remove();
+      return [...document.querySelectorAll(".m")].map((el) => { const fg = lum(getComputedStyle(el).color); return (Math.max(fg, bg) + 0.05) / (Math.min(fg, bg) + 0.05); });
+    });
+    assert.ok(ratios.length >= 2, "the logbook line and the sizes");
+    for (const ratio of ratios) assert.ok(ratio >= 4.5, `${colorScheme}: ${ratio.toFixed(2)}:1`);
+  }
 });
