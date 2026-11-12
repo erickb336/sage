@@ -44,6 +44,7 @@ Read `skills/sage/references/commands.md` for the full row of a command before y
 | `gate add <T> --question "<q>" --options "<a\|b>" --recommend <a> [--default <a>]` · `gate answer <G> --option <n> --project <folder>` · `gate answer <G> --other-hex <hex> --project <folder>` | Parks a question for the user, with your recommendation and the default. |
 | `log <T\|-> "<decision>" --why "<reason>"` | Adds a line to the decision trail. |
 | `pages <T>` · `pages <T> record <file>` · `pages <T> record --run <R> --text <report>` | Makes (mode 700) and prints the folder where agents save the task's pages (research, designs, findings pages). |
+| `message <T> --file <json>` | Prints a message to the user in its kind's shape, and writes its page (the presentation skill). |
 | `board [this\|all\|<project>\|<T>] [--view chat\|task\|status\|html]` · `board --name-hex <hex>` | Prints the board: the chat board by default. |
 | `stats [--task <T>]` | Prints a guide line, a total line with the count of done review runs that have no tokens, and one table of the 50 tasks with the most review tokens, largest first. |
 | `worktrees` · `worktrees prune --yes` | Lists the git worktrees of the project's repository, one line each. |
