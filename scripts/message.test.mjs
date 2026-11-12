@@ -13,7 +13,7 @@ import { test } from "node:test";
 import { fileURLToPath } from "node:url";
 import { KINDS, frameLines, messageText, prepareMessage } from "../packages/sage-core/message.mjs";
 import { PAGE_POLICY, SWITCH_SCRIPT, messagePage } from "../packages/sage-core/message-page.mjs";
-import { kindOf, pageProblems, renderMessage, textProblems } from "../packages/sage-core/message-checks.mjs";
+import { kindOf, pageProblems, renderMessage, shapeMiss, textProblems } from "../packages/sage-core/message-checks.mjs";
 import { columns, openBoxes, pictureSvg } from "../packages/sage-core/picture.mjs";
 
 const HERE = dirname(fileURLToPath(import.meta.url));
@@ -474,4 +474,30 @@ test("F-T984-24: on the message command's path, sections nested thousands deep a
   const r = sage("message", "T1", "--file", path);
   assert.equal(r.status, 1, r.out);
   assert.match(r.out, /^sage: the message is not in its kind's shape[^\n]*\n- blocks\[\d+\]\.body\[0\]\.body\[0\]\.body\[0\]\.body\[0\]\.body\[0\] is a section 6 deep: sections nest at most 5 deep/);
+});
+
+// T1004, T1005: a hook reads the chief's message after the owner sees it, and gives the chief a note when the message
+// names its kind and misses its shape. The names count each miss with no text of the message.
+test("shapeMiss: a message that names its kind and misses its shape gives its kind, each problem, a name for each with no text of the message, and the note", () => {
+  const question = ["QUESTION", "", "Should the fix for T12 ship today?", "", "Where this is: Release 1.0 › one task", "", "Needed by: today.", "",
+    "What you approve: the ship.", "", "├─ a tree line", "", "The flow", "```", "│ Brief │ ▶ a line that runs on past the forty-sixth", "├─ x", "```", "", "1. Ship", "2. Wait"].join("\n");
+  const miss = shapeMiss(question);
+  assert.equal(miss.kind, "question");
+  assert.deepEqual(miss.problems, textProblems(question), "the problems are the text check's own");
+  assert.deepEqual(miss.names, ["picture width", "picture tree marks", "tree marks", "raw ids", "missing: The one real choice in it",
+    "missing: If you do not answer", "out of order: Needed by", "missing: After you answer", "no pick"]);
+  assert.ok(!miss.names.join(" ").includes("T12"), "a name has no id of the message");
+  const lines = miss.note.split("\n");
+  assert.match(lines[0], /^sage: your last message names its kind, QUESTION, but it does not fit that kind's shape:$/);
+  assert.deepEqual(lines.slice(1, -1), miss.problems.map((p) => `- ${p}`), "the note names each problem");
+  assert.match(lines.at(-1), /do not send it again only to fix its shape/);
+  // The forms that need a picture or a closed box.
+  assert.deepEqual(shapeMiss("ARCHITECTURE\n\nHow the hook reads a message\n\nWhat changes for you: nothing.\n\nWhat I need from you: nothing.").names, ["no picture"]);
+  assert.deepEqual(shapeMiss("PROGRESS\n\nThe build moved on\n\nThe flow\n```\n╔══ open\n```\n").names.slice(0, 1), ["box not closed"]);
+});
+
+test("shapeMiss: a message that fits its shape, and a message that names no kind, give null", () => {
+  for (const name of ALL) assert.equal(shapeMiss(render(fixture(name)).text), null, name);
+  assert.equal(shapeMiss("Done: the build passed on T12, and ├─ is a tree mark."), null);
+  assert.equal(shapeMiss(""), null);
 });
