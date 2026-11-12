@@ -153,7 +153,7 @@ test("each shared card names its owning chief, an open offer, or Unclaimed; the 
   assert.equal(cardFits({ provider: "", priority: "P2", kind: "", milestone: "" }, { who: "claude" }), false);
   assert.equal(cardFits({ provider: "", priority: "P2", kind: "", milestone: "" }, { who: "" }), true);
   assert.equal(cardFits({ provider: "claude", priority: "P2", kind: "", milestone: "" }, { who: "claude" }), true);
-  assert.match(renderBoardText(model), /\*\*T321 Show the board in both providers\*\* · Claude · C1 · lantern · PR 88/);
+  assert.match(renderBoardText(model), /\*\*T321 Show the board in both providers\*\* · in progress · Claude · C1 · lantern · PR 88/);
   assert.match(renderBoardText(model), /⇄ Offered to Codex · C2\\\. It waits for R407 and R420 to end, then Codex · C2 accepts\\\./);
 });
 
@@ -230,7 +230,7 @@ test("a lead slot's logbook mark, as the hook writes it for a linked project, eq
   const files = () => readdirSync(sharedRoot(env), { recursive: true, withFileTypes: true }).filter(entry => entry.isFile()).map(entry => [join(entry.parentPath, entry.name), readFileSync(join(entry.parentPath, entry.name), "hex")]).sort();
   const before = files();
   const chat = claude.sage(["board", "this", "--view", "chat", "--project", project], env);
-  assert.match(chat, /\*\*T1 Sample shared task\*\* · Claude · C1 · lantern/);
+  assert.match(chat, /\*\*T1 Sample shared task\*\* · not started · Claude · C1 · lantern/);
   mkdirSync(join(project, "sub"));
   assert.match(claude.sage(["board", "this", "--view", "chat", "--project", join(project, "sub")], env), /T1 Sample shared task/);
   assert.match(claude.sage(["board", "T1", "--view", "task", "--project", project], env), /^\*\*T1 Sample shared task\*\*\nClaude · C1 · lantern/);

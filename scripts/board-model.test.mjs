@@ -573,11 +573,11 @@ const milestoneOf = (model, id) => model.milestones.find(item => item.id === id)
 test("T233: each wait on a card has its state, and the wait line names the unmet ones: a task, the pilot, the breakdown, never met, and odd text that it never shows", () => {
   const model = milestonesModel();
   const line = id => cardOf(model, id).waitLine;
-  assert.deepEqual(line("T13"), { never: false, text: "Waits for T12 (in review)." }, "not met");
-  assert.deepEqual(line("T11"), { never: true, text: "Waits for T10 (abandoned): it cannot start." }, "never met: abandoned; the met pilot wait is not named");
-  assert.deepEqual(cardOf(model, "T11").waits, [{ id: "T10", state: "abandoned", word: "abandoned", pilot: false, met: false, never: true }, { id: "T1", state: "merged", word: "merged", pilot: true, met: true, never: false }]);
-  assert.deepEqual(line("T22"), { never: true, text: "Waits for T21 (pilot, abandoned): it cannot start." }, "the pilot wait");
-  assert.deepEqual(line("T41"), { never: false, text: "Waits for T40 (pilot, building). Design and PE may run." }, "a task in design may run its design and PE");
+  assert.deepEqual(line("T13"), { never: false, text: "Waits for T12 (in progress)." }, "not met");
+  assert.deepEqual(line("T11"), { never: true, text: "Waits for T10 (stopped): it cannot start." }, "never met: abandoned; the met pilot wait is not named");
+  assert.deepEqual(cardOf(model, "T11").waits, [{ id: "T10", state: "abandoned", word: "stopped", pilot: false, met: false, never: true }, { id: "T1", state: "merged", word: "done", pilot: true, met: true, never: false }]);
+  assert.deepEqual(line("T22"), { never: true, text: "Waits for T21 (pilot, stopped): it cannot start." }, "the pilot wait");
+  assert.deepEqual(line("T41"), { never: false, text: "Waits for T40 (pilot, in progress). Design and PE may run." }, "a task in design may run its design and PE");
   assert.deepEqual(line("T32"), { never: false, text: "Waits for your approval of the M3 breakdown (gate G12)." }, "the breakdown wait, alone, although T32 also waits for T31");
   assert.deepEqual(line("T90"), { never: false, text: "Waits for the new breakdown of M9: you asked for changes (gate G9)." });
   assert.deepEqual(line("T60"), { never: true, text: "Waits for the M6 breakdown, which you dropped (gate G20): it cannot start." });
@@ -592,10 +592,10 @@ test("T233: each wait on a card has its state, and the wait line names the unmet
 test("T233: each milestone's state and progress (Q3), and what moves next (Q4: only a task with no unmet wait; the waiting tasks are a count)", () => {
   const model = milestonesModel();
   const view = id => { const p = milestoneOf(model, id); return [p.state, p.progressText, p.next && `${p.next.id} ${p.next.word}${p.next.pilot ? " pilot" : ""}`, p.waiting, p.cannotStart]; };
-  assert.deepEqual(view("M1"), ["active", "3 of 7 merged · T10 abandoned", "T12 in review", 1, ["T11"]]);
+  assert.deepEqual(view("M1"), ["active", "3 of 7 merged · T10 abandoned", "T12 in progress", 1, ["T11"]]);
   assert.deepEqual(view("M2"), ["stuck", "0 of 3 merged · T21 abandoned", null, 0, ["T22", "T23"]]);
   assert.deepEqual(view("M3"), ["proposed", "0 of 3 merged", null, 3, []]);
-  assert.deepEqual(view("M4"), ["active", "0 of 3 merged", "T40 building pilot", 2, []]);
+  assert.deepEqual(view("M4"), ["active", "0 of 3 merged", "T40 in progress pilot", 2, []]);
   assert.deepEqual(view("M5"), ["done", "2 of 3 merged · T52 abandoned", null, 0, []], "done: a concluded task counts as merged");
   assert.deepEqual(view("M6"), ["dropped", "0 of 1 merged", null, 0, ["T60"]], "dropped by the decision row of the owner's answer, after its gate row was lost");
   assert.deepEqual(view("M7"), ["lost", "0 of 1 merged", null, 0, ["T75"]]);
@@ -608,10 +608,10 @@ test("T233 C5, T383: a loop of waits from a hand edit ends: the order marks each
   const model = milestonesModel(), loop = milestoneOf(model, "M8");
   assert.deepEqual(loop.tasks.map(key => key.split("/").at(-1)), ["T80", "T82", "T83", "T81"]);
   assert.deepEqual([loop.next, loop.waiting, loop.cannotStart], [null, 0, ["T82", "T83", "T81"]]);
-  assert.deepEqual(cardOf(model, "T81").waitLine, { never: true, text: "Waits for T82 (not started, in a loop): it cannot start. Its waits make a loop, which never ends: the chief sets its waits again." });
-  assert.deepEqual(cardOf(model, "T81").waits[0], { id: "T82", state: "framed", word: "not started, in a loop", pilot: false, met: false, never: true, loop: true });
+  assert.deepEqual(cardOf(model, "T81").waitLine, { never: true, text: "Waits for T82 (waiting, in a loop): it cannot start. Its waits make a loop, which never ends: the chief sets its waits again." });
+  assert.deepEqual(cardOf(model, "T81").waits[0], { id: "T82", state: "framed", word: "waiting, in a loop", pilot: false, met: false, never: true, loop: true });
   // A wait on a task of no loop stays a plain wait: T13 waits for T12, which is in review.
-  assert.deepEqual(cardOf(model, "T13").waitLine, { never: false, text: "Waits for T12 (in review)." });
+  assert.deepEqual(cardOf(model, "T13").waitLine, { never: false, text: "Waits for T12 (in progress)." });
 });
 
 test("T233 Q1, QA, QC, C8: only a breakdown gate by data gets the milestone mark (sample T70 gets none); a stuck milestone and a lost gate need you with no card, and count", () => {
