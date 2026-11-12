@@ -1,6 +1,6 @@
 {
   "kind": "estimate",
-  "title": "The new words: 10 to 21 M tokens and 13 to 26 h of agent time",
+  "title": "The new words: 10.5 to 21 M tokens and 13 to 26 h of agent time",
   "blocks": [
     {
       "t": "field",
@@ -16,26 +16,25 @@
       ],
       "rows": [
         [
-          "1. The rename: program becomes milestone, in the code, the logbook files and the docs",
+          "The rename: program becomes milestone, in the code, the logbook files and the docs",
           "5 to 10 M",
           "6 to 12 h"
         ],
         [
-          "2. The release level",
+          "The release level",
           "4 to 8 M",
           "5 to 10 h"
         ],
         [
-          "3. The six state words on the board and in status",
+          "The six state words on the board and in status",
           "1.5 to 3 M",
           "2 to 4 h"
-        ],
-        [
-          "**All three**",
-          "**10.5 to 21 M**",
-          "**13 to 26 h**"
         ]
       ]
+    },
+    {
+      "t": "p",
+      "text": "**All three together:** 10.5 to 21 M tokens and 13 to 26 h of agent time."
     },
     {
       "t": "picture",
@@ -47,7 +46,7 @@
         "Rename     5–10        ━━━━━",
         "Release    4–8        ━━━━",
         "Words      1.5–3   ━━",
-        "All three  10–21            ━━━━━━━━━━━",
+        "All three  10.5–21          ━━━━━━━━━━━",
         "",
         "Agent time, hours",
         "                  0    5    10   15   20   25",

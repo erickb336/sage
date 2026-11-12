@@ -3,6 +3,10 @@
   "title": "Remove 3 folders that no run of mine made? This cannot be undone.",
   "blocks": [
     {
+      "t": "p",
+      "text": "SAMPLE CONTENT: an example, not a real request. The folders are made up, and nothing is deleted."
+    },
+    {
       "t": "field",
       "label": "What I will do",
       "text": "delete these 3 folders from your worktrees folder, with all the files in them. They do not go to the Trash."

@@ -255,6 +255,25 @@ test("a wrong input is refused with a plain problem, never a crash: an inherited
   refused({ ...catchUp, blocks: catchUp.blocks.map((b) => (b.t === "picture" ? { ...b, frame } : b)) }, /nested too deep for a box of 46 columns/);
 });
 
+test("the example texts: each row numbered once, an estimate's total as a total line that agrees with its rows, the sample confirm labelled (F-T984-7, -8, -9)", () => {
+  for (const name of ALL) assert.doesNotMatch(render(fixture(name)).text, /^\d+\. \d+\. /m, `${name}: a row numbered twice`);
+  const msg = fixture("11-estimate.json"), { text } = render(msg);
+  const rows = msg.blocks.find((b) => b.t === "table").rows;
+  assert.deepEqual(text.match(/^\d+\. .*/gm).map((l) => l.split(" ")[0]), rows.map((_, i) => `${i + 1}.`), "one numbered item for each pull request");
+  // The total is the sum of the rows, and the title, the total line and the picture say the same range.
+  const sum = (col, unit) => [0, 1].map((side) => rows.reduce((t, r) => t + Number(r[col].split(` ${unit}`)[0].split(" to ")[side]), 0));
+  const [tokLo, tokHi] = sum(1, "M"), [hLo, hHi] = sum(2, "h");
+  assert.deepEqual([tokLo, tokHi, hLo, hHi], [10.5, 21, 13, 26]);
+  assert.ok(msg.title.includes(`${tokLo} to ${tokHi} M tokens and ${hLo} to ${hHi} h`), msg.title);
+  const paragraphs = text.split("\n\n").map((p) => p.replace(/\n/g, " "));
+  assert.ok(paragraphs.includes(`All three together: ${tokLo} to ${tokHi} M tokens and ${hLo} to ${hHi} h of agent time.`), "a total line of its own, not an item");
+  assert.match(text, new RegExp(`All three {2}${tokLo}–${tokHi} `), "the picture");
+  assert.match(text, new RegExp(`All three {2}${hLo}–${hHi} `), "the picture");
+  // The confirm example is sample data: its text and its page say so before its first part.
+  const confirm = render(fixture("13-confirm.json")).text;
+  assert.ok(confirm.indexOf("SAMPLE CONTENT") > 0 && confirm.indexOf("SAMPLE CONTENT") < confirm.indexOf("What I will do"), confirm);
+});
+
 test("the page escapes every text, loads nothing, and allows only its own style and the hash of its one script", () => {
   const msg = structuredClone(fixture("05-explainer.json"));
   msg.title = "About <script>alert(1)</script> & \"quotes\"";
