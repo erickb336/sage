@@ -4,7 +4,7 @@
 import "./test-env.mjs";
 import assert from "node:assert/strict";
 import { execFileSync, spawnSync } from "node:child_process";
-import { existsSync, mkdtempSync, readFileSync, readdirSync, rmSync, writeFileSync } from "node:fs";
+import { existsSync, mkdtempSync, readFileSync, readdirSync, realpathSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { test } from "node:test";
@@ -204,7 +204,9 @@ test("T1003: two rows of one release name (a hand edit) refuse every write, and 
 // only releases.tsv, which that sage does not read, so it keeps its reads and writes. A release cell adds a column that it
 // does not know: then it refuses every write with its "newer sage" message, and changes nothing, so no cell is lost.
 test("T1003: the sage of T995 in an open session reads a logbook with releases, and refuses to write it once an item has a release, with nothing lost", (t) => {
-  const old = mkdtempSync(join(tmpdir(), "sage-older-"));
+  // The real path: sage.mjs runs only when its argv path is the path of its own module, and a temp folder through a link
+  // (TMPDIR=/tmp/... on macOS, where /tmp links to /private/tmp) made the older sage exit 0 and do nothing.
+  const old = realpathSync(mkdtempSync(join(tmpdir(), "sage-older-")));
   t.after(() => rmSync(old, { recursive: true, force: true }));
   execFileSync("tar", ["-x", "-C", old], { input: execFileSync("git", ["-C", REPO, "archive", OLDER, "plugins/sage/core", "plugins/sage/skills/sage"], { maxBuffer: 64 * 1024 * 1024 }) });
   const s = logbook(2), olderTool = join(old, "plugins/sage/skills/sage/sage.mjs");
@@ -213,8 +215,9 @@ test("T1003: the sage of T995 in an open session reads a logbook with releases, 
   s.ok("milestone", "propose", "--name", "Sage feel", "--goal", "A sample goal", "--pilot", "T1", "--tasks", "none");
   const releases = readFileSync(join(s.dir, "releases.tsv"), "utf8");
   // A release with no item: the older sage reads and writes, and leaves releases.tsv as it is.
-  assert.equal(older("status").status, 0);
-  assert.equal(older("task", "add", "--title", "Sample task 3", "--size", "tiny", "--priority", "P3").status, 0);
+  // Each check reads the older sage's own output, so a sage that did not run cannot pass.
+  assert.match(older("status").stdout, /^milestone M1 · pilot T1/m);
+  assert.match(older("task", "add", "--title", "Sample task 3", "--size", "tiny", "--priority", "P3").stdout, /^T3 framed · tiny/);
   assert.equal(readFileSync(join(s.dir, "releases.tsv"), "utf8"), releases);
   // A milestone in a release: the older sage refuses each write and names the newer sage; its reads go on.
   s.ok("milestone", "M1", "set", "release=1.0");
@@ -225,7 +228,7 @@ test("T1003: the sage of T995 in an open session reads a logbook with releases, 
     assert.match(r.stderr, /milestones\.tsv has columns that this version of sage does not know \(release\): a newer sage wrote this logbook, and a write of this version would lose them\. Update the sage plugin/, args.join(" "));
   }
   assert.deepEqual(snapshot(s.dir), before, "nothing changed");
-  assert.equal(older("status").status, 0);
+  assert.match(older("status").stdout, /^milestone M1 · pilot T1/m);
   // A single task in a release: the same, for tasks.tsv.
   s.ok("task", "T3", "set", "release=1.0");
   before = snapshot(s.dir);
