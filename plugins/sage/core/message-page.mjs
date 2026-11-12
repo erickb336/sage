@@ -65,7 +65,8 @@ function blockHtml(b, level = 2) {
       return `<div class="tg"><div class="tg-bar" hidden role="group" aria-label="Which picture"><button type="button" data-v="after" aria-pressed="true">After this change</button><button type="button" data-v="today" aria-pressed="false">Today</button></div>${side("tg-after", "After this change", b.after)}${side("tg-today", "Today", b.today)}</div>`;
     }
     case "changes": return `<div class="m-table"><table><thead><tr><th>Where you see it</th><th>Today</th><th>After this change</th><th>Why</th></tr></thead><tbody>${b.rows.map((r) => `<tr>${[r.where, r.today, r.after, r.why].map((c) => `<td>${inline(c)}</td>`).join("")}</tr>`).join("")}</tbody></table></div>`;
-    case "page": return `<div class="m-page"><div class="m-page-title">Page · ${inline(b.title)}</div><div class="m-page-path">${esc(b.path ?? b.file)}</div></div>`;
+    // The link is text, not a link: a page opens with no origin, so the board refuses a link from it to another page.
+    case "page": return `<div class="m-page"><div class="m-page-title">Page · ${inline(b.title)}</div>${b.url ? `<div class="m-page-path">${esc(b.url)}</div>` : ""}<div class="m-page-path">${esc(b.path ?? b.file)}</div></div>`;
     case "code": return `<pre>${esc(b.lines.join("\n"))}</pre>`;
     case "steps": return `<ol>${b.items.map((s) => `<li>${inline(s.text)}${s.cmd ? `<pre>${esc(s.cmd.join("\n"))}</pre>` : ""}${s.see ? `<p class="m-see">${inline(s.see)}</p>` : ""}</li>`).join("")}</ol>`;
     default: throw new Error(`unknown block ${b.t}`);

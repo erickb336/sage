@@ -160,15 +160,16 @@ export function pageProblems(html) {
 
 /**
  * A message from its JSON, as the state tool's message command gives it: the text for the chat and, for a message with
- * a picture or a long message, its page. page(name) gives the path of the page with that file name. A message that fails
+ * a picture or a long message, its page. pagePath(name) gives the path of the page with that file name, and pageUrl(name)
+ * the board's link to it. A message that fails
  * its shape or its checks gives only its problems, so that no message reaches the owner in another shape.
  */
-export function renderMessage(input, { pagePath = (name) => name } = {}) {
+export function renderMessage(input, { pagePath = (name) => name, pageUrl = () => undefined } = {}) {
   const { problems, msg, width } = prepareMessage(input);
   if (problems.length) return { problems };
   const pictured = msg.long !== undefined || msg.blocks.some(function has(b) { return b.t === "picture" || b.t === "toggle" || (b.t === "section" && b.body.some(has)); });
   const name = `${msg.kind.replace(/ /g, "-")}-${createHash("sha256").update(JSON.stringify(msg)).digest("hex").slice(0, 8)}.html`;
-  const page = pictured ? { title: msg.title, path: pagePath(name), name } : undefined;
+  const page = pictured ? { title: msg.title, url: pageUrl(name), path: pagePath(name), name } : undefined;
   const text = messageText(msg, { width, page });
   const html = page && messagePage(msg, messageText(msg, { width, full: true, today: true }));
   const found = [...textProblems(text), ...(html ? pageProblems(html) : [])];

@@ -27,11 +27,11 @@ import { BREAKDOWN, ENDED, GATE_ID, MET, MILESTONE_ID, TASK_ID, breakdownGate, r
 import { OBSERVATIONS_MAX_BYTES, OBSERVATION_DATA_MAX_BYTES, validateObservation, validateObservations } from "./observations.mjs";
 import { MOVES, PLAN_MAX, checkoutGone, createSharedRoot, sharedRoot, unreadableFolder } from "./shared-root.mjs";
 import { changedText, countsOf, endText, gateQuestion, gateText, localTime, mapHtml, mismatchText, previewText, providersOf, reconciliationText, startText, stepText, stoppedText, title } from "./move-text.mjs";
-import { worktreeRoot, worktrees } from "./worktrees.mjs";
+import { pagesFolder, worktreeRoot, worktrees } from "./worktrees.mjs";
 import { CHIEF, TAKEOVER_OPTIONS, chiefOnly, createChiefs, crossed, offerOf, replaceOf, replaceQuestion, writerClass } from "./chiefs.mjs";
 import { LEAD_COMMANDS, leadProblem as leadPolicy, leadRequest } from "./lead-policy.mjs";
 import { renderMessage } from "./message-checks.mjs";
-import { MAX_SECTIONS } from "./message.mjs";
+import { MAX_SECTIONS, PAGE_MAX, PAGE_TYPES, pageType, pageUrl } from "./message.mjs";
 
 /** The one line for a saved change that cannot finish: the settle step refuses with it, and `sage logbook repair` is its way out. */
 export const STUCK_WRITE = 'This command changed nothing. This project cannot save changes; other projects work. Tell the owner. There are two ways out. With a backup: the owner restores the folder that `sage logbook` prints; rows newer than the backup are lost. With no backup: after the owner accepts the loss of this saved change, the chief runs `sage logbook repair --accept-change-loss yes --project <the project>`, or the owner runs it in a terminal when the chief cannot; it keeps the file, and a half-published update keeps mixed tables. Do not remove review-pending.json by hand.';
@@ -254,10 +254,8 @@ const slug = (name) => String(name).toLowerCase().replace(/[^a-z0-9]+/g, "-").re
  * folder for each task in it. The logbook key (name and hash) keeps two projects with the same folder name apart. The
  * Claude hook lets the investigate agent write here (T932).
  */
-const pagesRoot = (project, env = process.env) => join(worktreeRoot(env), basename(storeDir(project, env)), "pages");
+const pagesRoot = (project, env = process.env) => pagesFolder(basename(storeDir(project, env)), env);
 const pagesDir = (project, task, env) => join(pagesRoot(project, env), task);
-/** The largest page that pages record reads: 16 MiB, the size limit of a published page. */
-const PAGE_MAX = 16 * 1024 * 1024;
 const MESSAGE_MAX = 1024 * 1024;
 
 /**
@@ -4148,19 +4146,24 @@ function act(cmd, pos, opt, dir, env, skip, project) {
       if (Buffer.byteLength(text) > MESSAGE_MAX) refuse("the message's JSON is over 1 MiB. Nothing written.");
       let input;
       try { input = JSON.parse(text); } catch (e) { refuse(`the message is not JSON: ${e.message}. Nothing written.`); }
-      // A Page block names a page by its task and its file in that task's pages folder; the page must exist. The walk
-      // stops where sections nest too deep: the shape check refuses those, and the stack stays small.
+      // A Page block names a page by its task and its file in that task's pages folder, by the board's rule (pageType), so
+      // that its link opens: a regular file, not a link, with one name, of at most 16 MiB. The walk stops where sections
+      // nest too deep: the shape check refuses those, and the stack stays small.
+      const logbook = basename(storeDir(project, env));
       const pages = (blocks, depth = 0) => (Array.isArray(blocks) ? blocks : []).forEach((b) => {
         if (b?.t === "section" && depth < MAX_SECTIONS) pages(b.body, depth + 1);
         if (b?.t !== "page") return;
-        if (!TASK_ID.test(String(b.task)) || typeof b.file !== "string" || !/^(?:[\w.-]+\/)*[\w.-]+$/.test(b.file) || b.file.split("/").some((part) => /^\.+$/.test(part)))
-          refuse(`a page block names its page as { t: page, title, task, file }: a task id and a file name in that task's pages folder, not ${JSON.stringify({ task: b.task, file: b.file })}. Nothing written.`);
+        if (!TASK_ID.test(String(b.task)) || typeof b.file !== "string" || !pageType(b.file))
+          refuse(`a page block names its page as { t: page, title, task, file }: a task id and a file in that task's pages folder that the board serves: 1 to 3 parts of letters, digits and . _ - (none that starts with a dot), ending in .${Object.keys(PAGE_TYPES).join(", .")}; not ${JSON.stringify({ task: b.task, file: b.file })}. Nothing written.`);
         b.path = join(pagesDir(project, b.task, env), b.file);
-        if (!existsSync(b.path)) refuse(`the page block "${b.title}" names ${b.path}, and it does not exist. Save the page there first. Nothing written.`);
+        b.url = pageUrl(logbook, b.task, b.file);
+        const info = lstatSync(b.path, { throwIfNoEntry: false });
+        if (!info) refuse(`the page block "${b.title}" names ${b.path}, and it does not exist. Save the page there first. Nothing written.`);
+        if (!info.isFile() || info.nlink !== 1 || info.size > PAGE_MAX || realpathSync(b.path) !== join(realpathSync(pagesDir(project, b.task, env)), b.file)) refuse(`the page block "${b.title}" names ${b.path}, and the board serves only a regular file with one name (no link), of at most 16 MiB. Save the page itself there. Nothing written.`);
       });
       pages(input?.blocks);
       const folder = pagesDir(project, taskId, env);
-      const out = renderMessage(input, { pagePath: (name) => join(folder, name) });
+      const out = renderMessage(input, { pagePath: (name) => join(folder, name), pageUrl: (name) => pageUrl(logbook, taskId, name) });
       if (out.problems) refuse(`the message is not in its kind's shape, so nothing reaches the owner in another shape. Nothing written.\n${out.problems.map((p) => `- ${p}`).join("\n")}`);
       if (out.page) {
         // A new file, then a rename: a link that waits at the page's name is replaced, never followed.
