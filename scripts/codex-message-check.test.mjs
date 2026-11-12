@@ -6,7 +6,7 @@
 import "./test-env.mjs";
 import assert from "node:assert/strict";
 import { spawnSync } from "node:child_process";
-import { cpSync, existsSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, writeFileSync } from "node:fs";
+import { cpSync, existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, realpathSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { test } from "node:test";
@@ -87,6 +87,40 @@ test("a message that fits its kind's shape, and a message that names no kind, gi
   assert.equal(s.stop(null), undefined, "Codex gives null for a turn with no message");
   assert.equal(s.note(s.prompt("ok")), undefined);
   assert.deepEqual(s.count(), []);
+});
+
+test("the note is about the last message only, as in Claude: a later Stop that fits, names no kind or has no message removes it", (t) => {
+  const s = setup(t);
+  s.prompt("sage mode");
+  // Two turns end with no prompt between them, for example when an agent's end wakes the chief.
+  s.stop(MISSED);
+  assert.equal(s.stop(QUESTION), undefined);
+  assert.equal(s.note(s.prompt("ok")), undefined, "a later message that fits");
+  s.stop(MISSED);
+  s.stop("Done: the build passed.");
+  assert.equal(s.note(s.prompt("ok")), undefined, "a later message with no kind");
+  s.stop(MISSED);
+  s.stop(null);
+  assert.equal(s.note(s.prompt("ok")), undefined, "a later turn with no message");
+  // A later miss still gives its note, and each miss is counted.
+  s.stop(QUESTION);
+  s.stop(MISSED);
+  assert.match(s.note(s.prompt("ok")), /misses the shape of that kind/);
+  assert.equal(s.count().length, 4);
+});
+
+test("a note file that cannot be read is removed at the next prompt, so it is not read again (F-T1005-3)", (t) => {
+  const s = setup(t);
+  s.prompt("sage mode");
+  s.stop(MISSED);
+  const notes = join(s.dir, "sage-home/.hooks/codex/notes");
+  const [name] = readdirSync(notes);
+  writeFileSync(join(notes, name), "{ damaged");
+  assert.equal(s.note(s.prompt("ok")), undefined);
+  assert.deepEqual(readdirSync(notes), [], "the damaged note is gone");
+  // The next miss gives its note as usual.
+  s.stop(MISSED);
+  assert.match(s.note(s.prompt("ok")), /misses the shape of that kind/);
 });
 
 test("out of sage mode there is no chief, so a miss gives no note; and a note waits for sage mode", (t) => {
