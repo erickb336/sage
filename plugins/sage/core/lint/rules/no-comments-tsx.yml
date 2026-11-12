@@ -1,5 +1,6 @@
 id: no-comments-tsx
 language: Tsx
+ignores: ["**/*.{html,htm,xhtml}"]
 severity: error
 message: Remove this comment, or write a directive from the list in the rule set's README.md with no text after it.
 rule:

@@ -48,23 +48,28 @@ for (const mutant of MUTANTS) {
   }));
 }
 
-test("a scan flags the comments of the script and the style inside an HTML page", () => withCopy((dir) => {
-  writeFileSync(join(dir, "page.html"), [
-    "<!-- SPDX-License-Identifier: MIT -->",
-    "<script>",
-    "const u = \"https://example.com//x\"; // why",
-    "/* eslint-disable */",
-    "</script>",
-    "<style>",
-    "a { color: red; } /* why */",
-    "/* stylelint-disable */",
-    "</style>",
-    "<p title=\"<!-- x -->\">y</p>",
-  ].join("\n"));
-  const run = astGrep(["scan", "--json=compact", "page.html"], dir);
+test("a scan of an HTML page checks only its HTML comments, and skips its script and style blocks of any type", () => withCopy((dir) => {
+  const files = {
+    "page.html": [
+      "<!-- why -->",
+      "<script type=\"text/x-handlebars-template\">Read more at https://example.com/docs</script>",
+      "<script type=\"text/x-template\"><a href=\"//example.com\">x</a></script>",
+      "<script type=\"text/plain\">see https://example.com // and /* this */</script>",
+      "<script>const a = 1; // a gap that the README names</script>",
+      "<script lang=\"ts\">const a: number = 1; // why</script>",
+      "<script lang=\"tsx\">const a = <b />; // why</script>",
+      "<style>a { color: red; } /* why */</style>",
+    ].join("\n"),
+    "page.htm": "<script>f(); // why</script>\n<!-- why -->",
+    "page.xhtml": "<style>a { color: red; } /* why */</style>\n<!-- why -->",
+    "a.js": "f(); // why",
+    "a.css": "a { color: red; } /* why */",
+  };
+  for (const [name, code] of Object.entries(files)) writeFileSync(join(dir, name), code);
+  const run = astGrep(["scan", "--json=compact", ...Object.keys(files)], dir);
   assert.equal(run.status, 1, run.stderr);
-  const found = JSON.parse(run.stdout).map((m) => `${m.ruleId} ${m.range.start.line + 1} ${m.text}`).sort();
-  assert.deepEqual(found, ["no-comments-css 7 /* why */", "no-comments-js 3 // why"]);
+  const found = JSON.parse(run.stdout).map((m) => `${m.file} ${m.ruleId} ${m.range.start.line + 1}`).sort();
+  assert.deepEqual(found, ["a.css no-comments-css 1", "a.js no-comments-js 1", "page.htm no-comments-html 2", "page.html no-comments-html 1", "page.xhtml no-comments-html 2"]);
 }));
 
 const EXPLAINED = {

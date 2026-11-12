@@ -41,11 +41,13 @@ Every language allows one SPDX line, such as `// SPDX-License-Identifier: MIT` (
 | HTML | `no-comments-html` | `comment` | `prettier-ignore`, `stylelint-disable` and `stylelint-enable` |
 | YAML | `no-comments-yaml` | `comment` | `yaml-language-server: $schema=<url>`, `yamllint disable` and `enable` (also `-line`), `yamllint disable-file` |
 
-A scan of an HTML file also checks its `<script>` with the JavaScript rule and its `<style>` with the CSS rule.
+A scan of an HTML file checks only its HTML comments (see [Limits](#limits)).
 
 The comment kinds differ by language, and a kind that a language does not have stops the whole scan (exit 8). So each rule names its own kinds. Each rule has `severity: error`, because a rule without it exits 0 when it finds comments.
 
 ## Limits
+
+In an HTML file (`.html`, `.htm` or `.xhtml`), the rule set checks only the HTML comments. It skips each `<script>` and `<style>` block, whatever its type. A block can hold a template, and text in a template, such as `https://example.com`, looks like a `//` comment. So a comment in JavaScript or CSS inside an HTML file passes. Comments in `.js`, `.ts`, `.tsx`, `.css` and other files stay checked. The `ignores` line of the JavaScript, TypeScript, TSX and CSS rules does this.
 
 ast-grep's own suppression comment, `ast-grep-ignore`, hides comments from a scan. After code, it hides its own line. On its own line, it hides the next line, but the rule flags it. As the first line with a blank line after it, it hides the whole file. A rule cannot refuse it, because the suppression hides that rule too. sage's lint command (task T1019) is planned to refuse each file that contains `ast-grep-ignore`. `scripts/lint-rules.test.mjs` shows this limit.
 
