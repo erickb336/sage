@@ -7,8 +7,10 @@
 // box never decide it twice. Two cases of the design differ from today's box: a task that is done or stopped keeps its
 // word (its gate shows alone in Needs you), and a merge check that refuses the head is the chief's to repair (F5).
 
+// The tables have no prototype, so a state named like an Object key ("constructor", "__proto__") is unknown too.
 /** What a task in each state is doing, as its reason says it when no reason needs you. */
 const DOING = {
+  __proto__: null,
   framed: "No agent works on it yet.",
   designing: "Agents design it.",
   "awaiting-you": "You answered. The chief moves it on.",
@@ -22,17 +24,21 @@ const DOING = {
   verified: "Every check is clean.",
   "pr-ready": "The pull request is ready to merge.",
 };
-const ENDS = { merged: ["done", "Merged."], concluded: ["done", "The study ended."], abandoned: ["stopped", "Stopped for good."] };
+const ENDS = { __proto__: null, merged: ["done", "Merged."], concluded: ["done", "The study ended."], abandoned: ["stopped", "Stopped for good."] };
 
 /**
  * A task's word, from its board card (buildBoardModel's tasks): state, reasons and waitLine. A state that the state tool
  * does not write has no word (null): the board shows its diagnostic instead.
  */
-export function taskWord({ state, reasons = [], waitLine = null }) {
+export function taskWord(card) {
+  const { state, waitLine = null } = card ?? {}, reasons = card?.reasons ?? [];
   if (ENDS[state]) return { word: ENDS[state][0], reason: ENDS[state][1] };
   if (!DOING[state]) return { word: null, reason: `The board cannot read the state "${state}".` };
   // F5: the chief repairs a refused head (a new commit, new cycles), so the refusal is the reason of a task in progress.
-  const owner = reasons.filter(reason => reason.kind !== "merge-refused");
+  // The board adds a failed checks or QA verdict only while the merge check does not pass, so with a refusal it is part
+  // of what the chief repairs, not the owner's.
+  const chiefs = reasons.some(reason => reason.kind === "merge-refused") ? ["merge-refused", "checks-fail", "qa-fail"] : [];
+  const owner = reasons.filter(reason => !chiefs.includes(reason.kind));
   if (owner.length) return { word: "needs you", reason: owner[0].text };
   // No agent can take a framed or briefed task before its waits are met (F1, F3). Design and PE may run meanwhile.
   if (waitLine && ["framed", "briefed"].includes(state)) return { word: "waiting", reason: waitLine.text };
@@ -41,6 +47,7 @@ export function taskWord({ state, reasons = [], waitLine = null }) {
 
 /** A milestone's word in each state of the board's milestones that does not come from its tasks. */
 const MILESTONE = {
+  __proto__: null,
   proposed: ["needs you", "Its breakdown waits for your answer."],
   lost: ["needs you", "The logbook lost its breakdown gate. Ask the chief to repair it."],
   stuck: ["needs you", "Its pilot stopped. Choose a new pilot, or drop the milestone."],
@@ -52,7 +59,7 @@ const MILESTONE = {
  * A milestone's word, from its state as the board model reads it (proposed, changing, active, done, stuck, dropped or
  * lost) and the words of its tasks. An active or done milestone's word comes from its tasks, as a release's does.
  */
-export function milestoneWord({ state }, words) {
+export function milestoneWord({ state }, words = []) {
   return MILESTONE[state] ? { word: MILESTONE[state][0], reason: MILESTONE[state][1] } : releaseWord(words);
 }
 
@@ -61,7 +68,7 @@ export function milestoneWord({ state }, words) {
  * done item. Empty, or nothing started: not started. Each item stopped: stopped (F6, so "done" never hides that nothing
  * shipped). Each item done or stopped: done. Else in progress.
  */
-export function releaseWord(words) {
+export function releaseWord(words = []) {
   const done = words.filter(word => word === "done").length, stopped = words.filter(word => word === "stopped").length;
   const count = `${done} of ${words.length} done.`;
   if (!words.length) return { word: "not started", reason: "Nothing is in it yet." };

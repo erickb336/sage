@@ -12,6 +12,8 @@ const observation = (kind, data) => ({ id: "O1", task: "T1", kind, source: "samp
 const gate = (answer = "") => ({ id: "G1", task: "T1", question: "Sample: which layout?", recommendation: "the first", answer });
 const clean = ["checks-pass", "review-clean", "qa-pass"].map(kind => ({ task: "T1", pr: "41", sha: head, kind, cycle: "1", at: now }));
 const autopilot = on => [observation("pr", { number: 41, head, state: "open" }), observation("mode", { autopilot: on })];
+// A failed verdict on the head after a clean one (as in T294): the board shows it only while the merge check does not pass.
+const failed = kind => [...clean, { task: "T1", pr: "41", sha: head, kind, cycle: "1", at: now }];
 const passes = () => ({ ok: true, reason: "" });
 const refuses = () => ({ ok: false, reason: "T1 has open findings: F-T1-1. Fix them." });
 /** The board model of one logbook: T1 and the tasks it waits for. */
@@ -46,6 +48,10 @@ const CASES = [
   ["PE: pr-ready, autopilot off", { row: task("T1", "pr-ready", { pr: "41" }), ledger: clean, records: autopilot(false) }, "needs you"],
   ["F5: verified, the merge check refuses the head", { row: task("T1", "verified", { pr: "41" }), ledger: clean, records: autopilot(false), landing: refuses }, "in progress"],
   ["F5: pr-ready, the merge check refuses the head", { row: task("T1", "pr-ready", { pr: "41" }), ledger: clean, records: autopilot(true), landing: refuses }, "in progress"],
+  ["F5: verified, refused, QA failed, autopilot on", { row: task("T1", "verified", { pr: "41" }), ledger: failed("qa-fail"), records: autopilot(true), landing: refuses }, "in progress"],
+  ["F5: verified, refused, QA failed, autopilot off", { row: task("T1", "verified", { pr: "41" }), ledger: failed("qa-fail"), records: autopilot(false), landing: refuses }, "in progress"],
+  ["F5: pr-ready, refused, checks failed, autopilot on", { row: task("T1", "pr-ready", { pr: "41" }), ledger: failed("checks-fail"), records: autopilot(true), landing: refuses }, "in progress"],
+  ["F5: pr-ready, refused, checks failed, autopilot off", { row: task("T1", "pr-ready", { pr: "41" }), ledger: failed("checks-fail"), records: autopilot(false), landing: refuses }, "in progress"],
   ["verified with no build: the chief concludes it", { row: task("T1", "verified", { route: "investigate,evidence-review" }) }, "in progress"],
   ["merged", { row: task("T1", "merged", { pr: "41" }) }, "done"],
   ["concluded", { row: task("T1", "concluded", { route: "investigate,evidence-review" }) }, "done"],
@@ -77,16 +83,30 @@ test("T1002: the reason says what the owner answers, what the task waits for, or
   assert.equal(reason({ row: task("T1", "framed", { waits: "T2" }), others: [task("T2", "building")] }), "Waits for T2 (building).");
   assert.match(reason({ row: task("T1", "framed", { waits: "T2" }), others: [task("T2", "abandoned")] }), /cannot start/);
   assert.equal(reason({ row: task("T1", "verified", { pr: "41" }), ledger: clean, records: autopilot(false), landing: refuses }), "The merge check refuses aaaaaaa. T1 has open findings: F-T1-1.");
+  assert.equal(reason({ row: task("T1", "verified", { pr: "41" }), ledger: failed("qa-fail"), records: autopilot(true), landing: refuses }), "The merge check refuses aaaaaaa. T1 has open findings: F-T1-1.");
 });
 
-test("T1002: a state that the state tool does not write has no word", () => {
+test("T1002: a state that the state tool does not write has no word, also one named like an Object key", () => {
   assert.equal(taskWord(cardOf({ row: task("T1", "half-done") })).word, null);
+  for (const state of ["constructor", "toString", "__proto__", "hasOwnProperty"]) {
+    assert.equal(taskWord({ state, reasons: [] }).word, null, state);
+    // A milestone state with no table row takes its tasks' word, as an active milestone does.
+    assert.deepEqual(milestoneWord({ state }, ["done"]), { word: "done", reason: "1 of 1 done." }, state);
+  }
+});
+
+test("T1002: a missing card, reasons or words read as an unknown state or an empty list", () => {
+  assert.equal(taskWord(null).word, null);
+  assert.equal(taskWord().word, null);
+  assert.deepEqual(taskWord({ state: "building", reasons: null }), { word: "in progress", reason: "Agents build it." });
+  assert.deepEqual(milestoneWord({ state: "active" }), { word: "not started", reason: "Nothing is in it yet." });
+  assert.deepEqual(releaseWord(), { word: "not started", reason: "Nothing is in it yet." });
 });
 
 test("T1002: 'needs you' agrees with the board's Needs you box, but for the design's two changes", () => {
   // The box is the board's own output: the cards of model.needsOwner. The design changes two cases, which T997 shows:
   // a task that is done or stopped keeps its word, and a refused head is the chief's to repair (F5).
-  const changed = new Set(["F5: verified, the merge check refuses the head", "F5: pr-ready, the merge check refuses the head", "a done task with an open gate keeps its word"]);
+  const changed = new Set([...CASES.map(([name]) => name).filter(name => name.startsWith("F5:")), "a done task with an open gate keeps its word"]);
   const sample = MILESTONES_NOW, board = buildBoardModel([milestonesSource()], { now: sample });
   const cards = [...CASES.map(([name, fixture]) => [name, model(fixture)]).map(([name, built]) => [name, built.tasks.find(card => card.id === "T1"), built]),
     ...board.tasks.map(card => [`milestones fixture ${card.id}`, card, board])];
