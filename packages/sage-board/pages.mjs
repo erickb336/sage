@@ -60,8 +60,12 @@ function parse(url) {
   return !query || file.endsWith(".html") ? { logbook, task, file, scripts: !!query } : null;
 }
 
-/** Has a page a script of its own: a script element or an event attribute, other than sage's Today switch? */
-const ownScript = (html) => /<script\b|\son[a-z]+\s*=/i.test(html.replaceAll(`<script>${SWITCH_SCRIPT}</script>`, ""));
+/**
+ * Has a page a script of its own: a script element or an event attribute in a tag, other than sage's Today switch? A tag
+ * runs from its name to the next < or > outside a quoted value, so text and quoted values are not attributes. Each part
+ * of the pattern stops at a different character, so the test takes time in line with the page's size.
+ */
+const ownScript = (html) => /<script\b|<[a-z][^<>"']*(?:(?:"[^"]*"|'[^']*')[^<>"']*)*[\s/]on[a-z]+\s*=/i.test(html.replaceAll(`<script>${SWITCH_SCRIPT}</script>`, ""));
 
 /**
  * The pages of a task folder, its own files first, then each folder's, at most 3 parts deep: { pages, more }. It lists

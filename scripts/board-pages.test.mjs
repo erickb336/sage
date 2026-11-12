@@ -54,6 +54,8 @@ function sampleRoot(base) {
     "research.html": "<!DOCTYPE html><title>research</title><p>SAMPLE research</p>",
     "message.html": `<!DOCTYPE html><title>message</title><p>SAMPLE</p>${SWITCH}`,
     "scripted.html": "<!DOCTYPE html><title>scripted</title><p>SAMPLE</p><script>document.title='ran'</script>",
+    "handler.html": "<!DOCTYPE html><title>handler</title><p title=\"a > b\" onclick=\"document.title='ran'\">SAMPLE</p>",
+    "prose.html": "<!DOCTYPE html><title>prose</title><p>SAMPLE: done once = fine</p><p title=\"done once = fine\">x</p>",
     "brief.pdf": "%PDF-1.4 SAMPLE", "shot.png": "PNG SAMPLE", "photo.jpg": "JPG", "anim.gif": "GIF", "pic.webp": "WEBP", "chart.svg": "<svg xmlns='http://www.w3.org/2000/svg'/>",
     "notes.md": "# SAMPLE <b>notes</b>", "notes.txt": "SAMPLE", "sub/inner.html": "<p>inner</p>", "sub/deep/deepest.txt": "three parts",
     "sub/deep/deeper/too-deep.txt": "four parts", "state.json": "{}", "events.jsonl": "{}", "run.log": "log", "page.tmp": "tmp", ".hidden.html": "<p>hidden</p>",
@@ -151,8 +153,9 @@ test("the pages route serves each page type with its own type and the sandbox po
   pageHeaders(index, /^script-src 'none'; default-src 'none';/);
   assert.equal(index.headers["cross-origin-opener-policy"], "same-origin");
   const listed = [...index.body.matchAll(/<a href="\/pages\/project-abcdef\/T1\/([^"?]+)">/g)].map((m) => m[1]).sort();
-  assert.deepEqual(listed, ["anim.gif", "brief.pdf", "chart.svg", "message.html", "notes.md", "notes.txt", "photo.jpg", "pic.webp", "research.html", "scripted.html", "shot.png", "sub/deep/deepest.txt", "sub/inner.html"]);
-  assert.deepEqual([...index.body.matchAll(/href="([^"]+\?scripts=1)"/g)].map((m) => m[1]), [`/pages/${LOGBOOK}/T1/scripted.html?scripts=1`], "the scripts link only for a page with a script of its own");
+  assert.deepEqual(listed, ["anim.gif", "brief.pdf", "chart.svg", "handler.html", "message.html", "notes.md", "notes.txt", "photo.jpg", "pic.webp", "prose.html", "research.html", "scripted.html", "shot.png", "sub/deep/deepest.txt", "sub/inner.html"]);
+  // The scripts link only for a page with a script of its own: a script element or an event attribute in a tag, not prose.
+  assert.deepEqual([...index.body.matchAll(/href="([^"]+\?scripts=1)"/g)].map((m) => m[1]), [`/pages/${LOGBOOK}/T1/handler.html?scripts=1`, `/pages/${LOGBOOK}/T1/scripted.html?scripts=1`]);
   assert.match(index.body, /a page may link to sites outside this Mac/);
   assert.match(index.body, /the link "open with its scripts" runs the page's own scripts/);
   assert.equal((await get(f, `/pages/${LOGBOOK}/T1`)).body, index.body, "the index also without the last slash");
