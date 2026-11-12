@@ -110,6 +110,6 @@ The chief keeps this order: designer → PE → the owner's answer on the design
 4. Start a distinct PE child with its own run, the saved prototype, screenshots and designer report. Save its complete report and actual outcome. Resolve PE `CHANGE`, `blocked` and `question` outcomes before acceptance.
 5. Show the design and PE report to the owner. When the design waits for approval, record the owner’s actual design approval before starting dependent implementation. A stored report supplies no approval.
 
-An ordinary open design gate is not a general merge refusal. The chief must preserve the design procedure. Existing missing-review and milestone-wait refusals still apply. A design arena keeps the same order: candidates and a judge stand for the designer, then PE, owner’s design approval and build.
+An ordinary open design gate is not a general merge refusal. The chief must preserve the design procedure. Existing missing-review and milestone-wait refusals still apply. A design arena keeps the same order: candidates and a judge stand for the designer, then PE, the owner's answer on the design, and build.
 
 Label local fixture artifacts and synthetic hook events as sample data. They demonstrate storage and sequencing, not actual designer creation, independent PE work or installed acceptance.

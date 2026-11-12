@@ -126,7 +126,7 @@ You talk only to the chief. The chief frames each task and asks you the product 
 <a href="docs/assets/routes-light.svg">
 <picture>
   <source media="(prefers-color-scheme: dark)" srcset="docs/assets/routes-dark.svg">
-  <img alt="Routes by size. Tiny: build. Small: build, code review, QA. Large: design, PE check, you approve, build, code review, security review, UX review, QA. Investigate: gather evidence, evidence review, a proposal to you. A risk flag adds the security review to every size except investigate, which changes no code." src="docs/assets/routes-light.svg" width="100%">
+  <img alt="Routes by size. Tiny: build. Small: build, code review, QA. Large: design, PE check, your answer, build, code review, security review, UX review, QA. Investigate: gather evidence, evidence review, a proposal to you. A risk flag adds the security review to every size except investigate, which changes no code." src="docs/assets/routes-light.svg" width="100%">
 </picture>
 </a>
 

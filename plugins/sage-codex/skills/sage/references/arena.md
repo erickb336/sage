@@ -8,7 +8,7 @@ Frame the task with `task_add`, with `add: "arena"` and the reason as `why`.
 
 ## The rules
 
-**A large task's arena is a design arena.** It stands for the route's design block, so start no other designer, and its order is arena, PE, the user's approval, build. A build arena runs only on a tiny or small task, or on a briefed task after an approved design.
+**A large task's arena is a design arena.** It stands for the route's design block, so start no other designer, and its order is arena, PE, the user's answer on the design, build. A build arena runs only on a tiny or small task, or on a briefed task whose design may go ahead.
 
 **The arena step is open** while the route has the arena block or the task has a candidate run, and no judge of the task ended done. While it is open, the state tool refuses an implementer or designer `run_add` with no `candidate`. It also refuses `task_set` to verified or concluded, and `merge_check`. To close the step, finish a judge. For a task that needs no arena, abandon it and frame it again: `candidate` on a build's run marks the build's branch as a candidate's. An abandoned task has no open step, but its candidate's branch still never merges.
 
@@ -19,7 +19,7 @@ Frame the task with `task_add`, with `add: "arena"` and the reason as `why`.
 1. **Write the rubric:** 3 to 6 criteria from the acceptance that a judge can grade. Record it with `log`, with `arena rubric` as `why`. The candidates do not see it.
 2. **Start N candidates** (3 by default): designers or implementers, with the same brief and a different angle each.
    - Start at most three at one time. An `arena 4` runs in waves: start the next candidate when a slot is free.
-   - A large task before briefed takes only designers: move a framed task first with `task_set`, `state` designing. A large task at briefed, after an approved design, may take implementers.
+   - A large task before briefed takes only designers: move a framed task first with `task_set`, `state` designing. A large task at briefed, once its design may go ahead, may take implementers.
    - A candidate run opens the step on a task with no arena block, but the state tool refuses a candidate on a route with no code review, such as a tiny task framed with no arena.
    - For candidate k, call `run_add` with the role, `branch` `sage/t<n>-c<k>` and `candidate` k. The task name is `sage_<role>_t<n>_r<run>`. Give no model: the candidates differ by their angles. Give `reasoning_effort` only when `run_add` printed one (from `arena_models`).
    - Each brief names its branch, a worktree, the folder that `pages` prints and its page name: `<R>-artifact.html` for a designer, `<R>-artifact.diff` for an implementer. A candidate opens no pull request.
@@ -40,8 +40,8 @@ Frame the task with `task_add`, with `add: "arena"` and the reason as `why`.
 6. **A build goes on from the judge's branch.** A Codex judge leaves the pull request to you: push its branch and open a draft pull request from it. Move the task one state at a time to briefed, building and reviewing, with `pr` on the last move. Then record a lead run and start one lead, as **Run the route** says, with the judge's branch and PR in CONTEXT. It starts at reviewing. The reviews and QA of the route check the branch like any build, and a repair needs no `candidate`. At verified, run `gh pr ready <n>`, then merge or tell the user as usual.
 7. **A design goes to the PE.** The judge opens no pull request. It saves the final design in the pages folder, and its RESULT gives the page's path.
    - Record the page with `pages` and `record`. Run the PE with the judge's branch and page in its brief. Give its `run_add` no `branch`: a design arena's task has none, and a PE run on any other branch is refused.
-   - Move the task to awaiting-you, through designing when it is framed. Then ask the user to approve the design with `gate_add`, and name the page in the question: the user reviews the page, not a branch.
-   - After the approval, move the task to briefed. The build starts as for any approved design: one implementer, on a new branch from main (`sage/t<n>`), not on the judge's branch, so that the prototype and its sample data stay out of main. The implementer's brief names the judge's branch as the design to build.
+   - Move the task to awaiting-you, through designing when it is framed. Then show the design to the user with `gate_add`, and name the page in the question: the user reviews the page, not a branch. The design waits for the user's approval when it changes what the user sees or data that the user keeps; an internal shape goes ahead as recommended when the user does not answer.
+   - When the design may go ahead, move the task to briefed. The build starts as for any design that may go ahead: one implementer, on a new branch from main (`sage/t<n>`), not on the judge's branch, so that the prototype and its sample data stay out of main. The implementer's brief names the judge's branch as the design to build.
 8. **A candidate's branch never merges,** also for an abandoned task: `task_set` to verified and `merge_check` refuse it.
 9. **Keep the evidence.** Candidate branches and pages stay until the user deletes them, and so does the judge's branch of a design. A merge deletes the branch that it lands: its commits are in main. Worktrees go at the end of the task.
 

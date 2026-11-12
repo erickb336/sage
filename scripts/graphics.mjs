@@ -573,7 +573,7 @@ const panel = (t, id, W, H, body, label) => worldSvg(W, H, id, [worldDefs(id), m
 /** Routes: the least route for each size of task. */
 function routes(t, id) {
   const W = 1100, size = SMALL, ph = 48, gap = 26, x0 = 272;
-  const STEP = { design: "Design", pe: "PE check", approve: "You approve", build: "Build", code: "Code review", security: "Security review", ux: "UX review", qa: "QA", evidence: "Gather evidence", review: "Evidence review", propose: "A proposal to you" };
+  const STEP = { design: "Design", pe: "PE check", approve: "Your answer", build: "Build", code: "Code review", security: "Security review", ux: "UX review", qa: "QA", evidence: "Gather evidence", review: "Evidence review", propose: "A proposal to you" };
   const rows = [
     ["tiny", ["one obvious edit"], [["build"]]],
     ["small", ["one bounded change"], [["build", "code", "qa"]]],
@@ -606,7 +606,7 @@ function routes(t, id) {
     text(160, ny + 42, ["A risk flag (auth, personal data, schema, money, secrets or outside", "input) adds the security review to every size except investigate,", "which changes no code. The chief may add steps, never remove these."], { size, fill: t.ink, lh: 1.4 }),
   );
   out.unshift(backdrop(t, id, W, H, { moon: [930, 150, 120], seeds: [23, 41, 6], far: [H - 120, 60, 200, 70, 140], near: [H + 20, 90, 240, 80, 170], mist: [140, 280, H - 160], mistK: 0.6 }));
-  return panel(t, id, W, H, out.join("\n"), "Routes by size. Tiny: build. Small: build, code review, QA. Large: design, PE check, you approve, build, code review, security review, UX review, QA. Investigate: gather evidence, evidence review, a proposal to you. A risk flag adds the security review to every size except investigate, which changes no code.");
+  return panel(t, id, W, H, out.join("\n"), "Routes by size. Tiny: build. Small: build, code review, QA. Large: design, PE check, your answer, build, code review, security review, UX review, QA. Investigate: gather evidence, evidence review, a proposal to you. A risk flag adds the security review to every size except investigate, which changes no code.");
 }
 
 /** A task's life: the states, with the repair loop and the held state. */

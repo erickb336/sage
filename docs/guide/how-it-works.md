@@ -53,9 +53,11 @@ Each task gets the least route for its size. The chief can add steps, never remo
 <a href="../assets/routes-light.svg">
 <picture>
   <source media="(prefers-color-scheme: dark)" srcset="../assets/routes-dark.svg">
-  <img alt="Routes by size. Tiny: build. Small: build, code review, QA. Large: design, PE check, you approve, build, code review, security review, UX review, QA. Investigate: gather evidence, evidence review, a proposal to you. A risk flag adds the security review to every size except investigate, which changes no code." src="../assets/routes-light.svg" width="100%">
+  <img alt="Routes by size. Tiny: build. Small: build, code review, QA. Large: design, PE check, your answer, build, code review, security review, UX review, QA. Investigate: gather evidence, evidence review, a proposal to you. A risk flag adds the security review to every size except investigate, which changes no code." src="../assets/routes-light.svg" width="100%">
 </picture>
 </a>
+
+A large task's design goes to you after the PE check. It waits for your approval when it changes what you see or data that you keep. An internal shape goes ahead as recommended when you do not answer.
 
 ## A task's life
 
@@ -91,12 +93,12 @@ N candidates (3 by default) get the same brief, each with a different angle and 
 
 A judge scores them against a rubric that they do not see. It makes a new branch from the best candidate, and grafts the best parts of the others into one final version. If the candidates disagree on the product, the judge gives you both choices with a recommendation through the chief, and goes on with your answer.
 
-When the judge ends done, the chief shows you its scores, its base, its grafts, what it rejected and any candidate that produced nothing. You see this before a lead starts on a build, and before the question that asks you to approve a design.
+When the judge ends done, the chief shows you its scores, its base, its grafts, what it rejected and any candidate that produced nothing. You see this before a lead starts on a build, and before a design goes to you.
 
 What happens next depends on the arena:
 
-- **A build:** the judge opens a pull request from its branch, and that version goes through the reviews and QA of its route, like any build. A build arena runs only on a tiny or small task, or after a design that you approved. A tiny arena gets the code review, because a graft is new code that nobody read.
-- **A design:** the judge saves the final design as a page, the PE checks it, you approve that page, and the build starts on a new branch from main. An arena on a large task is always a design arena: it stands for the task's design step.
+- **A build:** the judge opens a pull request from its branch, and that version goes through the reviews and QA of its route, like any build. A build arena runs only on a tiny or small task, or on a large task whose design may go ahead. A tiny arena gets the code review, because a graft is new code that nobody read.
+- **A design:** the judge saves the final design as a page, and the PE checks it. Then the page goes to you like any large design (see [Routes](#routes)), and the build starts on a new branch from main. An arena on a large task is always a design arena: it stands for the task's design step.
 
 Until a judge ends done, the task cannot reach you as ready, and an investigation cannot conclude: the state tool and the merge check refuse it. An abandoned task has no open arena step. A candidate's branch never merges, also for an abandoned task.
 
