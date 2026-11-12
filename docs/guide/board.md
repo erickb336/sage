@@ -158,7 +158,7 @@ The page reads files only: the logbooks, the hook's agent slots and helper notes
 
 To join a slot to its run, the hook marks each agent slot with the run id from the first line of the agent's brief ("Run R12 · task T3"). An agent whose brief has no such line shows with "No run recorded".
 
-<!-- The old anchor stays: older entries of CHANGELOG.md and changes/earlier.md link to it. -->
+<!-- The old anchor stays, so that older links to it still work. -->
 <a id="programs-on-the-board"></a>
 
 ## Milestones on the board

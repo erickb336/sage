@@ -23,7 +23,7 @@ grep -v -E '^[[:space:]]*(</?(a|picture|p)( [^>]*)?>|<source [^>]*>)?[[:space:]]
 
 **The order of sections**
 
-A project is large when it has more than one kind of user, more than one way in, or a README over 150 lines. Otherwise it is small. The sections of the table come in its order. A section counts by what it holds, whatever its heading: for example, sage's "Learn sage in 5 minutes" is its Usage section. A section of the project's own can go between them. For Why, How it works, What's new, Concepts, FAQ and Under the hood, a link to a page that holds the section counts as the section, so that the README stays short. For What's new, that page is the changelog.
+A project is large when it has more than one kind of user, more than one way in, or a README over 150 lines. Otherwise it is small. The sections of the table come in its order. A section counts by what it holds, whatever its heading: for example, sage's "Learn sage in 5 minutes" is its Usage section. A section of the project's own can go between them. For Why, How it works, What's new, Concepts, FAQ and Under the hood, a link to a page that holds the section counts as the section, so that the README stays short. For What's new, that page is the changelog or the release notes.
 
 | Section | What it holds | Small | Large |
 | --- | --- | --- | --- |
@@ -32,7 +32,7 @@ A project is large when it has more than one kind of user, more than one way in,
 | Usage | Examples of the common jobs, each with what the reader sees | required | required |
 | Why | The problem, and the alternatives | optional | required |
 | How it works | A diagram of the parts and the flow, then short text | optional | required |
-| What's new | The last 3 to 5 changes, newest first; older ones in a changelog or the git log | optional | required |
+| What's new | The last 3 to 5 changes, newest first; older ones in a changelog, the release notes or the git log | optional | required |
 | Concepts | The project's own words, one meaning each | none | required |
 | FAQ | The real questions that users asked | optional | required |
 | Under the hood | The folders, how to change the project, and how to run its checks | one line: run the checks | required |

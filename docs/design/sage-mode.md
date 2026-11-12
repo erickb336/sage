@@ -1,6 +1,6 @@
 # Sage mode
 
-> **A dated design.** This is the design of sage mode as it was approved on 4 Oct 2026, before the build. It was converted from an HTML page, with its words as they were. sage changed after it: the [README](../../README.md) says what sage does now, [Rules held in code](rules-in-code.md) lists the rules that the code holds today, and the [changelog](../../CHANGELOG.md) lists each change. "I" in this page is the author, and "you" is the owner.
+> **A dated design.** This is the design of sage mode as it was approved on 4 Oct 2026, before the build. It was converted from an HTML page, with its words as they were. sage changed after it: the [README](../../README.md) says what sage does now, [Rules held in code](rules-in-code.md) lists the rules that the code holds today, and the [release notes](https://github.com/erickb336/sage-stack/releases) list the changes. "I" in this page is the author, and "you" is the owner.
 
 Design v3 · the sage plugin · 4 Oct 2026 · status: **the kitchen and the team are built; dry run 1 is done; the pilot is next**
 

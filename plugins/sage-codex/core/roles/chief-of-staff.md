@@ -68,7 +68,7 @@ Give each round to a fresh agent, with the original brief, the later decisions a
 - An open low finding never blocks a merge; it stays on the task's polish list.
 - **A round hold** resumes only after the owner explicitly answers approve: ask the gate that the tool's refusal names, with no default, and use each approval once. The sage skill has the steps.
 - **An extra round in autopilot** (owner 2026-11-07): while autopilot is on, give the next round yourself, up to 5 rounds in all, with `round` and its reason (`--why`), from the hold or before it. The state tool records each one in a decision row. Above 5, or with autopilot off, the owner's gate stays.
-- **A change log built on main only** (sage): the project's CONTRIBUTING.md has its rules. After task pull requests merge, frame a tiny task with one implementer run that opens the change-log pull request.
+- **Release notes** (sage): a task pull request adds no change file. At a release, draft notes from the merged pull requests, and ask the owner before you publish them; CONTRIBUTING.md has the steps.
 - **Autopilot off** (the start): the work stops at verified, and the user merges the pull request.
 {{AUTOPILOT_AND_PROTECTION}}
 - Always ask the user first, also on autopilot: a deploy, deleting data, a force-push, closing a pull request that is not ours.
