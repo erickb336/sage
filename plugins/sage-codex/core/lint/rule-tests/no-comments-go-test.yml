@@ -11,6 +11,9 @@ valid:
   - "// SPDX-License-Identifier: BSD-3-Clause\npackage a"
   - "package a\n\n// #include <stdio.h>\n// #cgo LDFLAGS: -lm\nimport \"C\""
   - "package a\n\n/*\n#include <stdlib.h>\n*/\nimport \"C\""
+  - "//go:noinline\nfunc f() {}"
+  - "package a\n\nimport _ \"unsafe\"\n\n//go:linkname now runtime.nanotime\nfunc now() int64"
+  - "// SPDX-License-Identifier: MIT\r\n\r\n//go:build linux\r\n\r\npackage a\r\n\r\nvar w = 1 //nolint:unused\r\n\r\n//go:noinline\r\nfunc f() {}\r\n"
 invalid:
   - "// Package a explains.\npackage a"
   - 'var u = 1 // explain'
@@ -19,3 +22,6 @@ invalid:
   - "package a\n\n// explain\nimport \"fmt\""
   - "package a\n\n// explain\nfunc f() {}\n\nimport \"C\""
   - "package a\n\n/* block */\nfunc f() {}"
+  - "//go:noinline because it is hot\nfunc f() {}"
+  - "//go:nosplit why\nfunc f() {}"
+  - "var u = 1 // explain\r\n"

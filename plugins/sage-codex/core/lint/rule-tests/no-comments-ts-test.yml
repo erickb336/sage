@@ -24,6 +24,13 @@ valid:
   - '/* SPDX-License-Identifier: Apache-2.0 OR MIT */'
   - 'const n: number = 1 as unknown as number;'
   - 'type A = { url: "https://example.com//x" };'
+  - '/*eslint-disable*/'
+  - 'f(); //eslint-disable-line no-console'
+  - '//eslint-disable-next-line'
+  - '// istanbul ignore next'
+  - '/* @ts-ignore */'
+  - '/* @ts-expect-error */'
+  - "/* @ts-ignore */\nconst b: number = \"y\";"
 invalid:
   - '// explain'
   - 'f(); // trailing'
@@ -39,3 +46,7 @@ invalid:
   - '// prettier-ignore because'
   - "interface I { a: string; // why\n}"
   - 'enum E { A /* why */ }'
+  - '/* @ts-ignore why */'
+  - '/* @ts-expect-error: why */'
+  - '// c8 ignore next'
+  - '// istanbul ignore next because'

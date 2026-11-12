@@ -1,4 +1,4 @@
 id: spdx
 language: JavaScript
 rule:
-  regex: '^(//|#|/\*|<!--) SPDX-License-Identifier: [\w.()+-]+( (AND|OR|WITH) [\w.()+-]+)*( \*/| -->)?$'
+  regex: '^(//|#|/\*|<!--) SPDX-License-Identifier: [\w.()+-]+( (AND|OR|WITH) [\w.()+-]+)*( \*/| -->)?\r?$'

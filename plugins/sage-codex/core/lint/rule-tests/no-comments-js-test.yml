@@ -24,6 +24,12 @@ valid:
   - '/* SPDX-License-Identifier: Apache-2.0 OR MIT */'
   - '#!/usr/bin/env node'
   - 'const r = /\/\/x/;'
+  - '/*eslint-disable*/'
+  - 'f(); //eslint-disable-line no-console'
+  - '//eslint-disable-next-line'
+  - '// istanbul ignore next'
+  - '/* @ts-ignore */'
+  - '/* @ts-expect-error */'
 invalid:
   - '// explain'
   - 'f(); // trailing'
@@ -39,3 +45,7 @@ invalid:
   - '// prettier-ignore because'
   - 'const j = <div>{/* jsx */}</div>;'
   - "<!-- legacy html comment"
+  - '/* @ts-ignore why */'
+  - '/* @ts-expect-error: why */'
+  - '// c8 ignore next'
+  - '// istanbul ignore next because'

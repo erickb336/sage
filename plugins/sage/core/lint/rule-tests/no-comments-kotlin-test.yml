@@ -3,8 +3,10 @@ valid:
   - 'val u = "https://example.com//x /* y */"'
   - '@Suppress("UNCHECKED_CAST") fun f() {}'
   - '// SPDX-License-Identifier: Apache-2.0'
+  - "// SPDX-License-Identifier: MIT\r\nclass A\r\n"
 invalid:
   - '// explain'
   - 'val x = 1 // trailing'
   - '/* block */ fun f() {}'
   - '/** KDoc. */ fun f() {}'
+  - "class A // explain\r\n"

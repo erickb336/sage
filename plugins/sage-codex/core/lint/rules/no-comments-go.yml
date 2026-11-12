@@ -1,15 +1,16 @@
 id: no-comments-go
 language: Go
 severity: error
-message: A comment in code. Only a tool directive from the fixed list, one SPDX line or a cgo preamble may stay.
+message: Remove this comment, or write a directive from the list in the rule set's README.md with no text after it. A cgo preamble may stay.
 rule:
   kind: comment
   not:
     any:
-      - regex: '^//go:\w+( \S.*)?$'
-      - regex: '^//nolint:[\w-]+(,[\w-]+)*$'
-      - regex: '^//export \w+$'
-      - regex: '^// Code generated .+ DO NOT EDIT\.$'
+      - regex: '^//go:\w+\r?$'
+      - regex: '^//go:(build|generate|embed|linkname|debug|fix|wasmimport|wasmexport|cgo_\w+) \S.*$'
+      - regex: '^//nolint:[\w-]+(,[\w-]+)*\r?$'
+      - regex: '^//export \w+\r?$'
+      - regex: '^// Code generated .+ DO NOT EDIT\.\r?$'
       - matches: spdx
       - precedes:
           stopBy: { not: { kind: comment } }

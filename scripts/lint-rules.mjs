@@ -14,6 +14,7 @@ export function astGrep(args, dir = RULE_SET) {
 export function ruleTestProblems(dir = RULE_SET) {
   const run = astGrep(["test", "--skip-snapshot-tests"], dir);
   if (run.status === 0) return [];
-  const lines = `${run.stdout}${run.stderr}`.split("\n").filter((line) => /^(FAIL|\[|Error|  \S)/.test(line));
-  return [`packages/sage-core/lint: ast-grep test failed (exit ${run.status ?? run.error?.code}); the rule set and its rule-tests disagree:\n${lines.join("\n")}`];
+  const output = `${run.stdout}${run.stderr}`, lines = output.split("\n").filter((line) => /^(FAIL|\[|Error|  \S)/.test(line));
+  const files = [...output.matchAll(/^FAIL (\S+)/gm)].map(([, id]) => `rules/${id}.yml or rule-tests/${id}-test.yml`);
+  return [`packages/sage-core/lint: ast-grep test failed (exit ${run.status ?? run.error?.code}); fix ${files.join(", ") || "the file that the error names"}, as "Change the rule set" in packages/sage-core/lint/README.md says:\n${lines.join("\n")}`];
 }

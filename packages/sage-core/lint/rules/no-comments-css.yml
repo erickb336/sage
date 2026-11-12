@@ -1,7 +1,7 @@
 id: no-comments-css
 language: Css
 severity: error
-message: A comment in code. Only a tool directive from the fixed list or one SPDX line may stay.
+message: Remove this comment, or write a directive from the list in the rule set's README.md with no text after it.
 rule:
   any: [{ kind: comment }, { kind: js_comment }]
   not:

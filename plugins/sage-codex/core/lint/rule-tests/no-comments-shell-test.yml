@@ -11,9 +11,13 @@ valid:
   - 'echo $x # shellcheck disable=SC2086,SC2046'
   - '# shellcheck source=lib/common.sh'
   - '# SPDX-License-Identifier: MIT'
+  - "#!/usr/bin/env -S uv run --script\necho hi"
+  - "#!/bin/bash\r\n# SPDX-License-Identifier: MIT\r\n# shellcheck disable=SC2034\r\nX=1\r\n"
 invalid:
   - '# explain'
   - 'echo hi # trailing'
   - "echo hi\n#!/bin/sh"
   - '# shellcheck disable=SC2086 because'
   - "f() {\n  # inside\n  echo hi\n}"
+  - "echo hi # explain\r\n"
+  - "# shellcheck disable=SC2086 because\r\necho $x\r\n"

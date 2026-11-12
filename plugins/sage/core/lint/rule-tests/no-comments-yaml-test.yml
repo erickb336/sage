@@ -7,6 +7,7 @@ valid:
   - 'line: x # yamllint disable-line rule:line-length'
   - '# yamllint disable rule:truthy rule:comments'
   - '# SPDX-License-Identifier: MIT'
+  - "# yamllint disable-file\na: 1"
 invalid:
   - '# explain'
   - 'key: value # trailing'
