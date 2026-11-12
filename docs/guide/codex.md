@@ -23,6 +23,7 @@ The design of the two provider plugins is in [Separate provider packages](../des
 | Role agents | Yes: the lead, the implementer, the reviewers, QA, the PE, the designer, the arena judge and the investigation roles | The public helper supports each of these roles and the investigation roles. The chief starts one lead for each task with a build, and the lead starts its team and records its task; other role agents start no agents and record nothing. A pilot on stock Codex ran a lead and its team with a test model, and each thread needs a multi-agent v2 model (see [start a role agent](../../packages/sage-codex/skills/sage/references/roles.md)). |
 | The brief check | Yes: the hook refuses a brief without every field | Yes: the chief runs the `brief` tool before each spawn, and the gate refuses a role agent's spawn with no checked brief. Each role agent starts with the project's standing orders and its checked brief ([The brief check](#the-brief-check)) |
 | The report check | Yes | Yes, for a role agent whose task name starts with `sage_`: a report without every field gets one more turn, then the agent stops with one plain line. A review or QA agent's report goes through the same reader as in Claude Code: a report that the reader cannot read gets one more turn too |
+| The shape check of the chief's messages | See [Sage's messages](using-sage.md#sages-messages) | Yes, as a note: when the chief's message names its kind on its first line and misses the shape of that kind, the chief gets a note with your next message. The note names the kind and each problem. Nothing is blocked, and you see no line. Each miss adds one line to `message-misses.jsonl` in the hooks' folder (`~/.codex/sage/.hooks/codex`, or under `SAGE_HOME`): the time, the kind and the names of the problems, never the message's text |
 | sage mode: the push rule in code | Yes | Yes: the same push form as in Claude Code ([The rules in Codex](#the-rules-in-codex)) |
 | sage mode: agent caps in code | Yes | Yes: the state tool refuses a new run when the project already has its cap of running runs (`max_agents`, 10 by default), as in Claude Code. Codex's own thread limit must hold as many agents ([What you need](#what-you-need)) |
 | Autopilot | Yes | Yes, in Codex 0.164 and later: autopilot merges verified work with sage's merge command, with no prompt for the merge ([Autopilot in Codex](#autopilot-in-codex)). The hook refuses `gh pr merge` in every mode |
@@ -83,15 +84,15 @@ The browser board shows every logbook by default, and each card says which provi
 
       > **Note:** when the command stops with `unknown command "hooks"`, the installed copy is from before T957, and it has no `hooks` command. This happens when your Codex config pins the sage marketplace to an old commit. Run the 3 commands of [Update and remove](#update-and-remove) (remove the marketplace, add it again, add the plugin), then do this step again.
 
-      It writes the Codex home that holds the plugin, also when `CODEX_HOME` is not set; it refuses when `CODEX_HOME` names another home. It puts 7 sage entries at the end of your Codex hooks file (`~/.codex/hooks.json`), and copies sage's hook launcher to `~/.codex/sage-hooks`. When you have no hooks file yet, it makes one. When you have one, your own hooks in it stay as they were (also a hook that you put in a sage group), and a copy of the old file stays in `~/.codex/hooks.json.sage-backup`. A second run changes nothing. The command refuses a hooks file that it cannot read, and changes nothing then.
+      It writes the Codex home that holds the plugin, also when `CODEX_HOME` is not set; it refuses when `CODEX_HOME` names another home. It puts 8 sage entries at the end of your Codex hooks file (`~/.codex/hooks.json`), and copies sage's hook launcher to `~/.codex/sage-hooks`. When you have no hooks file yet, it makes one. When you have one, your own hooks in it stay as they were (also a hook that you put in a sage group), and a copy of the old file stays in `~/.codex/hooks.json.sage-backup`. A second run changes nothing. The command refuses a hooks file that it cannot read, and changes nothing then.
    3. Run `codex` in a project folder. At the "Hooks need review" screen, choose **Trust all and continue**. Codex runs the sage hooks only after this step.
 
    > **Note:** `codex exec` skips hooks without your trust, and it gives no warning.
 
-4. Send the on phrase alone (see [Turn on sage mode](#turn-on-sage-mode)). When all is well, you see no sage line: the chief gets the status (the sage version, the Codex version, how many of the 7 sage hooks are trusted, and how to start sage mode). You see a warning line only for a limit, for example:
+4. Send the on phrase alone (see [Turn on sage mode](#turn-on-sage-mode)). When all is well, you see no sage line: the chief gets the status (the sage version, the Codex version, how many of the 8 sage hooks are trusted, and how to start sage mode). You see a warning line only for a limit, for example:
 
    ```text
-   sage: 3 of the 7 sage hooks are not trusted or turned off, so they do not run. To trust them or turn them on, type /hooks in the Codex CLI.
+   sage: 3 of the 8 sage hooks are not trusted or turned off, so they do not run. To trust them or turn them on, type /hooks in the Codex CLI.
    ```
 
    When a sage entry of your hooks file is missing or changed, or the launcher is older than the installed sage, the warning names the command that fixes it (`hooks install`). Run it yourself in a terminal, or tell the chief yes, and then the chief runs it. The chief does not run it without your yes, because it writes your hooks file. When your Codex config pins the sage marketplace to one commit, the warning gives the 3 commands that end the pin (see [Update and remove](#update-and-remove)). The other limit is a Codex version outside the tested range (0.164 to 0.167), for example:
@@ -102,11 +103,11 @@ The browser board shows every logbook by default, and each card says which provi
 
    Codex starts a session at your first message, so a warning comes then. The status counts the trust records in your Codex config: a changed entry or a hook that you turned off in `/hooks` does not count. Codex itself checks the hash of each entry, and it runs a hook only when they match.
 
-   > **Warning:** when no sage hook is trusted, no sage hook runs, so you see no sage line at all, also no warning. If sage mode does not start, type `/hooks` in the Codex CLI. If the 7 sage hooks are not in the list, do step 3 again; if they are not trusted, trust them there.
+   > **Warning:** when no sage hook is trusted, no sage hook runs, so you see no sage line at all, also no warning. If sage mode does not start, type `/hooks` in the Codex CLI. If the 8 sage hooks are not in the list, do step 3 again; if they are not trusted, trust them there.
 
 In the desktop app, do steps 1 and 2 in a terminal, with the Codex CLI (see [What you need](#what-you-need)). The app reads the same Codex home (`~/.codex`), so sage shows under the sage marketplace in its plugins list. An install from the app's own plugin list is not checked yet.
 
-If the app does not ask you to trust the hooks, do step 3 once in the terminal. The app's own hook review is not checked yet: sage's desktop checks drove the app's Codex as the app drives it, not the app's screens. The package check (`npm run check:codex`, with `SAGE_CODEX_BIN` set to the app's own `codex`) showed that the app's Codex lists the 7 sage entries as your hooks, and that they stay trusted after an update.
+If the app does not ask you to trust the hooks, do step 3 once in the terminal. The app's own hook review is not checked yet: sage's desktop checks drove the app's Codex as the app drives it, not the app's screens. The package check (`npm run check:codex`, with `SAGE_CODEX_BIN` set to the app's own `codex`) showed that the app's Codex lists the sage entries as your hooks (7 entries then, before the Stop entry), and that they stay trusted after an update.
 
 Then do the [gate check](#check-that-the-sage-gate-runs).
 
@@ -138,7 +139,7 @@ The desktop app puts its worktree threads under `~/.codex/worktrees`. sage's `.c
   Until then, no sage hook runs, and sage's logbook tools refuse every call with a line that names the install command.
 - To turn sage off, turn the plugin off in your Codex config file (`enabled = false` for `plugins."sage@sage"`, in its own table or in any other TOML form). The launcher then does nothing. The launcher reads only that file: a `-c` option, a profile or a managed policy that turns the plugin off does not stop sage's hooks (a documented limit).
 - To remove sage (with `CODEX_HOME` set, use that folder in place of `~/.codex`):
-  1. Run `node ~/.codex/sage-hooks/launch.mjs --uninstall`. It removes the 7 sage entries from your hooks file and the `~/.codex/sage-hooks` folder. Your own hooks stay.
+  1. Run `node ~/.codex/sage-hooks/launch.mjs --uninstall`. It removes the 8 sage entries from your hooks file and the `~/.codex/sage-hooks` folder. Your own hooks stay.
   2. Run `codex plugin remove sage@sage`, then `codex plugin marketplace remove sage`.
 
   If you removed the plugin first, the sage entries do nothing, because the launcher finds no sage: run step 1 at any time. The Codex logbook in `~/.codex/sage` stays; delete that folder yourself to remove it.
@@ -151,7 +152,7 @@ Do this check after you install sage's hooks, after an update that asks you to r
 1. Trust the hooks:
    1. Open a terminal, and go to the project folder.
    2. Run `codex`, with the same Codex home as the app. When you set `CODEX_HOME` for the app, set the same value in the terminal.
-   3. Type `/hooks`. Codex lists each hook and whether you trust it. Each of the 7 sage hooks (it comes from your hooks file, `~/.codex/hooks.json`, and its command runs `sage-hooks/launch.mjs`) must show as trusted.
+   3. Type `/hooks`. Codex lists each hook and whether you trust it. Each of the 8 sage hooks (it comes from your hooks file, `~/.codex/hooks.json`, and its command runs `sage-hooks/launch.mjs`) must show as trusted.
    4. If a sage hook shows as new, changed or not trusted, trust it there (or choose **Trust all and continue** at the start screen). Then start a new session in the app.
 2. Send the phrase `sage mode` alone (see [Turn on sage mode](#turn-on-sage-mode)), then ask the chief to run the sage status tool. When the gate runs, the chief shows the status lines of the logbook. When it does not run, the chief shows a line that starts with "sage's gate is not running" and names the `hooks install` command: do step 1 again.
 3. Check the gate on a shell command from code mode.

@@ -21,7 +21,7 @@ import { fileURLToPath, pathToFileURL } from "node:url";
 /** The launcher's version: the start status asks for `hooks install` when the installed launcher is older than its plugin's. */
 export const LAUNCHER_VERSION = 2;
 /** Each event's timeout in seconds, in sage's entry (entries.mjs): the largest timeout of the hooks before T957. */
-export const TIMEOUTS = { SessionStart: 10, UserPromptSubmit: 10, PreToolUse: 30, PermissionRequest: 30, PostToolUse: 10, SubagentStart: 10, SubagentStop: 10 };
+export const TIMEOUTS = { SessionStart: 10, UserPromptSubmit: 10, PreToolUse: 30, PermissionRequest: 30, PostToolUse: 10, SubagentStart: 10, SubagentStop: 10, Stop: 10 };
 /**
  * The milliseconds that the launcher waits for sage's answer: four fifths of the entry's timeout. Codex stops a hook at its
  * timeout and runs the tool call (a Failed hook does not block), so the launcher gives its own answer first.
