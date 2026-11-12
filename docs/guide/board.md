@@ -218,9 +218,14 @@ The board shows web pages, PDFs, pictures (PNG, JPEG, GIF, WebP and SVG), and Ma
 
 A page can be at most 3 parts deep in the task's folder (for example `designs/final/index.html`) and at most 16 MiB. The index lists at most 200 pages.
 
-Each page opens in a sandbox. A page cannot read the board or your files, load anything from the board or from another site, send a form, or move to another site by itself. The one way out of a page is a link that you click in it.
+Each page opens in a sandbox. A page cannot read the board or your files, load a picture, a style or a script from the board or from another site, or send a form.
 
-Only sage's own script runs: the Today switch of a message's page. A page that holds this switch and also an `http-equiv` meta tag other than sage's own policy tag (for example a refresh) gets no script, so that a refresh cannot move it. It shows without its switch.
+Only sage's own script runs: the Today switch of a message's page. A page that holds this switch and also an `http-equiv` (for example a refresh) or a `srcdoc` outside sage's own policy tag gets no script, so that a refresh cannot move it: it shows without its switch. When the board cannot judge a page, the page also shows without its switch.
+
+The usual way out of a page is a link that you click in it. Two ways out need no click:
+
+- When a page opens, it can make your browser ask another site for an address, for example with a prerender link. The address can hold any text of the page, so that text can leave the Mac. The board found no header that stops this in Chromium.
+- A page that you open with "open with its scripts" (`?scripts=1`) can move itself to another site, by its script or by a meta refresh.
 
 Two warning lines in the index tell you the rest:
 
