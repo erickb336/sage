@@ -30,6 +30,7 @@ import { changedText, countsOf, endText, gateQuestion, gateText, localTime, mapH
 import { worktreeRoot, worktrees } from "./worktrees.mjs";
 import { CHIEF, TAKEOVER_OPTIONS, chiefOnly, createChiefs, crossed, offerOf, replaceOf, replaceQuestion, writerClass } from "./chiefs.mjs";
 import { LEAD_COMMANDS, leadProblem as leadPolicy, leadRequest } from "./lead-policy.mjs";
+import { renderMessage } from "./message-checks.mjs";
 
 /** The one line for a saved change that cannot finish: the settle step refuses with it, and `sage logbook repair` is its way out. */
 export const STUCK_WRITE = 'This command changed nothing. This project cannot save changes; other projects work. Tell the owner. There are two ways out. With a backup: the owner restores the folder that `sage logbook` prints; rows newer than the backup are lost. With no backup: after the owner accepts the loss of this saved change, the chief runs `sage logbook repair --accept-change-loss yes --project <the project>`, or the owner runs it in a terminal when the chief cannot; it keeps the file, and a half-published update keeps mixed tables. Do not remove review-pending.json by hand.';
@@ -138,7 +139,7 @@ TABLES.gates = [...TABLES.gates, "kind"];
 const ADDED = { ...FILLED, runs: [...FILLED.runs, ...SPARSE.runs], tasks: [...FILLED.tasks, ...SPARSE.tasks], gates: SPARSE.gates };
 /** The status of a run that ended. Any other status is an active or an unknown run. */
 const RUN_ENDS = ["done", "blocked", "question", "failed"];
-const COMMANDS = ["init", "logbook", "standing", "pages", "task", "task-adopt", "milestone", "round", "run", "finding", "verdict", "gate", "log", "status", "stats", "merge-check", "config", "projects", "board", "observe", "link", "claim", "offer", "cancel", "accept", "unclaim", "move", "worktrees"];
+const COMMANDS = ["init", "logbook", "standing", "pages", "message", "task", "task-adopt", "milestone", "round", "run", "finding", "verdict", "gate", "log", "status", "stats", "merge-check", "config", "projects", "board", "observe", "link", "claim", "offer", "cancel", "accept", "unclaim", "move", "worktrees"];
 /** The options of each command, by its name or by its name and first word. Every command also takes --project. */
 const OPTIONS = {
   "logbook repair": ["accept-loss", "accept-change-loss"],
@@ -170,6 +171,7 @@ const OPTIONS = {
   board: ["name-hex", "view"],
   stats: ["task"],
   pages: ["run", "text"],
+  message: ["file", "json"],
   "worktrees prune": ["yes"],
 };
 /** The canonical number of a PR in an older row: "040" is PR 40. */
@@ -251,6 +253,7 @@ const pagesRoot = (project, env = process.env) => join(worktreeRoot(env), basena
 const pagesDir = (project, task, env) => join(pagesRoot(project, env), task);
 /** The largest page that pages record reads: 16 MiB, the size limit of a published page. */
 const PAGE_MAX = 16 * 1024 * 1024;
+const MESSAGE_MAX = 1024 * 1024;
 
 /**
  * A branch that a task or a writer run may name: letters, digits and . _ / -, as today's branches (sage/t94,
@@ -3060,7 +3063,7 @@ function sageCommand(argv, env) {
     refuse(`no logbook for the project ${printed}. ${printed === project ? `Run: sage init --project ${shell(project)}` : "Its path has control characters, so no command is printed to paste. Rename the folder, or run sage init from inside it."}`);
   }
   // A read takes no lock: every file is replaced whole, so it sees the store before or after a change, never half of one.
-  if (readOnly || (cmd === "logbook" && !repair) || cmd === "status" || cmd === "stats" || (cmd === "standing" && pos[0] !== "add") || (cmd === "pages" && pos[1] !== "record") || cmd === "worktrees") return act(cmd, pos, opt, dir, env, [], project);
+  if (readOnly || (cmd === "logbook" && !repair) || cmd === "status" || cmd === "stats" || (cmd === "standing" && pos[0] !== "add") || (cmd === "pages" && pos[1] !== "record") || cmd === "message" || cmd === "worktrees") return act(cmd, pos, opt, dir, env, [], project);
   notePlugin(env);
   if (place.row && !place.row.commits && fillCommits(place.checkout, env)) locate(project, env); // the filled row may show a folder of another project
   const run = () => change(cmd, pos, opt, dir, env, skip, project, place.shared);
@@ -4037,6 +4040,41 @@ function act(cmd, pos, opt, dir, env, skip, project) {
       const root = projectRoot(project);
       try { git(["-C", root, "rev-parse", "--git-dir"], env); } catch { refuse(`${visible(root)} is not a git repository, so it has no worktrees. Nothing changed.`); }
       return worktrees({ git: (args) => git(args, env), root, tasks: read(dir, "tasks"), runs: read(dir, "runs"), ledger: read(dir, "ledger"), here: [folderHere(), project], prune });
+    }
+    case "message": {
+      // message <T> --file <json> (or --json <text>): a message to the owner from its JSON (T984). It prints the text for
+      // the chat, and writes the page of a message with a picture, or of a long message, in the task's pages folder.
+      const taskId = taskOf(dir, need(sub, "the task id")).task.id;
+      if (id !== undefined || (opt.file === undefined) === (opt.json === undefined)) refuse("message takes <task> and one of --file <the message's JSON file> or --json <the message's JSON>. Nothing written.");
+      let text = opt.json;
+      if (opt.file !== undefined) {
+        try { text = readRegular(resolve(opt.file), { link: false, max: MESSAGE_MAX, encoding: "utf8" }); } catch { text = undefined; }
+        if (text === undefined) refuse(`${opt.file} is not a JSON file of at most 1 MiB that sage can read. Nothing written.`);
+      }
+      if (Buffer.byteLength(text) > MESSAGE_MAX) refuse("the message's JSON is over 1 MiB. Nothing written.");
+      let input;
+      try { input = JSON.parse(text); } catch (e) { refuse(`the message is not JSON: ${e.message}. Nothing written.`); }
+      // A Page block names a page by its task and its file in that task's pages folder; the page must exist.
+      const pages = (blocks) => (Array.isArray(blocks) ? blocks : []).forEach((b) => {
+        if (b?.t === "section") pages(b.body);
+        if (b?.t !== "page") return;
+        if (!TASK_ID.test(String(b.task)) || typeof b.file !== "string" || !/^(?:[\w.-]+\/)*[\w.-]+$/.test(b.file) || b.file.split("/").some((part) => /^\.+$/.test(part)))
+          refuse(`a page block names its page as { t: page, title, task, file }: a task id and a file name in that task's pages folder, not ${JSON.stringify({ task: b.task, file: b.file })}. Nothing written.`);
+        b.path = join(pagesDir(project, b.task, env), b.file);
+        if (!existsSync(b.path)) refuse(`the page block "${b.title}" names ${b.path}, and it does not exist. Save the page there first. Nothing written.`);
+      });
+      pages(input?.blocks);
+      const folder = pagesDir(project, taskId, env);
+      const out = renderMessage(input, { pagePath: (name) => join(folder, name) });
+      if (out.problems) refuse(`the message is not in its kind's shape, so nothing reaches the owner in another shape. Nothing written.\n${out.problems.map((p) => `- ${p}`).join("\n")}`);
+      if (out.page) {
+        // A new file, then a rename: a link that waits at the page's name is replaced, never followed.
+        mkdirSync(folder, { recursive: true, mode: 0o700 });
+        const temp = `${out.page.path}.${randomUUID()}.tmp`;
+        writeFileSync(temp, out.page.html, { mode: 0o600, flag: "wx" });
+        renameSync(temp, out.page.path);
+      }
+      return out.text;
     }
     case "pages": {
       // pages <T> makes the task's pages folder (mode 700) and prints it. pages <T> record <file> logs a page in it, with its sha256.

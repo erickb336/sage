@@ -1,0 +1,41 @@
+{
+  "kind": "progress",
+  "title": "The new words: the build is done, and four checks run now",
+  "blocks": [
+    {
+      "t": "field",
+      "label": "Where this is",
+      "text": "Release 1.0 › single task: the new words, part 1 of 3 (the rename) › step: review"
+    },
+    {
+      "t": "p",
+      "text": "✓ Plan › ✓ Build › ▶ Review › ○ Merge"
+    },
+    {
+      "t": "field",
+      "label": "Since my last note",
+      "text": "your approval of the design, at 18:43."
+    },
+    {
+      "t": "field",
+      "label": "What changed",
+      "text": "The implementer finished the build and opened the pull request at 19:55. A code review, a security review, a UX review and QA started on it at once."
+    },
+    {
+      "t": "field",
+      "label": "Next",
+      "text": "When the four checks end, the lead repairs what they find, or the task is ready to merge. I write again when it is ready, or when it needs you."
+    },
+    {
+      "t": "field",
+      "label": "Cost so far",
+      "text": "1.0 M tokens and about 1.5 h of agent time (measured; the lead's own tokens come at its end). The estimate for this task is 5 to 10 M tokens."
+    },
+    {
+      "t": "field",
+      "label": "What I need from you",
+      "text": "nothing."
+    }
+  ],
+  "ref": "T995 · PR 515"
+}

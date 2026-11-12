@@ -1,0 +1,92 @@
+{
+  "kind": "estimate",
+  "title": "The new words: 10 to 21 M tokens and 13 to 26 h of agent time",
+  "blocks": [
+    {
+      "t": "field",
+      "label": "What it covers",
+      "text": "the three pull requests for the new words. Each one builds, gets its reviews and QA, and is ready to merge."
+    },
+    {
+      "t": "table",
+      "head": [
+        "Pull request",
+        "Tokens",
+        "Agent time"
+      ],
+      "rows": [
+        [
+          "1. The rename: program becomes milestone, in the code, the logbook files and the docs",
+          "5 to 10 M",
+          "6 to 12 h"
+        ],
+        [
+          "2. The release level",
+          "4 to 8 M",
+          "5 to 10 h"
+        ],
+        [
+          "3. The six state words on the board and in status",
+          "1.5 to 3 M",
+          "2 to 4 h"
+        ],
+        [
+          "**All three**",
+          "**10.5 to 21 M**",
+          "**13 to 26 h**"
+        ]
+      ]
+    },
+    {
+      "t": "picture",
+      "title": "The ranges on one scale",
+      "key": "Key: each bar is a range; 1 column is 1 M tokens or 1 hour.",
+      "lines": [
+        "Tokens, millions",
+        "                  0    5    10   15   20",
+        "Rename     5–10        ━━━━━",
+        "Release    4–8        ━━━━",
+        "Words      1.5–3   ━━",
+        "All three  10–21            ━━━━━━━━━━━",
+        "",
+        "Agent time, hours",
+        "                  0    5    10   15   20   25",
+        "Rename     6–12         ━━━━━━",
+        "Release    5–10        ━━━━━",
+        "Words      2–4      ━━",
+        "All three  13–26               ━━━━━━━━━━━━━"
+      ]
+    },
+    {
+      "t": "field",
+      "label": "Basis",
+      "text": "the engineer's check, from a past large task that the logbook measured: the clean-up of the hook's command rules took 8.1 M tokens and 11 h."
+    },
+    {
+      "t": "field",
+      "label": "How sure",
+      "text": "an estimate, not a measurement. The range is wide because review rounds vary."
+    },
+    {
+      "t": "field",
+      "label": "What would change it",
+      "text": "each repair round adds a new review cycle: about 0.7 M tokens for one round of a small task (measured, the clean-up of leftover folders), more for a large one."
+    },
+    {
+      "t": "field",
+      "label": "So far",
+      "text": "part 1 has used 1.0 M tokens (measured; the lead's own tokens come at its end)."
+    },
+    {
+      "t": "field",
+      "label": "Your time",
+      "text": "three reports to read and one update of sage. I have no measured basis for your time."
+    },
+    {
+      "t": "field",
+      "label": "What I need from you",
+      "text": "nothing. If the cost is too high, tell me: parts 2 and 3 have not started."
+    }
+  ],
+  "ref": "T995 · T996 · T997"
+}

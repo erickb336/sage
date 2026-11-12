@@ -1,0 +1,88 @@
+{
+  "kind": "lesson kept",
+  "title": "A picture shows what you will see, in words, never raw tool lines with ids",
+  "blocks": [
+    {
+      "t": "field",
+      "label": "What happened",
+      "text": "on 11 Nov I showed you a question with a before and after made of the tool's own status lines. Each line named the work by its id. You could not tell what changed, so you picked another version."
+    },
+    {
+      "t": "picture",
+      "title": "Before: what I sent",
+      "lines": [
+        "╭─ Before: what I sent ──────────────────────╮",
+        "│ Two lines of the tool's status, before and │",
+        "│ after the change. Each line named the work │",
+        "│ by its id, with no word for what it is.    │",
+        "╰────────────────────────────────────────────╯"
+      ]
+    },
+    {
+      "t": "picture",
+      "title": "After: what I send now",
+      "key": "Key: the same place twice. The after names each part, its level and its state word.",
+      "lines": [
+        "╭─ After: what I send now ───────────────────╮",
+        "│ Milestone 5: Sage feel                     │",
+        "│ In progress · 0 of 8 tasks done            │",
+        "│ ╭─ Task: Presentation skill ─────────────╮ │",
+        "│ │ In progress · the pilot                │ │",
+        "│ ╰────────────────────────────────────────╯ │",
+        "╰────────────────────────────────────────────╯"
+      ]
+    },
+    {
+      "t": "field",
+      "label": "The lesson",
+      "text": "a picture shows what you will see, in your words: names, not ids, and a state word for each part."
+    },
+    {
+      "t": "field",
+      "label": "Has it happened before",
+      "text": "yes. The same kind of mistake came twice before: on 10 Nov, messages too compressed to read after time away; on 11 Nov, a catch-up of labels with no meaning. Three times: this lesson goes into code."
+    },
+    {
+      "t": "table",
+      "head": [
+        "Where the lesson lives now",
+        "What it holds",
+        "State"
+      ],
+      "caption": "Where the lesson lives now",
+      "rows": [
+        [
+          "The logbook",
+          "The decision of 11 Nov: the question format, and why the version with tool lines failed",
+          "Done"
+        ],
+        [
+          "The picture research",
+          "Its rule for every picture: words, not ids",
+          "Done"
+        ],
+        [
+          "The check of these example pages",
+          "No raw ids in a message; a task number once, in a small reference line",
+          "Done, for these pages only"
+        ],
+        [
+          "The presentation skill",
+          "A check that fails on a message with raw ids, so the lesson holds in code",
+          "Todo, in its build"
+        ]
+      ]
+    },
+    {
+      "t": "field",
+      "label": "What changes for you",
+      "text": "pictures in my messages use names and state words. If you see an id in a picture, tell me: it is a bug."
+    },
+    {
+      "t": "field",
+      "label": "What I need from you",
+      "text": "nothing."
+    }
+  ],
+  "ref": "T984"
+}

@@ -1,0 +1,65 @@
+{
+  "kind": "request understood",
+  "title": "One way to show sage's pages and pictures, the same in Claude and Codex",
+  "blocks": [
+    {
+      "t": "field",
+      "label": "Your words",
+      "text": "“can we also have a consistent way to display visuals that works for whatever provider”"
+    },
+    {
+      "t": "field",
+      "label": "What I understood",
+      "text": "you want sage's pages and pictures to reach you the same way in each app that you use, so that you never need to know which provider runs the work. This is a study first: compare the ways, then recommend one."
+    },
+    {
+      "t": "section",
+      "label": "Read back (costly if wrong)",
+      "body": [
+        {
+          "t": "list",
+          "items": [
+            "Where: the Claude desktop app, Claude Code in a terminal, the Codex desktop app, Codex in a terminal, and the phone.",
+            "What: research pages, pictures and the board.",
+            "Ways to compare: a local web page, a file, a picture in the terminal, a page inside the chat, a PDF."
+          ]
+        }
+      ]
+    },
+    {
+      "t": "field",
+      "label": "In",
+      "text": "a comparison of each way in each app, with evidence, and one recommendation."
+    },
+    {
+      "t": "field",
+      "label": "Out",
+      "text": "how a picture is drawn (decided: an image, and the same picture as text); the build."
+    },
+    {
+      "t": "field",
+      "label": "Appetite",
+      "text": "about 0.5 M tokens and 1 h of agent time for the study and its evidence review (estimate, range 0.3 to 1 M). Past 1 M tokens, I stop and ask you."
+    },
+    {
+      "t": "section",
+      "label": "Unsure, with my default",
+      "body": [
+        {
+          "t": "list",
+          "items": [
+            "The phone: a place to check, or out of scope? Default: check it, but do not design for it.",
+            "Claude's own file tool: compare it like the other ways? Default: yes."
+          ],
+          "ordered": true
+        }
+      ]
+    },
+    {
+      "t": "field",
+      "label": "If you say nothing",
+      "text": "I start in 15 minutes with the defaults. Reply “correct” to start now, or fix a line."
+    }
+  ],
+  "ref": "T1000"
+}

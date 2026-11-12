@@ -1,0 +1,76 @@
+{
+  "kind": "explainer",
+  "title": "About milestones",
+  "blocks": [
+    {
+      "t": "field",
+      "label": "What it is",
+      "text": "a milestone is a group of tasks for one goal, where at least one task waits for another. You approve its plan before any of its tasks builds."
+    },
+    {
+      "t": "field",
+      "label": "Why it exists",
+      "text": "some requests are too big for one pull request. A milestone keeps their tasks together and runs one pilot task first. The other tasks start only after the pilot merges, so a wrong idea costs one task, not eight."
+    },
+    {
+      "t": "field",
+      "label": "A real example",
+      "text": "milestone 5, Sage feel, has 8 tasks. The pilot is the presentation skill; the 7 playbooks wait for it. You approved its plan on 10 Nov. It is done when each task that is not stopped is done."
+    },
+    {
+      "t": "picture",
+      "title": "How it works: a milestone in its release",
+      "key": "Key: each box names its level. The arrow means “waits for”. A release and a milestone are both optional.",
+      "lines": [
+        "╭─ Release 1.0 ──────────────────────────────╮",
+        "│ ╭─ Milestone 5: Sage feel ───────────────╮ │",
+        "│ │ Goal: sage's feel, as skills           │ │",
+        "│ │ ╭─ Pilot: Presentation skill ────────╮ │ │",
+        "│ │ │ Runs first, from start to merge    │ │ │",
+        "│ │ ╰────────────────────────────────────╯ │ │",
+        "│ │   │ they wait for the pilot            │ │",
+        "│ │   ▼                                    │ │",
+        "│ │ ╭─ 7 tasks: the playbooks ───────────╮ │ │",
+        "│ │ │ Start after the pilot merges       │ │ │",
+        "│ │ ╰────────────────────────────────────╯ │ │",
+        "│ │ Done when each task that is not        │ │",
+        "│ │ stopped is done                        │ │",
+        "│ ╰────────────────────────────────────────╯ │",
+        "│ ╭─ Single tasks ─────────────────────────╮ │",
+        "│ │ Each one pull request or one study     │ │",
+        "│ ╰────────────────────────────────────────╯ │",
+        "╰────────────────────────────────────────────╯"
+      ]
+    },
+    {
+      "t": "field",
+      "label": "Like, and where the likeness stops",
+      "text": "it is like a milestone in a project plan: one goal and the work for it. But a sage milestone has no date. It ends when its tasks are done, not on a day."
+    },
+    {
+      "t": "field",
+      "label": "What it is not",
+      "text": "it is not a release: a release is a version that you ship, such as 1.0, and it holds milestones and single tasks. It is not a task: a task is one pull request or one study."
+    },
+    {
+      "t": "section",
+      "label": "New words",
+      "body": [
+        {
+          "t": "list",
+          "items": [
+            "pilot: the one task of a milestone that runs from start to merge first.",
+            "release: a version that you ship. Optional.",
+            "Old word: program. You retired it on 11 Nov; now it means only a computer program."
+          ]
+        }
+      ]
+    },
+    {
+      "t": "page",
+      "title": "Release, milestone, state words",
+      "task": "T995",
+      "file": "design.html"
+    }
+  ]
+}

@@ -1,0 +1,53 @@
+{
+  "kind": "report",
+  "title": "Two improvements merged; they work after you update sage",
+  "blocks": [
+    {
+      "t": "field",
+      "label": "Where this is",
+      "text": "Release 1.0 › two single tasks from your request of 7 Nov for fewer restrictions › both merged on 10 Nov"
+    },
+    {
+      "t": "table",
+      "head": [
+        "Piece of work",
+        "What changes for you",
+        "How I know it works",
+        "Cost",
+        "You must act"
+      ],
+      "rows": [
+        [
+          "Leads wait for the automatic checks before reviews",
+          "No review starts on a commit whose checks failed, so no tokens go to reviews of a broken commit. A lead also briefs a framed task itself.",
+          "One clean cycle on the final commit: code review clean, QA pass, checks pass.",
+          "0.6 M tokens, about 1 h of agent time (measured)",
+          "Yes: update sage"
+        ],
+        [
+          "The chief cleans up the folders that agents leave",
+          "The chief removes the leftover folders in your worktrees folder, and saves its own pages, without asking you. A task worktree stays: only git can remove it, and git refuses one with changes.",
+          "The first review found that the chief could delete a live task folder. One repair round fixed it and two small findings. Then one clean cycle: code review clean, QA pass, checks pass.",
+          "1.4 M tokens, about 2.5 h of agent time (measured)",
+          "Yes: update sage"
+        ]
+      ]
+    },
+    {
+      "t": "field",
+      "label": "What I did not check",
+      "text": "how many review tokens the wait saves; that needs a week of runs after your update. I did not see either change in a live session, because your sessions run the older sage."
+    },
+    {
+      "t": "field",
+      "label": "Weak points",
+      "text": "seven small findings stay on the polish list of the clean-up change. For example, git's forced remove still runs when its option name is shortened."
+    },
+    {
+      "t": "field",
+      "label": "What you need to do",
+      "text": "update sage in Claude Code and in Codex, and start new sessions. Until you do, your sessions run the older sage."
+    }
+  ],
+  "ref": "T803 · PR 513 · T807 · PR 514"
+}
