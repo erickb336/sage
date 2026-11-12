@@ -141,7 +141,7 @@ function card(ctx, task, { archived = false, i = 0 } = {}) {
   // A pilot whose breakdown waits for you shows the breakdown, and no wait line when its only wait is that question (Q1,
   // QF): a wait that is never met is first on the wait line (waitLine), so a line that is never met says more (R1535-1).
   const others = approval && task.reasons.filter(reason => reason !== approval);
-  const now = approval ? `<div class="nowline need">${ICON}<span><b>Needs you:</b> the breakdown of ${esc(approval.breakdown.id)}.${others.length ? ` ${others.map(reason => esc(`${String(reason.text).split(LINE).join(" ")}${reason.recommendation ? ` I recommend: ${reason.recommendation}` : ""}`)).join(" ")}` : ""}</span></div>${task.waitLine?.never ? waitHtml(task) : ""}${breakdownBody(approval)}`
+  const now = approval ? `<div class="nowline need">${ICON}<span><b>Needs you:</b> the breakdown of ${esc(milestoneName({ id: approval.breakdown.id }, true))}.${others.length ? ` ${others.map(reason => esc(`${String(reason.text).split(LINE).join(" ")}${reason.recommendation ? ` I recommend: ${reason.recommendation}` : ""}`)).join(" ")}` : ""}</span></div>${task.waitLine?.never ? waitHtml(task) : ""}${breakdownBody(approval)}`
     : task.waitLine && !task.loop.now.needs ? waitHtml(task) : (task.column !== "backlog" ? nowNext(task) : task.loop.now.needs ? nowNext(task, false) : "") + waitHtml(task);
   return `<a class="card${task.reasons.length ? " needs" : ""}${approval ? " approval" : ""}" id="card-${b64(task.key)}" href="${esc(taskHref(ctx, task))}" data-key="${esc(task.key)}" data-project="${esc(task.group ?? task.project)}" data-provider="${esc(who(task))}" data-priority="${esc(task.priority)}" data-kind="${esc(task.kind)}" data-needs="${!!task.reasons.length}" data-agents="${task.agents.filter(agent => !agent.stale).length}" data-inferred="${task.inferredWork ? 1 : 0}" data-review="${task.column === "review" ? 1 : 0}" data-i="${i}" data-milestone="${task.milestone ? b64(task.milestone.key) : ""}"${archived ? " data-archived hidden" : ""}>`
     + (approval ? `<div class="band"><span aria-hidden="true">◫</span>Milestone approval<span class="bk">· ${esc(milestoneName(approval.breakdown))} · gate ${esc(approval.gateId)}</span></div>` : "")
@@ -244,7 +244,7 @@ function waitItem(ctx, task, wait) {
   if (wait.odd) return `<li class="v-stale"><span class="g" aria-hidden="true">⊘</span>Text in the waits cell that is not a task id · <span class="stw-cant">never met</span>: the chief sets the waits again.</li>`;
   if (wait.breakdown) {
     const { id, gate } = wait.breakdown, why = breakdownWhy(wait.breakdown);
-    return `<li class="${wait.never ? "v-stale" : "v-wait"}"><span class="g" aria-hidden="true">${wait.never ? "⊘" : "⧗"}</span>The breakdown of ${esc(id)}${gate ? ` (gate ${esc(gate)})` : ""}: ${esc(why)} · <span class="${wait.never ? "stw-cant" : "faint"}">${wait.never ? "never met" : "not met"}</span></li>`;
+    return `<li class="${wait.never ? "v-stale" : "v-wait"}"><span class="g" aria-hidden="true">${wait.never ? "⊘" : "⧗"}</span>The breakdown of ${esc(milestoneName({ id }, true))}${gate ? ` (gate ${esc(gate)})` : ""}: ${esc(why)} · <span class="${wait.never ? "stw-cant" : "faint"}">${wait.never ? "never met" : "not met"}</span></li>`;
   }
   const other = ctx.tasks.get(`${task.project}/${wait.id}`);
   const name = other ? `<a href="${esc(taskHref(ctx, other))}">${esc(wait.id)}</a> ${esc(other.title)}` : esc(wait.id);
@@ -254,8 +254,8 @@ function waitItem(ctx, task, wait) {
 function milestoneSections(ctx, task) {
   const milestone = task.milestone && ctx.milestones.get(task.milestone.key);
   const box = !task.milestone ? `<div class="empty">In no milestone.</div>`
-    : milestone ? `<p><a href="${esc(milestoneHref(ctx, milestone.key))}"><span aria-hidden="true">◫</span> ${esc(milestone.id)} ${esc(milestone.name)}</a> · ${wordTag(milestone.word, "pstate")}${task.milestone.pilot ? ' · <span class="tag pilot">pilot</span>' : ""}</p>${milestone.progress.total ? pbar(milestone) : ""}`
-    : `<p><span aria-hidden="true">◫</span> ${esc(task.milestone.id)} · <span class="stw-cant">not in the logbook</span></p>`;
+    : milestone ? `<p><a href="${esc(milestoneHref(ctx, milestone.key))}"><span aria-hidden="true">◫</span> ${esc(milestoneName(milestone))}</a> · ${wordTag(milestone.word, "pstate")}${task.milestone.pilot ? ' · <span class="tag pilot">pilot</span>' : ""}</p>${milestone.progress.total ? pbar(milestone) : ""}`
+    : `<p><span aria-hidden="true">◫</span> ${esc(milestoneName({ id: task.milestone.id }))} · <span class="stw-cant">not in the logbook</span></p>`;
   const by = ctx.waitedBy.get(task.key) ?? [];
   return `<section><h3>Milestone</h3>${box}</section><section><h3>Waits for <span class="n">${task.waits.length}</span></h3>${task.waits.length ? `<ul class="vlist">${task.waits.map(wait => waitItem(ctx, task, wait)).join("")}</ul>` : `<div class="empty">Waits for no task.</div>`}`
     + `${by.length ? `<h4>Waited for by</h4><p>${by.map(other => `<a href="${esc(taskHref(ctx, other))}">${esc(other.id)}</a>`).join(", ")}</p>` : ""}</section>`;
@@ -827,9 +827,9 @@ function milestoneFilter(ctx, model) {
 function needStrip(ctx, model) {
   const items = model.milestoneNeeds ?? [];
   if (!items.length) return "";
-  // A stuck milestone says its id, its name and why in one line, "Milestone M2, Lead build: the pilot T21 was abandoned. …" (T374, T390).
+  // A stuck milestone says its level, its name and why in one line, "Milestone 2: Lead build is stuck: the pilot T21 was abandoned. …" (T374, T390, F-T996-12).
   const stuck = need => need.kind === "stuck" && ctx.milestones.get(need.key);
-  const what = need => stuck(need) ? `Milestone ${stuck(need).id}, ${stuck(need).name}: ${need.text.charAt(0).toLowerCase()}${need.text.slice(1)}` : need.title;
+  const what = need => stuck(need) ? `${need.title}: ${need.text.charAt(0).toLowerCase()}${need.text.slice(1)}` : need.title;
   const item = need => `<li data-need data-project="${esc(need.group)}" data-milestone="${need.milestone ? b64(need.key) : ""}"><span class="ic" aria-hidden="true">${need.milestone ? "◫" : "!"}</span><span class="what">${esc(what(need))} <span class="faint">· ${esc(need.projectName)} · ${esc(title(need.sourceLabel))} logbook</span></span>`
     + `<span class="act">${stuck(need) ? "Answer in the chat." : esc(need.text)}${need.milestone && ctx.milestones.has(need.key) ? ` <a href="${esc(milestoneHref(ctx, need.key))}">Open the milestone</a>` : ""}</span></li>`;
   return `<section class="needstrip" id="needstrip" aria-labelledby="needstrip-h"><h2 id="needstrip-h">${ICON}Needs you, not on a card <span class="n" id="needstrip-n">${items.length}</span></h2><ul>${items.map(item).join("")}</ul></section>`;
@@ -1004,7 +1004,7 @@ function milestoneTask(ctx, task) {
   const milestone = ctx.milestones.get(task.milestone?.key), pilot = milestone && !task.milestone.pilot && ctx.tasks.get(`${milestone.project}/${milestone.pilot}`);
   const ownPilot = pilot && task.waits.find(wait => wait.id === pilot.id), viaPilot = !!pilot && !ownPilot?.never && task.waits.some(wait => wait.breakdown && !wait.never);
   const waits = task.waits.filter(wait => !(wait.breakdown && (!pilot || !wait.never && !viaPilot)) && !(wait.pilot && wait.met) && !(viaPilot && wait === ownPilot)).map(wait => wait.odd ? "⊘ its waits cell has text that is not a task id"
-    : wait.breakdown ? wait.never ? `⊘ waits for the breakdown of ${wait.breakdown.id}: ${breakdownWhy(wait.breakdown)}` : `⧗ waits for ${pilot.id} (pilot, ${pilot.word})`
+    : wait.breakdown ? wait.never ? `⊘ waits for the breakdown of ${milestoneName({ id: wait.breakdown.id }, true)}: ${breakdownWhy(wait.breakdown)}` : `⧗ waits for ${pilot.id} (pilot, ${pilot.word})`
     : wait.met ? `✓ waits for ${wait.id}, ${wait.word}` : `${wait.never ? "⊘" : "⧗"} waits for ${wait.id} (${wait.word})${wait.never ? ": it cannot start" : ""}`);
   const at = roles(task), sub = [task.milestone?.pilot ? "pilot" : "", ...waits, at.length ? `${at.join(", ")} at work` : "", task.pr ? `PR ${task.pr}` : "", task.priority, task.kind ? KIND[task.kind][1] : ""].filter(Boolean);
   return `<div class="trow${ab ? " ab" : ""}${cant ? " cant" : ""}${needs ? " needs" : ""}"><span class="id">${esc(task.id)}</span><a class="t" href="${esc(taskHref(ctx, task))}">${esc(task.title)}</a>${wordTag(task.word)}${sub.length ? `<span class="sub">${esc(sub.join(" · "))}</span>` : ""}</div>`;
@@ -1087,7 +1087,7 @@ function milestonePage(ctx, milestone, routed) {
     const moving = own.filter(task => task !== next.first && !ENDED_STATES.includes(task.state) && !task.waitLine);
     // "T11 cannot start: it waits for T10, which was abandoned." Each wait that is never met, in the prototype's words; odd
     // text in the waits cell is its own clause, "its waits cell has text that is not a task id" (R1391-2).
-    const never = wait => wait.breakdown ? `the breakdown of ${wait.breakdown.id}: ${breakdownWhy(wait.breakdown)}` : wait.loop ? `${wait.id}, in a loop of waits that never ends` : `${wait.id}, which ${wait.state ? `was ${wait.word}` : "is not in the logbook"}`;
+    const never = wait => wait.breakdown ? `the breakdown of ${milestoneName({ id: wait.breakdown.id }, true)}: ${breakdownWhy(wait.breakdown)}` : wait.loop ? `${wait.id}, in a loop of waits that never ends` : `${wait.id}, which ${wait.state ? `was ${wait.word}` : "is not in the logbook"}`;
     const why = task => { const named = task.waits.filter(wait => wait.never && !wait.odd).map(never), odd = task.waits.some(wait => wait.odd);
       return [named.length && `it waits for ${named.join(" and ")}`, odd && "its waits cell has text that is not a task id"].filter(Boolean).join(", and "); };
     const cannot = own.filter(task => task.waitLine?.never && !ENDED_STATES.includes(task.state)).map(task => `<div class="waitline cant"><span class="wm" aria-hidden="true">⊘</span><span>${esc(task.id)} cannot start: ${esc(why(task))}. Ask the chief to ${task.waits.some(wait => wait.odd) ? "set its waits again" : "remove the wait"}, or to drop ${esc(task.id)}.</span></div>`).join("");
@@ -1160,7 +1160,8 @@ function frameOf(ctx, entry) {
     const tasks = m.tasks.map(task).filter(open), shown = tasks.filter(item => ["needs you", "in progress"].includes(item.word)).sort(byWord).slice(0, 3), rest = tasks.filter(item => !shown.includes(item));
     const groups = WORDS.map(word => [word, rest.filter(item => item.word === word)]).filter(([, items]) => items.length).map(([word, items]) => ({ level: "group", name: plural(items.length, "task"), word, note: word === "waiting" ? waitingFor(ctx, items) : "" }));
     return { level: "milestone", name: milestoneName(m), href: milestoneHref(ctx, m.key), word: m.word, here: m.word === "needs you", done: doneText(m.progress.merged, m.progress.total, m.progress.abandoned.length),
-      note: m.word === "needs you" ? m.reason : "", kids: [...shown.map(item => taskNode(item, item.id === m.pilot)), ...groups] };
+      // A dropped milestone with tasks still in it gives their next step, as the Milestones tab and the chat's line do (F-T996-13).
+      note: m.word === "needs you" ? m.reason : m.state === "dropped" && m.open ? droppedNext(m) : "", kids: [...shown.map(item => taskNode(item, item.id === m.pilot)), ...groups] };
   };
   const list = (name, tasks, extra = {}) => ({ level: "list", name, word: releaseWord(tasks.map(item => item.word)).word, list: [...tasks].sort(byWord).map(item => ({ id: item.id, title: item.title, word: item.word, href: taskHref(ctx, item) })), ...extra });
   const nodes = frameReleases(entry).map(release => {
@@ -1237,9 +1238,12 @@ function releasesOfEntry(ctx, entry, named) {
 function releasesList(ctx, model, routed) {
   const entries = shownReleases(model), h = routed ? "h1" : "h2";
   const intro = `<p class="rintro">A release holds milestones and single tasks. It is done when each of them is done or stopped. Shipping it (a tag, a publish) is your action, not a state.</p>`;
-  if (!entries.length) return `<${h} class="ptitle">Releases</${h}><div class="emptyboard"><b>No releases yet.</b> A release is a version that you ship, such as 1.0. To add one, ask the chief. It then holds milestones and single tasks.</div>`;
+  // A releases table that cannot be read says so for its project, as the Milestones tab does, so that the owner never asks
+  // for releases that the logbook has (F-T996-11). The project filter shows the line with its project.
+  const broken = (model.milestoneNeeds ?? []).filter(need => need.kind === "releases").map(need => `<div class="banner warn" data-rproject="${esc(need.group)}">${ICON}<div><b>The releases of ${esc(need.projectName)} cannot be read.</b> ${esc(need.text)}</div></div>`).join("");
+  if (!entries.length) return `<${h} class="ptitle">Releases</${h}>${broken || `<div class="emptyboard"><b>No releases yet.</b> A release is a version that you ship, such as 1.0. To add one, ask the chief. It then holds milestones and single tasks.</div>`}`;
   const none = `<div class="emptyboard" id="noreleases" hidden><b>No release in this project.</b> <button class="linkbtn" type="button" data-reset>Show all projects</button></div>`;
-  return `<${h} class="ptitle">Releases</${h}>${intro}${none}${entries.map(entry => releasesOfEntry(ctx, entry, entries.length > 1)).join("")}`;
+  return `<${h} class="ptitle">Releases</${h}>${intro}${broken}${none}${entries.map(entry => releasesOfEntry(ctx, entry, entries.length > 1)).join("")}`;
 }
 export function renderReleasesHtml(model, { live = false, paths = false } = {}) {
   const ctx = context(model, false), at = hhmm(model.at);
@@ -1305,7 +1309,7 @@ const reasonLines = reason => {
 const WAIT_MARK = { never: "⊘", wait: "⧗" };
 /** A milestone's line in the chat's Milestones section, by its state. */
 const milestoneLine = milestone => {
-  const head = `${md(milestone.id)} ${md(clamp(milestone.name))}${wordText(milestone)}${milestone.where ? ` · ${milestone.where}` : ""}`;
+  const head = `${md(milestoneName({ id: milestone.id, name: milestone.name && clamp(milestone.name) }))}${wordText(milestone)}${milestone.where ? ` · ${milestone.where}` : ""}`;
   const tasks = n => `${n} ${n === 1 ? "task" : "tasks"}`;
   const pilot = `the pilot ${md(milestone.pilot)} ${milestone.pilotState ? "was abandoned" : "is not in the logbook"}`;
   const cannot = milestone.cannotStart.length ? ` · ${milestone.cannotStart.map(md).join(", ")} cannot start` : "";

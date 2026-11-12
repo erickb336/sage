@@ -133,7 +133,7 @@ test("T996: a logbook with no releases table, or an empty one, shows the board a
   for (const view of ["html", "snapshot", "text"]) assert.equal(empty[view], missing[view], view);
   assert.ok(!missing.html.includes('<section class="where"') && !missing.html.includes('href="/releases"') && !missing.html.includes("tag rel") && !missing.html.includes("no release"));
   assert.ok(!missing.snapshot.includes('id="releases"') && !missing.text.includes("Where we are") && !missing.text.includes("no release"));
-  assert.ok(missing.text.includes("### ◫ Milestones\n- M1 Sample milestone"), "the Milestones section stays");
+  assert.ok(missing.text.includes("### ◫ Milestones\n- Milestone 1\\: Sample milestone"), "the Milestones section stays");
   // The same logbook with one release row shows the frame: the table is read from the logbook.
   sheet("releases", [["name", "goal", "at"], ["1.0", "Sample goal.", ""]]);
   const one = views();
@@ -167,15 +167,7 @@ test("T996: a long or wide name is cut to fit, so every line of the chat's frame
 });
 
 test("F-T996-1: a releases table that cannot be read is a Needs you item, and no release that a cell names shows as not in the logbook", t => {
-  const root = mkdtempSync(join(tmpdir(), "sage-board-releases-")), project = join(root, "sample-abcdef");
-  t.after(() => rmSync(root, { recursive: true, force: true }));
-  mkdirSync(project);
-  const sheet = (name, rows) => writeFileSync(join(project, `${name}.tsv`), rows.map(row => row.join("\t")).join("\n") + "\n");
-  sheet("tasks", [["id", "title", "size", "risk", "route", "state", "branch", "pr", "round", "keys", "milestone", "release"], ["T1", "Sample first", "small", "", "build", "framed", "", "", "0", "", "", ""], ["T2", "Sample single", "small", "", "build", "framed", "", "", "0", "", "", "1.0"]]);
-  for (const [name, header] of Object.entries({ runs: "id task role round candidate branch status tokens report started ended", findings: "task key round source severity summary triage reason status", ledger: "task pr sha kind cycle run at", gates: "id task question options recommendation default answer at", decisions: "at task decision why", milestones: "id name goal pilot gate at" })) sheet(name, [header.split(" ")]);
-  // Line 2 has 2 cells, and the header has 3.
-  sheet("releases", [["name", "goal", "at"], ["1.0", "Sample goal."]]);
-  const data = buildBoardModel(readBoardSources([{ id: "sample", path: root, label: "Sample source" }]), { now: NOW });
+  const data = buildBoardModel([damagedReleases(t)], { now: NOW });
   const text = renderBoardText(data), html = renderBoardHtml(data, { snapshot: false }) + renderReleasesHtml(data);
   const needs = text.split("### 🔴 Needs you\n")[1].split("\n### ")[0];
   assert.equal(needs, "**1 · The releases table cannot be read** · Sample source · sample\n> releases\\.tsv line 2 has 2 cells, and its header has 3\\. The board shows the tasks without their releases\\. Ask the chief to repair the logbook\\.\n");
@@ -197,9 +189,9 @@ test("F-T996-2: a dropped milestone with tasks still in it, in a done release th
   const data = model(tables), text = renderBoardText(data);
   assert.equal(data.releases[0].releases[0].word, "done", "0.9 holds a done task and a stopped milestone: done");
   assert.ok(!frameOf(text).includes("Old plan"), "the frame does not show release 0.9");
-  assert.ok(text.includes("### ◫ Milestones\n- M4 Old plan · stopped · dropped · 1 task still in it: ask the chief to take each task out of the milestone\n"), text.split("```").at(-1).slice(0, 400));
+  assert.ok(text.includes("### ◫ Milestones\n- Milestone 4\\: Old plan · stopped · dropped · 1 task still in it: ask the chief to take each task out of the milestone\n"), text.split("```").at(-1).slice(0, 400));
   // The milestones that the frame shows are not repeated there.
-  assert.ok(!text.includes("- M5 Sage feel") && !text.includes("- M6 Faster reviews"));
+  assert.ok(!text.includes("- Milestone 5\\: Sage feel") && !text.includes("- Milestone 6\\: Faster reviews"));
   // With M4 not dropped and no task left, the section goes, as before.
   tables.tasks = tables.tasks.filter(task => task.id !== "T950");
   assert.ok(!renderBoardText(model(tables)).includes("### ◫ Milestones"));
@@ -238,4 +230,60 @@ test("F-T996-10: a box of waiting tasks that wait for different tasks keeps its 
   const stopped = releasesTables();
   stopped.tasks.find(task => task.id === "T984").state = "abandoned";
   assert.ok(frameOf(renderBoardText(model(stopped))).includes("Waiting · they cannot start"), frameOf(renderBoardText(model(stopped))));
+});
+
+/** A logbook on disk whose releases table cannot be read: line 2 has 2 cells, and the header has 3 (SAMPLE DATA). */
+function damagedReleases(t) {
+  const root = mkdtempSync(join(tmpdir(), "sage-board-releases-")), project = join(root, "sample-abcdef");
+  t.after(() => rmSync(root, { recursive: true, force: true }));
+  mkdirSync(project);
+  const sheet = (name, rows) => writeFileSync(join(project, `${name}.tsv`), rows.map(row => row.join("\t")).join("\n") + "\n");
+  sheet("tasks", [["id", "title", "size", "risk", "route", "state", "branch", "pr", "round", "keys", "milestone", "release"], ["T1", "Sample first", "small", "", "build", "framed", "", "", "0", "", "", ""], ["T2", "Sample single", "small", "", "build", "framed", "", "", "0", "", "", "1.0"]]);
+  for (const [name, header] of Object.entries({ runs: "id task role round candidate branch status tokens report started ended", findings: "task key round source severity summary triage reason status", ledger: "task pr sha kind cycle run at", gates: "id task question options recommendation default answer at", decisions: "at task decision why", milestones: "id name goal pilot gate at" })) sheet(name, [header.split(" ")]);
+  sheet("releases", [["name", "goal", "at"], ["1.0", "Sample goal."]]);
+  return readBoardSources([{ id: "sample", path: root, label: "Sample source" }])[0];
+}
+
+test("F-T996-11: the Releases tab says that a releases table cannot be read, per project, and never \"No releases yet\" for it", t => {
+  const damaged = damagedReleases(t);
+  const main = data => { const html = renderReleasesHtml(data); return html.slice(html.indexOf('<main class="page open" aria-label="Releases">')); };
+  const banner = '<b>The releases of sample cannot be read.</b> releases.tsv line 2 has 2 cells, and its header has 3. The board shows the tasks without their releases. Ask the chief to repair the logbook.';
+  // The damaged logbook alone: the tab says why it shows no release, and asks for a repair, not for new releases.
+  const alone = main(buildBoardModel([damaged], { now: NOW }));
+  assert.ok(alone.includes(banner), alone);
+  assert.ok(!alone.includes("No releases yet") && !alone.includes("To add one, ask the chief"), alone);
+  // With a second project whose releases read: its releases show, and the damaged project keeps its own line, which the project filter shows for it.
+  const both = main(buildBoardModel([damaged, releasesSource()], { now: NOW }));
+  assert.ok(both.includes(banner) && both.includes("Release 1.0") && !both.includes("No releases yet"), both);
+  assert.match(both, /<div class="banner warn" data-rproject="sample-abcdef">/);
+});
+
+test("F-T996-12, F-T996-15, F-T996-16: owner text names a milestone by its level, never by its raw id", () => {
+  const data = model(), text = renderBoardText(data), html = renderBoardHtml(data, { snapshot: false });
+  // The pilot's card: the breakdown of milestone 6, as the design says it.
+  assert.ok(cardOf(html, "T1010").includes("<b>Needs you:</b> the breakdown of milestone 6."), cardOf(html, "T1010"));
+  // A task that waits for the breakdown, on the chat's Backlog and on its card.
+  assert.ok(text.includes("⧗ Waits for your approval of milestone 6 \\(gate G3\\)\\."), text);
+  assert.ok(cardOf(html, "T1011").includes("Waits for your approval of milestone 6 (gate G3)."), cardOf(html, "T1011"));
+  // The task page's milestone link and its wait.
+  const taskPage = renderBoardHtml(data, { taskKey: "claude/sage-ff5ee2/T1011", snapshot: false });
+  assert.ok(taskPage.includes('<span aria-hidden="true">◫</span> Milestone 6: Faster reviews</a>'), "the task page's milestone link");
+  assert.ok(taskPage.includes("The breakdown of milestone 6 (gate G3)"), "the task page's wait");
+  // A stuck milestone in "Needs you, not on a card".
+  const stuck = releasesTables();
+  stuck.tasks.find(task => task.id === "T1010").state = "abandoned";
+  const strip = renderBoardHtml(model(stuck), { snapshot: false }).split('id="needstrip"')[1].split("</section>")[0];
+  assert.ok(strip.includes("Milestone 6: Faster reviews is stuck: the pilot T1010 was abandoned."), strip);
+  // The gate's own question keeps the text of its row ("Approve milestone M6?"); the tag's tooltip and the Milestone filter list keep the id.
+  const kept = view => view.replace(/title="Milestone M6: Faster reviews"/g, "").replace(/<option[^>]*>[^<]*<\/option>/g, "");
+  for (const view of [strip, text, html, taskPage]) for (const old of ["Milestone M6", "of M6", "M6 breakdown", "M6 Faster reviews"]) assert.ok(!kept(view).includes(old), old);
+});
+
+test("F-T996-13: a dropped milestone with tasks still in it gives its next step in the frame, on the web and in the chat", () => {
+  const tables = releasesTables();
+  tables.gates.find(gate => gate.id === "G3").answer = "drop";
+  const data = model(tables), frame = frameOf(renderBoardText(data));
+  assert.ok(frame.includes("│ ╭─ Milestone 6: Faster reviews ──────────╮ │\n│ │ Stopped · 0 of 2 tasks done            │ │\n│ │ 2 tasks still in it: ask the chief to  │ │\n│ │ take each task out of the milestone.   │ │"), frame);
+  const html = renderBoardHtml(data, { snapshot: false }), web = html.slice(html.indexOf('<section class="where"'), html.indexOf('<main class="board"'));
+  assert.ok(web.includes('<div class="hbl">2 tasks still in it: ask the chief to take each task out of the milestone.</div>'), web);
 });

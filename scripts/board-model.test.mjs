@@ -578,10 +578,10 @@ test("T233: each wait on a card has its state, and the wait line names the unmet
   assert.deepEqual(cardOf(model, "T11").waits, [{ id: "T10", state: "abandoned", word: "stopped", pilot: false, met: false, never: true }, { id: "T1", state: "merged", word: "done", pilot: true, met: true, never: false }]);
   assert.deepEqual(line("T22"), { never: true, text: "Waits for T21 (pilot, stopped): it cannot start." }, "the pilot wait");
   assert.deepEqual(line("T41"), { never: false, text: "Waits for T40 (pilot, in progress). Design and PE may run." }, "a task in design may run its design and PE");
-  assert.deepEqual(line("T32"), { never: false, text: "Waits for your approval of the M3 breakdown (gate G12)." }, "the breakdown wait, alone, although T32 also waits for T31");
-  assert.deepEqual(line("T90"), { never: false, text: "Waits for the new breakdown of M9: you asked for changes (gate G9)." });
-  assert.deepEqual(line("T60"), { never: true, text: "Waits for the M6 breakdown, which you dropped (gate G20): it cannot start." });
-  assert.deepEqual(line("T75"), { never: true, text: "Waits for the M7 breakdown, whose gate G30 is not in the logbook: it cannot start." });
+  assert.deepEqual(line("T32"), { never: false, text: "Waits for your approval of milestone 3 (gate G12)." }, "the breakdown wait, alone, although T32 also waits for T31");
+  assert.deepEqual(line("T90"), { never: false, text: "Waits for the new breakdown of milestone 9: you asked for changes (gate G9)." });
+  assert.deepEqual(line("T60"), { never: true, text: "Waits for the breakdown of milestone 6, which you dropped (gate G20): it cannot start." });
+  assert.deepEqual(line("T75"), { never: true, text: "Waits for the breakdown of milestone 7, whose gate G30 is not in the logbook: it cannot start." });
   assert.deepEqual(line("T83"), { never: true, text: "It cannot start. Its waits cell has text that is not a task id: the chief sets its waits again." });
   assert.ok(!JSON.stringify(cardOf(model, "T83")).includes("soon"), "the odd text is not in the model");
   for (const id of ["T1", "T10", "T12", "T40", "T70"]) assert.equal(line(id), null, `${id}: nothing waits, or the task ended`);
@@ -684,7 +684,7 @@ test("F-T233-2, F-T233-3: the model counts a lost milestone whose gate is open o
   edited.gates.find(gate => gate.id === "G12").question = "Ship it?";
   const shown = milestonesModel([milestonesSource("claude", edited)]);
   assert.equal(milestoneOf(shown, "M3").state, "lost");
-  assert.deepEqual(cardOf(shown, "T32").waitLine, { never: true, text: "Waits for the M3 breakdown, whose gate G12 names no milestone in its question: it cannot start." }, "T383 item 12: the reason names the question");
+  assert.deepEqual(cardOf(shown, "T32").waitLine, { never: true, text: "Waits for the breakdown of milestone 3, whose gate G12 names no milestone in its question: it cannot start." }, "T383 item 12: the reason names the question");
   // The gate answered: no card holds it, so the milestone is its own item, with the same words.
   const answered = milestonesTables();
   Object.assign(answered.gates.find(gate => gate.id === "G12"), { options: "yes|no", answer: "yes" });
@@ -752,7 +752,7 @@ test("T383 item 10: a provider root that cannot be read is a counted Needs you i
 test("T383 item 12: a gate on the pilot with the breakdown options, whose question names no milestone or another, is lost by its question, in those words", () => {
   const other = edited(tables => { tables.gates.find(gate => gate.id === "G12").question = "Approve milestone M4? No task builds before you approve."; });
   assert.equal(cardOf(other, "T30").reasons[0].text.split("\u2028").at(-1), "The gate G12 of M3 names M4 in its question, not M3: ask the chief to repair the logbook, or to propose M3 again.");
-  assert.deepEqual(cardOf(other, "T32").waitLine, { never: true, text: "Waits for the M3 breakdown, whose gate G12 names M4 in its question, not M3: it cannot start." });
+  assert.deepEqual(cardOf(other, "T32").waitLine, { never: true, text: "Waits for the breakdown of milestone 3, whose gate G12 names M4 in its question, not M3: it cannot start." });
   const none = edited(tables => { Object.assign(tables.gates.find(gate => gate.id === "G12"), { question: "Ship it?", answer: "yes" }); });
   assert.deepEqual(none.milestoneNeeds.find(need => need.milestone === "M3").title, "The gate G12 of M3 names no milestone in its question");
 });

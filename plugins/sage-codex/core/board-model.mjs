@@ -266,12 +266,13 @@ const waitsFor = (task, graph) => shownWaits(task, graph).map(wait =>
   // A wait of a loop of waits (a hand edit) is never met, as no task of the loop can start first.
   // Its word is the state word of the task that it waits for (namedWaits), once each card has its word.
   : { id: wait.id, state: wait.state ?? null, pilot: !!wait.pilot, met: MET.includes(wait.state), never: dead(wait.state) || !!wait.loop, ...(wait.loop && { loop: true }) });
+// The owner reads "milestone 6", not its id M6 (F-T996-12); the gate's own text names what its row names (namedText).
 const BREAKDOWN_WAIT = {
-  proposed: (id, gate) => `your approval of the ${id} breakdown (gate ${gate})`,
-  changing: (id, gate) => `the new breakdown of ${id}: you asked for changes (gate ${gate})`,
-  dropped: (id, gate) => `the ${id} breakdown, which you dropped (gate ${gate})`,
+  proposed: (id, gate) => `your approval of ${milestoneName({ id }, true)} (gate ${gate})`,
+  changing: (id, gate) => `the new breakdown of ${milestoneName({ id }, true)}: you asked for changes (gate ${gate})`,
+  dropped: (id, gate) => `the breakdown of ${milestoneName({ id }, true)}, which you dropped (gate ${gate})`,
 };
-const waitName = wait => wait.breakdown ? BREAKDOWN_WAIT[wait.breakdown.state]?.(wait.breakdown.id, wait.breakdown.gate) ?? `the ${wait.breakdown.id} breakdown, ${wait.breakdown.missing ? "which is not in the logbook" : !wait.breakdown.gate ? "whose milestone names no breakdown gate" : wait.breakdown.named !== undefined ? `whose gate ${wait.breakdown.gate} ${namedText(wait.breakdown.named, wait.breakdown.id)}` : wait.breakdown.gateFound ? `whose gate ${wait.breakdown.gate} is not a breakdown gate` : `whose gate ${wait.breakdown.gate} is not in the logbook`}`
+const waitName = wait => wait.breakdown ? BREAKDOWN_WAIT[wait.breakdown.state]?.(wait.breakdown.id, wait.breakdown.gate) ?? `the breakdown of ${milestoneName({ id: wait.breakdown.id }, true)}, ${wait.breakdown.missing ? "which is not in the logbook" : !wait.breakdown.gate ? "whose milestone names no breakdown gate" : wait.breakdown.named !== undefined ? `whose gate ${wait.breakdown.gate} ${namedText(wait.breakdown.named, wait.breakdown.id)}` : wait.breakdown.gateFound ? `whose gate ${wait.breakdown.gate} is not a breakdown gate` : `whose gate ${wait.breakdown.gate} is not in the logbook`}`
   : `${wait.id}${wait.pilot || wait.word ? ` (${[wait.pilot && "pilot", wait.word].filter(Boolean).join(", ")})` : ""}`;
 /**
  * The owner's state words (state-words.mjs, T997): each card's word, then each wait names the word of the task that it

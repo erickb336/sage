@@ -68,7 +68,7 @@ test("T368: the Milestone filter keeps its milestone's cards and its Needs you i
   await page.selectOption("#f-milestone", key("M2"));
   assert.deepEqual((await shownIds(page)).sort(), ["T22", "T23"]);
   assert.equal(await page.locator("#needstrip-n").textContent(), "1");
-  assert.equal(await page.locator("#needstrip li:not([hidden]) .what").textContent(), "Milestone M2, Lead build: the pilot T21 was abandoned. Choose a new pilot, or drop the milestone. · sage (sample) · Claude logbook");
+  assert.equal(await page.locator("#needstrip li:not([hidden]) .what").textContent(), "Milestone 2: Lead build is stuck: the pilot T21 was abandoned. Choose a new pilot, or drop the milestone. · sage (sample) · Claude logbook");
   assert.equal(await page.locator("#s-needs").textContent(), "1", "the summary counts the item that shows");
   await page.selectOption("#f-milestone", "none");
   assert.deepEqual((await shownIds(page)).sort(), ["T70"]);
