@@ -1,7 +1,0 @@
-id: no-comments-rust
-language: Rust
-severity: error
-message: Remove this comment. Only one SPDX line may stay (see the rule set's README.md).
-rule:
-  any: [{ kind: line_comment }, { kind: block_comment }]
-  not: { matches: spdx }

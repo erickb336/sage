@@ -4,9 +4,6 @@ rule:
   any:
     - regex: '^// ?eslint-(disable|enable|disable-line|disable-next-line)( [\w@/-]+(, [\w@/-]+)*)?$'
     - regex: '^/\* ?eslint-(disable|enable|disable-line|disable-next-line)( [\w@/-]+(, [\w@/-]+)*)? ?\*/$'
-    - regex: '^// @ts-(expect-error|ignore|nocheck|check)$'
-    - regex: '^/\* ?@ts-(expect-error|ignore) ?\*/$'
-    - regex: '^/// <reference (path|types|lib|no-default-lib)="[^"]*" ?/>$'
     - regex: '^(// prettier-ignore|/\* prettier-ignore \*/)$'
     - regex: '^// istanbul ignore (next|if|else|file)$'
     - regex: '^/\* (istanbul|c8|v8) ignore (next|start|stop|if|else|file)( \d+)? \*/$'

@@ -6,6 +6,6 @@ rule:
   kind: comment
   not:
     any:
-      - regex: '^<!-- (prettier-ignore|stylelint-(disable|enable)( [\w/-]+(, [\w/-]+)*)?) -->$'
+      - regex: '^<!-- prettier-ignore -->$'
       - matches: spdx
       - inside: { kind: quoted_attribute_value }

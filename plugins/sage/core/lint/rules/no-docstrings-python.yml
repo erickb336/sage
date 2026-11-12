@@ -1,7 +1,0 @@
-id: no-docstrings-python
-language: Python
-severity: error
-message: Remove this docstring. A string that stands alone as a statement is a comment (see the rule set's README.md).
-rule:
-  kind: string
-  inside: { kind: expression_statement }

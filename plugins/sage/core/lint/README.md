@@ -1,8 +1,8 @@
 # The no-comments rule set
 
-**This folder is sage's default lint rule set for code without comments: [ast-grep](https://ast-grep.github.io) rules that flag each comment in 13 languages, except a tool directive from a fixed list.**
+**This folder is sage's default lint rule set for code without comments: [ast-grep](https://ast-grep.github.io) rules that flag each comment in JavaScript, YAML and HTML, except a tool directive from a fixed list.**
 
-Code says what it does through its names, types and tests. A comment goes stale and nothing checks it. So this rule set refuses explanatory comments, doc comments and docstrings. It keeps only text that a tool reads: a directive with no free text after it, and one SPDX licence line.
+Code says what it does through its names, types and tests. A comment goes stale and nothing checks it. So this rule set refuses explanatory comments and doc comments. It keeps only text that a tool reads: a directive with no free text after it, and one SPDX licence line.
 
 A project gets this rule set only after its owner says yes. The project then owns its copy and may change it.
 
@@ -28,28 +28,23 @@ Every language allows one SPDX line, such as `// SPDX-License-Identifier: MIT` (
 
 | Language | Rule | Comment kinds | Directives that stay |
 | --- | --- | --- | --- |
-| JavaScript, TypeScript, TSX | `no-comments-js`, `-ts`, `-tsx` | `comment`, `html_comment` | `eslint-disable` and `eslint-enable` (also `-line` and `-next-line`, and with no space after `//` or `/*`), `@ts-expect-error`, `@ts-ignore`, `@ts-nocheck`, `@ts-check`, `/// <reference … />`, `prettier-ignore`, `istanbul ignore`, `c8` and `v8` `ignore`, `#__PURE__`, `#__NO_SIDE_EFFECTS__` (the `js-directive` rule in `utils/`). `@ts-expect-error` and `@ts-ignore` may also be a block comment, such as `{/* @ts-expect-error */}` in JSX. `c8` and `v8` pass only as a block comment, such as `/* c8 ignore next */`. |
-| Python | `no-comments-python` | `comment` | a shebang on line 1 (with any arguments), the coding line on line 1 or 2, `noqa: <codes>`, `type: ignore[<codes>]`, `pyright: ignore[<rules>]` and `pyright: <mode>`, `pragma: no cover`, `fmt: off`, `on` and `skip`. A bare `# noqa` or `# type: ignore` (with no codes) is flagged. |
-| Python | `no-docstrings-python` | a string that stands alone as a statement | none |
-| Go | `no-comments-go` | `comment` | `//go:<directive>` with no text after it, `//nolint:<linters>`, `//export <name>`, `// Code generated … DO NOT EDIT.`, and the cgo preamble: the comments right before `import "C"`. Only `build`, `generate`, `embed`, `linkname`, `debug`, `fix`, `wasmimport`, `wasmexport` and `cgo_*` take arguments after `//go:`; `//go:generate` takes a command. |
-| Rust | `no-comments-rust` | `line_comment`, `block_comment` | none |
-| Java | `no-comments-java` | `line_comment`, `block_comment` | none |
-| Kotlin | `no-comments-kotlin` | `line_comment`, `multiline_comment` | none |
-| Shell (Bash) | `no-comments-shell` | `comment` | a shebang on line 1 (with any arguments), `shellcheck <directive>=<value>` |
-| Ruby | `no-comments-ruby` | `comment` | a shebang on line 1 (with any arguments), `frozen_string_literal`, `rubocop:disable`, `enable` and `todo`, Sorbet's `typed:` |
-| CSS | `no-comments-css` | `comment`, `js_comment` | `stylelint-disable` and `stylelint-enable` (also `-line` and `-next-line`), `prettier-ignore` |
-| HTML | `no-comments-html` | `comment` | `prettier-ignore`, `stylelint-disable` and `stylelint-enable` |
+| JavaScript (`.js`, `.mjs`, `.cjs`, `.jsx`) | `no-comments-js` | `comment`, `html_comment` | `eslint-disable` and `eslint-enable` (also `-line` and `-next-line`, and with no space after `//` or `/*`), `prettier-ignore`, `istanbul ignore`, `c8` and `v8` `ignore`, `#__PURE__`, `#__NO_SIDE_EFFECTS__` (the `js-directive` rule in `utils/`). `c8` and `v8` pass only as a block comment, such as `/* c8 ignore next */`. |
+| HTML | `no-comments-html` | `comment` | `prettier-ignore` |
 | YAML | `no-comments-yaml` | `comment` | `yaml-language-server: $schema=<url>`, `yamllint disable` and `enable` (also `-line`), `yamllint disable-file` |
 
 A scan of an HTML file checks only its HTML comments (see [Limits](#limits)).
 
-The comment kinds differ by language, and a kind that a language does not have stops the whole scan (exit 8). So each rule names its own kinds. Each rule has `severity: error`, because a rule without it exits 0 when it finds comments.
+A file in another language is not checked. The comment kinds differ by language, and a kind that a language does not have stops the whole scan (exit 8). So each rule names its own kinds. Each rule has `severity: error`, because a rule without it exits 0 when it finds comments.
 
 ## Limits
 
-In an HTML file (`.html`, `.htm` or `.xhtml`), the rule set checks only the HTML comments. It skips each `<script>` and `<style>` block, whatever its type. A block can hold a template, and text in a template, such as `https://example.com`, looks like a `//` comment. So a comment in JavaScript or CSS inside an HTML file passes. Comments in `.js`, `.ts`, `.tsx`, `.css` and other files stay checked. The `ignores` line of the JavaScript, TypeScript, TSX and CSS rules does this.
+In an HTML file (`.html`, `.htm` or `.xhtml`), the rule set checks only the HTML comments. It skips each `<script>` block, whatever its type. A block can hold a template, and text in a template, such as `https://example.com`, looks like a `//` comment. So a comment in JavaScript inside an HTML file passes. Comments in `.js`, `.mjs`, `.cjs` and `.jsx` files stay checked. The `ignores` line of the JavaScript rule does this.
 
 ast-grep's own suppression comment, `ast-grep-ignore`, hides comments from a scan. After code, it hides its own line. On its own line, it hides the next line, but the rule flags it. As the first line with a blank line after it, it hides the whole file. A rule cannot refuse it, because the suppression hides that rule too. sage's lint command (task T1019) is planned to refuse each file that contains `ast-grep-ignore`. `scripts/lint-rules.test.mjs` shows this limit.
+
+## Add a language
+
+The rule set has a rule only for each language that sage itself uses. A language joins when a project that uses it adopts the rules. Task T1020 then adds that language's rule and its rule tests, with a mutant in `scripts/lint-rules.test.mjs`.
 
 ## Change the rule set
 
