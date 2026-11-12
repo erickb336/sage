@@ -52,9 +52,10 @@ function route(target) {
   if (target === "/milestones" || target === "/milestones?events=1") return { task: null, milestones: true, events: target !== "/milestones" };
   const milestone = /^\/milestone\/([A-Za-z0-9_-]+)(\?events=1)?$/.exec(target);
   // The addresses from before the rename of program to milestone (T995) move to the new ones, for one version. An old
-  // milestone key (the project and its program id) moves to the page of its milestone (renamed, in the request).
-  const old = /^\/program(?:s|\/([A-Za-z0-9_-]+))$/.exec(target);
-  if (old) { const key = old[1] && taskKey(old[1]); return old[1] && !key ? null : { renamed: key ?? null }; }
+  // milestone key (the project and its program id) moves to the page of its milestone (renamed, in the request). The live
+  // stream of an old address, which a tab opened before the update keeps, sends the new page's stream (F-T995-29).
+  const old = /^\/program(?:s|\/([A-Za-z0-9_-]+))(\?events=1)?$/.exec(target);
+  if (old) { const key = old[1] && taskKey(old[1]); return old[1] && !key ? null : { renamed: key ?? null, events: !!old[2] }; }
   if (milestone) { const key = taskKey(milestone[1]); return key ? { task: null, milestone: key, events: !!milestone[2] } : null; }
   const page = /^\/task\/([A-Za-z0-9_-]+)$/.exec(target);
   if (page) { const key = taskKey(page[1]); return key ? { task: key, events: false } : null; }
@@ -342,12 +343,15 @@ export function createBoardServer({ sources, password, port = 43123, allowedHost
       if (!signedIn) { response.setHeader("WWW-Authenticate", 'Basic realm="Sage board", charset="UTF-8"'); return fail(401, "Sign in to the Sage board."); }
     }
     if (!["GET", "HEAD"].includes(request.method)) { response.setHeader("Allow", "GET, HEAD"); return fail(405, "This method is not permitted."); }
-    const selected = route(request.url);
+    let selected = route(request.url);
     if (selected?.renamed !== undefined) {
       // The milestone whose id was that program id (its was, from the logbook's id map); any other key keeps its words.
       const key = selected.renamed && (model.milestones.find(milestone => milestone.was && `${milestone.project}/${milestone.was}` === selected.renamed)?.key ?? selected.renamed);
-      response.writeHead(301, { Location: key ? `/milestone/${Buffer.from(key).toString("base64url")}` : "/milestones" });
-      return response.end();
+      if (selected.events) selected = key ? { task: null, milestone: key, events: true } : { task: null, milestones: true, events: true };
+      else {
+        response.writeHead(301, { Location: key ? `/milestone/${Buffer.from(key).toString("base64url")}` : "/milestones" });
+        return response.end();
+      }
     }
     if (!selected || selected.task && !model.tasks.some(task => task.key === selected.task)) return fail(404, "This board page does not exist.");
     // An unknown milestone gets the not-found page of the design, with status 404; its stream does not exist.

@@ -496,13 +496,20 @@ test("T368 C9: /milestones and /milestone/KEY are routes with the same sign-in a
   for (const path of ["/milestone/", "/milestone/_w", `/milestone/${milestoneKey("M1")}=`, `/milestone/${milestoneKey("M1")}/`, `/milestone/${milestoneKey("M1")}?events=2`, "/milestones/", "/milestones?x=1", "/Milestones", `/milestone/${Buffer.from("a\nb").toString("base64url")}`]) {
     const result = await read(f, path); assert.equal(result.status, 404, path); assert.doesNotMatch(result.body, /Sample milestone/, path);
   }
-  // T995: the addresses from before the rename move to the new ones for one version, behind the same sign-in; a stream does not move.
+  // T995: the addresses from before the rename move to the new ones for one version, behind the same sign-in.
   for (const [old, to] of [["/programs", "/milestones"], [`/program/${milestoneKey("M1")}`, `/milestone/${milestoneKey("M1")}`]]) {
     const moved = await read(f, old);
     assert.deepEqual([moved.status, moved.headers.location], [301, to], old);
     assert.equal((await read(f, old, { rawHeaders: ["Host", "sample.tailnet.ts.net"] })).status, 401, `${old}: away from the Mac, the password comes first`);
   }
-  for (const path of ["/programs?events=1", "/program/", "/programs/", `/program/${milestoneKey("M1")}?events=1`]) assert.equal((await read(f, path)).status, 404, path);
+  // F-T995-29: a tab opened before the update keeps its old stream address, and gets the new page's stream, so it updates.
+  for (const [old, text] of [["/programs?events=1", "1 of 2 merged"], [`/program/${milestoneKey("M1")}?events=1`, "Sample goal of M1."]]) {
+    assert.equal((await read(f, old, { rawHeaders: ["Host", "sample.tailnet.ts.net"] })).status, 401, `${old}: away from the Mac, the password comes first`);
+    const stream = events(f, old); t.after(() => stream.close());
+    assert.ok((await stream.next()).html.includes(text), old);
+  }
+  for (const path of ["/program/", "/programs/", "/programs?events=2", `/program/${milestoneKey("M1")}?events=1&task=x`]) assert.equal((await read(f, path)).status, 404, path);
+  assert.equal((await read(f, `/program/${milestoneKey("M9")}?events=1`)).status, 404, "no stream for an unknown milestone, also at its old address");
   // Away from the Mac, the pages and their streams need the password.
   for (const path of ["/milestones", "/milestones?events=1", `/milestone/${milestoneKey("M1")}`, `/milestone/${milestoneKey("M1")}?events=1`]) {
     const refused = await read(f, path, { rawHeaders: ["Host", "sample.tailnet.ts.net"] });
@@ -535,6 +542,9 @@ test("F-T995-4: an old milestone page's address, with its program id, moves to t
     assert.equal(page.status, 200, when);
     const moved = await read(f, `/program/${milestoneKey("PG1")}`);
     assert.deepEqual([moved.status, moved.headers.location], [301, `/milestone/${milestoneKey("M5")}`], when);
+    // F-T995-29: the old page's stream, with its program id, sends the page of its milestone.
+    const stream = events(f, `/program/${milestoneKey("PG1")}?events=1`); t.after(() => stream.close());
+    assert.ok((await stream.next()).html.includes("Sample goal of PG1."), when);
   }
 });
 
