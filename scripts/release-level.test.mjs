@@ -10,6 +10,7 @@ import { join } from "node:path";
 import { test } from "node:test";
 import { fileURLToPath } from "node:url";
 import { releasesOf } from "../packages/sage-core/milestone-rules.mjs";
+import { taskWord } from "../packages/sage-core/state-words.mjs";
 
 const TOOL = fileURLToPath(new URL("../plugins/sage/skills/sage/sage.mjs", import.meta.url));
 const SPY = fileURLToPath(new URL("kill-spy.mjs", import.meta.url));
@@ -193,7 +194,9 @@ test("T1003: the state rule of a release (the state words of T1002): empty or no
     for (const t of tasks) if (t.milestone) byMilestone.set(t.milestone, [...(byMilestone.get(t.milestone) ?? []), t]);
     return { byId: new Map(tasks.map((t) => [t.id, t])), milestones: new Map(milestones.map((m) => [m.id, m])), byMilestone };
   };
-  const stateOf = (tasks, milestones) => releasesOf([{ name: "1.0", goal: "", at: "" }], graph(tasks, milestones))[0].state;
+  // Each task's word is its card's (taskWord), here a card with no reason and no wait (T1009).
+  const wordOf = (t) => taskWord({ state: t.state }).word;
+  const stateOf = (tasks, milestones) => releasesOf([{ name: "1.0", goal: "", at: "" }], graph(tasks, milestones), wordOf)[0].state;
   const single = (state, id = "T1") => ({ id, state, release: "1.0" });
   assert.equal(stateOf([]), "not started", "an empty release");
   assert.equal(stateOf([single("framed"), single("framed", "T2")]), "not started", "nothing started");
@@ -212,7 +215,7 @@ test("T1003: the state rule of a release (the state words of T1002): empty or no
   // T997: the release reads a milestone in the state that the board and status show, so a stuck one needs the owner.
   assert.equal(stateOf([members[1]], [m("active")]), "in progress", "a milestone whose pilot the logbook lost is stuck: it needs the owner, so it has started");
   assert.equal(stateOf([{ ...members[1], state: "framed" }], [m("active")]), "in progress", "also when nothing else in it has started");
-  assert.deepEqual(releasesOf([{ name: "1.0" }], graph([{ id: "T1", state: "merged", release: "１.０" }]))[0].singles.map((t) => t.id), ["T1"], "a cell names a release without case or width");
+  assert.deepEqual(releasesOf([{ name: "1.0" }], graph([{ id: "T1", state: "merged", release: "１.０" }]), wordOf)[0].singles.map((t) => t.id), ["T1"], "a cell names a release without case or width");
 });
 
 test("T1003: a missing releases table reads as empty while no cell names a release; once one does, a write refuses and names the repair", () => {

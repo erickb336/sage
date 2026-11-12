@@ -766,7 +766,7 @@ function milestonesOf(source, project, group, graph, cards) {
     return { key: `${project.key}/${milestone.id}`, id: milestone.id, name: milestone.name, goal: milestone.goal, pilot: milestone.pilot, pilotState: pilotState ?? null, gate: milestone.gate, gateFound: milestone.gateFound, questions: questions.get(milestone.id) ?? [], ...(milestone.named !== undefined && { named: milestone.named }), ...(was.has(milestone.id) && { was: was.get(milestone.id) }), open: open.length,
       // An old logbook's milestone names that logbook, not the shared root that the board reads it through (F-T624-19).
       source: source.id, sourceLabel: project.old ? `Old ${title(project.old.provider)}` : source.label, project: project.key, group: group.key, projectName: group.name, archived: group.archived,
-      state, ...wordOf(milestoneWordOf(milestone, graph)), progress, progressText: progressText(progress), tasks: ordered.map(task => `${project.key}/${task.id}`), depths: layered.map(([, depth]) => depth),
+      state, ...wordOf(milestoneWordOf(milestone, graph, task => card(task)?.word)), progress, progressText: progressText(progress), tasks: ordered.map(task => `${project.key}/${task.id}`), depths: layered.map(([, depth]) => depth),
       next: first ? { key: first.key, id: first.id, word: first.word, pilot: first.id === milestone.pilot } : null,
       waiting: waiting.filter(item => !item.waitLine.never).length, cannotStart: waiting.filter(item => item.waitLine.never).map(item => item.id),
       need: need && { ...need, key: `${project.key}/${milestone.id}`, milestone: milestone.id, source: source.id, sourceLabel: source.label, projectName: group.name, group: group.key, archived: group.archived } };
@@ -800,7 +800,7 @@ function releasesOfBook(project, group, graph, byKey) {
   // says why (logbookNeeds), and no release that a cell names shows as "not in the logbook" (F-T996-1). So does a milestones
   // or tasks table that cannot be read: a release's count needs both, else it reads done or "0 of 0" (F-T996-28, F-T996-29).
   if (project.old || RELEASE_TABLES.some(name => cannotRead(project, name))) return null;
-  const releases = releasesOf(project.tables.releases ?? [], graph);
+  const releases = releasesOf(project.tables.releases ?? [], graph, task => byKey.get(`${project.key}/${task.id}`)?.word);
   if (!releases.length) return null;
   const key = id => `${project.key}/${id}`, ids = new Set(), names = new Map();
   const out = releases.map(release => {
