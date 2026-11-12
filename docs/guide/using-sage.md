@@ -125,7 +125,7 @@ The other kinds are a progress note, a request understood, an explainer, an inci
 
 A picture is plain text first, at most 46 columns wide, so it reads the same in a terminal and in the app. A message with a picture, or a message that is too long for the chat, also names its page:
 
-- The Page block is `Page ·` and a title, then a file path on your Mac. In the Claude desktop app, a click on the path opens the page in the Browser pane.
+- The Page block is `Page ·` and a title, then the board's link to the page, then its file path on your Mac. A click on the link opens the page from the board server: in the Claude desktop app's Browser pane, in the Codex app's built-in browser, or in your default browser from a terminal ([the pages of a task](board.md#the-pages-of-a-task)). When the board does not run, use the file path: in the Claude desktop app, a click on it opens the page in the Browser pane.
 - The page shows the whole message, with each picture drawn as an image from the same text.
 - A design's page has a switch between the picture after the change and today's picture.
 
@@ -138,7 +138,8 @@ In Claude Code, the sage hook reads each message of the chief when it ends. A me
 
 Known limits:
 
-- A page loads nothing and runs only its own switch, but a page that you open can still send its own content out, for example through a link in it.
+- A page loads nothing and runs only its own switch, but a page that you open can still send its own content out, for example through a link in it. A page may link to sites outside this Mac: when you click such a link, your browser opens that site, and the site gets everything in the link's address.
+- The link always names port 43123, the board's default port. If you moved the board to another port, change the port in the link.
 - A terminal with an East Asian wide setting draws the box marks two columns wide, so a picture there can look broken.
 
 ## The lead and the models

@@ -20,7 +20,7 @@ const PLUGINS = ["provider", "contract", "at"];
  */
 const CONTRACT = "2";
 /** A logbook's folder name: today's rule, computed once and saved in the row. */
-const FOLDER = /^[a-z0-9-]+-[0-9a-f]{6}$/;
+export const LOGBOOK_FOLDER = /^[a-z0-9-]+-[0-9a-f]{6}$/;
 const COMMITS = /^(?:[0-9a-f]{40,64}(?:,[0-9a-f]{40,64})*)?$/;
 /** What a refusal about first commits adds: a shallow clone's first commit is its newest one, so it matches no other checkout. */
 const SHALLOW = "A shallow clone needs its full history here: run git fetch --unshallow in it, then try again.";
@@ -54,7 +54,7 @@ export const sharedRoot = (env = process.env, fixed) => resolve(fixed || env.SAG
 
 /** The column names of bindings.tsv, and the check of one of its rows: the state tool and the board read the table with them. */
 export const BINDING_COLUMNS = BINDINGS;
-export const bindingRow = (r) => isAbsolute(r.root) && FOLDER.test(r.folder) && COMMITS.test(r.commits);
+export const bindingRow = (r) => isAbsolute(r.root) && LOGBOOK_FOLDER.test(r.folder) && COMMITS.test(r.commits);
 
 /** Is something at the path? A folder on the way that is no folder holds nothing: the later read names it, as before this root. */
 const present = (path) => {
@@ -324,7 +324,7 @@ export function createSharedRoot({ Refusal, refuse, listed, legacyRoots, makeLog
         const dir = join(root.path, name);
         let logbook;
         try {
-          logbook = FOLDER.test(name) && lstatSync(dir, { throwIfNoEntry: false })?.isDirectory() && present(join(dir, "tasks.tsv"));
+          logbook = LOGBOOK_FOLDER.test(name) && lstatSync(dir, { throwIfNoEntry: false })?.isDirectory() && present(join(dir, "tasks.tsv"));
         } catch (e) {
           // A folder that sage may not search may hold a logbook of this project: a clear refusal, never a stack (F-T642-4).
           refuse(unreadableFolder(visible(dir), e));
@@ -595,7 +595,7 @@ export function createSharedRoot({ Refusal, refuse, listed, legacyRoots, makeLog
    */
   function link(project, { to, separate }, env = process.env) {
     if ((to === undefined) === (separate === undefined) || (separate !== undefined && separate !== true)) refuse("link takes exactly one of --to <folder> or --separate; --separate takes no value. Nothing changed.");
-    if (to !== undefined && !FOLDER.test(to)) refuse(`${JSON.stringify(visible(to))} is not a logbook folder: its name is <project>-<6 hex>, as sage link prints it. Nothing changed.`);
+    if (to !== undefined && !LOGBOOK_FOLDER.test(to)) refuse(`${JSON.stringify(visible(to))} is not a logbook folder: its name is <project>-<6 hex>, as sage link prints it. Nothing changed.`);
     const checkout = projectRoot(resolve(project)), key = realOf(checkout), shared = rootOf(env);
     if (!lstatSync(key, { throwIfNoEntry: false })?.isDirectory()) refuse(`${visible(key)} is not a folder, so it cannot be a row. Nothing changed.`);
     if (/\p{Cc}/u.test(key)) refuse(`the path of ${visible(key)} has control characters, so it cannot be a row. Rename the folder. Nothing changed.`);

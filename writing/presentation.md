@@ -40,7 +40,7 @@ Draw each picture as fixed-width text first. The page draws its image from the s
 
 ## Pages
 
-A message with a picture, and a message too long for the chat, get a page: one file in the task's pages folder that holds the whole message, with each picture as an image. The message names it in a Page block: `Page · <title>`, then its file path. In the Claude desktop app, the owner opens the path in the Browser pane. Do not send a page with Claude's file tool: it sends a copy through Anthropic's servers. A long message holds only its main point and the Page block; the page holds the rest.
+A message with a picture, and a message too long for the chat, get a page: one file in the task's pages folder that holds the whole message, with each picture as an image. The message names it in a Page block: `Page · <title>`, then the board's link to the page (`http://127.0.0.1:43123/pages/<logbook>/<task>/<file>`), then its file path. The owner clicks the link: it opens the page from the board, in the Claude desktop app, in the Codex app and from a terminal. When the board does not run, the owner opens the path. Do not send a page with Claude's file tool: it sends a copy through Anthropic's servers. A long message holds only its main point and the Page block; the page holds the rest.
 
 A page loads nothing and runs only its own switch. Known limit: a page that the owner opens can still send its own content out through a link or a change of address.
 
@@ -68,7 +68,7 @@ The JSON: `{ "kind", "title", "blocks": [ … ], "ref" }`, and `"status"` for an
 | `changes` | `rows` of `{ where, today, after, why }` | numbered rows; for changes without a screen |
 | `steps` | `items` of `{ text, cmd, see }` | numbered steps, each command in a fence |
 | `code` | `lines` | the lines in a fence |
-| `page` | `title`, `task`, `file` (a page in that task's pages folder) | the Page block |
+| `page` | `title`, `task`, `file`: a file in that task's pages folder that the board serves (a web page, PDF, picture, Markdown or text file, at most 3 parts deep and 16 MiB) | the Page block: the title, the link, the path |
 
 A catch-up's picture is a `frame`: boxes inside boxes that the command lays out and gives their state words. Each box is `{ "box": "release" | "milestone" | "task" | "group", "name", "items": [ boxes or lines of text ] }`. A task gives its recorded `state` (for example `"reviewing"`), and may give `waits` (what it waits for) and `needs` (the owner's question). A milestone may give its state (`"proposed"`, or `"done"`, which the boxes inside it must agree with); its word and a release's word come from the boxes inside them, and the tasks inside a group count too. A group gives its `word`, and so does a box whose items are only lines of text. Any box may give a `note` for its first line. Exactly one box is `"here": true`: the double box, the task that runs now.
 

@@ -14,6 +14,11 @@ import { join, resolve, sep } from "node:path";
  * so agents may write in it. It holds each project's pages root, and in sage mode the chief writes in it too (T807).
  */
 export const worktreeRoot = (env = process.env) => resolve(env.SAGE_WORKTREES || join(env.HOME || homedir(), "sage-worktrees"));
+/**
+ * The pages folder of one logbook, by the logbook's folder name (for example sage-43265b): <worktree root>/<logbook>/pages,
+ * one folder for each task in it. The state tool's pages command and the board's pages route (T1001) both use it.
+ */
+export const pagesFolder = (logbook, env = process.env) => join(worktreeRoot(env), logbook, "pages");
 
 /** The states of a task that is over, in the order that names a row's reason: a worktree of another task is open. */
 const OVER = ["merged", "concluded", "abandoned"];

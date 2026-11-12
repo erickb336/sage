@@ -3,7 +3,8 @@ import { createHash, randomBytes, scrypt, timingSafeEqual } from "node:crypto";
 import { lstatSync, readdirSync, watch } from "node:fs";
 import { createServer } from "node:http";
 import { dirname, isAbsolute, join, resolve, sep } from "node:path";
-import { readBoardSources, buildBoardModel, landingRule, renderBoardHtml, renderAgentsHtml, renderMilestonesHtml, renderReleasesHtml } from "../sage-core/index.mjs";
+import { readBoardSources, buildBoardModel, landingRule, renderBoardHtml, renderAgentsHtml, renderMilestonesHtml, renderReleasesHtml, BOARD_PORT } from "../sage-core/index.mjs";
+import { pagesRequest, servePages } from "./pages.mjs";
 
 const MAX_HTML = 8 * 1024 * 1024;
 const MAX_CLIENTS = 16;
@@ -107,7 +108,7 @@ const OFF = "Access from outside this Mac is off until the owner sets a board pa
  * a response on the Mac carries the X-Sage-Board header: the id, this process's pid and the time the listener started,
  * so the board command can tell which board answers on the port.
  */
-export function createBoardServer({ sources, password, port = 43123, allowedHosts = [], id, clock = () => new Date().toISOString(), settleReads = SETTLE_READS, duringRead = null, providerRoots = [] } = {}) {
+export function createBoardServer({ sources, password, port = BOARD_PORT, allowedHosts = [], id, clock = () => new Date().toISOString(), settleReads = SETTLE_READS, duringRead = null, providerRoots = [] } = {}) {
   if (!Number.isSafeInteger(port) || port < 1024 || port > 65535) throw new TypeError("board port must be an integer from 1024 through 65535");
   if (typeof clock !== "function") throw new TypeError("the board clock must be a function that gives an ISO time");
   if (password !== undefined && !validPasswordRecord(password)) throw new TypeError("the board password must be a record from hashPassword");
@@ -331,6 +332,7 @@ export function createBoardServer({ sources, password, port = 43123, allowedHost
 
   const server = createServer({ maxHeaderSize: 8192 }, async (request, response) => {
     securityHeaders(response);
+    if (pagesRequest(request.url)) return servePages(request, response, { onMac, model }); // the pages route has its own rules (T1001)
     const fail = (status, text) => { response.writeHead(status, { "Content-Type": "text/plain; charset=utf-8" }); response.end(request.method === "HEAD" ? undefined : `${text}\n`); };
     if (!browserBoundary(request)) return fail(403, "This request is not permitted.");
     // The owner's decisions (T216, T229): on the Mac itself the board needs no sign-in. Every other request signs in

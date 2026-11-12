@@ -6,9 +6,9 @@ import "./test-env.mjs"; // first: no variable of the developer's shell changes 
 import assert from "node:assert/strict";
 import { execFileSync, spawnSync } from "node:child_process";
 import { createHash } from "node:crypto";
-import { existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, realpathSync, statSync, symlinkSync, writeFileSync } from "node:fs";
+import { existsSync, linkSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, realpathSync, statSync, symlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
-import { dirname, join } from "node:path";
+import { basename, dirname, join } from "node:path";
 import { test } from "node:test";
 import { fileURLToPath } from "node:url";
 import { KINDS, frameLines, messageText, prepareMessage } from "../packages/sage-core/message.mjs";
@@ -469,11 +469,31 @@ test("the message command resolves a Page block in a task's pages folder, and re
   const folder = sage("pages", "T1").out;
   writeFileSync(join(folder, "research.html"), "<p>research</p>");
   const local = { ...question, blocks: question.blocks.map((b) => (b.t === "page" ? { ...b, task: "T1" } : b)) };
+  // F-T1001-18: a path through a regular file (research.html is a file) is not there either: the same refusal, not a crash.
+  const through = sage("message", "T1", "--json", JSON.stringify({ ...local, blocks: local.blocks.map((b) => (b.t === "page" ? { ...b, file: "research.html/x.html" } : b)) }));
+  assert.equal(through.status, 1, through.out);
+  assert.match(through.out, /^sage: the page block "Showing visuals in every app" names .*\/research\.html\/x\.html, and it does not exist\. Save the page there first\. Nothing written\./);
   const ok = sage("message", "T1", "--file", file("q.json", local));
   assert.equal(ok.status, 0, ok.out);
-  assert.ok(ok.out.endsWith(`Page · Showing visuals in every app\n  ${join(folder, "research.html")}`), ok.out);
-  for (const page of [{ task: "T1", file: "../T2/x.html" }, { task: "T1", file: "/etc/passwd" }, { task: "../T1", file: "x.html" }, { path: "/etc/passwd" }])
+  // T1001: the board's link to the page, between the title and the path: its logbook is the folder above the pages folder.
+  const logbook = basename(dirname(dirname(folder)));
+  assert.ok(ok.out.endsWith(`Page · Showing visuals in every app\n  http://127.0.0.1:43123/pages/${logbook}/T1/research.html\n  ${join(folder, "research.html")}`), ok.out);
+  assert.deepEqual(textProblems(ok.out), [], "the link line is part of the Page block, not the message's own words");
+  // A file that the board does not serve gets no Page block: a path out, a part with a dot first or with two dots inside
+  // (F-T1001-1), a type that is not a page, more than 3 parts.
+  for (const page of [{ task: "T1", file: "../T2/x.html" }, { task: "T1", file: "/etc/passwd" }, { task: "../T1", file: "x.html" }, { path: "/etc/passwd" },
+    { task: "T1", file: ".research.html" }, { task: "T1", file: "a/.b/x.html" }, { task: "T1", file: "state.json" }, { task: "T1", file: "run.log" }, { task: "T1", file: "a/b/c/x.html" },
+    { task: "T1", file: "v1..v2.html" }, { task: "T1", file: "notes..md" }, { task: "T1", file: "a..b/x.html" }])
     assert.match(sage("message", "T1", "--json", JSON.stringify({ ...question, blocks: question.blocks.map((b) => (b.t === "page" ? { t: "page", title: "x", ...page } : b)) })).out, /a page block names its page as \{ t: page, title, task, file \}/, JSON.stringify(page));
+  // A link, a file with a second name, or a link in a folder of the path: the board refuses each, so the command does too.
+  writeFileSync(join(folder, "outside.html"), "<p>x</p>");
+  symlinkSync(join(folder, "outside.html"), join(folder, "link.html"));
+  linkSync(join(folder, "outside.html"), join(folder, "hard.html"));
+  mkdirSync(join(folder, "real"));
+  writeFileSync(join(folder, "real", "in.html"), "<p>x</p>");
+  symlinkSync(join(folder, "real"), join(folder, "via"));
+  for (const name of ["link.html", "hard.html", "via/in.html"])
+    assert.match(sage("message", "T1", "--json", JSON.stringify({ ...local, blocks: local.blocks.map((b) => (b.t === "page" ? { ...b, file: name } : b)) })).out, /names .*, and the board serves only a regular file with one name that it can read, of at most 16 MiB, with no link in its path or in the pages folders/, name);
   const bad = sage("message", "T1", "--json", JSON.stringify({ ...local, blocks: local.blocks.filter((b) => b.label !== "Needed by") }));
   assert.equal(bad.status, 1);
   assert.match(bad.out, /^sage: the message is not in its kind's shape, so nothing reaches the owner in another shape\. Nothing written\.\n- a question needs "Needed by" before "Judged by"/);

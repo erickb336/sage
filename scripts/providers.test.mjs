@@ -437,12 +437,12 @@ test("T216: each plugin's board is a cross-provider reader: it imports only Node
   for (const provider of ["claude", "codex"]) {
     const { dir, plugin } = isolated(t, provider);
     const files = filesUnder(join(plugin, "board"));
-    assert.deepEqual(files.map((file) => relative(join(plugin, "board"), file)).sort(), ["cli.mjs", "install.mjs", "server.mjs"]);
+    assert.deepEqual(files.map((file) => relative(join(plugin, "board"), file)).sort(), ["cli.mjs", "install.mjs", "pages.mjs", "server.mjs"]);
     const { parse } = await import("es-module-lexer/minimal");
     for (const file of files) {
       const [imports] = parse(readFileSync(file, "utf8"));
       for (const { n: name } of imports.filter((item) => item.d !== -2)) { // -2 is import.meta, not an import
-        const allowed = name?.startsWith("node:") || name === "../core/index.mjs" || /^\.\/(?:cli|install|server)\.mjs$/.test(name ?? "");
+        const allowed = name?.startsWith("node:") || name === "../core/index.mjs" || /^\.\/(?:cli|install|pages|server)\.mjs$/.test(name ?? "");
         assert.ok(allowed, `${provider} ${relative(plugin, file)} imports ${name}`);
       }
     }
