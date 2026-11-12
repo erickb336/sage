@@ -287,6 +287,26 @@ test("F-T984-9: the confirm example is sample data, and its text says so before 
   assert.ok(at > 0 && at < text.indexOf("What I will do"), text);
 });
 
+test("F-T984-30: the lesson's rows say what is true: the check of raw ids runs on the message command's path", () => {
+  const lesson = fixture("14-lesson-kept.json"), rows = lesson.blocks.find((b) => b.t === "table").rows;
+  const row = rows.find((r) => /^A check that fails on a message with raw ids/.test(r[1]));
+  assert.match(row[2], /^Done/, row.join(" | "));
+  assert.match(refusal({ ...fixture("01-progress-note.json"), title: "T12 is built" }), /raw ids in the message: T12/);
+});
+
+
+test("F-T984-31: the incident and the design give the cost of the new words that the estimate's rows add up to", () => {
+  const rows = fixture("11-estimate.json").blocks.find((b) => b.t === "table").rows;
+  const total = [0, 1].map((side) => rows.reduce((t, r) => t + Number(r[1].split(" M")[0].split(" to ")[side]), 0)).join(" to ");
+  assert.equal(total, "10.5 to 21");
+  for (const name of ["06-incident.json", "07-design.json"]) {
+    // The incident also quotes the old figure that was wrong, 2 to 5 M tokens.
+    const said = [...render(fixture(name)).text.replace(/\s+/g, " ").matchAll(/([\d.]+ to [\d.]+) M tokens/g)].map((m) => m[1]).filter((r) => r !== "2 to 5");
+    assert.ok(said.length > 0 && said.every((r) => r === total), `${name}: ${said.join(", ")}`);
+  }
+});
+
+
 test("the page escapes every text, loads nothing, and allows only its own style and the hash of its one script", () => {
   const msg = structuredClone(fixture("05-explainer.json"));
   msg.title = "About <script>alert(1)</script> & \"quotes\"";

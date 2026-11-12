@@ -11,7 +11,7 @@
     {
       "t": "field",
       "label": "What happened",
-      "text": "I told you that the new words would cost 2 to 5 M tokens. The engineer's check, based on a past large task, gave 10 to 21 M tokens for the three pull requests: about four times more."
+      "text": "I told you that the new words would cost 2 to 5 M tokens. The engineer's check, based on a past large task, gave 10.5 to 21 M tokens for the three pull requests: about four times more."
     },
     {
       "t": "section",
@@ -25,7 +25,7 @@
         {
           "t": "field",
           "label": "True",
-          "text": "10 to 21 M tokens and 13 to 26 h of agent time for all three pull requests (estimate, from the engineer's check)."
+          "text": "10.5 to 21 M tokens and 13 to 26 h of agent time for all three pull requests (estimate, from the engineer's check)."
         },
         {
           "t": "field",
@@ -80,7 +80,7 @@
     {
       "t": "field",
       "label": "What you need to do",
-      "text": "nothing. If 10 to 21 M tokens is too much for the new words, tell me: parts 2 and 3 can wait."
+      "text": "nothing. If 10.5 to 21 M tokens is too much for the new words, tell me: parts 2 and 3 can wait."
     },
     {
       "t": "field",

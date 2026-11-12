@@ -185,7 +185,7 @@
     {
       "t": "field",
       "label": "Why we might not do this",
-      "text": "it costs 10 to 21 M tokens and 13 to 26 h of agent time, and every logbook moves once to the new words."
+      "text": "it costs 10.5 to 21 M tokens and 13 to 26 h of agent time, and every logbook moves once to the new words."
     },
     {
       "t": "field",

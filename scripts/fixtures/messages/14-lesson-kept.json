@@ -69,7 +69,7 @@
         [
           "The presentation skill",
           "A check that fails on a message with raw ids, so the lesson holds in code",
-          "Todo, in its build"
+          "Done: the message command refuses a raw id"
         ]
       ]
     },
