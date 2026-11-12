@@ -1,9 +1,7 @@
 // Checks the sources and that the generated files match them. Fails with a list of every problem.
-import { spawnSync } from "node:child_process";
 import { existsSync, readFileSync, readdirSync } from "node:fs";
 import { dirname, join, relative } from "node:path";
 import { GENERATED, ROOT, outputs, filesUnder, parseSource } from "./build.mjs";
-import { changelog } from "./changelog.mjs";
 import { checkWords, flaggedWords, yamlText } from "./dictionary.mjs";
 import { BRIEF_FIELDS as CORE_BRIEF_FIELDS, FINDING_FORM, ROLE_PRINCIPLES } from "../packages/sage-core/index.mjs";
 import { TASK_KINDS } from "../packages/sage-core/logbook-fields.mjs";
@@ -162,8 +160,6 @@ const readByPeople = [
   ...referenceFiles().map((f) => `plugins/sage/${f}`),
   // The README and the docs: every page that docFiles reads for links.
   ...docFiles(ROOT),
-  // The change log fragments, which CHANGELOG.md on main gets only later: so the task pull request that adds one fails.
-  ...readdirSync(join(ROOT, "changes")).filter((f) => f.endsWith(".md")).map((f) => `changes/${f}`),
   ...readdirSync(join(ROOT, "docs/assets")).filter((f) => f.endsWith(".svg")).map((f) => `docs/assets/${f}`),
 ];
 for (const f of dictionary ? readByPeople : []) {
@@ -183,29 +179,14 @@ try {
   }
 } catch (e) { problems.push(String(e.message)); } // a source that the build cannot read, such as a README without its markers
 
-// T539: CHANGELOG.md is built on main only, so that two task pull requests never conflict in it. The diff of this
-// checkout from its merge base with origin/main tells the two kinds of pull request apart: a diff that touches
-// CHANGELOG.md must touch nothing else (a change-log pull request) and hold exactly the build of changes/; any
-// other diff leaves CHANGELOG.md as main has it, which may lag behind changes/ (a warning, not a failure).
-// A copy with no .git (a test fixture) has no diff to read, so only the build of changes/ is checked there.
-try {
-  const git = (...args) => spawnSync("git", args, { cwd: ROOT, encoding: "utf8" });
-  const base = existsSync(join(ROOT, ".git")) ? git("merge-base", "origin/main", "HEAD") : null;
-  if (base?.status) problems.push("CHANGELOG.md: no merge base with origin/main, so the check cannot see what this branch changes; run git fetch origin main (in CI, check out with fetch-depth: 0)");
-  // The tracked files only, committed, staged or changed, as CI sees them: a stray new file does not change the kind.
-  const touched = base?.status === 0 ? git("diff", "--name-only", base.stdout.trim()).stdout.split("\n").filter(Boolean) : [];
-  if (touched.includes("CHANGELOG.md") && touched.length > 1) problems.push(`CHANGELOG.md: a task pull request carries only its changes/<task>.md and leaves CHANGELOG.md as main has it; put your text in changes/<task>.md and undo the edit of CHANGELOG.md (git fetch origin main, then git checkout ${base.stdout.trim()} -- CHANGELOG.md). The chief rebuilds it on main with npm run changelog, in a change-log pull request that changes only CHANGELOG.md`);
-  else {
-    const built = changelog(ROOT), current = readFileSync(join(ROOT, "CHANGELOG.md"), "utf8");
-    if (touched.includes("CHANGELOG.md") && current !== built) problems.push("CHANGELOG.md: a change-log pull request holds exactly the build of changes/; run npm run changelog");
-    else if (base && current !== built) console.warn("! CHANGELOG.md lags behind changes/ (allowed on main and on a task branch); the chief rebuilds it with npm run changelog in a change-log pull request");
-  }
-  // Each fragment's links resolve as from CHANGELOG.md, where they go, so the task pull request that adds a fragment fails.
-  for (const f of readdirSync(join(ROOT, "changes")).filter((f) => f.endsWith(".md"))) {
-    const text = readFileSync(join(ROOT, "changes", f), "utf8");
-    problems.push(...linkProblems(ROOT, ["CHANGELOG.md"], () => text).map((p) => p.replace(/^CHANGELOG\.md:/, `changes/${f}:`)));
-  }
-} catch (e) { problems.push(String(e.message)); } // a fragment that the build cannot place, or a line written by hand
+// T1014: no change file per task. A task pull request says what changed for users in its description, and each
+// release gets its notes, drafted from the pull requests that merged since the last release (CONTRIBUTING.md).
+// So a changes/ folder that comes back, for example from a branch made before T1014, fails here. A dot file, such
+// as a Finder .DS_Store that git leaves behind in the old folder, is not a change file.
+if (existsSync(join(ROOT, "changes"))) for (const f of readdirSync(join(ROOT, "changes")).filter((f) => !f.startsWith("."))) {
+  problems.push(`changes/${f}: sage has no change file per task any more (T1014); delete it, and say what changed for users in the pull request description. Each release gets notes drafted from the merged pull requests (CONTRIBUTING.md)`);
+}
+
 const core = readFileSync(join(ROOT, "instructions/core.md"), "utf8");
 if (Buffer.byteLength(core) > 8 * 1024) problems.push(`instructions/core.md: ${Buffer.byteLength(core)} bytes; keep it under 8 KiB (it loads into every session, so each byte costs context there)`);
 

@@ -18,7 +18,7 @@ This is the index of sage's documentation, by reader. Start with the [README](..
 - [Remote Control](guide/remote-control.md): follow and start sessions from your phone.
 - [sage in Codex](guide/codex.md): what works in Codex today, and how to try it.
 - [Board service guide](../packages/sage-board/README.md): the board server by hand, the login service and private phone access.
-- [Changelog](../CHANGELOG.md): every change for users, newest first.
+- [Changelog](../CHANGELOG.md): the changes for users up to 12 Nov 2026, newest first. Later changes are in the [release notes](https://github.com/erickb336/sage-stack/releases).
 
 ## If you change sage
 
