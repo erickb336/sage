@@ -1,0 +1,28 @@
+id: no-comments-python
+valid:
+  - 'x = "# not a comment"'
+  - "y = '''\n# inside a string\n'''"
+  - "#!/usr/bin/env python3\nx = 1"
+  - "# -*- coding: utf-8 -*-\nx = 1"
+  - "#!/usr/bin/env python3\n# coding: utf-8\nx = 1"
+  - 'import os  # noqa: F401'
+  - 'import os, sys  # noqa: F401, E401'
+  - 'x = f()  # type: ignore[attr-defined]'
+  - 'x = f()  # pyright: ignore[reportAttributeAccessIssue]'
+  - '# pyright: strict'
+  - 'def f():  # pragma: no cover'
+  - '# fmt: off'
+  - 'x = [1,2]  # fmt: skip'
+  - '# SPDX-License-Identifier: MIT'
+invalid:
+  - '# explain'
+  - 'x = 1  # explain'
+  - 'import os  # noqa'
+  - 'import os  # noqa: F401 because'
+  - 'x = f()  # type: ignore'
+  - 'x = f()  # type: ignore[attr-defined] why'
+  - '# pyright: ignore'
+  - '# pragma: no cover because'
+  - "x = 1\n#!/usr/bin/env python3"
+  - "x = 1\ny = 2\n# -*- coding: utf-8 -*-"
+  - "def f():\n    # inside\n    return 1"

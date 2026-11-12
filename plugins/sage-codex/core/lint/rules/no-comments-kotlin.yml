@@ -1,0 +1,7 @@
+id: no-comments-kotlin
+language: Kotlin
+severity: error
+message: A comment in code. Only one SPDX line may stay.
+rule:
+  any: [{ kind: line_comment }, { kind: multiline_comment }]
+  not: { matches: spdx }

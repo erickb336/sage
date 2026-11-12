@@ -1,0 +1,11 @@
+id: no-comments-css
+language: Css
+severity: error
+message: A comment in code. Only a tool directive from the fixed list or one SPDX line may stay.
+rule:
+  any: [{ kind: comment }, { kind: js_comment }]
+  not:
+    any:
+      - regex: '^/\* stylelint-(disable|enable|disable-line|disable-next-line)( [\w/-]+(, [\w/-]+)*)? \*/$'
+      - regex: '^/\* prettier-ignore \*/$'
+      - matches: spdx

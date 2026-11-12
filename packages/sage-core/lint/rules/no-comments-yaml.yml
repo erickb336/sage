@@ -1,0 +1,11 @@
+id: no-comments-yaml
+language: Yaml
+severity: error
+message: A comment in code. Only a tool directive from the fixed list or one SPDX line may stay.
+rule:
+  kind: comment
+  not:
+    any:
+      - regex: '^# yaml-language-server: \$schema=\S+$'
+      - regex: '^# yamllint (disable|enable)(-line)?( rule:[\w-]+)*$'
+      - matches: spdx

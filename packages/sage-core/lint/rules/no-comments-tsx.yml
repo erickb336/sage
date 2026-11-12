@@ -1,0 +1,8 @@
+id: no-comments-tsx
+language: Tsx
+severity: error
+message: A comment in code. Only a tool directive from the fixed list or one SPDX line may stay.
+rule:
+  any: [{ kind: comment }, { kind: html_comment }]
+  not:
+    any: [{ matches: js-directive }, { matches: spdx }]

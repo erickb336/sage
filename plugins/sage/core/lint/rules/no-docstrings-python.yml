@@ -1,0 +1,7 @@
+id: no-docstrings-python
+language: Python
+severity: error
+message: A docstring. A string that stands alone as a statement is a comment.
+rule:
+  kind: string
+  inside: { kind: expression_statement }

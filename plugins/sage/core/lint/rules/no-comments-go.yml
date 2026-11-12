@@ -1,0 +1,17 @@
+id: no-comments-go
+language: Go
+severity: error
+message: A comment in code. Only a tool directive from the fixed list, one SPDX line or a cgo preamble may stay.
+rule:
+  kind: comment
+  not:
+    any:
+      - regex: '^//go:\w+( \S.*)?$'
+      - regex: '^//nolint:[\w-]+(,[\w-]+)*$'
+      - regex: '^//export \w+$'
+      - regex: '^// Code generated .+ DO NOT EDIT\.$'
+      - matches: spdx
+      - precedes:
+          stopBy: { not: { kind: comment } }
+          kind: import_declaration
+          has: { stopBy: end, kind: interpreted_string_literal, regex: '^"C"$' }

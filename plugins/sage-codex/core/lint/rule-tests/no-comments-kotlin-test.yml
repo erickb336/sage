@@ -1,0 +1,10 @@
+id: no-comments-kotlin
+valid:
+  - 'val u = "https://example.com//x /* y */"'
+  - '@Suppress("UNCHECKED_CAST") fun f() {}'
+  - '// SPDX-License-Identifier: Apache-2.0'
+invalid:
+  - '// explain'
+  - 'val x = 1 // trailing'
+  - '/* block */ fun f() {}'
+  - '/** KDoc. */ fun f() {}'

@@ -1,0 +1,11 @@
+id: no-comments-html
+language: Html
+severity: error
+message: A comment in code. Only a tool directive from the fixed list or one SPDX line may stay.
+rule:
+  kind: comment
+  not:
+    any:
+      - regex: '^<!-- (prettier-ignore|stylelint-(disable|enable)( [\w/-]+(, [\w/-]+)*)?) -->$'
+      - matches: spdx
+      - inside: { kind: quoted_attribute_value }

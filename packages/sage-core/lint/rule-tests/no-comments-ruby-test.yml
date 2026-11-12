@@ -1,0 +1,15 @@
+id: no-comments-ruby
+valid:
+  - '# frozen_string_literal: true'
+  - 'x = "# not a comment"'
+  - 'x = 1 # rubocop:disable Style/Foo'
+  - '# rubocop:disable Metrics/AbcSize, Style/Bar'
+  - '# rubocop:enable all'
+  - '# typed: strict'
+  - '# SPDX-License-Identifier: MIT'
+invalid:
+  - '# explain'
+  - 'x = 1 # trailing'
+  - 'x = 1 # rubocop:disable Style/Foo -- why'
+  - '# frozen_string_literal: true and more'
+  - "=begin\nblock comment\n=end"

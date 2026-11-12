@@ -1,0 +1,12 @@
+id: no-comments-ruby
+language: Ruby
+severity: error
+message: A comment in code. Only a tool directive from the fixed list or one SPDX line may stay.
+rule:
+  kind: comment
+  not:
+    any:
+      - regex: '^# frozen_string_literal: (true|false)$'
+      - regex: '^# rubocop:(disable|enable|todo) [\w/]+(, ?[\w/]+)*$'
+      - regex: '^# typed: (ignore|false|true|strict|strong)$'
+      - matches: spdx

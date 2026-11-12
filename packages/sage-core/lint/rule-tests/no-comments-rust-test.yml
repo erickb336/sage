@@ -1,0 +1,14 @@
+id: no-comments-rust
+valid:
+  - 'fn main() { let s = "a // b /* c */"; }'
+  - 'fn main() { let r = r#"// raw"#; }'
+  - '#[allow(dead_code)] fn f() {}'
+  - '#![deny(missing_docs)]'
+  - '// SPDX-License-Identifier: MIT OR Apache-2.0'
+invalid:
+  - '// explain'
+  - '/// doc'
+  - '//! inner'
+  - '/* block */ fn f() {}'
+  - '/** doc block */ fn f() {}'
+  - "fn f() { let x = 1; // trailing\n}"

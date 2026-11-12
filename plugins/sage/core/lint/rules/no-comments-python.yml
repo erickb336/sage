@@ -1,0 +1,16 @@
+id: no-comments-python
+language: Python
+severity: error
+message: A comment in code. Only a tool directive from the fixed list or one SPDX line may stay.
+rule:
+  kind: comment
+  not:
+    any:
+      - all: [{ regex: '^#!/\S+( \S+)?$' }, { nthChild: 1 }]
+      - all: [{ regex: '^# (-\*- )?coding[:=] ?[\w.-]+( -\*-)?$' }, { any: [{ nthChild: 1 }, { nthChild: 2 }] }]
+      - regex: '^# noqa: ?[A-Z]+\d+(, ?[A-Z]+\d+)*$'
+      - regex: '^# type: ignore\[[\w-]+(, ?[\w-]+)*\]$'
+      - regex: '^# pyright: (ignore\[\w+(, ?\w+)*\]|basic|standard|strict)$'
+      - regex: '^# pragma: no (cover|branch)$'
+      - regex: '^# fmt: (off|on|skip)$'
+      - matches: spdx

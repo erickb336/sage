@@ -17,6 +17,7 @@ import { SHOTS, SHOTS_RECORD, sampleHash } from "./board-shots.mjs";
 import { unrunTestFiles } from "./test-commands.mjs";
 import { referenceFiles, startTextProblems } from "./start-text.mjs";
 import { KINDS as MESSAGE_KINDS } from "../packages/sage-core/message.mjs";
+import { ruleTestProblems } from "./lint-rules.mjs";
 
 const problems = [];
 try { problems.push(...packageBoundaryProblems(ROOT)); }
@@ -204,6 +205,7 @@ try {
 // T934: the Claude chief's and lead's start texts stay under their limits, and each reference that they name exists
 // and has its trigger. node scripts/start-text.mjs prints the bytes of each part.
 try { problems.push(...await startTextProblems()); } catch (e) { problems.push(`start texts: ${e.message} (scripts/start-text.mjs)`); }
+try { problems.push(...ruleTestProblems()); } catch (e) { problems.push(`packages/sage-core/lint: ${e.message} (scripts/lint-rules.mjs)`); }
 // T985: each playbook has its five parts in order, and its moment names message kinds that exist and the default with no
 // answer. The chief's Playbooks list has one trigger line for each playbook, and names no other.
 {
