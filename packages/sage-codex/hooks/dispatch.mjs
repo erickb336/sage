@@ -6,15 +6,17 @@
 // input as before (the gate refuses it).
 import { briefAnswer } from "./brief-hook.mjs";
 import { gateAnswer } from "./gate-hook.mjs";
+import { messageCheck } from "./message-check.mjs";
 import { reportGate } from "./report-gate.mjs";
 import { answer } from "./sage-codex-hook.mjs";
 import { startStatus } from "./session-start-hook.mjs";
 
 const mode = (input) => answer(input, process.env);
 const stop = (input) => reportGate(input, process.env);
+const check = (input) => messageCheck(input, process.env);
 /**
  * Each event's routes: [the field that Codex matched, its pattern, the hook], the first that matches runs. A hook gets the
- * input and the launcher's context; a hook whose second parameter is its env gets a wrapper (mode, stop), never the context.
+ * input and the launcher's context; a hook whose second parameter is its env gets a wrapper (mode, stop, check), never the context.
  */
 export const ROUTES = {
   SessionStart: [["source", /^(?:startup|resume|clear)$/, startStatus], ["source", /^(?:compact|fork)$/, mode]],
@@ -24,6 +26,7 @@ export const ROUTES = {
   PostToolUse: [["tool_name", /spawn_agent$/, briefAnswer]],
   SubagentStart: [[null, null, briefAnswer]],
   SubagentStop: [[null, null, stop]],
+  Stop: [[null, null, check]],
 };
 
 /** The output object of sage's hook for one event and its parsed input (undefined when it was not JSON), or undefined. */

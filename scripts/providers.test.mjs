@@ -489,7 +489,7 @@ test("manifests point to disjoint plugin roots and only supported Codex hooks", 
   assert.equal("hooks" in json("plugins/sage-codex/.codex-plugin/plugin.json"), false);
   assert.equal(existsSync(join(ROOT, "plugins/sage-codex/hooks/hooks.json")), false);
   const { EVENTS } = await import(pathToFileURL(join(ROOT, "plugins/sage-codex/hooks/entries.mjs")).href);
-  assert.deepEqual(Object.keys(EVENTS), ["SessionStart", "UserPromptSubmit", "PreToolUse", "PermissionRequest", "PostToolUse", "SubagentStart", "SubagentStop"]);
+  assert.deepEqual(Object.keys(EVENTS), ["SessionStart", "UserPromptSubmit", "PreToolUse", "PermissionRequest", "PostToolUse", "SubagentStart", "SubagentStop", "Stop"]);
   assert.deepEqual([...outputs()], [...outputs()], "packaging is deterministic");
 });
 
@@ -1787,7 +1787,7 @@ for (const scenario of ['success', 'exit-error', 'bad-manifest']) test(`Codex pa
   assert.equal(readFileSync(closed, 'utf8'), 'stdin closed', 'the child acknowledged transport closure');
   if (scenario === 'success') {
     assert.equal(result.code, 0, stderr);
-    assert.match(stdout, /discovered \d+ skills and no plugin hook .* all 7 stay trusted/);
+    assert.match(stdout, /discovered \d+ skills and no plugin hook .* all 8 stay trusted/);
   } else {
     assert.equal(result.code, 1, stdout + stderr);
     assert.doesNotMatch(stdout, /discovered \d+ skills/);
