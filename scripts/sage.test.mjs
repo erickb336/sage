@@ -2969,7 +2969,7 @@ test("F-R78-1: no write makes a lost table again, so neither init nor a new find
   }
   assert.deepEqual(snapshot(s.dir), before, "no write changed a file");
   // The way out when no copy is left: the user accepts the loss. The repair says so in the decision trail, and keeps no file from it.
-  assert.equal(s.no("logbook", "repair", "--accept-loss", "toString"), "sage: logbook repair needs --accept-loss with the tables whose rows the user accepts to lose, joined by a comma: tasks, runs, findings, ledger, gates, decisions, milestones. Not toString.");
+  assert.equal(s.no("logbook", "repair", "--accept-loss", "toString"), "sage: logbook repair needs --accept-loss with the tables whose rows the user accepts to lose, joined by a comma: tasks, runs, findings, ledger, gates, decisions, milestones, releases. Not toString.");
   assert.equal(s.ok("logbook", "repair", "--accept-loss", "findings"), "findings.tsv started again without rows. The decision is in decisions.tsv.");
   assert.deepEqual([rows(s.dir, "findings"), rows(s.dir, "decisions").map((d) => `${d.decision} · ${d.why}`)], [[], ["findings.tsv started again without rows · the user accepts the loss of its rows"]]);
   assert.equal(s.ok("merge-check", "--sha", SHA, "--cycles", "1"), "T1 may merge: 1 clean cycle on this SHA", "the loss is the user's decision now");
@@ -2978,7 +2978,7 @@ test("F-R78-1: no write makes a lost table again, so neither init nor a new find
 
 test("F-R78-1: init makes a new logbook, finishes one that it began, and refuses tables with rows but no tasks.tsv", () => {
   const s = store(); // init on an empty folder: every table with only its header line
-  assert.deepEqual(readdirSync(s.dir).sort(), ["briefs", "checkout.txt", "decisions.tsv", "findings.tsv", "gates.tsv", "ledger.tsv", "milestones.tsv", "reports", "runs.tsv", "standing.md", "status.md", "tasks.tsv"]);
+  assert.deepEqual(readdirSync(s.dir).sort(), ["briefs", "checkout.txt", "decisions.tsv", "findings.tsv", "gates.tsv", "ledger.tsv", "milestones.tsv", "releases.tsv", "reports", "runs.tsv", "standing.md", "status.md", "tasks.tsv"]);
   rmSync(join(s.dir, "tasks.tsv"));
   rmSync(join(s.dir, "findings.tsv")); // init stopped before its last tables
   assert.equal(s.ok("init"), `logbook ${s.dir}`);
@@ -3048,7 +3048,7 @@ test("F-R87-1: one repair starts two damaged tables again, and a repair that ano
   assert.equal(s.no("logbook", "repair", "--accept-loss", "findings"), `sage: ${lost(s.dir, "ledger", "has only blank lines", "findings,ledger")}`);
   assert.equal(s.no("logbook", "repair", "--accept-loss", "ledger"), `sage: ${lost(s.dir, "findings", undefined, "ledger,findings")}`);
   assert.equal(s.no("logbook", "repair", "--accept-loss", "findings", "--accept-loss", "ledger"), "sage: --accept-loss is given twice. Give it once, with the tables joined by a comma: --accept-loss findings,ledger.");
-  assert.equal(s.no("logbook", "repair", "--accept-loss", "findings,x"), "sage: logbook repair needs --accept-loss with the tables whose rows the user accepts to lose, joined by a comma: tasks, runs, findings, ledger, gates, decisions, milestones. Not x.");
+  assert.equal(s.no("logbook", "repair", "--accept-loss", "findings,x"), "sage: logbook repair needs --accept-loss with the tables whose rows the user accepts to lose, joined by a comma: tasks, runs, findings, ledger, gates, decisions, milestones, releases. Not x.");
   const before = snapshot(s.dir);
   assert.equal(s.no("logbook", "repair", "--accept-loss", "findings,ledger,runs"), `sage: ${join(s.dir, "runs.tsv")} passes the logbook check, so it has nothing to repair. Nothing changed.`);
   assert.deepEqual(snapshot(s.dir), before, "a refused repair changes no table");
@@ -3151,7 +3151,7 @@ test("T314: task add takes --priority and --kind, and task set takes priority= a
   assert.equal(s.ok("task", "T2", "set", "priority=P0", "kind=docs"), "T2 framed · tiny · round 0 · route build · P0 · kind docs");
   assert.equal(s.ok("task", "T1", "set", "kind=none"), "T1 framed · small · round 0 · route build,code-review,qa · P1");
   assert.deepEqual(rows(s.dir, "tasks").map((t) => [t.id, t.priority, t.kind]), [["T1", "P1", ""], ["T2", "P0", "docs"]]);
-  assert.match(s.no("task", "T2", "set", "colour=red"), /^sage: task set takes state=, branch=, pr=, title=, priority=, kind=, waits=, milestone= or approval=$/);
+  assert.match(s.no("task", "T2", "set", "colour=red"), /^sage: task set takes state=, branch=, pr=, title=, priority=, kind=, waits=, milestone=, release= or approval=$/);
 });
 
 // The scale line of T500, as the state tool and the Codex state MCP say it.
@@ -4039,7 +4039,7 @@ test("T337: milestone propose refuses a bad name or goal, a name in use or like 
     [p("--name", "Codex", "--goal", "g", "--pilot", "T1", "--tasks", "T9"), "sage: no task T9. The latest: T1, T2, T3, T4."],
     [p("--name", "Codex", "--goal", "g", "--pilot", "T1", "--tasks", "T3"), `sage: T3 is merged: an ended task joins no milestone. Leave it out of --tasks.${nothing}`],
     [p("M1", "--name", "Codex"), "sage: no milestone M1. There is none yet."],
-    [["milestone", "list"], "sage: milestone takes: propose --name <name> --goal <goal> --pilot <T> --tasks <T,T>, or propose <M> with --name, --goal, --pilot or --tasks to propose it again"],
+    [["milestone", "list"], "sage: milestone takes: propose --name <name> --goal <goal> --pilot <T> --tasks <T,T>, or propose <M> with --name, --goal, --pilot or --tasks to propose it again, or <M> set release=<name> (release=none takes it out)"],
   ];
   for (const [args, why] of first) assert.equal(s.no(...args), why, args.join(" "));
   assert.deepEqual(files(), before, "a refusal writes nothing");

@@ -17,8 +17,9 @@ These are sage's approved words: one word for one thing, and one meaning for eac
 | Word | Meaning | Do not say |
 | --- | --- | --- |
 | **request** | What the owner asks for in the chat, in the owner's words, before sage frames it. | ask, ticket, issue, prompt |
+| **release** | A version that the owner ships, such as 1.0: it holds milestones and single tasks, and it is optional. | version (alone), launch, sprint |
 | **milestone** | A request that sage runs as two or more tasks for one goal, where at least one task waits for another. It has a goal, a done condition (a count of merged tasks), a breakdown that the owner approves, and one pilot task. | program (say "program" only for a computer program), project (a project is one repository and its logbook), epic, initiative, plan, roadmap |
-| **task** | One unit of work in one project, with one route and at most one pull request. It is in at most one milestone, and it may wait for other tasks of its logbook ("waits for": it builds and merges only after they are merged or concluded). It ends in one of three states: merged (its pull request is in main), concluded (a route with no build step, such as investigate, ended with a clean evidence review) or abandoned (its work stopped for good, from any state). | job, ticket, issue, item, unit, phase, step |
+| **task** | One unit of work in one project, with one route and at most one pull request. It is in at most one milestone or, outside one, in a release, and it may wait for other tasks of its logbook ("waits for": it builds and merges only after they are merged or concluded). It ends in one of three states: merged (its pull request is in main), concluded (a route with no build step, such as investigate, ended with a clean evidence review) or abandoned (its work stopped for good, from any state). | job, ticket, issue, item, unit, phase, step |
 | **step** | One block of a task's route, done by one agent role: design, arena, pe, build, code-review, security-review, ux-review, qa, investigate, evidence-review. | stage, phase; never "step" for a task of a milestone (the approved plan's "step 0 to 4" are tasks T4 to T8) |
 | **route** | The ordered steps of one task, set by its size and risk flags. | pipeline, workflow, flow, process |
 | **run** | One agent's work on one step of a task, from brief to report; it has an id such as R12. Also the PE check of a breakdown. | job, attempt, session, invocation, execution |
@@ -37,7 +38,7 @@ These are sage's approved words: one word for one thing, and one meaning for eac
 
 ## Phrases
 
-These are not new words. They are fixed phrases inside the lines above, so that the list stays at 18 words.
+These are not new words. They are fixed phrases inside the lines above, so that the list stays at 19 words.
 
 - **breakdown**: the content of a milestone that the owner approves (goal, done condition, tasks, "waits for" links, pilot, cost, questions). In the milestone line.
 - **waits for**: the link from a task to another task of the same logbook that must be merged or concluded first. In the task line. A circle of such links is a **loop**, and sage refuses it.

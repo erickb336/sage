@@ -607,7 +607,7 @@ test("the state server lists one tool for each state-tool command, and marks onl
   const s = await connect(t);
   const tools = await s.tools();
   assert.deepEqual(tools.map((tool) => tool.name).sort(), ["accept", "brief", "cancel", "claim", "config", "finding_add", "finding_close", "finding_move", "finding_triage", "gate_add", "gate_answer", "gate_replace",
-    "init", "link", "log", "merge_check", "message", "milestone_propose", "move", "offer", "pages", "report_compare", "round", "run_add", "run_done", "standing", "standing_add", "status", "task_add", "task_adopt", "task_set", "unclaim", "verdict", "worktrees"]);
+    "init", "link", "log", "merge_check", "message", "milestone_propose", "milestone_set", "move", "offer", "pages", "release_add", "report_compare", "round", "run_add", "run_done", "standing", "standing_add", "status", "task_add", "task_adopt", "task_set", "unclaim", "verdict", "worktrees"]);
   assert.deepEqual(tools.filter((tool) => tool.annotations.readOnlyHint).map((tool) => tool.name).sort(), ["merge_check", "report_compare", "standing", "status"]);
   assert.ok(tools.every((tool) => tool.inputSchema.required.includes("project") && tool.inputSchema.additionalProperties === false));
   // T500: a task_add needs its priority, from the scale.
@@ -1087,7 +1087,7 @@ test("the chief's setup text sends only read commands to the state CLI, and name
   assert.ok(cli.length > 0, setup);
   assert.deepEqual(cli.filter((command) => !["board", "config", "status", "standing", "merge-check", "logbook"].includes(command)), [], "each command it runs through the CLI only reads");
   const [list] = /The tools are .*?\./.exec(setup);
-  for (const name of ["milestone_propose", "config"]) assert.ok(Object.hasOwn(TOOLS, name) && list.includes(`\`${name}\``), name);
+  for (const name of ["milestone_propose", "milestone_set", "release_add", "config"]) assert.ok(Object.hasOwn(TOOLS, name) && list.includes(`\`${name}\``), name);
   assert.doesNotMatch(setup, /no milestone runs in Codex/);
 });
 
@@ -1131,6 +1131,17 @@ test("T930: milestone_propose (new and again) and task_set milestone= give the C
   assert.match(await both("task_set", { task: "T3", fields: { milestone: "M1" } }, ["task", "T3", "set", "milestone=M1"]), /^T3 framed .*M1/);
   assert.match((await both("milestone_propose", { milestone: "M9" }, ["milestone", "propose", "M9"])).error, /^sage: .*M9/);
   assert.match(await both("status", {}, ["status"]), /M1/);
+});
+
+test("T1003: release_add, milestone_set and task_set release= give the Claude state tool's own lines through the Codex server", async (t) => {
+  const { both } = await milestoneWorld(t);
+  assert.match(await both("release_add", { name: "1.0", goal: "Ship the first version" }, ["release", "add", "--name", "1.0", "--goal", "Ship the first version"]), /^release 1\.0 added · goal: Ship the first version\./);
+  assert.match((await both("release_add", { name: "M5" }, ["release", "add", "--name", "M5"])).error, /^sage: the release's name has the form of a sage id/);
+  await both("milestone_propose", { name: "Codex milestones", goal: "Codex runs milestones.", pilot: "T1", tasks: "T2" }, ["milestone", "propose", "--name", "Codex milestones", "--goal", "Codex runs milestones.", "--pilot", "T1", "--tasks", "T2"]);
+  assert.equal(await both("milestone_set", { milestone: "M1", release: "1.0" }, ["milestone", "M1", "set", "release=1.0"]), "M1 · release 1.0 · name: Codex milestones");
+  assert.match((await both("task_set", { task: "T2", fields: { release: "1.0" } }, ["task", "T2", "set", "release=1.0"])).error, /^sage: T2 is in M1, and a task of a milestone is in its milestone's release\./);
+  assert.match(await both("task_set", { task: "T3", fields: { release: "1.0" } }, ["task", "T3", "set", "release=1.0"]), /^T3 framed .* · release 1\.0$/);
+  assert.match(await both("status", {}, ["status"]), /^release 1\.0 · in progress · 0 of 3 tasks done · milestones M1 · single tasks T3 · goal: Ship the first version$/m);
 });
 
 test("T930: config sets the board name, the archive, the cycle counts and max_leads through the Codex server, with the Claude state tool's lines", async (t) => {
@@ -1185,7 +1196,8 @@ test("T952: run_add holds the project's agent cap in Codex as in Claude: the 11t
 
 test("T930: only the chief calls milestone_propose and config, and a lead sets no milestone=, at the gate and at the server", async (t) => {
   const w = await leadWorld(t), { lead } = w;
-  const calls = [["milestone_propose", { name: "n", goal: "g", pilot: "T1", tasks: "T2" }], ["config", { settings: { max_leads: "9" } }], ["config", { settings: { name: "Mine" } }]];
+  const calls = [["milestone_propose", { name: "n", goal: "g", pilot: "T1", tasks: "T2" }], ["config", { settings: { max_leads: "9" } }], ["config", { settings: { name: "Mine" } }],
+    ["release_add", { name: "1.0" }], ["milestone_set", { milestone: "M1", release: "1.0" }]]; // T1003: the release level is the chief's too
   const LOGBOOK = "sage: role agents report; only the chief records the logbook. Put this in your report";
   const before = readFileSync(join(w.env.CODEX_HOME, "sage", readdirSync(join(w.env.CODEX_HOME, "sage")).find((name) => name.startsWith("project-")), "tasks.tsv"), "utf8");
   for (const [name, args] of calls) {
@@ -1198,6 +1210,7 @@ test("T930: only the chief calls milestone_propose and config, and a lead sets n
     }
   }
   assert.match((await lead("task_set", { task: "T1", fields: { milestone: "M1" } })).denied, /^sage: a lead sets only state, branch, pr of its task, not milestone/);
+  assert.match((await lead("task_set", { task: "T1", fields: { release: "1.0" } })).denied, /^sage: a lead sets only state, branch, pr of its task, not release/);
   assert.equal(readFileSync(join(w.env.CODEX_HOME, "sage", readdirSync(join(w.env.CODEX_HOME, "sage")).find((name) => name.startsWith("project-")), "tasks.tsv"), "utf8"), before, "nothing changed");
   assert.equal(existsSync(join(w.env.CODEX_HOME, "sage", "config.json")), false, "no config written");
   assert.match(await w.call("config", { settings: { max_leads: "9" } }), /^max_agents=10 max_leads=9 /, "the chief sets it");

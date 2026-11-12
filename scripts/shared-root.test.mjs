@@ -1294,6 +1294,20 @@ const MOVED_COUNTS = RECONCILED([
   "old rows marked     2     2        1     1   match",
 ]);
 
+test("T1003: the move takes the releases by name, each name once with the first logbook's row first, and each moved task keeps its release", (t) => {
+  const w = moveWorld(t);
+  w.claude("release", "add", "--name", "1.0", "--goal", "The Claude goal");
+  w.claude("task", "T2", "set", "release=1.0");
+  w.codex("release", "add", "--name", "1.0", "--goal", "The Codex goal");
+  w.codex("release", "add", "--name", "Beta");
+  w.codex("task", "T1", "set", "release=Beta");
+  w.claude("move", "--gate", w.ask().id);
+  const dir = join(w.shared, w.folder());
+  assert.deepEqual(rowsIn(join(dir, "releases.tsv")).map((r) => [r.name, r.goal]), [["1.0", "The Claude goal"], ["Beta", ""]]);
+  assert.deepEqual(rowsIn(join(dir, "tasks.tsv")).filter((r) => r.release).map((r) => [r.id, r.title, r.release]), [["T4", "claude open", "1.0"], ["T6", "codex open", "Beta"]]);
+  assert.deepEqual(w.claude("status").split("\n").filter((l) => l.startsWith("release ")), ["release 1.0 · not started · 0 of 1 task done · single tasks T4 · goal: The Claude goal", "release Beta · not started · 0 of 1 task done · single tasks T6"]);
+});
+
 test("the move takes the open tasks of both old logbooks into one shared logbook, after the preview and one gate, and the board reads one project (T640)", (t) => {
   const w = moveWorld(t), folder = w.folder(), dir = join(w.shared, folder);
   const before = { claude: readFileSync(join(w.claudeDir, "tasks.tsv"), "utf8"), codex: readFileSync(join(w.codexDir, "tasks.tsv"), "utf8") };

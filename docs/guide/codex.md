@@ -16,6 +16,7 @@ The design of the two provider plugins is in [Separate provider packages](../des
 | The principles of each role | Yes: each agent file preloads them | Yes: `role.mjs` puts them in each role's text. A lead gets the path of each one to read, and the mode hook gives the chief the paths of its principles |
 | The logbook and the board | Yes | Yes: the plugin's `sage` MCP tools write the logbook, and the board phrases show the board ([The board in Codex](#the-board-in-codex)) |
 | Milestones (one goal, several tasks, a breakdown gate) | Yes | Yes: the `milestone_propose` tool opens the breakdown gate, and `task_set` with `milestone=` puts a task in a milestone or takes it out ([The logbook tools](#the-logbook-tools)) |
+| Releases (a version that you ship: milestones and single tasks) | Yes | Yes: the `release_add` tool adds a release, `milestone_set` puts a milestone in it, and `task_set` with `release=` puts a single task in it ([The logbook tools](#the-logbook-tools)) |
 | The settings: cycle counts, `max_leads`, the model keys, the project's board name and archive, and its start in sage mode | Yes | Yes: the `config` tool, when you ask the chief. A model key gives a Codex agent a reasoning effort, not a model ([Model keys in Codex](#model-keys-in-codex)) |
 | sage mode: the chief's role | Yes | Yes: the `sage mode` phrase gives it, and it comes back after a compaction |
 | Start every session of a project in sage mode | Yes: `config start=sage-mode`, or the `"agent"` line ([Start every session in sage mode](using-sage.md#start-every-session-in-sage-mode)) | Yes: the same `config start=sage-mode` setting turns sage mode on at each new session (one setting for both, with a shared logbook) |
@@ -327,6 +328,7 @@ The plugin starts a local MCP server, `sage`, in the desktop app and in the CLI.
 | `offer`, `cancel`, `accept`, `unclaim` | `offer <T>`, `cancel <T>`, `accept <T>`, `unclaim <T>`: [hand a task to another chief](using-sage.md#shared-logbooks) |
 | `task_add`, `task_set` | `task add`, `task <T> set` |
 | `milestone_propose` | `milestone propose`, `milestone propose <M>`: [a milestone](using-sage.md#waits-and-milestones) and its breakdown gate. A task joins or leaves with `task_set` `milestone=` |
+| `release_add`, `milestone_set` | `release add`, `milestone <M> set release=<name>`: [a release](using-sage.md#releases) and the milestones in it. A single task goes in with `task_set` `release=` |
 | `config` | `config key=value ...`: the cycle counts, `max_leads`, the other counts and the model keys for all projects, the project's board name and archive (`name=`, `archived=`), and its start in sage mode (`start=sage-mode` or `start=normal`) |
 | `task_adopt` | `task-adopt <T>`: adopt another provider's task and PR from a separate logbook, with fresh destination reviews. In a shared logbook it refuses: use the takeover gate |
 | `run_add`, `run_done` | `run add`, `run done` |
