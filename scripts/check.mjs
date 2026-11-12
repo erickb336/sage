@@ -16,6 +16,7 @@ import { docFiles, linkProblems, paragraphProblems, readmeProblems } from "./rea
 import { SHOTS, SHOTS_RECORD, sampleHash } from "./board-shots.mjs";
 import { unrunTestFiles } from "./test-commands.mjs";
 import { referenceFiles, startTextProblems } from "./start-text.mjs";
+import { KINDS as MESSAGE_KINDS } from "../packages/sage-core/message.mjs";
 
 const problems = [];
 try { problems.push(...packageBoundaryProblems(ROOT)); }
@@ -201,6 +202,25 @@ try {
 // T934: the Claude chief's and lead's start texts stay under their limits, and each reference that they name exists
 // and has its trigger. node scripts/start-text.mjs prints the bytes of each part.
 try { problems.push(...await startTextProblems()); } catch (e) { problems.push(`start texts: ${e.message} (scripts/start-text.mjs)`); }
+// T985: each playbook has its five parts in order, and its moment names message kinds that exist and the default with no
+// answer. The chief's Playbooks list has one trigger line for each playbook, and names no other.
+{
+  const PARTS = ["How the chief knows", "Agents prepare", "The owner's moment", "After the answer", "The owner learns"];
+  const at = "packages/sage-core/references/playbooks.md", chief = readFileSync(join(ROOT, "packages/sage-core/roles/chief-of-staff.md"), "utf8");
+  const list = chief.slice(chief.indexOf("**Playbooks:**"), chief.indexOf("\n4. "));
+  const triggers = new Set([...list.matchAll(/^ {3}- \*\*([^*]+)\*\*: /gm)].map((m) => m[1]));
+  const books = readFileSync(join(ROOT, at), "utf8").split(/^## /m).slice(1).map((s) => [s.slice(0, s.indexOf("\n")), s]);
+  for (const [name, text] of books) {
+    const parts = [...text.matchAll(/^\d\. \*\*([^:*]+):\*\*/gm)].map((m) => m[1]);
+    if (parts.join("|") !== PARTS.join("|")) problems.push(`${at}: the playbook "${name}" has the parts ${parts.join(", ") || "none"}; give it the five parts in order: ${PARTS.join(", ")}`);
+    const moment = text.slice(text.indexOf("3. **The owner's moment:**"), text.indexOf("\n4. "));
+    const kinds = [...moment.matchAll(/message kind `([^`]+)`/g)].map((m) => m[1]);
+    if (!kinds.length || kinds.some((k) => !Object.hasOwn(MESSAGE_KINDS, k))) problems.push(`${at}: the moment of the playbook "${name}" names the kinds ${kinds.join(", ") || "none"}; name each as message kind \`<kind>\` with a kind of packages/sage-core/message.mjs`);
+    if (!moment.includes("If the owner does not answer:")) problems.push(`${at}: the moment of the playbook "${name}" has no "If the owner does not answer:" line; write its default`);
+    if (!triggers.has(name)) problems.push(`packages/sage-core/roles/chief-of-staff.md: the Playbooks list has no trigger line "- **${name}**: <when>" for the playbook "${name}"`);
+  }
+  for (const name of triggers) if (!books.some(([n]) => n === name)) problems.push(`packages/sage-core/roles/chief-of-staff.md: the Playbooks list names "${name}", which ${at} has no section for`);
+}
 
 // A test must not hold wall-clock or CPU time under a tight fixed bound: load and machine differences can fail a
 // correct test (T53, T188). A name takes the clock when it is set from a clock reading or from a
