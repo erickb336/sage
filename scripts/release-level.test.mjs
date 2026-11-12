@@ -138,7 +138,8 @@ test("T1003: status shows each release in row order, with its state, the count o
   s.ok("task", "T5", "set", "release=Beta");
   const releaseLines = () => s.levels().filter((l) => l.startsWith("release"));
   assert.deepEqual(s.levels(), [
-    "release 1.0 · not started · 0 of 4 tasks done · milestones M1 · single tasks T3, T4 · goal: Ship the first version",
+    // M1's breakdown waits for the owner: a milestone that needs you has started, so its release is in progress (T1002's rule).
+    "release 1.0 · in progress · 0 of 4 tasks done · milestones M1 · single tasks T3, T4 · goal: Ship the first version",
     "release Beta · not started · 0 of 1 task done · single tasks T5",
     "release Alpha · not started · 0 of 0 tasks done",
     "milestone M1 · release 1.0 · pilot T1: 0 of 2 merged · breakdown waits for you (G1) · name: Sage feel",
@@ -146,6 +147,7 @@ test("T1003: status shows each release in row order, with its state, the count o
   setStates(s.dir, { T3: "merged", T4: "abandoned", T5: "abandoned" });
   assert.deepEqual(releaseLines().slice(0, 2), ["release 1.0 · in progress · 1 of 4 tasks done · 1 stopped · milestones M1 · single tasks T3, T4 · goal: Ship the first version",
     "release Beta · stopped · 0 of 1 task done · 1 stopped · single tasks T5"]);
+  s.ok("gate", "answer", "G1", "--option", "1"); // while the breakdown waits for the owner, M1 needs you, so 1.0 is not done
   setStates(s.dir, { T1: "merged", T2: "concluded" });
   assert.equal(releaseLines()[0], "release 1.0 · done · 3 of 4 tasks done · 1 stopped · milestones M1 · single tasks T3, T4 · goal: Ship the first version");
   // A cell that names a release which the table lacks (a hand edit) keeps its items in a count, and says so.
@@ -153,7 +155,7 @@ test("T1003: status shows each release in row order, with its state, the count o
   assert.equal(releaseLines().at(-1), "release Beta · not in the logbook: add it with release add, or set the release of each item again · 0 of 1 task done · 1 stopped · single tasks T5");
 });
 
-test("T1003: the state rule of a release: empty or nothing started is not started, all stopped is stopped, done needs a done item, a dropped milestone is stopped", () => {
+test("T1003: the state rule of a release (the state words of T1002): empty or nothing started is not started, all stopped is stopped, done needs a done item, a dropped milestone is stopped", () => {
   const graph = (tasks, milestones = []) => {
     const byMilestone = new Map();
     for (const t of tasks) if (t.milestone) byMilestone.set(t.milestone, [...(byMilestone.get(t.milestone) ?? []), t]);
@@ -162,7 +164,8 @@ test("T1003: the state rule of a release: empty or nothing started is not starte
   const stateOf = (tasks, milestones) => releasesOf([{ name: "1.0", goal: "", at: "" }], graph(tasks, milestones))[0].state;
   const single = (state, id = "T1") => ({ id, state, release: "1.0" });
   assert.equal(stateOf([]), "not started", "an empty release");
-  assert.equal(stateOf([single("framed"), single("abandoned", "T2")]), "not started", "nothing started");
+  assert.equal(stateOf([single("framed"), single("framed", "T2")]), "not started", "nothing started");
+  assert.equal(stateOf([single("framed"), single("abandoned", "T2")]), "in progress", "a stopped item is not a not-started one");
   assert.equal(stateOf([single("abandoned"), single("abandoned", "T2")]), "stopped");
   assert.equal(stateOf([single("merged"), single("abandoned", "T2")]), "done");
   assert.equal(stateOf([single("concluded")]), "done");
@@ -172,6 +175,7 @@ test("T1003: the state rule of a release: empty or nothing started is not starte
   const members = [{ id: "T1", state: "framed", milestone: "M1" }, { id: "T2", state: "building", milestone: "M1" }];
   assert.equal(stateOf(members, [m("dropped")]), "stopped", "a dropped milestone is stopped, also with open tasks");
   assert.equal(stateOf(members, [m("active")]), "in progress");
+  assert.equal(stateOf([{ ...members[0] }], [m("proposed")]), "in progress", "a milestone whose breakdown waits for the owner needs you, so it has started");
   assert.equal(stateOf([{ ...members[0], release: "2.0" }], [m("active")]), "not started", "a task of a milestone counts in its milestone's release, never in its own cell's");
   assert.deepEqual(releasesOf([{ name: "1.0" }], graph([{ id: "T1", state: "merged", release: "１.０" }]))[0].singles.map((t) => t.id), ["T1"], "a cell names a release without case or width");
 });
@@ -233,5 +237,5 @@ test("T1003: the sage of T995 in an open session reads a logbook with releases, 
   assert.equal(read.status, 0, read.stderr);
   assert.match(read.stdout, /^T3 framed /);
   // This version still reads and writes it, and its release lines are whole.
-  assert.match(s.ok("status"), /^release 1\.0 · not started · 0 of 2 tasks done · milestones M1 · single tasks T3 · goal: Ship the first version$/m);
+  assert.match(s.ok("status"), /^release 1\.0 · in progress · 0 of 2 tasks done · milestones M1 · single tasks T3 · goal: Ship the first version$/m);
 });

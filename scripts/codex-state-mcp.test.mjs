@@ -1128,7 +1128,7 @@ test("T1003: release_add, milestone_set and task_set release= give the Claude st
   assert.equal(await both("milestone_set", { milestone: "M1", release: "1.0" }, ["milestone", "M1", "set", "release=1.0"]), "M1 · release 1.0 · name: Codex milestones");
   assert.match((await both("task_set", { task: "T2", fields: { release: "1.0" } }, ["task", "T2", "set", "release=1.0"])).error, /^sage: T2 is in M1, and a task of a milestone is in its milestone's release\./);
   assert.match(await both("task_set", { task: "T3", fields: { release: "1.0" } }, ["task", "T3", "set", "release=1.0"]), /^T3 framed .* · release 1\.0$/);
-  assert.match(await both("status", {}, ["status"]), /^release 1\.0 · not started · 0 of 3 tasks done · milestones M1 · single tasks T3 · goal: Ship the first version$/m);
+  assert.match(await both("status", {}, ["status"]), /^release 1\.0 · in progress · 0 of 3 tasks done · milestones M1 · single tasks T3 · goal: Ship the first version$/m);
 });
 
 test("T930: config sets the board name, the archive, the cycle counts and max_leads through the Codex server, with the Claude state tool's lines", async (t) => {

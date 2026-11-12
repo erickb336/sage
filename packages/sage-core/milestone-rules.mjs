@@ -1,6 +1,7 @@
 // The rules of waits (T336) and milestones (T337), in one place: the state tool and the board read a logbook with them
 // (T233), so the status line, the merge check and the board never disagree. Pure functions of table rows: no file access.
 import { BREAKS, LINE, proposalOf } from "./logbook-fields.mjs";
+import { milestoneWord, releaseWord } from "./state-words.mjs";
 
 /**
  * Waits (T336): a task may wait for other tasks of its own logbook. A wait is met when that task is merged or concluded; an
@@ -269,17 +270,12 @@ export function releaseNameProblem(name, releases) {
   const twin = releases.find((r) => releaseKey(r.name) === key);
   return twin ? `is the name of the release ${twin.name} already (case and width do not count): give each release its own name` : null;
 }
-/** The word of a task in a release: done (merged or concluded), stopped (abandoned), not started (framed), else in progress. */
-const taskWord = (task) => (MET.includes(task.state) ? "done" : task.state === "abandoned" ? "stopped" : task.state === "framed" ? "not started" : "in progress");
 /**
- * The state of a release from the words of its items (the owner's rule, PE plan of T1003): not started when it is empty or
- * no item has started; stopped when every item is stopped; done when each item is done or stopped and one is done; else
- * in progress. A milestone item has the same rule over its tasks, and is stopped when the owner dropped it.
+ * The word of a task row in its release's state (the state words of T1002 read a board card; a release needs only whether
+ * the task is done, stopped, not started or under way): done (merged or concluded), stopped (abandoned), not started
+ * (framed), else in progress.
  */
-const levelState = (words) => !words.length ? "not started"
-  : words.every((w) => w === "stopped") ? "stopped"
-  : words.every((w) => w === "done" || w === "stopped") ? "done"
-  : words.some((w) => w === "done" || w === "in progress") ? "in progress" : "not started";
+const rowWord = (task) => (MET.includes(task.state) ? "done" : task.state === "abandoned" ? "stopped" : task.state === "framed" ? "not started" : "in progress");
 /**
  * Each release in row order, with its milestones, its single tasks, its state and the count of its tasks (the tasks of its
  * milestones and its single tasks): done, stopped and all. Then a stand-in (missing: true) for each name that a release
@@ -292,7 +288,8 @@ export function releasesOf(releases, { byId, milestones, byMilestone }) {
   for (const t of byId.values()) if (t.release && !t.milestone) of(t.release).singles.push(t);
   return [...out.values()].map((r) => {
     const tasks = [...r.milestones.flatMap((m) => byMilestone.get(m.id) ?? []), ...r.singles];
-    const words = [...r.milestones.map((m) => (m.state === "dropped" ? "stopped" : levelState((byMilestone.get(m.id) ?? []).map(taskWord)))), ...r.singles.map(taskWord)];
-    return { ...r, state: levelState(words), done: tasks.filter((t) => MET.includes(t.state)).length, stopped: tasks.filter((t) => t.state === "abandoned").length, total: tasks.length };
+    // The state words' one rule (state-words.mjs, T1002): a milestone's word from its state or its tasks, a release's from its items.
+    const words = [...r.milestones.map((m) => milestoneWord(m, (byMilestone.get(m.id) ?? []).map(rowWord)).word), ...r.singles.map(rowWord)];
+    return { ...r, state: releaseWord(words).word, done: tasks.filter((t) => MET.includes(t.state)).length, stopped: tasks.filter((t) => t.state === "abandoned").length, total: tasks.length };
   });
 }
