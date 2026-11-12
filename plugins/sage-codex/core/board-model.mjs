@@ -845,11 +845,12 @@ function sourceNeeds(source) {
 }
 
 // A logbook problem that needs the owner (R1307-1, R1307-2): a milestones or releases table (F-T996-1) that the board cannot
-// read, and a logbook that it cannot read (its folder, or a table but those two). An observation, an artifact or a checkout file that cannot be
+// read, and a logbook that it cannot read (its folder, or a table but those two). An older logbook's programs.tsv holds its
+// milestones (T995), so its problem is the milestones table's (F-T1012-1). An observation, an artifact or a checkout file that cannot be
 // read is a line under the board only: every task shows. Each reason says the file and the line, as the reader gives them.
 const TABLE_NAMES = ["tasks", "runs", "findings", "ledger", "gates", "decisions", "milestones"];
-const TABLE_FILE = new RegExp(`^(${[...TABLE_NAMES, "releases"].join("|")}): (.*)$`);
-const unreadable = project => project.diagnostics.filter(message => !/^(milestones|releases|observations|checkout|bindings|chiefs|sources|artifact [^:]*): /.test(message));
+const TABLE_FILE = new RegExp(`^(${[...TABLE_NAMES, "releases", "programs"].join("|")}): (.*)$`);
+const unreadable = project => project.diagnostics.filter(message => !/^(milestones|programs|releases|observations|checkout|bindings|chiefs|sources|artifact [^:]*): /.test(message));
 function reasonOf(message) {
   const [, name, rest] = TABLE_FILE.exec(message) ?? [];
   if (!name) return title(plainProblem(message));
@@ -858,22 +859,22 @@ function reasonOf(message) {
 function logbookNeeds(source, project, group) {
   // hidesReleases: the item is why the logbook's releases do not show, so the Releases tab gives it (F-T996-37, F-T996-40).
   const item = (kind, needTitle, text, hidesReleases = false) => ({ kind, title: needTitle, text, key: `${project.key}/${kind}`, source: source.id, sourceLabel: source.label, projectName: group.name, group: group.key, archived: group.archived, ...(hidesReleases && { hidesReleases }) });
-  const milestones = project.diagnostics.find(message => message.startsWith("milestones: ")), lost = unreadable(project);
+  const milestones = project.diagnostics.filter(message => /^(milestones|programs): /.test(message)), lost = unreadable(project);
   const releases = project.old ? null : project.diagnostics.find(message => message.startsWith("releases: "));
   const others = group.books.filter(book => book.project !== project && !cannotRead(book.project, "tasks")).map(book => title(book.source.label));
   const tables = lost.map(message => TABLE_FILE.exec(message)?.[1]).filter(Boolean);
   // With no tasks, the board shows no milestone either: one item says why, with the milestones table's reason too (T383).
-  const noTasks = cannotRead(project, "tasks"), why = [...lost, ...(noTasks && milestones ? [milestones] : [])], hides = releasesHidden(project);
+  const noTasks = cannotRead(project, "tasks"), why = [...lost, ...(noTasks ? milestones : [])], hides = releasesHidden(project);
   const shows = noTasks ? others.length ? `The board shows only the ${others.join(" and ")} logbook of ${group.name}.` : `The board shows no task of ${group.name}.`
     : `The board shows its tasks without the rows of ${tables.map(name => `${name}.tsv`).join(", ")}.`;
   // Every table with one error code (a folder with no read permission): the folder is the reason, once.
   const codes = new Set(why.map(message => TABLE_FILE.exec(message)?.[2]));
-  const folder = why.length === TABLE_NAMES.length && codes.size === 1 && /^E[A-Z]+$/.test([...codes][0]) ? `Its folder ${PLAIN[[...codes][0]] ?? "cannot be read"}` : null;
+  const folder = TABLE_NAMES.every(name => why.some(message => message.startsWith(`${name}: `))) && codes.size === 1 && /^E[A-Z]+$/.test([...codes][0]) ? `Its folder ${PLAIN[[...codes][0]] ?? "cannot be read"}` : null;
   // An open move gate has no task, so no card shows it: it needs the owner here (F-T640-41, the owner's option a).
   const moves = project.old ? [] : (project.tables.gates ?? []).filter(gate => !gate.answer && !gate.task && /^move · plan [0-9a-f]{8}$/.test(String(gate.question ?? "").split(LINE)[0]));
   return [
     ...moves.map(gate => ({ ...item("move", `The move gate ${gate.id} waits for your answer`, `${String(gate.question).split(LINE)[1] ?? "Move the project into one shared logbook?"} Answer the gate in the chat: the chief puts it to you word for word, with its options and its recommendation.`), key: `${project.key}/${gate.id}` })),
-    ...(milestones && !noTasks ? [item("milestones", "The milestones table cannot be read", `${reasonOf(milestones)}. The board shows the tasks without their milestones. Ask the chief to repair the logbook.`, hides)] : []),
+    ...(milestones.length && !noTasks ? [item("milestones", "The milestones table cannot be read", `${milestones.map(reasonOf).join(". ")}. The board shows the tasks without their milestones. Ask the chief to repair the logbook.`, hides)] : []),
     ...(releases && !noTasks ? [item("releases", "The releases table cannot be read", `${reasonOf(releases)}. The board shows the tasks without their releases. Ask the chief to repair the logbook.`, hides)] : []),
     ...(lost.length ? [item("logbook", `The ${title(source.label)} logbook cannot be read`, `${folder ?? why.map(reasonOf).join(". ")}. ${shows} Ask the chief to repair the logbook.`, hides && why.some(message => /^(tasks|programs|milestones): /.test(message)))] : []),
   ];

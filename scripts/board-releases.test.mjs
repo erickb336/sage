@@ -234,7 +234,7 @@ test("F-T996-10: a box of waiting tasks that wait for different tasks keeps its 
 
 /** A logbook on disk whose releases table cannot be read: line 2 has 2 cells, and the header has 3 (SAMPLE DATA). */
 const damagedReleases = t => logbookOnDisk(t, { releases: [["name", "goal", "at"], ["1.0", "Sample goal."]] });
-/** A logbook on disk (SAMPLE DATA): T1 not in a release, T2 a single task of release 1.0; sheets replace its tables. */
+/** A logbook on disk (SAMPLE DATA): T1 not in a release, T2 a single task of release 1.0; sheets replace its tables (null: no file). */
 function logbookOnDisk(t, sheets) {
   const root = mkdtempSync(join(tmpdir(), "sage-board-releases-")), project = join(root, "sample-abcdef");
   t.after(() => rmSync(root, { recursive: true, force: true }));
@@ -243,7 +243,7 @@ function logbookOnDisk(t, sheets) {
   sheet("tasks", [["id", "title", "size", "risk", "route", "state", "branch", "pr", "round", "keys", "milestone", "release"], ["T1", "Sample first", "small", "", "build", "framed", "", "", "0", "", "", ""], ["T2", "Sample single", "small", "", "build", "framed", "", "", "0", "", "", "1.0"]]);
   for (const [name, header] of Object.entries({ runs: "id task role round candidate branch status tokens report started ended", findings: "task key round source severity summary triage reason status", ledger: "task pr sha kind cycle run at", gates: "id task question options recommendation default answer at", decisions: "at task decision why", milestones: "id name goal pilot gate at" })) sheet(name, [header.split(" ")]);
   sheet("releases", [["name", "goal", "at"], ["1.0", "Sample goal.", ""]]);
-  for (const [name, rows] of Object.entries(sheets)) sheet(name, rows);
+  for (const [name, rows] of Object.entries(sheets)) if (rows) sheet(name, rows); else rmSync(join(project, `${name}.tsv`));
   return readBoardSources([{ id: "sample", path: root, label: "Sample source" }])[0];
 }
 
@@ -329,6 +329,20 @@ test("F-T996-36: an older logbook with programs.tsv (before the rename, T995) an
   const tasks = [TASKS_HEADER, ["T1", "Sample first", "small", "", "build", "framed", "", "", "0", "", "M1", ""], ["T2", "Sample single", "small", "", "build", "merged", "", "", "0", "", "", "1.0"]];
   noReleaseFrom(logbookOnDisk(t, { programs, tasks, milestones: DAMAGED_MILESTONES }), "The milestones table cannot be read", "milestones.tsv line 2 has 2 cells, and its header has 7.");
   noReleaseFrom(logbookOnDisk(t, { programs, tasks: [TASKS_HEADER, ["T1", "Sample first"]] }), "The Sample source logbook cannot be read", "tasks.tsv line 2 has 2 cells, and its header has 12.", "sample-abcdef");
+});
+
+test("F-T1012-1, F-T1012-2: a damaged programs.tsv is the milestones table's problem: Needs you and one Releases banner name programs.tsv", t => {
+  // SAMPLE DATA: an older logbook (before the rename, T995) with no milestones.tsv; line 2 of programs.tsv has 1 cell.
+  const programs = [["id", "name", "goal", "pilot", "gate", "at", "release"], ["P1"]];
+  const reason = "programs.tsv line 2 has 1 cell, and its header has 7.";
+  noReleaseFrom(logbookOnDisk(t, { programs, milestones: null }), "The milestones table cannot be read", reason);
+  // T1 names milestone M1 too, so milestones.tsv is missing as well: one problem with the milestones, one item and one banner.
+  const tasks = [TASKS_HEADER, ["T1", "Sample first", "small", "", "build", "framed", "", "", "0", "", "M1", ""], ["T2", "Sample single", "small", "", "build", "framed", "", "", "0", "", "", "1.0"]];
+  const data = buildBoardModel([logbookOnDisk(t, { programs, tasks, milestones: null })], { now: NOW });
+  assert.deepEqual(data.milestoneNeeds.map(need => [need.kind, need.text]), [["milestones", `milestones.tsv is missing. ${reason} The board shows the tasks without their milestones. Ask the chief to repair the logbook.`]]);
+  const { main } = releasesViews(data);
+  assert.equal(main.match(/<div class="banner warn" data-rproject=/g)?.length, 1, main);
+  assert.ok(main.includes(`<b>The releases of sample cannot be read.</b> milestones.tsv is missing. ${reason}`), main);
 });
 
 test("F-T996-41: a damaged tasks or gates table makes no milestone advice that guesses: Needs you names the table and asks for a repair", () => {
