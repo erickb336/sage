@@ -15,7 +15,7 @@ const SWITCH = `'sha256-${createHash("sha256").update(SWITCH_SCRIPT).digest("bas
 const REST = "default-src 'none'; style-src 'unsafe-inline'; img-src data:; font-src data:; media-src data:; base-uri 'none'; form-action 'none'; frame-ancestors 'none'";
 /**
  * The policy of a page. Its origin is no origin (a sandbox without allow-same-origin), so it reads no storage of the
- * board and the board refuses its requests. It loads no picture, style, frame or script from a server. No header stops
+ * board and the board refuses its requests. It loads no picture, style or frame from a server. No header stops
  * a prerender link (Chromium's NoStatePrefetch) from asking another site for its address when the page opens
  * (F-T1013-5). Only sage's own script runs (a message page's Today switch, see switchOnly), and any other page gets no
  * scripts at all. A sandbox without scripts also stops a meta refresh, and no policy stops a refresh while scripts run
