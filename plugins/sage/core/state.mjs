@@ -33,6 +33,7 @@ import { LEAD_COMMANDS, leadProblem as leadPolicy, leadRequest } from "./lead-po
 import { renderMessage } from "./message-checks.mjs";
 import { MAX_SECTIONS, PAGE_MAX, PAGE_TYPES, pageType, pageUrl } from "./message.mjs";
 import { pageFile, pageTaskFolder } from "./page-files.mjs";
+import { taskWord } from "./state-words.mjs";
 
 /** The one line for a saved change that cannot finish: the settle step refuses with it, and `sage logbook repair` is its way out. */
 export const STUCK_WRITE = 'This command changed nothing. This project cannot save changes; other projects work. Tell the owner. There are two ways out. With a backup: the owner restores the folder that `sage logbook` prints; rows newer than the backup are lost. With no backup: after the owner accepts the loss of this saved change, the chief runs `sage logbook repair --accept-change-loss yes --project <the project>`, or the owner runs it in a terminal when the chief cannot; it keeps the file, and a half-published update keeps mixed tables. Do not remove review-pending.json by hand.';
@@ -2808,8 +2809,9 @@ function judgeMerge(sha, env, { cycles, pr, readOnly, head, project, locked, ses
  * label, so the name cannot pass for the status. A done or dropped milestone keeps its name and count, and a dropped one
  * names the next step for its tasks that have not ended. A milestone whose pilot is abandoned or lost is stuck, also before
  * its approval, as on the board. The graph has the tasks by milestone (shownGraph), so the lines are linear in the tasks (R1208-5).
+ * wordOf: a task row's word (statusWords).
  */
-function milestonesLine(graph) {
+function milestonesLine(graph, wordOf) {
   const { byId, milestones, byMilestone } = graph;
   return [...milestones.values()].map((p) => {
     const own = byMilestone.get(p.id) ?? [], text = progressText(progressOf(own));
@@ -2822,7 +2824,7 @@ function milestonesLine(graph) {
       : state === "stuck" ? `${text} · pilot ${p.pilot} ${pilot ?? "not in the logbook"}: choose a new pilot, or drop the milestone`
       : `pilot ${p.pilot}: ${text}${why}`;
     // The owner's word (state-words.mjs, T997) comes first after the release, as on the release line.
-    return `milestone ${p.id}${p.release ? ` · release ${oneLine(p.release)}` : ""} · ${milestoneWordOf(p, graph).word} · ${line} · name: ${oneLine(p.name)}`;
+    return `milestone ${p.id}${p.release ? ` · release ${oneLine(p.release)}` : ""} · ${milestoneWordOf(p, graph, wordOf).word} · ${line} · name: ${oneLine(p.name)}`;
   });
 }
 
@@ -2844,6 +2846,15 @@ const gateShort = (g, { milestones, renamed }) => {
   // A move gate's first two lines: its plan and its question, as a breakdown gate shows its first line (F-T640-55).
   if (moveOf(g)) return String(g.question).split(LINE).slice(0, 2).join(" · ");
   return breakdownGate(g, milestones, renamed) ? `${first} (breakdown, ${n} ${n === 1 ? "task" : "tasks"})` : first;
+};
+/**
+ * Each task row's word for the milestone and release lines of status: the board card's rule (taskWord, F-T997-1) with the
+ * reasons that status reads, an open gate (needs you) and an unmet wait (waiting). Status reads no PR, verdict or run clock:
+ * the board's reasons from them come on a task under way, where needs you and in progress count alike in those lines.
+ */
+const statusWords = (gates, graph) => {
+  const asked = new Set(gates.map((g) => g.task));
+  return (t) => taskWord({ state: t.state, reasons: asked.has(t.id) ? [{ kind: "gate", text: "" }] : [], waitLine: shownOpen(t, graph).length ? { text: "" } : null }).word;
 };
 /** The status lines. With save, also status.md: only a command that holds the lock saves, so status.md never lags. */
 function status(dir, save) {
@@ -2869,7 +2880,8 @@ function status(dir, save) {
   // The open tasks with no priority (T500): older rows stay valid, so status names them for the chief to set.
   const none = tasks.filter((t) => !ENDED.includes(t.state) && !t.priority).map((t) => t.id);
   if (none.length) lines.push(`priority ${none.length} open task${none.length === 1 ? " has" : "s have"} none: ${none.slice(0, 10).join(", ")}${none.length > 10 ? `, and ${none.length - 10} more` : ""} · set them with task <T> set priority=<P0 to P3>`);
-  lines.push(...releasesOf(read(dir, "releases"), graph).map(releaseLine), ...milestonesLine(graph));
+  const wordOf = statusWords(gates, graph);
+  lines.push(...releasesOf(read(dir, "releases"), graph, wordOf).map(releaseLine), ...milestonesLine(graph, wordOf));
   // The runs by task, once, so the usage lines are linear in the runs.
   const runsOf = new Map();
   for (const r of runs) (runsOf.get(r.task) ?? runsOf.set(r.task, []).get(r.task)).push(r);
