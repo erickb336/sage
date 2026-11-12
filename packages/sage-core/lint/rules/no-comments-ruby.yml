@@ -11,3 +11,4 @@ rule:
       - regex: '^# rubocop:(disable|enable|todo) [\w/]+(, ?[\w/]+)*\r?$'
       - regex: '^# typed: (ignore|false|true|strict|strong)\r?$'
       - matches: spdx
+      - inside: { kind: heredoc_body }

@@ -19,6 +19,7 @@ const MUTANTS = [
   { name: "a shell shebang passes on any line", file: "rules/no-comments-shell.yml", from: "{ nthChild: 1 }, { inside", to: "{ regex: '.' }, { inside", fails: "no-comments-shell" },
   { name: "any comment before a later import \"C\" passes as a cgo preamble", file: "rules/no-comments-go.yml", from: "stopBy: { not: { kind: comment } }", to: "stopBy: end", fails: "no-comments-go" },
   { name: "a comment inside an HTML attribute value is flagged", file: "rules/no-comments-html.yml", from: "\n      - inside: { kind: quoted_attribute_value }", to: "", fails: "no-comments-html" },
+  { name: "the text ## before an interpolation in a Ruby heredoc is flagged", file: "rules/no-comments-ruby.yml", from: "\n      - inside: { kind: heredoc_body }", to: "", fails: "no-comments-ruby" },
 ];
 
 function copyOfRuleSet() {
