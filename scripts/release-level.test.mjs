@@ -284,3 +284,83 @@ test("T1003: the sage of T995 in an open session reads a logbook with releases, 
   assert.equal(still.status, 1);
   assert.match(still.stderr, /has columns that this version of sage does not know \(release\)/);
 });
+
+// F-T1003-21 (T1007): a task that leaves a milestone keeps the milestone's release as its own release, with a decision row,
+// so that nothing leaves a release by itself. The row names the task, the release and why.
+const releaseRows = (dir) => rowsOf(dir, "decisions").filter((d) => /^release /.test(d.decision)).map((d) => [d.task, d.decision, d.why]);
+const releaseOf = (dir, id) => rowsOf(dir, "tasks").find((t) => t.id === id).release ?? "";
+const kept = (id, m, release) => [id, `release none → ${release}`, `${id} left milestone ${m}, and keeps its release`];
+
+test("T1007: a task that leaves a milestone with milestone=none keeps the milestone's release, with a decision row", () => {
+  const s = logbook(3);
+  s.ok("release", "add", "--name", "1.0");
+  s.ok("milestone", "propose", "--name", "Sage feel", "--goal", "A sample goal", "--pilot", "T1", "--tasks", "T2,T3");
+  s.ok("milestone", "M1", "set", "release=1.0");
+  s.ok("gate", "answer", "G1", "--option", "1"); // approve
+  assert.match(s.ok("task", "T2", "set", "milestone=none"), / · keeps the release 1\.0 of M1/);
+  assert.equal(releaseOf(s.dir, "T2"), "1.0");
+  assert.deepEqual(releaseRows(s.dir), [kept("T2", "M1", "1.0")]);
+  assert.equal(s.levels()[0], "release 1.0 · not started · 0 of 3 tasks done · milestones M1 · single tasks T2");
+  // A task that stays is in the release through its milestone only: its own cell stays empty.
+  assert.equal(releaseOf(s.dir, "T3"), "");
+});
+
+test("T1007: a task that a new milestone propose leaves out of --tasks, or an old pilot, keeps the milestone's release, with a decision row", () => {
+  const s = logbook(3);
+  s.ok("release", "add", "--name", "1.0");
+  s.ok("milestone", "propose", "--name", "Sage feel", "--goal", "A sample goal", "--pilot", "T1", "--tasks", "T2,T3");
+  s.ok("milestone", "M1", "set", "release=1.0");
+  s.ok("gate", "answer", "G1", "--option", "2"); // change
+  s.ok("milestone", "propose", "M1", "--tasks", "T2");
+  assert.equal(releaseOf(s.dir, "T3"), "1.0");
+  assert.deepEqual(releaseRows(s.dir), [kept("T3", "M1", "1.0")]);
+  s.ok("gate", "answer", "G2", "--option", "1"); // approve
+  s.ok("milestone", "propose", "M1", "--pilot", "T2", "--tasks", "none"); // a new pilot: the old pilot T1 leaves
+  assert.equal(releaseOf(s.dir, "T1"), "1.0");
+  assert.deepEqual(releaseRows(s.dir), [kept("T3", "M1", "1.0"), kept("T1", "M1", "1.0")]);
+  assert.equal(s.levels()[0], "release 1.0 · in progress · 0 of 3 tasks done · milestones M1 · single tasks T1, T3");
+});
+
+test("T1007: a task that leaves a milestone with no release gets no release and no release row, by milestone=none and by milestone propose", () => {
+  const s = logbook(3);
+  s.ok("release", "add", "--name", "1.0");
+  s.ok("task", "T3", "set", "release=1.0"); // a release column, so that an empty cell is a real empty cell
+  s.ok("task", "T3", "set", "release=none");
+  s.ok("milestone", "propose", "--name", "Sage feel", "--goal", "A sample goal", "--pilot", "T1", "--tasks", "T2,T3");
+  s.ok("gate", "answer", "G1", "--option", "1"); // approve
+  assert.doesNotMatch(s.ok("task", "T2", "set", "milestone=none"), /keeps the release/);
+  s.ok("milestone", "propose", "M1", "--tasks", "none"); // T3 leaves
+  for (const id of ["T2", "T3"]) assert.equal(rowsOf(s.dir, "tasks").find((t) => t.id === id).milestone, "", id);
+  for (const id of ["T2", "T3"]) assert.equal(releaseOf(s.dir, id), "", id);
+  assert.deepEqual(releaseRows(s.dir).filter(([, , why]) => /left milestone/.test(why)), []);
+});
+
+test("T1007: an ended task (merged, concluded, abandoned) stays in its milestone's count, so its release does not change", () => {
+  const s = logbook(5);
+  s.ok("release", "add", "--name", "1.0");
+  s.ok("milestone", "propose", "--name", "Sage feel", "--goal", "A sample goal", "--pilot", "T1", "--tasks", "T2,T3,T4,T5");
+  s.ok("milestone", "M1", "set", "release=1.0");
+  s.ok("gate", "answer", "G1", "--option", "1"); // approve
+  setStates(s.dir, { T3: "merged", T4: "concluded", T5: "abandoned" });
+  const before = snapshot(s.dir);
+  for (const id of ["T3", "T4", "T5"]) assert.match(s.no("task", id, "set", "milestone=none"), /an ended task joins no milestone and leaves none/, id);
+  assert.deepEqual(snapshot(s.dir), before, "each refusal changes nothing");
+  s.ok("milestone", "propose", "M1", "--tasks", "T2"); // leaves out the ended tasks, which stay in M1
+  for (const id of ["T3", "T4", "T5"]) {
+    assert.equal(rowsOf(s.dir, "tasks").find((t) => t.id === id).milestone, "M1", id);
+    assert.equal(releaseOf(s.dir, id), "", id);
+  }
+  assert.deepEqual(releaseRows(s.dir), []);
+});
+
+test("T1007: the tasks of a dropped milestone, taken out one by one, each keep its release, with its row", () => {
+  const s = logbook(3);
+  s.ok("release", "add", "--name", "1.0");
+  s.ok("milestone", "propose", "--name", "Sage feel", "--goal", "A sample goal", "--pilot", "T1", "--tasks", "T2,T3");
+  s.ok("milestone", "M1", "set", "release=1.0");
+  s.ok("gate", "answer", "G1", "--option", "3"); // drop
+  for (const id of ["T2", "T1", "T3"]) assert.match(s.ok("task", id, "set", "milestone=none"), / · keeps the release 1\.0 of M1/, id);
+  for (const id of ["T1", "T2", "T3"]) assert.equal(releaseOf(s.dir, id), "1.0", id);
+  assert.deepEqual(releaseRows(s.dir), [kept("T2", "M1", "1.0"), kept("T1", "M1", "1.0"), kept("T3", "M1", "1.0")]);
+  assert.equal(s.levels()[0], "release 1.0 · in progress · 0 of 3 tasks done · milestones M1 · single tasks T1, T2, T3");
+});
