@@ -590,11 +590,24 @@ test("T956, T970: the gap rule holds a Codex lead at its next step, also its rou
   assert.match(await lead(...calls[0]), /^R\d+ running · code-reviewer on T1/);
 });
 
+test("T984: the message tool gives the chief the same text and page as the CLI's message command", async (t) => {
+  const s = await connect(t);
+  await s.call("init");
+  await s.call("task_add", { title: "t", size: "small", priority: "P2" });
+  const fixture = (name) => JSON.parse(readFileSync(join(ROOT, "scripts/fixtures/messages", name), "utf8"));
+  const text = await s.call("message", { task: "T1", message: fixture("10-catch-up.json") });
+  assert.match(text, /^CATCH-UP\n\nRelease 1\.0: the presentation skill is in\n/);
+  const page = /\n {2}(\/\S+\/pages\/T1\/catch-up-[0-9a-f]{8}\.html)\n/.exec(text)?.[1];
+  assert.ok(page && existsSync(page), text);
+  assert.ok(page.startsWith(join(s.dir, "worktrees")), "in the task's pages folder");
+  assert.match((await s.call("message", { task: "T1", message: { kind: "question", title: "Why?", blocks: [] } })).error, /^sage: the message is not in its kind's shape/);
+});
+
 test("the state server lists one tool for each state-tool command, and marks only the reads read-only", async (t) => {
   const s = await connect(t);
   const tools = await s.tools();
   assert.deepEqual(tools.map((tool) => tool.name).sort(), ["accept", "brief", "cancel", "claim", "config", "finding_add", "finding_close", "finding_move", "finding_triage", "gate_add", "gate_answer", "gate_replace",
-    "init", "link", "log", "merge_check", "milestone_propose", "move", "offer", "pages", "report_compare", "round", "run_add", "run_done", "standing", "standing_add", "status", "task_add", "task_adopt", "task_set", "unclaim", "verdict", "worktrees"]);
+    "init", "link", "log", "merge_check", "message", "milestone_propose", "move", "offer", "pages", "report_compare", "round", "run_add", "run_done", "standing", "standing_add", "status", "task_add", "task_adopt", "task_set", "unclaim", "verdict", "worktrees"]);
   assert.deepEqual(tools.filter((tool) => tool.annotations.readOnlyHint).map((tool) => tool.name).sort(), ["merge_check", "report_compare", "standing", "status"]);
   assert.ok(tools.every((tool) => tool.inputSchema.required.includes("project") && tool.inputSchema.additionalProperties === false));
   // T500: a task_add needs its priority, from the scale.
