@@ -11,7 +11,7 @@ import { test } from "node:test";
 import { fileURLToPath, pathToFileURL } from "node:url";
 import { shellCommands } from "../plugins/sage/core/command-reader.mjs";
 import { landingRule } from "../plugins/sage/core/board-view.mjs";
-import { writerClass } from "../plugins/sage/core/chiefs.mjs";
+import { chiefOnly, writerClass } from "../plugins/sage/core/chiefs.mjs";
 import { RENAME_WHY } from "../plugins/sage/core/milestone-rules.mjs";
 import * as claude from "../plugins/sage/skills/sage/sage.mjs";
 import { tool as codex } from "../plugins/sage-codex/skills/sage/sage.mjs";
@@ -101,19 +101,22 @@ test("F-T604-23: the printed repair line on a legacy project adds no chiefs.tsv 
 
 // F4 of the T995 PE: writerClass ends in a read, so a command that writes and has no class would pass every chief's
 // guard. Each command that the state tool lists is a read here, or has write forms whose class is not a read.
-test("T995 F4: every command of the state tool is a read or has a writer class, also the old words program and release", () => {
+test("T995 F4: every command of the state tool is a read or has a writer class, also the old words program and release <T>, and the release level (T1003)", () => {
   let listed;
   try { claude.sage(["no-such-command"]); } catch (error) { listed = /Commands: (.*)$/.exec(error.message)[1].split(", "); }
   const READS = ["status", "stats", "merge-check", "board", "link", "worktrees"];
   const WRITES = {
     init: [[]], logbook: [["repair"]], standing: [["add"]], pages: [["T1", "record"]], task: [["add"], ["T1", "set"]], "task-adopt": [["T1"]],
-    milestone: [["propose"]], round: [["T1"]], run: [["add", "T1"], ["done", "R1"], ["usage", "R1"]], finding: [["add", "T1"], ["triage", "T1"], ["close", "T1"], ["move", "T1"]],
+    milestone: [["propose"], ["M1", "set"]], release: [["add"], ["T1"]], round: [["T1"]], run: [["add", "T1"], ["done", "R1"], ["usage", "R1"]], finding: [["add", "T1"], ["triage", "T1"], ["close", "T1"], ["move", "T1"]],
     verdict: [["T1"]], gate: [["add"], ["add", "T1"], ["answer", "G1"], ["replace", "T1"]], log: [["T1"], ["-"]], config: [["max_rounds=3"]], projects: [["rebuild"]],
     observe: [["T1"]], claim: [["T1"]], offer: [["T1"]], cancel: [["T1"]], accept: [["T1"]], unclaim: [["T1"]], move: [[]],
   };
   assert.deepEqual([...READS, ...Object.keys(WRITES)].sort(), [...listed].sort(), "each listed command is a read or has its write forms here");
-  for (const [cmd, forms] of Object.entries({ ...WRITES, program: [["propose"]], release: [["T1"]] })) for (const pos of forms) assert.notEqual(writerClass(cmd, pos).kind, "read", `${cmd} ${pos.join(" ")}`);
+  for (const [cmd, forms] of Object.entries({ ...WRITES, program: [["propose"], ["M1", "set"]] })) for (const pos of forms) assert.notEqual(writerClass(cmd, pos).kind, "read", `${cmd} ${pos.join(" ")}`);
   assert.deepEqual([writerClass("program", ["propose"]), writerClass("release", ["T1"])], [writerClass("milestone", ["propose"]), writerClass("unclaim", ["T1"])], "an old word has the class of its new word");
+  // A release changes no task, so any chief sets it; only release <T>, the old word of unclaim, moves a task between chiefs.
+  assert.deepEqual([writerClass("release", ["add"]).kind, writerClass("milestone", ["M1", "set"]).kind], ["any", "any"]);
+  assert.deepEqual([chiefOnly("release", ["T1"]), chiefOnly("release", ["add"])], [true, false]);
 });
 
 test("a legacy project has no chief: no chiefs.tsv, no chief column, and no option or claim", (t) => {
@@ -589,6 +592,8 @@ for (const [name, own, other] of pairs) {
     assert.equal(w.tables(), tables, "the refused claim changes nothing");
     assert.equal(w.owner("claim", "T1", "--version", w.version()), "T1 claimed · chief C1", "the unclaiming chief claims it back");
     assert.match(w.owner("release", "T1"), /^T1 unclaimed · no owning chief\. .*\nnote: release is unclaim now\. The old words work for one more version\.$/, "T995: the old word works for one version");
+    // T1003: release add is the release level, which changes no task, so another chief adds one too, with no note.
+    assert.match(w.intruder("release", "add", "--name", "1.0"), /^release 1\.0 added\. Put a milestone in it/);
     // The question names the chief that unclaimed the task, so the answer knows its provider (F-T656-2); a Claude chief
     // that takes it from a Codex chief runs one fresh cycle first.
     const [mine, theirs] = name === "Claude" ? ["claude", "codex"] : ["codex", "claude"];
@@ -1042,7 +1047,7 @@ test("F-T604-19: an older sage, whose tables have no chief column, refuses to wr
   const plugin = join(w.base, "older");
   cpSync(at("../plugins/sage-codex"), plugin, { recursive: true });
   const state = join(plugin, "core/state.mjs"), source = readFileSync(state, "utf8");
-  const older = source.replace(", tasks: [...PLAIN_TABLES.tasks, CHIEF_COLUMN], runs: [...PLAIN_TABLES.runs, CHIEF_COLUMN, CHECKOUT_COLUMN] };", " };");
+  const older = source.replace("const SPARSE = { tasks: [CHIEF_COLUMN, \"offer\", RELEASE_COLUMN], runs: [CHIEF_COLUMN, CHECKOUT_COLUMN],", "const SPARSE = { tasks: [\"offer\", RELEASE_COLUMN],");
   assert.notEqual(older, source, "the fixture removes the column");
   writeFileSync(state, older);
   const { tool } = await import(pathToFileURL(join(plugin, "skills/sage/sage.mjs")).href);
@@ -1323,7 +1328,7 @@ test("T625: after the first run add with a checkout, a sage of PR 5a refuses to 
   const plugin = join(w.base, "older");
   cpSync(at("../plugins/sage-codex"), plugin, { recursive: true });
   const state = join(plugin, "core/state.mjs"), source = readFileSync(state, "utf8");
-  const older = source.replace("runs: [...PLAIN_TABLES.runs, CHIEF_COLUMN, CHECKOUT_COLUMN] };", "runs: [...PLAIN_TABLES.runs, CHIEF_COLUMN] };").replace("runs: [CHIEF_COLUMN, CHECKOUT_COLUMN], gates", "runs: [CHIEF_COLUMN], gates");
+  const older = source.replace("runs: [CHIEF_COLUMN, CHECKOUT_COLUMN], gates", "runs: [CHIEF_COLUMN], gates");
   assert.notEqual(older, source, "the fixture removes the column");
   writeFileSync(state, older);
   const { tool } = await import(pathToFileURL(join(plugin, "skills/sage/sage.mjs")).href);
