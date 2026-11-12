@@ -2,7 +2,9 @@
 // The look is the T218 design (approved 2026-10-11) with the T305 picker, filter bar and step line (approved 2026-10-18).
 // The page needs no script for its cards, task pages, backlog fold and theme; the picker and the filters need the script.
 import { LINE, PRIORITIES, TASK_KINDS, proposalOf } from "./logbook-fields.mjs";
-import { ENDED, lostClause, lostWhy, MILESTONE_ID } from "./milestone-rules.mjs";
+import { ENDED, lostClause, lostWhy, MILESTONE_ID, milestoneName } from "./milestone-rules.mjs";
+import { releaseWord, taskWord } from "./state-words.mjs";
+import { box, columns } from "./picture.mjs";
 const esc = value => String(value ?? "").replace(/[&<>"']/g, c => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]));
 // The backslash and the tilde too (F1): a text that ends with a backslash would cancel the chat's hard break, and "~~" strikes text through.
 // Every control (C0, C1 with U+0085) and line or paragraph separator is a space, and every format character (\p{Cf}:
@@ -89,7 +91,7 @@ function context(model, snapshot) {
   const renamed = new Map();
   for (const milestone of model.milestones ?? []) if (milestone.was) (renamed.get(milestone.project) ?? renamed.set(milestone.project, new Map()).get(milestone.project)).set(milestone.was, milestone.id);
   return { snapshot, slot: new Map(keys.map((key, i) => [key, `p${i % 8}`])), sources: providers.map(source => source.id), names: providers.map(source => title(source.standIn)), at: model.at,
-    tasks: new Map(model.tasks.map(task => [task.key, task])), milestones: new Map((model.milestones ?? []).map(milestone => [milestone.key, milestone])), renamed, waitedBy };
+    tasks: new Map(model.tasks.map(task => [task.key, task])), milestones: new Map((model.milestones ?? []).map(milestone => [milestone.key, milestone])), renamed, waitedBy, model };
 }
 const dot = (ctx, key) => `<span class="dot ${ctx.slot.get(key) ?? "p0"}" aria-hidden="true"></span>`;
 // A long name ends in an ellipsis on its inner span (a flex box cuts its own text with none); the title keeps it whole.
@@ -99,7 +101,10 @@ const kindTag = task => task.kind ? `<span class="tag kind"><span aria-hidden="t
 // A priority's meaning, for its title and for screen readers (F-T305-12).
 const PRIORITY_WORD = { P0: "highest priority", P1: "second priority", P2: "third priority", P3: "lowest priority" };
 // A milestone's tag (T233): its name, and pilot on its pilot. A milestone that the logbook lost shows its id.
-const milestoneTag = task => task.milestone ? `<span class="tag prog" title="Milestone ${esc(task.milestone.id)}${task.milestone.name ? `: ${esc(task.milestone.name)}` : ""}"><span class="pm" aria-hidden="true">◫</span><span class="vh">Milestone </span>${esc(task.milestone.name ?? task.milestone.id)}</span>${task.milestone.pilot ? `<span class="tag pilot">pilot</span>` : ""}` : "";
+// The card names its nearest level (T996): its milestone with the level's word, else its release, else "no release" when
+// its logbook has releases. A logbook with no releases gives its single tasks no release field, so they show no tag.
+const milestoneTag = task => task.milestone ? `<span class="tag prog" title="Milestone ${esc(task.milestone.id)}${task.milestone.name ? `: ${esc(task.milestone.name)}` : ""}"><span class="pm" aria-hidden="true">◫</span>${esc(milestoneName(task.milestone))}</span>${task.milestone.pilot ? `<span class="tag pilot">pilot</span>` : ""}`
+  : task.release ? `<span class="tag rel"><span class="pm" aria-hidden="true">◎</span>Release ${esc(task.release)}</span>` : task.release === null ? `<span class="tag norel" title="In no release: ask the chief to put it in one">no release</span>` : "";
 // An open task with no priority shows the gap (T500): every task needs one, and the chief sets it.
 const tags = task => `${task.priority ? `<span class="tag prio" title="${task.priority}, ${PRIORITY_WORD[task.priority]}">${task.priority}<span class="vh">, ${PRIORITY_WORD[task.priority]}</span></span>` : ENDED.includes(task.state) ? "" : `<span class="tag noprio" title="No priority: ask the chief to set P0 to P3">no priority</span>`}${kindTag(task)}<span class="tag">${esc(task.size)}</span>${task.risk ? `<span class="tag risk">risk: ${esc(task.risk.replace(/,/g, ", "))}</span>` : ""}${milestoneTag(task)}`;
 /** The archived group: each archived project's name and task count, folded, with what needs you there. Its tasks are on no column. */
@@ -136,10 +141,10 @@ function card(ctx, task, { archived = false, i = 0 } = {}) {
   // A pilot whose breakdown waits for you shows the breakdown, and no wait line when its only wait is that question (Q1,
   // QF): a wait that is never met is first on the wait line (waitLine), so a line that is never met says more (R1535-1).
   const others = approval && task.reasons.filter(reason => reason !== approval);
-  const now = approval ? `<div class="nowline need">${ICON}<span><b>Needs you:</b> the breakdown of ${esc(approval.breakdown.id)}.${others.length ? ` ${others.map(reason => esc(`${String(reason.text).split(LINE).join(" ")}${reason.recommendation ? ` I recommend: ${reason.recommendation}` : ""}`)).join(" ")}` : ""}</span></div>${task.waitLine?.never ? waitHtml(task) : ""}${breakdownBody(approval)}`
+  const now = approval ? `<div class="nowline need">${ICON}<span><b>Needs you:</b> the breakdown of ${esc(milestoneName({ id: approval.breakdown.id }, true))}.${others.length ? ` ${others.map(reason => esc(`${String(reason.text).split(LINE).join(" ")}${reason.recommendation ? ` I recommend: ${reason.recommendation}` : ""}`)).join(" ")}` : ""}</span></div>${task.waitLine?.never ? waitHtml(task) : ""}${breakdownBody(approval)}`
     : task.waitLine && !task.loop.now.needs ? waitHtml(task) : (task.column !== "backlog" ? nowNext(task) : task.loop.now.needs ? nowNext(task, false) : "") + waitHtml(task);
   return `<a class="card${task.reasons.length ? " needs" : ""}${approval ? " approval" : ""}" id="card-${b64(task.key)}" href="${esc(taskHref(ctx, task))}" data-key="${esc(task.key)}" data-project="${esc(task.group ?? task.project)}" data-provider="${esc(who(task))}" data-priority="${esc(task.priority)}" data-kind="${esc(task.kind)}" data-needs="${!!task.reasons.length}" data-agents="${task.agents.filter(agent => !agent.stale).length}" data-inferred="${task.inferredWork ? 1 : 0}" data-review="${task.column === "review" ? 1 : 0}" data-i="${i}" data-milestone="${task.milestone ? b64(task.milestone.key) : ""}"${archived ? " data-archived hidden" : ""}>`
-    + (approval ? `<div class="band"><span aria-hidden="true">◫</span>Milestone approval<span class="bk">· ${esc(approval.breakdown.id)} ${esc(approval.breakdown.name)} · gate ${esc(approval.gateId)}</span></div>` : "")
+    + (approval ? `<div class="band"><span aria-hidden="true">◫</span>Milestone approval<span class="bk">· ${esc(milestoneName(approval.breakdown))} · gate ${esc(approval.gateId)}</span></div>` : "")
     + `<div class="top"><span class="id">${esc(task.id)}</span>·${project(ctx, task)}${holderTag(task)}${task.pr ? `<span class="pr">PR ${esc(task.pr)}</span>` : ""}${wordTag(task.word)}</div>`
     // A moved task keeps its old number in view (T640): the owner knows "T640" from chats, briefs and reports.
     + (task.was ? `<div class="nextline was">${esc(task.was)}</div>` : "")
@@ -239,7 +244,7 @@ function waitItem(ctx, task, wait) {
   if (wait.odd) return `<li class="v-stale"><span class="g" aria-hidden="true">⊘</span>Text in the waits cell that is not a task id · <span class="stw-cant">never met</span>: the chief sets the waits again.</li>`;
   if (wait.breakdown) {
     const { id, gate } = wait.breakdown, why = breakdownWhy(wait.breakdown);
-    return `<li class="${wait.never ? "v-stale" : "v-wait"}"><span class="g" aria-hidden="true">${wait.never ? "⊘" : "⧗"}</span>The breakdown of ${esc(id)}${gate ? ` (gate ${esc(gate)})` : ""}: ${esc(why)} · <span class="${wait.never ? "stw-cant" : "faint"}">${wait.never ? "never met" : "not met"}</span></li>`;
+    return `<li class="${wait.never ? "v-stale" : "v-wait"}"><span class="g" aria-hidden="true">${wait.never ? "⊘" : "⧗"}</span>The breakdown of ${esc(milestoneName({ id }, true))}${gate ? ` (gate ${esc(gate)})` : ""}: ${esc(why)} · <span class="${wait.never ? "stw-cant" : "faint"}">${wait.never ? "never met" : "not met"}</span></li>`;
   }
   const other = ctx.tasks.get(`${task.project}/${wait.id}`);
   const name = other ? `<a href="${esc(taskHref(ctx, other))}">${esc(wait.id)}</a> ${esc(other.title)}` : esc(wait.id);
@@ -249,8 +254,8 @@ function waitItem(ctx, task, wait) {
 function milestoneSections(ctx, task) {
   const milestone = task.milestone && ctx.milestones.get(task.milestone.key);
   const box = !task.milestone ? `<div class="empty">In no milestone.</div>`
-    : milestone ? `<p><a href="${esc(milestoneHref(ctx, milestone.key))}"><span aria-hidden="true">◫</span> ${esc(milestone.id)} ${esc(milestone.name)}</a> · ${wordTag(milestone.word, "pstate")}${task.milestone.pilot ? ' · <span class="tag pilot">pilot</span>' : ""}</p>${milestone.progress.total ? pbar(milestone) : ""}`
-    : `<p><span aria-hidden="true">◫</span> ${esc(task.milestone.id)} · <span class="stw-cant">not in the logbook</span></p>`;
+    : milestone ? `<p><a href="${esc(milestoneHref(ctx, milestone.key))}"><span aria-hidden="true">◫</span> ${esc(milestoneName(milestone))}</a> · ${wordTag(milestone.word, "pstate")}${task.milestone.pilot ? ' · <span class="tag pilot">pilot</span>' : ""}</p>${milestone.progress.total ? pbar(milestone) : ""}`
+    : `<p><span aria-hidden="true">◫</span> ${esc(milestoneName({ id: task.milestone.id }))} · <span class="stw-cant">not in the logbook</span></p>`;
   const by = ctx.waitedBy.get(task.key) ?? [];
   return `<section><h3>Milestone</h3>${box}</section><section><h3>Waits for <span class="n">${task.waits.length}</span></h3>${task.waits.length ? `<ul class="vlist">${task.waits.map(wait => waitItem(ctx, task, wait)).join("")}</ul>` : `<div class="empty">Waits for no task.</div>`}`
     + `${by.length ? `<h4>Waited for by</h4><p>${by.map(other => `<a href="${esc(taskHref(ctx, other))}">${esc(other.id)}</a>`).join(", ")}</p>` : ""}</section>`;
@@ -550,6 +555,20 @@ a.prog:hover{transform:translateY(-1px);box-shadow:var(--ring),var(--lift)}a.pro
 .prog .goal{margin:4px 0 8px;color:var(--muted);font-size:12.5px;overflow-wrap:anywhere}.prog .nx{font-size:12.5px;margin-top:6px;overflow-wrap:anywhere}
 .prog .nx.need{background:var(--need-soft);color:var(--need);border-radius:6px;padding:5px 8px;font-weight:600}.pmeta{color:var(--muted);font-size:12px;margin-left:auto}
 .page .emptyboard,.page .banner{margin:0 0 10px}
+.where{margin:0 20px 12px;background:var(--panel);border-radius:14px;padding:8px 10px 10px;box-shadow:var(--ring)}
+.wh{font-size:10.5px;text-transform:uppercase;letter-spacing:.06em;font-weight:650;color:var(--muted);margin:0 0 6px}
+.hframe,.hbc{display:flex;flex-direction:column;gap:6px}.hbc{margin-top:6px}
+.hb{border:1.5px solid var(--edge);border-radius:12px;padding:6px 9px;min-width:0;background:var(--panel);overflow-wrap:anywhere}
+.hb.release{border-color:var(--ok)}.hb.milestone{border-color:var(--accent)}.hb.loose{border-style:dashed}.hb.here{border:4px double var(--need)}.hb.here.now{border-color:var(--text)}
+.hbt{display:flex;flex-wrap:wrap;align-items:center;gap:4px 8px}.hbk{font-weight:650}.hbk a{color:inherit}
+.hbl{font-size:12.5px;color:var(--muted);margin-top:2px}.hbl a{color:var(--link)}.hbl.tail{margin-top:6px}
+@media (min-width:900px){.hbc .hbc{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));align-items:start}}
+.rintro{color:var(--muted);font-size:13px;margin:0 0 12px}
+.rcard{background:var(--panel);border-radius:14px;padding:10px 12px;box-shadow:var(--ring);margin:0 0 10px}.rcard.loose{box-shadow:none;border:1.5px dashed var(--edge)}
+.rtitle{font-weight:700;font-size:15px;display:flex;align-items:center;gap:8px;flex-wrap:wrap;margin:0 0 4px;overflow-wrap:anywhere}
+.rrow{border-top:1px solid var(--line);padding:7px 0}.rhead{display:flex;flex-wrap:wrap;gap:4px 8px;align-items:center;overflow-wrap:anywhere}.rhead a{color:inherit}
+.rtext{font-size:12.5px;color:var(--muted);margin-top:2px;overflow-wrap:anywhere}.rcard .goal{margin:4px 0;font-size:13px;overflow-wrap:anywhere}
+.tag.rel{color:var(--text);background:var(--ok-soft);font-weight:550;overflow-wrap:anywhere;max-width:100%}.tag.rel .pm{color:var(--ok)}.tag.norel{font-style:italic}
 @media (forced-colors:active){:is(.card,a.prog,.trow).needs:not(:focus-visible),.needstrip{outline:3px double CanvasText;outline-offset:1px}
  .boardtabs a[aria-current="page"],.seg button[aria-pressed="true"]{border:2px solid Highlight}.trow{border:1px solid CanvasText}}
 @media (max-width:1116px){body>main.page,#pages>.page{margin:8px}}
@@ -560,7 +579,7 @@ a.prog:hover{transform:translateY(-1px);box-shadow:var(--ring),var(--lift)}a.pro
  header{padding:12px 16px;gap:8px 10px}
  .fbar{padding:10px 16px 0}
  .summary,.legend{padding-left:16px;padding-right:16px;gap:6px 14px}
- .banner,.emptyboard{margin:0 16px 10px}
+ .banner,.emptyboard,.where{margin:0 16px 10px}
  .pop{position:fixed;left:0;right:0;bottom:0;top:auto;width:100%;max-height:80vh;border-radius:14px 14px 0 0;margin:0}
  .board{grid-auto-flow:row;grid-auto-columns:auto;grid-template-columns:1fr;padding:6px 16px 20px;overflow:visible}
  .col{min-height:0}.col.needs-col{order:-1}.col.empty-col{display:none}
@@ -672,6 +691,8 @@ function filter(){
   // The milestones list keeps the chosen project's milestones, with the count of each group.
   let rows=0;all('[data-plist]').forEach(ul=>{const own=all('li[data-project]',ul);own.forEach(li=>li.hidden=!!S.project&&li.dataset.project!==S.project);const n=own.filter(li=>!li.hidden).length,head=ul.closest('details')||ul.previousElementSibling;rows+=n;ul.hidden=!n;if(head){head.hidden=!n;const c=head.querySelector('.n');if(c)c.textContent=String(n)}});
   const nomilestones=$('nomilestones');if(nomilestones)nomilestones.hidden=rows>0;
+  // The release frames above the columns and the Releases tab keep the chosen project's releases (T996).
+  const rel=all('[data-rproject]');rel.forEach(e=>e.hidden=!!S.project&&e.dataset.rproject!==S.project);const nr=$('noreleases');if(nr)nr.hidden=rel.some(e=>!e.hidden);
   draw();
 }
 function draw(){
@@ -806,9 +827,9 @@ function milestoneFilter(ctx, model) {
 function needStrip(ctx, model) {
   const items = model.milestoneNeeds ?? [];
   if (!items.length) return "";
-  // A stuck milestone says its id, its name and why in one line, "Milestone M2, Lead build: the pilot T21 was abandoned. …" (T374, T390).
+  // A stuck milestone says its level, its name and why in one line, "Milestone 2: Lead build is stuck: the pilot T21 was abandoned. …" (T374, T390, F-T996-12).
   const stuck = need => need.kind === "stuck" && ctx.milestones.get(need.key);
-  const what = need => stuck(need) ? `Milestone ${stuck(need).id}, ${stuck(need).name}: ${need.text.charAt(0).toLowerCase()}${need.text.slice(1)}` : need.title;
+  const what = need => stuck(need) ? `${need.title}: ${need.text.charAt(0).toLowerCase()}${need.text.slice(1)}` : need.title;
   const item = need => `<li data-need data-project="${esc(need.group)}" data-milestone="${need.milestone ? b64(need.key) : ""}"><span class="ic" aria-hidden="true">${need.milestone ? "◫" : "!"}</span><span class="what">${esc(what(need))} <span class="faint">· ${esc(need.projectName)} · ${esc(title(need.sourceLabel))} logbook</span></span>`
     + `<span class="act">${stuck(need) ? "Answer in the chat." : esc(need.text)}${need.milestone && ctx.milestones.has(need.key) ? ` <a href="${esc(milestoneHref(ctx, need.key))}">Open the milestone</a>` : ""}</span></li>`;
   return `<section class="needstrip" id="needstrip" aria-labelledby="needstrip-h"><h2 id="needstrip-h">${ICON}Needs you, not on a card <span class="n" id="needstrip-n">${items.length}</span></h2><ul>${items.map(item).join("")}</ul></section>`;
@@ -857,17 +878,21 @@ export function renderBoardHtml(model, { taskKey = null, snapshot = true, live =
     const noprog = `<div class="emptyboard" id="noprog" hidden><b>No task of <span id="noprog-name"></span> shows on the board.</b> <span id="noprog-why"></span> <a id="noprog-link" href="">Open the milestone</a> · <button class="linkbtn" type="button" data-reset>Show all tasks</button></div>`;
     const noprov = `<div class="emptyboard" id="noprov" hidden><b>No <span id="noprov-who"></span> logbook in this project.</b> <span id="noprov-name"></span> has tasks only in <span id="noprov-has"></span>. <button class="linkbtn" type="button" data-showall>Show all providers</button></div>`;
     const gone = `<div role="status"><div class="banner info" id="gone" hidden><div>The project that you chose before has no logbook now. The board shows all projects. <button class="linkbtn" type="button" data-dismiss>Dismiss</button></div></div></div>`;
-    body = `<div class="boardview"><header>${snapshot ? `<h1>Task board</h1>${model.milestones?.length ? pagesNav("board", model, true) : ""}` : `<h1>Sage board</h1>${pagesNav("board", model)}`}${pill}<span class="spacer"></span>${theme}${picker(ctx, model, paths)}</header><div class="fbar" id="board-filters" role="group" aria-label="Filters">${filterBar(ctx, model)}</div>${summary}<div id="board-content" data-at="${esc(at)}">${banners(model)}${needStrip(ctx, model)}${gone}${empty}${nomatch}${noprog}${noprov}<main class="board" data-scroll="board">${model.columns.map(col => column(ctx, col)).join("")}</main>${archivedGroup(model)}${legend(ctx)}</div></div>`
+    body = `<div class="boardview"><header>${snapshot ? `<h1>Task board</h1>${model.milestones?.length || shownReleases(model).length ? pagesNav("board", model, true) : ""}` : `<h1>Sage board</h1>${pagesNav("board", model)}`}${pill}<span class="spacer"></span>${theme}${picker(ctx, model, paths)}</header><div class="fbar" id="board-filters" role="group" aria-label="Filters">${filterBar(ctx, model)}</div>${summary}<div id="board-content" data-at="${esc(at)}">${banners(model)}${needStrip(ctx, model)}${gone}${whereHtml(ctx)}${empty}${nomatch}${noprog}${noprov}<main class="board" data-scroll="board">${model.columns.map(col => column(ctx, col)).join("")}</main>${archivedGroup(model)}${legend(ctx)}</div></div>`
       // Offline, the task pages, the milestones list and each milestone's page are sections of the one file (C9).
-      + (snapshot ? `<form id="themes" hidden></form><div id="pages">${model.tasks.map(task => page(ctx, task)).join("")}${model.milestones?.length ? `<section class="page" id="milestones" aria-label="Milestones"><div class="pagebar"><a class="back" href="#">← Board</a><span class="spacer"></span>${themeSwitch("flip-milestones", true)}</div>${milestonesList(ctx, model, false)}</section>` : ""}${(model.milestones ?? []).map(milestone => `<section class="page" id="${esc(milestoneAnchor(milestone.key))}" aria-label="${esc(milestone.id)}">${milestonePage(ctx, milestone, false)}</section>`).join("")}</div>` : "");
+      + (snapshot ? `<form id="themes" hidden></form><div id="pages">${model.tasks.map(task => page(ctx, task)).join("")}${shownReleases(model).length ? `<section class="page" id="releases" aria-label="Releases"><div class="pagebar"><a class="back" href="#">← Board</a><span class="spacer"></span>${themeSwitch("flip-releases", true)}</div>${releasesList(ctx, model, false)}</section>` : ""}${model.milestones?.length ? `<section class="page" id="milestones" aria-label="Milestones"><div class="pagebar"><a class="back" href="#">← Board</a><span class="spacer"></span>${themeSwitch("flip-milestones", true)}</div>${milestonesList(ctx, model, false)}</section>` : ""}${(model.milestones ?? []).map(milestone => `<section class="page" id="${esc(milestoneAnchor(milestone.key))}" aria-label="${esc(milestone.id)}">${milestonePage(ctx, milestone, false)}</section>`).join("")}</div>` : "");
   }
   return `<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>${task ? `${esc(task.id)} · ` : ""}Sage task board</title><script>${THEME_HEAD}</script><style>${CSS}</style></head><body>${body}<script>${BOARD_ENHANCEMENT}${live ? liveScript(taskKey ? `/?events=1&task=${b64(taskKey)}` : "/?events=1") : ""}</script></body></html>`;
 }
 
-/** The pages of the served board, as links (T308, T233): "Task board | Milestones | Agents (n)". The count is the running agents. Offline, the board and its milestones list. */
+/**
+ * The pages of the served board, as links (T308, T233, T996): "Task board | Releases | Milestones | Agents (n)". The count is
+ * the running agents. The Releases tab shows only when a logbook has releases. Offline, the board, its releases and its milestones list.
+ */
 const pagesNav = (current, model, snapshot = false) => {
-  const tab = (href, key, name) => `<a href="${href}"${current === key ? ' aria-current="page"' : ""}>${name}</a>`;
-  return `<nav class="boardtabs" id="board-pages" aria-label="Board pages">${snapshot ? tab("#", "board", "Task board") + tab("#milestones", "milestones", "Milestones") : tab("/", "board", "Task board") + tab("/milestones", "milestones", "Milestones") + tab("/agents", "agents", `Agents (${model.agents?.count ?? 0})`)}</nav>`;
+  const tab = (href, key, name) => `<a href="${href}"${current === key ? ' aria-current="page"' : ""}>${name}</a>`, releases = shownReleases(model).length || current === "releases";
+  return `<nav class="boardtabs" id="board-pages" aria-label="Board pages">${snapshot ? tab("#", "board", "Task board") + (releases ? tab("#releases", "releases", "Releases") : "") + (model.milestones?.length ? tab("#milestones", "milestones", "Milestones") : "")
+    : tab("/", "board", "Task board") + (releases ? tab("/releases", "releases", "Releases") : "") + tab("/milestones", "milestones", "Milestones") + tab("/agents", "agents", `Agents (${model.agents?.count ?? 0})`)}</nav>`;
 };
 
 // The Agents page (T308 layout A, approved 2026-10-18): one box per project with its cap, a lead's helpers under it,
@@ -979,7 +1004,7 @@ function milestoneTask(ctx, task) {
   const milestone = ctx.milestones.get(task.milestone?.key), pilot = milestone && !task.milestone.pilot && ctx.tasks.get(`${milestone.project}/${milestone.pilot}`);
   const ownPilot = pilot && task.waits.find(wait => wait.id === pilot.id), viaPilot = !!pilot && !ownPilot?.never && task.waits.some(wait => wait.breakdown && !wait.never);
   const waits = task.waits.filter(wait => !(wait.breakdown && (!pilot || !wait.never && !viaPilot)) && !(wait.pilot && wait.met) && !(viaPilot && wait === ownPilot)).map(wait => wait.odd ? "⊘ its waits cell has text that is not a task id"
-    : wait.breakdown ? wait.never ? `⊘ waits for the breakdown of ${wait.breakdown.id}: ${breakdownWhy(wait.breakdown)}` : `⧗ waits for ${pilot.id} (pilot, ${pilot.word})`
+    : wait.breakdown ? wait.never ? `⊘ waits for the breakdown of ${milestoneName({ id: wait.breakdown.id }, true)}: ${breakdownWhy(wait.breakdown)}` : `⧗ waits for ${pilot.id} (pilot, ${pilot.word})`
     : wait.met ? `✓ waits for ${wait.id}, ${wait.word}` : `${wait.never ? "⊘" : "⧗"} waits for ${wait.id} (${wait.word})${wait.never ? ": it cannot start" : ""}`);
   const at = roles(task), sub = [task.milestone?.pilot ? "pilot" : "", ...waits, at.length ? `${at.join(", ")} at work` : "", task.pr ? `PR ${task.pr}` : "", task.priority, task.kind ? KIND[task.kind][1] : ""].filter(Boolean);
   return `<div class="trow${ab ? " ab" : ""}${cant ? " cant" : ""}${needs ? " needs" : ""}"><span class="id">${esc(task.id)}</span><a class="t" href="${esc(taskHref(ctx, task))}">${esc(task.title)}</a>${wordTag(task.word)}${sub.length ? `<span class="sub">${esc(sub.join(" · "))}</span>` : ""}</div>`;
@@ -1062,7 +1087,7 @@ function milestonePage(ctx, milestone, routed) {
     const moving = own.filter(task => task !== next.first && !ENDED_STATES.includes(task.state) && !task.waitLine);
     // "T11 cannot start: it waits for T10, which was abandoned." Each wait that is never met, in the prototype's words; odd
     // text in the waits cell is its own clause, "its waits cell has text that is not a task id" (R1391-2).
-    const never = wait => wait.breakdown ? `the breakdown of ${wait.breakdown.id}: ${breakdownWhy(wait.breakdown)}` : wait.loop ? `${wait.id}, in a loop of waits that never ends` : `${wait.id}, which ${wait.state ? `was ${wait.word}` : "is not in the logbook"}`;
+    const never = wait => wait.breakdown ? `the breakdown of ${milestoneName({ id: wait.breakdown.id }, true)}: ${breakdownWhy(wait.breakdown)}` : wait.loop ? `${wait.id}, in a loop of waits that never ends` : `${wait.id}, which ${wait.state ? `was ${wait.word}` : "is not in the logbook"}`;
     const why = task => { const named = task.waits.filter(wait => wait.never && !wait.odd).map(never), odd = task.waits.some(wait => wait.odd);
       return [named.length && `it waits for ${named.join(" and ")}`, odd && "its waits cell has text that is not a task id"].filter(Boolean).join(", and "); };
     const cannot = own.filter(task => task.waitLine?.never && !ENDED_STATES.includes(task.state)).map(task => `<div class="waitline cant"><span class="wm" aria-hidden="true">⊘</span><span>${esc(task.id)} cannot start: ${esc(why(task))}. Ask the chief to ${task.waits.some(wait => wait.odd) ? "set its waits again" : "remove the wait"}, or to drop ${esc(task.id)}.</span></div>`).join("");
@@ -1092,6 +1117,140 @@ function milestonePage(ctx, milestone, routed) {
   const when = at => shortDay(at) ? `<span class="faint" title="${esc(day(at))} UTC">${esc(shortDay(at))}</span> ` : "";
   const decisions = `<section><h3>Latest decisions</h3>${log.length ? `<ol class="log">${log.map(row => `<li>${when(row.at)}${esc(row.text)}</li>`).join("")}</ol>` : `<div class="empty">No decisions recorded.</div>`}</section>`;
   return `${top}<div class="detail">${lead}<div class="colL">${order}</div><div class="colR">${decisions}</div></div>`;
+}
+
+// The releases (T996, the T995 design that the owner approved in gate G141): the "Where we are" frame above the columns
+// (option B), in the page's boxes and in the chat's text, and the Releases tab. One frame model gives both forms. A logbook
+// with no releases has no entry in model.releases, so its board shows as before.
+const ENDS = ["done", "stopped"], WORDS = ["needs you", "in progress", "waiting", "not started", "done", "stopped"], LISTED = 4;
+const byWord = (a, b) => WORDS.indexOf(a.word) - WORDS.indexOf(b.word);
+const open = item => !!item && !!item.word && (!ENDS.includes(item.word) || item.open > 0);
+const doneText = (done, total, stopped) => `${done} of ${plural(total, "task")} done${stopped ? ` · ${stopped} stopped` : ""}`;
+const countsText = tasks => WORDS.map(word => [word, tasks.filter(task => task.word === word).length]).filter(([, n]) => n).map(([word, n]) => `${n} ${word}`).join(" · ");
+const shownReleases = model => (model.releases ?? []).filter(entry => !entry.archived);
+/** The releases that the frame shows: each one that is not done or stopped, or the last one when all are. */
+const frameReleases = entry => { const live = entry.releases.filter(release => !ENDS.includes(release.word)); return live.length ? live : entry.releases.slice(-1); };
+
+/**
+ * What a box of waiting tasks waits for, when each of them waits for the same thing (the design's "Waiting for the
+ * presentation skill"): the same tasks, the owner's approval or the new breakdown of their milestone, or nothing that can
+ * be met. Else "": the box has its word alone. A task's title is cut, so that no word is wider than the chat's box.
+ */
+function waitingFor(ctx, items) {
+  const why = item => item.waitLine?.never ? "never" : item.waits.find(wait => wait.breakdown && !wait.met)?.breakdown.state ?? item.waits.filter(wait => wait.id && !wait.met).map(wait => wait.id).sort().join(" ");
+  const [first, ...rest] = items.map(why);
+  if (!first || rest.some(key => key !== first)) return "";
+  if (first === "never") return `Waiting · ${items.length === 1 ? "it cannot" : "they cannot"} start`;
+  if (first === "proposed") return "Waiting for your approval";
+  if (first === "changing") return "Waiting for the new breakdown";
+  const names = first.split(" ").map(id => fit(ctx.tasks.get(`${items[0].project}/${id}`)?.title || id, 24));
+  return `Waiting for ${names.length > 1 ? `${names.slice(0, -1).join(", ")} and ${names.at(-1)}` : names[0]}`;
+}
+
+/**
+ * The frame's boxes of one logbook: a box for each release that it shows, then one for what is in no release. A milestone
+ * box holds its open tasks that need you or are in progress (at most 3), then a box for each other word with its count,
+ * and for waiting tasks what they wait for. The single tasks of a release are one list box. A box that needs you, and a
+ * task in progress ("you are here", the design's section 1), is a double box. A task is named by its title, not its id.
+ */
+function frameOf(ctx, entry) {
+  const task = key => ctx.tasks.get(key), milestone = key => ctx.milestones.get(key);
+  const taskNode = (item, pilot) => ({ level: "task", id: item.id, name: item.title, href: taskHref(ctx, item), word: item.word, here: ["needs you", "in progress"].includes(item.word), note: item.word === "in progress" ? "you are here" : pilot ? "the pilot" : "" });
+  const milestoneNode = m => {
+    const tasks = m.tasks.map(task).filter(open), shown = tasks.filter(item => ["needs you", "in progress"].includes(item.word)).sort(byWord).slice(0, 3), rest = tasks.filter(item => !shown.includes(item));
+    const groups = WORDS.map(word => [word, rest.filter(item => item.word === word)]).filter(([, items]) => items.length).map(([word, items]) => ({ level: "group", name: plural(items.length, "task"), word, note: word === "waiting" ? waitingFor(ctx, items) : "" }));
+    return { level: "milestone", name: milestoneName(m), href: milestoneHref(ctx, m.key), word: m.word, here: m.word === "needs you", done: doneText(m.progress.merged, m.progress.total, m.progress.abandoned.length),
+      // A dropped milestone with tasks still in it gives their next step, as the Milestones tab and the chat's line do (F-T996-13).
+      note: m.word === "needs you" ? m.reason : m.state === "dropped" && m.open ? droppedNext(m) : "", kids: [...shown.map(item => taskNode(item, item.id === m.pilot)), ...groups] };
+  };
+  const list = (name, tasks, extra = {}) => ({ level: "list", name, word: releaseWord(tasks.map(item => item.word)).word, list: [...tasks].sort(byWord).map(item => ({ id: item.id, title: item.title, word: item.word, href: taskHref(ctx, item) })), ...extra });
+  const nodes = frameReleases(entry).map(release => {
+    const milestones = release.milestones.map(milestone).filter(Boolean), singles = release.singles.map(task).filter(item => item?.word);
+    const ended = state => milestones.filter(m => !open(m) && m.word === state).length;
+    return { level: "release", name: `Release ${release.name}`, word: release.word, done: doneText(release.done, release.total, release.stopped),
+      note: release.missing ? "It is not in the logbook. Ask the chief to add it." : "",
+      kids: [...milestones.filter(open).map(milestoneNode), ...(singles.length ? [list(plural(singles.length, "single task"), singles)] : [])],
+      tail: ENDS.map(state => ended(state) ? `${title(state)}: ${plural(ended(state), "milestone")}` : "").filter(Boolean).join(" · ") };
+  });
+  const milestones = entry.loose.milestones.map(milestone).filter(open), singles = entry.loose.singles.map(task).filter(open);
+  if (milestones.length || singles.length) nodes.push(list(`Not in a release: ${[milestones.length && plural(milestones.length, "milestone"), singles.length && plural(singles.length, "task")].filter(Boolean).join(" and ")}`, singles,
+    { level: "loose", word: releaseWord([...milestones, ...singles].map(item => item.word)).word, kids: milestones.map(milestoneNode) }));
+  return nodes;
+}
+
+/** A task's id after its title, as secondary text (F-T996-7): the owner reads the title first. */
+const idAfter = id => id ? ` <span class="faint">${esc(id)}</span>` : "";
+/** The page's form of a box: its level, its name (a link to its page) and its word, then its lines and the boxes inside it. */
+function frameHtml(node) {
+  const name = node.level === "task" ? `Task: ${node.name}` : node.name;
+  const head = `<div class="hbt"><span class="hbk">${node.href ? `<a href="${esc(node.href)}">${esc(name)}</a>` : esc(name)}${idAfter(node.id)}</span>${node.list ? "" : wordTag(node.word, "pstate")}</div>`;
+  const lines = [node.done, title(node.note)].filter(Boolean).map(line => `<div class="hbl">${esc(line)}</div>`).join("");
+  const listed = (node.list ?? []).slice(0, LISTED).map(item => `<div class="hbl">${wordTag(item.word, "pstate")} <a href="${esc(item.href)}">${esc(item.title)}</a>${idAfter(item.id)}</div>`).join("");
+  const more = (node.list?.length ?? 0) > LISTED ? `<div class="hbl">${esc(`and ${plural(node.list.length - LISTED, "more task")}: ${countsText(node.list.slice(LISTED))}`)}</div>` : "";
+  const kids = node.kids?.length ? `<div class="hbc">${node.kids.map(frameHtml).join("")}</div>` : "";
+  // "You are here" is a double box in the text colour, as in the design; a box that needs you keeps the colour of needs you.
+  return `<div class="hb ${node.level}${node.here ? ` here${node.word === "in progress" ? " now" : ""}` : ""}">${head}${lines}${listed}${more}${kids}${node.tail ? `<div class="hbl tail">${esc(node.tail)}</div>` : ""}</div>`;
+}
+/** The "Where we are" frame of each logbook with releases, above the columns. The project filter shows the chosen project's. */
+const whereHtml = ctx => shownReleases(ctx.model).map(entry => `<section class="where" data-rproject="${esc(entry.group)}" aria-label="Where we are · ${esc(entry.projectName)}"><h2 class="wh">Where we are <span class="faint">· ${esc(entry.projectName)}</span></h2><div class="hframe">${frameOf(ctx, entry).map(frameHtml).join("")}</div></section>`).join("");
+
+/** Text for a fixed-width frame: each control or line break a space, and no format character (as md does), but no Markdown escapes: it is in a code block. */
+const plain = value => String(value ?? "").replace(/[\x00-\x1f\x7f-\x9f\u2028\u2029]/g, " ").replace(/\p{Cf}/gu, "");
+/** A title cut to n columns with an ellipsis, so that a long name never breaks the box. */
+const fit = (text, n) => { let chars = [...plain(text)]; if (columns(chars.join("")) <= n) return chars.join(""); while (chars.length && columns(chars.join("")) > n - 1) chars.pop(); return `${chars.join("").trimEnd()}…`; };
+const FRAME_WIDTH = 46;
+/**
+ * The chat's form of a box (the T984 catch-up frame's look: box() of the message pictures, a double box for the item that
+ * needs you). Only a title holds logbook text, and fit cuts it; each line is the board's own words and counts.
+ */
+function frameText(node, w = FRAME_WIDTH) {
+  const name = node.level === "task" ? `Task: ${node.name}` : node.name;
+  // A task's note ("you are here", "the pilot") goes on its first line, and a group's ("Waiting for …") is its first line;
+  // a milestone's or a release's note is a sentence, on its own line.
+  const short = ["task", "group"].includes(node.level);
+  const first = node.list ? countsText(node.list) || title(node.word) : node.level === "group" && node.note ? node.note : [title(node.word), node.done, short ? node.note : ""].filter(Boolean).join(" · ");
+  const text = line => line ? [line] : [];
+  return box({ w, title: fit(name, w - 6), style: node.here ? "double" : "round", lines: [...text(first), ...text(short ? "" : node.note), ...(node.kids ?? []).map(kid => frameText(kid, w - 4)), ...text(node.tail)] });
+}
+/** The chat's "Where we are" section of each logbook with releases: its frame in a code block. */
+const whereText = model => { const ctx = context(model, false); return shownReleases(model).map(entry => `### ◫ Where we are · ${md(entry.projectName)}\n${"```"}\n${frameOf(ctx, entry).flatMap(node => frameText(node)).join("\n")}\n${"```"}`); };
+
+/** A row of the Releases tab: an item's level and name (a link to its page), its word, and what happens next. */
+const releaseRow = (name, href, word, text, id = "") => `<div class="rrow"><div class="rhead"><a href="${esc(href)}"><b>${esc(name)}</b></a>${idAfter(id)}${wordTag(word, "pstate")}</div>${text ? `<div class="rtext">${esc(text)}</div>` : ""}</div>`;
+const firstLine = text => String(text ?? "").split(LINE)[0];
+function releaseItems(ctx, milestones, singles) {
+  return milestones.map(m => releaseRow(milestoneName(m), milestoneHref(ctx, m.key), m.word, `${doneText(m.progress.merged, m.progress.total, m.progress.abandoned.length)}.${m.word === "needs you" ? ` ${m.reason}` : ""}`)).join("")
+    + singles.map(task => releaseRow(`Task: ${task.title}`, taskHref(ctx, task), task.word, firstLine(taskWord(task).reason), task.id)).join("");
+}
+function releaseCard(ctx, release) {
+  const milestones = release.milestones.map(key => ctx.milestones.get(key)).filter(Boolean), singles = release.singles.map(key => ctx.tasks.get(key)).filter(Boolean);
+  return `<section class="rcard"><h3 class="rtitle"><span aria-hidden="true">◎</span> Release ${esc(release.name)} ${wordTag(release.word, "pstate")}</h3><div class="rtext">${esc(doneText(release.done, release.total, release.stopped))}</div>`
+    + `${release.goal ? `<p class="goal">${esc(release.goal)}</p>` : ""}${release.missing ? `<div class="rtext stw-need">This release is not in the logbook: a milestone or a task names it. Ask the chief to add it.</div>` : ""}${releaseItems(ctx, milestones, singles)}</section>`;
+}
+/** The Releases tab of one logbook: its releases that are not done, what is in no release, then its done releases. */
+function releasesOfEntry(ctx, entry, named) {
+  const live = entry.releases.filter(release => !ENDS.includes(release.word)), ended = entry.releases.filter(release => ENDS.includes(release.word));
+  const milestones = entry.loose.milestones.map(key => ctx.milestones.get(key)).filter(open), singles = entry.loose.singles.map(key => ctx.tasks.get(key)).filter(open).sort(byWord);
+  const loose = milestones.length || singles.length ? `<section class="rcard loose"><h3 class="rtitle">Not in a release</h3><div class="rtext">To put a milestone or a task in a release, ask the chief.</div>${releaseItems(ctx, milestones, singles)}</section>` : "";
+  const done = `<section class="rcard"><h3 class="rtitle">Done releases</h3>${ended.length ? ended.map(release => `<div class="rrow"><div class="rhead"><b><span aria-hidden="true">◎</span> Release ${esc(release.name)}</b>${wordTag(release.word, "pstate")}</div><div class="rtext">${esc(doneText(release.done, release.total, release.stopped))}</div></div>`).join("") : `<div class="rtext">No release is done yet.</div>`}</section>`;
+  return `<div class="rproject" data-rproject="${esc(entry.group)}">${named ? `<h2 class="grp">${esc(entry.projectName)}</h2>` : ""}${live.map(release => releaseCard(ctx, release)).join("")}${loose}${done}</div>`;
+}
+function releasesList(ctx, model, routed) {
+  const entries = shownReleases(model), h = routed ? "h1" : "h2";
+  const intro = `<p class="rintro">A release holds milestones and single tasks. It is done when each of them is done or stopped. Shipping it (a tag, a publish) is your action, not a state.</p>`;
+  // A releases table that cannot be read says so for its project, as the Milestones tab does, so that the owner never asks
+  // for releases that the logbook has (F-T996-11). So does a milestones or tasks table that cannot be read, as the board then
+  // shows no release of the project (F-T996-28, F-T996-29). The project filter shows the line with its project.
+  const broken = (model.milestoneNeeds ?? []).filter(need => need.kind === "releases" || need.kind === "milestones" || need.noTasks).map(need => `<div class="banner warn" data-rproject="${esc(need.group)}">${ICON}<div><b>The releases of ${esc(need.projectName)} cannot be read.</b> ${esc(need.text)}</div></div>`).join("");
+  if (!entries.length) return `<${h} class="ptitle">Releases</${h}>${broken || `<div class="emptyboard"><b>No releases yet.</b> A release is a version that you ship, such as 1.0. To add one, ask the chief. It then holds milestones and single tasks.</div>`}`;
+  const none = `<div class="emptyboard" id="noreleases" hidden><b>No release in this project.</b> <button class="linkbtn" type="button" data-reset>Show all projects</button></div>`;
+  return `<${h} class="ptitle">Releases</${h}>${intro}${broken}${none}${entries.map(entry => releasesOfEntry(ctx, entry, entries.length > 1)).join("")}`;
+}
+export function renderReleasesHtml(model, { live = false, paths = false } = {}) {
+  const ctx = context(model, false), at = hhmm(model.at);
+  const body = `<div class="boardview"><header><h1>Sage board</h1>${pagesNav("releases", model)}${livePill(`Board · ${at}`)}<span class="spacer"></span>${THEME_SWITCH}${picker(ctx, model, paths, false)}</header>`
+    + `<div id="board-content" data-at="${esc(at)}">${banners(model)}<main class="page open" aria-label="Releases">${releasesList(ctx, model, true)}</main></div></div>`;
+  return `<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>Sage releases</title><script>${THEME_HEAD}</script><style>${CSS}</style></head><body>${body}<script>${BOARD_ENHANCEMENT}${live ? liveScript("/releases?events=1", ["board-content", "board-pages", "pick-list", "needs-count"]) : ""}</script></body></html>`;
 }
 
 /** The served milestones list, or one milestone's page (T233 C9). An unknown milestone key gives the not-found page. */
@@ -1151,7 +1310,7 @@ const reasonLines = reason => {
 const WAIT_MARK = { never: "⊘", wait: "⧗" };
 /** A milestone's line in the chat's Milestones section, by its state. */
 const milestoneLine = milestone => {
-  const head = `${md(milestone.id)} ${md(clamp(milestone.name))}${wordText(milestone)}${milestone.where ? ` · ${milestone.where}` : ""}`;
+  const head = `${md(milestoneName({ id: milestone.id, name: milestone.name && clamp(milestone.name) }))}${wordText(milestone)}${milestone.where ? ` · ${milestone.where}` : ""}`;
   const tasks = n => `${n} ${n === 1 ? "task" : "tasks"}`;
   const pilot = `the pilot ${md(milestone.pilot)} ${milestone.pilotState ? "was abandoned" : "is not in the logbook"}`;
   const cannot = milestone.cannotStart.length ? ` · ${milestone.cannotStart.map(md).join(", ")} cannot start` : "";
@@ -1169,7 +1328,8 @@ export function renderBoardText(model) {
   // The chat board uses the page's words: its summary, its column names and its date. A stand-in provider gets one note, not one per card.
   const shown = model.columns.flatMap(column => column.tasks.slice(0, CHAT_SHOWN));
   const standIns = shown.some(task => task.agents.some(agent => !agent.provider));
-  const milestoneTag = task => task.milestone ? ` · ◫ ${md(clamp(task.milestone.name ?? task.milestone.id))}${task.milestone.pilot ? " \\(pilot\\)" : ""}` : "";
+  const milestoneTag = task => task.milestone ? ` · ◫ ${md(milestoneName({ id: task.milestone.id, name: task.milestone.name && clamp(task.milestone.name) }))}${task.milestone.pilot ? " \\(pilot\\)" : ""}`
+    : task.release ? ` · ◎ Release ${md(clamp(task.release))}` : task.release === null ? " · no release" : "";
   // A card's question is in the Needs you section above; the card shows its steps and, when nothing needs you, its Now line.
   // A card of a milestone has its tag. A card with a wait has the tasks that it waits for in one line (⊘ when one is never
   // met), instead of its Now line and in its place, after the step line (R1307-3, T374). Each line ends with a hard break.
@@ -1194,7 +1354,7 @@ export function renderBoardText(model) {
   const milestoneNeeds = model.milestoneNeeds ?? [];
   let n = 0;
   // The breakdown gate shows its full key, as every other gate does: the owner answers by that key (F-T233-4).
-  const approval = ([task, gate]) => block([`**${++n} · ${md(gate.breakdown.id)} ${md(clamp(gate.breakdown.name))}**${wordText(model.milestones?.find(milestone => milestone.key === gate.breakdown.key) ?? {})} · ${md(task.sourceLabel)} · ${md(task.projectName)} · pilot ${md(task.id)} · gate ${md(gate.gateId)}`], reasonLines(gate));
+  const approval = ([task, gate]) => block([`**${++n} · ${md(milestoneName({ id: gate.breakdown.id, name: gate.breakdown.name && clamp(gate.breakdown.name) }))}**${wordText(model.milestones?.find(milestone => milestone.key === gate.breakdown.key) ?? {})} · ${md(task.sourceLabel)} · ${md(task.projectName)} · pilot ${md(task.id)} · gate ${md(gate.gateId)}`], reasonLines(gate));
   const milestoneNeed = need => block([`**${++n} · ${md(clamp(need.title))}** · ${md(need.sourceLabel)} · ${md(need.projectName)}`], [md(need.text)]);
   const other = task => block([`**${++n} · ${md(task.id)} ${md(clamp(task.title))}**${wordText(task)} · ${md(task.holder ?? task.sourceLabel)} · ${md(task.projectName)}`], task.reasons.flatMap(reason => reasonLines(reason)));
   const needs = approvals.length
@@ -1202,12 +1362,16 @@ export function renderBoardText(model) {
     : [...milestoneNeeds.map(milestoneNeed), ...others.map(other)].join("\n\n") || "No recorded task needs you.";
   // Milestones: each milestone that is not done or dropped, in a line; the done and dropped ones as counts. The project's name
   // shows when milestones of two projects show; the logbook's source when one project has milestones in two logbooks (C4).
-  const milestones = (model.milestones ?? []).filter(milestone => !milestone.archived);
+  // A dropped milestone with tasks still in it keeps its line, with the next step for them (F-T233-10).
+  const counted = milestone => milestone.state === "done" || milestone.state === "dropped" && !milestone.open;
+  // A logbook with releases shows its milestones in its "Where we are" frame (T996), not here: here it keeps only a
+  // milestone with a line that the frame does not show, such as a dropped one with tasks still in it, in a done release (F-T996-2).
+  const framed = new Set(shownReleases(model).map(entry => entry.key));
+  const inFrame = new Set(shownReleases(model).flatMap(entry => [...frameReleases(entry).flatMap(release => release.milestones), ...entry.loose.milestones]));
+  const milestones = (model.milestones ?? []).filter(milestone => !milestone.archived && (!framed.has(milestone.project) || !inFrame.has(milestone.key) && !counted(milestone)));
   const groups = new Set(milestones.map(milestone => milestone.group));
   const books = group => new Set(milestones.filter(milestone => milestone.group === group).map(milestone => milestone.project)).size;
   const where = milestone => [groups.size > 1 ? md(milestone.projectName) : "", books(milestone.group) > 1 ? md(milestone.sourceLabel) : ""].filter(Boolean).join(" · ");
-  // A dropped milestone with tasks still in it keeps its line, with the next step for them (F-T233-10).
-  const counted = milestone => milestone.state === "done" || milestone.state === "dropped" && !milestone.open;
   const ended = ["done", "dropped"].map(state => [state, milestones.filter(milestone => counted(milestone) && milestone.state === state).length]).filter(([, count]) => count);
   const milestoneText = milestones.length ? `### ◫ Milestones\n${[...milestones.filter(milestone => !counted(milestone)).map(milestone => `- ${milestoneLine({ ...milestone, where: where(milestone) })}`), ...(ended.length ? [`- ${ended.map(([state, count]) => `${count} ${state}`).join(" · ")}: open the board's Milestones tab`] : [])].join("\n")}` : "";
   // The count is the number of the numbered items above (n), so a pilot with a breakdown gate and another reason counts twice, as it shows.
@@ -1217,7 +1381,7 @@ export function renderBoardText(model) {
   const top = block([`**sage board** · built ${md(day(model.at))} UTC`, ...changing, ...moved,`🔴 ${n} needs you · ${counts.recordedAgents} agents at work${counts.inferredWork ? ` · ${counts.inferredWork} inferred PRs` : ""} · 🔁 ${counts.inReview} in review · ${counts.tasks} tasks`, standIns ? `${md("*")} A stand-in: the run does not record its provider, so the board names the logbook's source.` : ""]);
   const end = block([model.archived.length ? `Archived: ${model.archived.map(book => `${md(book.name)} (${archivedCounts(book)})`).join(", ")}` : "",
     ...model.diagnostics.map(d => `Incomplete source: ${md(d.source)}${d.project ? ` · ${md(d.project)}` : ""} · ${md(d.message)}`), ...model.warnings.map(d => `Setting ignored: ${md(d.source)} · ${md(d.project)} · ${md(d.message)}`), ...(model.notes ?? []).map(d => `Logbook note: ${md(d.source)} · ${md(d.project)} · ${md(d.message)}`)]);
-  return [top, `### 🔴 Needs you\n${needs}`, milestoneText, ...model.columns.map(section), end].filter(Boolean).join("\n\n");
+  return [top, `### 🔴 Needs you\n${needs}`, ...whereText(model), milestoneText, ...model.columns.map(section), end].filter(Boolean).join("\n\n");
 }
 export function renderBoardStatus(model) {
   // An archived project's tasks are not in Tasks or Owner: one line counts the archived projects and what needs you there.

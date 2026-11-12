@@ -123,7 +123,7 @@ test("T1002 F1: while a breakdown waits for the owner, only the pilot needs you;
   const board = buildBoardModel([milestonesSource()], { now: MILESTONES_NOW });
   const word = id => taskWord(board.tasks.find(card => card.id === id)).word;
   assert.deepEqual(["T30", "T31", "T32"].map(word), ["needs you", "waiting", "waiting"]);
-  assert.match(taskWord(board.tasks.find(card => card.id === "T31")).reason, /your approval of the M3 breakdown/);
+  assert.match(taskWord(board.tasks.find(card => card.id === "T31")).reason, /your approval of milestone 3/);
 });
 
 test("T1002: each milestone's word, from its state and its tasks' words", () => {

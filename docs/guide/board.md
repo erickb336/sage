@@ -137,7 +137,9 @@ A project with a [shared logbook](using-sage.md#shared-logbooks) shows as one pr
 
 ## The Agents page
 
-The board server has a page **Agents** (`/agents`). The header of the pages has three tabs: "Task board | Milestones | Agents (n)", where n is the count of agents that run now. The page has the same sign-in as the task board, and it updates live in the same way.
+The board server has a page **Agents** (`/agents`). The header of the pages has the tabs "Task board | Releases | Milestones | Agents (n)", where n is the count of agents that run now. The page has the same sign-in as the task board, and it updates live in the same way.
+
+The Releases tab shows only when a logbook has releases.
 
 The page shows every agent that runs now, in all projects, for Claude and Codex. It has one box for each project, with the project's Claude agent cap. A lead's helpers sit under it, indented.
 
@@ -165,14 +167,43 @@ A milestone is a request that sage runs as two or more tasks for one goal, with 
 
 | Where | What you see |
 | --- | --- |
-| A card | The milestone's name (◫), "pilot" on the pilot, and a wait line in place of the Now line: what the task waits for (⧗), or ⊘ when a wait is never met, so the task cannot start. A wait in a loop of waits (a hand edit) says "in a loop" and is never met. |
+| A card | The milestone with its level and number, for example "◫ Milestone 5: Sage feel", "pilot" on the pilot, and a wait line in place of the Now line: what the task waits for (⧗), or ⊘ when a wait is never met, so the task cannot start. A wait in a loop of waits (a hand edit) says "in a loop" and is never met. |
 | The pilot's card, while the breakdown waits for you | A "Milestone approval" band on top and a frame, then the breakdown gate's question as the chief stored it, line by line, and how to answer: approve, change (say what to change) or drop the milestone. Only the gate that the milestone's row names, on its pilot, with the options approve, change and drop, gets the band: a gate that only copies its words is a plain gate. |
 | The Milestone filter | The cards of one milestone, or of no milestone. A milestone with no card on the board (its tasks ended more than 7 days ago) says why, with a link to its page. The board keeps the choice in the address (`#pg=`). |
 | The Milestones tab (`/milestones`) | Each milestone in a group (Needs you, Active, Done; Dropped is folded) with its state word, goal, progress bar and progress, for example "3 of 7 merged · T10 abandoned", and what moves next: only a task that waits for nothing, then how many tasks wait and which cannot start. A milestone whose breakdown you asked to change is a line here: the chief revises it. |
 | A milestone's page (`/milestone/<key>`) | Its goal and progress, the pilot, what moves next, its tasks in order (the pilot first, then each task after the tasks that it waits for), and its latest decisions, as short lines with short dates (for example "17 Oct T2 merged: PR 66"). While the breakdown waits for you, the page shows the breakdown gate in the frame. An unknown milestone gives the page "Milestone not found", with status 404. |
 | The chat | A Milestones section with one line for each milestone that is not done. Done milestones, and dropped milestones with no task left in them, are counts, with ": open the board's Milestones tab". A dropped milestone with tasks still in it keeps its line, which asks the chief to take each task out. |
 
+A project with releases shows its milestones in the chat's "Where we are" frame, not in the Milestones section (see [Releases on the board](#releases-on-the-board)). The section keeps a milestone of that project only when the frame does not show it: for example, a dropped milestone with tasks still in it, in a done release. Its line still asks the chief to take each task out.
+
 The offline HTML file holds the milestones list and each milestone's page too, as parts of the one file. Each of its pages has its own theme switch.
+
+## Releases on the board
+
+A release is a version that you ship, such as 1.0. It holds milestones and single tasks (tasks outside a milestone), and it is optional (see [Releases](using-sage.md#releases)). A logbook with no release shows the board as before: no frame, no Releases tab and no release tag.
+
+| Where | What you see |
+| --- | --- |
+| Above the columns | A "Where we are" frame for each project with releases: boxes inside boxes, release › milestone › task, each with its level, its name and its state word. The project picker shows the chosen project's frame. |
+| A card | Its nearest level: its milestone ("◫ Milestone 5: Sage feel"), else its release ("◎ Release 1.0"), else "no release" when its project has releases. |
+| The Releases tab (`/releases`) | Each release that is not done, in the order that the chief added them, with its word, its count of done tasks, its goal, and a row for each milestone and single task in it, with its word and what happens next. Then "Not in a release": the open milestones and tasks in no release. Then "Done releases". |
+| The chat | A "Where we are" section after Needs you, with the same frame as text in a code block, 46 columns wide. Each task line ends with its nearest level, as on the card. |
+
+The frame follows these rules:
+
+- It shows each release that is not done or stopped, or the last release when all are. Then it shows the open milestones and tasks that are in no release.
+- A release box shows how many of its tasks are done. Its single tasks are one box.
+- A box names a task by its title, for example "Task: Presentation skill". On the page, the task's id follows in grey.
+- A milestone box holds its tasks that need you or are in progress (at most 3). Then it has a box for each other word, with its count.
+- A box of waiting tasks says what they wait for, when they all wait for the same thing: for example "Waiting for Presentation skill", or "Waiting for your approval". Else it shows the word alone.
+- A box that needs you has a double border. So has a task in progress, which says "you are here".
+- A milestone that you dropped, with tasks still in it, says how many and what to do: "2 tasks still in it: ask the chief to take each task out of the milestone."
+
+A release's word comes from its milestones and single tasks: see the rules of the state words above. A release that a milestone or a task names, but that the logbook does not have, says so in its box: ask the chief to add it.
+
+A releases table that the board cannot read is an item in Needs you, with the file and the line; the board then shows the tasks without their releases. The Releases tab says the same for that project ("The releases of sage cannot be read"), and never "No releases yet".
+
+Every line that the owner reads names a milestone by its level: "Milestone 6: Faster reviews", or "milestone 6" inside a sentence ("Waits for your approval of milestone 6"). Two places keep the id: the Milestone filter list, and the text of a gate, which comes from the gate's row.
 
 ## The pages of a task
 
