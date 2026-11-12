@@ -1305,7 +1305,8 @@ test("T1003: the move takes the releases by name, each name once with the first 
   const dir = join(w.shared, w.folder());
   assert.deepEqual(rowsIn(join(dir, "releases.tsv")).map((r) => [r.name, r.goal]), [["1.0", "The Claude goal"], ["Beta", ""]]);
   assert.deepEqual(rowsIn(join(dir, "tasks.tsv")).filter((r) => r.release).map((r) => [r.id, r.title, r.release]), [["T4", "claude open", "1.0"], ["T6", "codex open", "Beta"]]);
-  assert.deepEqual(w.claude("status").split("\n").filter((l) => l.startsWith("release ")), ["release 1.0 · not started · 0 of 1 task done · single tasks T4 · goal: The Claude goal", "release Beta · not started · 0 of 1 task done · single tasks T6"]);
+  // T4 has the open gate "Ship it?", so its card needs you and its release has started (T1009).
+  assert.deepEqual(w.claude("status").split("\n").filter((l) => l.startsWith("release ")), ["release 1.0 · in progress · 0 of 1 task done · single tasks T4 · goal: The Claude goal", "release Beta · not started · 0 of 1 task done · single tasks T6"]);
 });
 
 test("the move takes the open tasks of both old logbooks into one shared logbook, after the preview and one gate, and the board reads one project (T640)", (t) => {
@@ -1566,7 +1567,8 @@ test("a milestone moves with its tasks: new number, pilot and breakdown gate, an
   assert.deepEqual(rowsIn(join(dir, "tasks.tsv")).map((r) => [r.id, r.milestone]), [["T4", "M2"], ["T5", ""], ["T6", ""]]);
   const breakdown = rowsIn(join(dir, "gates.tsv")).find((g) => g.id === "G5");
   assert.deepEqual([breakdown.task, /^Approve milestone M2[ ?]/.test(breakdown.question), breakdown.answer], ["T4", true, "approve"]);
-  assert.match(w.claude("status"), /\nmilestone M2 · not started · pilot T4: 0 of 1 merged · name: Two steps\n/, "approved, as before the move");
+  // Its pilot T4 has the open gate "Ship it?", so its card needs you and the milestone has started (T1009).
+  assert.match(w.claude("status"), /\nmilestone M2 · in progress · pilot T4: 0 of 1 merged · name: Two steps\n/, "approved, as before the move");
 });
 
 test("an older plugin stops at the moved logbook's milestone column, and a repair of the decisions keeps the move's floors (F-T641-4, F-T641-8, T995)", (t) => {
