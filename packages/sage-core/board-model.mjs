@@ -363,7 +363,8 @@ function card(source, project, group, task, now, graph, landing) {
     : !checked ? { ok: false, text: `The merge check is not checked on ${head.slice(0, 7)}, because this board cannot run it.` }
     : checked.ok ? { ok: !projectCheck, text: `${checkName} passes on ${head.slice(0, 7)}. ${projectCheck ? "The global merge check is not checked. " : ""}The board does not check the PR's head branch.` }
     : { ok: false, text: `${checkName} refuses ${head.slice(0, 7)}. ${cap(checked.reason.split(/\.(?:\s|$)/)[0])}.` };
-  if (merge && !merge.ok) reasons.push({ kind: "merge-check", text: merge.text });
+  // merge-refused: the check ran and refused the head, so the chief repairs it (the state word's F5, state-words.mjs).
+  if (merge && !merge.ok) reasons.push({ kind: checked && !checked.ok ? "merge-refused" : "merge-check", text: merge.text });
   else if (merge && mode?.data.autopilot !== true) {
     const what = task.pr ? `review and merge PR ${task.pr}` : "review and merge it";
     reasons.push({ kind: "merge", mode: !!mode, text: mode ? `Autopilot is off, so ${what}.` : `The board cannot tell if autopilot is on, so ${what}.` });
