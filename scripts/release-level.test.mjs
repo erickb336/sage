@@ -57,7 +57,7 @@ test("T1003: a logbook without releases reads and writes as before: no release l
   assert.equal(existsSync(join(s.dir, "releases.tsv")), false, "only a release adds the table");
   s.ok("release", "add", "--name", "1.0");
   assert.deepEqual(rowsOf(s.dir, "releases").map((r) => [r.name, r.goal]), [["1.0", ""]]);
-  assert.equal(headOf(s.dir, "tasks").includes("release"), false, "a release with no item adds no column");
+  assert.equal(headOf(s.dir, "tasks").includes("release"), false, "a release with no milestone and no task adds no column");
 });
 
 test("T1003: release add refuses a name in an id form, none, a separator, or a name that a release has (case and width do not count), and changes nothing", () => {
@@ -67,7 +67,7 @@ test("T1003: release add refuses a name in an id form, none, a separator, or a n
   const before = snapshot(s.dir);
   for (const name of ["１.０", "BETA"]) assert.match(s.no("release", "add", "--name", name), /^sage: the release's name is the name of the release (1\.0|Beta) already \(case and width do not count\): give each release its own name\. Nothing changed\.$/, name);
   for (const name of ["T12", "m5", "Ｍ5", "PG1", "g3", "R7", "C2"]) assert.match(s.no("release", "add", "--name", name), /the release's name has the form of a sage id/, name);
-  assert.match(s.no("release", "add", "--name", "None"), /the release's name is none, which takes an item out of its release/);
+  assert.match(s.no("release", "add", "--name", "None"), /the release's name is none, which takes a milestone or a single task out of its release: give it a name such as 1\.0 or Beta/);
   for (const name of ["1.0, final", "1.0 · done"]) assert.match(s.no("release", "add", "--name", name), /has a comma or a middle dot/, name);
   assert.match(s.no("release", "add", "--name", " 2.0"), /the release's name has a space at its start or end/);
   assert.match(s.no("release", "add", "--name", "2.0", "--goal", ""), /the release's goal has 0 characters/);
@@ -182,9 +182,9 @@ test("T1003: status shows each release in row order, with its state, the count o
   s.ok("gate", "answer", "G1", "--option", "1"); // while the breakdown waits for the owner, M1 needs you, so 1.0 is not done
   setStates(s.dir, { T1: "merged", T2: "concluded" });
   assert.equal(releaseLines()[0], "release 1.0 · done · 3 of 4 tasks done · 1 stopped · milestones M1 · single tasks T3, T4 · goal: Ship the first version");
-  // A cell that names a release which the table lacks (a hand edit) keeps its items in a count, and says so.
+  // A cell that names a release which the table lacks (a hand edit) keeps its milestones and tasks in a count, and says so.
   writeFileSync(join(s.dir, "releases.tsv"), readFileSync(join(s.dir, "releases.tsv"), "utf8").split("\n").filter((l) => !l.startsWith("Beta\t")).join("\n"));
-  assert.equal(releaseLines().at(-1), "release Beta · not in the logbook: add it with release add, or set the release of each item again · 0 of 1 task done · 1 stopped · single tasks T5");
+  assert.equal(releaseLines().at(-1), "release Beta · not in the logbook: add it with release add, or set the release of each milestone and single task again · 0 of 1 task done · 1 stopped · single tasks T5");
 });
 
 test("T1003: the state rule of a release (the state words of T1002): empty or nothing started is not started, all stopped is stopped, done needs a done item, a dropped milestone is stopped", () => {
@@ -235,7 +235,7 @@ test("T1003: two rows of one release name (a hand edit) refuse every write, and 
 // The update window: a session that still runs the sage of T995 reads and writes the same logbook. A release alone adds
 // only releases.tsv, which that sage does not read, so it keeps its reads and writes. A release cell adds a column that it
 // does not know: then it refuses every write with its "newer sage" message, and changes nothing, so no cell is lost.
-test("T1003: the sage of T995 in an open session reads a logbook with releases, and refuses to write it once an item has a release, with nothing lost", (t) => {
+test("T1003: the sage of T995 in an open session reads a logbook with releases, and refuses to write it once a milestone or a task has a release, with nothing lost", (t) => {
   // The real path: sage.mjs runs only when its argv path is the path of its own module, and a temp folder through a link
   // (TMPDIR=/tmp/... on macOS, where /tmp links to /private/tmp) made the older sage exit 0 and do nothing.
   const old = realpathSync(mkdtempSync(join(tmpdir(), "sage-older-")));
@@ -246,7 +246,7 @@ test("T1003: the sage of T995 in an open session reads a logbook with releases, 
   s.ok("release", "add", "--name", "1.0", "--goal", "Ship the first version");
   s.ok("milestone", "propose", "--name", "Sage feel", "--goal", "A sample goal", "--pilot", "T1", "--tasks", "none");
   const releases = readFileSync(join(s.dir, "releases.tsv"), "utf8");
-  // A release with no item: the older sage reads and writes, and leaves releases.tsv as it is.
+  // A release with no milestone and no task: the older sage reads and writes, and leaves releases.tsv as it is.
   // Each check reads the older sage's own output, so a sage that did not run cannot pass.
   assert.match(older("status").stdout, /^milestone M1 · pilot T1/m);
   assert.match(older("task", "add", "--title", "Sample task 3", "--size", "tiny", "--priority", "P3").stdout, /^T3 framed · tiny/);
@@ -273,4 +273,11 @@ test("T1003: the sage of T995 in an open session reads a logbook with releases, 
   assert.match(read.stdout, /^T3 framed /);
   // This version still reads and writes it, and its release lines are whole.
   assert.match(s.ok("status"), /^release 1\.0 · in progress · 0 of 2 tasks done · milestones M1 · single tasks T3 · goal: Ship the first version$/m);
+  // With no milestone and no task in a release, the release columns stay, so the older sage still refuses (F-T1003-11).
+  s.ok("task", "T3", "set", "release=none");
+  s.ok("milestone", "M1", "set", "release=none");
+  assert.ok(headOf(s.dir, "tasks").includes("release") && headOf(s.dir, "milestones").includes("release"));
+  const still = older("task", "add", "--title", "x", "--size", "tiny", "--priority", "P3");
+  assert.equal(still.status, 1);
+  assert.match(still.stderr, /has columns that this version of sage does not know \(release\)/);
 });

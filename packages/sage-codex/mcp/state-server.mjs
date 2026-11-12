@@ -78,7 +78,7 @@ export const TOOLS = {
   },
   milestone_set: {
     describe: "Put a milestone in a release, or take it out with release none. A milestone is in at most one release, and each of its tasks is in that release. "
-      + "Move a late milestone to the next release only when the owner says that its release ships: one call for each open item. Each change writes a decision row.",
+      + "Move a late milestone to the next release only when the owner says that its release ships: one call for each open milestone or single task. Each change writes a decision row.",
     input: { milestone: id("M", "the milestone's id"), release: z.string().describe("the release's name, or none") },
     pos: ["milestone", "release"], argv: (i) => ["milestone", i.milestone, "set", `release=${i.release}`],
   },

@@ -2811,7 +2811,7 @@ function milestonesLine({ byId, milestones, byMilestone }) {
  * the tasks of its milestones and its single tasks, and the stopped ones), its milestones and single tasks, then its goal
  * last, after a label. A release that a cell names and the releases table lacks says so.
  */
-const releaseLine = (r) => `release ${oneLine(r.name)} · ${r.missing ? "not in the logbook: add it with release add, or set the release of each item again" : r.state} · ${r.done} of ${r.total} ${r.total === 1 ? "task" : "tasks"} done${r.stopped ? ` · ${r.stopped} stopped` : ""}`
+const releaseLine = (r) => `release ${oneLine(r.name)} · ${r.missing ? "not in the logbook: add it with release add, or set the release of each milestone and single task again" : r.state} · ${r.done} of ${r.total} ${r.total === 1 ? "task" : "tasks"} done${r.stopped ? ` · ${r.stopped} stopped` : ""}`
   + `${r.milestones.length ? ` · milestones ${r.milestones.map((m) => m.id).join(", ")}` : ""}${r.singles.length ? ` · single tasks ${r.singles.map((t) => t.id).join(", ")}` : ""}${r.goal ? ` · goal: ${oneLine(r.goal)}` : ""}`;
 
 /**
