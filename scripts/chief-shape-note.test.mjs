@@ -6,7 +6,7 @@
 import "./test-env.mjs"; // first: no variable of the developer's shell changes a result
 import assert from "node:assert/strict";
 import { spawnSync } from "node:child_process";
-import { cpSync, existsSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, writeFileSync } from "node:fs";
+import { cpSync, existsSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, statSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { test } from "node:test";
@@ -101,4 +101,83 @@ test("an error in the check gives no note and no block", () => {
   real.prompt("sage mode");
   real.stop(MISSED);
   assert.match(real.prompt("go on"), /the kind "question"/);
+});
+
+// Round 1 of T1004's repair: the note is about the chief's last message only, and a message with very many problems
+// still gives a short note and a count.
+/** The problem lines of a note: "- " and a problem, or "- and N more". */
+const problemLines = (note) => note.split("\n").filter((line) => line.startsWith("- "));
+
+test("F-T1004-1, F-T1004-3: a later message that fits, or that names no kind, leaves no note of an earlier miss", () => {
+  const s = session();
+  s.prompt("sage mode");
+  for (const later of [QUESTION, "Done: fine"]) {
+    s.stop(MISSED);
+    assert.equal(s.stop(later), undefined);
+    assert.equal(s.prompt("go on"), undefined, `after: ${later.split("\n", 1)[0]}`);
+  }
+  assert.equal(s.misses().length, 2, "each miss is still counted");
+});
+
+test("F-T1004-4: the note is about the last message before a prompt: of two misses, the last one; after a message that fits, none; and each miss is counted", () => {
+  const s = session();
+  s.prompt("sage mode");
+  const onlyId = QUESTION.replace("Should sage stop", "Should T77 stop"); // a raw id, and every part
+  const onlyPart = QUESTION.replace(/\nNeeded by:[^\n]*\n[^\n]*\n/, "\n"); // no "Needed by", and no id
+  assert.deepEqual(textProblems(onlyId).length, 1);
+  assert.deepEqual(textProblems(onlyPart).length, 1);
+  s.stop(onlyId);
+  s.stop(onlyPart);
+  const note = s.prompt("go on");
+  assert.match(note, /^sage: your last message /);
+  assert.deepEqual(problemLines(note), [`- ${textProblems(onlyPart)[0]}`], "the problem of the last message only");
+  assert.deepEqual(s.misses().map((m) => m.problems), [["raw ids"], ["missing: Needed by"]]);
+  // The last message fits: no note at all, also after two misses.
+  s.stop(onlyId);
+  s.stop(onlyPart);
+  s.stop(QUESTION);
+  assert.equal(s.prompt("and then?"), undefined);
+});
+
+test("F-T1004-2: a message with thousands of problems gives a note of 20 problems and the count of the rest, and the session's hook state stays readable", () => {
+  const s = session();
+  s.prompt("sage mode");
+  // 12,000 small pictures, each with a tree mark: the note once listed each one, and the hook state passed its 1 MB limit.
+  const many = `PROGRESS\n\nThe build moved on\n\n${"```\n├\n```\n".repeat(12_000)}`;
+  const all = textProblems(many);
+  assert.ok(all.length > 12_000);
+  assert.equal(s.stop(many), undefined);
+  assert.ok(statSync(join(s.dir, "state", "s1.json")).size < 64 * 1024, "the hook state stays small");
+  const note = s.prompt("go on");
+  assert.deepEqual(problemLines(note), [...all.slice(0, 20).map((p) => `- ${p}`), `- and ${all.length - 20} more`]);
+  const [{ problems: names }] = s.misses();
+  assert.equal(names[0], "picture");
+  assert.equal(new Set(names).size, names.length, "the count names each kind of problem once");
+  // The state is still read: the next miss gives its own note.
+  s.stop(MISSED);
+  assert.match(s.prompt("and then?"), /needs "Needed by"/);
+});
+
+test("F-T1004-2: the raw-id problem lists at most 20 ids, and the count of the rest", () => {
+  const s = session();
+  s.prompt("sage mode");
+  const ids = Array.from({ length: 5_000 }, (_, i) => `T${i + 1}`);
+  s.stop(QUESTION.replace("Should sage stop", `Should ${ids.join(" ")} stop`));
+  const [line, ...rest] = problemLines(s.prompt("go on"));
+  assert.deepEqual(rest, []);
+  assert.equal(line, `- raw ids in the message: ${ids.slice(0, 20).join(", ")} and 4980 more. Name the work in words; put its ids in the Ref line`);
+});
+
+test("F-T1004-5: a picture with very many problems gives a note and a count, not an error", () => {
+  const s = session();
+  s.prompt("sage mode");
+  // 200,000 lines over the width of 46 columns in one picture: their problems once overflowed the stack in one push.
+  const wide = `PROGRESS\n\nThe build moved on\n\nThe flow\n\`\`\`\n${`${"x".repeat(47)}\n`.repeat(200_000)}\`\`\`\n`;
+  assert.equal(s.stop(wide), undefined);
+  const lines = problemLines(s.prompt("go on"));
+  assert.equal(lines.length, 21);
+  assert.equal(lines[0], "- picture 1: line 1 is 47 columns: a picture has at most 46");
+  assert.match(lines[20], /^- and \d+ more$/);
+  assert.equal(s.misses().length, 1);
+  assert.equal(s.misses()[0].problems[0], "picture");
 });

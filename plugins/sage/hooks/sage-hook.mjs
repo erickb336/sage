@@ -261,11 +261,14 @@ export function handle(input, state, slots) {
   // Only then: at a SubagentStop, a foreground agent of the session may be running and not listed.
   if (event === "Stop" && main && Array.isArray(input.background_tasks)) slots.reconcile(input.background_tasks.map((t) => t?.id));
   // The chief's message, at the main session's Stop in sage mode (T1004): one that names its kind and misses its shape
-  // gives the chief a note at its next prompt. The owner already sees the message, so the hook never blocks, and any
-  // error gives no note. Each miss counts as one line of shape-misses.jsonl beside the hook state: the time, the kind
-  // and the problem names, no text of the message. Claude Code 2.1.289 sends last_assistant_message on this Stop.
+  // gives the chief a note at its next prompt. The note is about the last message only: each Stop replaces it, so a
+  // later message that fits, or that names no kind, leaves none (F-T1004-1, F-T1004-4). The owner already sees the
+  // message, so the hook never blocks, and any error gives no note. Each miss counts as one line of shape-misses.jsonl
+  // beside the hook state: the time, the kind and the problem names, no text of the message. Claude Code 2.1.289 sends
+  // last_assistant_message on this Stop.
   if (event === "Stop" && main && state.sage) {
     let miss;
+    delete state.shapeNote;
     try { miss = typeof input.last_assistant_message === "string" && core.messageMiss(input.last_assistant_message); } catch {}
     if (miss) {
       state.shapeNote = miss.note;

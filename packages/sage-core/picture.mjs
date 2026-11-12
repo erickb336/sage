@@ -65,7 +65,8 @@ const BOX_MARKS = /[─-╿]/u;
 const STATE_CLASS = [["Not started", "st-not"], ["Waiting", "st-wait"], ["Needs you", "st-need"], ["In progress", "st-prog"], ["Done", "st-done"], ["Stopped", "st-stop"]];
 
 const grid = (lines) => {
-  const W = Math.max(0, ...lines.map((l) => [...l].length));
+  // A reduce, not Math.max(...): a picture of very many lines overflows the stack as call arguments (F-T1004-5).
+  const W = lines.reduce((w, l) => Math.max(w, [...l].length), 0);
   return { W, H: lines.length, g: lines.map((l) => [...l, ...Array(W - [...l].length).fill(" ")]) };
 };
 
