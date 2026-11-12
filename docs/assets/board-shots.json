@@ -1,7 +1,7 @@
 {
-  "sample": "ca4cb68329bed864cc685984b2eaf942288b24ff985edc042244611b88342685",
+  "sample": "ebf8524dd148cd8c3e50af0d3d3e35a9400c6590980ea589db6aa5262fe92ff1",
   "sources": [
-    "scripts/fixtures/board-programs.mjs",
+    "scripts/fixtures/board-milestones.mjs",
     "scripts/fixtures/board-walkthrough.mjs"
   ]
 }

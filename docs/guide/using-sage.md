@@ -178,9 +178,9 @@ sage uses balanced model defaults:
 
 When the chief adds a code review or QA to a tiny task, Sonnet does it too. An optional `model.<role>.risk` setting overrides the size choice when the task has a risk flag. In Codex, every agent runs on the session's model, and the same keys give it a reasoning effort ([Model keys in Codex](codex.md#model-keys-in-codex)).
 
-## Waits and programs
+## Waits and milestones
 
-> **Warning:** before you use waits or programs, update sage (see [To update sage](#to-update-sage)) and restart every session that was already open. An older session still merges a waiting task, or a task of a program that you did not approve.
+> **Warning:** before you use waits or milestones, update sage (see [To update sage](#to-update-sage)) and restart every session that was already open. An older session still merges a waiting task, or a task of a milestone that you did not approve.
 
 **A task can wait for other tasks.** Ask the chief, for example "T8 waits for T7".
 
@@ -190,17 +190,19 @@ A wait on an abandoned task is never met, so the chief asks you to remove or cha
 
 **Two tasks can share one pull request**, for example a fix that closes both. The chief gives both tasks the same branch and pull request. Autopilot merges it only when each task passes its own reviews and QA on the head commit.
 
-### Programs
+### Milestones
 
-A program is one request that sage runs as several tasks for one goal, with one pilot task. You approve its breakdown before any task of it builds.
+A milestone is one request that sage runs as several tasks for one goal, with one pilot task. You approve its breakdown before any task of it builds.
 
 - The chief frames every task first. Then it asks you one question: the goal, the pilot, and each task with what it waits for.
 - You answer approve, change or drop. To say what to change, answer in your own words.
-- No task of the program builds before you approve.
+- No task of the milestone builds before you approve.
 - The pilot runs end to end and merges first. Each other task builds and merges only after the pilot.
-- After change, the chief proposes again and tells you what changed. After drop, it takes each task out of the program.
+- After change, the chief proposes again and tells you what changed. After drop, it takes each task out of the milestone.
 
-The board shows each program on its Programs tab: see [Programs on the board](board.md#programs-on-the-board). The full rules are in [Rules held in code](../design/rules-in-code.md#waits-and-programs).
+Milestones were called programs before. At its first write, this version renames each program of a logbook to a milestone with a new number, such as M5 for PG1. Your old answers stay as you gave them.
+
+The board shows each milestone on its Milestones tab: see [Milestones on the board](board.md#milestones-on-the-board). The full rules are in [Rules held in code](../design/rules-in-code.md#waits-and-milestones).
 
 ## Start every session in sage mode
 
@@ -399,7 +401,7 @@ A moved folder with no Git commits, or that is no Git repository, has no first c
 
 | Who | Writes |
 | --- | --- |
-| The owning chief | Its own task: `task <T> set`, `round`, `run add`, `run done`, `finding add`, `triage`, `close`, `move`, `verdict`, `gate add <T>`, `program propose` for its pilot and each of its tasks, `log <T>`, `offer`, `cancel` and `release`. |
+| The owning chief | Its own task: `task <T> set`, `round`, `run add`, `run done`, `finding add`, `triage`, `close`, `move`, `verdict`, `gate add <T>`, `milestone propose` for its pilot and each of its tasks, `log <T>`, `offer`, `cancel` and `unclaim`. |
 | A lead | What the chief of its lead run may write, on the task of that run only, while that run runs. |
 | Any chief | `task add`, `claim`, `accept` or `cancel` (a decline) of an offer that names it, `gate add` with no task, `gate replace`, `init`, `standing add`, `config`, `log -`, `pages <T> record`, `observe` and `run usage`. |
 | You | `gate answer`, in your own words, from either provider, each form of `logbook repair` (`--accept-loss`, `--accept-change-loss`, or both) and `projects rebuild`: each is your act and names no chief, so the line that sage prints works in your terminal. |
@@ -418,23 +420,23 @@ A moved folder with no Git commits, or that is no Git repository, has no first c
 | The task has no owning chief | The write refuses and prints the claim that works for that chief. A Claude chief runs `sage claim <T> --version <version> --chief C<n>`. A Codex chief calls the `claim` tool with the task and that version. |
 | A chief abandons a task that has no owning chief | Any chief may do it, with a reason, and needs no claim and no takeover gate: `sage task <T> set state=abandoned --why "<reason>" --chief C<n>`, or `task_set` with that state alone and `why` in Codex. The task keeps no chief, and the decision row keeps the reason and the chief. A change of any other field still needs the claim. |
 | The task changed before the claim, or another chief claimed it first | The claim refuses and changes nothing. |
-| Another chief released the task last, or the move brought it from the other provider's logbook | The claim refuses, changes nothing and names the takeover gate. The chief that released a task claims it back, and after the move each chief claims the tasks that its own provider started. |
+| Another chief unclaimed the task last, or the move brought it from the other provider's logbook | The claim refuses, changes nothing and names the takeover gate. The chief that unclaimed a task claims it back, and after the move each chief claims the tasks that its own provider started. |
 | `task-adopt` in a shared logbook | It refuses: after the move, the other provider's tasks are in the logbook already. An old, separate logbook keeps `task-adopt` as before. |
 
 **Hand a task to another chief.** You decide each change of owning chief away from another chief, in either direction between Claude and Codex: it ends in your answer to a takeover gate. To start one, tell either chief to take over a task, and answer the gate in either chat.
 
-A Claude chief adds `--chief C<n>` to each command below. A Codex chief calls the tool of the same name: `offer`, `cancel`, `accept`, `release` or `gate_replace`.
+A Claude chief adds `--chief C<n>` to each command below. A Codex chief calls the tool of the same name: `offer`, `cancel`, `accept`, `unclaim` or `gate_replace`.
 
 | Command | Who and when | Result |
 | --- | --- | --- |
 | `sage offer <T> --to C<n>` | The owning chief. The task has no open offer. | The offer names one other chief. The owning chief stays, and active runs go on. |
 | `sage cancel <T> --offer <id>` | The owning chief, with the exact open offer. The chief that the offer names runs the same command to decline it. Active runs do not stop it. | The offer clears, and it never becomes valid again. After a decline, the line says that the recipient declined, and the owning chief keeps the task. |
 | `sage accept <T> --offer <id> --version <version>` | The chief that the offer names, with the exact open offer and the current version. The task has no active or unknown run. | A takeover gate for you, from the owning chief to that chief. Approve gives that chief the task, and decline ends the offer. A second accept prints the open gate and opens no other. |
-| `sage release <T>` | The owning chief. The task has no open offer and no active or unknown run. | The task has no owning chief. Only that chief claims it back; another chief takes it through a takeover gate. Its work and reports stay. |
+| `sage unclaim <T>` | The owning chief. The task has no open offer and no active or unknown run. | The task has no owning chief. Only that chief claims it back; another chief takes it through a takeover gate. Its work and reports stay. |
 | `sage gate replace <T> --to C<n>` | Any chief: for a task of another chief, for a task with no owning chief that it may not claim, or for an owning chief that stopped. | The takeover gate for you, with the options approve and decline, or the gate that is open already for the same task and chiefs. It asks "Hand T331 and PR 92 from C2 (codex) to C1 (claude)?", names each run that will end as failed, with its role, and the task's title. It says what each answer does, and that the branch keeps its name, the PR its number and the verdicts stay. |
 
 - `offer` and `task <T>` print the offer's id and the version that `accept` needs. A Codex chief runs that read in its shell, with the CLI of the installed plugin: `node ~/.codex/plugins/cache/sage/sage/<version>/skills/sage/sage.mjs task <T> --project <project>`. It only reads the logbook, so it runs in Codex's sandbox.
-- An accept or a release that waits for a run names the takeover gate too: a run of unknown status may never end, and only a takeover ends it.
+- An accept or an unclaim that waits for a run names the takeover gate too: a run of unknown status may never end, and only a takeover ends it.
 - A run that ends does not advance a transfer: the recipient still accepts. A transfer changes no run: each run keeps the chief that dispatched it.
 - Sage cannot see that a chief ended, so a stopped chief stays the owning chief until you answer. A takeover gate is the only way to take a task with no consent from its chief.
 - You answer a takeover gate as you answer any gate, and only once. The answer approve does one write: it sets the chief, clears an open offer and ends each named run as failed. A gate of an older sage has the options replace and keep, and still answers: replace does the same write.
@@ -486,16 +488,16 @@ The move gate is your act, so the move names no chief. In Codex, the chief uses 
 | --- | --- |
 | An open task | Moves with a new number, Claude's first, and starts unclaimed. Its priority, size, route, round, branch and PR stay: an adoption record of version 2 keeps the old task, its branch and its PR. A task in verifying, verified or pr-ready returns to reviewing. |
 | A task in a repair round | Keeps its round and its round keys. A round key whose finding closed before the move gets a new key with no row, so the next round counts as before the move. |
-| Its open findings, its gates (answered ones too), its program, its waits and its PR history | Move with new numbers, also each finding key (through the gate's own task first), task or program number in a moved gate's question. A wait on a merged or concluded task counts as met. Each moved finding's summary names its old key. |
+| Its open findings, its gates (answered ones too), its milestone, its waits and its PR history | Move with new numbers, also each finding key (through the gate's own task first), task or milestone number in a moved gate's question. A wait on a merged or concluded task counts as met. Each moved finding's summary names its old key. |
 | An open gate with no task | Moves with a new number. The open gates take the first numbers. |
-| A task that a task of the other logbook adopted | Moves with the task that adopted it: its open findings, its gates and its program go to that task too. In a chain of adoptions, each task moves with the last task of the chain. |
-| A finished task of a program that moves (for example its merged pilot) | Moves with the program, finished, with a new number, so the program keeps its pilot, its breakdown approval and its done count. |
+| A task that a task of the other logbook adopted | Moves with the task that adopted it: its open findings, its gates and its milestone go to that task too. In a chain of adoptions, each task moves with the last task of the chain. |
+| A finished task of a milestone that moves (for example its merged pilot) | Moves with the milestone, finished, with a new number, so the milestone keeps its pilot, its breakdown approval and its done count. |
 | A finished task, the runs, the verdicts and the kept reports | Stay in the old logbook, read-only. The board shows each finished task with its Old label. A moved task gets fresh reviews and QA. |
 | The standing orders | Claude's keep their numbers. Codex's follow under a heading, with new numbers and the old Codex number in brackets, and a Codex line with no number (the rest of an order, or a note) stays where it was. A repeated order stays: ask the chief to remove it. |
 | The old logbooks | Each gets `moved.json`, a `moved` column in its task table with each new number, and a backup copy, `tasks.before-move.tsv`. Every write there refuses. Its decisions get the highest new number of the map for each kind of id, and the logbook of the move gate gets a row that the gate moved the project: a restore by hand keeps these rows. |
 | Each checkout of the repository with a logbook | Gets a row in `bindings.tsv`. |
 
-The new logbook holds `sources.tsv` (its old logbooks, which the board reads) and `move-map.html`, a page of each old and new number, with a tab for each kind of row (tasks, gates, programs, findings) and a find box. The map page shows paths, so it stays on your Mac.
+The new logbook holds `sources.tsv` (its old logbooks, which the board reads) and `move-map.html`, a page of each old and new number, with a tab for each kind of row (tasks, gates, milestones, findings) and a find box. The map page shows paths, so it stays on your Mac.
 
 For 7 days after the move, the board shows a banner that names the map page and the logbook folder that holds it. The move prints times in your Mac's own time zone, with the zone as an offset from UTC (for example `09:33 UTC+05:30`), and the board prints them in UTC.
 
@@ -507,7 +509,7 @@ For 7 days after the move, the board shows a banner that names the map page and 
 | The move also links other checkouts of the repository | The preview and the gate name each one by its path and provider. If one of them is another project, answer keep, and tell the chief which one. |
 | Another checkout with the same first commit has another GitHub remote than this one (a fork) | The move leaves it out, and the preview and the gate name it. Its logbooks are not moved or marked, it gets no row, and it keeps working as a project of its own. A checkout with no GitHub remote moves, as a clone; a remote that Git cannot read refuses the preview. |
 | A folder cannot be written (for example the Claude folder from the Codex sandbox) | The preview refuses and names each folder. Ask the other provider's chief to move the project. |
-| A wait names an abandoned task, or a program's pilot is not in the logbook | The preview refuses. Change the waits, or fix the pilot or take the open tasks out of the program, then ask again. |
+| A wait names an abandoned task, or a milestone's pilot is not in the logbook | The preview refuses. Change the waits, or fix the pilot or take the open tasks out of the milestone, then ask again. |
 | A finished task has an open gate | The preview refuses and lists each such gate with its task, state and question, because its old logbook is read-only after the move and no one could answer it there. Answer each gate, then ask again. |
 | A logbook changed after the preview | Nothing moves. The refusal says what changed and that the gate is closed, and the chief shows a new preview and opens a new gate. An older move gate refuses and names the newer one, and the same `--plan` again shows the open gate again. |
 | The move stopped (the Mac slept) | Every command of the project, in Claude and in Codex, refuses and names the same command. The chief runs it at once, from any checkout of the move, and it goes on from the next step. If an old logbook changed before the move marked it, nothing moves, the new logbook goes aside, and the chief starts again with a new preview. |
@@ -527,7 +529,7 @@ To restore by hand (no command does this). Warning: work recorded after the move
 6. Rename the new logbook's folder `~/.sage/<folder>` to `~/.sage/.<folder>.restored-<plan>`, where `<plan>` is the move's plan. The board reads no folder whose name starts with a dot, so no task shows twice, and a later move can use the folder name again. Keep it until you are sure.
 7. If the plan `~/.sage/moves/<folder>.json` is there (an end check that did not match keeps it), rename it to `<folder>.json.aside`. While it is there, every command of the project refuses.
 
-After a restore, the old move gate moves nothing: to move again, ask the chief for a new preview, and answer a new gate. A new task, gate or program takes a number above the move's map, from the rows that the move wrote in the old logbooks' decisions.
+After a restore, the old move gate moves nothing: to move again, ask the chief for a new preview, and answer a new gate. A new task, gate or milestone takes a number above the move's map, from the rows that the move wrote in the old logbooks' decisions.
 
 **Limits.**
 
@@ -559,7 +561,7 @@ After a restore, the old move gate moves nothing: to move again, ask the chief f
 | A push or a merge is refused | The hook refuses it: an agent pushes only `git push <remote> <branch>` on its own branch, never to the default branch, and never merges. The refusal names the form that passes; a push also needs a remote URL on `github.com` (not an ssh host alias) and `gh` logged in, because the hook asks GitHub for the default branch. Ask the chief what it needs. |
 | A second push to a blank repository is refused | The first push made the task's branch the default branch. The chief creates main, then runs `gh repo edit github.com/<owner>/<repo> --default-branch main`. Both commands ask you, and the hook refuses the move past 20 commits on the default branch, 5 branches or 3 open pull requests. |
 | No pull request opens | Check that `gh` is installed and logged in (`gh auth status`), and that the project has a GitHub remote. Without a remote, the work stops at a verified branch. |
-| A task waits and nothing moves | Send `show board`. An open question under "Needs you" holds the task until you answer. A task of a program waits for your approval of the breakdown, then for its pilot. |
+| A task waits and nothing moves | Send `show board`. An open question under "Needs you" holds the task until you answer. A task of a milestone waits for your approval of the breakdown, then for its pilot. |
 | A pull request does not merge | A merge needs its clean cycles on the exact head commit. A new commit starts again from cycle 1, except a clean merge of main that keeps the pull request's own change the same and passes CI. |
 | The board line says that the server is not running | The line says why: for example a busy port, or an older board server on the port. See the [board service guide](../../packages/sage-board/README.md). |
 | `board --install --login-file` refuses | It needs a `node` command on PATH that does not change at an upgrade. Put a `node` link to your Node in a folder that you own and that is on PATH (for example `~/.local/bin/node`), then run the install again. |

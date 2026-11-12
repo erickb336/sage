@@ -1737,8 +1737,8 @@ const FORGERIES = [
   `${TOOL} logbook repair --accept-change-loss yes`,
   `${TOOL} standing add never review`,
   `${TOOL} round T2`,
-  `${TOOL} program propose --name x --goal y --pilot T2`,
-  `${TOOL} task T2 set program=PG1`,
+  `${TOOL} milestone propose --name x --goal y --pilot T2`,
+  `${TOOL} task T2 set milestone=M1`,
   `${TOOL} newcommand T2`,
 ].map((args) => `node ${args} --project /p`);
 const READ_COMMANDS = (dir) => ["status", `merge-check --sha ${SHA}`, "standing", "logbook", "config", "status --project=x", `standing --project ${dir}`].map((args) => `node ${TOOL} ${args} --project ${dir}`);

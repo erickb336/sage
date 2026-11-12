@@ -17,7 +17,9 @@ A table that fails refuses every merge and every write, and the refusal names th
 
 After a repair of tasks.tsv, the verdicts of its lost tasks stay in ledger.tsv. The merge check refuses their SHA, says that tasks.tsv was started again, and asks for a new commit with its verdicts under a task that the logbook has.
 
-The programs table came after the others. A logbook made before it has no programs.tsv: that reads as a table with no rows while no task names a program, and `program propose` writes the file. When a task names a program and the file is missing, its rows are lost, as for any table.
+The milestones table came after the others. A logbook made before it has no milestones.tsv: that reads as a table with no rows while no task names a milestone, and `milestone propose` writes the file. When a task names a milestone and the file is missing, its rows are lost, as for any table.
+
+A logbook from before the rename of program to milestone (T995) keeps its milestones in programs.tsv until its first write of this version, which moves them to milestones.tsv. programs.tsv has the same checks as every table, and the refusal of a damaged one names `logbook repair --accept-loss programs`, which this logbook takes while it has the file.
 
 Limit: a table cut to only its header line is a table without rows. The check cannot tell it from a new table.
 

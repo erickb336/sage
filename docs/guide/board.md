@@ -41,7 +41,7 @@ Each card shows its task, project, the provider whose logbook holds it (Claude o
 - Review evidence applies only to the recorded PR head. Missing facts stay unknown.
 - Inferred work from a Codex PR stays separate from recorded running agents.
 
-The browser board has a project picker (the button with the current project; "/" opens it), a chip for each project that needs you, and a filter bar: Who, Priority, Kind and Program. These need the page script.
+The browser board has a project picker (the button with the current project; "/" opens it), a chip for each project that needs you, and a filter bar: Who, Priority, Kind and Milestone. These need the page script.
 
 - Under a filter, the Needs you chip and each project's chip count only the tasks that the filter keeps.
 - A live update changes only the parts of the page that changed, and keeps your scroll, focus, open folds and the open picker.
@@ -58,10 +58,10 @@ Gate IDs include the source and project. The chief must resolve that exact logbo
 
 Needs you also has items that no card holds:
 
-- a stuck program (its pilot was abandoned or is not in the logbook, also before you approve the breakdown);
+- a stuck milestone (its pilot was abandoned or is not in the logbook, also before you approve the breakdown);
 - a breakdown gate that the logbook lost;
-- a program that tasks name but the logbook does not have;
-- a programs table that the board cannot read;
+- a milestone that tasks name but the logbook does not have;
+- a milestones table that the board cannot read;
 - a logbook that it cannot read;
 - a provider's logbook folder that it cannot read ("The Codex logbooks cannot be read");
 - an open move gate ("The move gate G104 waits for your answer"): [the move](using-sage.md#move-an-existing-project) of the project waits for your answer to its gate.
@@ -69,10 +69,10 @@ Needs you also has items that no card holds:
 Each item says why and what to do, and counts in "needs you".
 
 - In the chat, the count of "needs you" equals the numbered items.
-- In the chat, a program's breakdown gate is under its own heading, "Program approval", and every other item is under "Other".
+- In the chat, a milestone's breakdown gate is under its own heading, "Milestone approval", and every other item is under "Other".
 - On the board page, the items with no card are in the box "Needs you, not on a card" above the columns.
 
-A task page shows the step line, one row for each step with its detail and each review role's state, the brief, runs, verdict evidence, findings, artifacts, and latest decisions. Under the findings, the polish list shows the task's open low findings, which never block a merge; the task's card shows their count ("polish 2"). A task of a program also shows its program, with a link and the progress, each task that it waits for with its state (met, not met or never met), and the tasks that wait for it.
+A task page shows the step line, one row for each step with its detail and each review role's state, the brief, runs, verdict evidence, findings, artifacts, and latest decisions. Under the findings, the polish list shows the task's open low findings, which never block a merge; the task's card shows their count ("polish 2"). A task of a milestone also shows its milestone, with a link and the progress, each task that it waits for with its state (met, not met or never met), and the tasks that wait for it.
 
 The offline HTML file contains the selected tasks and their full details. Text from agents is escaped in both views.
 
@@ -83,7 +83,7 @@ A project with a [shared logbook](using-sage.md#shared-logbooks) shows as one pr
 | Line | Where | What it says |
 | --- | --- | --- |
 | `Claude · C1` on the card's top line | Each card of a shared task, in place of the logbook's name | The owning chief and its provider. |
-| `Unclaimed`, with a dashed outline | A shared task with no owning chief | The chief that released it can claim it back; another chief needs your takeover gate. |
+| `Unclaimed`, with a dashed outline | A shared task with no owning chief | The chief that unclaimed it can claim it back; another chief needs your takeover gate. |
 | `Offered to Codex · C2. It waits for R407 to end, then Codex · C2 accepts.` | Under the step line, and on the task page | An open offer, while a run of the task runs. |
 | `Offered to Claude · C1. Ready: Claude · C1 can accept.` | The same | An open offer with no running run. |
 | `Hand T320 from Claude · C1 to Codex · C2? R410 and R411 end as failed.` | Needs you | An open takeover gate, with its options and recommendation: `approve, when you know that Claude · C1 stopped`, or after an accept `approve, because Claude · C1 offered T320 to Codex · C2`. Then the offer line says `Codex · C2 asks to take this. Needs you: G7.` |
@@ -96,7 +96,7 @@ A project with a [shared logbook](using-sage.md#shared-logbooks) shows as one pr
 | `sample-owner/lantern · 2 checkouts: lantern, lantern-b` | The second line of a shared project in the project picker | Two or more linked checkouts of the project are on this Mac, in link order. A gone checkout does not count, by the same rule as `· gone` on a run, and one checkout shows `folder lantern`, as before. A folder name shows without control or bidi characters. |
 | `A checkout named harbor-new is linked to this logbook, but it has no first commit in common with it.` | Logbook notes, over the board | A row of `bindings.tsv` links that folder to the logbook of another project. The board does not count it as a checkout. Commands in that folder stop: ask the chief there. |
 | `was Claude T640` | Under the top line of a card, beside the id on the task page, and in the chat | A task that [the move](using-sage.md#move-an-existing-project) took to the shared logbook, with its old provider and number. It stays for the life of the task. |
-| `sage moved to one shared logbook on 2026-11-03 15:44 UTC.` | A banner over the board, and a line at the top of the chat board | The project moved in the last 7 days. The banner names the map page of old and new numbers, `move-map.html`, and the logbook folder that holds it on your Mac. It shows no path, and it says when a finished task of a moved program has a new number too. |
+| `sage moved to one shared logbook on 2026-11-03 15:44 UTC.` | A banner over the board, and a line at the top of the chat board | The project moved in the last 7 days. The banner names the map page of old and new numbers, `move-map.html`, and the logbook folder that holds it on your Mac. It shows no path, and it says when a finished task of a moved milestone has a new number too. |
 | (no banner) | The board | A stopped move waits to finish: the banner shows only after the move ends. The map page gives its time in UTC beside your Mac's time, as the banner does. |
 | `Old · Claude · read-only` or `Old · Codex · read-only` | A card in Done, and its task page | A finished task that stayed in its old logbook when the project moved. Its number belongs to the old logbook, and an open gate of it is not in Needs you. On a card in another column, it is an open task that a move did not finish: its hover text and its page say so. |
 | `The logbook is changing.` | A note over the board | The board read the logbook 3 times, and it changed during each read. When a part of the last read changed while the board read it, the note names that part, because it does not show. |
@@ -108,7 +108,7 @@ A project with a [shared logbook](using-sage.md#shared-logbooks) shows as one pr
 - **Old logbooks:** the move (a later sage) lists them in `sources.tsv`. The board reads a folder of that list only when it is a logbook folder directly under a Claude or Codex root, not a link, with the move's mark `moved.json`, and its row names that root's provider (one root for both providers, set by `SAGE_HOME`, takes either), in the chat as on the board page. Only the provider words `claude` and `codex` read.
 - **A row that the board does not read:** any other row, or a folder that the board cannot read, is one line under Logbook notes. The board stays live, and a live logbook stays on its own.
 - **Each old logbook shows once,** in its shared project. A task row that moved shows only in the shared logbook, and Done still shows the last 7 days.
-- **Programs of an old logbook:** a program with an open task moved with it, with a new number, so it shows only in the shared logbook. An old logbook shows only its finished programs, and none of them is in Needs you. Its programs say `Old Claude` or `Old Codex` where a shared program says `Shared`.
+- **Milestones of an old logbook:** a milestone with an open task moved with it, with a new number, so it shows only in the shared logbook. An old logbook shows only its finished milestones, and none of them is in Needs you. Its milestones say `Old Claude` or `Old Codex` where a shared milestone says `Shared`.
 - **The changing note:** the board reads a logbook again when it changed during the read, at most 3 times. After the third change, the board page keeps its last good read under the note, and the next read with no change removes it.
 - **The changing note in the chat:** the chat board has no earlier read, so it shows its third read with the note. Ask for the board again.
 - **Agents:** a run of a shared logbook joins its agent slot in its provider's root. So a Claude run with a slot shows as at work, not as "may be stuck".
@@ -117,7 +117,7 @@ A project with a [shared logbook](using-sage.md#shared-logbooks) shows as one pr
 
 ## The Agents page
 
-The board server has a page **Agents** (`/agents`). The header of the pages has three tabs: "Task board | Programs | Agents (n)", where n is the count of agents that run now. The page has the same sign-in as the task board, and it updates live in the same way.
+The board server has a page **Agents** (`/agents`). The header of the pages has three tabs: "Task board | Milestones | Agents (n)", where n is the count of agents that run now. The page has the same sign-in as the task board, and it updates live in the same way.
 
 The page shows every agent that runs now, in all projects, for Claude and Codex. It has one box for each project, with the project's Claude agent cap. A lead's helpers sit under it, indented.
 
@@ -136,21 +136,23 @@ The page reads files only: the logbooks, the hook's agent slots and helper notes
 
 To join a slot to its run, the hook marks each agent slot with the run id from the first line of the agent's brief ("Run R12 · task T3"). An agent whose brief has no such line shows with "No run recorded".
 
+<!-- The old anchor stays: older entries of CHANGELOG.md and changes/earlier.md link to it. -->
+<a id="programs-on-the-board"></a>
 
-## Programs on the board
+## Milestones on the board
 
-A program is a request that sage runs as two or more tasks for one goal, with one pilot task and a breakdown that you approve (see [Programs](using-sage.md#programs)).
+A milestone is a request that sage runs as two or more tasks for one goal, with one pilot task and a breakdown that you approve (see [Milestones](using-sage.md#milestones)).
 
 | Where | What you see |
 | --- | --- |
-| A card | The program's name (◫), "pilot" on the pilot, and a wait line in place of the Now line: what the task waits for (⧗), or ⊘ when a wait is never met, so the task cannot start. A wait in a loop of waits (a hand edit) says "in a loop" and is never met. |
-| The pilot's card, while the breakdown waits for you | A "Program approval" band on top and a frame, then the breakdown gate's question as the chief stored it, line by line, and how to answer: approve, change (say what to change) or drop the program. Only the gate that the program's row names, on its pilot, with the options approve, change and drop, gets the band: a gate that only copies its words is a plain gate. |
-| The Program filter | The cards of one program, or of no program. A program with no card on the board (its tasks ended more than 7 days ago) says why, with a link to its page. The board keeps the choice in the address (`#pg=`). |
-| The Programs tab (`/programs`) | Each program in a group (Needs you, Active, Done; Dropped is folded) with its state, goal, progress bar and progress, for example "3 of 7 merged · T10 abandoned", and what moves next: only a task that waits for nothing, then how many tasks wait and which cannot start. A program whose breakdown you asked to change is a line here: the chief revises it. |
-| A program's page (`/program/<key>`) | Its goal and progress, the pilot, what moves next, its tasks in order (the pilot first, then each task after the tasks that it waits for), and its latest decisions, as short lines with short dates (for example "17 Oct T2 merged: PR 66"). While the breakdown waits for you, the page shows the breakdown gate in the frame. An unknown program gives the page "Program not found", with status 404. |
-| The chat | A Programs section with one line for each program that is not done. Done programs, and dropped programs with no task left in them, are counts, with ": open the board's Programs tab". A dropped program with tasks still in it keeps its line, which asks the chief to take each task out. |
+| A card | The milestone's name (◫), "pilot" on the pilot, and a wait line in place of the Now line: what the task waits for (⧗), or ⊘ when a wait is never met, so the task cannot start. A wait in a loop of waits (a hand edit) says "in a loop" and is never met. |
+| The pilot's card, while the breakdown waits for you | A "Milestone approval" band on top and a frame, then the breakdown gate's question as the chief stored it, line by line, and how to answer: approve, change (say what to change) or drop the milestone. Only the gate that the milestone's row names, on its pilot, with the options approve, change and drop, gets the band: a gate that only copies its words is a plain gate. |
+| The Milestone filter | The cards of one milestone, or of no milestone. A milestone with no card on the board (its tasks ended more than 7 days ago) says why, with a link to its page. The board keeps the choice in the address (`#pg=`). |
+| The Milestones tab (`/milestones`) | Each milestone in a group (Needs you, Active, Done; Dropped is folded) with its state, goal, progress bar and progress, for example "3 of 7 merged · T10 abandoned", and what moves next: only a task that waits for nothing, then how many tasks wait and which cannot start. A milestone whose breakdown you asked to change is a line here: the chief revises it. |
+| A milestone's page (`/milestone/<key>`) | Its goal and progress, the pilot, what moves next, its tasks in order (the pilot first, then each task after the tasks that it waits for), and its latest decisions, as short lines with short dates (for example "17 Oct T2 merged: PR 66"). While the breakdown waits for you, the page shows the breakdown gate in the frame. An unknown milestone gives the page "Milestone not found", with status 404. |
+| The chat | A Milestones section with one line for each milestone that is not done. Done milestones, and dropped milestones with no task left in them, are counts, with ": open the board's Milestones tab". A dropped milestone with tasks still in it keeps its line, which asks the chief to take each task out. |
 
-The offline HTML file holds the programs list and each program's page too, as parts of the one file. Each of its pages has its own theme switch.
+The offline HTML file holds the milestones list and each milestone's page too, as parts of the one file. Each of its pages has its own theme switch.
 
 ## The board server
 
@@ -174,6 +176,6 @@ If you edit the port first, `--stop` finds no board on the new port, and the old
 
 The [board service guide](../../packages/sage-board/README.md) gives local startup, stable installation, offline export, and private phone access through a private HTTPS tunnel, such as Tailscale Serve. The server runs independently of a chat.
 
-It listens on loopback and asks for a sign-in for every request that is not from the Mac itself. A task page or a program page that is too large to show (over 8 MB) shows its parent page (the board, or the programs list) with a note, and the rest of the board stays live.
+It listens on loopback and asks for a sign-in for every request that is not from the Mac itself. A task page or a milestone page that is too large to show (over 8 MB) shows its parent page (the board, or the milestones list) with a note, and the rest of the board stays live.
 
 `board --install --login-file` refuses when no upgrade-stable `node` command is on PATH, for example with asdf, Volta, fnm or a keg-only Homebrew Node. To fix it, put a `node` link to the Node that you run the install with in a folder that you own and that is on PATH (for example `~/.local/bin/node`), then run the install again.

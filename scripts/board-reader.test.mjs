@@ -132,52 +132,52 @@ test("damaged task identities and states are diagnostics, and repeated artifacts
   assert.ok(Object.values(result.contents).reduce((bytes, content) => bytes + Buffer.byteLength(content.text ?? ""), 0) <= 16 * 1024 * 1024);
 });
 
-test("T233 C3: the programs table: missing is no rows while no task names a program, else a diagnostic; a damaged header, two rows of one id, or a bad pilot or gate cell make it unreadable; a bad program cell shows as ?", t => {
+test("T233 C3: the milestones table: missing is no rows while no task names a milestone, else a diagnostic; a damaged header, two rows of one id, or a bad pilot or gate cell make it unreadable; a bad milestone cell shows as ?", t => {
   const root = mkdtempSync(join(tmpdir(), "sage-board-reader-"));
   t.after(() => rmSync(root, { recursive: true, force: true }));
-  const HEAD = "id\ttitle\tsize\trisk\troute\tstate\tbranch\tpr\tround\tkeys\twaits\tprogram\n";
-  const task = (id, program = "", waits = "") => `${id}\tSample\tsmall\t\tbuild\tframed\t\t\t0\t\t${waits}\t${program}\n`;
+  const HEAD = "id\ttitle\tsize\trisk\troute\tstate\tbranch\tpr\tround\tkeys\twaits\tmilestone\n";
+  const task = (id, milestone = "", waits = "") => `${id}\tSample\tsmall\t\tbuild\tframed\t\t\t0\t\t${waits}\t${milestone}\n`;
   const EMPTY = { runs: "id\ttask\trole\tround\tcandidate\tbranch\tstatus\ttokens\treport\tstarted\tended\n", findings: "task\tkey\tround\tsource\tseverity\tsummary\ttriage\treason\tstatus\n", ledger: "task\tpr\tsha\tkind\tcycle\trun\tat\n", gates: "id\ttask\tquestion\toptions\trecommendation\tdefault\tanswer\tat\n", decisions: "at\ttask\tdecision\twhy\n" };
-  const read = (tasks, programs) => {
+  const read = (tasks, milestones) => {
     const path = mkdtempSync(join(root, "source-")), project = join(path, "sample-abcdef");
     mkdirSync(project);
     writeFileSync(join(project, "tasks.tsv"), HEAD + tasks.join(""));
     for (const [table, text] of Object.entries(EMPTY)) writeFileSync(join(project, `${table}.tsv`), text);
-    if (programs !== undefined) writeFileSync(join(project, "programs.tsv"), programs);
+    if (milestones !== undefined) writeFileSync(join(project, "milestones.tsv"), milestones);
     return readBoardSources([{ id: "one", path }])[0].projects[0];
   };
-  const PROGRAMS = "id\tname\tgoal\tpilot\tgate\tat\n";
-  // A logbook from before programs: no programs table, and no task names a program.
+  const MILESTONES = "id\tname\tgoal\tpilot\tgate\tat\n";
+  // A logbook from before milestones: no milestones table, and no task names a milestone.
   const old = read([task("T1")]);
   assert.deepEqual(old.diagnostics, []);
-  assert.deepEqual(old.tables.programs, []);
-  // A task names a program, and the table is missing: a diagnostic.
-  const lost = read([task("T1", "PG1")]);
-  assert.deepEqual(lost.diagnostics, ["programs: ENOENT"]);
-  assert.equal(lost.tables.programs, undefined);
+  assert.deepEqual(old.tables.milestones, []);
+  // A task names a milestone, and the table is missing: a diagnostic.
+  const lost = read([task("T1", "M1")]);
+  assert.deepEqual(lost.diagnostics, ["milestones: ENOENT"]);
+  assert.equal(lost.tables.milestones, undefined);
   // A good table: its rows as stored, also a name with marks (the renderers escape it).
-  const good = read([task("T1", "PG1"), task("T2", "PG1", "T1")], `${PROGRAMS}PG1\t<b>Codex</b> *support*\tSample goal\tT1\tG1\t2026-10-20T10:00:00Z\n`);
+  const good = read([task("T1", "M1"), task("T2", "M1", "T1")], `${MILESTONES}M1\t<b>Codex</b> *support*\tSample goal\tT1\tG1\t2026-10-20T10:00:00Z\n`);
   assert.deepEqual(good.diagnostics, []);
-  assert.deepEqual(good.tables.programs, [{ id: "PG1", name: "<b>Codex</b> *support*", goal: "Sample goal", pilot: "T1", gate: "G1", at: "2026-10-20T10:00:00Z" }]);
+  assert.deepEqual(good.tables.milestones, [{ id: "M1", name: "<b>Codex</b> *support*", goal: "Sample goal", pilot: "T1", gate: "G1", at: "2026-10-20T10:00:00Z" }]);
   assert.equal(good.tables.tasks[1].waits, "T1");
   // Unreadable: a damaged header, two rows of one id or of one gate (T383 item 1), a bad id, pilot or gate cell. The other
   // tables stay readable. Each error names the row's line in the file (a blank line counts) and its id when it is one (T383 item 8).
   for (const [why, text, message] of [
     ["header", "id\tname\tgoal\tpilot\n", "damaged table header"],
-    ["twice", `${PROGRAMS}PG1\tA\tg\tT1\tG1\t\n\nPG1\tB\tg\tT2\tG2\t\n`, "line 4 has the program PG1 again (first on line 2)"],
-    ["one gate", `${PROGRAMS}PG1\tA\tg\tT1\tG1\t\nPG2\tB\tg\tT1\tG1\t\n`, "line 3: PG2 names the gate G1 of PG1"],
-    ["id", `${PROGRAMS}P1 <b>\tA\tg\tT1\tG1\t\n`, "line 2 has a program id that is not PG and a number"],
-    ["pilot", `${PROGRAMS}PG1\tA\tg\tX1\tG1\t\n`, "line 2: the pilot of PG1 is not a task id"],
-    ["gate", `${PROGRAMS}PG1\tA\tg\tT1\tgate 1\t\n`, "line 2: the gate of PG1 is not a gate id"],
+    ["twice", `${MILESTONES}M1\tA\tg\tT1\tG1\t\n\nM1\tB\tg\tT2\tG2\t\n`, "line 4 has the milestone M1 again (first on line 2)"],
+    ["one gate", `${MILESTONES}M1\tA\tg\tT1\tG1\t\nM2\tB\tg\tT1\tG1\t\n`, "line 3: M2 names the gate G1 of M1"],
+    ["id", `${MILESTONES}P1 <b>\tA\tg\tT1\tG1\t\n`, "line 2 has a milestone id that is not M and a number"],
+    ["pilot", `${MILESTONES}M1\tA\tg\tX1\tG1\t\n`, "line 2: the pilot of M1 is not a task id"],
+    ["gate", `${MILESTONES}M1\tA\tg\tT1\tgate 1\t\n`, "line 2: the gate of M1 is not a gate id"],
     // R1307-1: a row with too few cells says its line in the file (a blank line counts) and its count of cells.
-    ["row", `${PROGRAMS}\nPG1\tA\tg\n`, "line 3 has 3 cells, and its header has 6"],
+    ["row", `${MILESTONES}\nM1\tA\tg\n`, "line 3 has 3 cells, and its header has 6"],
   ]) {
-    const bad = read([task("T1", "PG1")], text);
-    assert.equal(bad.tables.programs, undefined, why);
-    assert.deepEqual(bad.diagnostics, [`programs: ${message}`], why);
+    const bad = read([task("T1", "M1")], text);
+    assert.equal(bad.tables.milestones, undefined, why);
+    assert.deepEqual(bad.diagnostics, [`milestones: ${message}`], why);
     assert.equal(bad.tables.tasks.length, 1, why);
   }
-  // A program cell that is not a program id shows as ?; a good one stays.
-  const cell = read([task("T1", "<img src=x>"), task("T2", "PG1")], `${PROGRAMS}PG1\tA\tg\tT2\tG1\t\n`);
-  assert.deepEqual(cell.tables.tasks.map(row => row.program), ["?", "PG1"]);
+  // A milestone cell that is not a milestone id shows as ?; a good one stays.
+  const cell = read([task("T1", "<img src=x>"), task("T2", "M1")], `${MILESTONES}M1\tA\tg\tT2\tG1\t\n`);
+  assert.deepEqual(cell.tables.tasks.map(row => row.milestone), ["?", "M1"]);
 });

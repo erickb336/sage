@@ -29,7 +29,7 @@ const COLS = {
   ledger: "task pr sha kind cycle run at",
   gates: "id task question options recommendation default answer at kind",
   decisions: "at task decision why",
-  programs: "id name goal pilot gate at",
+  milestones: "id name goal pilot gate at",
 };
 const LEGACY = { ...COLS, tasks: "id title size risk route state branch pr round keys priority kind", runs: "id task role round candidate branch status tokens report started ended", gates: "id task question options recommendation default answer at" };
 const sheet = (columns, rows) => `${[columns.split(" "), ...rows.map(row => columns.split(" ").map(column => row[column] ?? ""))].map(cells => cells.join("\t")).join("\n")}\n`;
@@ -150,9 +150,9 @@ test("each shared card names its owning chief, an open offer, or Unclaimed; the 
   assert.match(html, /<button type="button" id="who-claude" data-who="claude"/);
   assert.doesNotMatch(html, /data-who="shared"/, "no Shared button");
   // The page's own filter rule: an Unclaimed card shows only under All.
-  assert.equal(cardFits({ provider: "", priority: "P2", kind: "", program: "" }, { who: "claude" }), false);
-  assert.equal(cardFits({ provider: "", priority: "P2", kind: "", program: "" }, { who: "" }), true);
-  assert.equal(cardFits({ provider: "claude", priority: "P2", kind: "", program: "" }, { who: "claude" }), true);
+  assert.equal(cardFits({ provider: "", priority: "P2", kind: "", milestone: "" }, { who: "claude" }), false);
+  assert.equal(cardFits({ provider: "", priority: "P2", kind: "", milestone: "" }, { who: "" }), true);
+  assert.equal(cardFits({ provider: "claude", priority: "P2", kind: "", milestone: "" }, { who: "claude" }), true);
   assert.match(renderBoardText(model), /\*\*T321 Show the board in both providers\*\* · Claude · C1 · lantern · PR 88/);
   assert.match(renderBoardText(model), /⇄ Offered to Codex · C2\\\. It waits for R407 and R420 to end, then Codex · C2 accepts\\\./);
 });
@@ -415,22 +415,22 @@ test("F-T624-8: a damaged chiefs.tsv gives its one table diagnostic, and no warn
 });
 
 // Repair round 2 of PR 419 (R2413): one test for each fix key.
-test("F-T624-12: a program that moved with its open task leaves the old logbook, as no stuck or second program; a finished old program stays", t => {
+test("F-T624-12: a milestone that moved with its open task leaves the old logbook, as no stuck or second milestone; a finished old milestone stays", t => {
   const w = world(t), old = join(w.claudeRoot, FOLDER);
   rmSync(old, { recursive: true });
   const gate = (id, taskId) => ({ id, task: taskId, question: "Approve the breakdown?", options: "approve|change|drop", recommendation: "approve", answer: "approve", at: iso(-3 * DAY) });
   logbook(old, {
-    tasks: [task("T4", "Sync part one", "merged", { program: "PG1" }), { ...task("T5", "Sync pilot", "building", { program: "PG1" }), moved: "T20" }, task("T6", "Old export", "merged", { program: "PG2" }), { ...task("T7", "Lone pilot", "building", { program: "PG3" }), moved: "T21" }],
-    programs: [{ id: "PG1", name: "Sync", goal: "Sync", pilot: "T5", gate: "G1", at: iso(-3 * DAY) }, { id: "PG2", name: "Export", goal: "Export", pilot: "T6", gate: "G2", at: iso(-3 * DAY) }, { id: "PG3", name: "Lone", goal: "Lone", pilot: "T7", gate: "G3", at: iso(-3 * DAY) }],
+    tasks: [task("T4", "Sync part one", "merged", { milestone: "M1" }), { ...task("T5", "Sync pilot", "building", { milestone: "M1" }), moved: "T20" }, task("T6", "Old export", "merged", { milestone: "M2" }), { ...task("T7", "Lone pilot", "building", { milestone: "M3" }), moved: "T21" }],
+    milestones: [{ id: "M1", name: "Sync", goal: "Sync", pilot: "T5", gate: "G1", at: iso(-3 * DAY) }, { id: "M2", name: "Export", goal: "Export", pilot: "T6", gate: "G2", at: iso(-3 * DAY) }, { id: "M3", name: "Lone", goal: "Lone", pilot: "T7", gate: "G3", at: iso(-3 * DAY) }],
     gates: [gate("G1", "T5"), gate("G2", "T6"), gate("G3", "T7")],
     decisions: ["T4", "T6"].map(id => ({ at: iso(-DAY), task: id, decision: "state merged" })),
-  }, LEGACY, { cols: { tasks: `${LEGACY.tasks} program moved` }, files: { "checkout.txt": `${w.checkout}\n`, "moved.json": "{}\n" } });
+  }, LEGACY, { cols: { tasks: `${LEGACY.tasks} milestone moved` }, files: { "checkout.txt": `${w.checkout}\n`, "moved.json": "{}\n" } });
   const model = modelOf(w.sources), lantern = model.projects.find(project => project.name === "lantern");
-  assert.deepEqual(model.programNeeds.filter(need => need.group === lantern.key), []);
+  assert.deepEqual(model.milestoneNeeds.filter(need => need.group === lantern.key), []);
   assert.equal(lantern.needsOwner, 2, "the two shared tasks only");
-  assert.deepEqual(model.programs.filter(program => program.group === lantern.key).map(program => [program.key, program.state]), [[`claude/${FOLDER}/PG2`, "done"]]);
-  assert.equal(card(model, "T4").program, null, "a finished task of the moved program shows with no program");
-  assert.doesNotMatch(renderBoardText(model) + renderBoardHtml(model, { snapshot: false }), /PG1|PG3|is stuck/);
+  assert.deepEqual(model.milestones.filter(milestone => milestone.group === lantern.key).map(milestone => [milestone.key, milestone.state]), [[`claude/${FOLDER}/M2`, "done"]]);
+  assert.equal(card(model, "T4").milestone, null, "a finished task of the moved milestone shows with no milestone");
+  assert.doesNotMatch(renderBoardText(model) + renderBoardHtml(model, { snapshot: false }), /M1|M3|is stuck/);
 });
 
 test("F-T624-13: the board server reads an old logbook under a provider root that its config leaves out, as the one-shot board does", async t => {
@@ -800,7 +800,7 @@ test("T656: inferred work on an open PR reads the owning chief's provider, not t
   assert.equal(model.counts.inferredWork, 1);
 });
 
-test("F-T624-24 and F-T624-19: a shared run with no chief stands in as Unknown, not Shared; an old logbook's program names that logbook", t => {
+test("F-T624-24 and F-T624-19: a shared run with no chief stands in as Unknown, not Shared; an old logbook's milestone names that logbook", t => {
   const w = world(t), model = modelOf(w.sources), t322 = card(model, "T322");
   const page = renderBoardHtml(model, { taskKey: `shared/${FOLDER}/T322`, snapshot: false });
   assert.match(page, /<td class="id">R430<\/td><td><span class="standin" tabindex="0" title="Stand-in: the run names no chief, so the board does not know its provider\." data-why="[^"]*">Unknown<span class="vh">/);
@@ -809,17 +809,17 @@ test("F-T624-24 and F-T624-19: a shared run with no chief stands in as Unknown, 
   // An old logbook's runs stand in with its provider; a legacy run keeps its source (Claude).
   assert.equal(card(model, "T316").providerStandIn, "claude");
   assert.equal(card(model, "T41").providerStandIn, "claude");
-  // A finished program of the old Claude logbook says "Old Claude" where a shared program says "Shared".
+  // A finished milestone of the old Claude logbook says "Old Claude" where a shared milestone says "Shared".
   const old = join(w.claudeRoot, FOLDER);
   rmSync(old, { recursive: true });
   logbook(old, {
-    tasks: [task("T6", "Old export", "merged", { program: "PG2" })],
-    programs: [{ id: "PG2", name: "Export", goal: "Export", pilot: "T6", gate: "G2", at: iso(-3 * DAY) }],
+    tasks: [task("T6", "Old export", "merged", { milestone: "M2" })],
+    milestones: [{ id: "M2", name: "Export", goal: "Export", pilot: "T6", gate: "G2", at: iso(-3 * DAY) }],
     gates: [{ id: "G2", task: "T6", question: "Approve the breakdown?", options: "approve|change|drop", recommendation: "approve", answer: "approve", at: iso(-3 * DAY) }],
     decisions: [{ at: iso(-DAY), task: "T6", decision: "state merged" }],
-  }, LEGACY, { cols: { tasks: `${LEGACY.tasks} program moved` }, files: { "checkout.txt": `${w.checkout}\n`, "moved.json": "{}\n" } });
-  const programs = modelOf(w.sources).programs.filter(program => program.id === "PG2");
-  assert.deepEqual(programs.map(program => [program.key, program.sourceLabel]), [[`claude/${FOLDER}/PG2`, "Old Claude"]]);
+  }, LEGACY, { cols: { tasks: `${LEGACY.tasks} milestone moved` }, files: { "checkout.txt": `${w.checkout}\n`, "moved.json": "{}\n" } });
+  const milestones = modelOf(w.sources).milestones.filter(milestone => milestone.id === "M2");
+  assert.deepEqual(milestones.map(milestone => [milestone.key, milestone.sourceLabel]), [[`claude/${FOLDER}/M2`, "Old Claude"]]);
 });
 
 test("F-T625-4, F-T625-8 and F-T625-9: only the gone folder of the branch's newest writer run stops the review, and its note names that run", t => {

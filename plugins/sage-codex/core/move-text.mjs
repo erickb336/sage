@@ -10,7 +10,7 @@ export const STEPS = 6;
 const DONE = ["plan saved, new logbook not built yet", "new logbook built, old logbooks not marked yet", "old logbooks marked, checkouts not linked yet", "checkouts linked, plan not removed yet"];
 /**
  * New numbers as the preview shows them: each run of numbers in a row as "T4–T6", the runs joined by commas. A finished
- * task of a program takes a number between the open ones, so the open tasks are not always one run (F-T647-3).
+ * task of a milestone takes a number between the open ones, so the open tasks are not always one run (F-T647-3).
  */
 const range = (ids) => {
   if (!ids.length) return "none";
@@ -48,7 +48,7 @@ const by = (rows, provider) => rows.filter((r) => r.provider === provider);
 const books = (n) => (n === 1 ? "the logbook" : n === 2 ? "both logbooks" : `the ${n} logbooks`);
 const shortPlan = (plan) => plan.digest.slice(0, 8);
 
-/** The open tasks of a map: not an adopted task, which moves in the row of the task that adopted it, and not a finished task of a program (F-T640-59). */
+/** The open tasks of a map: not an adopted task, which moves in the row of the task that adopted it, and not a finished task of a milestone (F-T640-59). */
 const opened = (tasks) => tasks.filter((m) => !m.adopted && !m.finished);
 /** The counts of the plan, by provider: what the preview shows and what the end check compares. */
 export function countsOf(plan, provider) {
@@ -57,7 +57,7 @@ export function countsOf(plan, provider) {
     tasks: opened(by(map.tasks, provider)).length,
     findings: by(map.findings, provider).length,
     gates: by(map.gates, provider).filter((m) => m.open).length,
-    programs: by(map.programs, provider).length,
+    milestones: by(map.milestones, provider).length,
     standing: by(map.standing, provider).reduce((n, s) => n + s.count, 0),
     // The lines of a later logbook's standing orders that have no number: a continuation or a note under the list (F-T640-21).
     notes: by(map.standing, provider).reduce((n, s) => n + (s.notes ?? 0), 0),
@@ -86,13 +86,13 @@ export function previewText(plan, checks) {
     row("open findings", providers.map((p) => [countsOf(plan, p).findings, "new keys"])),
     row("open gates", providers.map((p) => [countsOf(plan, p).gates, range(ids(by(plan.map.gates, p).filter((m) => m.open)))])),
     ...(plan.map.gates.some((m) => !m.open) ? [row("answered gates", providers.map((p) => [by(plan.map.gates, p).filter((m) => !m.open).length, range(ids(by(plan.map.gates, p).filter((m) => !m.open)))]))] : []),
-    row("programs", providers.map((p) => [countsOf(plan, p).programs, range(ids(by(plan.map.programs, p)))])),
+    row("milestones", providers.map((p) => [countsOf(plan, p).milestones, range(ids(by(plan.map.milestones, p)))])),
     row("standing orders", providers.map(standing)),
     "",
     `What stays (read-only, "Old" on the board)`,
     `${"finished tasks".padEnd(18)}${providers.map((p, i) => String(plan.map.finished[p] ?? 0).padStart(i ? 18 : 3)).join("")}`,
     "runs, verdicts and kept reports never move",
-    `${"next numbers".padEnd(18)}${["T", "R", "G", "PG"].map((p) => plan.next[p]).join(" · ")}`,
+    `${"next numbers".padEnd(18)}${["T", "R", "G", "M"].map((p) => plan.next[p]).join(" · ")}`,
     "",
     "Checks",
     ...checks.map(([mark, text, ...more]) => [`${mark.padEnd(6)}${text}`, ...more.map((line) => `      ${line}`)].join("\n")),
@@ -151,7 +151,7 @@ export function changedText(asked, plan, shown, gate) {
     const diffs = [
       added.length && `${added.length} more open ${added.length === 1 ? "task" : "tasks"} (${added.join(", ")})`,
       gone.length && `${gone.length} fewer open ${gone.length === 1 ? "task" : "tasks"} (${gone.join(", ")})`,
-      ...["findings", "gates", "programs", "standing"].map((k) => now[k] !== was[k] && `${Math.abs(now[k] - was[k])} ${now[k] > was[k] ? "more" : "fewer"} ${{ findings: "open findings", gates: "open gates", programs: "programs", standing: "standing orders" }[k]}`),
+      ...["findings", "gates", "milestones", "standing"].map((k) => now[k] !== was[k] && `${Math.abs(now[k] - was[k])} ${now[k] > was[k] ? "more" : "fewer"} ${{ findings: "open findings", gates: "open gates", milestones: "milestones", standing: "standing orders" }[k]}`),
     ].filter(Boolean);
     if (diffs.length) lines.push(`  ${title(p)}: ${diffs.join(", ")}`);
   }
@@ -236,7 +236,7 @@ export function reconciliationText(plan, found, missing) {
   const providers = providersOf(plan), wrong = [];
   // The row of unnumbered standing lines shows only when a later logbook has such a line (F-T640-21).
   const notes = providers.some((p) => countsOf(plan, p).notes || found[p]?.notes) ? [["standing notes", "notes"]] : [];
-  const rows = [["tasks (open)", "tasks"], ["findings (open)", "findings"], ["gates (open)", "gates"], ["programs", "programs"], ["standing orders", "standing"], ...notes, ["wait links", "waits"], ["old rows marked", "marked"]].map(([label, key]) => {
+  const rows = [["tasks (open)", "tasks"], ["findings (open)", "findings"], ["gates (open)", "gates"], ["milestones", "milestones"], ["standing orders", "standing"], ...notes, ["wait links", "waits"], ["old rows marked", "marked"]].map(([label, key]) => {
     const pairs = providers.map((p) => [countsOf(plan, p)[key], found[p]?.[key] ?? 0]), ok = pairs.every(([a, b]) => a === b);
     if (!ok) wrong.push(label);
     return `${label.padEnd(18)}${pairs.map(([a, b], i) => `${String(a).padStart(i ? 9 : 3)}${String(b).padStart(6)}`).join("")}   ${ok ? "match" : "MISMATCH"}`;
@@ -287,8 +287,8 @@ export function endText(plan, map, backups, shown) {
 }
 
 const esc = (s) => String(s).replace(/[&<>"']/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" })[c]);
-/** Where the map page sends a finished task: a program with an open task moves whole, its finished tasks too (F-T640-59, F-T645-9). */
-const FINISHED = "A finished task stays on the board under its old number, unless its program moved: then it moved with its program, and this page lists it.";
+/** Where the map page sends a finished task: a milestone with an open task moves whole, its finished tasks too (F-T640-59, F-T645-9). */
+const FINISHED = "A finished task stays on the board under its old number, unless its milestone moved: then it moved with its milestone, and this page lists it.";
 
 /** The old-to-new map as the Mac's own page, beside the new logbook: it may show paths, because it is no shared page. */
 export function mapHtml(plan, { at, backups, shown }) {
@@ -296,11 +296,11 @@ export function mapHtml(plan, { at, backups, shown }) {
   const rows = [
     ...plan.map.tasks.map((m) => ["tasks", m.provider, m.old, m.new, m.title + (m.adopted ? " (adopted by the task it moved with)" : "")]),
     ...plan.map.gates.map((m) => ["gates", m.provider, m.old, m.new, m.open ? "open gate" : "answered gate"]),
-    ...plan.map.programs.map((m) => ["programs", m.provider, m.old, m.new, "program"]),
+    ...plan.map.milestones.map((m) => ["milestones", m.provider, m.old, m.new, "milestone"]),
     ...plan.map.findings.map((m) => ["findings", m.provider, `${m.task} ${m.old}`, m.new, "open finding"]),
   ];
   // One tab for each kind of row, as the design's map page has them (F-T640-14). A search looks in every kind.
-  const kinds = ["tasks", "gates", "programs", "findings"].map((k) => [k, rows.filter(([kind]) => kind === k).length]).filter(([, n]) => n);
+  const kinds = ["tasks", "gates", "milestones", "findings"].map((k) => [k, rows.filter(([kind]) => kind === k).length]).filter(([, n]) => n);
   // The board prints the time of the move in UTC: the page says it too, so that both name the same day (F-T640-53).
   const local = localTime(at), utc = new Date(String(at ?? "")), board = Number.isNaN(utc.getTime()) || !/UTC[+-]/.test(local.clock) ? "" : ` (${utc.toISOString().slice(0, 10)} ${utc.toISOString().slice(11, 16)} UTC on the board)`;
   return `<!doctype html>

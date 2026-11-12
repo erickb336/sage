@@ -201,16 +201,16 @@ test("the Codex install line names a GitHub remote, as docs/guide/codex.md does 
   assert.match(readFileSync(join(ROOT, "docs/guide/codex.md"), "utf8"), /a GitHub remote for the project/);
 });
 
-test("the board image's alt text says its two Needs you items are program items, not questions (T467-3)", () => {
+test("the board image's alt text says its two Needs you items are milestone items, not questions (T467-3)", () => {
   const alt = realReadme().match(/<img alt="The board page[^"]*"/)[0];
-  assert.match(alt, /a Needs you box with two program items,/);
-  assert.doesNotMatch(alt, /program questions/);
+  assert.match(alt, /a Needs you box with two milestone items,/);
+  assert.doesNotMatch(alt, /milestone questions/);
 });
 
 test("the README defines the on phrase and the update warning in words the reader has met (R1661)", () => {
   const readme = realReadme();
   assert.match(readme, /Send the on phrase, the words below, as a message of its own/);
-  assert.match(readme, /> \*\*Warning:\*\* before you use programs \(tasks of one goal\) or tasks that wait for other tasks, update sage/);
+  assert.match(readme, /> \*\*Warning:\*\* before you use milestones \(tasks of one goal\) or tasks that wait for other tasks, update sage/);
 });
 
 // T521 (the owner, 2026-10-25): How sage works is in the README, the limits table is gone, and Learn more links the

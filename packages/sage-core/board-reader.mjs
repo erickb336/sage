@@ -4,7 +4,7 @@ import { basename, dirname, isAbsolute, join, resolve } from "node:path";
 import { createHash } from "node:crypto";
 import { validateObservations } from "./observations.mjs";
 import { logbookSettings } from "./logbook-fields.mjs";
-import { PROGRAM_ID, TASK_ID, checkPrograms } from "./program-rules.mjs";
+import { MILESTONE_ID, TASK_ID, checkMilestones, renameRows } from "./milestone-rules.mjs";
 import { BINDING_COLUMNS, bindingRow, checkoutGone, githubRemote, linkedRows, ownerOf, plainName } from "./shared-root.mjs";
 import { chiefsWhole } from "./chiefs.mjs";
 import { MOVES } from "./shared-root.mjs";
@@ -20,7 +20,7 @@ const TABLES = {
   ledger: "task pr sha kind cycle run at",
   gates: "id task question options recommendation default answer at",
   decisions: "at task decision why",
-  programs: "id name goal pilot gate at",
+  milestones: "id name goal pilot gate at",
 };
 
 function regularBytes(file, budget) {
@@ -43,11 +43,11 @@ function regularBytes(file, budget) {
 
 const regular = (file, budget) => new TextDecoder("utf-8", { fatal: true }).decode(regularBytes(file, budget));
 
-function table(file, name, budget) {
+function table(file, name, budget, expected = TABLES[name]) {
   // Each line keeps its number in the file, so a damaged row says where it is (R1307-1).
   const [[header] = [], ...lines] = regular(file, budget).replace(/^\uFEFF/, "").split(/\r?\n/).map((line, i) => [line, i + 1]).filter(([line]) => line);
   const columns = header?.split("\t") ?? [];
-  if (new Set(columns).size !== columns.length || !TABLES[name].split(" ").every(c => columns.includes(c))) throw new Error("damaged table header");
+  if (new Set(columns).size !== columns.length || !expected.split(" ").every(c => columns.includes(c))) throw new Error("damaged table header");
   const identities = new Set();
   const rows = lines.map(([line, number]) => {
     const cells = line.split("\t");
@@ -56,14 +56,14 @@ function table(file, name, budget) {
     if (name === "tasks") {
       if (!TASK_ID.test(row.id) || identities.has(row.id) || !TASK_STATES.has(row.state)) throw new Error("damaged task identity or state");
       identities.add(row.id);
-      // A program cell that is not a program id shows as "?", as the older board shows a bad id: no hand-edited text reaches the board.
-      if (row.program && !PROGRAM_ID.test(row.program)) row.program = "?";
+      // A milestone cell that is not a milestone id shows as "?", as the older board shows a bad id: no hand-edited text reaches the board.
+      if (row.milestone && !MILESTONE_ID.test(row.milestone)) row.milestone = "?";
     }
     return row;
   });
-  // Two rows of one id or of one gate make the programs table unreadable, as the state tool refuses it; so does a bad id,
+  // Two rows of one id or of one gate make the milestones table unreadable, as the state tool refuses it; so does a bad id,
   // pilot or gate cell. The error names the row's line. The older board (board.mjs) reads it with the same check.
-  return name === "programs" ? checkPrograms(rows, lines.map(([, number]) => number)) : rows;
+  return name === "milestones" ? checkMilestones(rows, lines.map(([, number]) => number)) : rows;
 }
 
 /** The lines of a small table of exact columns, as rows: the shared root's bindings, a logbook's chiefs and its old sources. */
@@ -175,7 +175,7 @@ export const SHARED = "shared";
 export const hookProvider = source => source.hookProvider ?? source.provider ?? null;
 /** The folders of a logbook's receipts: a write adds one before it changes the tables. */
 const RECEIPTS = ["usage-requests", "replace-requests"];
-const WATCHED = [...Object.keys(TABLES), "chiefs", "sources"].map(name => `${name}.tsv`).concat("review-pending.json");
+const WATCHED = [...Object.keys(TABLES), "chiefs", "sources", "programs"].map(name => `${name}.tsv`).concat("review-pending.json");
 const MAX_ATTEMPTS = 3, MAX_OLD = 16;
 /**
  * What says that a logbook changed between two reads: the folder, each table and review-pending.json (a table write is a
@@ -197,20 +197,33 @@ export const changedPart = message => message === "project changed during the re
  */
 function readLogbook(directory, project, budget, { now, bound, chiefs = true, duringRead, attempt }) {
   const before = lstatSync(directory);
+  let none = false; // no milestones.tsv, and no task names a milestone
   for (const name of Object.keys(TABLES)) {
     try { project.tables[name] = table(join(directory, `${name}.tsv`), name, budget); }
     catch (error) {
-      // A logbook from before programs has no programs table: that is a table with no rows while no task names a
-      // program (the state tool's namesProgram rule). Once one does, a missing table is a diagnostic, as for any table.
-      if (name === "programs" && error.code === "ENOENT" && !(project.tables.tasks ?? []).some(task => task.program)) project.tables.programs = [];
+      // A logbook from before milestones has no milestones table: that is a table with no rows while no task names a
+      // milestone (the state tool's namesMilestone rule). Once one does, a missing table is a diagnostic, as for any table.
+      // A program cell names a milestone too, when its logbook from before the rename (T995) lost programs.tsv.
+      if (name === "milestones" && error.code === "ENOENT" && !(project.tables.tasks ?? []).some(task => task.milestone || (task.program && !lstatSync(join(directory, "programs.tsv"), { throwIfNoEntry: false })))) project.tables.milestones = [], none = true;
       else project.diagnostics.push(`${name}: ${error.code ?? error.message}`);
     }
   }
+  // A logbook from before the rename of program to milestone (T995) reads as the state tool reads it: its programs with
+  // their new ids, each task's program cell as its milestone cell, and the new first line of each open breakdown gate.
+  let programs;
+  try { programs = table(join(directory, "programs.tsv"), "programs", budget, TABLES.milestones); }
+  catch (error) { if (error.code !== "ENOENT") project.diagnostics.push(`programs: ${error.code ?? error.message}`); }
+  if (programs) {
+    const [tasks = [], decisions = [], gates = [], milestones] = ["tasks", "decisions", "gates", "milestones"].map(name => project.tables[name]);
+    Object.assign(project.tables, renameRows({ tasks, decisions, gates, milestones: none ? undefined : milestones, programs }, ""));
+    try { checkMilestones(project.tables.milestones); }
+    catch (error) { delete project.tables.milestones; project.diagnostics.push(`milestones: ${error.message}`); }
+  }
   // A task row that the move took to the shared logbook (its moved cell is set) shows there, not here (T306, PR 7). Its
-  // program moved with it, with a new number, so the program and its cells leave this old logbook too (F-T624-12).
-  const moved = (project.tables.tasks ?? []).filter(task => task.moved), gone = new Set(moved.map(task => task.program).filter(Boolean));
-  if (moved.length) project.tables.tasks = project.tables.tasks.filter(task => !task.moved).map(task => gone.has(task.program) ? { ...task, program: "" } : task);
-  if (gone.size && project.tables.programs) project.tables.programs = project.tables.programs.filter(program => !gone.has(program.id));
+  // milestone moved with it, with a new number, so the milestone and its cells leave this old logbook too (F-T624-12).
+  const moved = (project.tables.tasks ?? []).filter(task => task.moved), gone = new Set(moved.map(task => task.milestone).filter(Boolean));
+  if (moved.length) project.tables.tasks = project.tables.tasks.filter(task => !task.moved).map(task => gone.has(task.milestone) ? { ...task, milestone: "" } : task);
+  if (gone.size && project.tables.milestones) project.tables.milestones = project.tables.milestones.filter(milestone => !gone.has(milestone.id));
   // The chiefs of a shared logbook (T306, PR 3), by the state tool's rule. A legacy logbook has none: no file, no rows.
   // A table that the board cannot read gives null: its one diagnostic says so, and no task's chief counts as not listed.
   project.chiefs = [];

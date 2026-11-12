@@ -67,17 +67,17 @@ The chief of staff never edits files. It writes briefs, records verdicts and ask
 
 | Idea | From | In sage mode |
 | --- | --- | --- |
-| A chief that owns the program, never the code | pstack orchestrate, Cursor projects | While sage mode is on, the hook refuses the chief's file edits. After the off phrase, the session edits files as a normal session. |
+| A chief that owns the milestone, never the code | pstack orchestrate, Cursor projects | While sage mode is on, the hook refuses the chief's file edits. After the off phrase, the session edits files as a normal session. |
 | "The brief is the product." A missing field stops the spawn | pstack orchestrate | A brief template with required fields. The hook refuses an agent spawn when a field is missing. |
 | Verdicts recorded by head SHA. A new commit voids them | pstack ledger, Orchestrator "merge the exact checked commit" | A ledger in the logbook. A merge is blocked unless the current SHA has the verdicts its route needs. |
 | A mode switched on by name, with playbooks copied into the to-do list | poteto mode | "sage mode" as the whole message. Each route's blocks go into the task list. |
-| Scale the ceremony to the unit | pstack, Anthropic research system | Routes come in sizes: tiny, small, large, program. |
+| Scale the ceremony to the unit | pstack, Anthropic research system | Routes come in sizes: tiny, small, large, milestone. |
 | A PE that separates "changes" from "questions for you" | Orchestrator, after the PE loop failed to converge | The same verdict shape. A later PE pass checks its earlier asks first. |
 | Code review and security review side by side. No dropped findings | Orchestrator ORC-021 and ORC-028 | Each finding gets a triage: fix, dismiss with a reason, or ask you. A task can't finish with an open medium or high finding. An open low finding never blocks a merge; it stays on the task's polish list. |
 | One writer. Reviewers in a fresh context | Cognition 2026, Claude Code docs | Only the implementer and the designer write, each in their own worktree. |
 | Rules as prompts decay. Encode them in structure | Orchestrator lessons, poteto's trust ladder | The important rules are code: hooks and the state tool ([rules](#rules)). |
 | Completions are queue events. Never review inline | pstack orchestrate | The chief records a report and starts a reviewer. It doesn't read the diff itself. |
-| A pilot before fan-out | pstack orchestrate | A program-sized route runs one unit end to end first. |
+| A pilot before fan-out | pstack orchestrate | A milestone-sized route runs one unit end to end first. |
 | Build verification first | poteto, Anthropic harness posts | QA needs a live run of the real app for behaviour changes, not only tests. |
 
 <a id="team"></a>
@@ -130,7 +130,7 @@ flowchart TB
   S -->|"small: one bounded change"| T2["Build → code review (+ security if a risk flag) → QA"]
   S -->|"large: new screens, flows, data"| T3["Design → PE → you approve → Build → code, security, UX review → repair → QA live"]
   S -->|"cause unknown"| T4["Investigate, no changes → evidence review → a proposal to you"]
-  S -->|"program: many tasks, days"| T5["Plan → PE → pilot one unit → tracks in a rolling window"]
+  S -->|"milestone: many tasks, days"| T5["Plan → PE → pilot one unit → tracks in a rolling window"]
 ```
 
 Risk flags: auth, personal data, a schema or migration, money, secrets, input from outside. Any flag adds the security review to every size except investigate, which changes no code.
@@ -378,7 +378,7 @@ A cycle is a full set of fresh reviewers and QA on one head SHA. Each cycle uses
 | Tiny | 1 | $0.05 – $0.30 |
 | Small | 3 – 5 | $0.30 – $1.50 |
 | Large | 8 – 16 | $1 – $5 |
-| Program | tens to hundreds | No basis yet. The pilot measures one unit |
+| Milestone | tens to hundreds | No basis yet. The pilot measures one unit |
 
 **Measured in dry run 1** (before its fixes): 28 agent runs for 2 tasks, $5.28 in all. A small task with a risk flag, 2 repair rounds and 2 cycles cost about $2.60, which is above the estimate. The fixes (no repair rounds for low findings, 1 cycle unless autopilot) cut that most. **Earlier basis.** Orchestrator's real factory trial: one Feature task, 16 agent runs, $0.61–$0.83 of Claude. Anthropic's research system post: multi-agent runs use about 15× the tokens of a chat. With your subscription, this counts against your usage limits, not money. The ranges are guesses until the pilot measures real tasks, and I'll replace them with those numbers.
 
@@ -389,7 +389,7 @@ A cycle is a full set of fresh reviewers and QA on one head SHA. Each cycle uses
 | Option | For | Against | Verdict |
 | --- | --- | --- | --- |
 | **A.** Instructions only: a chief with playbooks in its prompt (the first prototype) | Simplest, very flexible | Rules in prompts decay (the PE loop, dropped findings). No state across sessions | Rejected as the whole design. It's the starting layer |
-| **B.** Workflow scripts as fixed flows | Deterministic, structured output, can resume | Can't take your input mid-run, so each question needs a new run. Flows live in code, as rigid as Orchestrator's | Rejected for routes. Maybe later for large fan-outs (program size) |
+| **B.** Workflow scripts as fixed flows | Deterministic, structured output, can resume | Can't take your input mid-run, so each question needs a new run. Flows live in code, as rigid as Orchestrator's | Rejected for routes. Maybe later for large fan-outs (milestone size) |
 | **C.** A chief + building blocks + a state tool + hook checks | Flexible routes, key rules enforced, state survives sessions and devices, cheap for small tasks | More parts: agents, a CLI and hooks. Hooks see only what tools expose | Recommended |
 | **D.** Agent teams | Peers can message each other | Experimental, no nesting, the lead approves plans by itself | Rejected for now |
 | **E.** Orchestrator as the engine (its ORC-023) | Reuses all of Orchestrator | A heavy app, a separate sign-in, fixed flows | Rejected. Orchestrator stays your separate playground |
@@ -470,7 +470,7 @@ Each step ends in a check. The next step starts only when that check passes.
 | 3. Pilot | One small real task on one of your projects. You watch from your phone | The task merges, or reaches a PR, with a ledger verdict on its head SHA. Measured cost |
 | 4. Design rounds and arena | The Design block with prototypes and keep, change or drop. The arena block | One real design round with an arena of 3 that you mark |
 | 5. Autopilot and Learn | Autopilot cycles and the merge check. Lessons into the kitchen | One auto-merge after the set cycles. One lesson turned into a check |
-| 6. Program size | Tracks, a rolling window, the pilot rule. Built only when a real program needs it | One program with a pilot unit |
+| 6. Milestone size | Tracks, a rolling window, the pilot rule. Built only when a real milestone needs it | One milestone with a pilot unit |
 
 <a id="decide"></a>
 

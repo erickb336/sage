@@ -208,7 +208,7 @@ test("T218 F-T218-8 and F-T218-10: faint text and skipped loop steps meet 4.5 co
   assert.ok(["board light provider on a pill", "board light provider on an alternate pill", "board dark legend alternate pill", "task light earlier head", "task dark earlier head"].every(kind => results.includes(kind)));
 });
 
-test("T349, R1347-1: every text on the board, a task page, the programs list, a program page, the Agents page and the snapshot's task and program pages meets AA contrast, dark and light, at 375 and 1280 px", async t => {
+test("T349, R1347-1: every text on the board, a task page, the milestones list, a milestone page, the Agents page and the snapshot's task and milestone pages meets AA contrast, dark and light, at 375 and 1280 px", async t => {
   const { pages, targets } = contrastPages(), low = [], seen = new Set();
   for (const width of [375, 1280]) {
     // A dark system: the measure does not depend on the default theme, which other tests check.
@@ -234,9 +234,9 @@ test("T349, R1347-1: every text on the board, a task page, the programs list, a 
     }
   }
   assert.deepEqual(low, []);
-  assert.ok(["snapshot task h3", "snapshot programs h3", "snapshot program div.band"].every(kind => seen.has(kind)), [...seen].filter(kind => kind.startsWith("snapshot ")).join(", "));
+  assert.ok(["snapshot task h3", "snapshot milestones h3", "snapshot milestone div.band"].every(kind => seen.has(kind)), [...seen].filter(kind => kind.startsWith("snapshot ")).join(", "));
   // The texts of the two contrast bugs that T349 fixed are among the measured ones.
-  assert.ok(["agents span.ptag.ptag-claude", "agents span.ptag.ptag-codex", "agents span.faint", "board span.n", "program div.band"].every(kind => seen.has(kind)), [...seen].filter(kind => kind.startsWith("agents")).join(", "));
+  assert.ok(["agents span.ptag.ptag-claude", "agents span.ptag.ptag-codex", "agents span.faint", "board span.n", "milestone div.band"].every(kind => seen.has(kind)), [...seen].filter(kind => kind.startsWith("agents")).join(", "));
 });
 
 // R1349-1, R1349-2: each control, and the chosen tab and Who pill, stands out 3:1 from what is behind it (WCAG 1.4.11).
@@ -246,13 +246,13 @@ test("R1349-1, R1349-2: the theme switch, the picker, the filters, the chosen ta
   const context = await browser.newContext({ viewport: { width: 1280, height: 900 }, colorScheme: "dark", reducedMotion: "reduce" });
   t.after(() => context.close());
   await context.route("**/*", route => route.abort());
-  for (const name of ["board", "programs"]) {
+  for (const name of ["board", "milestones"]) {
     const page = await context.newPage();
     await page.setContent(pages[name]);
     for (const theme of ["dark", "light"]) {
       if (theme === "light") await page.locator("label[for=flip]").click();
       assert.equal((await shownTheme(page))[0], theme);
-      // The programs list has no filters: it shows the switch, the picker and the tabs.
+      // The milestones list has no filters: it shows the switch, the picker and the tabs.
       const list = CONTROLS.filter(([, selector]) => name === "board" || ["label.theme", ".trigger", ".boardtabs a[aria-current=page]"].includes(selector));
       for (const item of (await page.evaluate(measureContrast, list)).flat()) {
         seen.add(item.kind);
@@ -264,13 +264,13 @@ test("R1349-1, R1349-2: the theme switch, the picker, the filters, the chosen ta
   assert.deepEqual([...seen].sort(), CONTROLS.map(([kind]) => kind).sort());
 });
 
-test("R1347-3: in forced colours, the cards, task page sections, program cards and the rules keep an outline, and a card that needs you keeps its frame", async t => {
+test("R1347-3: in forced colours, the cards, task page sections, milestone cards and the rules keep an outline, and a card that needs you keeps its frame", async t => {
   const { pages } = contrastPages();
   const context = await browser.newContext({ viewport: { width: 1280, height: 900 }, colorScheme: "dark", forcedColors: "active", reducedMotion: "reduce" });
   t.after(() => context.close());
   await context.route("**/*", route => route.abort());
   const page = await context.newPage(), seen = [];
-  for (const [name, selector] of [["board", "a.card:not(.needs)"], ["board", "a.card.needs"], ["task", ".detail section"], ["programs", "a.prog"], ["agents", ".rules"]]) {
+  for (const [name, selector] of [["board", "a.card:not(.needs)"], ["board", "a.card.needs"], ["task", ".detail section"], ["milestones", "a.prog"], ["agents", ".rules"]]) {
     await page.setContent(pages[name]);
     const edge = await page.locator(selector).first().evaluate(element => { const style = getComputedStyle(element); return { shadow: style.boxShadow, border: `${style.borderTopWidth} ${style.borderTopStyle}`, color: style.borderTopColor, outline: `${style.outlineWidth} ${style.outlineStyle}` }; });
     // The emulation is real: the browser drops each box shadow, so only a border or an outline draws an edge.

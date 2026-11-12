@@ -5,9 +5,9 @@
 import { buildBoardModel } from "../../packages/sage-core/board-model.mjs";
 import assert from "node:assert/strict";
 import * as render from "../../packages/sage-core/board-render.mjs";
-import { NOW, programsSource } from "./board-programs.mjs";
+import { NOW, milestonesSource } from "./board-milestones.mjs";
 
-const { renderAgentsHtml, renderBoardHtml, renderProgramsHtml } = render;
+const { renderAgentsHtml, renderBoardHtml, renderMilestonesHtml } = render;
 const b64 = value => Buffer.from(value).toString("base64url");
 /** The value of one theme token as the board's CSS sets it, for example themeToken("light", "--bg"). */
 export const themeToken = (theme, name) => (theme === "light" ? render.LIGHT : render.DARK).split(";").find(item => item.startsWith(`${name}:`)).slice(name.length + 1);
@@ -75,12 +75,12 @@ export function measureContrast(list = null) {
 }
 
 /**
- * The SAMPLE DATA pages of the contrast tests, from the T233 fixture logbook: the board, a task page, the programs list,
- * a program page waiting for approval, the Agents page with a lead, its helpers, a stuck agent and both providers, and
- * the offline snapshot. The snapshot holds its task and program pages; targets gives the address hash that opens each.
+ * The SAMPLE DATA pages of the contrast tests, from the T233 fixture logbook: the board, a task page, the milestones list,
+ * a milestone page waiting for approval, the Agents page with a lead, its helpers, a stuck agent and both providers, and
+ * the offline snapshot. The snapshot holds its task and milestone pages; targets gives the address hash that opens each.
  */
 export function contrastPages() {
-  const source = programsSource(), codex = programsSource("codex", { gates: [], runs: [] }), tables = source.projects[0].tables;
+  const source = milestonesSource(), codex = milestonesSource("codex", { gates: [], runs: [] }), tables = source.projects[0].tables;
   tables.runs = [
     { id: "R3", task: "T12", role: "lead", status: "running", started: "2026-10-20T11:20:00Z", tokens: "", model: "opus" },
     { id: "R1", task: "T12", role: "code-reviewer", status: "running", started: "2026-10-20T11:30:00Z", tokens: "" },
@@ -96,17 +96,17 @@ export function contrastPages() {
     { name: "s4", at: now - 3 * 60000, marks: ["ok", "project-sage", "role-sage_implementer", "run-R2"] },
   ] };
   const model = buildBoardModel([source, codex], { now: NOW });
-  const task = model.tasks.find(item => item.id === "T12"), program = model.programs.find(item => item.id === "PG3");
+  const task = model.tasks.find(item => item.id === "T12"), milestone = model.milestones.find(item => item.id === "M3");
   return {
     model,
     pages: {
       board: renderBoardHtml(model, { snapshot: false }),
       task: renderBoardHtml(model, { snapshot: false, taskKey: task.key }),
-      programs: renderProgramsHtml(model),
-      program: renderProgramsHtml(model, { programKey: program.key }),
+      milestones: renderMilestonesHtml(model),
+      milestone: renderMilestonesHtml(model, { milestoneKey: milestone.key }),
       agents: renderAgentsHtml(model),
       snapshot: renderBoardHtml(model),
     },
-    targets: { "snapshot task": `#task-${b64(task.key)}`, "snapshot programs": "#programs", "snapshot program": `#program-${b64(program.key)}` },
+    targets: { "snapshot task": `#task-${b64(task.key)}`, "snapshot milestones": "#milestones", "snapshot milestone": `#milestone-${b64(milestone.key)}` },
   };
 }
