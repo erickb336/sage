@@ -6214,10 +6214,10 @@ test("F-T289-39: the stop gate blocks a RESULT that is not CLEAN, PASS, FINDINGS
   assert.equal(cleanVerdictOf(s, next, "qa"), undefined, "the reader reads PASS too");
 });
 
-test("F-T289-33: an indented line in the shape of a finding is never detail: the report is unreadable", () => {
+test("F-T289-33: an indented line in the shape of a finding is never detail: it is its own finding (T1008), so a CLEAN report with it backs no clean verdict", () => {
   const s = leadSession();
-  for (const line of ["  - F1 High the token is logged", "  * K1 medium the form loses text", "  1. K2 high the key is in the log"]) {
-    assert.match(cleanVerdictOf(s, report("CLEAN", lines("- F0 low a typo", line))) ?? "", /cannot (?:be )?read \(a line under FINDINGS is not none alone and not a finding in the form - <key> <severity> <summary>/, line);
+  for (const [line, severity] of [["  - F1 High the token is logged", "high"], ["  * K1 medium the form loses text", "medium"], ["  1. K2 high the key is in the log", "high"]]) {
+    assert.match(cleanVerdictOf(s, report("CLEAN", lines("- F0 low a typo", line))) ?? "", UNHELD(severity), line);
   }
 });
 
@@ -6356,9 +6356,11 @@ test("F-T289-52: an indented fence line and a FINDINGS list item do not hide a F
 
 test("F-T289-54: a high under a low on an unmarked or severity-first line, or as a label after the low's summary, makes the report unreadable", () => {
   const s = leadSession();
-  for (const tail of ["    HIGH: path traversal in the loader", "    Severity: high - path traversal", "    high", "\t- H1 high real crash"]) {
+  for (const tail of ["    HIGH: path traversal in the loader", "    Severity: high - path traversal", "    high"]) {
     assert.match(cleanVerdictOf(s, report("FINDINGS", lines("", "- L1 low noisy log", tail))) ?? "", UNREADABLE, JSON.stringify(tail));
   }
+  // A finding line under it, also after a tab, is its own high finding (T1008).
+  assert.match(cleanVerdictOf(s, report("FINDINGS", lines("", "- L1 low noisy log", "\t- H1 high real crash"))) ?? "", UNHELD("high"), "a tabbed finding line");
   assert.match(cleanVerdictOf(s, report("FINDINGS", "- L1 low noisy log; also a high: path traversal in the loader")) ?? "", UNREADABLE, "same line");
   assert.match(cleanVerdictOf(s, report("FINDINGS", lines("", "- L1 low noisy log", "    steps: found a High problem in the loader"))) ?? "", UNREADABLE, "prose detail with a higher word (F-T289-62)");
 });
@@ -6413,9 +6415,11 @@ test("F-T289-60: a higher severity word later on a finding line or in its detail
 });
 
 test("F-T289-62: an indented item or prose line with a higher severity word anywhere in it makes the report unreadable", () => {
-  for (const tail of ["  - K2 [security] high SQL injection in login", "  - K2 severity: high SQL injection", "  - Also K2 high SQL injection", "    steps: found a High problem in the loader", "    K2 is high: SQL injection", "    1. H1 high real crash"]) {
+  for (const tail of ["  - K2 [security] high SQL injection in login", "  - K2 severity: high SQL injection", "  - Also K2 high SQL injection", "    steps: found a High problem in the loader", "    K2 is high: SQL injection"]) {
     assert.match(freshVerdict(report("FINDINGS", lines("", "- K1 low a typo", tail))) ?? "", UNREADABLE, tail);
   }
+  // A numbered item in the form of a finding is its own high finding (T1008).
+  assert.match(freshVerdict(report("FINDINGS", lines("", "- K1 low a typo", "    1. H1 high real crash"))) ?? "", UNHELD("high"));
   // The trade-off: an honest detail line with a higher word blocks once at the stop, and the helper writes it again (F-T964-1).
   const s = leadSession();
   const honest = report("FINDINGS", lines("", "- K1 low the list is slow", "    steps: load a high row count"));
@@ -6533,7 +6537,7 @@ const ALIGNED = [
     "                              The message names only the milestone."),
 ];
 test("T1008: a finding lined up under the one on the FINDINGS line is its own finding, so the clean report backs its verdict", () => {
-  assert.deepEqual(ALIGNED.map((f) => readReport(report("FINDINGS", f)).findings), [[{ key: "S1", severity: "low" }, { key: "S2", severity: "low" }], [{ key: "F1", severity: "low" }, { key: "F2", severity: "low" }]]);
+  assert.deepEqual(ALIGNED.map((f) => readReport(report("FINDINGS", f)).findings.map(({ key, severity }) => ({ key, severity }))), [[{ key: "S1", severity: "low" }, { key: "S2", severity: "low" }], [{ key: "F1", severity: "low" }, { key: "F2", severity: "low" }]]);
   const s = leadSession();
   assert.equal(stopOf(s, "aligned-security", report("FINDINGS", ALIGNED[0]), "sage:security-reviewer"), undefined, "the stop gate reads it");
   assert.equal(stopOf(s, "aligned-qa", report("FINDINGS", ALIGNED[1])), undefined, "the stop gate reads it");
