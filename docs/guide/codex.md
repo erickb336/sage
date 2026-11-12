@@ -386,11 +386,13 @@ The public `role.mjs pe` and `role.mjs designer` helpers use the shared role con
 
 The designer writes the scoped prototype and screenshots in its assigned branch, worktree and artifact paths. Both roles keep their existing read access and configuration, logbook, spawn and message restrictions.
 
-The chief follows designer → PE → owner’s design approval → build. It records existing prototype files in the task’s pages folder and saves each complete report. Report text alone creates a report file, not a prototype.
+The chief follows designer → PE → the owner's answer on the design → build. A design waits for your approval when it changes what you see or data that you keep; an internal shape goes ahead as recommended when you do not answer.
+
+The chief records existing prototype files in the task’s pages folder and saves each complete report. Report text alone creates a report file, not a prototype.
 
 The trusted start and stop hooks retain the matching direct child’s exact report, with an optional SHA. Retention grants no verdict or design approval. Preserve `blocked`, `question` and PE `CHANGE` outcomes.
 
-Ordinary open design gates do not generally prevent merge in code. The chief must obtain the owner’s actual design approval before dependent implementation. Missing-review and milestone-wait checks remain unchanged.
+Ordinary open design gates do not generally prevent merge in code. When a design waits for approval, the chief must obtain the owner’s actual design approval before dependent implementation. Missing-review and milestone-wait checks remain unchanged.
 
 Generated-package tests use labelled synthetic artifacts and hook events. Installed acceptance still needs the reviewed package, updated hook trust, both role texts, actual child runs, permission refusals, report retention and the saved prototype.
 
