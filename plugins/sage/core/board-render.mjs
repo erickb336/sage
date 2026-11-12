@@ -2,7 +2,7 @@
 // The look is the T218 design (approved 2026-10-11) with the T305 picker, filter bar and step line (approved 2026-10-18).
 // The page needs no script for its cards, task pages, backlog fold and theme; the picker and the filters need the script.
 import { LINE, PRIORITIES, TASK_KINDS, proposalOf } from "./logbook-fields.mjs";
-import { ENDED, lostClause, lostWhy, MILESTONE_ID } from "./milestone-rules.mjs";
+import { ENDED, lostClause, lostWhy, MILESTONE_ID, milestoneName } from "./milestone-rules.mjs";
 import { releaseWord, taskWord } from "./state-words.mjs";
 import { box, columns } from "./picture.mjs";
 const esc = value => String(value ?? "").replace(/[&<>"']/g, c => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]));
@@ -144,7 +144,7 @@ function card(ctx, task, { archived = false, i = 0 } = {}) {
   const now = approval ? `<div class="nowline need">${ICON}<span><b>Needs you:</b> the breakdown of ${esc(approval.breakdown.id)}.${others.length ? ` ${others.map(reason => esc(`${String(reason.text).split(LINE).join(" ")}${reason.recommendation ? ` I recommend: ${reason.recommendation}` : ""}`)).join(" ")}` : ""}</span></div>${task.waitLine?.never ? waitHtml(task) : ""}${breakdownBody(approval)}`
     : task.waitLine && !task.loop.now.needs ? waitHtml(task) : (task.column !== "backlog" ? nowNext(task) : task.loop.now.needs ? nowNext(task, false) : "") + waitHtml(task);
   return `<a class="card${task.reasons.length ? " needs" : ""}${approval ? " approval" : ""}" id="card-${b64(task.key)}" href="${esc(taskHref(ctx, task))}" data-key="${esc(task.key)}" data-project="${esc(task.group ?? task.project)}" data-provider="${esc(who(task))}" data-priority="${esc(task.priority)}" data-kind="${esc(task.kind)}" data-needs="${!!task.reasons.length}" data-agents="${task.agents.filter(agent => !agent.stale).length}" data-inferred="${task.inferredWork ? 1 : 0}" data-review="${task.column === "review" ? 1 : 0}" data-i="${i}" data-milestone="${task.milestone ? b64(task.milestone.key) : ""}"${archived ? " data-archived hidden" : ""}>`
-    + (approval ? `<div class="band"><span aria-hidden="true">◫</span>Milestone approval<span class="bk">· ${esc(approval.breakdown.id)} ${esc(approval.breakdown.name)} · gate ${esc(approval.gateId)}</span></div>` : "")
+    + (approval ? `<div class="band"><span aria-hidden="true">◫</span>Milestone approval<span class="bk">· ${esc(milestoneName(approval.breakdown))} · gate ${esc(approval.gateId)}</span></div>` : "")
     + `<div class="top"><span class="id">${esc(task.id)}</span>·${project(ctx, task)}${holderTag(task)}${task.pr ? `<span class="pr">PR ${esc(task.pr)}</span>` : ""}${wordTag(task.word)}</div>`
     // A moved task keeps its old number in view (T640): the owner knows "T640" from chats, briefs and reports.
     + (task.was ? `<div class="nextline was">${esc(task.was)}</div>` : "")
@@ -559,7 +559,7 @@ a.prog:hover{transform:translateY(-1px);box-shadow:var(--ring),var(--lift)}a.pro
 .wh{font-size:10.5px;text-transform:uppercase;letter-spacing:.06em;font-weight:650;color:var(--muted);margin:0 0 6px}
 .hframe,.hbc{display:flex;flex-direction:column;gap:6px}.hbc{margin-top:6px}
 .hb{border:1.5px solid var(--edge);border-radius:12px;padding:6px 9px;min-width:0;background:var(--panel);overflow-wrap:anywhere}
-.hb.release{border-color:var(--ok)}.hb.milestone{border-color:var(--accent)}.hb.loose{border-style:dashed}.hb.here{border:4px double var(--need)}
+.hb.release{border-color:var(--ok)}.hb.milestone{border-color:var(--accent)}.hb.loose{border-style:dashed}.hb.here{border:4px double var(--need)}.hb.here.now{border-color:var(--text)}
 .hbt{display:flex;flex-wrap:wrap;align-items:center;gap:4px 8px}.hbk{font-weight:650}.hbk a{color:inherit}
 .hbl{font-size:12.5px;color:var(--muted);margin-top:2px}.hbl a{color:var(--link)}.hbl.tail{margin-top:6px}
 @media (min-width:900px){.hbc .hbc{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));align-items:start}}
@@ -1119,15 +1119,12 @@ function milestonePage(ctx, milestone, routed) {
   return `${top}<div class="detail">${lead}<div class="colL">${order}</div><div class="colR">${decisions}</div></div>`;
 }
 
-/** The served milestones list, or one milestone's page (T233 C9). An unknown milestone key gives the not-found page. */
 // The releases (T996, the T995 design that the owner approved in gate G141): the "Where we are" frame above the columns
 // (option B), in the page's boxes and in the chat's text, and the Releases tab. One frame model gives both forms. A logbook
 // with no releases has no entry in model.releases, so its board shows as before.
 const ENDS = ["done", "stopped"], WORDS = ["needs you", "in progress", "waiting", "not started", "done", "stopped"], LISTED = 4;
 const byWord = (a, b) => WORDS.indexOf(a.word) - WORDS.indexOf(b.word);
 const open = item => !!item && !!item.word && (!ENDS.includes(item.word) || item.open > 0);
-/** A milestone as the owner names it, with its level: "Milestone 5: Sage feel" (M5), or its id when the logbook lost it. */
-const milestoneName = ({ id, name }) => `Milestone ${/^M[1-9]\d*$/.test(id) ? id.slice(1) : id}${name ? `: ${name}` : ""}`;
 const doneText = (done, total, stopped) => `${done} of ${plural(total, "task")} done${stopped ? ` · ${stopped} stopped` : ""}`;
 const countsText = tasks => WORDS.map(word => [word, tasks.filter(task => task.word === word).length]).filter(([, n]) => n).map(([word, n]) => `${n} ${word}`).join(" · ");
 const shownReleases = model => (model.releases ?? []).filter(entry => !entry.archived);
@@ -1135,20 +1132,37 @@ const shownReleases = model => (model.releases ?? []).filter(entry => !entry.arc
 const frameReleases = entry => { const live = entry.releases.filter(release => !ENDS.includes(release.word)); return live.length ? live : entry.releases.slice(-1); };
 
 /**
+ * What a box of waiting tasks waits for, when each of them waits for the same thing (the design's "Waiting for the
+ * presentation skill"): the same tasks, the owner's approval or the new breakdown of their milestone, or nothing that can
+ * be met. Else "": the box has its word alone. A task's title is cut, so that no word is wider than the chat's box.
+ */
+function waitingFor(ctx, items) {
+  const why = item => item.waitLine?.never ? "never" : item.waits.find(wait => wait.breakdown && !wait.met)?.breakdown.state ?? item.waits.filter(wait => wait.id && !wait.met).map(wait => wait.id).sort().join(" ");
+  const [first, ...rest] = items.map(why);
+  if (!first || rest.some(key => key !== first)) return "";
+  if (first === "never") return `Waiting · ${items.length === 1 ? "it cannot" : "they cannot"} start`;
+  if (first === "proposed") return "Waiting for your approval";
+  if (first === "changing") return "Waiting for the new breakdown";
+  const names = first.split(" ").map(id => fit(ctx.tasks.get(`${items[0].project}/${id}`)?.title || id, 24));
+  return `Waiting for ${names.length > 1 ? `${names.slice(0, -1).join(", ")} and ${names.at(-1)}` : names[0]}`;
+}
+
+/**
  * The frame's boxes of one logbook: a box for each release that it shows, then one for what is in no release. A milestone
- * box holds its open tasks that need you or are in progress (at most 3), then a box for each other word with its count.
- * The single tasks of a release are one list box. A box that needs you is "here", a double box.
+ * box holds its open tasks that need you or are in progress (at most 3), then a box for each other word with its count,
+ * and for waiting tasks what they wait for. The single tasks of a release are one list box. A box that needs you, and a
+ * task in progress ("you are here", the design's section 1), is a double box. A task is named by its title, not its id.
  */
 function frameOf(ctx, entry) {
   const task = key => ctx.tasks.get(key), milestone = key => ctx.milestones.get(key);
-  const taskNode = (item, pilot) => ({ level: "task", id: item.id, name: item.title, href: taskHref(ctx, item), word: item.word, here: item.word === "needs you", note: pilot ? "the pilot" : "" });
+  const taskNode = (item, pilot) => ({ level: "task", id: item.id, name: item.title, href: taskHref(ctx, item), word: item.word, here: ["needs you", "in progress"].includes(item.word), note: item.word === "in progress" ? "you are here" : pilot ? "the pilot" : "" });
   const milestoneNode = m => {
     const tasks = m.tasks.map(task).filter(open), shown = tasks.filter(item => ["needs you", "in progress"].includes(item.word)).sort(byWord).slice(0, 3), rest = tasks.filter(item => !shown.includes(item));
-    const groups = WORDS.map(word => [word, rest.filter(item => item.word === word).length]).filter(([, n]) => n).map(([word, n]) => ({ level: "group", name: plural(n, "task"), word }));
+    const groups = WORDS.map(word => [word, rest.filter(item => item.word === word)]).filter(([, items]) => items.length).map(([word, items]) => ({ level: "group", name: plural(items.length, "task"), word, note: word === "waiting" ? waitingFor(ctx, items) : "" }));
     return { level: "milestone", name: milestoneName(m), href: milestoneHref(ctx, m.key), word: m.word, here: m.word === "needs you", done: doneText(m.progress.merged, m.progress.total, m.progress.abandoned.length),
       note: m.word === "needs you" ? m.reason : "", kids: [...shown.map(item => taskNode(item, item.id === m.pilot)), ...groups] };
   };
-  const list = (name, tasks, extra = {}) => ({ level: "list", name, word: releaseWord(tasks.map(item => item.word)).word, list: [...tasks].sort(byWord), ...extra });
+  const list = (name, tasks, extra = {}) => ({ level: "list", name, word: releaseWord(tasks.map(item => item.word)).word, list: [...tasks].sort(byWord).map(item => ({ id: item.id, title: item.title, word: item.word, href: taskHref(ctx, item) })), ...extra });
   const nodes = frameReleases(entry).map(release => {
     const milestones = release.milestones.map(milestone).filter(Boolean), singles = release.singles.map(task).filter(item => item?.word);
     const ended = state => milestones.filter(m => !open(m) && m.word === state).length;
@@ -1163,15 +1177,18 @@ function frameOf(ctx, entry) {
   return nodes;
 }
 
+/** A task's id after its title, as secondary text (F-T996-7): the owner reads the title first. */
+const idAfter = id => id ? ` <span class="faint">${esc(id)}</span>` : "";
 /** The page's form of a box: its level, its name (a link to its page) and its word, then its lines and the boxes inside it. */
 function frameHtml(node) {
-  const name = node.level === "task" ? `Task ${node.id}: ${node.name}` : node.name;
-  const head = `<div class="hbt"><span class="hbk">${node.href ? `<a href="${esc(node.href)}">${esc(name)}</a>` : esc(name)}</span>${node.list ? "" : wordTag(node.word, "pstate")}</div>`;
-  const lines = [node.done, node.note].filter(Boolean).map(line => `<div class="hbl">${esc(line)}</div>`).join("");
-  const listed = (node.list ?? []).slice(0, LISTED).map(item => `<div class="hbl">${wordTag(item.word, "pstate")} <a href="${esc(item.href)}">${esc(item.id)} ${esc(item.title)}</a></div>`).join("");
+  const name = node.level === "task" ? `Task: ${node.name}` : node.name;
+  const head = `<div class="hbt"><span class="hbk">${node.href ? `<a href="${esc(node.href)}">${esc(name)}</a>` : esc(name)}${idAfter(node.id)}</span>${node.list ? "" : wordTag(node.word, "pstate")}</div>`;
+  const lines = [node.done, title(node.note)].filter(Boolean).map(line => `<div class="hbl">${esc(line)}</div>`).join("");
+  const listed = (node.list ?? []).slice(0, LISTED).map(item => `<div class="hbl">${wordTag(item.word, "pstate")} <a href="${esc(item.href)}">${esc(item.title)}</a>${idAfter(item.id)}</div>`).join("");
   const more = (node.list?.length ?? 0) > LISTED ? `<div class="hbl">${esc(`and ${plural(node.list.length - LISTED, "more task")}: ${countsText(node.list.slice(LISTED))}`)}</div>` : "";
   const kids = node.kids?.length ? `<div class="hbc">${node.kids.map(frameHtml).join("")}</div>` : "";
-  return `<div class="hb ${node.level}${node.here ? " here" : ""}">${head}${lines}${listed}${more}${kids}${node.tail ? `<div class="hbl tail">${esc(node.tail)}</div>` : ""}</div>`;
+  // "You are here" is a double box in the text colour, as in the design; a box that needs you keeps the colour of needs you.
+  return `<div class="hb ${node.level}${node.here ? ` here${node.word === "in progress" ? " now" : ""}` : ""}">${head}${lines}${listed}${more}${kids}${node.tail ? `<div class="hbl tail">${esc(node.tail)}</div>` : ""}</div>`;
 }
 /** The "Where we are" frame of each logbook with releases, above the columns. The project filter shows the chosen project's. */
 const whereHtml = ctx => shownReleases(ctx.model).map(entry => `<section class="where" data-rproject="${esc(entry.group)}" aria-label="Where we are · ${esc(entry.projectName)}"><h2 class="wh">Where we are <span class="faint">· ${esc(entry.projectName)}</span></h2><div class="hframe">${frameOf(ctx, entry).map(frameHtml).join("")}</div></section>`).join("");
@@ -1187,20 +1204,22 @@ const FRAME_WIDTH = 46;
  */
 function frameText(node, w = FRAME_WIDTH) {
   const name = node.level === "task" ? `Task: ${node.name}` : node.name;
-  // A task's note ("the pilot") goes on its first line; a milestone's or a release's note is a sentence, on its own line.
-  const first = node.list ? countsText(node.list) || title(node.word) : [title(node.word), node.done, node.level === "task" ? node.note : ""].filter(Boolean).join(" · ");
+  // A task's note ("you are here", "the pilot") goes on its first line, and a group's ("Waiting for …") is its first line;
+  // a milestone's or a release's note is a sentence, on its own line.
+  const short = ["task", "group"].includes(node.level);
+  const first = node.list ? countsText(node.list) || title(node.word) : node.level === "group" && node.note ? node.note : [title(node.word), node.done, short ? node.note : ""].filter(Boolean).join(" · ");
   const text = line => line ? [line] : [];
-  return box({ w, title: fit(name, w - 6), style: node.here ? "double" : "round", lines: [...text(first), ...text(node.level === "task" ? "" : node.note), ...(node.kids ?? []).map(kid => frameText(kid, w - 4)), ...text(node.tail)] });
+  return box({ w, title: fit(name, w - 6), style: node.here ? "double" : "round", lines: [...text(first), ...text(short ? "" : node.note), ...(node.kids ?? []).map(kid => frameText(kid, w - 4)), ...text(node.tail)] });
 }
 /** The chat's "Where we are" section of each logbook with releases: its frame in a code block. */
 const whereText = model => { const ctx = context(model, false); return shownReleases(model).map(entry => `### ◫ Where we are · ${md(entry.projectName)}\n${"```"}\n${frameOf(ctx, entry).flatMap(node => frameText(node)).join("\n")}\n${"```"}`); };
 
 /** A row of the Releases tab: an item's level and name (a link to its page), its word, and what happens next. */
-const releaseRow = (name, href, word, text) => `<div class="rrow"><div class="rhead"><a href="${esc(href)}"><b>${esc(name)}</b></a>${wordTag(word, "pstate")}</div>${text ? `<div class="rtext">${esc(text)}</div>` : ""}</div>`;
+const releaseRow = (name, href, word, text, id = "") => `<div class="rrow"><div class="rhead"><a href="${esc(href)}"><b>${esc(name)}</b></a>${idAfter(id)}${wordTag(word, "pstate")}</div>${text ? `<div class="rtext">${esc(text)}</div>` : ""}</div>`;
 const firstLine = text => String(text ?? "").split(LINE)[0];
 function releaseItems(ctx, milestones, singles) {
   return milestones.map(m => releaseRow(milestoneName(m), milestoneHref(ctx, m.key), m.word, `${doneText(m.progress.merged, m.progress.total, m.progress.abandoned.length)}.${m.word === "needs you" ? ` ${m.reason}` : ""}`)).join("")
-    + singles.map(task => releaseRow(`Task ${task.id}: ${task.title}`, taskHref(ctx, task), task.word, firstLine(taskWord(task).reason))).join("");
+    + singles.map(task => releaseRow(`Task: ${task.title}`, taskHref(ctx, task), task.word, firstLine(taskWord(task).reason), task.id)).join("");
 }
 function releaseCard(ctx, release) {
   const milestones = release.milestones.map(key => ctx.milestones.get(key)).filter(Boolean), singles = release.singles.map(key => ctx.tasks.get(key)).filter(Boolean);
@@ -1229,6 +1248,7 @@ export function renderReleasesHtml(model, { live = false, paths = false } = {}) 
   return `<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>Sage releases</title><script>${THEME_HEAD}</script><style>${CSS}</style></head><body>${body}<script>${BOARD_ENHANCEMENT}${live ? liveScript("/releases?events=1", ["board-content", "board-pages", "pick-list", "needs-count"]) : ""}</script></body></html>`;
 }
 
+/** The served milestones list, or one milestone's page (T233 C9). An unknown milestone key gives the not-found page. */
 export function renderMilestonesHtml(model, { milestoneKey = null, live = false, paths = false } = {}) {
   const ctx = context(model, false), at = hhmm(model.at), milestone = milestoneKey ? ctx.milestones.get(milestoneKey) : null;
   // The address can hold any text: the page names the milestone only when the key ends in a milestone id (T375).
@@ -1329,7 +1349,7 @@ export function renderBoardText(model) {
   const milestoneNeeds = model.milestoneNeeds ?? [];
   let n = 0;
   // The breakdown gate shows its full key, as every other gate does: the owner answers by that key (F-T233-4).
-  const approval = ([task, gate]) => block([`**${++n} · ${md(gate.breakdown.id)} ${md(clamp(gate.breakdown.name))}**${wordText(model.milestones?.find(milestone => milestone.key === gate.breakdown.key) ?? {})} · ${md(task.sourceLabel)} · ${md(task.projectName)} · pilot ${md(task.id)} · gate ${md(gate.gateId)}`], reasonLines(gate));
+  const approval = ([task, gate]) => block([`**${++n} · ${md(milestoneName({ id: gate.breakdown.id, name: gate.breakdown.name && clamp(gate.breakdown.name) }))}**${wordText(model.milestones?.find(milestone => milestone.key === gate.breakdown.key) ?? {})} · ${md(task.sourceLabel)} · ${md(task.projectName)} · pilot ${md(task.id)} · gate ${md(gate.gateId)}`], reasonLines(gate));
   const milestoneNeed = need => block([`**${++n} · ${md(clamp(need.title))}** · ${md(need.sourceLabel)} · ${md(need.projectName)}`], [md(need.text)]);
   const other = task => block([`**${++n} · ${md(task.id)} ${md(clamp(task.title))}**${wordText(task)} · ${md(task.holder ?? task.sourceLabel)} · ${md(task.projectName)}`], task.reasons.flatMap(reason => reasonLines(reason)));
   const needs = approvals.length
@@ -1337,14 +1357,16 @@ export function renderBoardText(model) {
     : [...milestoneNeeds.map(milestoneNeed), ...others.map(other)].join("\n\n") || "No recorded task needs you.";
   // Milestones: each milestone that is not done or dropped, in a line; the done and dropped ones as counts. The project's name
   // shows when milestones of two projects show; the logbook's source when one project has milestones in two logbooks (C4).
-  // A logbook with releases shows its milestones in its "Where we are" frame (T996), not here.
+  // A dropped milestone with tasks still in it keeps its line, with the next step for them (F-T233-10).
+  const counted = milestone => milestone.state === "done" || milestone.state === "dropped" && !milestone.open;
+  // A logbook with releases shows its milestones in its "Where we are" frame (T996), not here: here it keeps only a
+  // milestone with a line that the frame does not show, such as a dropped one with tasks still in it, in a done release (F-T996-2).
   const framed = new Set(shownReleases(model).map(entry => entry.key));
-  const milestones = (model.milestones ?? []).filter(milestone => !milestone.archived && !framed.has(milestone.project));
+  const inFrame = new Set(shownReleases(model).flatMap(entry => [...frameReleases(entry).flatMap(release => release.milestones), ...entry.loose.milestones]));
+  const milestones = (model.milestones ?? []).filter(milestone => !milestone.archived && (!framed.has(milestone.project) || !inFrame.has(milestone.key) && !counted(milestone)));
   const groups = new Set(milestones.map(milestone => milestone.group));
   const books = group => new Set(milestones.filter(milestone => milestone.group === group).map(milestone => milestone.project)).size;
   const where = milestone => [groups.size > 1 ? md(milestone.projectName) : "", books(milestone.group) > 1 ? md(milestone.sourceLabel) : ""].filter(Boolean).join(" · ");
-  // A dropped milestone with tasks still in it keeps its line, with the next step for them (F-T233-10).
-  const counted = milestone => milestone.state === "done" || milestone.state === "dropped" && !milestone.open;
   const ended = ["done", "dropped"].map(state => [state, milestones.filter(milestone => counted(milestone) && milestone.state === state).length]).filter(([, count]) => count);
   const milestoneText = milestones.length ? `### ◫ Milestones\n${[...milestones.filter(milestone => !counted(milestone)).map(milestone => `- ${milestoneLine({ ...milestone, where: where(milestone) })}`), ...(ended.length ? [`- ${ended.map(([state, count]) => `${count} ${state}`).join(" · ")}: open the board's Milestones tab`] : [])].join("\n")}` : "";
   // The count is the number of the numbered items above (n), so a pilot with a breakdown gate and another reason counts twice, as it shows.

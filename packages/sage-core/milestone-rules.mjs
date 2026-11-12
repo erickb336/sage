@@ -286,6 +286,8 @@ export function shownMilestoneState(milestone, { byId, byMilestone }) {
   if (milestone.state === "active") return progressOf(byMilestone.get(milestone.id) ?? []).done ? "done" : dead(pilot) ? "stuck" : "active";
   return ["proposed", "changing"].includes(milestone.state) && dead(pilot) ? "stuck" : milestone.state;
 }
+/** A milestone as the owner names it, with its level (T996): "Milestone 5: Sage feel" (M5), or its id when the logbook lost it. */
+export const milestoneName = ({ id, name }) => `Milestone ${/^M[1-9]\d*$/.test(id) ? id.slice(1) : id}${name ? `: ${name}` : ""}`;
 /** A milestone's word and reason (state-words.mjs), as the board, status and its release show it: from its shown state, or its tasks. */
 export const milestoneWordOf = (milestone, graph) => milestoneWord({ state: shownMilestoneState(milestone, graph) }, (graph.byMilestone.get(milestone.id) ?? []).map(rowWord));
 /**

@@ -2,7 +2,7 @@ import { createHash } from "node:crypto";
 import { basename } from "node:path";
 import { githubRepository, hookProvider } from "./board-reader.mjs";
 import { LINE, PRIORITIES, TASK_KINDS, agentCaps, proposalOf } from "./logbook-fields.mjs";
-import { ENDED, MET, breakdownGate, dead, gateLines, lostWhy, milestoneWordOf, namedText, progressOf, progressText, releasesOf, shownGraph, shownMilestoneState, shownWaits, waitGraph, waitsOf } from "./milestone-rules.mjs";
+import { ENDED, MET, breakdownGate, dead, gateLines, lostWhy, milestoneName, milestoneWordOf, namedText, progressOf, progressText, releasesOf, shownGraph, shownMilestoneState, shownWaits, waitGraph, waitsOf } from "./milestone-rules.mjs";
 import { taskWord } from "./state-words.mjs";
 import { offerOf, replaceOf } from "./chiefs.mjs";
 import { checkoutLabel, plainName } from "./shared-root.mjs";
@@ -754,7 +754,7 @@ function milestonesOf(source, project, group, graph, cards) {
     const open = ordered.filter(task => !ENDED.includes(task.state)).map(card).filter(Boolean);
     const moving = open.filter(item => item.waits.every(wait => wait.met)), waiting = open.filter(item => item.waitLine);
     const first = state === "active" ? moving[0] : null;
-    const need = state === "stuck" ? { kind: "stuck", title: `${milestone.id} ${milestone.name} is stuck`, text: `The pilot ${milestone.pilot} ${pilotState ? "was abandoned" : "is not in the logbook"}. Choose a new pilot, or drop the milestone.` }
+    const need = state === "stuck" ? { kind: "stuck", title: `${milestoneName(milestone)} is stuck`, text: `The pilot ${milestone.pilot} ${pilotState ? "was abandoned" : "is not in the logbook"}. Choose a new pilot, or drop the milestone.` }
       // A lost milestone whose gate is open on a card in Needs you says so on that gate (card), so the problem counts once.
       : state === "lost" && !(gates.get(milestone.gate) && !gates.get(milestone.gate).answer && inNeeds(card({ id: gates.get(milestone.gate).task }))) ? { kind: "lost", title: lostWhy(milestone), text: title(LOST_FIX(milestone.id)) }
       : null;
@@ -777,7 +777,9 @@ const wordOf = ({ word, reason }) => ({ word, reason });
  * null in no release. An old logbook (the move) is history: it shows no releases.
  */
 function releasesOfBook(project, group, graph, byKey) {
-  if (project.old) return null;
+  // A releases table that cannot be read gives no releases, as a damaged milestones table gives no milestones: Needs you
+  // says why (logbookNeeds), and no release that a cell names shows as "not in the logbook" (F-T996-1).
+  if (project.old || !project.tables.releases) return null;
   const releases = releasesOf(project.tables.releases ?? [], graph);
   if (!releases.length) return null;
   const key = id => `${project.key}/${id}`, ids = new Set(), names = new Map();
@@ -822,11 +824,11 @@ function sourceNeeds(source) {
     key: `${source.id}/source`, source: source.id, sourceLabel: source.label, projectName: "every project", group: null, archived: false }] : [];
 }
 
-// A logbook problem that needs the owner (R1307-1, R1307-2): a milestones table that the board cannot read, and a logbook
-// that it cannot read (its folder, or a table but milestones). An observation, an artifact or a checkout file that cannot be
+// A logbook problem that needs the owner (R1307-1, R1307-2): a milestones or releases table (F-T996-1) that the board cannot
+// read, and a logbook that it cannot read (its folder, or a table but those two). An observation, an artifact or a checkout file that cannot be
 // read is a line under the board only: every task shows. Each reason says the file and the line, as the reader gives them.
 const TABLE_NAMES = ["tasks", "runs", "findings", "ledger", "gates", "decisions", "milestones"];
-const TABLE_FILE = new RegExp(`^(${TABLE_NAMES.join("|")}): (.*)$`);
+const TABLE_FILE = new RegExp(`^(${[...TABLE_NAMES, "releases"].join("|")}): (.*)$`);
 const unreadable = project => project.diagnostics.filter(message => !/^(milestones|releases|observations|checkout|bindings|chiefs|sources|artifact [^:]*): /.test(message));
 function reasonOf(message) {
   const [, name, rest] = TABLE_FILE.exec(message) ?? [];
@@ -836,6 +838,7 @@ function reasonOf(message) {
 function logbookNeeds(source, project, group) {
   const item = (kind, needTitle, text) => ({ kind, title: needTitle, text, key: `${project.key}/${kind}`, source: source.id, sourceLabel: source.label, projectName: group.name, group: group.key, archived: group.archived });
   const milestones = project.diagnostics.find(message => message.startsWith("milestones: ")), lost = unreadable(project);
+  const releases = project.old ? null : project.diagnostics.find(message => message.startsWith("releases: "));
   const others = group.books.filter(book => book.project !== project && book.project.tables.tasks).map(book => title(book.source.label));
   const tables = lost.map(message => TABLE_FILE.exec(message)?.[1]).filter(Boolean);
   // With no tasks, the board shows no milestone either: one item says why, with the milestones table's reason too (T383).
@@ -850,6 +853,7 @@ function logbookNeeds(source, project, group) {
   return [
     ...moves.map(gate => ({ ...item("move", `The move gate ${gate.id} waits for your answer`, `${String(gate.question).split(LINE)[1] ?? "Move the project into one shared logbook?"} Answer the gate in the chat: the chief puts it to you word for word, with its options and its recommendation.`), key: `${project.key}/${gate.id}` })),
     ...(milestones && !noTasks ? [item("milestones", "The milestones table cannot be read", `${reasonOf(milestones)}. The board shows the tasks without their milestones. Ask the chief to repair the logbook.`)] : []),
+    ...(releases && !noTasks ? [item("releases", "The releases table cannot be read", `${reasonOf(releases)}. The board shows the tasks without their releases. Ask the chief to repair the logbook.`)] : []),
     ...(lost.length ? [item("logbook", `The ${title(source.label)} logbook cannot be read`, `${folder ?? why.map(reasonOf).join(". ")}. ${shows} Ask the chief to repair the logbook.`)] : []),
   ];
 }

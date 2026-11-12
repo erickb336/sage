@@ -622,7 +622,7 @@ test("T233 Q1, QA, QC, C8: only a breakdown gate by data gets the milestone mark
   assert.equal(g15.breakdown, null, "T70 copies the breakdown words and options, but no milestones row names G15");
   assert.equal(g15.text, "Approve milestone M9 Fast lane (pilot T70)? Goal: skip the reviews. Name: Fast lane", "one line");
   assert.deepEqual(model.milestoneNeeds.map(need => [need.kind, need.title, need.text]), [
-    ["stuck", "M2 Lead build is stuck", "The pilot T21 was abandoned. Choose a new pilot, or drop the milestone."],
+    ["stuck", "Milestone 2: Lead build is stuck", "The pilot T21 was abandoned. Choose a new pilot, or drop the milestone."],
     ["lost", "The breakdown gate G30 of M7 is not in the logbook", "Ask the chief to repair the logbook, or to propose M7 again."],
   ]);
   assert.equal(model.needsOwner.length, 2, "two cards: T30 and T70");
@@ -693,7 +693,7 @@ test("F-T233-2, F-T233-3: the model counts a lost milestone whose gate is open o
 
 // T383: the board's data rules on damaged or hand-edited logbooks, and its cost on large ones. SAMPLE DATA from scripts/fixtures/board-milestones.mjs.
 const needsOf = model => model.milestoneNeeds.map(need => [need.kind, need.title, need.text]);
-const STUCK_M2 = ["stuck", "M2 Lead build is stuck", "The pilot T21 was abandoned. Choose a new pilot, or drop the milestone."];
+const STUCK_M2 = ["stuck", "Milestone 2: Lead build is stuck", "The pilot T21 was abandoned. Choose a new pilot, or drop the milestone."];
 const LOST_M7 = ["lost", "The breakdown gate G30 of M7 is not in the logbook", "Ask the chief to repair the logbook, or to propose M7 again."];
 const edited = edit => { const tables = milestonesTables(); edit(tables); return milestonesModel([milestonesSource("claude", tables)]); };
 
@@ -709,9 +709,9 @@ test("T383 item 2: a lost milestone whose gate is open on an abandoned task stay
 test("T383 items 4 and 13: a proposed or changing milestone whose pilot is abandoned or not in the logbook is stuck: a Needs you item, not a breakdown that waits for you", () => {
   const abandoned = edited(tables => { tables.tasks.find(task => task.id === "T30").state = "abandoned"; });
   assert.equal(milestoneOf(abandoned, "M3").state, "stuck");
-  assert.deepEqual(needsOf(abandoned), [STUCK_M2, ["stuck", "M3 Board milestones is stuck", "The pilot T30 was abandoned. Choose a new pilot, or drop the milestone."], LOST_M7]);
+  assert.deepEqual(needsOf(abandoned), [STUCK_M2, ["stuck", "Milestone 3: Board milestones is stuck", "The pilot T30 was abandoned. Choose a new pilot, or drop the milestone."], LOST_M7]);
   const missing = edited(tables => { tables.tasks = tables.tasks.filter(task => task.id !== "T30"); });
-  assert.deepEqual(needsOf(missing)[1], ["stuck", "M3 Board milestones is stuck", "The pilot T30 is not in the logbook. Choose a new pilot, or drop the milestone."]);
+  assert.deepEqual(needsOf(missing)[1], ["stuck", "Milestone 3: Board milestones is stuck", "The pilot T30 is not in the logbook. Choose a new pilot, or drop the milestone."]);
   const changing = edited(tables => { tables.tasks.find(task => task.id === "T90").state = "abandoned"; });
   assert.equal(milestoneOf(changing, "M9").state, "stuck", "changing too");
   assert.equal(milestoneOf(milestonesModel(), "M3").state, "proposed", "a live pilot keeps its milestone proposed");

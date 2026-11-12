@@ -26,11 +26,11 @@ test("T996: the chat board shows the frame of the releases that are not done, wi
     "│ In progress · 1 of 10 tasks done           │",
     "│ ╭─ Milestone 5: Sage feel ───────────────╮ │",
     "│ │ In progress · 0 of 8 tasks done        │ │",
-    "│ │ ╭─ Task: Presentation skill ─────────╮ │ │",
-    "│ │ │ In progress · the pilot            │ │ │",
-    "│ │ ╰────────────────────────────────────╯ │ │",
+    "│ │ ╔═ Task: Presentation skill ═════════╗ │ │",
+    "│ │ ║ In progress · you are here         ║ │ │",
+    "│ │ ╚════════════════════════════════════╝ │ │",
     "│ │ ╭─ 7 tasks ──────────────────────────╮ │ │",
-    "│ │ │ Waiting                            │ │ │",
+    "│ │ │ Waiting for Presentation skill     │ │ │",
     "│ │ ╰────────────────────────────────────╯ │ │",
     "│ ╰────────────────────────────────────────╯ │",
     "│ ╭─ 2 single tasks ───────────────────────╮ │",
@@ -46,7 +46,7 @@ test("T996: the chat board shows the frame of the releases that are not done, wi
     "│ ║ ║ Needs you · the pilot              ║ ║ │",
     "│ ║ ╚════════════════════════════════════╝ ║ │",
     "│ ║ ╭─ 1 task ───────────────────────────╮ ║ │",
-    "│ ║ │ Waiting                            │ ║ │",
+    "│ ║ │ Waiting for your approval          │ ║ │",
     "│ ║ ╰────────────────────────────────────╯ ║ │",
     "│ ╚════════════════════════════════════════╝ │",
     "│ ╭─ 1 single task ────────────────────────╮ │",
@@ -87,7 +87,7 @@ test("T996: the web board shows the frame above the columns, and each card names
   const where = html.indexOf('<section class="where" data-rproject="sage-ff5ee2"'), board = html.indexOf('<main class="board"');
   assert.ok(where > 0 && where < board, "the frame is above the columns");
   const frame = html.slice(where, board);
-  for (const part of ["Release 1.0", "Release 1.1", "Milestone 5: Sage feel", "Milestone 6: Faster reviews", "Task T984: Presentation skill", "2 single tasks", "Not in a release: 1 task"]) assert.ok(frame.includes(part), part);
+  for (const part of ["Release 1.0", "Release 1.1", "Milestone 5: Sage feel", "Milestone 6: Faster reviews", "Task: Presentation skill", "2 single tasks", "Not in a release: 1 task"]) assert.ok(frame.includes(part), part);
   assert.ok(!frame.includes("Release 0.9"), "a done release is on the Releases tab, not in the frame");
   assert.ok(frame.includes('<div class="hb milestone here">'), "the milestone that needs you is a double box");
   assert.ok(cardOf(html, "T985").includes('<span class="tag prog" title="Milestone M5: Sage feel"><span class="pm" aria-hidden="true">◫</span>Milestone 5: Sage feel</span>'));
@@ -105,8 +105,8 @@ test("T996: the Releases tab lists the releases that are not done in row order, 
   assert.ok(main.includes('Release 1.1 <span class="pstate stw-run"><span aria-hidden="true">▶</span> in progress</span></h3><div class="rtext">0 of 3 tasks done</div>'), main);
   assert.ok(main.includes('Release 0.9</b><span class="pstate stw-done"><span aria-hidden="true">✓</span> done</span></div><div class="rtext">1 of 1 task done</div>'), main);
   assert.ok(main.includes(`<a href="/milestone/${Buffer.from("claude/sage-ff5ee2/M5").toString("base64url")}"><b>Milestone 5: Sage feel</b></a>`));
-  assert.ok(main.includes(`<a href="/task/${Buffer.from("claude/sage-ff5ee2/T996").toString("base64url")}"><b>Task T996: Board footer links</b></a>`));
-  assert.ok(main.includes("Task T992: Fix a typo in the guide") && !main.includes("T994"), "a stopped task in no release is not listed");
+  assert.ok(main.includes(`<a href="/task/${Buffer.from("claude/sage-ff5ee2/T996").toString("base64url")}"><b>Task: Board footer links</b></a> <span class="faint">T996</span><span class="pstate stw-need">`), "a task row leads with its title; its id is secondary text");
+  assert.ok(main.includes("Task: Fix a typo in the guide") && !main.includes("T994"), "a stopped task in no release is not listed");
   assert.match(html, /<a href="\/releases" aria-current="page">Releases<\/a>/);
   // The offline snapshot holds the tab as a section.
   assert.ok(renderBoardHtml(model()).includes('<section class="page" id="releases" aria-label="Releases">'));
@@ -164,4 +164,78 @@ test("T996: a long or wide name is cut to fit, so every line of the chat's frame
   const lines = frameOf(renderBoardText(model(tables))).split("\n");
   assert.deepEqual([...new Set(lines.map(columns))], [46]);
   assert.ok(lines[0].startsWith("╭─ Release 版本") && lines[0].includes("…"), lines[0]);
+});
+
+test("F-T996-1: a releases table that cannot be read is a Needs you item, and no release that a cell names shows as not in the logbook", t => {
+  const root = mkdtempSync(join(tmpdir(), "sage-board-releases-")), project = join(root, "sample-abcdef");
+  t.after(() => rmSync(root, { recursive: true, force: true }));
+  mkdirSync(project);
+  const sheet = (name, rows) => writeFileSync(join(project, `${name}.tsv`), rows.map(row => row.join("\t")).join("\n") + "\n");
+  sheet("tasks", [["id", "title", "size", "risk", "route", "state", "branch", "pr", "round", "keys", "milestone", "release"], ["T1", "Sample first", "small", "", "build", "framed", "", "", "0", "", "", ""], ["T2", "Sample single", "small", "", "build", "framed", "", "", "0", "", "", "1.0"]]);
+  for (const [name, header] of Object.entries({ runs: "id task role round candidate branch status tokens report started ended", findings: "task key round source severity summary triage reason status", ledger: "task pr sha kind cycle run at", gates: "id task question options recommendation default answer at", decisions: "at task decision why", milestones: "id name goal pilot gate at" })) sheet(name, [header.split(" ")]);
+  // Line 2 has 2 cells, and the header has 3.
+  sheet("releases", [["name", "goal", "at"], ["1.0", "Sample goal."]]);
+  const data = buildBoardModel(readBoardSources([{ id: "sample", path: root, label: "Sample source" }]), { now: NOW });
+  const text = renderBoardText(data), html = renderBoardHtml(data, { snapshot: false }) + renderReleasesHtml(data);
+  const needs = text.split("### 🔴 Needs you\n")[1].split("\n### ")[0];
+  assert.equal(needs, "**1 · The releases table cannot be read** · Sample source · sample\n> releases\\.tsv line 2 has 2 cells, and its header has 3\\. The board shows the tasks without their releases\\. Ask the chief to repair the logbook\\.\n");
+  assert.equal(data.counts.needsOwner, 1);
+  for (const view of [text, html]) assert.ok(!view.includes("not in the logbook"), "no stand-in release");
+  // As for a damaged milestones table, the tasks show without their releases: no frame and no release tag.
+  assert.deepEqual(data.releases, []);
+  assert.ok(!text.includes("Where we are") && !text.includes("Release 1") && !text.includes("no release"), text);
+  // The logbook's other tables still read: the board is not "cannot be read" for the logbook.
+  assert.ok(!needs.includes("logbook cannot be read"), needs);
+});
+
+test("F-T996-2: a dropped milestone with tasks still in it, in a done release that the frame does not show, keeps its line in the chat's Milestones section", () => {
+  const tables = releasesTables();
+  // Release 0.9 is done and is not the last release: its milestone M4 is dropped (gate G4: drop), and T950 is still in it.
+  tables.tasks.push({ ...tables.tasks[0], id: "T950", title: "Old plan pilot", state: "framed", release: "", milestone: "M4" });
+  tables.gates.push({ id: "G4", task: "T950", question: "Approve milestone M4? No task builds before you approve. Name: Old plan", options: "approve|change|drop", recommendation: "approve", default: "", answer: "drop", at: tables.gates[0].at });
+  tables.milestones.push({ id: "M4", name: "Old plan", goal: "Sample goal.", pilot: "T950", gate: "G4", at: tables.milestones[0].at, release: "0.9" });
+  const data = model(tables), text = renderBoardText(data);
+  assert.equal(data.releases[0].releases[0].word, "done", "0.9 holds a done task and a stopped milestone: done");
+  assert.ok(!frameOf(text).includes("Old plan"), "the frame does not show release 0.9");
+  assert.ok(text.includes("### ◫ Milestones\n- M4 Old plan · stopped · dropped · 1 task still in it: ask the chief to take each task out of the milestone\n"), text.split("```").at(-1).slice(0, 400));
+  // The milestones that the frame shows are not repeated there.
+  assert.ok(!text.includes("- M5 Sage feel") && !text.includes("- M6 Faster reviews"));
+  // With M4 not dropped and no task left, the section goes, as before.
+  tables.tasks = tables.tasks.filter(task => task.id !== "T950");
+  assert.ok(!renderBoardText(model(tables)).includes("### ◫ Milestones"));
+});
+
+test("F-T996-5: the chat's Milestone approval entry and the web approval band name the level as the milestone tag does", () => {
+  const data = model(), text = renderBoardText(data), html = renderBoardHtml(data, { snapshot: false });
+  assert.ok(text.includes("#### ◫ Milestone approval\n**1 · Milestone 6\\: Faster reviews** · needs you · claude · sage \\(sample\\) · pilot T1010 · gate G3\n"), text);
+  assert.ok(cardOf(html, "T1010").includes('Milestone approval<span class="bk">· Milestone 6: Faster reviews · gate G3</span>'), cardOf(html, "T1010"));
+  assert.ok(!text.split("### ◫ Where we are")[0].includes("M6 Faster reviews") && !cardOf(html, "T1010").includes("M6 Faster reviews"));
+});
+
+test("F-T996-7, F-T996-10: the web frame names each task by its title with its id after it, marks the task in progress \"you are here\", and says what a waiting box waits for; each link opens its page", () => {
+  const html = renderBoardHtml(model(), { snapshot: false });
+  const frame = html.slice(html.indexOf('<section class="where"'), html.indexOf('<main class="board"'));
+  const task = id => `/task/${Buffer.from(`claude/sage-ff5ee2/${id}`).toString("base64url")}`;
+  // The task in progress is "here": a double box, with "You are here".
+  assert.ok(frame.includes(`<div class="hb task here now"><div class="hbt"><span class="hbk"><a href="${task("T984")}">Task: Presentation skill</a> <span class="faint">T984</span></span><span class="pstate stw-run"><span aria-hidden="true">▶</span> in progress</span></div><div class="hbl">You are here</div></div>`), frame);
+  assert.ok(frame.includes('<span class="hbk">7 tasks</span><span class="pstate stw-wait"><span aria-hidden="true">⧗</span> waiting</span></div><div class="hbl">Waiting for Presentation skill</div>'), frame);
+  assert.ok(frame.includes('<span class="hbk">1 task</span><span class="pstate stw-wait"><span aria-hidden="true">⧗</span> waiting</span></div><div class="hbl">Waiting for your approval</div>'), frame);
+  // A task of a list box: its word, its title (a link to its page), then its id.
+  assert.ok(frame.includes(`<a href="${task("T996")}">Board footer links</a> <span class="faint">T996</span>`), frame);
+  assert.ok(!/Task T\d+:/.test(frame) && !/>T\d+ [A-Z]/.test(frame), "no task box or list line leads with its id");
+  // Each link of the frame opens a page: a task's, or a milestone's.
+  const links = [...frame.matchAll(/<a href="([^"]*)">([^<]*)<\/a>/g)];
+  assert.ok(links.length >= 8, `${links.length} links`);
+  for (const [, href, name] of links) assert.match(href, /^\/(task|milestone)\/[A-Za-z0-9_-]+$/, name);
+  for (const id of ["T984", "T996", "T993", "T1010", "T1012", "T992"]) assert.ok(frame.includes(`<a href="${task(id)}">`), id);
+});
+
+test("F-T996-10: a box of waiting tasks that wait for different tasks keeps its word alone; tasks that can never start say so", () => {
+  const tables = releasesTables();
+  tables.tasks.find(task => task.id === "T986").waits = "T996";
+  const frame = frameOf(renderBoardText(model(tables)));
+  assert.ok(frame.includes("│ │ │ Waiting                            │ │ │"), frame);
+  const stopped = releasesTables();
+  stopped.tasks.find(task => task.id === "T984").state = "abandoned";
+  assert.ok(frameOf(renderBoardText(model(stopped))).includes("Waiting · they cannot start"), frameOf(renderBoardText(model(stopped))));
 });
