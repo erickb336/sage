@@ -11,7 +11,7 @@ import { renderMessage } from "../plugins/sage-codex/core/index.mjs";
 const PLUGIN = join(ROOT, "plugins/sage-codex");
 const fixture = (name) => JSON.parse(readFileSync(join(ROOT, "scripts/fixtures/messages", name), "utf8"));
 const QUESTION = renderMessage(fixture("02-question.json"), { pagePath: (name) => `/pages/T1/${name}` }).text;
-const MISSED = QUESTION.replace(/\nNeeded by:[^\n]*\n[^\n]*\n/, "\n").replace("Where this is:", "Where this is: T4242 waits.");
+const MISSED = QUESTION.replace(/\n\n\*\*Needed by\*\*\n[\s\S]*?(?=\n\n)/, "").replace("**Where this is**\n", "**Where this is**\nT4242 waits. ");
 
 let sessions = 0, turns = 0;
 function setup(t) {

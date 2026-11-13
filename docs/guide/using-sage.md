@@ -117,7 +117,7 @@ You answer in your own words, or pick an option. When you do not answer, the wor
 
 Each message from the chief has one kind, and its first line names it: for example `QUESTION`, `REPORT`, `CATCH-UP` or `INCIDENT · Resolved`. Each kind has a fixed shape, so you find the same part in the same place each time:
 
-- **A question** has the question as its title, then where the work is, what you approve, the one real choice, a table with one row for each answer (my pick marked, what happens next, the cost), what happens if you do not answer, and when the answer is needed.
+- **A question** comes on the host's choice card: you pick an answer, and the chief's pick is the first. First the chief sends a short message in segments, each under a bold label: where the work is, what you approve, the one real choice, what happens if you do not answer, and when the answer is needed. With no card, the question comes as text in the same segments, with the answers as a numbered list (my pick marked, what happens next, the cost).
 - **A report** has a title that says what happened and what it needs, a table with one row for each piece of work (what changes for you, how the chief knows that it works, the cost, whether you must act), what the chief did not check, the weak points, and what you need to do.
 - **A catch-up** draws the release, its milestones and its tasks as boxes inside boxes, each with its state word: not started, waiting, needs you, in progress, done or stopped. The task that runs now is in a double box. Then it says what changed since a time, what the chief does if a thing happens, and what it needs from you.
 
