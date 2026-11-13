@@ -124,8 +124,8 @@ export const TOOLS = {
     input: { task, key: z.string().describe("the finding key") }, pos: ["task", "key"], argv: (i) => ["finding", "close", i.task, i.key],
   },
   finding_move: {
-    describe: "Move an open medium or low finding to a new follow-up task, which the tool frames.",
-    input: { task, key: z.string().describe("the finding key"), to: z.string().describe("the title of the follow-up task"), size: optional("tiny, small or large (small by default)") },
+    describe: "Move an open medium or low finding to a new follow-up task, which the tool frames (to, the title, and size), or into an open task of this logbook (into, the task id). Give to or into. The finding arrives triaged fix: close it after a re-check confirms the fix.",
+    input: { task, key: z.string().describe("the finding key"), to: optional("the title of a new follow-up task, never a task id"), into: id("T", "an open task to move the finding into").optional(), size: optional("tiny, small or large (small by default); not with into") },
     pos: ["task", "key"], argv: (i) => ["finding", "move", i.task, i.key],
   },
   verdict: {
