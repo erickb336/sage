@@ -28,7 +28,10 @@ Before you send a message, read it as the owner would after a week away, with no
 - **The first line** is the kind's head, for example `QUESTION` or `INCIDENT · Resolved`. The checks read the kind from it.
 - **Where this is**: release › milestone or single task › step, for example "Release 1.0 › milestone 5, Sage feel › step: review". Leave out the release when the logbook has none.
 - **State words**: a task, a milestone or a release is not started, waiting, needs you, in progress, done or stopped. Use these six words, not the tool's states.
+- **A heading for each part**: start each part with a `### <label>` heading line, such as `### Where this is`, with a blank line before and after it. Never write a part's label as a bold line: it looks like one more progress line. Bold inside the text is still allowed for a word that needs it.
 - **One blank line** between the parts. A table becomes numbered rows, with one line for each column.
+- **Progress lines stay plain**: between tool calls, write one plain sentence, such as "Starting the lead for the new words now." No heading, no bold, no list.
+- **A rule before the message**: when the turn had progress lines, start the final message with a `---` line and a blank line, so that the message is separate from them. The checks read the kind from the first line after the rule.
 - **No raw ids** (a task, run, gate, milestone, chief, finding or pull request number) in the text or in a picture. Put them in one last line: `Ref: T12 · PR 40`.
 - **Large choices only**: "Judged by" and "The bad side of my pick" go in a question only when the choice is large.
 
@@ -55,7 +58,7 @@ For a message with a picture, a long message, or any message where the shape mat
 
 1. Make a temp folder, and write the JSON in it, for example `mkdir -p /tmp/sage-message`, then `cat > /tmp/sage-message/T12.json <<'EOF'` … `EOF`.
 2. Run `sage message <task> --file /tmp/sage-message/T12.json`. In Codex, call the `message` tool with the task and the message.
-3. Send the text that it prints, word for word. It ends with the Page block when the message has a page.
+3. Send the text that it prints, word for word, after a `---` line when the turn had progress lines. It ends with the Page block when the message has a page.
 
 The command refuses a message that is not in its kind's shape, and names each problem: fix them and run it again. Write a short message with no picture by hand, in the same shape: the checks read the text in the same way.
 
@@ -63,9 +66,9 @@ The JSON: `{ "kind", "title", "blocks": [ … ], "ref" }`, and `"status"` for an
 
 | Block | Fields | Text form |
 | --- | --- | --- |
-| `field` | `label`, `text` | `Label: text`; in a question or a confirm, `**Label**` on its own line, then the text |
+| `field` | `label`, `text` | `### Label`, a blank line, then the text |
 | `p` | `text` | a paragraph, anywhere |
-| `section` | `label`, `body` (blocks) | the label, then its blocks; in a question or a confirm, the label in bold |
+| `section` | `label`, `body` (blocks) | `### Label`, a blank line, then its blocks; a section inside a section gets `####` |
 | `list` | `items`, `ordered` | `- item` or `1. item` |
 | `table` | `head`, `rows`, `pick` (the row of your pick, from 0), `caption` | numbered rows; your pick says "(my pick)" |
 | `picture` | `title`, `lines` or `frame`, `key` | the title, the lines in a fence, the key |
@@ -77,7 +80,7 @@ The JSON: `{ "kind", "title", "blocks": [ … ], "ref" }`, and `"status"` for an
 
 A catch-up's picture is a `frame`: boxes inside boxes that the command lays out and gives their state words. Each box is `{ "box": "release" | "milestone" | "task" | "group", "name", "items": [ boxes or lines of text ] }`. A task gives its recorded `state` (for example `"reviewing"`), and may give `waits` (what it waits for) and `needs` (the owner's question). A milestone may give its state (`"proposed"`, or `"done"`, which the boxes inside it must agree with); its word and a release's word come from the boxes inside them, and the tasks inside a group count too. A group gives its `word`, and so does a box whose items are only lines of text. Any box may give a `note` for its first line. Exactly one box is `"here": true`: the double box, the task that runs now.
 
-In the text of a field, a list or a cell, `**bold**` and a code span show on the page. The chat text shows bold words without their marks, except the bold label of each part of a question or a confirm, and keeps a code span's backticks: a word in code, such as a chip name, is not an id.
+In the text of a field, a list or a cell, `**bold**` and a code span show on the page. The chat text shows bold words without their marks, and keeps a code span's backticks: a word in code, such as a chip name, is not an id.
 
 ## Ask with the question tool
 
@@ -90,11 +93,11 @@ Use the tool only for a choice that is the owner's: product direction, or an act
 3. Call the tool. Put the whole batch in one call when it fits, the most important question first.
 4. Record the answer with `gate answer`: the option's number, or the owner's own words (the tool's Other) as `--other-hex`.
 
-The owner's rules for the chat message and the text form (12 Nov 2026), because the parts ran together and a table made long answers hard to read:
+The owner's rules for the chat message and the text form (12 Nov 2026), because the parts ran together and a table made long answers hard to read. Then the owner asked for clearer labels, because a bold label looked like one more progress line, so each label is now a heading:
 
-1. **Separate segments.** Give each part a bold label on its own line, such as **Where this is** or **If you do not answer**, with its text on the next line. Put a blank line between the parts. Keep each part to one or two short sentences.
+1. **Separate segments.** Give each part a `###` heading line, such as `### Where this is` or `### If you do not answer`, with a blank line before and after it, and its text under it. Keep each part to one or two short sentences.
 2. **No tables for answers or explanations.** On the card, the long text goes in the option's description. In the text form, the answers are a short numbered list, with what happens next and the cost under each answer. Use a table only for short, uniform data, such as numbers or dates.
-3. **The same rules with no tool.** The text form has the same bold labels and the same list of answers. `sage message` prints it so, and the message check notes a label in the line or a table of answers.
+3. **The same rules with no tool.** The text form has the same headings and the same list of answers. `sage message` prints it so, and the message check notes a bold label, a label in the line or a table of answers.
 
 | Part of the question | On the card |
 | --- | --- |
@@ -128,25 +131,33 @@ Should pages reach you only by a link to your Mac? Where this is: Release 1.0 �
 | Keep the file tool too | Some pages open inside the Claude chat. A copy of each goes through Anthropic's servers. | Small: one more rule for the chief. |
 ```
 
-**After, with the tool:** first the chat message, in segments.
+**After, with the tool:** first the chat message, in segments. The turn had progress lines, so the message starts with a rule.
 
 ```text
-**Where this is**
+---
+
+### Where this is
+
 Release 1.0 › single task: one way to show visuals › step: investigate
 
-**What you approve**
+### What you approve
+
 How pages reach you in the Claude app.
 
-**The one real choice in it**
+### The one real choice in it
+
 A page inside the chat, or a page that never leaves your Mac.
 
-**If you do not answer**
+### If you do not answer
+
 The build uses my pick.
 
-**Needed by**
+### Needed by
+
 Before the page link build starts.
 
-**After you answer**
+### After you answer
+
 I say in one line what I recorded.
 ```
 
@@ -180,14 +191,17 @@ QUESTION
 Should pages reach you only by a link to your
 Mac?
 
-**Where this is**
+### Where this is
+
 Release 1.0 › single task: one way to show
 visuals › step: investigate
 
-**What you approve**
+### What you approve
+
 How pages reach you in the Claude app.
 
-**The one real choice in it**
+### The one real choice in it
+
 A page inside the chat, or a page that never
 leaves your Mac.
 
@@ -204,13 +218,16 @@ leaves your Mac.
      through Anthropic's servers.
    - Cost: Small: one more rule for the chief.
 
-**If you do not answer**
+### If you do not answer
+
 The build uses my pick.
 
-**Needed by**
+### Needed by
+
 Before the page link build starts.
 
-**After you answer**
+### After you answer
+
 I say in one line what I recorded.
 ```
 
@@ -223,8 +240,8 @@ Each kind: its `kind` in the JSON, its head (the first line), when to send it, a
 | Kind | Head | When | Parts, in order |
 | --- | --- | --- | --- |
 | `progress` | `PROGRESS` | While a task runs: one short note when it moves to a new step, with nothing for the owner to do. | Where this is · [Since my last note] · What changed · Next · [Cost so far] · What I need from you |
-| `question` | `QUESTION` | When work waits for the owner's choice. The title is the question. Ask it on the choice card (see above); this text form is the fallback. Each part goes under a bold label on its own line. The answers are a numbered list, never a table. | Where this is · What you approve · The one real choice in it · the answers, a numbered list (Answer, What happens next, Cost; your pick marked) · If you do not answer · Needed by · [Judged by] · [The bad side of my pick] · After you answer · [a Page block] |
-| `report` | `REPORT` | When work ends: a pull request merged, or a study concluded. The title says what happened and what it needs. | Where this is · [Why this change] · [a picture, any number] · a table (Piece of work, What changes for you, How I know it works, Cost, You must act) · What I did not check · Weak points · What you need to do · [a Page block] |
+| `question` | `QUESTION` | When work waits for the owner's choice. The title is the question. Ask it on the choice card (see above); this text form is the fallback. Each part starts with a ### heading on its own line. The answers are a numbered list, never a table. | Where this is · What you approve · The one real choice in it · the answers, a numbered list (Answer, What happens next, Cost; your pick marked) · If you do not answer · Needed by · [Judged by] · [The bad side of my pick] · After you answer · [a Page block] |
+| `report` | `REPORT` | When work ends: a pull request merged, or a study concluded. The title says what happened and what it needs. The table of the pieces of work goes under its own ### What changed heading. | Where this is · [Why this change] · [a picture, any number] · a table (Piece of work, What changes for you, How I know it works, Cost, You must act) · What I did not check · Weak points · What you need to do · [a Page block] |
 | `request understood` | `REQUEST UNDERSTOOD` | Right after the owner asks for new work, before agents spend hours on it. It starts on its defaults unless the owner corrects it. | Your words · What I understood · Read back (costly if wrong) · In · Out · Appetite · [Unsure, with my default] · If you say nothing |
 | `explainer` | `EXPLAINER` | When the owner asks what a part of sage is, or a message uses a word that is new to the owner. The title is “About …”. | What it is · Why it exists · A real example · [a picture, any number] · [Like, and where the likeness stops] · [What it is not] · [New words] · [a Page block] |
 | `incident` | `INCIDENT` | When an agent did what it must not do, or sage told the owner something that proved wrong. The status is Investigating, Identified, Monitoring or Resolved. | Where this is · What happened · [What I told you, and what is true] · What it changed for you · What I did · Why it could happen · Has it happened before · What stops it next time · What you need to do · Next update |
@@ -234,5 +251,5 @@ Each kind: its `kind` in the JSON, its head (the first line), when to send it, a
 | `catch-up` | `CATCH-UP` | When the owner comes back after time away, or asks where the work is: boxes inside boxes (release › milestone › task), each with its state word, the current task in a double box. | a picture · Each box · Since · What changed · If this happens · What I need from you |
 | `estimate` | `ESTIMATE` | Before work starts, when the owner asks how long or how much, or when a cost changes a choice. The title is the number, with its unit and range. | What it covers · a table · [a picture, any number] · Basis · How sure · [What would change it] · [So far] · [Your time] · What I need from you |
 | `steps for you` | `STEPS FOR YOU` | When only the owner can do something: an install, an update, a setting, a sign-in. A warning goes before the steps it is about. | When · Why · numbered steps · How you know it worked · Your time · If a step fails |
-| `confirm` | `CONFIRM` | Just before an act that cannot be undone: a delete, a publish, a message to other people. The title names the act and says that it cannot be undone. Ask it on the choice card too; its text form is the fallback, with each part under a bold label. | What I will do · a table · What stays · If you say yes · If you say no, or nothing |
+| `confirm` | `CONFIRM` | Just before an act that cannot be undone: a delete, a publish, a message to other people. The title names the act and says that it cannot be undone. Ask it on the choice card too; its text form is the fallback, with a ### heading for each part. | What I will do · a table · What stays · If you say yes · If you say no, or nothing |
 | `lesson kept` | `LESSON KEPT` | When a mistake teaches sage something: the lesson once, and where it now lives. | What happened · [a picture, any number] · The lesson · Has it happened before · a table (Where the lesson lives now, What it holds, State) · What changes for you · What I need from you |

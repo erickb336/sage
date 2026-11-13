@@ -11,7 +11,7 @@ import { renderMessage, textProblems } from "../packages/sage-core/message-check
 const PLUGIN = fileURLToPath(new URL("../plugins/sage", import.meta.url));
 const fixture = (name) => JSON.parse(readFileSync(fileURLToPath(new URL(`./fixtures/messages/${name}`, import.meta.url)), "utf8"));
 const QUESTION = renderMessage(fixture("02-question.json")).text;
-const MISSED = QUESTION.replace(/\n\n\*\*Needed by\*\*\n[\s\S]*?(?=\n\n)/, "").replace("Should sage stop", "Should T77 stop");
+const MISSED = QUESTION.replace(/\n\n### Needed by\n\n[\s\S]*?(?=\n\n)/, "").replace("Should sage stop", "Should T77 stop");
 
 function session(plugin = PLUGIN) {
   const dir = realpathSync(mkdtempSync(join(tmpdir(), "sage-shape-")));
@@ -108,7 +108,7 @@ test("F-T1004-4: the note is about the last message before a prompt: of two miss
   const s = session();
   s.prompt("sage mode");
   const onlyId = QUESTION.replace("Should sage stop", "Should T77 stop");
-  const onlyPart = QUESTION.replace(/\n\n\*\*Needed by\*\*\n[\s\S]*?(?=\n\n)/, "");
+  const onlyPart = QUESTION.replace(/\n\n### Needed by\n\n[\s\S]*?(?=\n\n)/, "");
   assert.deepEqual(textProblems(onlyId).length, 1);
   assert.deepEqual(textProblems(onlyPart).length, 1);
   s.stop(onlyId);
