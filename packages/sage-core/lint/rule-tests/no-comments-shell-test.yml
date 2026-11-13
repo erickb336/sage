@@ -1,0 +1,13 @@
+id: no-comments-shell
+valid:
+  - 'echo "a # b"'
+  - "echo 'a # b'"
+  - 'echo ${#items[@]} $#'
+  - 'curl https://example.com/#anchor'
+  - "cat <<'EOF'\n# heredoc text\nEOF"
+  - '# shellcheck disable=SC2086'
+  - '# shellcheck disable=SC2086,SC2034 source=lib/x.sh'
+invalid:
+  - '# explain'
+  - 'npm ci # why'
+  - '# shellcheck disable=SC2086 because'
