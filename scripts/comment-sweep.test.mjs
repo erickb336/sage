@@ -1,7 +1,7 @@
 import "./test-env.mjs";
 import assert from "node:assert/strict";
 import { spawnSync } from "node:child_process";
-import { cpSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
+import { cpSync, existsSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join, relative } from "node:path";
 import { test } from "node:test";
@@ -19,10 +19,7 @@ import { prove } from "./comment-proof.mjs";
 import { RULE_SET } from "./lint-rules.mjs";
 import { stripComments } from "./strip-comments.mjs";
 
-const PROJECT = {
-  "sgconfig.yml": `ruleDirs: [${JSON.stringify(join(RULE_SET, "rules"))}]\nutilDirs: [${JSON.stringify(join(RULE_SET, "utils"))}]\n`,
-  ".gitattributes": readFileSync(join(ROOT, ".gitattributes"), "utf8"),
-};
+const PROJECT = { ".gitattributes": readFileSync(join(ROOT, ".gitattributes"), "utf8") };
 
 function folder(files) {
   const dir = mkdtempSync(join(realpathSync(tmpdir()), "sage-strip-"));
@@ -345,3 +342,31 @@ test("F-T1027-4, F-T1027-12: the steps for a branch from before the sweep strip 
   const merge = commands.indexOf("git merge origin/main"), install = commands.indexOf("npm ci", merge);
   assert.ok(merge >= 0 && install > merge && install < commands.indexOf(strips[1]), commands.join("\n"));
 });
+
+test("F-T1027-16: a comment on the header line of a run block goes once, and the shell lines after it stay", () => {
+  const before = "a:\n  run: | # head comment\n    echo hi\n    npm test\n";
+  const f = repository({ "a.yml": before });
+  try {
+    const run = script("strip-comments.mjs", ["a.yml"], f.dir);
+    assert.equal(run.stdout, `removed 1 comments from 1 files in ${f.dir}\n`, run.stderr);
+    assert.equal(f.read("a.yml"), "a:\n  run: |\n    echo hi\n    npm test\n");
+    assert.deepEqual(prove("a.yml", before, f.read("a.yml")), BOTH_PASS);
+  } finally { f.done(); }
+});
+
+test("F-T1027-17: the strip of a repository with no sgconfig.yml uses the rule set beside the script, and a repository's own sgconfig.yml wins", () => {
+  const f = repository({ "a.mjs": "a(); // why\n", ".github/w.yml": "on: push # why\njobs:\n  a:\n    steps:\n      - run: |\n          npm test # why\n" });
+  try {
+    assert.equal(existsSync(join(f.dir, "sgconfig.yml")), false);
+    const run = script("strip-comments.mjs", ["."], f.dir);
+    assert.equal(run.stderr, "");
+    assert.equal(run.stdout, `removed 3 comments from 2 files in ${f.dir}\n`);
+    assert.deepEqual([f.read("a.mjs"), f.read(".github/w.yml")], ["a();\n", "on: push\njobs:\n  a:\n    steps:\n      - run: |\n          npm test\n"]);
+  } finally { f.done(); }
+  const own = repository({ "a.mjs": "a(); // why\n", "a.yml": "a: 1 # why\n", "lint/rules/no-comments-js.yml": readFileSync(join(RULE_SET, "rules", "no-comments-js.yml"), "utf8"), "sgconfig.yml": `ruleDirs: [lint/rules]\nutilDirs: [${JSON.stringify(join(RULE_SET, "utils"))}]\n` });
+  try {
+    assert.equal(script("strip-comments.mjs", ["a.mjs", "a.yml"], own.dir).stdout, `removed 1 comments from 1 files in ${own.dir}\n`);
+    assert.deepEqual([own.read("a.mjs"), own.read("a.yml")], ["a();\n", "a: 1 # why\n"]);
+  } finally { own.done(); }
+});
+
