@@ -104,10 +104,10 @@ test("the strip keeps the shebang and each directive of the rule set, and remove
 test("a second strip changes nothing", () => {
   const f = folder({ "a.mjs": "// a\nconst a = 1; /* b */\n\n// c\n\nexport { a };\n", ".github/w.yml": "on: push # d\n" });
   try {
-    assert.deepEqual(stripComments(f.dir, ["."]), { files: 2, comments: 4 });
+    assert.deepEqual(stripComments(f.dir, ["."]), { files: 2, comments: 4, skipped: [] });
     const first = [f.read("a.mjs"), f.read(".github/w.yml")];
     assert.deepEqual(first, ["const a = 1;\n\nexport { a };\n", "on: push\n"]);
-    assert.deepEqual(stripComments(f.dir, ["."]), { files: 0, comments: 0 });
+    assert.deepEqual(stripComments(f.dir, ["."]), { files: 0, comments: 0, skipped: [] });
     assert.deepEqual([f.read("a.mjs"), f.read(".github/w.yml")], first);
   } finally { f.done(); }
 });
@@ -339,6 +339,9 @@ test("F-T1027-4, F-T1027-12: the steps for a branch from before the sweep strip 
   const strips = commands.filter((code) => code.includes("strip-comments.mjs"));
   assert.equal(strips.length, 2);
   for (const strip of strips) assert.match(strip, /strip-comments\.mjs \$\(git diff --name-only --diff-filter=d origin\/main\.\.\.HEAD\)$/);
+  const steps = section.split("\n").filter((line) => /^\d+\. .*strip-comments\.mjs/.test(line));
+  assert.equal(steps.length, 2);
+  for (const step of steps) assert.match(step, /If `git diff --name-only --diff-filter=d origin\/main\.\.\.HEAD` lists no file, skip to step \d+\./, step);
   const merge = commands.indexOf("git merge origin/main"), install = commands.indexOf("npm ci", merge);
   assert.ok(merge >= 0 && install > merge && install < commands.indexOf(strips[1]), commands.join("\n"));
 });
@@ -382,4 +385,36 @@ test("F-T1027-18: the proof fails a workflow whose run block lost a shell commen
   const steps = ["CONTRIBUTING.md", "packages/sage-core/lint/README.md"].flatMap((file) => readFileSync(join(ROOT, file), "utf8").split("\n").filter((line) => /^\d+\. .*comment-proof\.mjs/.test(line)));
   assert.equal(steps.length, 3);
   for (const step of steps) assert.match(step, /`run:` block .*by hand/, step);
+});
+
+test("F-T1027-22: the strip keeps the CR of a CRLF line that ends in a shell comment of a run block", () => {
+  assert.equal(stripped("w.yml", "steps:\r\n  - run: |\r\n      npm ci # why\r\n      npm test\r\n"), "steps:\r\n  - run: |\r\n      npm ci\r\n      npm test\r\n");
+});
+
+test("F-T1027-21: the strip skips a named file that .gitattributes marks generated or vendored, as the scan of a folder does, and says which", () => {
+  const f = repository({ "plugins/sage/a.mjs": "a(); // built\n", "scripts/fixtures/sage-14c0d0c/b.mjs": "b(); // test data\n", "scripts/c.mjs": "c(); // why\n", "d.mjs": "d(); // why\n" });
+  try {
+    const run = script("strip-comments.mjs", ["plugins/sage/a.mjs", "scripts/fixtures/sage-14c0d0c/b.mjs", "scripts/c.mjs"], f.dir);
+    assert.equal(run.stderr, "");
+    assert.equal(run.stdout, [
+      "skipped plugins/sage/a.mjs: .gitattributes marks it linguist-generated or linguist-vendored",
+      "skipped scripts/fixtures/sage-14c0d0c/b.mjs: .gitattributes marks it linguist-generated or linguist-vendored",
+      `removed 1 comments from 1 files in ${f.dir}`,
+      "",
+    ].join("\n"));
+    const only = script("strip-comments.mjs", ["plugins/sage/a.mjs"], f.dir);
+    assert.match(only.stdout, new RegExp(`removed 0 comments from 0 files in ${f.dir}\n$`));
+    assert.deepEqual(["plugins/sage/a.mjs", "scripts/fixtures/sage-14c0d0c/b.mjs", "scripts/c.mjs", "d.mjs"].map(f.read), ["a(); // built\n", "b(); // test data\n", "c();\n", "d(); // why\n"]);
+  } finally { f.done(); }
+});
+
+test("F-T1027-26: the strip in a folder that is not in a git repository fails by name and changes no file", () => {
+  const f = folder({ "scripts/a.mjs": "a(); // why\n" });
+  try {
+    const run = script("strip-comments.mjs", [], f.dir);
+    assert.equal(run.status, 1, run.stdout);
+    assert.equal(run.stderr, `strip-comments: ${f.dir} is not in a git repository; run the strip in your checkout\n`);
+    assert.equal(run.stdout, "");
+    assert.equal(f.read("scripts/a.mjs"), "a(); // why\n");
+  } finally { f.done(); }
 });

@@ -3,6 +3,8 @@ import assert from "node:assert/strict";
 import { cpSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, realpathSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { fileURLToPath } from "node:url";
+import { parse } from "yaml";
 import { RULE_SET, astGrep, commentScan, ruleTestProblems } from "./lint-rules.mjs";
 
 const SUPPRESSION = ["ast-grep", "ignore"].join("-");
@@ -84,7 +86,7 @@ test("F-T1027-2: a scan checks the shell in the run blocks of a YAML file, and n
       "          echo \"a # b\" ${#x} # why",
       "          # shellcheck disable=SC2086",
       "      - name: n",
-      "        run: >-",
+      "        run: |-",
       "          npm ci",
       "          # why",
       "      - with:",
@@ -99,6 +101,19 @@ test("F-T1027-2: a scan checks the shell in the run blocks of a YAML file, and n
   assert.equal(run.status, 1, run.stderr);
   assert.deepEqual(JSON.parse(run.stdout).map((m) => `${m.file} ${m.ruleId} ${m.range.start.line + 1}`).sort(), ["ci.yml no-comments-shell 11", "ci.yml no-comments-shell 5", "ci.yml no-comments-shell 6"]);
 }));
+
+test("F-T1027-20: a folded run block (> or >-) gives no shell match, because the shell gets its lines folded into one; a literal block (|, |- or |+) does", () => withCopy((dir) => {
+  const steps = ["|", "|-", "|+", ">", ">-", ">+"].flatMap((sign) => [`  - run: ${sign}`, "      npm ci # why", "      npm test"]);
+  writeFileSync(join(dir, "ci.yml"), ["steps:", ...steps].join("\n"));
+  const run = astGrep(["scan", "--json=compact"], dir, dir, ["ci.yml"]);
+  assert.deepEqual(JSON.parse(run.stdout).map((m) => m.range.start.line + 1), [3, 6, 9], run.stderr);
+}));
+
+test("F-T1027-23: the root sgconfig.yml gives the same run blocks to the shell rule as the rule set's own sgconfig.yml", () => {
+  const injections = (file) => parse(readFileSync(file, "utf8")).languageInjections;
+  assert.ok(injections(join(RULE_SET, "sgconfig.yml"))?.length);
+  assert.deepEqual(injections(fileURLToPath(new URL("../sgconfig.yml", import.meta.url))), injections(join(RULE_SET, "sgconfig.yml")));
+});
 
 const EXPLAINED = {
   "a.js": "f(); // why", "a.html": "<p>x</p><!-- why -->", "a.yml": "a: 1 # why", "a.css": "/* why */", "ci.yml": "run: |\n  npm ci # why\n",

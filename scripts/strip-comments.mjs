@@ -2,7 +2,7 @@ import { readFileSync, realpathSync, writeFileSync } from "node:fs";
 import { isAbsolute, join, relative, resolve } from "node:path";
 import { spawnSync } from "node:child_process";
 import { isMain } from "./is-main.mjs";
-import { SCAN_FOLDERS, commentScan } from "./lint-rules.mjs";
+import { SCAN_FOLDERS, commentScan, excludedPaths } from "./lint-rules.mjs";
 
 const MARK = "\u0000";
 
@@ -10,7 +10,8 @@ function stripRanges(text, byteRanges, { yaml = false } = {}) {
   if (text.includes(MARK)) throw new Error("the file holds a NUL character, which the strip uses as its mark");
   const bytes = Buffer.from(text);
   let marked = "", at = 0, atByte = 0;
-  for (const [startByte, endByte] of byteRanges) {
+  for (const [startByte, rangeEnd] of byteRanges) {
+    const endByte = bytes.subarray(rangeEnd - 1, rangeEnd + 1).toString() === "\r\n" ? rangeEnd - 1 : rangeEnd;
     const start = at + bytes.subarray(atByte, startByte).toString().length;
     const end = start + bytes.subarray(startByte, endByte).toString().length;
     const lineBefore = text.slice(text.lastIndexOf("\n", start - 1) + 1, start);
@@ -71,7 +72,7 @@ export function stripComments(root, paths = SCAN_FOLDERS) {
     comments += distinct.length;
     writeFileSync(path, stripRanges(readFileSync(path, "utf8"), distinct, { yaml: /\.ya?ml$/.test(file) }));
   }
-  return { files: byFile.size, comments };
+  return { files: byFile.size, comments, skipped: excludedPaths(root, paths) };
 }
 
 const USAGE = `usage: node scripts/strip-comments.mjs [path ...]
@@ -94,9 +95,11 @@ if (isMain(import.meta.url)) {
     process.exit(option === "--help" || option === "-h" ? 0 : 2);
   }
   try {
-    const top = spawnSync("git", ["rev-parse", "--show-toplevel"], { encoding: "utf8" }).stdout.trim();
-    const root = realpathSync(top || process.cwd());
-    const { files, comments } = stripComments(root, paths.length ? paths.map((path) => repositoryPath(root, path)) : SCAN_FOLDERS);
+    const top = spawnSync("git", ["rev-parse", "--show-toplevel"], { encoding: "utf8" }).stdout?.trim();
+    if (!top) throw new Error(`${process.cwd()} is not in a git repository; run the strip in your checkout`);
+    const root = realpathSync(top);
+    const { files, comments, skipped } = stripComments(root, paths.length ? paths.map((path) => repositoryPath(root, path)) : SCAN_FOLDERS);
+    for (const path of skipped) console.log(`skipped ${path}: .gitattributes marks it linguist-generated or linguist-vendored`);
     console.log(`removed ${comments} comments from ${files} files in ${root}`);
   } catch (error) {
     console.error(`strip-comments: ${error.message.split("\n")[0]}`);

@@ -92,7 +92,7 @@ PR 540 removed every comment from the sources. Strip the files that a branch mad
 4. Run `node <main checkout>/scripts/comment-proof.mjs HEAD`. It must report 0 failed, except for a YAML file whose `run:` block lost a shell comment: that file always fails, so check its change by hand with `git diff HEAD -- <file>`. Each line that changed must only have lost a `#` comment. A file type with no proof, such as `.json`, is "not proved" and does not fail.
 5. Commit, then run `git merge origin/main`. In a conflict, take main's side of each line that only lost a comment.
 6. Run `npm ci`. The merge brought the tools of the strip and the proof into `package.json`.
-7. Strip your branch's files again: `node scripts/strip-comments.mjs $(git diff --name-only --diff-filter=d origin/main...HEAD)`. It removes the comments that the merge brought.
+7. Strip your branch's files again: `node scripts/strip-comments.mjs $(git diff --name-only --diff-filter=d origin/main...HEAD)`. It removes the comments that the merge brought. If `git diff --name-only --diff-filter=d origin/main...HEAD` lists no file, skip to step 9.
 8. Run `node scripts/comment-proof.mjs HEAD`. It must report 0 failed, except for a YAML file whose `run:` block lost a shell comment: check that file by hand, as in step 4.
 9. Run `npm run build` and `npm run check`, then commit.
 

@@ -5,6 +5,7 @@ languageInjections:
     rule:
       pattern: $CONTENT
       kind: block_scalar
+      regex: '^\|'
       inside:
         kind: block_node
         inside:
