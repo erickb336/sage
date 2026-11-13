@@ -41,6 +41,7 @@ In this file, `sage` stands for `node <path to skills/sage/sage.mjs>`, the absol
 - runs: `sage run add <T> --role <role> --branch <branch>` (the branch only for the implementer) and `sage run done <R> --status done --tokens <n>`, for the five roles above; `sage run done <R> --status failed` for a helper that gave no report;
 - findings: `sage finding add <T> --source <role> --severity <severity> --summary=<word> --run <R> --class <class>`, `sage finding triage <T> <K> fix` (in a cycle, a medium or high one: `sage finding triage <T> <K> fix --proof <R>`), `sage finding triage <T> <K> dismiss --reason=<word>` (a low finding that is no fix key of the round or of an earlier one), `sage finding triage <T> <K> dismiss --proof <R>` (a medium finding that the proof check did not reproduce) and `sage finding close <T> <K>`;
 - verdicts: `sage verdict <T> --sha <sha> --kind <kind> --cycle <n> --pr <n> --run <R>`, for a review or QA only;
+- the lint check: the state tool's `lint` command, with the task and `--sha`, to see early the lines that the sage's lint will name. It records lint-pass or lint-fail, which only it writes. The sage runs it on the final head before the merge;
 - the round: `sage round <T>`;
 - the task: `sage task <T> set state=<state>`, with `branch=<branch>` and `pr=<n>`.
 

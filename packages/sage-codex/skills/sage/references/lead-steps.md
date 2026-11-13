@@ -26,6 +26,7 @@ Use `status` for a logbook read, or the trusted literal command form in [command
 
 - `task_set`: give `task` and `fields`, with string values, for example `{"task": "T12", "fields": {"state": "reviewing"}}`. The fields are `state` (framed to briefed, briefed to building, building to reviewing, reviewing to verifying, verifying to reviewing, repairing to reviewing), `branch` and `pr`.
 - `verdict`: give `task`, `kind` (`review-clean`, `security-clean`, `ux-clean`, `qa-pass`, `qa-fail` or `findings`), `sha`, `cycle`, `pr` and the `run` whose kept report backs it, after you end that run. The `checks-pass` and `checks-fail` verdicts are the chief's.
+- `lint`: give `task` and `sha`, to see early the lines that the chief's lint will name. It records `lint-pass` or `lint-fail`, which only `lint` writes. The chief runs it on the final head before the merge.
 
 **A report with findings.** Do these steps in this order. Triage comes after the verdict, because after a `fix` triage of a medium or high finding, the gate refuses the first verdict of a head until `round`.
 
