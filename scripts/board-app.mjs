@@ -18,7 +18,7 @@ export function buildBoardApp(root) {
   const result = buildSync({
     absWorkingDir: root,
     entryPoints: { app: `${APP_SOURCE}/main.jsx`, "vendor-entry": `${APP_SOURCE}/vendor.js` },
-    bundle: true, splitting: true, format: "esm", platform: "browser", target: ["es2022"],
+    bundle: true, splitting: true, preserveSymlinks: true, format: "esm", platform: "browser", target: ["es2022"],
     minify: true, legalComments: "none", jsx: "automatic", charset: "utf8",
     define: { "process.env.NODE_ENV": "\"production\"" },
     entryNames: "[name]-[hash]", chunkNames: "vendor-[hash]", outdir: "out",
