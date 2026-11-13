@@ -1,7 +1,7 @@
 import { spawnSync } from "node:child_process";
 import { existsSync, readFileSync } from "node:fs";
 import { createRequire } from "node:module";
-import { join } from "node:path";
+import { basename, join, matchesGlob } from "node:path";
 import { fileURLToPath } from "node:url";
 import { LINT_CONFIG, astGrepScan, skippedText } from "../packages/sage-core/lint.mjs";
 
@@ -33,9 +33,19 @@ export function scanExclusions(root) {
     .map(([glob]) => glob);
 }
 
+export function excludedPaths(root, paths) {
+  const globs = scanExclusions(root);
+  return paths.filter((path) => globs.some((glob) => matchesGlob(glob.includes("/") ? path : basename(path), glob)));
+}
+
+const NO_IGNORE_FILES = ["hidden", "dot", "exclude", "global", "parent", "vcs"].flatMap((kind) => ["--no-ignore", kind]);
+
 export function commentScan(root, paths = SCAN_FOLDERS) {
-  const globs = ["!.git", ...scanExclusions(root).map((glob) => `!${glob}`)].flatMap((glob) => ["--globs", glob]);
-  const { matches, files } = astGrepScan(binary(), { config: join(root, LINT_CONFIG), cwd: root, paths, args: ["--no-ignore", "hidden", ...globs] });
+  const excluded = excludedPaths(root, paths), kept = paths.filter((path) => !excluded.includes(path));
+  if (!kept.length) return [];
+  const globs = ["!.git", "!node_modules", ...scanExclusions(root).map((glob) => `!${glob}`)].flatMap((glob) => ["--globs", glob]);
+  const config = existsSync(join(root, LINT_CONFIG)) ? join(root, LINT_CONFIG) : join(RULE_SET, LINT_CONFIG);
+  const { matches, files } = astGrepScan(binary(), { config, cwd: root, paths: kept, args: [...NO_IGNORE_FILES, ...globs] });
   const skipped = [...files].filter(([, f]) => f.skipped && f.skipped !== "emptyFile").map(([file, f]) => `${file}: ${skippedText(f.skipped)}`);
   if (skipped.length) throw new Error(skipped.join("\n"));
   if (matches.some((m) => m.severity !== "error")) throw new Error(`ast-grep scan gave a match with a severity other than error; give each rule in ${RULE_SET}/rules severity: error`);

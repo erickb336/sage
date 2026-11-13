@@ -84,16 +84,17 @@ To add a principle, add `principles/<name>.md`. A principle adapted from pstack 
 
 ## A branch from before the sweep
 
-PR 540 removed every comment from the sources. Strip a branch made before it with main's script first, so that the merge has only real conflicts:
+PR 540 removed every comment from the sources. Strip the files that a branch made before it changed, with main's script, so that the merge has only real conflicts. Both scripts work in the git repository of the current folder, so run each command at the root of your worktree:
 
 1. Commit your work.
 2. In a checkout of main that has PR 540, run `npm ci --ignore-scripts`.
-3. In your worktree, run `node <main checkout>/scripts/strip-comments.mjs`.
-4. In your worktree, run `node <main checkout>/scripts/comment-proof.mjs HEAD`. It must report 0 failed.
+3. Run `git fetch origin`. If `git diff --name-only --diff-filter=d origin/main...HEAD` lists no file, skip to step 5. Else strip the files that your branch changed, and no other file: `node <main checkout>/scripts/strip-comments.mjs $(git diff --name-only --diff-filter=d origin/main...HEAD)`.
+4. Run `node <main checkout>/scripts/comment-proof.mjs HEAD`. It must report 0 failed, except for a YAML file whose `run:` block lost a shell comment: that file always fails, so check its change by hand with `git diff HEAD -- <file>`. Each line that changed must only have lost a `#` comment. A file type with no proof, such as `.json`, is "not proved" and does not fail.
 5. Commit, then run `git merge origin/main`. In a conflict, take main's side of each line that only lost a comment.
-6. Run `node scripts/strip-comments.mjs` again. It removes the comments that the merge brought.
-7. Run `node scripts/comment-proof.mjs HEAD`. It must report 0 failed.
-8. Run `npm run build` and `npm run check`, then commit.
+6. Run `npm ci`. The merge brought the tools of the strip and the proof into `package.json`.
+7. If `git diff --name-only --diff-filter=d origin/main...HEAD` lists no file, skip to step 9. Else strip your branch's files again: `node scripts/strip-comments.mjs $(git diff --name-only --diff-filter=d origin/main...HEAD)`. It removes the comments that the merge brought.
+8. Run `node scripts/comment-proof.mjs HEAD`. It must report 0 failed, except for a YAML file whose `run:` block lost a shell comment: check that file by hand, as in step 4.
+9. Run `npm run build` and `npm run check`, then commit.
 
 ## The README and the docs
 

@@ -2,3 +2,15 @@ ruleDirs: [rules]
 utilDirs: [utils]
 testConfigs:
   - testDir: rule-tests
+languageInjections:
+  - hostLanguage: yaml
+    rule:
+      pattern: $CONTENT
+      kind: block_scalar
+      regex: '^\|'
+      inside:
+        kind: block_node
+        inside:
+          kind: block_mapping_pair
+          has: { field: key, regex: '^run$' }
+    injected: bash

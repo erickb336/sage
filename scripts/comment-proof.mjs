@@ -1,10 +1,10 @@
 import { spawnSync } from "node:child_process";
 import { readFileSync } from "node:fs";
 import { join } from "node:path";
-import { fileURLToPath } from "node:url";
 import { Lang, parse } from "@ast-grep/napi";
 import { transformSync } from "esbuild";
 import { Lexer, parseAllDocuments } from "yaml";
+import { isMain } from "./is-main.mjs";
 
 function jsTokens(src) {
   const root = parse(Lang.JavaScript, src).root();
@@ -71,8 +71,7 @@ function same(fn, before, after) {
 
 export function prove(file, before, after) {
   const proof = proofFor(file);
-  if (!proof) return { tokens: "no proof for this language", canonical: "no proof for this language" };
-  return { tokens: same(proof.tokens, before, after), canonical: same(proof.canonical, before, after) };
+  return proof ? { tokens: same(proof.tokens, before, after), canonical: same(proof.canonical, before, after) } : null;
 }
 
 const git = (root, args) => {
@@ -81,17 +80,24 @@ const git = (root, args) => {
   return run.stdout;
 };
 
+const NOT_A_STRIP = { A: "it was added", D: "it was deleted", T: "its type changed" };
+
 export function proveChanges(root, base, head) {
-  const files = git(root, ["diff", "--name-only", "--diff-filter=M", base, ...(head ? [head] : []), "--"]).split("\n").filter(Boolean);
-  return files.map((file) => {
+  const fields = git(root, ["diff", "--name-status", "-z", "--no-renames", base, ...(head ? [head] : []), "--"]).split("\0").filter(Boolean);
+  return Array.from({ length: fields.length / 2 }, (_, i) => [fields[2 * i], fields[2 * i + 1]]).map(([status, file]) => {
+    if (status !== "M") return { file, status: "failed", why: `${NOT_A_STRIP[status] ?? `git reports it as ${status}`}, and a strip only removes comments` };
     const before = git(root, ["show", `${base}:${file}`]);
     const after = head ? git(root, ["show", `${head}:${file}`]) : readFileSync(join(root, file), "utf8");
-    return { file, ...prove(file, before, after), lines: before.split("\n").length - after.split("\n").length };
+    const lines = before.split("\n").length - after.split("\n").length;
+    const result = prove(file, before, after);
+    if (!result) return { file, status: "not proved", lines };
+    return { file, status: result.tokens === true && result.canonical === true ? "passed" : "failed", why: `tokens: ${result.tokens}\n  canonical: ${result.canonical}`, lines, ...result };
   });
 }
 
 const USAGE = `usage: node scripts/comment-proof.mjs [base] [head]
-Checks that each file that changed from base (default HEAD) to head (default: the working tree) lost only comments.`;
+Checks that each file that changed from base (default HEAD) to head (default: the working tree) lost only comments, in the git repository of the current folder.
+A JavaScript or YAML file passes or fails. A file of another type is not proved, and does not fail the run.`;
 
 function main(args) {
   const option = args.find((arg) => arg.startsWith("-"));
@@ -103,15 +109,16 @@ function main(args) {
   const [base = "HEAD", head] = args;
   const root = git(process.cwd(), ["rev-parse", "--show-toplevel"]).trim();
   const results = proveChanges(root, base, head);
-  const failed = results.filter((r) => r.tokens !== true || r.canonical !== true);
-  for (const r of failed) console.log(`✗ ${r.file}\n  tokens: ${r.tokens}\n  canonical: ${r.canonical}`);
+  const count = (status) => results.filter((r) => r.status === status).length;
+  for (const r of results.filter((r) => r.status === "not proved")) console.log(`- ${r.file}: not proved, because no proof reads this file type`);
+  for (const r of results.filter((r) => r.status === "failed")) console.log(`✗ ${r.file}\n  ${r.why}`);
   const pass = (key) => results.filter((r) => r[key] === true).length;
-  const removed = results.reduce((n, r) => n + r.lines, 0);
-  console.log(`${results.length} changed files from ${base} to ${head ?? "the working tree"}, ${removed} lines fewer: token proof passes for ${pass("tokens")}, canonical proof passes for ${pass("canonical")}, ${failed.length} failed`);
-  process.exitCode = failed.length ? 1 : 0;
+  const removed = results.reduce((n, r) => n + (r.lines ?? 0), 0);
+  console.log(`${results.length} changed files from ${base} to ${head ?? "the working tree"} in ${root}, ${removed} lines fewer: token proof passes for ${pass("tokens")}, canonical proof passes for ${pass("canonical")}, ${count("not proved")} not proved, ${count("failed")} failed`);
+  process.exitCode = count("failed") ? 1 : 0;
 }
 
-if (process.argv[1] === fileURLToPath(import.meta.url)) {
+if (isMain(import.meta.url)) {
   try { main(process.argv.slice(2)); } catch (error) {
     console.error(`comment-proof: ${error.message.split("\n")[0]}`);
     process.exitCode = 1;

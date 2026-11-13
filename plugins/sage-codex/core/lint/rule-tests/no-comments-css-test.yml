@@ -1,0 +1,15 @@
+id: no-comments-css
+valid:
+  - 'a { color: red; }'
+  - 'a::after { content: "/* not a comment */"; }'
+  - '@import url("//example.com/a.css");'
+  - 'a { background: url(//example.com/a.png); }'
+  - '/* prettier-ignore */'
+  - '/* stylelint-disable */'
+  - '/* stylelint-disable-next-line color-no-hex, declaration-no-important */'
+  - '/* SPDX-License-Identifier: MIT */'
+invalid:
+  - '/* explain */'
+  - 'a { color: red; /* why */ }'
+  - '/* stylelint-disable color-no-hex -- why */'
+  - '/* prettier-ignore because */'
