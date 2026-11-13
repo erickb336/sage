@@ -62,8 +62,8 @@ not another source layer. Tests run each bundle outside the checkout.
 Task state, the state tool, the board, role rules and role text, the principles
 of each role, brief and report reading, the command reader and the shared
 policies live in core. The shared policies are the merge-command reading, the
-push rule, the logbook-write rule, the agent `gh` list, the stash, process and
-board password rules, the edit rules of the chief and of the read-only roles,
+push rule, the logbook-write rule, the agent `gh` list, the stash and process
+rules, the edit rules of the chief and of the read-only roles,
 and the mode phrases. Both providers call them.
 
 The shared command policy takes a trusted state-tool path from each provider.

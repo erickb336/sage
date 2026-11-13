@@ -17,7 +17,7 @@ This is the index of sage's documentation, by reader. Start with the [README](..
 - [The board](guide/board.md): the columns, the cards, Needs you, the Agents page and milestones.
 - [Remote Control](guide/remote-control.md): follow and start sessions from your phone.
 - [sage in Codex](guide/codex.md): what works in Codex today, and how to try it.
-- [Board service guide](../packages/sage-board/README.md): the board server by hand, the login service and private phone access.
+- [Board service guide](../packages/sage-board/README.md): the board server by hand and the login service.
 - [Release notes](https://github.com/erickb336/sage-stack/releases): the changes for users in each release. Each [merged pull request](https://github.com/erickb336/sage-stack/pulls?q=is%3Apr+is%3Amerged) says what it changed.
 
 ## If you change sage

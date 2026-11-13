@@ -2,7 +2,7 @@
 
 The board is a view of every project's logbook: what needs you, the agents that run now, each active task, and what merged. This page is the user guide to the board.
 
-The [README](../../README.md#the-board) has a screenshot, and [Every phrase](using-sage.md#every-phrase) lists the board phrases with all the others. The [board service guide](../../packages/sage-board/README.md) gives the server's setup by hand, the login service and private phone access.
+The [README](../../README.md#the-board) has a screenshot, and [Every phrase](using-sage.md#every-phrase) lists the board phrases with all the others. The [board service guide](../../packages/sage-board/README.md) gives the server's setup by hand and the login service.
 
 The board only reads. To change a task, a priority or a kind, ask the chief.
 
@@ -47,8 +47,7 @@ The browser board has a project picker (the button with the current project; "/"
 - Under a filter, the Needs you chip and each project's chip count only the tasks that the filter keeps.
 - A live update changes only the parts of the page that changed, and keeps your scroll, focus, open folds and the open picker.
 - At widths from 701 to 1180 px, the six columns show as two rows of three, so no column is cut off; above 1180 px the six columns fit also with a classic scroll bar.
-- At phone width each chip, filter and button is at least 44 px high.
-- On a task page, a dotted stand-in value shows its reason when you tap it or move the focus to it.
+- On a task page, a dotted stand-in value shows its reason when you move the focus to it.
 - The browser board is dark until you choose the light theme with the switch at the top; it works with scripts off too, and with scripts the board keeps your choice in this browser.
 
 ### The state words
@@ -137,7 +136,7 @@ A project with a [shared logbook](using-sage.md#shared-logbooks) shows as one pr
 
 ## The Agents page
 
-The board server has a page **Agents** (`/agents`). The header of the pages has the tabs "Task board | Releases | Milestones | Agents (n)", where n is the count of agents that run now. The page has the same sign-in as the task board, and it updates live in the same way.
+The board server has a page **Agents** (`/agents`). The header of the pages has the tabs "Task board | Releases | Milestones | Agents (n)", where n is the count of agents that run now. The page has the same access check as the task board, and it updates live in the same way.
 
 The Releases tab shows only when a logbook has releases.
 
@@ -212,7 +211,7 @@ Agents save each task's pages (research, designs, the pages of the chief's messa
 - `http://127.0.0.1:43123/pages/<logbook>/<task>/` is the task's index: a list of its pages, with the size of each.
 - `http://127.0.0.1:43123/pages/<logbook>/<task>/<file>` opens one page. For example: `http://127.0.0.1:43123/pages/sage-43265b/T1000/research.html`.
 
-On the Mac, a task page links its index: its top line has the link **Pages** when the task has a pages folder. Through a tunnel, the task page has no such link, because the board serves no page there.
+A task page links its index: its top line has the link **Pages** when the task has a pages folder.
 
 The Page block of a message gives this link between its title and its file path ([sage's messages](using-sage.md#sages-messages)). So one link opens the page in the same way in each app: in the Browser pane of the Claude desktop app, in the built-in browser of the Codex app, and in your default browser from a terminal.
 
@@ -244,13 +243,9 @@ A site that moves you to a page by itself gets "not permitted", and so does a li
 
 The board server only reads your logbooks. It does not make or change a logbook, fetch from GitHub, or decide whether a pull request may merge. The state tool still records each change and applies the merge rules.
 
-In Claude and in Codex, `show board` also starts the local board server on the Mac when it is not running (the first time, it sets it up from the standard Claude and Codex roots and the shared root), and the chief shows its address, or why it is not running, next to the chat board. In Codex, this start runs outside Codex's sandbox, so Codex asks you to approve it ([The board in Codex](codex.md#the-board-in-codex)). On the Mac the board needs no sign-in.
+In Claude and in Codex, `show board` also starts the local board server on the Mac when it is not running (the first time, it sets it up from the standard Claude and Codex roots and the shared root), and the chief shows its address, or why it is not running, next to the chat board. In Codex, this start runs outside Codex's sandbox, so Codex asks you to approve it ([The board in Codex](codex.md#the-board-in-codex)). The board is for a desktop browser on this Mac only, and it needs no sign-in.
 
-On the phone, through a private HTTPS tunnel, you sign in as `sage` with your own password. Set it once in Terminal on the Mac with the `board --set-password` command that the line gives; until then, access from outside the Mac is off.
-
-The command needs a terminal, and the sage hook refuses the ordinary command shapes by which an agent sets the password or reads the board config. It does not stop a script that builds them while it runs; full protection needs the sandbox.
-
-After you change the password or another setting of the config, or update sage, the line says that a restart is needed: run the `board --stop` command that it gives, then ask for the board again.
+After you change a setting of the config, or update sage, the line says that a restart is needed: run the `board --stop` command that it gives, then ask for the board again.
 
 Setup never changes a board config that exists. To move the board to another port (1024 to 65535), do these steps in this order:
 
@@ -260,8 +255,8 @@ Setup never changes a board config that exists. To move the board to another por
 
 If you edit the port first, `--stop` finds no board on the new port, and the old server runs on.
 
-The [board service guide](../../packages/sage-board/README.md) gives local startup, stable installation, offline export, and private phone access through a private HTTPS tunnel, such as Tailscale Serve. The server runs independently of a chat.
+The [board service guide](../../packages/sage-board/README.md) gives local startup, stable installation and offline export. The server runs independently of a chat.
 
-It listens on loopback and asks for a sign-in for every request that is not from the Mac itself. A task page or a milestone page that is too large to show (over 8 MB) shows its parent page (the board, or the milestones list) with a note, and the rest of the board stays live.
+It listens on loopback and refuses every request that is not from the Mac itself. A task page or a milestone page that is too large to show (over 8 MB) shows its parent page (the board, or the milestones list) with a note, and the rest of the board stays live.
 
 `board --install --login-file` refuses when no upgrade-stable `node` command is on PATH, for example with asdf, Volta, fnm or a keg-only Homebrew Node. To fix it, put a `node` link to the Node that you run the install with in a folder that you own and that is on PATH (for example `~/.local/bin/node`), then run the install again.

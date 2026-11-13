@@ -32,5 +32,3 @@ In the desktop app, also turn on **Settings → Claude Code → Connect new sess
    ```
 
 While the server runs, your claude.ai account can start sessions on your computer, and they can reach everything in the folder.
-
-To use the board from the phone too, see [Private phone access](../../packages/sage-board/README.md#private-phone-access) in the board service guide.
