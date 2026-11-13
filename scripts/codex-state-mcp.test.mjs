@@ -1003,7 +1003,7 @@ test("the lint tool runs the state tool's lint on the task and the SHA, and verd
   const { call } = await connect(t);
   await call("init");
   await call("task_add", { title: "one", size: "tiny", priority: "P1" });
-  assert.match((await call("lint", { task: "T1", sha: SHA })).error, /^sage: \S+ has no origin\/main, so lint finds no base for [0-9a-f]{7}: run git fetch origin, then lint again\. Nothing changed\./);
+  assert.match(await call("lint", { task: "T1", sha: SHA }), /^T1 · [0-9a-f]{7}: \S+ has no origin\/main and no sgconfig\.yml at its root, so there is nothing to lint, and the merge check needs no lint verdict\. Nothing changed\.$/);
   assert.match((await call("verdict", { task: "T1", kind: "lint-pass", sha: SHA })).error, /kind|lint-pass/);
 });
 

@@ -21,7 +21,7 @@ function trustedGit() {
   throw Error("no trusted system Git executable is available");
 }
 
-export function readLocalGit(project, args, input) {
+export function readLocalGit(project, args, input, { timeout = 5000, maxBuffer = 32 * 1024 * 1024 } = {}) {
   const env = Object.fromEntries(Object.entries(process.env).filter(([key]) => !key.startsWith("GIT_")));
   Object.assign(env, {
     GIT_CONFIG_NOSYSTEM: "1", GIT_CONFIG_GLOBAL: "/dev/null", GIT_NO_REPLACE_OBJECTS: "1", GIT_GRAFT_FILE: "/dev/null",
@@ -29,5 +29,5 @@ export function readLocalGit(project, args, input) {
   });
   return execFileSync(trustedGit(), ["--no-replace-objects", "-c", "core.commitGraph=false", "-c", "core.fsmonitor=false", "-c", "core.hooksPath=/dev/null",
     "-c", "protocol.allow=never", "-C", project, ...args],
-  { env, input, timeout: 5000, maxBuffer: 32 * 1024 * 1024, stdio: [input === undefined ? "ignore" : "pipe", "pipe", "ignore"] });
+  { env, input, timeout, maxBuffer, stdio: [input === undefined ? "ignore" : "pipe", "pipe", "ignore"] });
 }

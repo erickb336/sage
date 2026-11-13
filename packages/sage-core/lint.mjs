@@ -1,5 +1,5 @@
 import { spawnSync } from "node:child_process";
-import { existsSync, mkdirSync, mkdtempSync, realpathSync, rmSync, writeFileSync } from "node:fs";
+import { existsSync, lstatSync, mkdirSync, mkdtempSync, realpathSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join, resolve, sep } from "node:path";
 import { readLocalGit } from "./local-git.mjs";
@@ -13,6 +13,10 @@ const NO_IGNORE = ["hidden", "dot", "exclude", "global", "parent", "vcs"].flatMa
 const REGULAR = /^100(644|755)$/;
 const NOT_CODE = { "120000": "a symbolic link: it holds a path, not code", "160000": "a submodule" };
 const UTF8 = new TextDecoder("utf-8", { fatal: true });
+export const LINT_MAX_BYTES = 10 * 1024 * 1024;
+const BATCH_BYTES = 64 * 1024 * 1024;
+const BIG = { maxBuffer: 1 << 28, timeout: 300_000 };
+const ALL = "all";
 
 export function astGrepBinary(project, tools) {
   for (const folder of [project, tools]) {
@@ -41,116 +45,166 @@ export function astGrepScan(binary, { config, cwd, paths, args = [] }) {
   return { matches, files };
 }
 
-export const skippedText = (reason) => `ast-grep skipped this file (${reason}), so no rule checked it. ${reason === "invalidUtf8" ? "Save it as UTF-8" : reason === "fileTooLarge" ? "Split it into smaller files" : "Fix the file"}, or mark it linguist-generated or linguist-vendored in the base's .gitattributes.`;
+export const skippedText = (reason) => `ast-grep skipped this file (${reason}), so no rule checked it. ${reason === "invalidUtf8" ? "Save it as UTF-8" : reason === "fileTooLarge" ? "Split it into smaller files" : "Fix the file"}, or mark it linguist-generated or linguist-vendored in the .gitattributes of origin/main.`;
 
-export function lintBase(project, sha) {
-  const git = (args) => readLocalGit(project, args).toString();
-  let main;
-  try {
-    main = git(["rev-parse", "--verify", "--end-of-options", `${BASE_BRANCH}^{commit}`]).trim();
-  } catch (e) {
-    if (typeof e?.status !== "number") throw e;
-    return { base: null };
-  }
-  const base = git(["merge-base", main, sha]).trim();
-  const [entry] = git(["ls-tree", "-z", base, "--", LINT_CONFIG]).split("\0").filter(Boolean);
-  return { base, config: entry ? entry.split(/[ \t]/)[0] : null };
+const fault = (message, fix) => Object.assign(new Error(message), { fix });
+const MAIN_FIX = `Fix ${LINT_CONFIG} and the rules on origin/main, then lint again.`;
+
+export function lintBase(project) {
+  const read = (folder, args) => {
+    try {
+      return readLocalGit(folder, args).toString();
+    } catch (e) {
+      if (typeof e?.status !== "number") throw e;
+      return null;
+    }
+  };
+  const top = read(project, ["rev-parse", "--show-toplevel"])?.replace(/\n$/, "") ?? project;
+  const main = read(top, ["rev-parse", "--verify", "--end-of-options", `${BASE_BRANCH}^{commit}`])?.trim();
+  if (!main) return { top, main: null, config: null, local: lstatSync(join(top, LINT_CONFIG), { throwIfNoEntry: false }) !== undefined };
+  const [entry] = readLocalGit(top, ["ls-tree", "-z", main, "--", LINT_CONFIG]).toString().split("\0").filter(Boolean);
+  return { top, main, config: entry ? entry.split(/[ \t]/)[0] : null };
 }
 
-export function lintChange(project, sha, binary) {
+export function lintChange(project, sha, binary, at = lintBase(project)) {
   if (!/^[0-9a-f]{40}$/.test(sha)) throw new Error(`${JSON.stringify(sha)} is not a full commit SHA`);
-  const { base, config } = lintBase(project, sha);
-  if (!base || !config) return { base, config };
-  if (!REGULAR.test(config)) throw new Error(`${LINT_CONFIG} at the root of the base ${base.slice(0, 7)} is not a regular file`);
-  const git = (args, input) => readLocalGit(project, args, input);
+  const { top, main, config } = at;
+  if (!main || !config) return at;
+  if (!REGULAR.test(config)) throw fault(`${LINT_CONFIG} at the root of origin/main ${main.slice(0, 7)} is not a regular file`, MAIN_FIX);
+  const git = (args, input) => readLocalGit(top, args, input, BIG);
+  const status = (args, code, error) => {
+    try {
+      return git(args).toString().trim();
+    } catch (e) {
+      if (e?.status === code) throw error;
+      throw e;
+    }
+  };
+  status(["cat-file", "-e", `${sha}^{commit}`], 128, fault(`the commit ${sha.slice(0, 7)} is not in ${top}`, "Fetch the head (git fetch origin), then lint again."));
+  const base = status(["merge-base", main, sha], 1, fault(`${sha.slice(0, 7)} shares no history with origin/main ${main.slice(0, 7)}`, "Start the branch from origin/main, then lint again."));
   const work = mkdtempSync(join(realpathSync(tmpdir()), "sage-lint-"));
+  const scan = (cwd, paths) => {
+    if (!paths.length) return { matches: [], files: new Map() };
+    try {
+      return astGrepScan(binary, { config: join(work, "rules", LINT_CONFIG), cwd, paths, args: NO_IGNORE });
+    } catch (e) {
+      throw fault(e.message, `Fix the rule or ${LINT_CONFIG} on origin/main that the message names, then lint again.`);
+    }
+  };
   try {
-    const rules = join(work, "base"), head = join(work, "head");
-    const yaml = treeOf(git(["ls-tree", "-r", "-z", "--full-tree", base])).filter((e) => REGULAR.test(e.mode) && /\.ya?ml$/i.test(e.path));
-    put(rules, yaml, blobs(git, yaml.map((e) => e.oid)));
+    const rules = join(work, "rules"), head = join(work, "head"), old = join(work, "old");
+    const yaml = treeOf(git(["ls-tree", "-r", "-z", "-l", "--full-tree", main])).filter((e) => REGULAR.test(e.mode) && /\.ya?ml$/i.test(e.path) && e.size <= LINT_MAX_BYTES);
+    eachBlob(git, yaml, (e, text) => {
+      const full = inside(rules, e.path);
+      if (!full) throw fault(`origin/main holds a path outside its tree: ${JSON.stringify(e.path)}`, MAIN_FIX);
+      mkdirSync(dirname(full), { recursive: true });
+      writeFileSync(full, text);
+    });
     const problems = [], notChecked = [];
-    const changed = changesOf(git(["diff", "--patch-with-raw", "-z", "--no-abbrev", "-U0", "-M", "--text", "--no-color", "--no-ext-diff", "--no-textconv", "--diff-filter=AMRT", base, sha]))
-      .filter((c) => c.lines.size);
-    const named = changed.filter((c) => {
+    const named = changesOf(git(["diff", "--raw", "-z", "--no-abbrev", "-M", "--no-color", "--diff-filter=AMRTC", base, sha])).filter((c) => {
       const why = nameProblem(c.path);
       if (why) problems.push({ file: JSON.stringify(c.path.toString("latin1")), text: why });
       return !why;
-    }).map((c) => ({ ...c, path: UTF8.decode(c.path) }));
-    const marked = attributes(git, base, named.map((c) => c.path));
-    const files = named.filter((c) => {
-      const why = NOT_CODE[c.mode] ?? (marked.get(c.path) && `${marked.get(c.path)} in the base's .gitattributes`);
+    }).map((c) => ({ ...c, path: UTF8.decode(c.path), from: c.from && !nameProblem(c.from) ? UTF8.decode(c.from) : null }));
+    const marked = attributes(git, main, [...new Set(named.flatMap((c) => (c.from ? [c.path, c.from] : [c.path])))]);
+    const code = named.filter((c) => {
+      const why = NOT_CODE[c.mode] ?? (marked.get(c.path) && `${marked.get(c.path)} in the .gitattributes of origin/main`);
       if (why) notChecked.push({ file: c.path, why });
       return !why;
-    });
-    blobs(git, files.map((c) => c.oid)).forEach((text, i) => (files[i].text = text));
-    const written = files.filter((c) => {
-      const why = putOne(head, c.path, c.text);
+    }).filter((c) => {
+      const why = putOne(head, c.path, "\n");
       if (why) problems.push({ file: c.path, text: why });
       return !why;
     });
-    const scan = written.length ? astGrepScan(binary, { config: join(rules, LINT_CONFIG), cwd: head, paths: written.map((c) => c.path), args: NO_IGNORE }) : { matches: [], files: new Map() };
+    const probe = scan(head, code.map((c) => c.path)).files;
+    const ruled = code.filter((c) => {
+      const seen = probe.get(c.path);
+      const why = !seen ? "no language of ast-grep" : !seen.rules ? `no rule of ${LINT_CONFIG} for ${[...new Set(seen.languages)].join(", ")}` : "";
+      if (why) notChecked.push({ file: c.path, why });
+      return !why;
+    });
+    const sizes = sizesOf(git, ruled.flatMap((c) => (c.oldOid && REGULAR.test(c.oldMode) ? [c.oid, c.oldOid] : [c.oid])));
+    const moved = ruled.filter((c) => c.from && c.from !== c.path && REGULAR.test(c.oldMode) && !marked.get(c.from) && !putOne(old, c.from, "\n"));
+    const oldProbe = scan(old, moved.map((c) => c.from)).files;
+    const files = ruled.filter((c) => {
+      const size = sizes.get(c.oid);
+      if (size > LINT_MAX_BYTES) problems.push({ file: c.path, text: `it is ${mib(size)} MiB, more than the ${mib(LINT_MAX_BYTES)} MiB that lint scans, so no rule checked it. Split it into smaller files, or mark it linguist-generated or linguist-vendored in the .gitattributes of origin/main.` });
+      return size <= LINT_MAX_BYTES;
+    }).map((c) => {
+      const checkedBefore = REGULAR.test(c.oldMode) && sizes.get(c.oldOid) <= LINT_MAX_BYTES && (c.from === c.path || oldProbe.get(c.from)?.rules > 0);
+      return { ...c, size: sizes.get(c.oid), lines: !checkedBefore ? ALL : c.oldOid === c.oid ? new Set() : addedLines(git(["diff", "-U0", "--text", "--no-color", "--no-ext-diff", "--no-textconv", c.oldOid, c.oid])) };
+    }).filter((c) => c.lines === ALL || c.lines.size);
+    const suppressed = new Set();
+    eachBlob(git, files, (c, text) => {
+      if (text.includes(SUPPRESSION)) suppressed.add(c.path);
+      writeFileSync(join(head, c.path), text);
+    });
+    const result = scan(head, files.map((c) => c.path));
     let checked = 0;
-    for (const c of written) {
-      const seen = scan.files.get(c.path);
-      if (seen?.skipped) {
-        if (seen.skipped !== "emptyFile") problems.push({ file: c.path, text: skippedText(seen.skipped) });
-      } else if (!seen) notChecked.push({ file: c.path, why: "no language of ast-grep" });
-      else if (!seen.rules) notChecked.push({ file: c.path, why: `no rule of ${LINT_CONFIG} for ${[...new Set(seen.languages)].join(", ")}` });
-      else {
+    for (const c of files) {
+      const skipped = result.files.get(c.path)?.skipped;
+      if (skipped) {
+        if (skipped !== "emptyFile") problems.push({ file: c.path, text: skippedText(skipped) });
+      } else {
         checked++;
-        if (c.text.includes(SUPPRESSION)) problems.push({ file: c.path, text: `it holds ${SUPPRESSION}, which hides lines from the rules, so the whole file fails. Remove it.` });
+        if (suppressed.has(c.path)) problems.push({ file: c.path, text: `it holds ${SUPPRESSION}, which hides lines from the rules, so the whole file fails. Remove it.` });
       }
     }
-    const lines = new Map(written.map((c) => [c.path, c.lines]));
-    for (const m of scan.matches) {
+    const lines = new Map(files.map((c) => [c.path, c.lines]));
+    for (const m of result.matches) {
       const added = lines.get(m.file);
-      const hit = added && Array.from({ length: m.range.end.line - m.range.start.line + 1 }, (_, k) => m.range.start.line + 1 + k).find((n) => added.has(n));
+      const hit = added && Array.from({ length: m.range.end.line - m.range.start.line + 1 }, (_, k) => m.range.start.line + 1 + k).find((n) => added === ALL || added.has(n));
       if (hit) problems.push({ file: m.file, line: hit, text: `${String(m.message ?? "").trim() || "a match"} (${m.ruleId}, ${m.severity})` });
     }
     const order = (a, b) => (a.file < b.file ? -1 : a.file > b.file ? 1 : (a.line ?? 0) - (b.line ?? 0));
     problems.sort(order);
     notChecked.sort(order);
-    return { base, config, checked, problems, notChecked };
+    return { main, base, config, checked, problems, notChecked };
   } finally {
     rmSync(work, { recursive: true, force: true });
   }
 }
 
+const mib = (bytes) => Math.round((bytes / 1048576) * 10) / 10;
+
 function treeOf(out) {
   return out.toString("latin1").split("\0").filter(Boolean).map((entry) => {
     const tab = entry.indexOf("\t"), meta = entry.slice(0, tab), path = entry.slice(tab + 1);
-    const [mode, , oid] = meta.split(" ");
-    return { mode, oid, path: Buffer.from(path, "latin1").toString("utf8") };
+    const [mode, , oid, size] = meta.split(/ +/);
+    return { mode, oid, size: Number(size), path: Buffer.from(path, "latin1").toString("utf8") };
   });
 }
 
-function blobs(git, oids) {
-  if (!oids.length) return [];
-  const out = git(["cat-file", "--batch"], `${oids.join("\n")}\n`);
-  const texts = [];
-  let at = 0;
-  for (const oid of oids) {
-    const end = out.indexOf(0x0a, at), head = out.toString("latin1", at, end).split(" ");
-    if (head[0] !== oid || head[1] !== "blob") throw new Error(`git cat-file gave ${JSON.stringify(head.join(" "))} for ${oid}`);
-    const size = Number(head[2]);
-    texts.push(out.subarray(end + 1, end + 1 + size));
-    at = end + 1 + size + 1;
+function sizesOf(git, oids) {
+  const sizes = new Map();
+  if (!oids.length) return sizes;
+  for (const line of git(["cat-file", "--batch-check"], `${oids.join("\n")}\n`).toString("latin1").split("\n").filter(Boolean)) {
+    const [oid, type, size] = line.split(" ");
+    if (type !== "blob") throw new Error(`git cat-file gave ${JSON.stringify(line)}`);
+    sizes.set(oid, Number(size));
   }
-  return texts;
+  return sizes;
+}
+
+function eachBlob(git, items, each) {
+  for (let i = 0; i < items.length;) {
+    const batch = [];
+    for (let bytes = 0; i < items.length && (!batch.length || bytes + items[i].size <= BATCH_BYTES); i++) batch.push(items[i]), (bytes += items[i].size);
+    const out = git(["cat-file", "--batch"], `${batch.map((e) => e.oid).join("\n")}\n`);
+    let at = 0;
+    for (const item of batch) {
+      const end = out.indexOf(0x0a, at), head = out.toString("latin1", at, end).split(" ");
+      if (head[0] !== item.oid || head[1] !== "blob") throw new Error(`git cat-file gave ${JSON.stringify(head.join(" "))} for ${item.oid}`);
+      const size = Number(head[2]);
+      each(item, out.subarray(end + 1, end + 1 + size));
+      at = end + 1 + size + 1;
+    }
+  }
 }
 
 function inside(root, path) {
   const full = resolve(root, path);
   return full.startsWith(root + sep) ? full : null;
-}
-
-function put(root, entries, texts) {
-  entries.forEach((e, i) => {
-    const full = inside(root, e.path);
-    if (!full) throw new Error(`the base holds a path outside its tree: ${JSON.stringify(e.path)}`);
-    mkdirSync(dirname(full), { recursive: true });
-    writeFileSync(full, texts[i]);
-  });
 }
 
 function putOne(root, path, text) {
@@ -177,9 +231,8 @@ function nameProblem(path) {
 
 function changesOf(out) {
   const raw = [];
-  let at = 0;
-  while (at < out.length && out[at] === 0x3a) {
-    const end = out.indexOf(0, at), [, mode, , oid, status] = out.toString("latin1", at + 1, end).split(" ");
+  for (let at = 0; at < out.length;) {
+    const end = out.indexOf(0, at), [oldMode, mode, oldOid, oid, status] = out.toString("latin1", at + 1, end).split(" ");
     at = end + 1;
     const paths = [];
     for (let k = /^[RC]/.test(status) ? 2 : 1; k > 0; k--) {
@@ -187,22 +240,23 @@ function changesOf(out) {
       paths.push(out.subarray(at, stop));
       at = stop + 1;
     }
-    raw.push({ mode, oid, path: paths.at(-1), lines: new Set() });
+    raw.push({ mode, oid, oldMode, oldOid: /^0+$/.test(oldOid) ? null : oldOid, from: status === "A" ? null : paths[0], path: paths.at(-1) });
   }
-  if (raw.length && out[at++] !== 0) throw new Error("git diff gave no end to its file list");
-  let file = -1;
-  for (const line of out.toString("latin1", at).split("\n")) {
-    if (line.startsWith("diff --git ")) file++;
-    const hunk = /^@@ -\S+ \+(\d+)(?:,(\d+))? @@/.exec(line);
-    if (hunk && raw[file]) for (let n = Number(hunk[1]), end = n + Number(hunk[2] ?? 1); n < end; n++) raw[file].lines.add(n);
-  }
-  if (file + 1 !== raw.length) throw new Error(`git diff gave ${raw.length} files and ${file + 1} patches`);
   return raw;
 }
 
-function attributes(git, base, paths) {
+function addedLines(out) {
+  const lines = new Set();
+  for (const line of out.toString("latin1").split("\n")) {
+    const hunk = /^@@ -\S+ \+(\d+)(?:,(\d+))? @@/.exec(line);
+    if (hunk) for (let n = Number(hunk[1]), end = n + Number(hunk[2] ?? 1); n < end; n++) lines.add(n);
+  }
+  return lines;
+}
+
+function attributes(git, main, paths) {
   if (!paths.length) return new Map();
-  const out = git(["-c", "core.attributesFile=/dev/null", "check-attr", "-z", "--stdin", "--source", base, "linguist-generated", "linguist-vendored"], `${paths.join("\0")}\0`).toString("utf8").split("\0");
+  const out = git(["-c", "core.attributesFile=/dev/null", "check-attr", "-z", "--stdin", "--source", main, "linguist-generated", "linguist-vendored"], `${paths.join("\0")}\0`).toString("utf8").split("\0");
   const marked = new Map();
   for (let k = 0; k + 2 < out.length; k += 3) if (["set", "true"].includes(out[k + 2]) && !marked.has(out[k])) marked.set(out[k], out[k + 1]);
   return marked;

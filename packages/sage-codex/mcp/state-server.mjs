@@ -134,7 +134,7 @@ export const TOOLS = {
     pos: ["task"], argv: (i) => ["verdict", i.task],
   },
   lint: {
-    describe: "Lint a head SHA of a task with the rules of its base: it scans the lines that the commit adds since the merge base with origin/main, with the base's root sgconfig.yml, and records lint-pass or lint-fail. It prints each problem with its file and line, and the files that it did not check. A base with no sgconfig.yml needs no lint: it records nothing. Run it before merge_check; a lead may run it on its own task.",
+    describe: "Lint a head SHA of a task with the rules of the tip of origin/main: it scans the lines that the commit adds since its merge base with origin/main, with the root sgconfig.yml of origin/main, and records lint-pass or lint-fail. It prints each problem with its file and line, and the files that it did not check. When origin/main has no sgconfig.yml, lint records nothing. Run it before merge_check; a lead may run it on its own task.",
     input: { task, sha }, pos: ["task"], argv: (i) => ["lint", i.task],
   },
   claim: {

@@ -1796,8 +1796,9 @@ function judge(dir, task, findings, decisions, id, rows, cycles, repaired, cfg, 
   if (!rows.some((r) => r.kind === "checks-pass")) return { ok: false, reason: `${who}: no checks-pass on this SHA. Run the checks on it and record checks-pass.` };
   const linted = rows.filter((r) => LINT_KINDS.includes(r.kind)).at(-1)?.kind;
   if (lint && linted !== "lint-pass") return { ok: false, reason: lint.error
-    ? `${who}: the merge check cannot find the base of this SHA (${lint.error}), so it cannot tell if the base has a root ${LINT_CONFIG}. Fetch origin and the head, then check again.`
-    : `${who}: ${linted ? "lint-fail" : "no lint-pass"} on this SHA, and its base ${lint.base.slice(0, 7)} has a root ${LINT_CONFIG}. ${linted ? "Fix the lines that lint named in a new commit, then lint that commit" : `Run sage lint ${task.id} --sha <sha> on it`}.` };
+    ? `${who}: the merge check cannot read the git checkout of the project (${lint.error}), so it cannot tell if origin/main has a root ${LINT_CONFIG}. Run it with --project set to the project's git checkout.`
+    : !lint.main ? `${who}: ${visible(lint.top)} has a root ${LINT_CONFIG} but no origin/main, and lint reads its rules only from the tip of origin/main, so no SHA here can get lint-pass. lint needs a remote named origin with a branch named main.`
+    : `${who}: ${linted ? "lint-fail" : "no lint-pass"} on this SHA, and origin/main ${lint.main.slice(0, 7)} has a root ${LINT_CONFIG}. ${linted ? "Fix the lines that lint named in a new commit, then lint that commit" : `Run sage lint ${task.id} --sha <sha> on it`}.` };
   const perCycle = cleanKinds(task);
   const want = perCycle.length ? cycles : 1;
   const clean = perCycle.length ? cleanCycles(task, rows) : 1;
@@ -1953,11 +1954,11 @@ function rebuild(root) {
   });
 }
 
-function lintNeed(checkout, sha) {
+function lintNeed(checkout) {
   if (checkout === undefined) return null;
   try {
-    const { base, config } = lintBase(checkout, sha);
-    return base && config ? { base } : null;
+    const at = lintBase(checkout);
+    return at.config || (!at.main && at.local) ? at : null;
   } catch (e) {
     return { error: e?.code ?? (typeof e?.status === "number" ? `git exit ${e.status}` : e?.message ?? String(e)) };
   }
@@ -2024,7 +2025,7 @@ function judgeMerge(sha, env, { cycles, pr, readOnly, head, project, locked, ses
       if (head !== undefined && ofPr.size) absent.push(...tasks.filter((t) => !ofPr.has(t.id) && owns(t.id)).map((t) => ({ name: `${visible(dir)} ${t.id}`, how: how(t.id) })));
       const graph = waitGraph(tasks, book ? rowsOf(book.milestones) : [], book ? rowsOf(book.gates) : [], decisions);
       const chief = basename(dir) !== mine ? undefined : merger ?? (session !== undefined ? chiefFor(project, session, env) : undefined);
-      const lint = lintNeed(gitOf(dir), sha);
+      const lint = lintNeed(gitOf(dir));
       const checked =[...new Set([...rows.map((r) => r.task), ...ofPr])].map((id) => {
         const task = byId.get(id), carry = carryOver(gitOf(dir), task, sha, ownOf.get(id) ?? [], ledgerOf.get(id) ?? []), own = carry.rows;
         const held = task?.state === "held" && { ok: false, reason: `${id} is held: only the sage moves a held task, and it does not merge until then.` };
@@ -3117,15 +3118,14 @@ function act(cmd, pos, opt, dir, env, skip, project) {
       if (!builds(task)) refuse(`${task.id} has no build block, so it has no commit to lint. Nothing changed.`);
       const sha = need(opt.sha, "--sha with the full 40-character SHA of the head commit (git rev-parse <branch>)").toLowerCase();
       if (notFull(sha)) refuse(notFull(sha));
-      const unread = (e) => refuse(`lint could not read ${sha.slice(0, 7)} in ${visible(project)} (${e?.message ?? e}). Fetch the head and origin (git fetch origin), then lint again. Nothing changed.`);
       let at, result;
-      try { at = lintBase(project, sha); } catch (e) { unread(e); }
-      if (!at.base) refuse(`${visible(project)} has no origin/main, so lint finds no base for ${sha.slice(0, 7)}: run git fetch origin, then lint again. Nothing changed.`);
-      const short = `${sha.slice(0, 7)} · base ${at.base.slice(0, 7)}`;
-      if (!at.config) return `${task.id} · ${short}: the base has no ${LINT_CONFIG} at its root, so there is nothing to lint, and the merge check needs no lint verdict. Nothing changed.`;
-      const tools = join(dirname(dir), "tools"), binary = astGrepBinary(project, tools);
-      if (!binary) refuse(`ast-grep ${AST_GREP_VERSION} is not in ${visible(join(project, "node_modules", ".bin"))} or in sage's tools folder ${visible(tools)}, so lint cannot run, and it writes no verdict. Install it in the tools folder: npm install --prefix ${shell(tools)} @ast-grep/cli@${AST_GREP_VERSION}`);
-      try { result = lintChange(project, sha, binary); } catch (e) { unread(e); }
+      try { at = lintBase(project); } catch (e) { refuse(`lint cannot read the git checkout ${visible(project)} (${e?.message ?? e}). Give --project the project's git checkout. Nothing changed.`); }
+      if (!at.main && at.local) refuse(`${visible(at.top)} has a root ${LINT_CONFIG} but no origin/main, and lint reads its rules only from the tip of origin/main, so it cannot lint ${sha.slice(0, 7)}. lint needs a remote named origin with a branch named main. Nothing changed.`);
+      if (!at.config) return `${task.id} · ${sha.slice(0, 7)}: ${at.main ? `origin/main ${at.main.slice(0, 7)} has` : `${visible(at.top)} has no origin/main and`} no ${LINT_CONFIG} at its root, so there is nothing to lint, and the merge check needs no lint verdict. Nothing changed.`;
+      const tools = join(dirname(dir), "tools"), binary = astGrepBinary(at.top, tools);
+      if (!binary) refuse(`ast-grep ${AST_GREP_VERSION} is not in ${visible(join(at.top, "node_modules", ".bin"))} or in sage's tools folder ${visible(tools)}, so lint cannot run, and it writes no verdict. Install it in the tools folder: npm install --prefix ${shell(tools)} @ast-grep/cli@${AST_GREP_VERSION}`);
+      try { result = lintChange(project, sha, binary, at); } catch (e) { refuse(`lint could not check ${sha.slice(0, 7)}: ${visible(String(e?.message ?? e))}. ${e?.fix ?? "lint has no known fix for this error: tell the owner, with this message."} Nothing changed.`); }
+      const short = `${sha.slice(0, 7)} · rules ${result.main.slice(0, 7)} · diff from ${result.base.slice(0, 7)}`;
       const kind = result.problems.length ? "lint-fail" : "lint-pass";
       write(dir, "ledger", [...read(dir, "ledger"), { task: task.id, pr: task.pr, sha, kind, cycle: "1", run: "", at: now() }]);
       return [
