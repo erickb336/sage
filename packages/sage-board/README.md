@@ -58,6 +58,16 @@ If you edit the port first, `--stop` finds no board on the new port, and the old
 
 The stable installation copies only board and core sources. It does not depend on a provider plugin cache. Stop the foreground service with Ctrl+C.
 
+## The new board (preview)
+
+The new board is at `/app/` on the same server: open `http://127.0.0.1:43123/app/` (or your configured port) in a desktop browser. It needs scripts. In this first version it has one page, the Overview, and it only reads the logbook:
+
+- **Needs you:** each open question, oldest first, with its chief, its task, its recommendation and when it was asked. Answer each question in its chief's chat.
+- **Milestones:** each milestone by the top priority of its open tasks, with its progress.
+- **In the last 24 hours:** the tasks merged, and the runs that failed or whose agent is silent for 30 minutes. "New tasks" shows as not known, because the logbook keeps no time when a task is added.
+
+The pages Tasks, Agents and Pull requests come next; until then, they link to the classic board at `/`. The new board loads only its own files from the board server, under a content security policy with no inline code and no outside source. Its data comes from one stream, `/app/events`. The classic board keeps working beside it.
+
 ## Other views
 
 Use the same command with `--status` for short text, or without a format option for the chat board. A project name selects that project. `T197` selects a task in the current checkout. If two sources contain that task, add `--scope <source/project-key>` from the choices in the error.
