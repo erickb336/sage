@@ -48,7 +48,7 @@ To add a principle, add `principles/<name>.md`. A principle adapted from pstack 
    npm run build
    ```
 
-5. Run the checks. They include the README's limits, its links and sage's word check. They also run the tests of the no-comments rule set in [`packages/sage-core/lint/`](packages/sage-core/lint/README.md). For these tests, `ast-grep test` runs from the pinned `@ast-grep/cli` devDependency.
+5. Run the checks. They include the README's limits, its links and sage's word check. They also run the tests of the no-comments rule set in [`packages/sage-core/lint/`](packages/sage-core/lint/README.md). For these tests, `ast-grep test` runs from the pinned `@ast-grep/cli` devDependency. The checks also scan `packages/`, `scripts/` and `.github/` with that rule set, and fail on each comment that is not an allowed directive. The scan skips each folder that `SCAN_EXCLUSIONS` in `scripts/lint-rules.mjs` lists, with its reason. To remove the comments of your change, commit it, then run `node scripts/strip-comments.mjs`. Then run `node scripts/comment-proof.mjs`: for each file that the strip changed, it checks that the code tokens and the minified code (for YAML, the parsed value) did not change. Put a reason that a reader needs in a name, a test name or a doc.
 
    ```sh
    npm run check

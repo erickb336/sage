@@ -17,7 +17,7 @@ import { unrunTestFiles } from "./test-commands.mjs";
 import { referenceFiles, startTextProblems } from "./start-text.mjs";
 import { priorArtProblems } from "./prior-art.mjs";
 import { KINDS as MESSAGE_KINDS } from "../packages/sage-core/message.mjs";
-import { ruleTestProblems } from "./lint-rules.mjs";
+import { commentProblems, ruleTestProblems } from "./lint-rules.mjs";
 import { npxPinProblems } from "./npx-pin.mjs";
 
 const problems = [];
@@ -168,6 +168,7 @@ try {
 try { problems.push(...await startTextProblems()); } catch (e) { problems.push(`start texts: ${e.message} (scripts/start-text.mjs)`); }
 try { problems.push(...npxPinProblems()); } catch (e) { problems.push(`npx pin: ${e.message} (scripts/npx-pin.mjs)`); }
 try { problems.push(...ruleTestProblems()); } catch (e) { problems.push(`packages/sage-core/lint: ${e.message} (scripts/lint-rules.mjs)`); }
+try { problems.push(...commentProblems(ROOT)); } catch (e) { problems.push(`comment scan: ${e.message} (scripts/lint-rules.mjs)`); }
 problems.push(...priorArtProblems());
 {
   const PARTS = ["How the chief knows", "Agents prepare", "The owner's moment", "After the answer", "The owner learns"];

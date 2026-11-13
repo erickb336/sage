@@ -88,3 +88,18 @@ test("the strip leaves the excluded folders alone", () => {
     assert.equal(f.read("scripts/new.mjs"), "run();\n");
   } finally { f.done(); }
 });
+
+test("npm run check fails on one comment in the sources, and names the file and line", () => {
+  const dir = mkdtempSync(join(realpathSync(tmpdir()), "sage-comment-check-"));
+  try {
+    cpSync(ROOT, dir, { recursive: true, filter: (src) => ![".git", ".claude", "node_modules"].includes(relative(ROOT, src)) });
+    symlinkSync(join(ROOT, "node_modules"), join(dir, "node_modules"), "dir");
+    const check = () => spawnSync("node", [join(dir, "scripts/check.mjs")], { encoding: "utf8" });
+    const clean = check();
+    assert.equal(clean.status, 0, clean.stderr);
+    writeFileSync(join(dir, "scripts/sample.mjs"), "export const why = 1; // a reason\n");
+    const r = check();
+    assert.equal(r.status, 1, r.stdout);
+    assert.deepEqual(r.stderr.split("\n").filter((line) => line.startsWith("✗")).map((line) => line.split(", ")[0]), ["✗ scripts/sample.mjs:1: a comment (no-comments-js)"]);
+  } finally { rmSync(dir, { recursive: true, force: true }); }
+});
