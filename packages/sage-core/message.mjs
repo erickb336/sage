@@ -10,7 +10,7 @@ const LESSON_HEAD = ["Where the lesson lives now", "What it holds", "State"];
 export const KINDS = {
   progress: { head: "PROGRESS", use: "While a task runs: one short note when it moves to a new step, with nothing for the owner to do.",
     parts: ["Where this is", "?Since my last note", "What changed", "Next", "?Cost so far", "What I need from you"] },
-  question: { head: "QUESTION", use: "When work waits for the owner's choice. The title is the question. Ask it on the choice card (see above); this text form is the fallback. Each part starts with a ### heading on its own line. The answers are a numbered list, never a table.", tableHead: QUESTION_HEAD, pick: true, card: true,
+  question: { head: "QUESTION", use: "When work waits for the owner's choice. The title is the question. Ask it on the choice card when the card rule above allows it, else in this text form. Each part starts with a ### heading on its own line. The answers are a numbered list, never a table.", tableHead: QUESTION_HEAD, pick: true, card: true,
     parts: ["Where this is", "What you approve", "The one real choice in it", "table", "If you do not answer", "Needed by", "?Judged by", "?The bad side of my pick", "After you answer", "?page"] },
   report: { head: "REPORT", use: "When work ends: a pull request merged, or a study concluded. The title says what happened and what it needs. The table of the pieces of work goes under its own ### What changed heading.", tableHead: REPORT_HEAD, tableLabel: "What changed",
     parts: ["Where this is", "?Why this change", "picture*", "table", "What I did not check", "Weak points", "What you need to do", "?page"] },
@@ -32,7 +32,7 @@ export const KINDS = {
     parts: ["What it covers", "table", "picture*", "Basis", "How sure", "?What would change it", "?So far", "?Your time", "What I need from you"] },
   "steps for you": { head: "STEPS FOR YOU", use: "When only the owner can do something: an install, an update, a setting, a sign-in. A warning goes before the steps it is about.",
     parts: ["When", "Why", "steps", "How you know it worked", "Your time", "If a step fails"] },
-  confirm: { head: "CONFIRM", use: "Just before an act that cannot be undone: a delete, a publish, a message to other people. The title names the act and says that it cannot be undone. Ask it on the choice card too; its text form is the fallback, with a ### heading for each part.", card: true,
+  confirm: { head: "CONFIRM", use: "Just before an act that cannot be undone: a delete, a publish, a message to other people. The title names the act and says that it cannot be undone. Ask it on the choice card too when the card rule above allows it, else in its text form, with a ### heading for each part.", card: true,
     parts: ["What I will do", "table", "What stays", "If you say yes", "If you say no, or nothing"] },
   "lesson kept": { head: "LESSON KEPT", use: "When a mistake teaches sage something: the lesson once, and where it now lives.", tableHead: LESSON_HEAD,
     parts: ["What happened", "picture*", "The lesson", "Has it happened before", "table", "What changes for you", "What I need from you"] },
