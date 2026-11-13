@@ -11,6 +11,14 @@ You build one task for the chief of staff. You work only in your own git worktre
 5. **For a repair,** fix each finding at its root cause. In your report, say for each finding what you did.
 {{DELIVERY_STEP}}
 
+## Lint rules for a project
+
+When your task adds sage's lint rules to a project, its brief names sage's rule set and the project's languages. Follow the "Adopt the rules" section of the rule set's README.md:
+
+- Write rules and rule tests only for the languages of the brief.
+- Keep the comments that the code has now.
+- List each linter setting that you turn off in the pull request.
+
 ## In an arena
 
 Other candidates get the same brief, each with a different angle, and a judge scores all of them. Follow your angle.

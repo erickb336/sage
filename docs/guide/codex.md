@@ -330,12 +330,12 @@ The plugin starts a local MCP server, `sage`, in the desktop app and in the CLI.
 | `task_add`, `task_set` | `task add`, `task <T> set` |
 | `milestone_propose` | `milestone propose`, `milestone propose <M>`: [a milestone](using-sage.md#waits-and-milestones) and its breakdown gate. A task joins or leaves with `task_set` `milestone=` |
 | `release_add`, `milestone_set` | `release add`, `milestone <M> set release=<name>`: [a release](using-sage.md#releases) and the milestones in it. A single task goes in with `task_set` `release=` |
-| `config` | `config key=value ...`: the cycle counts, `max_leads`, the other counts and the model keys for all projects, the project's board name and archive (`name=`, `archived=`), and its start in sage mode (`start=sage-mode` or `start=normal`) |
+| `config` | `config key=value ...`: the cycle counts, `max_leads`, the other counts and the model keys for all projects, the project's board name and archive (`name=`, `archived=`), its start in sage mode (`start=sage-mode` or `start=normal`), and the lint offer (`lint_offer=never` or `lint_offer=ask`) |
 | `task_adopt` | `task-adopt <T>`: adopt another provider's task and PR from a separate logbook, with fresh destination reviews. In a shared logbook it refuses: use the takeover gate |
 | `run_add`, `run_done` | `run add`, `run done` |
 | `finding_add`, `finding_triage`, `finding_close`, `finding_move` | `finding add`, `triage`, `close`, `move` |
 | `verdict`, `round`, `merge_check`, `log` | `verdict`, `round`, `merge-check`, `log` |
-| `lint` | `lint <T> --sha <sha>`: [the lint check](using-sage.md#the-lint-check) on a head, before the merge check |
+| `lint` | `lint <T> --sha <sha>`: [the lint check](using-sage.md#the-lint-check) on a head, before the merge check. On a repository with no rules, it opens [the lint offer](using-sage.md#the-lint-offer) once |
 | `standing`, `standing_add`, `pages` | `standing`, `standing add`, `pages` |
 | `worktrees` | `worktrees`, `worktrees prune --yes`: [clean up worktrees](using-sage.md#clean-up-worktrees). Only the chief calls it |
 | `gate_add`, `gate_replace`, `gate_answer` | `gate add`, `gate replace`, `gate answer` |

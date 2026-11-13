@@ -4381,7 +4381,7 @@ test("T948: config start=sage-mode starts each new session of the project in sag
   assert.deepEqual(JSON.parse(readFileSync(own, "utf8")), { archived: true }, "normal removes the key");
   assert.equal(starts(), false);
   assert.equal(s.no("config", "start=on"), 'sage: start is sage-mode or normal, not "on". Nothing changed.');
-  assert.equal(s.no("config", "start=sage-mode", "max_leads=2"), 'sage: "max_leads" is a key for all projects, and name=, archived= and start= are keys of one logbook: set them in a config command of their own.');
+  assert.equal(s.no("config", "start=sage-mode", "max_leads=2"), 'sage: "max_leads" is a key for all projects, and name=, archived=, start= and lint_offer= are keys of one logbook: set them in a config command of their own.');
   for (const text of ['{"start":"on"}', '{"start":true}', "[1]", "not json"]) {
     writeFileSync(own, text);
     assert.equal(starts(), false, `${text}: a bad file is a normal start`);
@@ -4405,7 +4405,7 @@ test("T314: config refuses a name that is too long, empty of text, spaced at an 
   assert.equal(s.no("config", "name= seacc"), 'sage: the name " seacc" has a space at its start or end, or two spaces together. Nothing changed.');
   assert.equal(s.no("config", "name=sea  cc"), 'sage: the name "sea  cc" has a space at its start or end, or two spaces together. Nothing changed.');
   assert.equal(s.no("config", "archived=true"), 'sage: archived is yes or no, not "true". Nothing changed.');
-  assert.equal(s.no("config", "name=x", "arena=2"), 'sage: "arena" is a key for all projects, and name=, archived= and start= are keys of one logbook: set them in a config command of their own.');
+  assert.equal(s.no("config", "name=x", "arena=2"), 'sage: "arena" is a key for all projects, and name=, archived=, start= and lint_offer= are keys of one logbook: set them in a config command of their own.');
   assert.equal(s.no("config", "name"), "sage: name needs a value: write name=<value>");
   assert.equal(existsSync(own), false, "no refusal wrote the file");
   writeFileSync(own, "[1]");

@@ -1,0 +1,7 @@
+{
+  "name": "sage-tools",
+  "private": true,
+  "dependencies": {
+    "@ast-grep/cli": "0.51.1"
+  }
+}
