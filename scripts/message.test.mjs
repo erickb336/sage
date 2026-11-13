@@ -480,6 +480,16 @@ test("F-T1043-3: a report gives the table of the pieces of work its own ### head
   assert.doesNotMatch(render(fixture("11-estimate.json")).text, /### What changed/, "only a report's table");
 });
 
+test("F-T1043-4: a question, a confirm or a progress note with its parts as a list of bold labels gets a note for each part; a plain list item gets none", () => {
+  const progress = "PROGRESS\n\nReview is clean\n\n### Where this is\n\nRelease 1.0 › single task › step: review\n\n### What changed\n\n- The review is clean.\n\n### Next\n\nQA.\n\n### What I need from you\n\nNothing.";
+  for (const text of [render(fixture("02-question.json")).text, render(fixture("13-confirm.json")).text, progress]) {
+    const labels = [...text.matchAll(/^### (.+)$/gm)].map((m) => m[1]);
+    assert.ok(labels.length >= 4, text.split("\n")[0]);
+    assert.deepEqual(messageMiss(text.replace(/^### (.+)\n\n/gm, "- **$1:** ")).names, labels.map((l) => `inline label: ${l}`), text.split("\n")[0]);
+    assert.equal(messageMiss(text.replace(/^### (.+)\n\n/gm, "- $1: ")), undefined, `${text.split("\n")[0]}: a plain list item`);
+  }
+});
+
 test("T1043: a message after a --- rule keeps its kind, so the check still reads it; a message with no kind is not checked", () => {
   const question = render(fixture("02-question.json")).text, report = render(fixture("03-report.json")).text;
   for (const rule of ["---", "***", "___"]) {

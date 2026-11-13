@@ -81,7 +81,7 @@ function namedProblems(text, { width = WIDTH } = {}) {
   const bold = (l, name) => l.trim().replace(/:?(\*\*):?$/, "$1") === `**${name}**`;
   for (const part of partsOf(kind).filter((p) => /^[A-Z]/.test(p.name))) {
     if (lines.some((l) => /^#{1,6} /.test(l) && labelAt(l, part.name))) continue;
-    const label = lines.find((l) => /^[^\s#-]/.test(l) && labelAt(l, part.name));
+    const label = lines.find((l) => /^(?:[^\s#-]|-.*\*\*)/.test(l) && labelAt(l, part.name));
     if (label === undefined) continue;
     problems.push(bold(label, part.name)
       ? [`bold label: ${part.name}`, `"${part.name}" is a bold line: use a ### heading, with its text under it`]
