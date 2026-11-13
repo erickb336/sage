@@ -735,7 +735,6 @@ const FAKE_GH = (() => {
     `#!/usr/bin/env node
 const fs = require("fs");
 const args = process.argv.slice(2);
-// gh pr view <n> --json ...: the head branch is FAKE_PR_HEAD (default claude/t1); "fail" exits 1, "slow" never answers.
 if (args[0] === "pr" && args[1] === "view") {
   const head = process.env.FAKE_PR_HEAD ?? "claude/t1";
   if (head === "fail") process.exit(1);
@@ -743,7 +742,6 @@ if (args[0] === "pr" && args[1] === "view") {
   else process.stdout.write(JSON.stringify({ headRefName: head, isCrossRepository: process.env.FAKE_PR_FORK === "1" }));
   return;
 }
-// gh api ... --jq .default_branch (T536): GitHub's default branch is FAKE_DEFAULT_BRANCH (default main); "fail" exits 1.
 if (args[0] === "api" && args.at(-1) === ".default_branch") {
   const name = process.env.FAKE_DEFAULT_BRANCH ?? "main";
   if (name === "fail" || process.env.GH_HOST || process.env.GH_REPO) process.exit(1);
@@ -3157,14 +3155,14 @@ const PATH_WORK_CHILD = `
   const fail = (kind) => {
     fs.writeSync(2, JSON.stringify({ error: "path-work-bound", kind, calls: work.calls,
       characters: work.characters, repeat: work.repeat }) + String.fromCharCode(10));
-    process.exit(86); // Stop only this test child, even when the hook catches filesystem errors.
+    process.exit(86);
   };
   const wrap = (name, original) => (...args) => {
     if (work) {
       const path = String(args[0]);
       work.calls++;
       work.characters += path.length;
-      if (work.calls > work.callLimit) fail("calls"); // Also bounds the map below.
+      if (work.calls > work.callLimit) fail("calls");
       if (work.characters > work.characterLimit) fail("characters");
       const key = name + ":" + path, repeat = (work.seen.get(key) ?? 0) + 1;
       work.seen.set(key, repeat);
@@ -3186,7 +3184,7 @@ const PATH_WORK_CHILD = `
   if (work.calls !== 2) throw Error("Named filesystem and native realpath instrumentation did not attach.");
   work = undefined;
   const hook = process.argv[1];
-  process.argv[1] = undefined; // This imports the handler; it does not invoke the hook CLI.
+  process.argv[1] = undefined;
   const { handle } = await import(hook);
   const slots = { bind() {}, release() {}, drop() {}, touch() {}, reconcile() {} };
   const out = {};

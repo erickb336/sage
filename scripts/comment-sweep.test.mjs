@@ -5,6 +5,12 @@ import { cpSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, sym
 import { tmpdir } from "node:os";
 import { dirname, join, relative } from "node:path";
 import { test } from "node:test";
+import { Lang, parse } from "@ast-grep/napi";
+import { buildBoardModel } from "../packages/sage-core/board-model.mjs";
+import { renderAgentsHtml, renderBoardHtml, renderMilestonesHtml, renderReleasesHtml } from "../packages/sage-core/board-render.mjs";
+import { prepareMessage } from "../packages/sage-core/message.mjs";
+import { messagePage } from "../packages/sage-core/message-page.mjs";
+import { mapHtml } from "../packages/sage-core/move-text.mjs";
 import { ROOT } from "./build.mjs";
 import { prove } from "./comment-proof.mjs";
 import { stripComments } from "./strip-comments.mjs";
@@ -122,4 +128,37 @@ test("npm run check fails on one comment in the sources, and names the file and 
     assert.equal(r.status, 1, r.stdout);
     assert.deepEqual(r.stderr.split("\n").filter((line) => line.startsWith("✗")).map((line) => line.split(", ")[0]), ["✗ scripts/sample.mjs:1: a comment (no-comments-js)"]);
   } finally { rmSync(dir, { recursive: true, force: true }); }
+});
+
+function servedComments(html) {
+  const found = [];
+  const walk = (node) => {
+    if (/comment/.test(node.kind())) return found.push(node.text());
+    if (node.kind() === "raw_text") return walk(parse(node.parent().kind() === "style_element" ? Lang.Css : Lang.JavaScript, node.text()).root());
+    node.children().forEach(walk);
+  };
+  walk(parse(Lang.Html, html).root());
+  return found;
+}
+
+test("control: the page reader finds a comment in a page's HTML, its style and its script, and none in a URL", () => {
+  assert.deepEqual(servedComments("<p>a</p><!-- h --><style>a{color:red}/* s */</style><script>f('https://x.test'); // j\n</script>"), ["<!-- h -->", "/* s */", "// j"]);
+});
+
+test("every page that the board, a message and a move serve has no comment in its HTML, its scripts or its styles, which the source scan reads as string text", () => {
+  const model = buildBoardModel([], { now: "2026-10-20T12:00:00Z" });
+  const message = prepareMessage(JSON.parse(readFileSync(join(ROOT, "scripts/fixtures/messages/02-question.json"), "utf8"))).msg;
+  const plan = { folder: "sample-abcdef.shared", digest: "0123456789abcdef", map: { tasks: [], gates: [], milestones: [], findings: [] } };
+  const pages = {
+    board: renderBoardHtml(model, { live: true }),
+    agents: renderAgentsHtml(model, { live: true }),
+    releases: renderReleasesHtml(model, { live: true }),
+    milestones: renderMilestonesHtml(model, { live: true }),
+    message: messagePage(message, ""),
+    "move map": mapHtml(plan, { at: "2026-10-20T12:00:00Z", backups: [], shown: (name) => name }),
+  };
+  for (const [name, html] of Object.entries(pages)) {
+    assert.match(html, /<script>[^<]/, `${name}: the page has a script`);
+    assert.deepEqual(servedComments(html), [], name);
+  }
 });

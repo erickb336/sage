@@ -526,10 +526,6 @@ ${itemFits.toString()}
 ${needCounts.toString()}
 const SHOWN=${BACKLOG_SHOWN},foldText=${foldText.toString()};
 const S={project:'',needs:false,who:'',priority:'',kind:'',milestone:'',open:false,query:'',active:null,archived:false,gone:false};
-// The address keeps the project (p) and the milestone (pg): a milestone page links to its tasks on the board with both. A
-// milestones page's Needs you chip opens the board with needs=1, which turns the Needs you filter on once: the board then
-// takes needs=1 out of the address, so a reload does not turn the filter on again.
-// A Milestone filter of a milestone in another project ends when you choose a project, also in the address (R1371-2).
 function ownMilestone(){const o=S.milestone&&S.milestone!=='none'&&S.project&&all('#f-milestone option').find(o=>o.value===S.milestone);if(o&&o.dataset.project!==S.project){S.milestone='';return true}return false}
 function fromHash(){try{const h=new URLSearchParams(location.hash.slice(1));S.project=h.has('p')?h.get('p'):localStorage.getItem('board-project')||'';S.milestone=h.get('pg')||'';if(ownMilestone()){h.delete('pg');save()}if(h.has('needs')){S.needs=h.get('needs')==='1';h.delete('needs');const t=h.toString();history.replaceState(null,'',t?'#'+t:location.pathname+location.search)}}catch(e){}}
 fromHash();
@@ -557,15 +553,12 @@ function filter(){
   all('[data-pick]').forEach(c=>{const n=need.projects[c.dataset.pick]||0,b=c.querySelector('[data-n]');if(b)b.textContent=String(n);c.hidden=c.dataset.pick===''?!S.project:c.dataset.pick===S.project||!n});
   const noprov=$('noprov'),lacks=!!cur&&!!S.who&&!cur.dataset.provider.split(' ').includes(S.who);
   if(noprov){noprov.hidden=!lacks;if(lacks){const w=all('[data-who]').find(b=>b.dataset.who===S.who);set('noprov-who',w?w.textContent:S.who);set('noprov-name',cur.dataset.name);set('noprov-has',cur.dataset.providers)}}
-  // QD: a milestone with no card on the board (its tasks ended more than 7 days ago) says why, with a link to its page.
   const opt=sel&&S.milestone&&S.milestone!=='none'?all('option',sel).find(o=>o.value===S.milestone):null,noprog=!!opt&&!shown.length,np=$('noprog');
   if(np){np.hidden=!noprog;if(noprog){set('noprog-name',opt.textContent);set('noprog-why',opt.dataset.why);$('noprog-link').href=opt.dataset.href}}
   const none=$('nomatch');if(none)none.hidden=!cards.length||shown.length>0||lacks||noprog;
   const gone=$('gone');if(gone)gone.hidden=!S.gone;
-  // The milestones list keeps the chosen project's milestones, with the count of each group.
   let rows=0;all('[data-plist]').forEach(ul=>{const own=all('li[data-project]',ul);own.forEach(li=>li.hidden=!!S.project&&li.dataset.project!==S.project);const n=own.filter(li=>!li.hidden).length,head=ul.closest('details')||ul.previousElementSibling;rows+=n;ul.hidden=!n;if(head){head.hidden=!n;const c=head.querySelector('.n');if(c)c.textContent=String(n)}});
   const nomilestones=$('nomilestones');if(nomilestones)nomilestones.hidden=rows>0;
-  // The release frames above the columns and the Releases tab keep the chosen project's releases (T996).
   const rel=all('[data-rproject]');rel.forEach(e=>e.hidden=!!S.project&&e.dataset.rproject!==S.project);const nr=$('noreleases');if(nr)nr.hidden=rel.some(e=>!e.hidden);
   draw();
 }
@@ -586,7 +579,6 @@ function draw(){
   const act=shown.find(o=>o.dataset.key===S.active);if(act&&S.open){input.setAttribute('aria-activedescendant',act.id);if(act.scrollIntoView)act.scrollIntoView({block:'nearest'})}else input.removeAttribute('aria-activedescendant');
   S.keys=shown.map(o=>o.dataset.key);
 }
-// A Milestone filter of another project ends when you choose a project: its cards would never show there.
 function choose(key){S.project=key;ownMilestone();S.open=false;S.query='';S.active=null;S.gone=false;save();filter();const t=$('pick-trig');if(t)t.focus()}
 function openList(){S.open=true;S.query='';S.active=null;draw();const q=$('pick-q');if(q)q.focus()}
 function closeList(focus){S.open=false;draw();if(focus){const t=$('pick-trig');if(t)t.focus()}}
@@ -607,10 +599,7 @@ document.addEventListener('click',e=>{const t=e.target;
 window.addEventListener('hashchange',()=>{if(/^#(p|pg|needs)=/.test(location.hash)){fromHash();filter()}});
 document.addEventListener('change',e=>{const f=e.target.dataset&&e.target.dataset.f;if(f){S[f]=e.target.value;if(f==='milestone')save();filter()}
   if(e.target.classList&&e.target.classList.contains('flip')){const now=getComputedStyle(document.documentElement).getPropertyValue('--scheme').trim();document.documentElement.dataset.theme=now;e.target.checked=false;try{localStorage.setItem('board-theme',now)}catch(x){}}});
-// A theme chosen in another tab of the board shows here too.
 window.addEventListener('storage',e=>{if(e.key==='board-theme'&&(e.newValue==='light'||e.newValue==='dark'))document.documentElement.dataset.theme=e.newValue});
-// The list closes when the focus leaves the picker (R1075-5). A press inside the list keeps the focus in the search field,
-// so a click on a row or a button still lands.
 document.addEventListener('focusout',e=>{const w=$('pick-pop')&&$('pick-pop').parentNode;if(S.open&&w&&w.contains(e.target)&&!(e.relatedTarget&&w.contains(e.relatedTarget)))closeList(false)});
 document.addEventListener('mousedown',e=>{if(e.target.closest&&e.target.closest('#pick-pop')&&!e.target.closest('input'))e.preventDefault()});
 document.addEventListener('input',e=>{if(e.target.id==='pick-q'){S.query=e.target.value;S.active=null;draw()}});
