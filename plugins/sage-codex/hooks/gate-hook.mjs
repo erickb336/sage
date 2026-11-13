@@ -5,7 +5,7 @@ import { accessSync, constants, existsSync, linkSync, mkdirSync, readdirSync, re
 import { homedir } from "node:os";
 import { basename, dirname, isAbsolute, join, relative, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
-import { AGENT_GH, agentCommandProblem, agentGh, boardCommandProblem, boardPathProblem, chiefEditDenied, commandWrites, createCommandPolicy, createPushPolicy, ghRuns, leadStopped as coreLeadStopped, logbookWrite, PR, programName, programsRun, pullRequestHead, readModeFile, roleEditDenied, sharedRoot, shellCommands, shellWriteEvidence, TEAM } from "../core/index.mjs";
+import { AGENT_GH, agentCommandProblem, agentGh, chiefEditDenied, commandWrites, createCommandPolicy, createPushPolicy, ghRuns, leadStopped as coreLeadStopped, logbookWrite, PR, programName, programsRun, pullRequestHead, readModeFile, roleEditDenied, sharedRoot, shellCommands, shellWriteEvidence, TEAM } from "../core/index.mjs";
 import { modeFile, readMode, tool } from "../skills/sage/sage.mjs";
 import { verificationOptions } from "../skills/sage/verify-install.mjs";
 import { privateDirectory, readState } from "./hook-state.mjs";
@@ -509,8 +509,6 @@ export async function gate(input, { mode = readMode, check = checkMerge, env = p
     } catch { return deny("sage: the hook could not read this patch, so it refuses it. Send one patch from *** Begin Patch to *** End Patch."); }
     if (!paths.length) return deny("sage: the hook could not read this patch, so it refuses it. Send one patch from *** Begin Patch to *** End Patch.");
     for (const path of paths) {
-      const board = boardPathProblem(path, f.cwd, { home: env.HOME || homedir() });
-      if (board) return deny(`sage: ${board}`);
       if (managedPatchPath(path, { cwd: f.cwd, env, pluginRoot: ROOT })) continue;
       if (codexPath(projectRoot(f.cwd), resolve(f.cwd, path))) return deny(CODEX_FOLDER);
       if (logbookWord(asWrite(path), env, f.cwd) !== undefined) return deny(LOGBOOK_PATCH(path));
@@ -526,8 +524,6 @@ export async function gate(input, { mode = readMode, check = checkMerge, env = p
   const namesReference = (references, test) => references.some(({ word, dir }) => test(asWord(resolve(dir, word)), env, f.cwd));
   const logbook = logbookWord(f.command, env, f.cwd);
   if (logbook !== undefined) return deny(LOGBOOK_WRITE(logbook));
-  const board = boardCommandProblem(f.command, f.cwd, { home: env.HOME || homedir() });
-  if (board) return deny(`sage: ${board}`);
   const runs = codexRuns(f.command, f.cwd, env);
   if (runs === null && /codex/i.test(f.command)
     && (/\b(?:resume|fork|queue)\b/i.test(f.command) || (thread.child && underSage(thread) !== false && mode(f, env).sage))) return deny(UNREAD_CODEX);
