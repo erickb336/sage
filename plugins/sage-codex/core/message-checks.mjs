@@ -80,7 +80,8 @@ function namedProblems(text, { width = WIDTH } = {}) {
   if (KINDS[kind].pick && !/\(my\s+pick\)/i.test(text)) problems.push(["no pick", `a ${kind} marks your pick with "(my pick)"`]);
   const bold = (l, name) => l.trim().replace(/:?(\*\*):?$/, "$1") === `**${name}**`;
   for (const part of partsOf(kind).filter((p) => /^[A-Z]/.test(p.name))) {
-    const label = lines.find((l) => labelAt(l, part.name) && !/^#{1,6} /.test(l));
+    if (lines.some((l) => /^#{1,6} /.test(l) && labelAt(l, part.name))) continue;
+    const label = lines.find((l) => /^[^\s#-]/.test(l) && labelAt(l, part.name));
     if (label === undefined) continue;
     problems.push(bold(label, part.name)
       ? [`bold label: ${part.name}`, `"${part.name}" is a bold line: use a ### heading, with its text under it`]

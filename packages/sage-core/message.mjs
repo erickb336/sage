@@ -12,7 +12,7 @@ export const KINDS = {
     parts: ["Where this is", "?Since my last note", "What changed", "Next", "?Cost so far", "What I need from you"] },
   question: { head: "QUESTION", use: "When work waits for the owner's choice. The title is the question. Ask it on the choice card (see above); this text form is the fallback. Each part starts with a ### heading on its own line. The answers are a numbered list, never a table.", tableHead: QUESTION_HEAD, pick: true, card: true,
     parts: ["Where this is", "What you approve", "The one real choice in it", "table", "If you do not answer", "Needed by", "?Judged by", "?The bad side of my pick", "After you answer", "?page"] },
-  report: { head: "REPORT", use: "When work ends: a pull request merged, or a study concluded. The title says what happened and what it needs.", tableHead: REPORT_HEAD,
+  report: { head: "REPORT", use: "When work ends: a pull request merged, or a study concluded. The title says what happened and what it needs. The table of the pieces of work goes under its own ### What changed heading.", tableHead: REPORT_HEAD, tableLabel: "What changed",
     parts: ["Where this is", "?Why this change", "picture*", "table", "What I did not check", "Weak points", "What you need to do", "?page"] },
   "request understood": { head: "REQUEST UNDERSTOOD", use: "Right after the owner asks for new work, before agents spend hours on it. It starts on its defaults unless the owner corrects it.",
     parts: ["Your words", "What I understood", "Read back (costly if wrong)", "In", "Out", "Appetite", "?Unsure, with my default", "If you say nothing"] },
@@ -204,7 +204,7 @@ export function messageText(msg, { width = WIDTH, page, full = false, today = fa
   const own = page ? [pageBlock(page)] : [], ref = msg.ref ? [[`Ref: ${msg.ref}`]] : [];
   const parts = msg.long !== undefined && !full
     ? [[headOf(msg)], wrap(plain(msg.long.title), WIDTH), wrap(`Main point: ${plain(msg.long.main)}`, WIDTH), ...own, ...ref]
-    : [[headOf(msg)], wrap(plain(msg.title), width), ...msg.blocks.map((b) => blockText(b, width, today)), ...own, ...ref];
+    : [[headOf(msg)], wrap(plain(msg.title), width), ...msg.blocks.map((b) => [...(b.t === "table" && KINDS[msg.kind].tableLabel ? [heading(KINDS[msg.kind].tableLabel, 0), ""] : []), ...blockText(b, width, today)]), ...own, ...ref];
   return parts.map((p) => p.join("\n")).join("\n\n");
 }
 

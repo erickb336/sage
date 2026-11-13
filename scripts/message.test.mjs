@@ -7,7 +7,7 @@ import { tmpdir } from "node:os";
 import { basename, dirname, join } from "node:path";
 import { test } from "node:test";
 import { fileURLToPath } from "node:url";
-import { KINDS, frameLines, messageText, prepareMessage } from "../packages/sage-core/message.mjs";
+import { KINDS, frameLines, messageText, partsOf, prepareMessage } from "../packages/sage-core/message.mjs";
 import { PAGE_POLICY, SWITCH_SCRIPT, messagePage } from "../packages/sage-core/message-page.mjs";
 import { kindOf, messageMiss, pageProblems, renderMessage, textProblems } from "../packages/sage-core/message-checks.mjs";
 import { columns, openBoxes, pictureSvg } from "../packages/sage-core/picture.mjs";
@@ -427,7 +427,7 @@ test("T1043: every kind gives each part a ### heading with a blank line before a
     const msg = resolved(fixture(name)), prepared = prepareMessage(msg);
     if (prepared.msg.long !== undefined) continue;
     const text = messageText(prepared.msg, { width: prepared.width }), lines = text.split("\n");
-    const labels = prepared.msg.blocks.filter((b) => b.t === "field" || b.t === "section").map((b) => b.label);
+    const labels = prepared.msg.blocks.flatMap((b) => (b.t === "field" || b.t === "section" ? [b.label] : b.t === "table" && msg.kind === "report" ? ["What changed"] : []));
     assert.deepEqual(lines.filter((l) => /^#{3} /.test(l)), labels.map((l) => `### ${l}`), name);
     lines.forEach((l, i) => { if (/^#{3} /.test(l)) assert.ok(lines[i - 1] === "" && lines[i + 1] === "", `${name}: blank lines around ${l}`); });
     assert.equal(lines.some((l) => /^\*\*.+\*\*:?$/.test(l.trim())), false, `${name}: no bold line`);
@@ -435,6 +435,49 @@ test("T1043: every kind gives each part a ### heading with a blank line before a
   const progress = fixture("01-progress-note.json");
   const nested = render({ ...progress, blocks: progress.blocks.map((b) => (b.label === "What changed" ? { t: "section", label: "What changed", body: [{ t: "section", label: "Inner", body: [{ t: "p", text: "One more line." }] }] } : b)) });
   assert.match(nested.text ?? nested.problems.join("\n"), /\n\n### What changed\n\n#### Inner\n\nOne more line\.\n\n### Next\n/);
+});
+
+test("F-T1043-1: a table column or a field in a section with the name of a part of the kind renders, and the check passes the text", () => {
+  const named = (kind) => partsOf(kind).filter((p) => /^[A-Z]/.test(p.name)).map((p) => p.name);
+  let tables = 0;
+  for (const name of ALL) {
+    const msg = fixture(name);
+    if (KINDS[msg.kind].tableHead || !msg.blocks.some((b) => b.t === "table")) continue;
+    const parts = named(msg.kind);
+    const renamed = { ...msg, blocks: msg.blocks.map((b) => (b.t === "table" ? { ...b, head: b.head.map((h, k) => (k ? parts[(k - 1) % parts.length] : h)) } : b)) };
+    const out = render(renamed);
+    assert.equal(out.problems, undefined, `${name}: ${out.problems}`);
+    assert.equal(messageMiss(out.text), undefined, name);
+    tables++;
+  }
+  assert.ok(tables >= 3, "the estimate, the state chart and the confirm");
+  const estimate = fixture("11-estimate.json");
+  const basis = render({ ...estimate, blocks: estimate.blocks.map((b) => (b.t === "table" ? { ...b, head: ["Pull request", "Tokens", "Basis"] } : b)) });
+  assert.equal(basis.problems, undefined, basis.problems);
+  assert.match(basis.text, /\n {3}- Basis: /);
+  const progress = fixture("01-progress-note.json");
+  const fields = render({ ...progress, blocks: progress.blocks.map((b) => (b.label === "What changed" ? { t: "section", label: "What changed", body: [{ t: "field", label: "Next", text: "QA starts." }, { t: "field", label: "Cost so far", text: "1 M tokens." }] } : b)) });
+  assert.equal(fields.problems, undefined, fields.problems);
+  assert.match(fields.text, /\n\n### What changed\n\n- Next: QA starts\.\n- Cost so far: 1 M tokens\.\n\n### Next\n/);
+  assert.equal(messageMiss(fields.text), undefined);
+});
+
+test("F-T1043-2: text that starts with a part's name and a colon gets no note when the part's heading is there, and the note when it is not", () => {
+  const steps = "STEPS FOR YOU\n\nUpdate sage\n\n### When\n\nNow.\n\n### Why\n\nThe fix is in the new version.\n\n1. Run the update.\n   Why: the old hook stays until you do.\n\n### How you know it worked\n\nThe version shows 1.2.\n\n### Your time\n\n2 minutes.\n\n### If a step fails\n\nTell me the error.";
+  const progress = "PROGRESS\n\nReview is clean\n\n### Where this is\n\nRelease 1.0 › single task › step: review\n\n### What changed\n\n- The review is clean.\n- Next: QA starts.\n\n### Next\n\nQA.\n\n### What I need from you\n\nNothing.";
+  assert.equal(messageMiss(steps), undefined, "Why: under a step, with the Why heading");
+  assert.equal(messageMiss(progress), undefined, "- Next: in a list, with the Next heading");
+  assert.equal(messageMiss(progress.replace("### What changed\n\n", "### What changed\n\nNext: QA starts soon.\n")), undefined, "Next: in the text of another part, with the Next heading");
+  assert.deepEqual(messageMiss(steps.replace("### Why\n\n", "Why: ")).names, ["inline label: Why"]);
+  assert.deepEqual(messageMiss(progress.replace("### Next\n\nQA.", "Next: QA.")).names, ["inline label: Next"]);
+  assert.deepEqual(messageMiss(progress.replace("### Next\n\nQA.", "**Next**\nQA.")).names, ["bold label: Next"]);
+});
+
+test("F-T1043-3: a report gives the table of the pieces of work its own ### heading, after the part before it", () => {
+  const report = render(fixture("03-report.json")).text;
+  assert.match(report, /\n\n### Where this is\n\nRelease 1\.0 › [^#]*?merged on 10 Nov\n\n### What changed\n\n1\. Leads wait for the automatic checks before\n/);
+  assert.equal(messageMiss(report), undefined);
+  assert.doesNotMatch(render(fixture("11-estimate.json")).text, /### What changed/, "only a report's table");
 });
 
 test("T1043: a message after a --- rule keeps its kind, so the check still reads it; a message with no kind is not checked", () => {
