@@ -936,6 +936,9 @@ test("each tool writes the Codex logbook in CODEX_HOME/sage, and returns each re
   assert.match((await call("finding_move", { task: "T1", key: "F-T1-2", to: "Follow up" })).error, /^sage: F-T1-2 is high, so it blocks T1 until it is fixed/);
   await call("finding_add", { task: "T1", source: "qa", severity: "low", summary: "c.js:3 slow", run: "R3", class: "speed" });
   assert.equal(await call("finding_move", { task: "T1", key: "F-T1-3", to: "Follow up" }), "F-T1-3 moved to T2 as F-T2-1 · T2 framed · small · route build,code-review,qa · P2");
+  await call("finding_add", { task: "T1", source: "qa", severity: "low", summary: "d.js:4 slow", run: "R3", class: "speed" });
+  assert.match((await call("finding_move", { task: "T1", key: "F-T1-4", to: "T2" })).error, /is a task id\. To move F-T1-4 into that open task, use --into T2\./);
+  assert.equal(await call("finding_move", { task: "T1", key: "F-T1-4", into: "T2" }), "F-T1-4 moved to T2 as F-T2-2 · T2 framed");
 
   assert.match((await call("verdict", { task: "T1", kind: "checks-pass", sha: "abc" })).error, /^sage: "abc" is not a full commit SHA/);
   assert.equal(await call("verdict", { task: "T1", kind: "checks-pass", sha: SHA }), "T1 checks-pass · 1111111 · cycle 1");

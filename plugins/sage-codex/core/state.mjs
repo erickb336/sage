@@ -125,7 +125,7 @@ const OPTIONS = {
   "run usage": ["tokens", "usage-source", "usage-evidence"],
   "finding add": ["source", "severity", "summary", "key", "run", "class"],
   "finding triage": ["reason", "proof"],
-  "finding move": ["to", "size"],
+  "finding move": ["to", "into", "size"],
   verdict: ["sha", "kind", "cycle", "pr", "run"],
   "gate add": ["question", "options", "recommend", "default"],
   "gate answer": ["option", "other-hex"],
@@ -3031,20 +3031,32 @@ function act(cmd, pos, opt, dir, env, skip, project) {
         if (f.triage !== "fix" && f.triage !== "ask") refuse(`${f.key} is not triaged as fix or ask`);
         f.status = "closed";
       } else if (sub === "move") {
+        const into = opt.into === undefined ? undefined : cell(opt.into).toUpperCase();
+        if (into !== undefined && (opt.to !== undefined || opt.size !== undefined)) refuse(`--into moves ${f.key} into an open task, so it takes no --to and no --size. Nothing changed.`);
+        if (/^T\d+$/i.test(cell(opt.to))) refuse(`--to takes the title of a new follow-up task, and ${JSON.stringify(cell(opt.to))} is a task id. To move ${f.key} into that open task, use --into ${cell(opt.to).toUpperCase()}. Nothing changed.`);
         if (f.status !== "open") refuse(`${f.key} is ${f.status}: only an open finding moves.`);
         if (f.severity === "high") refuse(`${f.key} is high, so it blocks ${id} until it is fixed: a high finding never moves to a follow-up task.`);
         if (roundKeys(taskOf(dir, id).task).includes(f.key) && !read(dir, "gates").some((g) => g.task === id && g.question.split(/[^\w-]+/).includes(f.key) && g.answer && g.answer === optionsOf(g)[0])) {
           refuse(`${f.key} is a fix of ${id}'s current round, so it stays on ${id}: it is fixed in a round, or dismissed with a reason. It moves to a follow-up task only after the owner chose the first option of a gate of ${id} whose question names ${f.key}: sage gate add ${id} --question "Move ${f.key} to a follow-up task?" --options "move|keep" --recommend <move or keep>.`);
         }
-        const title = need(cell(opt.to), '--to "<the follow-up task\'s title>"');
-        const size = opt.size ?? "small";
-        if (!SIZES[size] || size === "investigate") refuse("--size is tiny, small or large");
-        const to = frame(dir, title, size, [], [], { priority: "P2", ...chiefTag(opt) });
+        let to;
+        if (into === undefined) {
+          const size = opt.size ?? "small";
+          const title = need(cell(opt.to), '--to "<the follow-up task\'s title>", or --into <an open task>');
+          if (!SIZES[size] || size === "investigate") refuse("--size is tiny, small or large");
+          to = frame(dir, title, size, [], [], { priority: "P2", ...chiefTag(opt) });
+        } else {
+          to = taskOf(dir, into).task;
+          if (to.id === id) refuse(`${f.key} is on ${id} already: --into names another open task. Nothing changed.`);
+          if (ENDED.includes(to.state)) refuse(`${to.id} is ${to.state}: a finding moves only into an open task. Nothing changed.`);
+          const bar = opt.chief === undefined ? "" : ownerBar(dir, to, opt.chief);
+          if (bar) throw Object.assign(new Refusal(bar), { code: "other-chief" });
+        }
         const was = f.key, from = f.run || /^(R[1-9]\d*)-/.exec(was)?.[1];
-        Object.assign(f, { task: to.id, key: nextId(dir, `F-${to.id}-`), round: 0, triage: "", run: "" });
+        Object.assign(f, { task: to.id, key: nextId(dir, `F-${to.id}-`), round: to.round, triage: "fix", reason: `moved from ${was}`, run: "" });
         write(dir, "findings", findings);
-        write(dir, "decisions", [...read(dir, "decisions"), { at: now(), task: id, decision: `${was} moved to ${to.id} as ${f.key}: ${f.summary}`, why: `the follow-up task${from ? ` (from ${from}, ${f.severity})` : ""}: ${title}` }]);
-        return `${was} moved to ${to.id} as ${f.key} · ${framed(to)}`;
+        write(dir, "decisions", [...read(dir, "decisions"), { at: now(), task: id, decision: `${was} moved to ${to.id} as ${f.key}: ${f.summary}`, why: `${into === undefined ? "the follow-up task" : "the open task"}${from ? ` (from ${from}, ${f.severity})` : ""}: ${to.title}` }]);
+        return `${was} moved to ${to.id} as ${f.key} · ${into === undefined ? framed(to) : `${to.id} ${to.state}`}`;
       } else refuse("finding add, triage, close or move");
       write(dir, "findings", findings);
       return `${f.key} ${f.status} · ${f.triage}`;
