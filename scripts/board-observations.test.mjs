@@ -1,4 +1,3 @@
-// The observation writer runs as a CLI against temporary stores. No provider or process lookup supplies test facts.
 import "./test-env.mjs";
 import assert from "node:assert/strict";
 import { execFile, spawnSync } from "node:child_process";

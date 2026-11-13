@@ -154,7 +154,6 @@ for (const autopilot of [false, true]) for (const globalState of ["unavailable",
     const snapshots = readBoardSources(sources, { logbookKey });
     snapshots[0].projects[0].observations.records.push({ id: "O1", task: "T1", kind: "mode", basis: "observed", source: "sample", observedAt: "2026-10-26T00:00:00Z", recordedAt: "2026-10-26T00:00:00Z", data: { autopilot } });
     const before = snapshot(root);
-    // Only the project callback is available to this model. It must not infer a global result.
     const card = buildBoardModel(snapshots, { now: "2026-10-26T00:01:00Z", landing: landingRule(sources, logbookKey) }).tasks[0];
     assert.equal(card.column, "review");
     assert.equal(card.projectCheck.ok, true);

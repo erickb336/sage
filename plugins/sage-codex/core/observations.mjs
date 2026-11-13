@@ -1,4 +1,3 @@
-// Optional board evidence. It supplements old tables; it never supplies a merge verdict or live process claim.
 export const OBSERVATIONS_MAX_BYTES = 4 * 1024 * 1024;
 export const OBSERVATION_DATA_MAX_BYTES = 64 * 1024;
 const fail = reason => { throw new TypeError(`observation ${reason}`); };
@@ -34,7 +33,6 @@ const https = (value, name) => {
   return url.href;
 };
 
-/** Validate and canonicalize one recorded fact. No file, process, provider or network access occurs here. */
 export function validateObservation(value, { now = Date.now() } = {}) {
   object(value, ["id", "task", "kind", "source", "basis", "observedAt", "recordedAt", "data"]);
   if (!Object.hasOwn(shapes, value.kind)) fail("kind is not supported");
@@ -87,7 +85,6 @@ export function validateObservation(value, { now = Date.now() } = {}) {
   return { id: id(value.id, "O"), task: id(value.task, "T"), kind: value.kind, source: text(value.source, "source", 200), basis: choice(value.basis, ["observed", "reported"], "basis"), observedAt, recordedAt, data };
 }
 
-/** A missing sidecar is handled by its reader. A present file must contain this complete versioned schema. */
 export function validateObservations(value, options = {}) {
   object(value, ["version", "records"]);
   if (value.version !== 1 || !Array.isArray(value.records) || Buffer.byteLength(JSON.stringify(value)) > OBSERVATIONS_MAX_BYTES) fail("file needs version 1 and at most 4 MiB of records");

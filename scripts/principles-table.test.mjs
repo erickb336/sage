@@ -1,6 +1,4 @@
-// The principles page's table (scripts/principles-table.mjs): its rows and attribution words, then `npm run build`
-// and `npm run check` as people run them, in a copy of this repository.
-import "./test-env.mjs"; // first: no variable of the developer's shell changes a result
+import "./test-env.mjs";
 import assert from "node:assert/strict";
 import { spawnSync } from "node:child_process";
 import { cpSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
@@ -23,9 +21,8 @@ test("each principle gets its attribution from its source: from pstack; or sage'
   ]);
 });
 
-/** A copy of this repository, where a test can change files and run the npm scripts. */
 function copy(t) {
-  const dir = mkdtempSync(join(realpathSync(tmpdir()), "sage-principles-")); // the real path, so that build.mjs sees that it runs as the script
+  const dir = mkdtempSync(join(realpathSync(tmpdir()), "sage-principles-"));
   t.after(() => rmSync(dir, { recursive: true, force: true }));
   cpSync(ROOT, dir, { recursive: true, filter: (src) => ![".git", ".claude", "node_modules"].includes(relative(ROOT, src)) });
   symlinkSync(join(ROOT, "node_modules"), join(dir, "node_modules"), "dir");

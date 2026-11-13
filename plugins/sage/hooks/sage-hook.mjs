@@ -1,47 +1,4 @@
 #!/usr/bin/env node
-// The sage hook. Claude Code sends one JSON event on stdin; the hook answers with one JSON object on stdout, or nothing.
-//   - "sage mode" makes the session the user's chief of staff (agents/chief-of-staff.md) until "sage mode off". A
-//     session that starts as the sage:chief-of-staff agent, or in a project whose logbook has start=sage-mode (T948), is
-//     in sage mode from its first event, and "sage mode off" holds there too (T398). Only a message of the
-//     user that is exactly one phrase (mode-policy.mjs) switches sage mode or autopilot: never an agent's report, a task
-//     notification, a hand-back or another session's message (promptOf, T215, T240). A message the owner sends while
-//     Claude works counts as a message of its own. When the hook cannot read the frames of a prompt, nothing in it
-//     switches a mode, and the chief gets a note when the prompt has a phrase.
-//   - In sage mode it holds the rules that prompts alone did not hold in Orchestrator (docs/design/sage-mode.md,
-//     "Rules"): the chief never edits files, every brief has all its fields, at most cap.<project> (default
-//     max_agents) sage agents run at once for a project and cap_total across all projects, nobody force-pushes or pushes to main, and a merge needs autopilot on, the checked head SHA and the clean
-//     cycles that the ledger records for it (the merge check), and an agent never merges. The merge rule and the push rule are allow-lists: a
-//     command that runs a merge or a push is refused unless it is exactly the merge form or the push form. The rules judge
-//     the programs that a command line runs, as core's command reader sees them, never free text (T815). Both rules apply to every command tool (SHELL_TOOLS: Bash,
-//     Monitor, PowerShell, mcp__terminal__*), not only Bash. One case asks the user instead of a refusal: the chief's
-//     first creation of main or master on GitHub, in one literal gh api form (FIRST_FORM), checked on GitHub only
-//     (firstUpload, firstCreation).
-//   - Only main starts leads (max_leads per project, default 5), each named lead-T<n> of a task with a running lead run in the logbook of
-//     the session's folder (logbookView), and in the background, one per task; only leads start their permitted children (LEAD_HELPERS each),
-//     inside the project cap. A spawn of a sage: type by an agent meets these rules in any mode. In the same scope
-//     (sage mode, or a sage agent in any mode), an agent sends SendMessage only to main (it can wake a stopped agent), and
-//     never names a spawn main or lead-T<n> (reservedName). Only the main session's TaskStop frees a slot.
-//   - A sage agent may finish only with the full report of the sage:report skill.
-//   - In sage mode, the chief's message that names its kind and misses that kind's shape (core's messageMiss) gets the
-//     chief a note at its next prompt, and a line in shape-misses.jsonl (T1004). It never blocks, and it fails open.
-//   - Only the chief writes the logbook, in any mode (agentWriteProblem): an agent runs only the state tool's read
-//     commands. The one exception is a lead (agent type sage:lead, in the bound slot of its lead-T<n> spawn): it runs
-//     the commands of core's lead policy on its own task, from Bash, as one plain command, with no --project and no
-//     SAGE_PROJECT (leadProblem, T273). An agent never runs a command outside the sandbox, never
-//     writes under the sage root with a file tool (canonical paths), and never runs a shell write whose literal path is
-//     in the sage root or the shared root, or that removes or moves a folder that holds one (core's logbookWrite,
-//     T815). A forgery by a variable, code or a pattern after its literal part is a limit of the hook: the sandbox
-//     (T80) is the full guard for shell writes.
-//   - Only sage.mjs changes the logbook (chiefProblem): the chief's own file tools and shell writes never change it.
-//   - An agent (a sage agent, or any subagent in sage mode; never the chief) never runs git stash, and never runs a
-//     program that lists or signals processes unless that program is a fake in the temp folder (agentProblem).
-//   - In sage mode, a sage agent of a read-only role (core's roleEditDenied: a reviewer, QA, the PE, the lead, the
-//     investigate and evidence-review agents) runs no shell write form (core's commandWrites with readOnly, also git that
-//     changes the checkout), as in the Codex gate; only a redirection, or git in a worktree, in the temp folder, outside
-//     the project, passes (readOnlyWrite, T933, T936). Its file tools write only
-//     there too (readOnlyFile). The investigate agent may also write in the project's pages folder (scratchOf, T932).
-// SAGE_HOOKS=off turns it off. The hook never breaks a session: on an error it answers nothing, but it refuses a merge,
-// a push, every file change and command of an agent, and a chief's shell write into the sage root or the shared root.
 import { spawnSync } from "node:child_process";
 import { createHash, randomUUID } from "node:crypto";
 import { appendFileSync, closeSync, constants, fstatSync, lstatSync, mkdirSync, openSync, readFileSync, readdirSync, readlinkSync, realpathSync, renameSync, rmdirSync, rmSync, statSync, utimesSync, watch, writeFileSync } from "node:fs";
@@ -49,7 +6,6 @@ import { homedir } from "node:os";
 import { basename, dirname, isAbsolute, join, resolve, sep } from "node:path";
 import { fileURLToPath } from "node:url";
 
-// The state tool. When it cannot load, the hook still runs: its merge check refuses every merge, and it starts no new agent.
 const stateTool = await import("../skills/sage/sage.mjs").catch((error) => ({ error }));
 const core = await import("../core/index.mjs").catch((error) => ({ error }));
 const modePolicy = await import("./mode-policy.mjs").catch((error) => ({ error }));
@@ -57,11 +13,8 @@ const filePolicy = await import("./file-policy.mjs").catch((error) => ({ error }
 const ROOT = join(dirname(fileURLToPath(import.meta.url)), "..");
 const commandReader = await import("./command-reader.mjs").catch((error) => ({ error }));
 const TOOL = join(ROOT, "skills/sage/sage.mjs");
-/** The board server's command, which the build copies into the plugin from packages/sage-board. */
 const BOARD = join(ROOT, "board/cli.mjs");
-/** The one command that can create main or master (firstUpload). */
 const FIRST_FORM = "gh api --hostname github.com -X POST repos/<owner>/<repo>/git/refs -f ref=refs/heads/main -f sha=<full commit id>";
-/** The one command that moves the default branch of a blank repository to main or master (firstMove). */
 const MOVE_FORM = "gh repo edit github.com/<owner>/<repo> --default-branch main";
 const MOVE_NOTE = ` When the first push to a blank GitHub repository made a task's branch the default branch, the main session creates main with that form, then moves the default branch with ${MOVE_FORM}, as a command of its own that asks the user. An agent reports this to the chief.`;
 const TO_MAIN = `work reaches main only through a pull request. Push the task's branch and open a pull request. (Only the first creation of main in a blank GitHub repository asks the user, from the main session, as a command of its own: ${FIRST_FORM}, for a commit with no parent that is already on GitHub. After it, the chief tries to turn on branch protection for that branch.)${MOVE_NOTE}`;
@@ -71,59 +24,28 @@ const commandPolicy = await import("./command-policy.mjs")
     pushes: module.createPushPolicy({ mainReason: TO_MAIN, moveNote: MOVE_NOTE }),
   }))
   .catch((error) => ({ error }));
-const SP = String.raw`[^\S\r\n  ]`; // a space, a tab or an NBSP, never a line break
+const SP = String.raw`[^\S\r\n  ]`;
 const FILE_TOOLS = /^(Edit|Write|MultiEdit|NotebookEdit)$/;
 const AGENT_TOOLS = /^(Agent|Task)$/;
 const LEAD_CHILDREN = new Set(["sage:implementer", "sage:code-reviewer", "sage:security-reviewer", "sage:ux-reviewer", "sage:qa"]);
-/** The most helpers that one lead runs at once: the owner's decision of 2026-10-25 (T482). The project and total caps still hold. */
 const LEAD_HELPERS = 9;
-/** The lead's wait command (T482): it waits for a helper's stop with Bash alone, so the lead needs no Monitor tool. */
 const WAIT = join(ROOT, "hooks/wait.mjs");
-/** How long the wait waits at most for a helper's stop. The Bash tool's timeout 600000 of waitStep gives it a minute more. */
 const WAIT_MS = 9 * 60_000;
-/** How a lead runs the wait command for its task: each refusal that asks a lead to wait for a helper names it (R1764-2). */
 const waitStep = (task) => `${nodeCommand(WAIT, task ?? "<T>")} in the project's folder, as a Bash command of its own with the timeout 600000`;
-/** The tools that run a command. The PreToolUse matcher in claude.json names each of them. */
 const SHELL_TOOLS = /^(?:Bash|Monitor|PowerShell|mcp__terminal__.+)$/;
 const CHIEF = /(^|:)chief-of-staff$/;
-/** A sage agent type, in any letter case, so that a type such as Sage:lead cannot skip the sage rules (F-T255-5). */
 const OURS = /^sage:/i;
-/** A name that SendMessage and TaskStop use for the main session or a lead: main, or lead-T<n>, in any case (F-T255-4, F-T255-10). */
 const reservedName = (name) => /^(?:main|lead-t\d+)$/i.test(String(name ?? "").trim());
-/** An agent's event: Claude Code sets agent_id only for a subagent's events. An empty agent_id, or a sage role other than the chief, counts too (fail closed). */
 const agentEvent = (input) => "agent_id" in (input ?? {}) || (OURS.test(input?.agent_type ?? "") && !CHIEF.test(input.agent_type));
 export const BRIEF_FIELDS = ["GOAL", "SCOPE", "CONTEXT", "DECISIONS", "ACCEPTANCE", "VERIFY", "BUDGET", "FORBIDDEN", "REPORT", "STANDING"];
 export const REPORT_FIELDS = ["STATUS", "RESULT", "EVIDENCE", "FINDINGS", "QUESTIONS", "NOT VERIFIED", "BRANCH"];
 
-/**
- * A prompt: whether the owner wrote it, and the owner's text. Claude Code sends no sender field: a live capture of a
- * UserPromptSubmit hook in 2.1.289 has session_id, transcript_path, cwd, prompt_id, permission_mode, hook_event_name
- * and prompt, and its docs name no sender field either. So the hook reads the sender from the prompt. Claude Code puts
- * an agent's report, a task notification, another session's message and a system reminder in frames, and it can join
- * the owner's message to them. A frame closes only with a close of its own kind. Another session's message closes with
- * the note that Claude Code puts after it, so the note is part of the frame.
- * The hook reads the frames on the prompt as Claude Code sent it, with a stack of kinds: each close closes the innermost
- * open frame, and must be of its kind.
- *   - text: the text before the first frame and after the last close. Text between two frames is agent text: an agent
- *     can close its frames early, write a line, and open new frames before the real close (F-T215-3).
- *   - The owner's message that Claude Code queues while it works (queuedText) comes in a system reminder. It counts only
- *     as a whole system reminder, with Claude Code's note and with no frame mark in it, after the last other frame. An
- *     agent can write a whole queued shape at the end of a bare system reminder, and the hook cannot tell it from a real
- *     one. So a queued message switches only autopilot off: sage mode off would drop the guards (T240, F-T240-10).
- *   - queued: those messages, in the order the owner sent them. Each one counts as a message of its own.
- *   - stray: the queued messages before another frame. They switch nothing, because an agent can forge them; a phrase
- *     in them gets the unread note, so that the owner's switch is not lost without a word (F-T215-12).
- *   - owner: false when the hook cannot read the frames: a close with no open frame, a close of another kind than the
- *     innermost open frame, a frame still open at the end, or a frame's marker in the text (F-T215-2, F-T215-4). Then
- *     nothing in the prompt switches a mode, in either direction.
- */
 const FRAMES = [
   [/<task-notification>/g, /<\/task-notification>/g],
   [/<agent-message[\s>]/g, /<\/agent-message>/g],
   [new RegExp(`^${SP}*Another Claude session sent a message:`, "gm"), new RegExp(`^${SP}*That "other Claude session"[^\\n]*`, "gm")],
   [/<system-reminder>/g, /<\/system-reminder>/g],
 ];
-/** The owner's text in a queued message: the frame's text up to the first note with no "<" after it. One read (T34). */
 function queuedText(frame) {
   const open = /^<system-reminder>\s*The user sent a new message while you were working:\n/.exec(frame);
   const close = "</system-reminder>";
@@ -135,12 +57,11 @@ function queuedText(frame) {
 const MARKERS = /\[Subagent hand-back\]|\[SYSTEM NOTIFICATION/i;
 export function promptOf(input) {
   const all = input.prompt ?? "";
-  // Each open and close, by place: [at, kind, open]. A close sorts before an open at the same place.
   const edges = FRAMES.flatMap(([open, close], kind) => [
     ...[...all.matchAll(open)].map((m) => [m.index, kind, 1]),
     ...[...all.matchAll(close)].map((m) => [m.index + m[0].length, kind, 0]),
   ]).sort((a, b) => a[0] - b[0] || a[2] - b[2]);
-  const frames = []; // the top-level frames: [start, end, count of opens and closes]
+  const frames = [];
   const stack = [];
   for (const [at, kind, open] of edges) {
     if (open) {
@@ -152,8 +73,6 @@ export function promptOf(input) {
   }
   if (stack.length) return { owner: false, text: "", queued: [], all };
   const text = frames.length ? `${all.slice(0, frames[0][0])}\n${all.slice(frames.at(-1)[1])}` : all;
-  // The queued messages after the last other frame: whole frames with only their own open and close. A queued message
-  // before another frame (stray) switches nothing, but its off gets the unread note (F-T215-12).
   const queued = [];
   const stray = [];
   let tail = true;
@@ -165,17 +84,13 @@ export function promptOf(input) {
   return { owner: !MARKERS.test(text), text, queued: queued.toReversed(), all, stray: stray.join("\n") };
 }
 
-/**
- * Switches the modes, and returns the notes for the chief: the mode rules of core (switchModes, T240), with this hook's
- * frames (promptOf) and the autopilot note from its state tool. When the mode rules cannot load, autopilot turns off.
- */
 function switchModes(prompt, state, cwd) {
   if (modePolicy.error) {
     state.autopilot = false;
     return ["sage: the mode policy cannot load. Autopilot is off. Reinstall or update the sage plugin."];
   }
   return modePolicy.switchModes(prompt, state, { autopilotOn: () => {
-    let logbook; // the counts of this session's project: a shared project's live in the shared root
+    let logbook;
     try { logbook = stateTool.storeDir(cwd); } catch {}
     const c = stateTool.config(process.env, logbook);
     const broken = Object.keys(c).find((k) => c[k] === "invalid");
@@ -185,28 +100,21 @@ function switchModes(prompt, state, cwd) {
   } });
 }
 
-/** The note for a typed board request: core's one text for every provider (boardNote), with this plugin's commands. */
 function boardText(intent, cwd) {
   if (stateTool.error) return "sage: the owner asked for the board, but the state tool cannot load, so there is no board. Tell the owner so, and record no answer.";
   return core.boardNote(intent, cwd, { state: stateCommand, ensure: nodeCommand(BOARD, "board --ensure"), prefix: SPACE_NOTE, choice: "a choice card (AskUserQuestion)" });
 }
 
-/** "1 sage agent is running", "3 sage agents are running". */
 const running = (n) => `${n} sage ${n === 1 ? "agent is" : "agents are"} running`;
 
 export function handle(input, state, slots) {
   const event = input.hook_event_name;
-  // A tool event can arrive before another prompt. Missing mode rules must not leave cached autopilot enabled.
   if (modePolicy.error) state.autopilot = false;
   if (event === "PreToolUse" && SHELL_TOOLS.test(input.tool_name ?? "") && (commandReader.error || commandPolicy.error)) {
     return deny(event, "the command modules could not load, so the hook refuses this command. Restore the complete plugin and try again.");
   }
   const main = !agentEvent(input);
-  // The agent type turns sage mode on unless the owner's off phrase turned it off, so that phrase holds (T398) and an off
-  // value that another writer left is no off (F-R1516-2).
   if (main && CHIEF.test(input.agent_type ?? "") && !(state.sage === false && state.off === "owner")) state.sage = true;
-  // The project's start setting (config start=sage-mode, read by core for both providers, T948) turns sage mode on at the
-  // session's first event, once: the off phrase then holds for the rest of the session.
   if (main && !("start" in state)) {
     try { state.start = core.startsInSageMode(stateTool.storeDir(input.cwd ?? process.cwd())); } catch { state.start = false; }
     if (state.start === true && state.sage === undefined) state.sage = true;
@@ -226,46 +134,26 @@ export function handle(input, state, slots) {
     return notes.length ? context(event, notes.join("\n\n---\n\n")) : undefined;
   }
   if (event === "PostCompact") {
-    state.given = false; // the compaction can drop the instructions, so give them again at the next prompt
+    state.given = false;
     return undefined;
   }
   const ours = OURS.test(input.agent_type ?? "");
-  // Report validation precedes storage: a failed lease update must not let an incomplete report finish.
   if (event === "SubagentStop") {
-    // A lead does not end while a helper of its lead run runs (T482, K2): Claude Code holds a parent for its background
-    // children only in the terminal, so the hook blocks each stop, also a second one, until the helper stops, the sage
-    // ends its run, or its lease ends. The wait command lets the lead wait with Bash alone.
-    // A lead whose lead run the sage ended stops: its wait returns at once then, so a block would loop (R1834-1). A logbook
-    // that the hook cannot read keeps the block (fail closed).
     const lead = input.agent_type === "sage:lead" && slots.leadOf(input.agent_id);
     const ended = lead && (() => { try { return logbookOf(lead.folder).leadRun(lead.task)?.id !== lead.run; } catch { return false; } })();
     const live = lead && !ended ? slots.running(leadKey(lead)) : [];
     if (live.length) return { decision: "block", reason: `sage: your helper${live.length === 1 ? "" : "s"} ${live.join(", ")} still run${live.length === 1 ? "s" : ""}, and a lead does not end while a helper runs. Run ${waitStep(lead.task)}: it returns at once with each helper that stopped and whose run you end, else when a helper stops or none runs, and after ${WAIT_MS / 60_000} minutes at the latest. It names once each run whose report the hook cannot read: the sage ends that run, so do not end it, and name it in FINDINGS of your report. Then go on with your steps.` };
-    // A sage agent finishes only with the full report. The second stop goes through, so this cannot loop.
     if (ours && !input.stop_hook_active && typeof input.last_assistant_message === "string") {
       const missing = core.missingFields(REPORT_FIELDS, input.last_assistant_message);
       if (missing.length) return { decision: "block", reason: `sage: your report has no ${missing.join(", ")}. End with the report of the sage:report skill: ${REPORT_FIELDS.join(", ")}, each at the start of a line that is not in a list or a code block, with "none" where a field has nothing.` };
-      // The stop gate and the lead rules read a review's or QA's report with one reader, so a report that passes here is
-      // one they read (F-T289-24, F-T289-39). The lead rules read no other role's report, so its FINDINGS may list what it
-      // fixed or needs (F-T289-40). Each medium or high finding of a review or QA carries a proof that the proof check can
-      // rerun (T947). One stop names both problems, so that a fix of one does not leave the other unchecked (T964).
       const role = input.agent_type.slice("sage:".length).toLowerCase();
       const reason = REVIEWERS.includes(role) && core.stopReason(input.last_assistant_message, input.cwd ?? process.cwd(), { who: "the hook", proof: TEAM.slice(1).includes(role) });
       if (reason) return { decision: "block", reason };
     }
   }
-  if (!main && ours && input.agent_id) slots.touch(input.agent_id, input.agent_type); // the agent's lease: a slot that no event touched for an hour expires
+  if (!main && ours && input.agent_id) slots.touch(input.agent_id, input.agent_type);
   if (event === "SubagentStart") return void (ours && slots.bind(input.agent_id, input.agent_type));
-  // The session's live tasks at the main session's Stop: a slot whose agent is not among them is free. An agent that
-  // dies (for one, on a usage limit) fires no SubagentStop, but it leaves the registry, and the chief's next turn ends.
-  // Only then: at a SubagentStop, a foreground agent of the session may be running and not listed.
   if (event === "Stop" && main && Array.isArray(input.background_tasks)) slots.reconcile(input.background_tasks.map((t) => t?.id));
-  // The chief's message, at the main session's Stop in sage mode (T1004): one that names its kind and misses its shape
-  // gives the chief a note at its next prompt. The note is about the last message only: each Stop replaces it, so a
-  // later message that fits, or that names no kind, leaves none (F-T1004-1, F-T1004-4). The owner already sees the
-  // message, so the hook never blocks, and any error gives no note. Each miss counts as one line of shape-misses.jsonl
-  // beside the hook state: the time, the kind and the problem names, no text of the message. Claude Code 2.1.289 sends
-  // last_assistant_message on this Stop.
   if (event === "Stop" && main && state.sage) {
     let miss;
     delete state.shapeNote;
@@ -278,25 +166,18 @@ export function handle(input, state, slots) {
       } catch {}
     }
   }
-  // A helper's stop keeps its report and the commit that it saw, for its lead's verdict (F-T289-4, F-T289-5).
   if (event === "SubagentStop") {
     const helper = slots.helperFor(input.agent_id), head = helper && headOf(helper.folder, helper.task);
     if (!helper || REVIEWERS.includes(helper.role)) {
-      // The reviewed commit only when the branch did not move during the run: the tip at its start (F-T289-14).
       const sha = helper && helper.tip && head === helper.tip ? helper.tip : "";
-      // The report goes to the logbook too, where the state tool reads it for the run's verdict (T483). A report that is
-      // not kept backs no verdict, so a failure here only refuses that verdict later.
       if (helper && typeof input.last_assistant_message === "string") {
         try { stateTool.keepReport(helper.folder, { task: helper.task, run: helper.run, role: helper.role, sha, text: input.last_assistant_message }); } catch {}
       } else if (!helper) keepDirect(input, slots);
       return void slots.release(input.agent_id, helper && { ...core.readReport(input.last_assistant_message), sha });
     }
-    // A late report of a run that ended stays readable, whatever its role: the state tool says which runs keep one.
     try {
       if (typeof input.last_assistant_message === "string" && logbookOf(helper.folder).row(helper.run)?.status !== "running") stateTool.keepReport(helper.folder, { task: helper.task, run: helper.run, role: helper.role, sha: head || "", text: input.last_assistant_message });
     } catch {}
-    // An implementer's report backs no verdict, and its RESULT is its own word: a normal stop, with that word and the
-    // head that it left on the branch, so that its lead ends its run and starts the reviews there (R1817-1).
     return void slots.release(input.agent_id, { result: core.readReport(input.last_assistant_message).result, severities: [], sha: head || "" });
   }
   if (["PostToolUse", "PostToolUseFailure"].includes(event) && AGENT_TOOLS.test(input.tool_name ?? "") && !main && (typeof input.agent_id !== "string" || !input.agent_id)) return undefined;
@@ -304,37 +185,21 @@ export function handle(input, state, slots) {
   if (event === "PostToolUse" && input.tool_name === "Bash" && main) return void chiefEnded(input, slots);
   if (event === "PostToolUse" && AGENT_TOOLS.test(input.tool_name ?? "")) return void slots.result(input.tool_use_id, main ? undefined : input.agent_id, input.tool_response);
   if (event === "PostToolUseFailure" && AGENT_TOOLS.test(input.tool_name ?? "")) return void slots.drop(input.tool_use_id, main ? undefined : input.agent_id);
-  // The main session's TaskStop ends the named agent and frees its slot, a lead's or a child's too (T255 M3, F-T255-12,
-  // F-T273-14). A lead's name lead-T<n> stops this session's one lead of that name (F-T273-13, F-T273-16). An agent's
-  // TaskStop frees no slot: a lead could free a main-session agent's slot while that agent still runs (T255 M3). A lead
-  // stops no agent: it could cut its own reviewer off before a report, then add a new run of the role (F-T301-14). No other
-  // agent stops an agent either: a helper could cut a sibling or its lead off (F-T301-27). An agent still stops its own
-  // shell tasks (standing order 30): a target is an agent when it has an agent's name or a slot of this session holds it.
-  // TaskStop still takes the old shell_id for task_id, and a name in any case or with spaces (F-T301-33, F-T301-34).
   if (event === "PreToolUse" && input.tool_name === "TaskStop") {
     const { task_id, shell_id } = input.tool_input ?? {}, id = task_id ?? shell_id;
     if (!main && input.agent_type === "sage:lead") return deny(event, "a lead stops no task, also no shell task: only the main session stops one. Wait for the helper's stop, or ask the sage (SendMessage to main) to stop it.");
     if (!main && task_id !== undefined && shell_id !== undefined && task_id !== shell_id) return deny(event, "TaskStop gives task_id and shell_id with different values. Give only task_id.");
-    // A look-alike form names the same agent: NFKC, no format character, no spaces at the ends, any case (F-T301-53, F-T301-54).
     const name = agentName(id);
     if (!main && (/^(r\d+|lead-t\d+|main)$/.test(name) || slots.holds(id))) return deny(event, `an agent stops no agent: only the main session does, and ${id} is an agent. Stop only your own shell tasks; report to your lead or the sage what needs a stop.`);
-    // The main session stops a lead by its exact name, in any letter case: a look-alike form may name no agent for Claude
-    // Code, and its stop would free the slot of a lead that still runs (F-T301-71).
     if (!main) return undefined;
     if (!/^lead-t[1-9]\d*$/i.test(String(id ?? ""))) return void slots.release(id);
     const task = `T${String(id).slice("lead-t".length)}`;
-    // A lead that started with no name field has no name for Claude Code: its stop by name would fail and still free the
-    // slot of a lead that runs (T434).
     if (slots.unnamedLead(task)) return deny(event, `the lead of ${task} started with no name field, so Claude Code knows it only by its agent id. Stop it with TaskStop and the agent id from its start's result.`);
     return void slots.stopLead(task);
   }
-  // An agent's SendMessage can wake a stopped agent outside every cap, and its event cannot tell a stopped target from a
-  // live one. So an agent sends a message only to the main session: in sage mode, and for a sage agent in any mode, the
-  // scope of the nested spawn rule. A plain agent outside sage mode is the owner's normal use (T255 M2).
   if (event === "PreToolUse" && !main && (state.sage || ours) && input.tool_name === "SendMessage" && input.tool_input?.to !== "main") {
     return deny(event, "an agent sends a message only to main, because a message can wake a stopped agent. Start a fresh child with a full brief, or report to the sage.");
   }
-  // A message wakes an ended lead with no slot, so each of its writes would be refused (T482, F3): the sage starts a fresh lead.
   if (event === "PreToolUse" && main && state.sage && input.tool_name === "SendMessage" && slots.endedLead(input.tool_input?.to)) {
     return deny(event, `${input.tool_input.to} has ended or holds no lead slot, so a message would wake it with no slot, and the hook would refuse its writes. End its lead run, record a new one (${stateCommand("run add <T> --role lead")}) and start a fresh lead with the note in its brief.`);
   }
@@ -344,16 +209,13 @@ export function handle(input, state, slots) {
   if (why && main) return deny(event, `${why} Only sage.mjs changes the logbook: run the state tool's command for this change (node <path to skills/sage/sage.mjs> ...), as a command of its own. If no command does it, ask the user.`);
   if (why && input.agent_type === "sage:lead") return deny(event, `${why} A lead writes the logbook only with ${LEAD_FORM}. Report to the sage what else the logbook needs.`);
   if (why) return deny(event, `${why} Only the chief writes the logbook. An agent may run only ${READ_FORM}. Report what the logbook needs, and the chief records it.`);
-  // In every mode and for every session: the board password is the owner's alone (T229).
   const board = event === "PreToolUse" ? boardProblem(input) : undefined;
   if (board) return deny(event, board);
   const agent =(ours || (!main && state.sage)) && !CHIEF.test(input.agent_type ?? "");
   if (event === "PreToolUse" && agent && SHELL_TOOLS.test(input.tool_name ?? "")) {
     const ti = input.tool_input ?? {};
     const cwd = /^mcp__terminal__/.test(input.tool_name) && typeof ti.cwd === "string" ? ti.cwd : input.cwd ?? process.cwd();
-    // The fields that run: a description runs nothing (T386), so no rule judges its text (T815).
     const commands = runFields(ti);
-    // Keep push and merge refusals ahead of the narrower gh exceptions.
     if (state.sage) for (const command of commands) {
       const result = gitGate(event, command, state, cwd, false);
       if (result?.hookSpecificOutput?.permissionDecision === "deny") return result;
@@ -367,33 +229,24 @@ export function handle(input, state, slots) {
   if (file) return deny(event, file);
   const tool = input.tool_name ?? "";
   const ti = input.tool_input ?? {};
-  // The spawned type in lower case: a sage type in another letter case meets the same rules (F-T255-5). The caller's type
-  // stays exact: "sage:lead" is the one type that may start agents, and another case of it gets no such right.
   const spawned = String(ti.subagent_type ?? "").toLowerCase();
-  // The Agent tool's name, or else the first word of its description: the desktop app's Agent tool has no name field (T434),
-  // and an empty name falls back too (T262).
   const spawnName = String(ti.name ?? "").trim() ? String(ti.name) : String(ti.description ?? "").trim().split(/\s+/)[0];
-  // An agent never gives a spawn a reserved name: the chief's SendMessage or TaskStop to main or to a lead would then reach
-  // that agent, which a message can wake with no slot (F-T255-4, F-T255-10). The scope of the SendMessage rule.
   if (event === "PreToolUse" && !main && (state.sage || ours) && AGENT_TOOLS.test(tool) && reservedName(spawnName)) {
     return deny(event, 'an agent never names a spawn "main" or "lead-T<n>", because those names must reach only the main session and its leads. Give it another name.');
   }
-  let helperKey; // the run that a lead's child helps with, when the child's name is its run id (F-T284-8, F-T284-9)
-  // The nested rules check the spawned type too, not only the caller: in any mode (T255 H2).
+  let helperKey;
   const nestedSpawn = event === "PreToolUse" && !main && AGENT_TOOLS.test(tool) && (state.sage || ours || OURS.test(spawned));
   if (nestedSpawn) {
     if (input.agent_type !== "sage:lead") return deny(event, "only a lead may start an agent. Report to the sage.");
     if (typeof input.agent_id !== "string" || !input.agent_id) return deny(event, "the spawn has no valid caller identity, so its slot cannot be checked. Report to the sage.");
-    // A lead starts children only from the lead slot that the chief's spawn bound to it (F-T284-4).
     const lead = slots.leadOf(input.agent_id);
     if (!lead) return deny(event, "this lead holds no bound lead slot, so it starts no agent. Report to the sage.");
     if (!LEAD_CHILDREN.has(spawned)) return deny(event, "a lead starts only an implementer, code reviewer, security reviewer, UX reviewer or QA agent. Report to the sage.");
     const why = leadSpawnProblem(lead, spawned, spawnName, slots, ti.prompt);
     if (typeof why === "string") return deny(event, `${why} Report to the sage.`);
-    if (why?.stopped) return deny(event, why.stopped); // core's reason, whole, as for a write and in Codex (F-T928-4)
+    if (why?.stopped) return deny(event, why.stopped);
     helperKey = why?.helper;
   }
-  // The chief changes no file while sage mode is on, and a chief agent changes none in any mode (F-R1515-1).
   const chiefAgent = !main && CHIEF.test(input.agent_type ?? "");
   if (event === "PreToolUse" && FILE_TOOLS.test(tool) && (state.sage || chiefAgent)) {
     if (filePolicy.error) return deny(event, "the file policy cannot load, so this file change is refused. Reinstall or update the sage plugin.");
@@ -405,11 +258,7 @@ export function handle(input, state, slots) {
   let leadMark;
   if (main && AGENT_TOOLS.test(tool) && spawned === "sage:lead") {
     if (!/^lead-T\d+$/.test(spawnName)) return deny(event, 'the sage starts a lead only with the name lead-T<n> of its task: start the description with lead-T<n> and a space, for example "lead-T12 fix the form" (or give the name lead-T<n> when the Agent tool has a name field).');
-    // A foreground lead's slot binds only when the lead ends, so its children's events could not renew it (F-T255-7). The
-    // desktop app's Agent tool has no run_in_background field and starts every agent in the background, so only an
-    // explicit false is refused (T434).
     if (ti.run_in_background === false) return deny(event, "a lead always starts in the background: leave run_in_background out, or set it to true.");
-    // A lead starts only for a task with a running lead run (#118 point 4), in the logbook that its writes use (leadProblem).
     const task = spawnName.slice("lead-".length);
     let project, view;
     try {
@@ -421,9 +270,7 @@ export function handle(input, state, slots) {
     }
     const run = view.leadRun(task);
     if (!run) return deny(event, `${task} has no running lead run in the logbook of ${project}. Record it first, as a command of its own: ${stateCommand(`run add ${task} --role lead`)}. A lead starts only from a session opened in the project's folder or one of its worktrees, so that the lead's logbook is the one that the session uses (F-T284-7).`);
-    // The slot keeps the task, its logbook and its lead run, for the lead's writes (F-T273-1, F-T273-4).
     leadMark = { task, logbook: digest(view.dir), run: run.id, folder: project, named: Boolean(String(ti.name ?? "").trim()) };
-    // The helper notes of the logbook's ended lead runs are of no more use: no lead can use those runs (F-T289-13).
     slots.prune(view.endedLeadRuns().map((r) => digest(`${leadMark.logbook}:${r.id}`)));
   }
   if (AGENT_TOOLS.test(tool) && OURS.test(spawned)) {
@@ -441,8 +288,6 @@ export function handle(input, state, slots) {
     const r = slots.take(project, cap, caps.cap_total, input.tool_use_id ?? (main && spawned !== "sage:lead" ? String(Date.now()) : undefined), { role: spawned, caller: main ? undefined : input.agent_id, input: ti, lead: leadMark, helper: helperKey, maxLeads: caps.max_leads, brief: main && spawned !== "sage:lead" ? briefMark(ti.prompt, spawned, input.cwd) : undefined });
     if (r.refused) {
       slots.log(`${project} ${r.project}/${cap} total ${r.total}/${caps.cap_total}`);
-      // Only a lead starts an agent outside the main session, and a lead may not change the config: it waits for a helper,
-      // and its stop is blocked while a helper runs, so it reports the cap only when none runs (R1764-2, R1764-3).
       const helperWait = `Wait for one of your helpers to stop: run ${waitStep(main ? undefined : slots.leadOf(input.agent_id)?.task)}, then start this helper again.`;
       const raise = (key, n) => main ? `${SPACE_NOTE}Wait for one to finish, or raise the cap: ${stateCommand(`config ${key}=${n + 1}`)}` : `${helperWait} If no helper of yours runs, report the cap to the sage.`;
       if (r.refused === "identity") return deny(event, "the spawn has no valid, distinct caller and tool-use identity, so its slot cannot be checked. Report to the sage.");
@@ -450,9 +295,7 @@ export function handle(input, state, slots) {
       if (r.refused === "leads") return deny(event, `${project} is at its limit of ${caps.max_leads} running leads (max_leads). Wait for one to finish. Report to the sage.`);
       if (r.refused === "children") return deny(event, `this lead already has ${LEAD_HELPERS} children. ${helperWait}`);
       if (r.refused === "helper") return deny(event, `${helperKey.run} already has its helper: one run is backed by one child (F-T284-9). Report to the sage.`);
-      // A lead that started with no name field stops only by its agent id: a stop by name is refused (T434).
       const stop = () => slots.unnamedLead(leadMark.task) ? "by its agent id, from its start's result: it started with no name field, so a stop by its name is refused" : `by its agent id or by its name lead-${leadMark.task}`;
-      // A slot of another session: this session's TaskStop cannot reach it, so the reason names what frees it (R1762-2).
       if (r.refused === "task" && r.elsewhere) return deny(event, `a lead of ${leadMark.task} holds a slot in another session, for the lead run ${r.run ?? "of its start"} (F-T273-5), and a TaskStop in this session cannot stop it. If that session ended (a restart or a crash), the slot frees by itself after an hour with no event of that lead or its helpers: start this lead again then. To start a fresh lead now, run each of these as a command of its own: ${stateCommand(`run done ${r.run ?? "<its lead run>"} --status failed`)}, then ${stateCommand(`run add ${leadMark.task} --role lead`)}, then start the lead again.`);
       if (r.refused === "task") return deny(event, `a lead named lead-${leadMark.task} already holds a slot, in this session or for this logbook (F-T273-5, F-T273-16). Wait for it to end, or stop it with TaskStop (${stop()}), before you start a fresh lead.`);
       if (r.refused === "mark") return deny(event, `the agent cap could not mark its slot (${r.error}), so it refuses this spawn. Tell the user.`);
@@ -463,22 +306,15 @@ export function handle(input, state, slots) {
   if (SHELL_TOOLS.test(tool)) {
     const cwd = /^mcp__terminal__/.test(tool) && ti.cwd !== undefined ? ti.cwd : input.cwd ?? process.cwd();
     if (typeof cwd !== "string" || !cwd) return deny(event, "the command folder is not a path, so the hook cannot check this command.");
-    // The permission prompt shows every field, the description too, so a first upload counts in any field (T196).
     if (main && [...new Set(commandFields(ti))].filter(command => firstUpload(command) || firstMove(command)).length > 1) {
       return deny(event, "the input names more than one first-upload command. Send one command so the user approves one destination.");
     }
     let answer;
-    // The rules judge the fields that run: a description runs nothing (T386, T815).
     for (const command of new Set(runFields(ti))) {
-      // null, not undefined: an event with no session id still gets the owner rule of a shared logbook, and fails closed there (F-T618-27).
       const result = gitGate(event, command, state, cwd, main, input.session_id ?? null);
       if (result?.hookSpecificOutput?.permissionDecision === "deny") return result;
       answer ??= result;
     }
-    // The chief's shell writes in sage mode (T960), as in the Codex gate (T948): core's write forms and the git forms that
-    // throw away uncommitted work (T968), with the same text; such git in the temp folder, and a redirection, rm, rmdir,
-    // touch, tee, cp, mv or a gh clone or download in the chief's places (the temp folder and the sage worktrees folder),
-    // outside the project and outside a git work tree there, pass (T807, F-T807-1). A disguised write is a limit (order 70).
     const chief = main ? runFields(ti).map((command) => { try { return core.chiefShellProblem(command, cwd); } catch { return "the sage core cannot load, so the hook refuses this shell command of the chief. Reinstall or update the sage plugin."; } }).find(Boolean) : undefined;
     if (chief) return deny(event, chief);
     return answer;
@@ -486,27 +322,18 @@ export function handle(input, state, slots) {
   return undefined;
 }
 
-/** Shared push classification. Branch reads and the first-upload exception stay in the provider. */
 function pushProblem(command, cwd, extra) {
   if (commandPolicy.error) return "the command policy cannot load, so this push is refused.";
   return commandPolicy.pushes.pushProblem(command, cwd, extra);
 }
-/** The word git, and then a later word: one linear scan from the first git (T34, T100-N5). */
 const gitThen = (text, word) => new RegExp(`\\b${word}\\b`, "i").test(/\bgit\b([\s\S]*)/i.exec(text)?.[1] ?? "");
 const pushText = (text) => gitThen(text, "push");
-/** A command line without quotes, backslashes and line joins: the text that the rules test when the reader cannot read the line (fail closed). */
 const bare = (text) => text.replace(/\\\n/g, "").replace(/['"\\]/g, "");
 
-/**
- * The one exception to the push rule: the first creation of main or master on GitHub, for a blank project. The whole
- * command is FIRST_FORM, its flags in any order, each once, with nothing before or after it. Every word in it is
- * literal, so the user approves an immutable commit and a fixed destination. Returns { owner, repo, branch, sha }, or
- * undefined: then the push rule refuses the command as before. firstCreation then checks it on GitHub.
- */
 function firstUpload(command) {
-  if (!/^[\w./= -]+$/.test(command)) return undefined; // no quote, variable, newline, chain or redirection
+  if (!/^[\w./= -]+$/.test(command)) return undefined;
   const words = command.trim().split(/ +/);
-  if (words[0] !== "gh" || words[1] !== "api") return undefined; // no prefix: not env, an assignment or a path to gh
+  if (words[0] !== "gh" || words[1] !== "api") return undefined;
   const f = {};
   for (let k = 2; k < words.length; k++) {
     const w = words[k];
@@ -517,7 +344,7 @@ function firstUpload(command) {
     else if (w.startsWith("--method=")) [key, value] = ["method", w.slice(9)];
     else if (w === "-f") [, key, value] = /^(ref|sha)=(.*)$/.exec(words[++k] ?? "") ?? [];
     else if (!w.startsWith("-")) [key, value] = ["endpoint", w];
-    if (!key || key in f || value === undefined) return undefined; // another flag or field, or one given twice
+    if (!key || key in f || value === undefined) return undefined;
     f[key] = value;
   }
   const [, owner, repo] = /^repos\/((?!\.+\/)[\w.-]+)\/((?!\.+\/)[\w.-]+)\/git\/refs$/.exec(f.endpoint ?? "") ?? [];
@@ -526,10 +353,6 @@ function firstUpload(command) {
   return { owner, repo, branch, sha: f.sha };
 }
 
-/**
- * One GET from the GitHub API through gh, by the deadline: { status, body }. The host is always github.com, whatever
- * GH_HOST or GH_REPO say. SIGKILL ends a gh that ignores SIGTERM, so the timeout holds. It throws on an error, a timeout or an answer with no HTTP status.
- */
 function githubGet(path, deadline) {
   const timeout = Math.min(5000, deadline - Date.now());
   if (timeout <= 0) throw new Error("no time was left");
@@ -542,21 +365,12 @@ function githubGet(path, deadline) {
   return { status: Number(status), body: at < 0 ? "" : r.stdout.slice(at).trim() };
 }
 
-/**
- * A name from GitHub for the prompt: in double quotes, at most 60 characters (code points). It drops control and format
- * characters, separators other than the plain space (such as U+2028), and quote characters (also the fullwidth U+FF02).
- */
 const quoted = (name) => `"${[...String(name).replace(/(?! )[\p{Cc}\p{Cf}\p{Z}"'`‘-‟＂]/gu, "")].slice(0, 60).join("")}"`;
-/**
- * A word of a command line for a refusal, cleaned as quoted does: up to 160 characters whole, and a longer word as its
- * first 60 and its last 90 characters with "…" between, so that the root part that caused the refusal stays visible (F-T815-14).
- */
 const quotedWord = (word) => {
   const text = [...String(word).replace(/(?! )[\p{Cc}\p{Cf}\p{Z}"'`‘-‟＂]/gu, "")];
   return `"${text.length <= 160 ? text.join("") : `${text.slice(0, 60).join("")}…${text.slice(-90).join("")}`}"`;
 };
 
-/** The body of a 200 answer as JSON, or {} for another status. It throws a fixed reason, never the body's text. */
 function json({ status, body }) {
   if (status !== 200) return {};
   try {
@@ -566,14 +380,8 @@ function json({ status, body }) {
   }
 }
 
-/** git's empty tree: the tree of a commit with no files. */
 const EMPTY_TREE = "4b825dc642cb6eb9a060e54bf8d69288fbee4904";
 
-/**
- * The checks of the first creation, all on GitHub, never on the local repo: the branch is absent (404), the commit is
- * there and has no parent, and its tree gives the file count and the top-level names. Returns { decision, reason }:
- * "ask" with the prompt, or "deny". The deadline keeps the three calls inside the 10 seconds that Claude Code gives the hook.
- */
 function firstCreation({ owner, repo, branch, sha }) {
   const where = `github.com/${owner}/${repo}`;
   const no = (why) => ({ decision: "deny", reason: `this command creates ${branch} on ${where}, and the hook asks the user only when GitHub shows that it is the first creation of ${branch} at one root commit: ${why}. ${TO_MAIN}` });
@@ -585,11 +393,9 @@ function firstCreation({ owner, repo, branch, sha }) {
     const commit = githubGet(`${api}/commits/${sha}`, deadline);
     const c = json(commit);
     if (c.sha !== sha || !/^[0-9a-f]{40}$/.test(c.tree?.sha ?? "")) return no(`GitHub has no commit ${sha} in ${owner}/${repo} (answer ${commit.status}). Push it on a task branch first`);
-    // gh follows a redirect of a renamed or moved repository: then the answer is for another name than the prompt shows.
     if (!String(c.url).toLowerCase().startsWith(`https://api.github.com/repos/${owner}/${repo}/`.toLowerCase())) return no(`GitHub answered for another repository than ${owner}/${repo}, as for a renamed or moved repository. Use its current name`);
     if (!Array.isArray(c.parents)) return no(`GitHub's answer for commit ${sha} has no list of parents`);
     if (c.parents.length) return no(`commit ${sha} has a parent, so it is not one root commit`);
-    // GitHub stores no object for git's empty tree, so its tree API answers 404 for it: that tree has no files.
     const tree = c.tree.sha === EMPTY_TREE ? { status: 200, body: '{"tree":[]}' } : githubGet(`${api}/trees/${c.tree.sha}?recursive=1`, deadline);
     const t = json(tree);
     if (!Array.isArray(t.tree)) return no(`GitHub did not give the files of commit ${sha} (answer ${tree.status})`);
@@ -604,22 +410,11 @@ function firstCreation({ owner, repo, branch, sha }) {
   }
 }
 
-/**
- * The move of the default branch to main or master after the first upload (T621). The first push to a blank repository
- * makes the task's branch the default branch, and GitHub never moves it by itself, so the push rule then refuses that
- * branch. The whole command is MOVE_FORM, with every word literal. Returns { owner, repo, branch }, or undefined.
- */
 function firstMove(command) {
   const [, owner, repo, branch] = /^gh repo edit github\.com\/((?!\.+\/)[\w.-]+)\/((?!\.+\/)[\w.-]+) --default-branch (main|master)$/.exec(command.trim()) ?? [];
   return repo && { owner, repo, branch };
 }
-/** The most that a repository holds and still gets the move: the first task's commits, and a few task branches and their pull requests. */
 const MOVE_MOST = { commits: 20, branches: 5, pulls: 3 };
-/**
- * The checks of that move, all on GitHub: the default branch is not main or master, the branch is one root commit, as the
- * first creation made it, and the repository is within MOVE_MOST. A root commit proves nothing alone: any repository can
- * have one on main. So a repository with history never gets this exception, and the prompt shows the counts. { decision, reason }, as firstCreation.
- */
 function moveCheck({ owner, repo, branch }) {
   const where = `github.com/${owner}/${repo}`;
   const no = (why) => ({ decision: "deny", reason: `this command moves the default branch of ${where} to ${branch}, and the hook asks the user only when GitHub shows that ${branch} is one root commit, that another branch is the default branch, and that the repository is nearly empty: ${why}.` });
@@ -652,46 +447,30 @@ function moveCheck({ owner, repo, branch }) {
   }
 }
 
-/**
- * Only the chief writes the logbook (T83). An agent may run the state tool's read commands, by an allow-list of
- * subcommands, so a subcommand added later is refused until it is listed here. The rule holds for every tool that runs a
- * command (SHELL_TOOLS), not only Bash, and judges the programs that a command line runs (core's stateToolRun, T815).
- */
 const READS = { status: () => true, "merge-check": () => true, logbook: (pos) => pos[0] !== "repair", standing: (pos) => pos[0] !== "add", config: (pos) => !pos.length };
 const READ_FORM = "node <path to skills/sage/sage.mjs> <status, merge-check, logbook, standing or config> [--project <path>] (config without a key=value)";
 const PLAIN = /^[\w./=:@,+-]+(?:[ \t]+[\w./=:@,+-]+)*$/;
-/** All the text of a tool call's input, one string per field. */
 const fields = (v) => (typeof v === "string" ? [v] : v && typeof v === "object" ? Object.values(v).flatMap(fields) : []);
-/** Text as APFS compares names: it ignores case and Unicode form, and folds compatibility forms (ſ is s, ﬆ is st). */
 const fold = (text) => text.normalize("NFKC").toLowerCase();
-/** The sage root and the shared root, for core's logbookWrite. strict: throw when a root cannot be resolved (for agents). */
 function rootsOf(strict) {
   let raw;
   try {
     raw = stateTool.sageRoot(process.env);
     const roots = [raw, core.sharedRoot(process.env)];
-    roots.forEach(canonical); // a root behind a loop of links throws here: an agent then does nothing (fail closed, T83 F2)
+    roots.forEach(canonical);
     return roots;
   } catch (e) {
     if (strict) throw e;
     return raw ? [raw] : [];
   }
 }
-/** A path from the cwd, as the shell gives it to the system: ".." is not removed here, so the system resolves it after a link. */
-const from = (cwd, path) => (isAbsolute(path) ? path : `${isAbsolute(cwd) ? cwd : resolve(cwd)}/${path}`); // throws on a cwd that is not text
-/** The file that a file tool changes, as a canonical path under the sage root or the shared root, or undefined. It throws when it cannot resolve a path. */
+const from = (cwd, path) => (isAbsolute(path) ? path : `${isAbsolute(cwd) ? cwd : resolve(cwd)}/${path}`);
 function underRoot(input) {
   const ti = input.tool_input ?? {};
   const path = canonical(from(input.cwd ?? process.cwd(), String(ti.file_path ?? ti.notebook_path ?? "")));
   const root = [stateTool.sageRoot(process.env), core.sharedRoot(process.env)].map(canonical).find((r) => path === r || path.startsWith(r + sep));
   return root ? `the sage root ${root} (${path})` : undefined;
 }
-/**
- * T347: the one file the chief may change in sage mode is a Markdown file of Claude Code's own memory folder:
- * <config>/projects/<project>/memory/<name>.md, where config is CLAUDE_CONFIG_DIR or ~/.claude. Only Write, Edit and
- * MultiEdit; no subfolder, no "..", and no link: each folder on the way resolves to the place that its name says, and
- * the file is no symbolic or hard link. Claude Code does not document how it names <project>, so any one name passes.
- */
 function chiefMemoryWrite(input) {
   const path = input.tool_input?.file_path;
   if (!/^(?:Write|Edit|MultiEdit)$/.test(input.tool_name ?? "") || typeof path !== "string" || path.split(/[/\\]/).includes("..")) return false;
@@ -700,7 +479,6 @@ function chiefMemoryWrite(input) {
     const file = resolve(from(input.cwd ?? process.cwd(), path));
     const [projects, project, memory, name, ...rest] = file.slice(config.length + 1).split(sep);
     if (!file.startsWith(config + sep) || projects !== "projects" || memory !== "memory" || rest.length || !/^[^/\\]+\.md$/.test(name ?? "")) return false;
-    // The deepest folder that exists resolves to the same place under the real config folder: no folder is a link.
     const real = realpathSync.native(config), parts = ["projects", project, "memory"];
     for (let k = parts.length; k > 0; k--) {
       let at;
@@ -709,82 +487,40 @@ function chiefMemoryWrite(input) {
       break;
     }
     let st;
-    try { st = lstatSync(file); } catch { return true; } // a new file
+    try { st = lstatSync(file); } catch { return true; }
     return st.isFile() && st.nlink === 1;
   } catch {
     return false;
   }
 }
-/**
- * The chief's own tools change no logbook file either (S2): only sage.mjs does, so each change leaves its record. A file
- * tool never writes under the sage root or the shared root, and a shell write whose literal path is in one of them is
- * refused (core's logbookWrite, T815). The state tool runs no write form, so it passes. The hook sees the command, not
- * the files that sage.mjs writes. The owner's own ! commands are no hook events, so they stay free. Undefined, or the
- * reason for the refusal.
- */
 function chiefProblem(input) {
   if (FILE_TOOLS.test(input.tool_name ?? "")) {
     try {
       const at = underRoot(input);
       return at && `the chief never writes under ${at} with a file tool.`;
     } catch {
-      return undefined; // the sage root cannot be read: in sage mode, the rule that the chief changes no file still refuses
+      return undefined;
     }
   }
   if (!SHELL_TOOLS.test(input.tool_name ?? "")) return undefined;
   const word = shellWrite(input.tool_input ?? {}, input.cwd ?? process.cwd());
   return word === undefined ? undefined : `the chief never writes, moves or removes a logbook file from the shell (${quotedWord(word)} is in the sage root or the shared root, or holds one).`;
 }
-/** The word with which a command tool's input writes into the sage root or the shared root, or undefined. */
 const shellWrite = (ti, cwd) => runFields(ti).map((text) => core.logbookWrite(text, cwd, rootsOf(false))).find((word) => word !== undefined);
-/**
- * A lead's own writes (T273, #62 section 8, T928). A state tool write by an agent passes only when the event's agent_type
- * is exactly sage:lead (Claude Code sets it), and the agent holds a bound lead slot: the hook keeps the slot's task, its
- * logbook folder and its running lead run from the chief's spawn of lead-T<n> (leadSpawnProblem). The command's folder
- * must give that logbook, and that lead run must still run. Then core's one lead policy, which the state tool's guard and
- * Codex apply too, judges the command for the slot's task: its list, its own task, the round order, the values and the
- * gap rule (T956). The hook adds only its rule of a lead's run done, which needs its notes of the lead's helpers
- * (leadEndProblem). The hook reads the logbook of the command's
- * folder, as the state tool does without --project and SAGE_PROJECT; so a lead's write takes neither, and runs only from
- * Bash, whose folder is the event's cwd. Undefined, or the reason.
- */
 const TASK = /^T[1-9]\d*$/;
 const TEAM = ["implementer", "code-reviewer", "security-reviewer", "ux-reviewer", "qa"];
-/**
- * The roles that review or check a change: their reports back verdicts and findings, so the hook reads each one with
- * core's reader. The evidence review, which the chief starts, backs an investigation's evidence-clean (T932).
- */
 const REVIEWERS = [...TEAM.slice(1), "evidence-review"];
-/**
- * The most bytes of one logbook table that the hook reads for a lead: 4 MiB, the state tool's own limit for its
- * observations file. The largest real table on 2026-10-11 was 0.35 MB (sage's own decisions.tsv), so a real logbook
- * stays far below it, while a table above it refuses the write (fail closed) before the hook spends its time on it.
- */
 const LEAD_READ_MAX = 4 * 1024 * 1024;
 const digest = (text) => createHash("sha256").update(text).digest("hex");
 const LEAD_FORM = "node <path to skills/sage/sage.mjs> and a command of a lead's list on its own task, as one plain command from Bash in the project's folder, with no --project and no SAGE_PROJECT, and on a shared logbook with --lead <its lead run>, while its lead run runs";
-/**
- * The key of a run's helper: its logbook, the lead run that added it and its id, so that one child backs one run, and a
- * new lead never ends or uses an old lead's runs (F-T284-9, F-T289-8). The first part is the key of the lead's helpers.
- */
 const leadKey = (lead) => digest(`${lead.logbook}:${lead.run}`);
 const helperOf = (lead, run) => `${leadKey(lead)}.${run}`;
-/** A run that this lead added itself: the hook saw its own run add print the id (F-T289-8, F-T289-16). */
 const ownRun = (ctx, id) => /^R[1-9]\d*$/.test(id) && ctx.slots.helper(helperOf(ctx.lead, id)).owned;
-/**
- * The stop of a review or QA agent that the main session started itself (C-T483-1): its report goes to the logbook of its
- * folder for its run, which the hook marked on its slot from the brief's first line, "Run R<n> · task T<n>" (runOf). The
- * run is a running run of that role in that logbook, and not a run that a running lead added for its own helper. The
- * commit is the branch tip at the spawn when the branch did not move until this stop, else none, so that the report's
- * BRANCH must name it (R1933-1). No run mark, a run that two slots hold, or any doubt keeps nothing, and the verdict of
- * that run is refused.
- */
 function keepDirect(input, slots) {
   try {
     const role = String(input.agent_type ?? "").replace(/^sage:/, ""), mark = slots.runOf(input.agent_id);
     if (!OURS.test(input.agent_type ?? "") || !mark || mark.shared || typeof input.last_assistant_message !== "string") return;
     const folder = realpathSync.native(input.cwd), view = logbookOf(folder), run = view.row(mark.run);
-    // A running run keeps the report of a review or QA. A run that ended asks the state tool, which keeps its late report or refuses.
     if (run?.role !== role || (run.status === "running" && !REVIEWERS.includes(role))) return;
     const lead = view.leadRun(run.task);
     if (lead && slots.helper(helperOf({ logbook: digest(view.dir), run: lead.id }, mark.run)).owned) return;
@@ -792,10 +528,6 @@ function keepDirect(input, slots) {
     stateTool.keepReport(folder, { task: run.task, run: mark.run, role, sha, text: input.last_assistant_message });
   } catch {}
 }
-/**
- * The commit at the head of a task's branch, or "" (fail closed) (F-T289-5): read where the branch lives, the checkout of
- * its writer run in a shared logbook, else the lead's folder (branchTip, T634).
- */
 function headOf(folder, task) {
   try {
     const branch = logbookOf(folder).task(task)?.branch;
@@ -804,15 +536,6 @@ function headOf(folder, task) {
     return "";
   }
 }
-/**
- * The checks of a lead's spawn of a child (F-T284-11, F-T284-9): its lead slot's logbook still runs its lead run, and its
- * task is not held, in replan or ended. The child's name is a run id (R<n>), and the child is that run's helper: a running
- * run of the task in its current round, of the child's role, that this lead added (F-T301-57). The brief's first line
- * (BRIEF_LINE), when it has one, gives the run too: it names this lead's task, and a name that is a run id agrees with it
- * (T581). The helper keeps the branch's tip at its start (F-T289-14). The reason, core's whole reason for a task that
- * cannot move ({ stopped }), or the helper to record ({ helper }).
- * It throws when it cannot read the logbook, and the hook refuses the spawn then.
- */
 function leadSpawnProblem(lead, spawned, given, slots, prompt) {
   let view;
   try {
@@ -822,14 +545,12 @@ function leadSpawnProblem(lead, spawned, given, slots, prompt) {
   }
   if (digest(view.dir) !== lead.logbook) return "this lead's folder no longer gives its logbook, so it starts no agent.";
   if (view.leadRun(lead.task)?.id !== lead.run) return `${lead.task}'s lead run ${lead.run} no longer runs, so this lead starts no agent (F-T284-11).`;
-  // Held, replan and the end states: core's reason, as for a lead's write and in Codex (F-T284-11, F-T289-7, F-T928-4).
   const task = view.task(lead.task), stopped = core.leadStopped(lead.task, task);
   if (stopped) return { stopped };
   const [, lineRun, lineTask] = BRIEF_LINE.exec(String(prompt ?? "").split("\n", 1)[0]) ?? [];
   if (lineTask && lineTask !== lead.task) return `the brief's first line names ${lineTask}, and this lead runs ${lead.task}: a lead helps only with its own task.`;
   if (lineRun && /^R[1-9]\d*$/.test(String(given ?? "")) && given !== lineRun) return `the helper's name ${given} and the brief's first line ${lineRun} name two runs: give both the same run id.`;
   const name = lineRun ?? given;
-  // A helper's run id comes from its name or its brief: a child with neither would count for no run (F-T301-57).
   if (!/^R[1-9]\d*$/.test(String(name ?? ""))) return `a lead names each helper by its run id (R<n>, the id that run add printed), and ${JSON.stringify(String(name ?? "").slice(0, 40))} is not one.`;
   const run = view.row(name), role = spawned.slice("sage:".length);
   if (run?.task !== lead.task || run.status !== "running" || run.role !== role || String(run.round) !== String(task.round)) {
@@ -838,37 +559,23 @@ function leadSpawnProblem(lead, spawned, given, slots, prompt) {
   if (!ownRun({ lead, slots }, name)) return `${name} is not a run that this lead added: a lead helps only with its own runs, and the sage ends the others (F-T289-8, F-T289-16).`;
   return { helper: { key: helperOf(lead, name), folder: lead.folder, task: lead.task, role, run: name, tip: headOf(lead.folder, lead.task) } };
 }
-/**
- * A lead ends only a run that it added, after its helper stopped, so that a run still at work stays in the merge check's
- * guard of running reviews (F-T928-1): the rule of a lead's run done from the hook's notes of its helpers, after core's
- * lead policy let it through. Core's policy holds the gap rule, for both providers (T956). Undefined, or the reason.
- */
 function leadEndProblem(request, view, ctx) {
   if (request.command !== "run done") return undefined;
   const run = view.row(request.run);
   if (!ownRun(ctx, run.id)) return `${run.id} is not a run that this lead added: the chief ends it (F-T289-8, F-T289-16).`;
-  // A run whose helper gave no report (it never started, it left with no stop, or the chief stopped it) ends only as
-  // failed or blocked; a helper that started and did not stop holds its run while its slot holds its lease (F-T284-9,
-  // F-T289-3, F-T289-13, F-T289-20, F-T289-31).
   const key = helperOf(ctx.lead, run.id), { started, stopped } = ctx.slots.helper(key);
   if (Array.isArray(stopped?.severities)) return undefined;
   const left = started && !stopped ? ctx.slots.lease(key) : 0;
   if (left > 0) return `${run.id}'s helper has not stopped, and its slot holds its lease for about ${Math.ceil(left / 60_000)} more minute(s): wait for its stop, or ask your chief to end ${run.id} (F-T289-31).`;
   return ["failed", "blocked"].includes(request.status) ? undefined : `${run.id}'s helper gave no report, so ${run.id} ends only as failed or blocked (F-T289-3, F-T289-20).`;
 }
-/** The logbook of a folder, as the state tool finds it from process.cwd(): the physical path. realpath throws on a missing folder. */
 const logbookOf = (cwd) => stateTool.logbookView(realpathSync.native(cwd), process.env, { max: LEAD_READ_MAX });
-/**
- * After a lead's Bash command: when it was the lead's own run add of the state tool, the run that it printed is the
- * lead's (F-T289-16). A run that the sage added is never the lead's. Any doubt records nothing (fail closed).
- */
 function leadWrote(input, slots) {
   try {
     const lead = slots.leadOf(input.agent_id), command = String(input.tool_input?.command ?? "").trim();
     const [node, path, cmd, sub, task, ...rest] = command.split(/[ \t]+/);
     if (!lead || !PLAIN.test(command) || node !== "node" || cmd !== "run" || sub !== "add" || task !== lead.task || typeof input.cwd !== "string") return;
     if (canonical(resolve(input.cwd, path)) !== canonical(TOOL)) return;
-    // What the command asked for: the printed run must be of it (F-T289-27).
     const asked = (name) => rest.flatMap((w, k) => (w === `--${name}` ? [rest[k + 1]] : w.startsWith(`--${name}=`) ? [w.slice(name.length + 3)] : []));
     const out = String((typeof input.tool_response === "string" ? input.tool_response : input.tool_response?.stdout) ?? "").trim();
     const view = logbookOf(input.cwd);
@@ -885,19 +592,15 @@ function leadProblem(input, cmd, pos, opt, slots) {
   if (input.tool_name !== "Bash") return "a lead writes the logbook only from Bash, because the hook knows the folder of a Bash command.";
   if (opt.project !== undefined || process.env.SAGE_PROJECT !== undefined) return "a lead's write takes no --project and no SAGE_PROJECT: the state tool then finds the logbook from the command's folder, as the hook does.";
   if (typeof input.cwd !== "string" || !isAbsolute(input.cwd)) return "the event has no absolute folder, so the hook cannot find the logbook that this write changes.";
-  // The view throws on a damaged or oversized logbook, and agentWriteProblem refuses then.
   const view = logbookOf(input.cwd);
   if (digest(view.dir) !== lead.logbook) return `this command's folder gives another logbook than the one of ${own}'s lead (F-T273-1). Run it in the project's folder or one of its worktrees.`;
   if (view.leadRun(own)?.id !== lead.run) return `${own}'s lead run ${lead.run} no longer runs, so this lead writes nothing (F-T273-4).`;
-  // Core's one lead policy, as the state tool's guard and Codex apply it (T928).
   const request = stateTool.leadRequest(cmd, pos, opt), why = stateTool.leadProblem(view, { id: lead.run, task: own }, request, input.cwd);
   if (why) return why;
-  // A lead acts for the chief of its lead run: on a shared logbook its write names that run, and the state tool's guard reads it.
   if (view.shared && (opt.lead !== lead.run || opt.chief !== undefined)) return `this project's logbook is shared, so a lead's write names its lead run: add --lead ${lead.run}, with no --chief.`;
   return leadEndProblem(request, view, { lead, slots });
 }
 const READ_WAY = "To run a read command of the state tool, run node <path to skills/sage/sage.mjs> status (or merge-check, logbook, standing, config), with the path of the copy that this hook loads; to read the file, use cat <path> or git show <sha>:<path>.";
-/** The words and the options of a state tool command after its path, read as the state tool reads them (sage.mjs parse): --name value or --name=value. */
 function optionsOf(args) {
   const pos = [], opt = Object.create(null);
   let twice;
@@ -908,11 +611,6 @@ function optionsOf(args) {
   }
   return { pos, opt, twice };
 }
-/**
- * The words after the state tool's path in a main-session Bash command that runs this hook's state tool as one plain
- * command, or undefined. Its path may be in double or single quotes, and a backslash at a line's end joins the next line,
- * as the shell reads them (R1763-2).
- */
 function chiefStateWords(input) {
   const command = String(input.tool_input?.command ?? "").replace(/\\\r?\n/g, " ").trim();
   const quoted = [`node "${TOOL}" `, `node '${TOOL}' `].find((form) => command.startsWith(form));
@@ -925,12 +623,6 @@ function chiefStateWords(input) {
   }
   return words.length && PLAIN.test(words.join(" ")) ? words : undefined;
 }
-/**
- * The words after the state tool's path, as the shell reads them, so a quoted value is one word, and the tool's
- * environment: { words, env }. The line is this hook's tool as one command, and a substitution in its words does not
- * change that. Before node, it may set variables (NAME=value, such as SAGE_PROJECT=<folder>) and run env with -u <name>
- * and NAME=value. Any other line gives undefined.
- */
 function chiefWriteWords(input) {
   let commands;
   try {
@@ -950,11 +642,6 @@ function chiefWriteWords(input) {
   const [node, path, ...rest] = words;
   return node === "node" && /(?:^|\/)skills\/sage\/sage\.mjs$/.test(path) && canonical(resolve(input.cwd ?? process.cwd(), path)) === canonical(TOOL) ? { words: rest, env } : undefined;
 }
-/**
- * A write of a shared logbook names its chief, and the hook knows the session: it adds this session's row at its first
- * write, and refuses a command with no --chief or another chief's id. A legacy project has no chief. A logbook that cannot
- * be read passes here: the state tool then gives its own refusal.
- */
 function chiefIdProblem(input) {
   if (input.tool_name !== "Bash") return undefined;
   const { words, env } = chiefWriteWords(input) ?? {};
@@ -970,11 +657,6 @@ function chiefIdProblem(input) {
   if (!id || opt.chief === id) return undefined;
   return opt.chief === undefined ? `this project's logbook is shared, so each write names its chief: add --chief ${id} to this command.` : `this session is chief ${id}, not ${quoted(opt.chief)}: give --chief ${id}.`;
 }
-/**
- * After the sage's run done of a lead's helper run: the hook notes its stop, so that the lead can start the next helper
- * and does not wait for it (T482, T371). The slot stays until the helper really stops, or until its lease ends (T504).
- * The helper of a run that ended does no work that counts. Any doubt notes nothing.
- */
 function chiefEnded(input, slots) {
   try {
     const words = chiefStateWords(input);
@@ -987,14 +669,6 @@ function chiefEnded(input, slots) {
     slots.endHelpers(leads.map((lead) => helperOf({ logbook: digest(view.dir), run: lead.id }, run.id)));
   } catch {}
 }
-/**
- * The lead's wait (T482, K2): node wait.mjs <T>, in the project's folder. It returns when a helper of the task's running
- * lead run stopped and its run still runs (the lead has not ended it), when no helper of that lead run runs, or after ms.
- * It reads only the logbook and the hook's helper notes, with Bash alone: no Monitor and no notice. Its text for the lead.
- * Only the sage ends a review or QA run whose report the hook cannot read, so that stop does not end the wait: the wait
- * names it once (its only write is that told note) and waits for the helpers that run, and lists each one when none
- * runs (T523, R1847 F1).
- */
 export async function waitForHelpers(task, cwd, { ms = WAIT_MS, dir = stateDir() } = {}) {
   if (!TASK.test(String(task ?? ""))) return "usage: node wait.mjs <T>, in the project's folder, for example node wait.mjs T12";
   const started = Date.now();
@@ -1006,7 +680,6 @@ export async function waitForHelpers(task, cwd, { ms = WAIT_MS, dir = stateDir()
     const sages = open.filter((r) => Array.isArray(r.severities) && r.unreadable && REVIEWERS.includes(r.role));
     const stopped = open.filter((r) => !sages.includes(r)), live = slots.running(key);
     const line = (r) => [`${r.run} stopped`, r.role, !Array.isArray(r.severities) ? "no report" : sages.includes(r) ? "a report that the hook cannot read" : r.result || "no RESULT", ...(r.severities?.length ? [`findings ${r.severities.join(",")}`] : []), `sha ${r.sha ? r.sha.slice(0, 7) : "none"}`].join(" · ");
-    // The lines of these runs, whose reports the hook cannot read, with what to do; the wait notes that it named them.
     const told = (list, what) => (list.forEach((r) => slots.tell(`${key}.${r.run}`)), list.length ? [...list.map(line), what] : []);
     const once = () => told(sages.filter((r) => !slots.told(`${key}.${r.run}`)), "The sage ends each run whose report the hook cannot read: do not end it, and name it in FINDINGS of your report as a gap. The wait names it only this once.");
     if (stopped.length) return [...stopped.map(line), "End each of these runs (run done), with its findings and its verdict, then go on.", ...once()].join("\n");
@@ -1016,11 +689,10 @@ export async function waitForHelpers(task, cwd, { ms = WAIT_MS, dir = stateDir()
       let watcher;
       const end = () => { watcher?.close(); clearTimeout(timer); done(); };
       const timer = setTimeout(end, Math.min(5_000, Math.max(0, ms - (Date.now() - started))));
-      try { watcher = watch(join(dir, "helpers"), end); } catch {} // a stop writes a note there; the timer is the fallback
+      try { watcher = watch(join(dir, "helpers"), end); } catch {}
     });
   }
 }
-/** An agent's check fails closed: when it throws, the agent's command or file change is refused. */
 function agentWriteProblem(input, slots) {
   const file = FILE_TOOLS.test(input.tool_name ?? "");
   if (!file && !SHELL_TOOLS.test(input.tool_name ?? "")) return undefined;
@@ -1032,7 +704,7 @@ function agentWriteProblem(input, slots) {
 }
 function agentCheck(input, file, slots) {
   const ti = input.tool_input ?? {};
-  const roots = rootsOf(true); // fail closed: an agent does nothing while the sage root cannot be resolved
+  const roots = rootsOf(true);
   if (file) {
     const at = underRoot(input);
     return at && `an agent never writes under ${at}.`;
@@ -1040,8 +712,6 @@ function agentCheck(input, file, slots) {
   if (ti.dangerouslyDisableSandbox) return "an agent never runs a command outside the sandbox (dangerouslyDisableSandbox).";
   const cwd = input.cwd ?? process.cwd();
   const texts = runFields(ti);
-  // The runs of the state tool (core's stateToolRun, T815): an agent runs the tool's read commands, also
-  // in a pipe or a chain; a lead runs its own writes too, as one plain command. Any program may read their files.
   for (const text of texts) {
     let runs;
     try {
@@ -1051,12 +721,10 @@ function agentCheck(input, file, slots) {
       continue;
     }
     for (const run of runs) {
-      // Another copy (a checkout's, an older plugin's) can write the logbook in another way, also on a read command.
       if (canonical(from(run.dir ?? cwd, run.script)) !== canonical(TOOL)) return `an agent runs only the copy of the state tool that this hook loads, and ${quoted(run.script)} is not that copy. ${READ_WAY}`;
       const [cmd, ...args] = run.args, { pos, opt, twice } = optionsOf(args);
       if (Object.hasOwn(READS, cmd ?? "") && READS[cmd](pos)) continue;
       if (input.agent_type !== "sage:lead") return `"${[cmd, ...pos.slice(0, 1)].join(" ")}" writes the logbook, or is not a read command of the state tool.`;
-      // A lead's write is one plain command of the copy that this hook loads, as leadWrote reads it after the call.
       const command = String(ti.command ?? "").trim(), [node, path = ""] = command.split(/[ \t]+/);
       const plain = texts.length === 1 && runs.length === 1 && PLAIN.test(command) && node === "node" && /(?:^|\/)skills\/sage\/sage\.mjs$/.test(path) && !path.split("/").includes("..");
       if (!plain || canonical(resolve(cwd, path)) !== canonical(TOOL)) return `a lead runs a write of the state tool only as one plain command, with nothing before or after it, and only the copy that this hook loads. ${READ_WAY}`;
@@ -1066,14 +734,8 @@ function agentCheck(input, file, slots) {
   const word = texts.map((t) => core.logbookWrite(t, cwd, roots)).find((w) => w !== undefined);
   return word === undefined ? undefined : `an agent never writes, moves or removes a logbook file from the shell: ${quotedWord(word)} is in the sage root or the shared root, or holds one.`;
 }
-/**
- * The board password rule (T229), from core: no session and no agent, in any mode, sets the board password, or reads,
- * copies, replaces or searches the board config. Here each tool gives its paths: a file tool's path, a search tool's
- * folder, and each field that a command tool runs, from the terminal tool's own cwd. Undefined, or the reason.
- */
 function boardProblem(input) {
   const tool = input.tool_name ?? "", ti = input.tool_input ?? {}, home = process.env.HOME || homedir();
-  // Without core, a call whose text names the config folder or the option word is refused (fail closed).
   if (core.error) return /sage-board|--set-password/i.test(fields(ti).join("\n")) ? `the board password rule (T229) could not load (${core.error?.message ?? core.error}), so a call that names the board config or --set-password is refused.` : undefined;
   let cwd = typeof input.cwd === "string" && input.cwd ? input.cwd : process.cwd();
   if (/^(?:Read|Write|Edit|MultiEdit|NotebookEdit)$/.test(tool)) {
@@ -1082,7 +744,6 @@ function boardProblem(input) {
   }
   if (tool === "Grep" || tool === "Glob") return core.boardPathProblem(typeof ti.path === "string" && ti.path ? ti.path : ".", cwd, { home, search: true });
   if (!SHELL_TOOLS.test(tool)) return undefined;
-  // The terminal tool runs in its own cwd, as the agent rule reads it; a variable there leaves the folder unknown.
   const terminal = /^mcp__terminal__/.test(tool) && typeof ti.cwd === "string" && ti.cwd ? ti.cwd : undefined;
   if (terminal) cwd = from(cwd, terminal.replace(/^~(?=\/|$)/, home));
   const uncertain = terminal !== undefined && /[$`~]/.test(terminal.replace(/^~(?=\/|$)/, ""));
@@ -1093,20 +754,13 @@ function boardProblem(input) {
   return undefined;
 }
 
-/**
- * The canonical path for a compare: the real path of its longest part that exists (a link is followed, also when its
- * target is missing), in lower case and NFC, because APFS ignores both. On a volume that is case-sensitive, this can only
- * refuse more.
- */
 const canonical = (path) => fold(real(path));
 function real(path, strict = false) {
   let rest = [];
-  // The system opens no path over 4096 characters, so the walk below starts at the last part within them. Step by step,
-  // a word of a million characters took over a minute (F-T229-20).
   if (!strict && path.length > 4096) [path, rest] = [path.slice(0, path.lastIndexOf("/", 4096)) || "/", path.slice(path.lastIndexOf("/", 4096) + 1).split("/")];
   for (let hops = 0; ; ) {
     try {
-      return join(realpathSync.native(path), ...rest); // the system resolves ".." after each link; only the missing rest is joined
+      return join(realpathSync.native(path), ...rest);
     } catch (error) {
       if (strict && !["ENOENT", "ELOOP"].includes(error.code)) throw error;
       let link = false;
@@ -1114,7 +768,7 @@ function real(path, strict = false) {
         link = lstatSync(path, { throwIfNoEntry: false })?.isSymbolicLink();
       } catch (error) {
         if (strict && !["ENOENT", "ELOOP"].includes(error.code)) throw error;
-      } // Other callers keep treating an invalid path as missing.
+      }
       if (link) {
         if (++hops > 64) throw new Error(`too many links in ${path}`);
         path = from(dirname(path), readlinkSync(path));
@@ -1124,26 +778,23 @@ function real(path, strict = false) {
   }
 }
 
-/** Preserve command arrays while checking every other string, including nested tool inputs. */
 function commandFields(ti) {
   return fields(Array.isArray(ti.command) ? { ...ti, command: ti.command.join(" ") } : ti);
 }
 
-/** The fields that a command tool runs: every field but the description, because a description runs nothing (T386). */
 const runFields = (ti) => commandFields({ ...ti, description: undefined });
 
 function gitGate(event, command, state, cwd, main, session) {
-  const first = main ? firstUpload(command) : undefined; // an agent never gets the exception
+  const first = main ? firstUpload(command) : undefined;
   if (first) {
     const { decision, reason } = firstCreation(first);
     return decide(event, decision, reason);
   }
-  const move = main ? firstMove(command) : undefined; // an agent never gets this exception either
+  const move = main ? firstMove(command) : undefined;
   if (move) {
     const { decision, reason } = moveCheck(move);
     return decide(event, decision, reason);
   }
-  // With the session, a shared logbook's task branch takes a push only from its owning chief (T822).
   const owner = session === undefined ? undefined : (dir, branch) => stateTool.branchBar(realpathSync.native(dir), branch, session);
   const push = pushProblem(command, cwd, { owner });
   if (push) return deny(event, push);
@@ -1152,9 +803,7 @@ function gitGate(event, command, state, cwd, main, session) {
   if (merge.problem) return deny(event, merge.problem);
   if (!main) return deny(event, "an agent never merges. Report the pull request as ready.");
   if (!state.autopilot) return deny(event, 'autopilot is off, so the user merges. Report the pull request as ready. The user turns it on with the message "autopilot on", alone.');
-  // A state tool that cannot load refuses first, before the hook asks GitHub for anything.
   if (stateTool.error) return deny(event, `the merge check refuses: it could not run (${stateTool.error?.message ?? stateTool.error}), so it refuses every merge. Tell the user.`);
-  // The pull request's head branch, from GitHub: each task of the pull request must own it (F-T273-8).
   let head;
   try {
     if (core.error) throw core.error;
@@ -1165,7 +814,6 @@ function gitGate(event, command, state, cwd, main, session) {
   let verdict;
   try {
     if (stateTool.error) throw stateTool.error;
-    // Only a task of the merged project's logbook approves: its folder, resolved as for a lead (F-T273-9).
     verdict = stateTool.mergeCheck(merge.sha, process.env, { pr: merge.pr, head, project: realpathSync.native(cwd), session });
   } catch (e) {
     verdict = { reason: `it could not run (${e?.message ?? e}), so it refuses every merge. Tell the user.` };
@@ -1173,16 +821,11 @@ function gitGate(event, command, state, cwd, main, session) {
   return verdict?.ok === true ? undefined : deny(event, `the merge check refuses: ${verdict?.reason}`);
 }
 
-/**
- * The agent's command rules: the gh rule (H3) here, then core's stash and process rules (T931), which the Codex gate
- * holds too. Undefined when the command line passes; else the reason for the refusal.
- */
 const NO_GH = `an agent runs only these gh commands: ${Object.entries(core.AGENT_GH ?? {}).map(([group, subs]) => `gh ${group} ${subs.join(", ")}`).join("; ")}; and gh api with GET. Ask the chief to run any other gh command.`;
 export function agentProblem(command, cwd, path = process.env.PATH ?? "") {
   try {
     programsRun(command, cwd, path);
   } catch (e) {
-    // A line that the hook cannot read and whose text names gh: the cause and the way forward first, then the rule (F-T815-9).
     if (/\bgh(?:\.exe)?\b/i.test(bare(command))) return `${core.unreadable(e, "gh")} ${NO_GH[0].toUpperCase()}${NO_GH.slice(1)}`;
     return core.agentCommandProblem(command, cwd, path);
   }
@@ -1191,42 +834,23 @@ export function agentProblem(command, cwd, path = process.env.PATH ?? "") {
   return core.agentCommandProblem(command, cwd, path);
 }
 
-/** A sage agent's role from its agent type, and whether core keeps that role from editing (a role that core does not know: yes). */
 function readOnlyRole(agentType) {
   const role = String(agentType).replace(/^sage:/i, "").toLowerCase();
   try { return { role, denied: core.roleEditDenied({ sage: true, role }) }; } catch { return { role, denied: true }; }
 }
-/**
- * The folders where a read-only role writes, outside the project: the temp folder (core.TEMP), and for the investigate agent
- * also the pages folder of its project's logbook (the state tool's pagesRoot), for its research page (T932).
- */
 function scratchOf(role, cwd) {
   if (role !== "investigate") return core.TEMP;
   try { return [...core.TEMP, stateTool.pagesRoot(realpathSync.native(cwd), process.env)]; } catch { return core.TEMP; }
 }
 const PAGE_NOTE = "The investigate agent writes only its pages, in the task's pages folder that its brief names, and files in its scratch folder.";
-/**
- * A read-only role's shell write (T933, gap G21). In sage mode, a sage agent whose role core keeps from editing
- * (roleEditDenied: a reviewer, QA, the PE, the lead, the investigate and evidence-review agents) runs no command with a
- * write form (core's commandWrites), as in the Codex gate. A redirection into its scratch folders (scratchOf), outside
- * the project, passes, so that the agent keeps its output and probes there. A sage role that core does not know counts
- * as read-only. A disguised write (a variable, a script's own code) is a limit (standing order 70).
- * Undefined when the commands pass; else the reason for the refusal.
- */
 export function readOnlyWrite(agentType, commands, cwd) {
   const { role, denied } = readOnlyRole(agentType), scratch = denied ? scratchOf(role, cwd) : [];
   const write = denied ? commands.find((command) => { try { return core.commandWrites(command, cwd, scratch, { readOnly: true }); } catch { return true; } }) : undefined;
   return write === undefined ? undefined : `in sage mode, the ${role} agent changes no files, also not from the shell, so ${quoted(bare(write))} is refused: it has a write form (for example sed -i, a redirection to a file, tee, cp, mv, rm, code in node -e, or a git command that changes the checkout, such as git checkout, reset, commit or branch -D). ${role === "investigate" ? `${PAGE_NOTE} Redirect a page into its pages folder, with a literal path.` : "Report the finding instead."} ${core.READ_ONLY_SHELL_WAY ?? ""}`;
 }
-/**
- * A read-only role's file tool (T932): in sage mode it writes only into the role's scratch folders (scratchOf), outside
- * the project, as its shell does. The other read-only agent files take away the file tools; the investigate agent keeps
- * them for its pages. Undefined when the write passes; else the reason for the refusal. Any doubt refuses.
- */
 export function readOnlyFile(input) {
   const { role, denied } = readOnlyRole(input.agent_type);
   if (!denied) return undefined;
-  // Each path that the call gives, file_path and notebook_path, is in a scratch folder.
   const ti = input.tool_input ?? {}, paths = [ti.file_path, ti.notebook_path].filter((p) => p !== undefined);
   let outside = paths.length ? undefined : "";
   try {
@@ -1244,13 +868,11 @@ export function readOnlyFile(input) {
   return `in sage mode, the ${role} agent changes no project files, so its ${input.tool_name} of ${quoted(outside)} is refused. ${role === "investigate" ? PAGE_NOTE : "Report the finding instead."} A file in your scratch folder in the temp folder passes, with a literal path (for example /tmp/<run>/notes.md).`;
 }
 
-/** Shared program resolution; never executes a program. */
 export function programsRun(command, cwd, path = process.env.PATH ?? "", options) {
   if (commandReader.error) throw commandReader.error;
   return commandReader.programsRun(command, cwd, path, options);
 }
 
-/** Shared merge classification (core's mergeRun). The role, mode and ledger checks remain in gitGate. */
 export function mergeRun(command, cwd = process.cwd()) {
   if (commandPolicy.error) return { problem: "the command policy cannot load, so the merge is refused." };
   return sharedCommands.mergeRun(command, cwd);
@@ -1258,55 +880,33 @@ export function mergeRun(command, cwd = process.cwd()) {
 const mentionsMerge = (text) => commandPolicy.error || commandPolicy.mentionsMerge(text);
 
 const sharedCommands = commandPolicy.commands;
-/**
- * The chief's spelling of a state tool command: node and the tool's absolute path, unquoted, the one form that the
- * sandbox's excluded entry matches (a quoted path stays in the sandbox). A path with a space has no such form, so
- * then it quotes the path, which works while the sandbox is off. SPACE_NOTE says what the sandbox needs; a text puts it
- * as its own sentence before the command, so that the command after it stays one that a shell runs as pasted.
- */
 const nodeCommand = (script, args) => (/\s/.test(script) ? `node "${script}" ${args}` : `node ${script} ${args}`);
 export const stateCommand = (args) => nodeCommand(TOOL, args);
 const SPACE_NOTE = /\s/.test(TOOL) ? "The plugin path has a space: when the sandbox is on, it needs a plugin path without spaces. " : "";
-/** Shared shell parsing; never executes a command. */
 export function shellCommands(src) {
   if (commandReader.error) throw commandReader.error;
   return commandReader.shellCommands(src);
 }
 
-/** The chief of staff's instructions from its agent file, with the state tool's path and the skills to load. */
 export function chiefText() {
   const m = /^---\n([\s\S]*?)\n---\n([\s\S]*)$/.exec(readFileSync(join(ROOT, "agents/chief-of-staff.md"), "utf8"));
   const skills = [...m[1].matchAll(/^\s+-\s+(\S+)\s*$/gm)].map((x) => x[1]);
   return [
     `sage: sage mode is on. You are the user's chief of staff until the user sends the message "sage mode off", alone.`,
     `${SPACE_NOTE}The state tool: ${stateCommand("<command> --project <path>")}. Each shell call starts fresh, so write this full command every time; do not keep it in a variable. Load these skills now: ${skills.join(", ")}.`,
-    // The references come from the same install as the state tool's path (T934, F3): a reference path in these texts is from this folder.
     `The sage plugin's folder: ${ROOT}. A reference path in these instructions and in the sage skill, such as \`core/references/<name>.md\` or \`skills/sage/references/<name>.md\`, is in that folder: read the file there when its trigger holds.`,
     m[2].trim(),
   ].join("\n\n");
 }
 
 const context = (event, text) => ({ hookSpecificOutput: { hookEventName: event, additionalContext: text } });
-/**
- * An id from an event (a session, an agent or a tool use) as a file name: one safe character set, at most 128
- * characters, so that it can never name a path outside its directory or one the file system refuses. Every write and
- * every comparison of an id goes through this one mapping.
- */
 const safe = (raw) => String(raw ?? "").replace(/[^\w.-]/g, "_").slice(0, 128);
-/** An agent's name or id as TaskStop compares it: NFKC, no format character (a zero-width space), trimmed, in lower case (F-T301-53). */
 const agentName = (raw) => String(raw ?? "").normalize("NFKC").replace(/\p{Cf}/gu, "").trim().toLowerCase();
 
-/** A refusal, or a question to the user. Its reason can quote the command, so its control characters are escaped: they can change what a terminal shows. */
 const decide = (event, decision, reason) => ({ hookSpecificOutput: { hookEventName: event, permissionDecision: decision, permissionDecisionReason: `sage: ${String(reason).replace(/\p{Cc}/gu, (c) => `\\u${c.charCodeAt(0).toString(16).padStart(4, "0")}`)}` } });
 const deny = (event, reason) => decide(event, "deny", reason);
 
-/** A brief's first line, "Run R<n> · task T<n>" (T308), with any text after it that does not extend the task's id (T621): only R and digits pass. */
 const BRIEF_LINE = /^Run (R[1-9]\d{0,8}) · task (T[1-9]\d*)(?![\w/])/;
-/**
- * The run mark of the main session's spawn (R1933-1): the brief's run, unless the logbook of the spawn's folder has that
- * run on another task than the brief's "task T<n>" (then no mark). For a review or QA run of that role that runs, also the
- * tip of its task's branch at the start: the commit that the review sees, which its stop keeps when the branch did not move.
- */
 function briefMark(prompt, role, cwd) {
   const [, run, task] = BRIEF_LINE.exec(String(prompt ?? "").split("\n", 1)[0]) ?? [];
   if (!run) return { run: undefined };
@@ -1319,16 +919,8 @@ function briefMark(prompt, role, cwd) {
     return { run };
   }
 }
-/** The run id of a brief's first line (BRIEF_LINE), or undefined. */
 const briefRun = (prompt) => BRIEF_LINE.exec(String(prompt ?? "").split("\n", 1)[0])?.[1];
 
-/**
- * All sessions share numbered capacity slots. One short filesystem transaction protects allocation and lifecycle
- * changes, including legacy slots: a released slot number must never be mistaken for its next reservation.
- * New lead and child slots retain exact call identities and bind from Agent's structured result, or a lead's helper at
- * its SubagentStart when its call is the only pending one of its role (T581). Start order is not parent evidence.
- * Incomplete marks count conservatively; unconfirmed launches retain a one-hour lease.
- */
 export function slotsFor(dir, session, now = Date.now(), rawSession = session, leadRuns = liveLeadRun) {
   const STALE = { pending: 10 * 60_000, agent: 60 * 60_000 };
   const id = (raw) => safe(raw) || undefined;
@@ -1346,7 +938,7 @@ export function slotsFor(dir, session, now = Date.now(), rawSession = session, l
   };
   const marks = (slot) => {
     try { return readdirSync(join(dir, slot)); }
-    catch { return []; } // unreadable metadata counts conservatively during admission
+    catch { return []; }
   };
   const mark = (slot, prefix) => marks(slot).find(m => m.startsWith(prefix))?.slice(prefix.length);
   const has = (slot, name) => marks(slot).includes(name);
@@ -1362,18 +954,15 @@ export function slotsFor(dir, session, now = Date.now(), rawSession = session, l
     utimesSync(join(where, name), new Date(now), new Date(now));
   };
   const stopped = (agent, hashed = false) => noted(`ended-${hashed ? agent : hash(agent)}`);
-  // A run's helper notes, shared by every session, so that one child backs one run also across sessions and after a
-  // lease ends (F-T286-1, F-T286-7): started-<key> when its slot is taken, stopped-<key> with its report at its stop.
   const helpers = join(dir, "..", "helpers");
   const helperNote = (name) => {
     try { return readFileSync(join(helpers, name), "utf8"); }
     catch (error) { if (error.code === "ENOENT") return undefined; throw error; }
   };
-  const parsed = (text) => { try { return text === undefined ? undefined : JSON.parse(text); } catch { return {}; } }; // unreadable: not clean
+  const parsed = (text) => { try { return text === undefined ? undefined : JSON.parse(text); } catch { return {}; } };
   const free = (slot) => {
     const call = mark(slot, "call-");
     if ((has(slot, "exact") || mark(slot, "bound-") !== undefined) && has(slot, "ok") && call) note(`closed-${call}`, "", join(dir, "..", "slot-events", mark(slot, "scope-") ?? scope));
-    // Keep failures visible. An unsuccessful cleanup must not report that capacity was released.
     try { rmdirSync(join(dir, slot)); }
     catch { rmSync(join(dir, slot), { recursive: true, force: true }); }
   };
@@ -1385,22 +974,13 @@ export function slotsFor(dir, session, now = Date.now(), rawSession = session, l
       catch (error) { if (error.code !== "EEXIST") throw error; }
       Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, 5);
     }
-    // Never steal an old lock: its process may still own it. No process inspection is needed.
     if (!held) throw Error("the agent-slot lock is busy; no new agent can start until the slot state is available");
     try { return fn(...args); }
     finally { rmdirSync(lock); }
   };
   const expire = () => {
-    // A launched agent fires SubagentStart, or its first tool event, within seconds, and that marks its slot (possible-launch).
-    // A pending slot with no such sign after the 10-minute grace never launched, so it frees (T255 L2). A bound or
-    // possibly launched slot keeps the one-hour lease, which its agent's events renew.
     const age = slot => has(slot, "possible-launch") || mark(slot, "agent-") !== undefined || mark(slot, "bound-") !== undefined ? STALE.agent : STALE.pending;
     const stale = list().filter(slot => now - statSync(join(dir, slot)).mtimeMs > age(slot));
-    // A lead's slot never expires while it has a running child (T255 H1), nor, in its own session, while its lead run still
-    // runs in its logbook (T482, T353): a lead that waits keeps its slot however long the wait, and that session's TaskStop
-    // or the sage's end of the lead run ends it. The slot of another session's lead keeps only the one-hour lease (R1762-2):
-    // a live lead has an event at least every few minutes, its own or a helper's (its wait returns within 9), so an hour
-    // with none means that its session ended (a restart or a crash), and no TaskStop of this session can stop it.
     const parents = new Set(list().filter(slot => !stale.includes(slot)).map(slot => mark(slot, "parent-")).filter(Boolean));
     const own = new Set(ofSession());
     const running = slot => {
@@ -1411,15 +991,12 @@ export function slotsFor(dir, session, now = Date.now(), rawSession = session, l
     for (const slot of stale) if (!parents.has(mark(slot, "bound-")) && !running(slot)) free(slot);
   };
   const counts = project => ({ total: list().length, project: list().filter(slot => (mark(slot, "project-") ?? project) === project).length });
-  // Roles compare in lower case: take() marks the spawned type in lower case, and an event reports its own case (F-T255-13).
   const matching = (slot, role) => !role || !mark(slot, "role-") || mark(slot, "role-") === safe(String(role).toLowerCase());
   const pendingFor = role => ofSession().filter(slot => {
     if (!has(slot, "ok") || mark(slot, "pending-") === undefined || !matching(slot, role)) return false;
     const saved = marks(slot), prefixes = ["project-", "session-", "tool-", "pending-"];
     if (saved.length === 5 && saved.includes("ok") && prefixes.every(prefix => saved.filter(name => name.startsWith(prefix) && name.length > prefix.length).length === 1)
       && mark(slot, "tool-") === mark(slot, "pending-")) {
-      // Main's old complete format had no call identity. Adopt it under the mutation lock without inferring
-      // a native call, role or parent. This token identifies the reservation, never its reusable slot number.
       add(slot, `call-legacy-${randomUUID()}`);
     }
     return true;
@@ -1436,19 +1013,14 @@ export function slotsFor(dir, session, now = Date.now(), rawSession = session, l
     if (prior) return prior;
     const pending = pendingFor(role);
     const value = { calls: pending.map(slot => mark(slot, "call-")).filter(Boolean), legacyOnly: pending.every(slot => !has(slot, "exact")) };
-    // This records possible originating calls, never a guessed parent. Later calls cannot claim an old observation.
     note(`observed-${hash(agent)}`, JSON.stringify(value));
     return value;
   };
   const ownsAgent = (slot, agent) => has(slot, "exact") || mark(slot, "bound-") !== undefined ? mark(slot, "bound-") === hash(agent) : mark(slot, "agent-") === id(agent);
   const release = (agent, report) => {
     if (!valid(agent)) return;
-    // Terminal evidence before searching or freeing: a stop, also the main session's TaskStop, is an end, so a stopped
-    // lead starts no child after it (F-T273-14).
     note(`ended-${hash(agent)}`);
     for (const slot of ofSession()) {
-      // A lead's end frees no child's slot: a child may still run, and keeps its slot until its own stop or its lease (T255 M1).
-      // A helper's stop is the end of its run's real work, which run done and the verdict ask for (F-T284-9).
       if (ownsAgent(slot, agent)) {
         const key = mark(slot, "helper-");
         if (key && (report || helperNote(`stopped-${key}`) === undefined)) note(`stopped-${key}`, JSON.stringify({ ...parsed(helperNote(`started-${key}`)), ...report }), helpers);
@@ -1456,20 +1028,18 @@ export function slotsFor(dir, session, now = Date.now(), rawSession = session, l
       }
     }
   };
-  // A child's activity renews its lead's slot too, so a lead that waits for its children keeps its slot (T255 H1).
   const renew = (slots) => {
     const parents = new Set(slots.map(slot => mark(slot, "parent-")).filter(Boolean));
     for (const slot of [...slots, ...ofSession().filter(slot => parents.has(mark(slot, "bound-")))]) utimesSync(join(dir, slot), new Date(now), new Date(now));
   };
-  /** Joins an agent to its call's pending slot, once. False when the slot has no pending call. */
   const bindTo = (slot, agent) => {
     const pending = mark(slot, "pending-");
     if (!pending) return false;
     note(`binding-${hash(agent)}`, mark(slot, "call-"));
     renameSync(join(dir, slot, `pending-${pending}`), join(dir, slot, `bound-${hash(agent)}`));
-    if (mark(slot, "role-") === "sage_lead") note(`lead-${hash(agentName(agent))}`); // the agent is a lead, also after its slot frees (T482); case-folded (R1763-3)
+    if (mark(slot, "role-") === "sage_lead") note(`lead-${hash(agentName(agent))}`);
     if (!has(slot, "exact")) add(slot, `agent-${id(agent)}`);
-    add(slot, `folded-${hash(agentName(agent))}`); // holds compares agent ids case-folded (F-T301-53)
+    add(slot, `folded-${hash(agentName(agent))}`);
     return true;
   };
   const lease = (key) => Math.max(0, ...list().filter((slot) => mark(slot, "helper-") === key).map((slot) => STALE.agent - (now - statSync(join(dir, slot)).mtimeMs)));
@@ -1477,7 +1047,6 @@ export function slotsFor(dir, session, now = Date.now(), rawSession = session, l
     if (!valid(agent) || stopped(agent)) return;
     const own = ofSession().filter(slot => ownsAgent(slot, agent));
     if (own.length) return renew(own);
-    // Until the result supplies the join, activity can renew possible reservations but cannot assign their parents.
     if (noted(`binding-${hash(agent)}`)) return;
     const observation = observe(agent, role);
     const candidates = pendingFor(role).filter(slot => observation.calls.includes(mark(slot, "call-")));
@@ -1498,12 +1067,8 @@ export function slotsFor(dir, session, now = Date.now(), rawSession = session, l
       const prior = ofSession().find(slot => mark(slot, "call-") === call);
       if (prior) return has(prior, "ok") && mark(prior, "project-") === project && mark(prior, "role-") === safe(role) && mark(prior, "caller-") === owner && (!(exact || mark(prior, "bound-") !== undefined) || mark(prior, "input-") === hash(input))
         ? { ok: true } : { refused: "identity", ...counts(project) };
-      // One lead per task and logbook, across sessions (F-T273-5), and one lead per name lead-T<n> in a session, in any
-      // logbook, so that a TaskStop by that name stops one lead (F-T273-16).
       const sameName = slot => mark(slot, "task-") === lead.task && mark(slot, "role-") === "sage_lead";
       if (role === "sage:lead" && lead) {
-        // Another session's lead slot of this task and logbook for a lead run that no longer runs: the sage ended that run
-        // and recorded a new one, so that lead writes and starts nothing more. It ends and frees (R1762-2).
         const mine = new Set(ofSession());
         for (const slot of list().filter(slot => sameName(slot) && mark(slot, "logbook-") === lead.logbook && !mine.has(slot) && mark(slot, "run-") !== lead.run)) {
           const bound = mark(slot, "bound-");
@@ -1513,7 +1078,6 @@ export function slotsFor(dir, session, now = Date.now(), rawSession = session, l
         const held = list().find(slot => sameName(slot) && mark(slot, "logbook-") === lead.logbook) ?? [...mine].find(sameName);
         if (held) return { refused: "task", elsewhere: !mine.has(held), run: mark(held, "run-"), ...counts(project) };
       }
-      // One child backs one run: a live helper of the run, or one that stopped, refuses another (F-T284-9).
       if (helper && helperNote(`started-${helper.key}`) !== undefined) return { refused: "helper", ...counts(project) };
       let mine;
       for (let k = 1; k <= capTotal && !mine; k++) {
@@ -1524,18 +1088,16 @@ export function slotsFor(dir, session, now = Date.now(), rawSession = session, l
       try {
         const initial = [`project-${project}`, `session-${session}`, `tool-${id(tu)}`, `pending-${id(tu)}`, `call-${call}`, `caller-${owner}`, `scope-${scope}`, `input-${hash(input)}`];
         if (role) initial.push(`role-${safe(role)}`);
-        if (role === "sage:lead" && lead) initial.push(`task-${lead.task}`, `logbook-${lead.logbook}`); // the lead's own task and logbook (T273)
-        if (role === "sage:lead" && lead?.named) initial.push("named"); // Claude Code knows the lead by its name lead-T<n> too (T434)
-        // The slot's run, so that the board's Agents page joins it to its logbook row (T308): a lead's lead run (T273), a
-        // helper's run (its name), else the run of the brief's first line, as the main session's spawn checked it (brief).
+        if (role === "sage:lead" && lead) initial.push(`task-${lead.task}`, `logbook-${lead.logbook}`);
+        if (role === "sage:lead" && lead?.named) initial.push("named");
         const run = role === "sage:lead" && lead ? lead.run : helper ? helper.run : brief === undefined ? briefRun(input?.prompt) : brief.run;
         if (run) initial.push(`run-${run}`);
-        if (helper) initial.push(`helper-${helper.key}`); // the run that this child helps with (F-T284-9)
+        if (helper) initial.push(`helper-${helper.key}`);
         if (exact) initial.push("exact");
         if (caller !== undefined) initial.push(`parent-${hash(caller)}`);
         for (const m of initial) add(mine, m);
-        if (role === "sage:lead" && lead?.folder) writeFileSync(join(dir, mine, "folder"), lead.folder); // where the lead's logbook is (F-T284-11)
-        if (brief?.tip) writeFileSync(join(dir, mine, "tip"), brief.tip); // the commit that the review starts on (R1933-1)
+        if (role === "sage:lead" && lead?.folder) writeFileSync(join(dir, mine, "folder"), lead.folder);
+        if (brief?.tip) writeFileSync(join(dir, mine, "tip"), brief.tip);
         const others = list().filter(slot => slot !== mine);
         const projectSlots = others.filter(slot => (mark(slot, "project-") ?? project) === project);
         let refused;
@@ -1545,7 +1107,7 @@ export function slotsFor(dir, session, now = Date.now(), rawSession = session, l
         if (refused) { free(mine); return { refused, ...counts(project) }; }
         add(mine, "ok");
         if (helper) note(`started-${helper.key}`, JSON.stringify({ folder: helper.folder, task: helper.task, role: helper.role, run: helper.run, tip: helper.tip }), helpers);
-        utimesSync(join(dir, mine), new Date(now), new Date(now)); // after the last mark: a slot's age counts from the clock that judges it
+        utimesSync(join(dir, mine), new Date(now), new Date(now));
         return { ok: true };
       } catch (error) {
         free(mine);
@@ -1555,11 +1117,9 @@ export function slotsFor(dir, session, now = Date.now(), rawSession = session, l
     bind: transaction((agent, role) => {
       if (!valid(agent) || stopped(agent) || ofSession().some(slot => ownsAgent(slot, agent)) || noted(`binding-${hash(agent)}`) || noted(`started-${hash(agent)}`)) return;
       const observation = observe(agent, role);
-      note(`started-${hash(agent)}`); // event identity survives capacity release and lease expiry
+      note(`started-${hash(agent)}`);
       touch(agent, role);
       const pending = pendingFor(role).filter(slot => observation.calls.includes(mark(slot, "call-")));
-      // A foreground helper's result comes only after its stop, and no start event names its call (T581). So a lead's helper
-      // binds here when its call is the only pending one of the role. Two such calls stay unbound, for the result alone.
       if (!observation.legacyOnly) return void (observation.calls.length === 1 && pending.length === 1 && mark(pending[0], "helper-") && bindTo(pending[0], agent));
       if (pending.some(slot => has(slot, "exact"))) return;
       const slot = pending[0];
@@ -1568,11 +1128,8 @@ export function slotsFor(dir, session, now = Date.now(), rawSession = session, l
     result: transaction((tool, caller, response) => {
       if (!valid(tool) || (caller !== undefined && !valid(caller))) return;
       const slot = ofSession().find(slot => mark(slot, "call-") === callKey(tool, caller));
-      // A call whose slot was stopped before its result binds (TaskStop of lead-T<n>): its agent counts as ended (F-T273-17).
       if (!slot && noted(`closed-${callKey(tool, caller)}`) && valid(response?.agentId)) return void note(`ended-${hash(response.agentId)}`);
-      // Leave an existing legacy FIFO binding unchanged. An unbound main call can still use the exact result.
       if (!slot || (!has(slot, "exact") && mark(slot, "agent-") !== undefined && mark(slot, "bound-") === undefined)) return;
-      // An executed tool with an unreadable result may have launched an agent. It keeps its credit.
       add(slot, "possible-launch");
       if (!response || typeof response !== "object" || Array.isArray(response) || !valid(response.agentId) || !["completed", "async_launched"].includes(response.status)) return;
       const agent = response.agentId, bound = mark(slot, "bound-");
@@ -1583,7 +1140,6 @@ export function slotsFor(dir, session, now = Date.now(), rawSession = session, l
       if (bound !== undefined && bound !== hash(agent)) return;
       if (bound === undefined && (ofSession().some(other => other !== slot && ownsAgent(other, agent)) || !bindTo(slot, agent))) return;
       if (response.status === "completed") note(`ended-${hash(agent)}`);
-      // Recheck the child after binding. An async result after parent cleanup may describe a later launch; keep it charged.
       if (stopped(agent)) release(agent);
       else utimesSync(join(dir, slot), new Date(now), new Date(now));
     }),
@@ -1591,88 +1147,61 @@ export function slotsFor(dir, session, now = Date.now(), rawSession = session, l
     drop: transaction((tool, caller) => {
       const slot = ofSession().find(slot => mark(slot, "call-") === callKey(tool, caller))
         ?? (caller === undefined ? ofSession().find(slot => !has(slot, "exact") && mark(slot, "pending-") === id(tool)) : undefined);
-      // A failed exact call launched no agent that still runs, so its slot frees even when another start marked it (T255 L2).
-      // An old-format call keeps the slot after a possible start: its agent cannot be told from another spawn's.
       if (slot && (has(slot, "exact") || (mark(slot, "pending-") !== undefined && !has(slot, "possible-launch")))) {
-        // A failed call started no helper, so its run may get one (F-T284-9).
         if (mark(slot, "helper-")) rmSync(join(helpers, `started-${mark(slot, "helper-")}`), { force: true });
-        if (mark(slot, "bound-")) note(`ended-${mark(slot, "bound-")}`); // a helper that its start bound (T581)
+        if (mark(slot, "bound-")) note(`ended-${mark(slot, "bound-")}`);
         free(slot);
       }
     }),
     touch: transaction(touch),
-    /** The main session's TaskStop of lead-T<n>: it ends and frees this session's one lead slot of that name, bound or not (F-T273-13, F-T273-14, F-T273-16). */
-    /** A run's helper, in any session: did it start, and its stop's record (folder, task, role, result, severities, sha), or undefined. */
     helper: (key) => ({ owned: helperNote(`owned-${key}`) !== undefined, started: helperNote(`started-${key}`) !== undefined, stopped: parsed(helperNote(`stopped-${key}`)) }),
-    /** Did the lead's wait name this helper's report, which the hook cannot read, to its lead (T523)? tell notes that it did. */
     told: (key) => helperNote(`told-${key}`) !== undefined,
     tell: (key) => note(`told-${key}`, "", helpers),
-    /** A run that its lead added: the hook saw the lead's run add print its id (F-T289-16). */
     own: (key) => note(`owned-${key}`, "", helpers),
-    /** The time in ms for which a slot of this helper still holds its lease, or 0: a helper whose slot was freed without a stop left (F-T289-13, F-T289-31). */
     lease,
-    /** The runs of the helpers whose keys start with prefix (a lead's helpers) that started and did not stop, while a slot holds their lease (T482). */
     running: (prefix) => {
       let names = [];
       try { names = readdirSync(helpers); } catch (error) { if (error.code !== "ENOENT") throw error; }
       const keys = names.filter((n) => n.startsWith(`started-${prefix}.`)).map((n) => n.slice("started-".length));
       return keys.filter((key) => !names.includes(`stopped-${key}`) && lease(key) > 0).map((key) => key.slice(prefix.length + 1)).sort((a, b) => a.slice(1) - b.slice(1));
     },
-    /**
-     * The sage ended these helpers' runs: each one's stop is noted with no report, so that its lead goes on (T482, T371).
-     * The slot stays: the helper's own stop frees it and puts its report in this note, else its lease ends (T504).
-     */
     endHelpers: transaction((keys) => {
       for (const key of keys) {
         const started = helperNote(`started-${key}`);
         if (started !== undefined && helperNote(`stopped-${key}`) === undefined) note(`stopped-${key}`, JSON.stringify(parsed(started)), helpers);
       }
     }),
-    /**
-     * Would the main session's SendMessage to this target wake a lead with no slot (T482, F3)? lead-T<n> (any case, as
-     * TaskStop reads it) with no live lead slot of T<n> in this session, or the agent id of a lead that ended or whose slot
-     * is gone. An id compares as the slots fold it: trimmed, in any case (folded-, R1763-3). Any other target: false.
-     */
     endedLead: (to) => {
       const name = agentName(to), live = (slot) => mark(slot, "role-") === "sage_lead" && has(slot, "ok") && !stopped(mark(slot, "bound-") ?? "", true);
       if (/^lead-t[1-9]\d*$/.test(name)) return !ofSession().some((slot) => live(slot) && mark(slot, "task-") === `T${name.slice("lead-t".length)}`);
       return Boolean(name) && noted(`lead-${hash(name)}`) && !ofSession().some((slot) => live(slot) && mark(slot, "folded-") === hash(name));
     },
-    /** Removes the helper notes of the lead runs with these keys (F-T289-13). */
     prune: (leads) => {
       let names = [];
       try { names = readdirSync(helpers); } catch (error) { if (error.code !== "ENOENT") throw error; }
       for (const name of names) if (leads.some((lead) => name.slice(name.indexOf("-") + 1).startsWith(`${lead}.`))) rmSync(join(helpers, name), { force: true });
     },
-    /** The stop records of the helpers whose keys start with prefix: a lead's helpers (F-T289-6). */
     stops: (prefix) => {
       let names = [];
       try { names = readdirSync(helpers); } catch (error) { if (error.code !== "ENOENT") throw error; }
       return names.filter((n) => n.startsWith(`stopped-${prefix}`)).map((n) => parsed(helperNote(n)));
     },
-    /** The helper slot of this session's agent: its key and its started note, or undefined. */
     helperFor(agent) {
       const slot = valid(agent) && ofSession().find((slot) => ownsAgent(slot, agent) && mark(slot, "helper-"));
       return slot ? { key: mark(slot, "helper-"), ...parsed(helperNote(`started-${mark(slot, "helper-")}`)) } : undefined;
     },
-    /**
-     * The run of the slot that this session's agent holds, which the hook marked at the spawn (T308), or undefined (T529).
-     * shared: another slot of the session has the same run mark (two projects' runs with one id), so the run names no one folder.
-     */
     runOf(agent) {
       const slots = ofSession().filter((slot) => has(slot, "ok"));
       const slot = valid(agent) && !stopped(agent) && slots.find((slot) => ownsAgent(slot, agent));
       const run = slot && mark(slot, "run-");
       let tip = "";
-      try { tip = readFileSync(join(dir, slot, "tip"), "utf8"); } catch {} // the commit at the review's start, when the spawn saved one (R1933-1)
+      try { tip = readFileSync(join(dir, slot, "tip"), "utf8"); } catch {}
       return /^R[1-9]\d*$/.test(run ?? "") ? { run, tip: /^[0-9a-f]{40}$/.test(tip) ? tip : "", shared: slots.some((other) => other !== slot && mark(other, "run-") === run) } : undefined;
     },
-    /** Does a slot of this session hold this agent: a running agent, not a shell task (F-T301-27)? Its id compares case-folded, as agentName gives it (F-T301-53). */
     holds: (agent) => {
       const name = valid(agent) && agentName(agent);
       return Boolean(name) && ofSession().some((slot) => ownsAgent(slot, agent) || mark(slot, "folded-") === hash(name) || mark(slot, "agent-")?.toLowerCase() === id(name));
     },
-    /** Does this session hold a lead slot of this task whose spawn had no name field (T434)? */
     unnamedLead: (task) => ofSession().some(slot => mark(slot, "role-") === "sage_lead" && mark(slot, "task-") === task && !has(slot, "named")),
     stopLead: transaction((task) => {
       for (const slot of ofSession().filter(slot => mark(slot, "role-") === "sage_lead" && mark(slot, "task-") === task)) {
@@ -1681,7 +1210,6 @@ export function slotsFor(dir, session, now = Date.now(), rawSession = session, l
         free(slot);
       }
     }),
-    /** The task, logbook and lead run of the lead slot that this agent holds: bound to it by the spawn's result, in this session, not ended. Undefined otherwise. */
     leadOf(agent) {
       if (!valid(agent) || stopped(agent)) return undefined;
       const slot = ofSession().find(slot => has(slot, "ok") && mark(slot, "role-") === "sage_lead" && mark(slot, "bound-") === hash(agent));
@@ -1696,7 +1224,6 @@ export function slotsFor(dir, session, now = Date.now(), rawSession = session, l
         if (mark(slot, "parent-") !== undefined) continue;
         const agent = mark(slot, "agent-");
         if (agent !== undefined && !ids.map(id).includes(agent)) free(slot);
-        // Exact lead ownership is not inferred from the main session's possibly incomplete task registry.
       }
     }),
     log(text) {
@@ -1706,26 +1233,18 @@ export function slotsFor(dir, session, now = Date.now(), rawSession = session, l
   };
 }
 
-/** Does this lead run still run for its task in the logbook of this folder? False when the logbook cannot be read. */
 function liveLeadRun(folder, task, run) {
   try { return logbookOf(folder).leadRun(task)?.id === run; } catch { return false; }
 }
 
-// The mode, autopilot and slot state lives under the sage root, never in the temp folder, which sandboxed commands may write.
-// The hook finds the root itself, by the state tool's rule (sageRoot in sage.mjs), so that it still works when the state
-// tool does not load. Every merge then stays refused, because the merge check needs the tool.
 const stateDir = () => process.env.SAGE_HOOKS_STATE ?? join(process.env.SAGE_HOME ?? join(process.env.CLAUDE_CONFIG_DIR ?? join(homedir(), ".claude"), "sage"), ".hooks");
 
-// Node gives this module its real path, so a path to the hook through a symbolic link is compared as a real path too.
 if (process.argv[1] && realpathSync(process.argv[1]) === fileURLToPath(import.meta.url) && process.env.SAGE_HOOKS !== "off") {
   let input;
   try {
     input = JSON.parse(readFileSync(0, "utf8"));
     const session = safe(input.session_id ?? "unknown");
     const file = join(stateDir(), `${session}.json`);
-    // Only a regular file with one link and at most 1 MB holds state. A FIFO could block the read until the hook's timeout,
-    // so the file opens without a wait; a symbolic link does not open; a hard link or a huge file (which crashes the read)
-    // throws. So does a path the hook cannot open: the catch below fails closed (F-R1517-1, R1532-2, R1532-3).
     let state = {}, fd;
     try { fd = openSync(file, constants.O_RDONLY | (constants.O_NONBLOCK ?? 0) | (constants.O_NOFOLLOW ?? 0)); } catch (error) { if (error.code !== "ENOENT") throw error; }
     if (fd !== undefined) {
@@ -1739,13 +1258,11 @@ if (process.argv[1] && realpathSync(process.argv[1]) === fileURLToPath(import.me
         closeSync(fd);
       }
     }
-    if (!state || typeof state !== "object" || Array.isArray(state)) state = {}; // null, 5, "x" or true is no state
+    if (!state || typeof state !== "object" || Array.isArray(state)) state = {};
     const before = JSON.stringify(state);
     const output = handle(input, state, slotsFor(join(stateDir(), "slots"), session, Date.now(), input.session_id ?? null));
     if (JSON.stringify(state) !== before) {
       mkdirSync(stateDir(), { recursive: true });
-      // The temporary file is new ("wx"), so a link planted at its name is never written through. A stale one of the hook's
-      // own (a regular file of this user with one link) is removed; anything else at the name throws (R1532-2).
       const tmp = `${file}.${process.pid}`, save = () => writeFileSync(tmp, JSON.stringify(state), { flag: "wx" });
       try { save(); } catch (error) {
         if (error.code !== "EEXIST") throw error;
@@ -1758,12 +1275,11 @@ if (process.argv[1] && realpathSync(process.argv[1]) === fileURLToPath(import.me
     }
     if (output) process.stdout.write(JSON.stringify(output));
   } catch (e) {
-    // Never break the session, but never let a merge or a push through because the hook failed.
     let commands;
-    try { commands = commandFields(input?.tool_input ?? {}); } catch {} // unreadable input must still produce a refusal
+    try { commands = commandFields(input?.tool_input ?? {}); } catch {}
     const tools = (re) => re.test(input?.tool_name ?? "");
-    const agentWrite = agentEvent(input) && (tools(FILE_TOOLS) || tools(SHELL_TOOLS)); // fail closed: an agent does nothing unchecked
-    const chiefFile = !agentEvent(input) && CHIEF.test(input?.agent_type ?? "") && tools(FILE_TOOLS); // nor does the chief change a file (F-R1517-1)
+    const agentWrite = agentEvent(input) && (tools(FILE_TOOLS) || tools(SHELL_TOOLS));
+    const chiefFile = !agentEvent(input) && CHIEF.test(input?.agent_type ?? "") && tools(FILE_TOOLS);
     let chiefWrite;
     try {
       chiefWrite = tools(SHELL_TOOLS) && shellWrite(input.tool_input ?? {}, input.cwd ?? process.cwd()) !== undefined;

@@ -58,7 +58,6 @@ export function validateBoardConfig(config, configPath = null) {
   });
   const port = config.port ?? BOARD_PORT;
   if (!Number.isInteger(port) || port < 1024 || port > 65535) throw new TypeError("board port must be from 1024 to 65535");
-  // T229: the board has no random secret. A "secret" of an older config still loads, but nothing reads it, so it signs no one in.
   if (config.password !== undefined && !validPasswordRecord(config.password)) throw new TypeError("the board password in the config is not a valid record: set it again with board --set-password");
   if (!Array.isArray(config.allowedHosts ?? []) || (config.allowedHosts ?? []).some(host => typeof host !== "string" || host.length > 255)) throw new TypeError("allowedHosts must be a bounded list of exact host names");
   const pagesDir = config.pagesDir ? boundedPath(config.pagesDir) : null;
@@ -74,26 +73,13 @@ export function createBoardConfig(path, { sources, port = BOARD_PORT, allowedHos
   catch (error) { throw error.code === "EEXIST" ? new TypeError(existingConfig(path)) : error; }
   return config;
 }
-/** Setup never changes a config that exists: the line names the file and the way to change it. */
 const existingConfig = path => `the board config ${path} exists, and setup does not change it. To change its "port" or another setting, first run ${boardCommand("--stop", path, {}, true)} while the file still names the port of the running board, then edit that file, then ask for the board again. To set the board up again, remove the file first.`;
-/**
- * The standard logbook roots of the current user, as each provider's state tool computes them: SAGE_HOME, when it is
- * set, is the one root of every provider. A missing root stays listed: the server attaches when it appears. The board
- * reads every provider's logbook, so it names their settings, as a cross-provider reader may (AGENTS.md).
- */
 export const standardSources = (env = process.env) => [...(env.SAGE_HOME ? [{ id: "sage", label: "Sage", path: resolve(env.SAGE_HOME) }] : [
   { id: "claude", label: "Claude", provider: "claude", path: resolve(env.CLAUDE_CONFIG_DIR ?? join(env.HOME ?? homedir(), ".claude"), "sage") },
   { id: "codex", label: "Codex", provider: "codex", path: resolve(env.CODEX_HOME ?? join(env.HOME ?? homedir(), ".codex"), "sage") },
 ]), SHARED_SOURCE(env)];
-/** The provider roots where an old logbook of a shared project may be (T306), each with its provider, for the CLI and the server alike. */
 export const providerRoots = (env = process.env) => standardSources(env).filter(source => source.id !== "shared").map(source => ({ path: source.path, provider: source.provider ?? null }));
-/** The shared root (T306) as a board source, by core's one rule (sharedRoot). */
 const SHARED_SOURCE = env => ({ id: "shared", label: "Shared", path: sharedRoot(env) });
-/**
- * The sources that the board reads (T306, C2): the configured ones, and the shared root when no source names it. So a
- * config from before the shared root shows a shared project too. The config file stays as it is. The reader knows the
- * shared root by its id, so a source of another id at the shared root's path takes the id "shared" (F-T624-16).
- */
 export const readSources = (sources, env = process.env) => {
   if (sources.some(source => source.id === "shared")) return sources;
   const at = sources.findIndex(source => resolve(source.path) === sharedRoot(env));
@@ -101,11 +87,6 @@ export const readSources = (sources, env = process.env) => {
 };
 export const defaultConfigPath = (env = process.env) => join(env.HOME ?? homedir(), ".config", "sage-board", "board.json");
 
-/**
- * Ask for the owner's board password twice, with the echo off. It comes only from a terminal, never from an argument
- * or a pipe, so it is in no shell history or process list, and an agent (which has no terminal) cannot set it (T229).
- * The file keeps only its salted hash, at mode 0600.
- */
 async function setPassword(configPath, input, prompt, terminal) {
   if (!terminal) throw new TypeError("board --set-password needs a terminal: open Terminal on this Mac and run the command there yourself. It does not read a password from a pipe, a file or an agent.");
   const config = readBoardConfig(configPath);
@@ -133,20 +114,12 @@ async function setPassword(configPath, input, prompt, terminal) {
   return `Board password set in ${configPath}. A board server that is already running keeps the old sign-in until it starts again.`;
 }
 
-/** A non-secret name of one board config, from its real path: the server sends it, and ensure and stop compare it. */
 export const configId = configPath => createHash("sha256").update(`sage-board-config:${realpathSync(configPath)}`).digest("hex").slice(0, 16);
-/** A command that a shell runs as pasted: this file's full path, and --config when the owner gave it or it is not the default one. */
 function boardCommand(option, configPath, env, explicit = false) {
   const quote = text => /[^\w@%+=:,./-]/.test(text) ? `"${text.replace(/(["\\$`])/g, "\\$1")}"` : text;
   return ["node", quote(fileURLToPath(import.meta.url)), "board", option, ...(!explicit && configPath === defaultConfigPath(env) ? [] : ["--config", quote(configPath)])].join(" ");
 }
 
-/**
- * What answers on the board's port, on the Mac and with no sign-in: { kind: "none" } (nothing listens), "timeout",
- * "blocked" (a sandbox, such as Codex's, does not let this process reach the port: EPERM, T921), "other", "older" (a
- * board server from before T216's repair, which does not name its config) or "board" with the id, pid and start time
- * of its X-Sage-Board header.
- */
 const probe = ({ port }) => new Promise(done => {
   const req = request({ host: "127.0.0.1", port, path: "/", method: "HEAD", agent: false, timeout: 2000, headers: { Host: `127.0.0.1:${port}` } }, response => {
     response.resume();
@@ -161,21 +134,17 @@ const probe = ({ port }) => new Promise(done => {
   req.end();
 });
 
-/** What to do when a sandbox, such as Codex's, blocks this command (T921, T922). */
 const ESCALATE = "In Codex, run it escalated (outside the sandbox), or in Terminal on the Mac.";
-/** The one line for a port where this config's board does not answer; null when nothing listens. */
 function notOurs(found, configPath, config, env) {
   const at = `127.0.0.1:${config.port}`, elsewhere = `Stop it, or set another "port" in ${configPath}.`;
   if (found.kind === "none") return null;
   if (found.kind === "blocked") return `this command cannot reach ${at}: a sandbox blocks the local network here (EPERM). ${ESCALATE}`;
   if (found.kind === "board") return found.id === configId(configPath) ? null : `another board config holds ${at}. ${elsewhere}`;
-  // An older board does not name its process, so no command of this version stops it (F-T216-11, 16).
   if (found.kind === "older") return `an older board server runs on ${at}. Stop it where it started: press Ctrl+C in its terminal, or for the login service run launchctl bootout gui/$(id -u)/dev.sage.board. Then ask for the board again.`;
   if (found.kind === "timeout") return `the board does not answer: a program holds ${at} and gives no answer within 2 s. ${elsewhere}`;
   return `the board server is not running: another program answers on ${at}. ${elsewhere}`;
 }
 
-/** Start the server as a detached process when nothing answers. Its output goes to board.log next to the config; the server writes board.pid itself. */
 async function ensureBoard(configPath, config, env) {
   const url = `http://127.0.0.1:${config.port}/`;
   const set = boardCommand("--set-password", configPath, env);
@@ -186,8 +155,6 @@ async function ensureBoard(configPath, config, env) {
   const found = await probe(config), refused = notOurs(found, configPath, config, env);
   if (refused) throw new Error(refused);
   if (found.kind === "board") {
-    // A server keeps the code and the config that it started with. A server from before an upgrade (F-T229-32) can
-    // still take the old random secret, so its phone line is not known: only a restart gives this code's behaviour.
     const code = Math.max(...["cli.mjs", "server.mjs"].map(name => statSync(fileURLToPath(new URL(name, import.meta.url))).mtimeMs));
     const changed = lstatSync(configPath).mtimeMs > found.started ? `${configPath} changed` : code > found.started ? "the board command was updated" : null;
     return changed ? `Sage board is running: ${url}, but ${changed} after it started. Restart needed: run ${boardCommand("--stop", configPath, env)} then ask for the board again.` : ready("is running");
@@ -198,8 +165,6 @@ async function ensureBoard(configPath, config, env) {
   try { child = spawn(process.execPath, [fileURLToPath(import.meta.url), "board", "--serve", "--config", configPath], { cwd: dirname(configPath), detached: true, stdio: ["ignore", out, out] }); }
   finally { closeSync(out); }
   child.once("exit", () => { exited = true; }).once("error", () => { exited = true; }).unref();
-  // 10 s: the server reads every logbook before it listens. That takes well under a second on a large logbook today.
-  // A child that exits (another ensure won the port) still gives one more probe: the winner may be this config's board.
   for (const end = Date.now() + 10_000; Date.now() < end;) {
     const done = exited, now = await probe(config), problem = notOurs(now, configPath, config, env);
     if (now.kind === "board" && !problem) return ready("started");
@@ -220,17 +185,12 @@ function readPid(configPath) {
     return /^[1-9]\d{0,9}\n?$/.test(text) ? Number(text) : null;
   } finally { closeSync(fd); }
 }
-/** A new file renamed over board.pid: a link at that name, hard or symbolic, is replaced, never followed (F-T216-13). */
 function writePid(configPath, pid) {
   const temporary = join(dirname(configPath), `.board-${randomBytes(6).toString("hex")}.pid`);
   writeFileSync(temporary, `${pid}\n`, { flag: "wx", mode: 0o600 });
   try { renameSync(temporary, pidPath(configPath)); } catch (error) { rmSync(temporary, { force: true }); throw error; }
 }
 
-/**
- * Stop this config's board server: only the pid in board.pid, and only when the board on the port names this config
- * and that same pid. A board that does not name them (an older one) gets no signal, whatever board.pid holds.
- */
 async function stopBoard(configPath, config, env, kill) {
   const at = `127.0.0.1:${config.port}`, found = await probe(config), pid = readPid(configPath);
   if (found.kind === "none") return `No board server runs on ${at}.`;
@@ -239,7 +199,6 @@ async function stopBoard(configPath, config, env, kill) {
   if (!pid) throw new Error(`the board on ${at} has no board.pid next to ${configPath}, so this command cannot tell its process. Stop it where it started (for example launchctl bootout).`);
   if (found.pid !== pid) throw new Error(`the board on ${at} is process ${found.pid}, but board.pid says ${pid}. Stop it where it started (for example launchctl bootout).`);
   kill(pid, "SIGTERM");
-  // A wide guard for a busy Mac: the server closes in milliseconds.
   for (const end = Date.now() + 10_000; Date.now() < end; await new Promise(wake => setTimeout(wake, 100))) {
     if ((await probe(config)).kind === "none") return `Board server stopped: ${at} is free. Ask for the board again to start it.`;
   }
@@ -264,7 +223,6 @@ export async function runBoardCli(argv, { output = line => process.stdout.write(
   const { options, value } = parse(argv), explicit = options.config !== undefined;
   options.config ??= defaultConfigPath(env);
   if (options.scope && (options.serve || options.setup || options.ensure || options.stop || options["set-password"] || options.install)) throw new TypeError("--scope is only for a task lookup");
-  // --ensure first sets the board up when its config is missing, with the settings that --setup takes.
   const missing = options.ensure && !lstatSync(boundedPath(options.config), { throwIfNoEntry: false });
   if (options.setup || missing) {
     if (value !== "all" || options.sources?.length > 65536 || options.project || options.out || options["install-dir"] || options["login-file"]) throw new TypeError("setup takes --config, with optional sources, port, pages and allowed-hosts");
@@ -304,10 +262,8 @@ export async function runBoardCli(argv, { output = line => process.stdout.write(
   if (options["install-dir"] || options["login-file"]) throw new TypeError("installation paths require --install");
   if (options.serve) {
     if (value !== "all" || options.out || options.project) throw new TypeError("server uses all configured sources; no output or project option");
-    // The server writes board.pid only once it listens, and removes it when it stops, so a pid there is a running board.
     const configPath = boundedPath(options.config), server = createBoardServer({ ...config, sources: readSources(config.sources, env), providerRoots: providerRoots(env), id: configId(configPath) });
     await server.start();
-    // No listener stays without board.pid: then no command could tell its process (F-T216-12).
     try { writePid(configPath, process.pid); } catch (error) { await server.close(); throw error; }
     output(`Sage board: http://127.0.0.1:${config.port}/ · no sign-in needed on this Mac.`);
     return { ...server, close: () => server.close().finally(() => { if (readPid(configPath) === process.pid) rmSync(pidPath(configPath), { force: true }); }) };
@@ -331,8 +287,6 @@ if (process.argv[1] === fileURLToPath(import.meta.url)) {
     const server = await runBoardCli(process.argv.slice(2));
     if (server) { const stop = () => { server.close().then(() => { process.exitCode = 0; }).catch(() => { process.exitCode = 1; }); }; process.once("SIGINT", stop); process.once("SIGTERM", stop); }
   } catch (error) {
-    // A sandbox, such as Codex's, refuses a write outside the workspace with EPERM: on the first run, the mkdir of the
-    // board config folder (T922). The owner gets one line that says what to do, not Node's error.
     const line = error.code === "EPERM" && error.path ? `this command cannot write ${error.path}: a sandbox or the system blocks writes there (EPERM). ${ESCALATE}` : error.message;
     process.stderr.write(`sage board: ${line}\n`); process.exitCode = 1;
   }

@@ -1,15 +1,4 @@
 #!/usr/bin/env node
-// SAMPLE DATA for board QA and the browser tests (T305). It writes made-up Claude and Codex logbooks, and the fake
-// checkouts that they name, into a folder that you give. It has no default folder, and it refuses a folder that is not
-// empty, a path with a link in it, and a folder in a real logbook root, so it never writes over real logbooks.
-//
-//   node scripts/board-sample.mjs <empty folder> [--now <ISO time>]
-//
-// It prints the board sources as JSON: give them to createBoardServer, or to readBoardSources and buildBoardModel.
-// The set: 9 projects; one repository with a Claude and a Codex logbook (one project on the board); one repository in
-// two clones (two projects); long titles; an archived project; a display name with an upstream; a project with no
-// remote; gates; closed and moved findings; earlier runs; a stale run; every priority and every kind; and the Claude
-// hook's agent slots and helper notes for the Agents page (T308).
 import { createHash } from "node:crypto";
 import { existsSync, lstatSync, mkdirSync, readFileSync, readdirSync, realpathSync, utimesSync, writeFileSync } from "node:fs";
 import { userInfo } from "node:os";
@@ -27,13 +16,7 @@ const TABLES = {
 const ROUTE = { tiny: "build", small: "build,code-review,qa", large: "design,pe,build,code-review,security-review,ux-review,qa", investigate: "investigate,evidence-review" };
 const sha = seed => createHash("sha1").update(String(seed)).digest("hex");
 
-/**
- * The real logbook roots of this user, as the board and the state tools find them (F-T305-2): SAGE_HOME,
- * CLAUDE_CONFIG_DIR/sage and ~/.claude/sage, CODEX_HOME and ~/.codex, and the board's own settings folder. Each
- * home is both $HOME and the account's home, so a changed HOME does not hide the real one.
- */
 const realRoots = env => {
-  // The two homes that os.homedir() reads: in a test, os.homedir() throws for the home of the start (T944, test-env.mjs).
   const homes = [env.HOME, process.env.HOME, userInfo().homedir].filter(Boolean);
   return [env.SAGE_HOME, env.CLAUDE_CONFIG_DIR && join(env.CLAUDE_CONFIG_DIR, "sage"), env.CODEX_HOME,
     ...homes.flatMap(home => [join(home, ".claude", "sage"), join(home, ".codex"), join(home, ".config", "sage-board")])]
@@ -41,13 +24,11 @@ const realRoots = env => {
 };
 const inside = (root, path) => { const rel = relative(root, path); return rel === "" || !rel.startsWith("..") && !isAbsolute(rel); };
 
-/** Writes the sample logbooks into folder (absolute, empty or missing) and gives the board sources. */
 export function writeSampleLogbooks(folder, { now = new Date().toISOString(), env = process.env } = {}) {
   if (!isAbsolute(folder ?? "")) throw new TypeError("give an absolute folder for the sample logbooks");
   folder = resolve(folder);
   const root = realRoots(env).find(root => inside(root, folder));
   if (root) throw new Error(`${folder} is in the real logbook root ${root}: give a folder outside it`);
-  // A link anywhere in the path could lead the writes somewhere else (F-T305-1): refuse it, and name the real path.
   for (let path = folder; ; path = dirname(path)) {
     let link = false;
     try { link = lstatSync(path).isSymbolicLink(); } catch (error) { if (error.code !== "ENOENT") throw error; }
@@ -63,7 +44,6 @@ export function writeSampleLogbooks(folder, { now = new Date().toISOString(), en
   const ago = (hours) => new Date(at - hours * 3600000).toISOString().replace(/\.\d{3}Z$/, "Z");
   const sources = [{ id: "claude", label: "claude", provider: "Claude", path: join(folder, "claude") }, { id: "codex", label: "codex", provider: "Codex", path: join(folder, "codex") }];
 
-  /** One repository: a fake checkout with a Git config, and one logbook per provider that names it. */
   const repo = ({ folder: name, at: path = join(folder, "checkouts", name), origin, upstream, display, archived, books }) => {
     mkdirSync(join(path, ".git"), { recursive: true });
     const remote = (which, slug) => slug ? `[remote "${which}"]\n\turl = https://github.com/${slug}.git\n\tfetch = +refs/heads/*:refs/remotes/${which}/*\n` : "";
@@ -85,7 +65,6 @@ export function writeSampleLogbooks(folder, { now = new Date().toISOString(), en
   const backlog = list => ({ tasks: list.map(item => item[0]), decisions: list.map(item => item[1]) });
   const merge = (...parts) => parts.reduce((all, part) => Object.fromEntries(Object.keys(TABLES).map(name => [name, [...(all[name] ?? []), ...(part[name] ?? [])]])), {});
 
-  // 1. sage: one repository with a Claude and a Codex logbook. Every step of the loop, and every kind.
   const head = sha("sample head 1"), old = sha("sample head 0"), fixed = sha("sample head 2");
   const claudeSage = merge(
     backlog([
@@ -153,40 +132,25 @@ export function writeSampleLogbooks(folder, { now = new Date().toISOString(), en
     runs: [
       { id: "R18", task: "T9", role: "investigate", status: "done", tokens: "22000", started: ago(5), ended: ago(4) },
       { id: "R19", task: "T9", role: "evidence-review", status: "running", started: ago(0.3) },
-      // A run that started 3 days ago, with no logbook change since: the board says it may have stopped.
       { id: "R5", task: "T7", role: "implementer", status: "running", started: ago(72) },
     ],
   };
   repo({ folder: "sage", origin: "sample-owner/sage", books: { claude: claudeSage, codex: codexSage } });
 
-  // 2. A display name, an upstream and an origin; tasks in both providers.
   repo({ folder: "product-demos", origin: "sample-owner/council-record", upstream: "sample-org/council-record", display: "Council Record (sample)", books: {
     claude: { tasks: [task("T41", "Sample: council minutes search", "reviewing", { pr: "12", priority: "P0", kind: "ui" })], gates: [{ id: "G1", task: "T41", question: "Sample: ship the search behind a flag?", options: "yes|no", recommendation: "yes", at: ago(1) }], decisions: [{ at: ago(1), task: "T41", decision: "state reviewing", why: "sample" }] },
     codex: { tasks: [task("T3", "Sample: the contributor guide", "framed", { priority: "P3", kind: "docs" })], decisions: [{ at: ago(4), task: "T3", decision: "task framed", why: "sample" }] },
   } });
-  // 3. Claude only; verified, waits for the merge.
   repo({ folder: "order-chaser", origin: "sample-owner/order-chaser", books: { claude: { tasks: [task("T12", "Sample: retry the carrier poll", "verified", { pr: "41", priority: "P1", kind: "bug-fix" }), task("T13", "Sample: an email digest", "framed", { kind: "ui" })], decisions: [{ at: ago(26), task: "T12", decision: "state verified", why: "sample" }] } } });
-  // 4. Codex only, with a gate.
   repo({ folder: "review-queue", origin: "sample-owner/review-queue", books: { codex: { tasks: [task("T9", "Sample: the review queue page", "designing", { size: "large", route: ROUTE.large, priority: "P1", kind: "design" })], gates: [{ id: "G2", task: "T9", question: "Sample: one queue or one per project?", options: "one|per project", recommendation: "one", at: ago(50) }], decisions: [{ at: ago(50), task: "T9", decision: "state designing", why: "sample" }] } } });
-  // 5. Two clones of one repository at two paths: two projects.
   for (const clone of ["trip-planner", "trip-planner-copy"]) repo({ folder: clone, origin: "sample-owner/trip-planner", books: { claude: { tasks: [task("T20", `Sample: a shared packing list (${clone})`, "building", { kind: "ui" })], decisions: [{ at: ago(80), task: "T20", decision: "state building", why: "sample" }] } } });
-  // 6. No GitHub remote; idle for 9 days.
   repo({ folder: "home-lab", books: { claude: { tasks: [task("T5", "Sample: back up the NAS", "framed", { priority: "P3", kind: "docs" })], decisions: [{ at: ago(9 * 24), task: "T5", decision: "task framed", why: "sample" }] } } });
-  // 7. Archived.
   repo({ folder: "old-site", origin: "sample-owner/old-site", archived: true, books: { codex: { tasks: [task("T2", "Sample: a dark mode", "framed", { kind: "ui" }), task("T3", "Sample: the old held task", "held")], decisions: [{ at: ago(60 * 24), task: "T2", decision: "task framed", why: "sample" }] } } });
-  // 8. Idle for 3 weeks.
   repo({ folder: "recipes-app", origin: "sample-owner/recipes", books: { claude: { tasks: [task("T8", "Sample: scale a recipe", "framed", { kind: "optimization" })], decisions: [{ at: ago(21 * 24), task: "T8", decision: "task framed", why: "sample" }] } } });
   hookNotes(join(folder, "claude"), at);
   return sources;
 }
 
-/**
- * SAMPLE agent slots and helper notes of the Claude hook (T308), as sage-hook.mjs writes them under <root>/.hooks: one
- * folder per slot, one empty file per mark, and the folder's change time as the agent's last activity. It adds the
- * running runs that the slots hold to the sample logbooks, and a cap. The set: a lead with three helpers (two working,
- * one stopped while its run is still open), a run that runs long, two reviewers from the chief, a quiet agent that may be
- * stuck, a run that no slot holds, and a slot from an older hook with no run mark.
- */
 function hookNotes(root, at) {
   const sha256 = text => createHash("sha256").update(text).digest("hex");
   const book = name => readdirSync(root).find(entry => entry.startsWith(`${name}-`));
@@ -206,7 +170,6 @@ function hookNotes(root, at) {
     utimesSync(dir, minutes(idle), minutes(idle));
   };
   const note = (name, ago) => { writeFileSync(join(helpers, name), "{}"); utimesSync(join(helpers, name), minutes(ago), minutes(ago)); };
-  // sage: the lead of T301 and its helpers. R213 runs long: an implementer here usually takes about 30 min.
   const sage = join(root, book("sage")), logbook = sha256(sage), lead = sha256(`${logbook}:R240`), agent = sha256("sample lead agent");
   addRuns("sage", [
     { id: "R240", task: "T301", role: "lead", round: "0", status: "running", started: iso(55), model: "opus" },
@@ -222,20 +185,17 @@ function hookNotes(root, at) {
   note(`stopped-${lead}.R242`, 14);
   slot(["project-sage", "role-sage_implementer", "run-R213", `bound-${sha256("R213")}`], 2);
   slot(["project-sage", "role-sage_implementer", "run-R230", `bound-${sha256("R230")}`], 5);
-  // Council Record: two reviewers that the chief started.
   addRuns("product-demos", [
     { id: "R50", task: "T41", role: "code-reviewer", round: "0", status: "running", started: iso(18), model: "opus" },
     { id: "R51", task: "T41", role: "qa", round: "0", status: "running", started: iso(17), model: "sonnet" },
   ]);
   slot(["project-product-demos", "role-sage_code-reviewer", "run-R50", `bound-${sha256("R50")}`], 0);
   slot(["project-product-demos", "role-sage_qa", "run-R51", `bound-${sha256("R51")}`], 1);
-  // order-chaser: a PE with no activity for 41 min, and a run that no slot holds (its slot ended after an hour).
   addRuns("order-chaser", [
     { id: "R31", task: "T13", role: "pe", round: "0", status: "running", started: iso(58), model: "opus" },
     { id: "R29", task: "T13", role: "implementer", round: "0", status: "running", started: iso(204), model: "sonnet" },
   ]);
   slot(["project-order-chaser", "role-sage_pe", "run-R31", `bound-${sha256("R31")}`], 41);
-  // recipes-app: a slot from an older hook, with no run mark. It changes no logbook, so the project stays idle.
   slot(["project-recipes-app", "role-sage_designer", `bound-${sha256("old designer")}`], 6);
   writeFileSync(join(root, "config.json"), `${JSON.stringify({ max_agents: 3, "cap.sage": 5 })}\n`);
 }

@@ -1,7 +1,3 @@
-// Standalone browser check of the T308 Agents page: 375 and 1440 px, light and dark, the keyboard (the page tabs and the
-// task links) and a live refresh that keeps the scroll and the focus. SAMPLE DATA from board-sample.mjs. It runs in
-// `npm run test:browser`, not in `npm test`, with Playwright's bundled Chromium, or the headless shell at
-// BOARD_BROWSER_PATH; never an installed Chrome.
 import "./test-env.mjs";
 import assert from "node:assert/strict";
 import { mkdtempSync, realpathSync, rmSync } from "node:fs";
@@ -24,18 +20,15 @@ let browser;
 before(async () => { browser = await chromium.launch({ headless: true, ...(process.env.BOARD_BROWSER_PATH ? { executablePath: process.env.BOARD_BROWSER_PATH } : {}) }); });
 after(async () => { try { await browser?.close(); } finally { rmSync(dir, { recursive: true, force: true }); } });
 
-/** The sample's model; change(read) may edit the read sources first, as a later event of the hook would. */
 function sample(change = () => {}, now = NOW) {
   const read = readBoardSources(sources, { now: Date.parse(now) });
   change(read);
   return buildBoardModel(read, { now });
 }
 
-/** The Agents page. The theme is dark; theme "light" flips the switch, as a person does. */
 async function open(t, { width = 1440, height = 900, theme = "dark" } = {}) {
   const context = await browser.newContext({ viewport: { width, height }, colorScheme: "light", reducedMotion: "reduce", ...(width < 700 ? { isMobile: true, hasTouch: true } : {}) });
   t.after(() => context.close());
-  // A made-up origin; only the two pages are served, every other request fails.
   await context.route("**/*", route => route.abort());
   await context.route("http://board.test/agents", route => route.fulfill({ status: 200, contentType: "text/html; charset=utf-8", body: renderAgentsHtml(sample(), { live: true }) }));
   await context.route(/^http:\/\/board\.test\/task\/[\w-]+$/, route => route.fulfill({ status: 200, contentType: "text/html; charset=utf-8", body: "<!doctype html><title>task</title><p>sample task page</p>" }));
@@ -62,7 +55,6 @@ for (const width of [375, 1440]) for (const theme of ["light", "dark"]) {
     assert.deepEqual([...new Set(await page.locator(".st").allTextContents())].sort(), ["!may be stuck", "●working", "○running", "■helper stopped, run still open", "▲running long", "◷waiting for its helpers"].sort());
     for (const word of await page.locator(".st").all()) assert.equal(await word.isVisible(), true);
     assert.equal(await page.locator(".boardtabs a[aria-current=page]").textContent(), "Agents (13)");
-    // Each row stays inside its box: no text runs out of the page.
     const outside = await page.locator(".arow").evaluateAll((rows, w) => rows.filter(row => row.getBoundingClientRect().right > w).length, width);
     assert.equal(outside, 0);
   });
@@ -94,7 +86,6 @@ test("T308: a live refresh replaces the page and keeps the scroll and the focus"
   await link.focus({ preventScroll: true });
   const before = await page.evaluate(() => scrollY);
   assert.ok(before > 500, "the page scrolled");
-  // Ten minutes later: the reviewers are quiet, and a new run of the hook's sample took a slot.
   const later = sample(read => { for (const project of read.flatMap(source => source.projects)) for (const run of project.tables.runs ?? []) if (run.id === "R50") run.model = "sample-changed-model"; }, "2026-10-18T12:10:00Z");
   await push(page, later);
   assert.match(await page.locator("#board-content").textContent(), /model sample-changed-model/, "the new page is in");

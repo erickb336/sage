@@ -1,6 +1,4 @@
-// The dictionary (writing/dictionary.md): the flagged-word scan on literal texts, then `npm run build` and
-// `npm run check` as people run them, in a copy of this repository.
-import "./test-env.mjs"; // first: no variable of the developer's shell changes a result
+import "./test-env.mjs";
 import assert from "node:assert/strict";
 import { spawnSync } from "node:child_process";
 import { cpSync, existsSync, mkdtempSync, readFileSync, realpathSync, symlinkSync, writeFileSync } from "node:fs";
@@ -48,14 +46,11 @@ test("in a page or a graphic, the text counts, and code, scripts and tags do not
   assert.deepEqual(scan('<p class="store">The store</p>\n<code>store</code>\n<script>store()</script>\n<text>Store</text>', true), ["1:store", "4:Store"]);
 });
 
-/** A copy of this repository, where the tests can change files and run the npm scripts. */
 function copy() {
-  const dir = mkdtempSync(join(realpathSync(tmpdir()), "sage-dictionary-")); // the real path, so that build.mjs sees that it runs as the script
+  const dir = mkdtempSync(join(realpathSync(tmpdir()), "sage-dictionary-"));
   cpSync(ROOT, dir, { recursive: true, filter: (src) => ![".git", ".claude", "node_modules"].includes(relative(ROOT, src)) });
   symlinkSync(join(ROOT, "node_modules"), join(dir, "node_modules"), "dir");
   const run = (script) => spawnSync("node", [join(dir, "scripts", `${script}.mjs`)], { encoding: "utf8" });
-  // These tests edit authored text. Keep its assembled copy in step; generated skills
-  // still change only through build, so stale-output tests retain their meaning.
   const write = (rel, text) => {
     writeFileSync(join(dir, rel), text);
     const authored = rel.replace(/^plugins\/sage\//, "packages/sage-claude/");
@@ -63,7 +58,6 @@ function copy() {
   };
   const file = join(dir, "plugins/sage/agents/qa.md");
   const original = readFileSync(file, "utf8");
-  // The check refuses a test file that no test command names (R1534-3), so a test that adds scripts/sample.test.mjs names it.
   const listSample = () => {
     const pkg = JSON.parse(readFileSync(join(dir, "package.json"), "utf8"));
     pkg.scripts.test += " scripts/sample.test.mjs";
@@ -116,13 +110,13 @@ test("npm run check refuses a wall-clock time under a fixed number of ms in a te
   const bounds = () => {
     const r = c.run("check");
     assert.equal(r.status, 0, r.stderr);
-    const n = r.stdout.match(/✓ all checks pass \((\d+) timing bounds? carr(?:y|ies) "\/\/ timing-ok:"\)/)?.[1];
+    const n = r.stdout.match(/✓ all checks pass \((\d+) timing bounds? carr(?:y|ies) "timing-ok:"\)/)?.[1];
     assert.ok(n, r.stdout);
     return Number(n);
   };
   sample("const t0 = Date.now();");
-  const before = bounds(); // the bounds that the repository already has: a new justified bound must not break this test
-  sample(`${forms[0]} // timing-ok: the hook's own 10 s budget`);
+  const before = bounds();
+  sample(forms[0].replace("< 3000)", "< 3000, \"timing-ok: the hook's own 10 s budget\")"));
   assert.equal(bounds(), before + 1, "an explicit escape passes, and the check counts it");
   for (const allowed of [
     "const t0 = Date.now();\nwork();\nassert.ok(Date.now() - t0 >= 3000, 'a lower bound: a busy machine only adds time');",
@@ -136,7 +130,7 @@ test("npm run check refuses a wall-clock time under a fixed number of ms in a te
 
 test("F-T289-61: the timing check reads each file that a test file imports, such as sage-hook-tests.mjs, and counts its marks", () => {
   const c = copy();
-  const marks = c.read("scripts/sage-hook-tests.mjs").split("\n").filter((line) => /\/\/ timing-ok: \S/.test(line)).length;
+  const marks = c.read("scripts/sage-hook-tests.mjs").split("\n").filter((line) => /timing-ok: \S/.test(line)).length;
   assert.ok(marks > 0, "sage-hook-tests.mjs has timing-ok marks");
   const counted = () => Number(c.run("check").stdout.match(/✓ all checks pass \((\d+) timing bounds? carr/)?.[1]);
   assert.ok(counted() >= marks, `the check counts the ${marks} marks of sage-hook-tests.mjs`);
@@ -170,7 +164,7 @@ test("T188: check rejects fixed CPU-time bounds and permits ratios or a reason",
     assert.match(r.stderr, /scripts\/sample\.test\.mjs:\d+: a test holds a wall-clock or CPU time under a fixed number/);
   }
   for (const body of [
-    `${forms[0]} // timing-ok: a generous bound detects an endless reader`,
+    forms[0].replace("< 200_000)", "< 200_000, 'timing-ok: a generous bound detects an endless reader')"),
     "const cpu = process.cpuUsage();\nassert.ok(cpu.user >= 1);",
     "const [a, b] = [process.cpuUsage().user, process.cpuUsage().user];\nassert.ok(b < 30 * a + 20_000);",
     "const [a, b] = [process.cpuUsage().user, process.cpuUsage().user];\nassert.ok(b / a < 30);",
@@ -214,8 +208,6 @@ test("npm run check fails when the concepts page's word table is edited by hand"
   assert.equal(r.status, 1);
   assert.match(r.stderr, /✗ docs\/guide\/concepts\.md: out of date; run npm run build/);
 });
-
-// Round 1: the findings of the first review cycle on pull request #7, each as the reviewers showed it.
 
 test("every sage agent loads the dictionary skill, and the hook tells the chief to load it", async () => {
   const { chiefText } = await import("../plugins/sage/hooks/sage-hook.mjs");
@@ -313,9 +305,6 @@ test("a merge gate is a merge check: a gate is a question for the owner", () => 
   ]);
 });
 
-// Round 2: the findings of the second review cycle on pull request #7, each with the reviewers' inputs.
-
-/** The body of writing/dictionary.md with one edit. */
 const edited = (from, to) => parseSource(readFileSync(join(ROOT, "writing/dictionary.md"), "utf8").replace(from, to), "dictionary").body;
 const NO_LIST = "writing/dictionary.md: the check needs its flagged words, on one line: **Flagged:** word, word, …";
 
@@ -349,7 +338,7 @@ test("a Markdown link or image title counts, as GitHub shows it; an escaped back
   assert.deepEqual(scan("![a graphic](docs/assets/loop-light.svg \"the store\") and [b](https://x.org/y (the pipeline))."), ["1:store", "1:pipeline"]);
   assert.deepEqual(scan('See [the docs](https://a.org/store "the guide") and [it](https://a.org/Store_(x)).'), []);
   assert.deepEqual(scan("Run \\`store\\` now."), ["1:store"]);
-  assert.deepEqual(scan("Run \\\\`store` now."), []); // an escaped backslash, then a code span
+  assert.deepEqual(scan("Run \\\\`store` now."), []);
 });
 
 test("in Markdown, a tag is only what GitHub reads as a tag, and a quote in text does not make one run on", () => {

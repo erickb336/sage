@@ -1,9 +1,3 @@
-// The proof that T934 lost no rule: each sentence of the old start texts of the Claude chief and lead (the chief's
-// agent file, the sage skill and the lead's agent file at a base commit) is in the new start texts or in a reference
-// that they name. A sentence that T934 changed on purpose is listed in CHANGED with its new text, which must be there.
-//   node scripts/start-text-proof.mjs [<base commit>]     (default: the merge base of origin/main and HEAD, the main
-//   that T934's branch last took in; on T934's own start that was 8a38e314)
-// It prints the counts, and each sentence that is missing; it exits with 1 when one is missing.
 import { execFileSync } from "node:child_process";
 import { readFileSync } from "node:fs";
 import { join } from "node:path";
@@ -13,7 +7,6 @@ import { referenceFiles } from "./start-text.mjs";
 const BASE = process.argv[2] ?? execFileSync("git", ["-C", ROOT, "merge-base", "origin/main", "HEAD"], { encoding: "utf8" }).trim();
 const OLD = ["plugins/sage/agents/chief-of-staff.md", "plugins/sage/skills/sage/SKILL.md", "plugins/sage/agents/lead.md"];
 const NEW = [...OLD, ...referenceFiles().map((f) => `plugins/sage/${f}`)];
-/** The sentences that T934 changed on purpose: the old sentence, its new text and the reason. */
 const CHANGED = [
   ["After the owner chooses approve, record that answer with `gate_answer`, then call `task_set` with `task: T1` and `fields: {\"state\":\"building\",\"approval\":\"G1\"}`.",
     "After the owner chooses approve, record that answer with `sage gate answer G1 --option 1 --project <folder>`, then run `sage task T1 set state=building approval=G1`.",
@@ -22,13 +15,11 @@ const CHANGED = [
   ["A repeated CLI or `task_set` call after success refuses and adds nothing.", "A repeated `sage task T1 set` call after success refuses and adds nothing.", "F4: no Codex tool name"],
 ];
 
-/** A text without its frontmatter (the agent's skills list is no rule), as units: lines, table cells and sentences. */
 function sentences(text) {
   const body = text.replace(/^---\n[\s\S]*?\n---\n/, "");
   return body.split("\n").flatMap((line) => {
     const plain = line.replace(/^\s*(?:#+|[-*]|\d+\.)\s+/, "").trim();
     const cells = /^\|.*\|$/.test(plain) ? plain.slice(1, -1).split(/(?<!\\) \| /) : [plain];
-    // A sentence ends at ". " (or "? ", "! ") before a capital letter, a code span, bold text or a quote, outside a code span.
     return cells.flatMap((cell) => {
       const out = [];
       let code = false, start = 0;

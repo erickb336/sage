@@ -1,5 +1,3 @@
-// The Codex report gate and the role text script, run as Codex runs them: JSON on stdin, JSON on stdout.
-// The input shape is a SubagentStop input that stock Codex 0.160.0 sent in run R1648 (paths replaced).
 import assert from "node:assert/strict";
 import { spawnSync } from "node:child_process";
 import { createHash } from "node:crypto";
@@ -19,7 +17,6 @@ const FULL = "STATUS done\nRESULT PASS\nEVIDENCE echo ok printed ok\nFINDINGS no
 const UNREAD = { systemMessage: "sage: the report check could not read this agent's stop, so it did not check its report." };
 const BLOCK = { decision: "block", reason: 'sage: your report has no EVIDENCE, FINDINGS, QUESTIONS, NOT VERIFIED, BRANCH. End with the sage report: STATUS, RESULT, EVIDENCE, FINDINGS, QUESTIONS, NOT VERIFIED, BRANCH, each at the start of a line that is not in a list or a code block, with "none" where a field has nothing.' };
 
-// The three edge cases of core's field reader that the report check uses, as the deleted native server's test had them (T732, T914).
 test("missingFields reads a field as a table heading, and no prefixed word and no line indented with a no-break space (T461)", async () => {
   const { missingFields } = await import(pathToFileURL(join(ROOT, "plugins/sage-codex/core/index.mjs")).href);
   const all = ["STATUS", "RESULT", "EVIDENCE", "FINDINGS", "QUESTIONS", "NOT VERIFIED", "BRANCH"];
@@ -30,7 +27,6 @@ test("missingFields reads a field as a table heading, and no prefixed word and n
 
 const dir = mkdtempSync(join(tmpdir(), "sage-report-gate-"));
 test.after(() => rmSync(dir, { recursive: true, force: true }));
-/** A child transcript as Codex writes it: a session_meta line with the agent path, then items. */
 function transcript(agentPath) {
   const file = join(dir, `${agentPath.replaceAll("/", "_")}.jsonl`);
   writeFileSync(file, [{ timestamp: "2026-10-25T09:39:59.000Z", type: "session_meta", payload: { id: "01a1726e-61b6-7a01-a9bb-7a01f6164881", agent_path: agentPath, agent_nickname: "Lorentz", source: { subagent: { thread_spawn: { depth: 1, agent_path: agentPath, agent_role: null } } } } },
@@ -41,7 +37,6 @@ const stop = (fields) => ({ session_id: "01a1726e-6149-7c53-b2c2-24302efa1ced", 
   transcript_path: join(dir, "root.jsonl"), agent_transcript_path: transcript("/root/sage_implementer_t1"), cwd: dir,
   hook_event_name: "SubagentStop", model: "gpt-6.1-sol", permission_mode: "bypassPermissions", stop_hook_active: false,
   agent_id: "01a1726e-61b6-7a01-a9bb-7a01f6164881", agent_type: "default", last_assistant_message: "STATUS done\nRESULT PASS", ...fields });
-/** Codex's homes in the test folder, so that no gate run reads or writes the real ~/.codex (order 42). */
 const ENV = { ...process.env, HOME: join(dir, "home"), CODEX_HOME: join(dir, "codex-home") };
 function gate(input) {
   const r = spawnSync("node", [GATE], { input: typeof input === "string" ? input : JSON.stringify(input), encoding: "utf8", env: ENV });
@@ -69,7 +64,6 @@ test("a task name with a run, or a sage_ name in another letter case, gets the r
 });
 
 test("T483: the chief's review child keeps its report with the head that the gate saw, and only that report backs the run's verdict in the Codex state tool", () => {
-  // A project with T1 on its branch: the gate reads the branch's head at the stop, as the Claude hook does (R1908-1).
   const project = realpathSync(mkdtempSync(join(dir, "project-")));
   const git = (...args) => spawnSync("git", ["-C", project, "-c", "user.name=t", "-c", "user.email=t@t", ...args], { encoding: "utf8" }).stdout.trim();
   git("init", "-q", "-b", "codex/t12-a");
@@ -78,13 +72,11 @@ test("T483: the chief's review child keeps its report with the head that the gat
   const sage = (...args) => spawnSync("node", [TOOL, ...args, "--project", project], { encoding: "utf8", env: ENV });
   const ok = (...args) => { const r = sage(...args); assert.equal(r.status, 0, r.stderr); return r.stdout.trim(); };
   ok("init");
-  // T12 and runs from R40: ids of more than one digit, as real ones are (R1933-2).
   for (let k = 1; k <= 12; k++) ok("task", "add", "--priority", "P2", "--title", `t${k}`, "--size", "small");
-  for (let k = 1; k < 40; k++) ok("run", "done", ok("run", "add", "T1", "--role", "pe").split(" ")[0], "--status", "failed"); // ended, so the agent cap has room (T952)
+  for (let k = 1; k < 40; k++) ok("run", "done", ok("run", "add", "T1", "--role", "pe").split(" ")[0], "--status", "failed");
   ok("task", "T12", "set", "branch=codex/t12-a");
   const clean = "STATUS done\nRESULT CLEAN\nEVIDENCE npm test passed\nFINDINGS none\nQUESTIONS none\nNOT VERIFIED none\nBRANCH codex/t12-a";
   let threads = 0;
-  // A child's start (the brief hook binds the run to the chief's direct child) and its stop (the gate keeps its report).
   const child = (path, thread = `01a1726e-0000-7000-8000-${String(++threads).padStart(12, "0")}`) => {
     const file = join(dir, `child-${threads}-${path.replaceAll("/", "_")}.jsonl`);
     writeFileSync(file, JSON.stringify({ type: "session_meta", payload: { id: thread, agent_path: path } }) + "\n");
@@ -94,7 +86,6 @@ test("T483: the chief's review child keeps its report with the head that the gat
   const end = (file, message = clean) => gate(stop({ agent_transcript_path: file, cwd: project, last_assistant_message: message }));
   const verdict = (run, sha = head) => sage("verdict", "T12", "--kind", "review-clean", "--sha", sha, "--run", run);
   const run = () => ok("run", "add", "T12", "--role", "code-reviewer").split(" ")[0];
-  // The bound child's report, with no SHA of its own, backs review-clean on the head that the gate saw.
   assert.equal(run(), "R40", "the runs have two-digit ids");
   ok("run", "done", "R40", "--status", "done", "--tokens", "1");
   const kept = run(), mine = child(`/root/sage_code_reviewer_t12_${kept.toLowerCase()}`);
@@ -118,8 +109,6 @@ test("T483: the chief's review child keeps its report with the head that the gat
     assert.match(refused.stderr, /kept report cannot be read/);
     assert.equal(readFileSync(join(book, "ledger.tsv"), "utf8"), before);
   }
-  // The branch moves during the review: the tip at the start is not the head at the stop, so the gate keeps no commit,
-  // and a report whose BRANCH names no full SHA backs no verdict on the new head (R1933-1).
   const moved = run(), during = child(`/root/sage_code_reviewer_t12_${moved.toLowerCase()}`);
   begin(during);
   git("commit", "-q", "--allow-empty", "-m", "pushed during the review");
@@ -127,8 +116,7 @@ test("T483: the chief's review child keeps its report with the head that the gat
   assert.deepEqual(end(during), {});
   ok("run", "done", moved, "--status", "done", "--tokens", "1");
   assert.match(verdict(moved, newer).stderr, new RegExp(`^sage: ${moved}'s report names no full 40-character head SHA in BRANCH, and the hook saw none`), "the new head is not the reviewed commit");
-  head = newer; // the reviews below start on the new head
-  // A child of a child with the run's name binds nothing and keeps nothing; the real child's report stays its own (R1908-3).
+  head = newer;
   const nested = run(), sub = child(`/root/sage_qa_t12_r1/sage_code_reviewer_t12_${nested.toLowerCase()}`), real = child(`/root/sage_code_reviewer_t12_${nested.toLowerCase()}`);
   begin(sub);
   begin(real);
@@ -136,14 +124,12 @@ test("T483: the chief's review child keeps its report with the head that the gat
   assert.deepEqual(end(real, "STATUS done\nRESULT FINDINGS\nEVIDENCE x\nFINDINGS\n- K1 high a.js:1 data loss\n  proof: npm test\n  saw: not ok 1 the row is gone\nQUESTIONS none\nNOT VERIFIED none\nBRANCH codex/t12-a"), {});
   ok("run", "done", nested, "--status", "done", "--tokens", "1");
   assert.match(verdict(nested).stderr, /report has 1 medium or high finding/, "the canned PASS of the sub-child was not kept");
-  // Another thread with the same task name: its report is not kept, and the gate says so to the chief.
   const twice = run(), first = child(`/root/sage_code_reviewer_t12_${twice.toLowerCase()}`), second = child(`/root/sage_code_reviewer_t12_${twice.toLowerCase()}`);
   begin(first);
   begin(second);
   assert.deepEqual(end(second), { systemMessage: `sage: ${twice}'s report is not kept: this agent is not the child that started for ${twice}.` });
   assert.deepEqual(end(first), {}, "the bound child's report is kept");
   assert.match(end(first, clean.replace("npm test passed", "a second stop")).systemMessage ?? "", /^sage: R\d+'s report is not kept: (?!this agent)/, "a second report of the bound child is refused, and said");
-  // No start, no run in the task name, another role or task, or a first stop without the full report: nothing is kept.
   for (const [why, name, message, start = true] of [["no start", "sage_code_reviewer_t12_<R>", clean, false], ["no run in the task name", "sage_code_reviewer_t1", clean],
     ["another role in the task name", "sage_implementer_t12_<R>", clean], ["another task in the task name", "sage_code_reviewer_t2_<R>", clean],
     ["a first stop without the full report", "sage_code_reviewer_t12_<R>", "STATUS done\nRESULT CLEAN"]]) {
@@ -181,49 +167,41 @@ test("T585: an arena keeps the reports of its candidates and its judge, and a ca
   };
   const start = (file) => assert.equal(spawnSync("node", [BRIEF_HOOK], { input: JSON.stringify({ hook_event_name: "SubagentStart", session_id: "s", transcript_path: file, cwd: project }), encoding: "utf8", env: ENV }).status, 0);
   const finish = (file, text) => gate(stop({ agent_transcript_path: file, cwd: project, last_assistant_message: text }));
-  // A child runs from its start (the brief hook binds it) to its stop (the gate keeps its report); `during` runs between them.
   const play = (role, id, during = () => {}) => {
     const file = spawned(role, id);
     start(file);
     during();
     assert.deepEqual(finish(file, report(id)), {});
   };
-  // A candidate on its own branch: its report is kept exactly, with the head of that branch, not of the task's branch.
   const a = add("implementer", "--branch", "codex/t1-a", "--candidate", "1");
   play("implementer", a);
   assert.deepEqual([kept(a).text, kept(a).sha, kept(a).role], [report(a), headA, "implementer"]);
   assert.notEqual(headA, base);
-  // A candidate that commits during its run keeps the head of its branch at the stop.
   const b = add("implementer", "--branch", "codex/t1-b", "--candidate", "2");
   let headB;
   play("implementer", b, () => { headB = commit("candidate b moves"); });
   assert.deepEqual([kept(b).text, kept(b).sha], [report(b), headB]);
-  // So does a judge on its own branch, and a designer.
   const judgeRun = add("arena-judge", "--branch", "codex/t1-judge");
   git("branch", "-q", "codex/t1-judge");
   let headJudge;
   play("arena_judge", judgeRun, () => { git("checkout", "-q", "codex/t1-judge"); headJudge = commit("the judge grafts"); });
   assert.deepEqual([kept(judgeRun).text, kept(judgeRun).sha, kept(judgeRun).role], [report(judgeRun), headJudge, "arena-judge"]);
-  ok("run", "done", judgeRun, "--status", "done"); // closes the arena step, so the runs below need no number
-  // A branch that the run creates keeps its head at the stop.
+  ok("run", "done", judgeRun, "--status", "done");
   const c = add("designer", "--branch", "codex/t1-c");
   let headC;
   play("designer", c, () => { git("checkout", "-q", "-b", "codex/t1-c"); headC = commit("the design"); });
   assert.deepEqual([kept(c).sha, kept(c).role], [headC, "designer"]);
-  // A branch that is gone at the stop gives no SHA. The gate never reads the task's branch instead.
   git("branch", "-q", "codex/t1-d");
   const d = add("implementer", "--branch", "codex/t1-d", "--candidate", "3");
   play("implementer", d, () => git("branch", "-q", "-D", "codex/t1-d"));
   assert.equal(kept(d).sha, "");
-  // A review or QA run with --branch of another branch reads the branch of its task, and the other branch does not matter.
   for (const role of ["code-reviewer", "qa"]) {
     const id = add(role, "--branch", "codex/t1-a");
     play(role.replaceAll("-", "_"), id, () => git("branch", "-q", "-f", "codex/t1-a", headB));
     assert.equal(kept(id).sha, base, role);
     git("branch", "-q", "-f", "codex/t1-a", headA);
-    ok("run", "done", id, "--status", "failed"); // its report is kept: the run's end frees its place of the agent cap (T952)
+    ok("run", "done", id, "--status", "failed");
   }
-  // When the branch of its task moves during the run, it gets no SHA, as a run with no --branch.
   for (const role of ["code-reviewer", "qa"]) {
     const id = add(role, "--branch", "codex/t1-a"), before = git("rev-parse", "codex/t1");
     play(role.replaceAll("-", "_"), id, () => git("branch", "-q", "-f", "codex/t1", headB));
@@ -231,15 +209,12 @@ test("T585: an arena keeps the reports of its candidates and its judge, and a ca
     git("branch", "-q", "-f", "codex/t1", before);
     ok("run", "done", id, "--status", "failed");
   }
-  // The retained reports compare by digest, as the chief compares them with report_compare.
-  // The comparison wants real paths, as the MCP server has them; the folder of the test may sit behind a link.
   const real = realpathSync(dir), here = { ...ENV, HOME: join(real, "home"), CODEX_HOME: join(real, "codex-home") };
   const digest = (text) => createHash("sha256").update(text, "utf8").digest("hex");
   for (const id of [a, b, judgeRun]) {
     assert.deepEqual(tool.compareRetainedReport({ project, task: "T1", run: id, sha256: digest(report(id)) }, here), { status: "match" }, id);
     assert.deepEqual(tool.compareRetainedReport({ project, task: "T1", run: id, sha256: digest(`${report(id)} `) }, here), { status: "mismatch" }, id);
   }
-  // A candidate backs no verdict, so a report that is not kept says only what happened.
   const candidate = () => add("implementer", "--branch", `codex/t1-e${++threads}`);
   const other = candidate(), bound = spawned("implementer", other), stranger = spawned("implementer", other);
   start(bound);
@@ -314,7 +289,6 @@ test("T552: a reviewer under a lead has its report bound and kept, so that it ba
   ok("run", "done", bound, "--status", "done", "--tokens", "1");
   assert.equal(verdict(bound).status, 0, "its kept report backs review-clean on the head that the gate saw");
 
-  // The same rule as a flat child: another thread of that name keeps nothing, and a path under another task's lead binds nothing.
   const twice = add("code-reviewer"), first = child(`/root/sage_lead_t1_r1/sage_code_reviewer_t1_${twice.toLowerCase()}`, "thread-b"), second = child(`/root/sage_lead_t1_r1/sage_code_reviewer_t1_${twice.toLowerCase()}`, "thread-c");
   begin(first);
   begin(second);
@@ -363,7 +337,6 @@ test("T947: a review or QA child's medium or high finding carries a proof that t
     ["- K1 medium a.js:1 a stuck job\n  proof: kill 1\n  saw: done", /^sage: K1's proof "kill 1" is refused: an agent never reads or signals the real process list/],
     ["- K1 medium a.js:1 a bad file\n  proof: npm test > out.txt\n  saw: not ok 1", /^sage: K1's proof "npm test > out\.txt" is refused: it writes outside the scratch folder\./],
     ["- K1 low a.js:1 a nit\n- K2 medium a.js:2 a bad value", /^sage: K2 is medium and has no proof line\./],
-    // F-T947-2: git only reads; F-T947-8: inline code has its own reason; F-T947-5: one pair of backticks is a mark.
     ...["git reset --hard", "git clean -fdx", "git -C /Users/x/repo log", "npm test && git branch -D claude/t12", "git worktree add /tmp/w HEAD"].map((proof) =>
       [`- K1 medium a.js:1 a bad value\n  proof: ${proof}\n  saw: not ok 1`, /^sage: K1's proof ".*" is refused: a proof runs git only to read its own working copy: git status, log, show, diff, rev-parse, ls-files, grep, cat-file, blame, with no -C, -c, --git-dir, --work-tree or --output\./]),
     ["- K1 medium a.js:1 a bad value\n  proof: node -e \"console.log(1)\"\n  saw: 1", /^sage: K1's proof "node -e \\"console\.log\(1\)\\"" is refused: it runs inline code \(such as node -e or sh -c\), which the gate cannot check: put the script in a file in your scratch folder, and run that file\./],
@@ -386,16 +359,13 @@ test("T947: a review or QA child's medium or high finding carries a proof that t
 test("T964: the gate reads a quoted name and a word after not as text, stops a higher word in a sentence once, and names both problems in one stop", () => {
   const stopOf = (message, again = false) => gate(stop({ agent_transcript_path: transcript("/root/sage_qa_t12"), last_assistant_message: message, stop_hook_active: again }));
   const report = (findings) => FULL.replace("RESULT PASS", "RESULT FINDINGS").replace("FINDINGS none", `FINDINGS\n${findings}`);
-  // The lines of three lost runs (R3084, R3062, R2942), without local paths: a quoted test name and a word after not are text.
   for (const findings of [
     "- K2 low sage-hook.mjs:246 the proof gate uses the one stop\n  2. A `saw:` line with real output such as \"not ok 3 a high finding is refused\" then makes the report unreadable.",
     "- F1 low state-server.mjs config: a name prints two values\n  - Reproduce with config settings {\"name\": \"x\"}. This is a follow-up note and not a blocker.",
   ]) assert.deepEqual(stopOf(report(findings)), {}, findings);
-  // A higher word in a plain sentence under a low finding stops once with the line and the word named (F-T964-1).
   const plain = report("- F-R3084-1 low proof-check.md:49 a real medium finding can be dropped");
   assert.match(stopOf(plain).reason, /^sage: the report check cannot read your report: the line "- F-R3084-1 low proof-check\.md:49 a real medium finding can be dropped" under FINDINGS has the severity word "medium" above the severity of its finding \(low\): write that finding as its own line - <key> <severity> <summary>, or put quoted output in backticks\./);
   assert.equal(stopOf(plain, true).decision, undefined, "the second stop goes through");
-  // An indented second finding line without a list mark is caught (F-T964-2).
   assert.match(stopOf(report("- K1 low a log\n  K2 low a second log")).reason, /a line under FINDINGS is not none alone and not a finding in the form - <key> <severity> <summary>: "K2 low a second log"/);
   const both = stopOf(report("- K1 medium a.js:1 a bad value\n- K2 low a log, K3 high a crash"));
   assert.equal(both.decision, "block");
@@ -406,7 +376,6 @@ test("T964: the gate reads a quoted name and a word after not as text, stops a h
 
 test("T461: a report that the Claude stop gate refuses cannot pass in Codex: the name of a review child does not matter, and a field obeys the one field rule", () => {
   const stopOf = (path, message, again = false) => gate(stop({ agent_transcript_path: transcript(path), last_assistant_message: message, stop_hook_active: again }));
-  // A high finding with no list mark: the reader cannot read it. Each name is a review child that the gate cannot bind to a run.
   const hidden = "STATUS done\nRESULT PASS\nEVIDENCE x\nFINDINGS\nK1 high a.js:1 data loss\nQUESTIONS none\nNOT VERIFIED none\nBRANCH none";
   for (const path of ["/root/sage_qa_t12", "/root/sage_code_reviewer_t12", "/root/sage_security_reviewer_t12", "/root/sage_ux_reviewer_t12", "/root/Sage_QA_T12_R40", "/root/SAGE_CODE_REVIEWER_T12", "/root/sage_pe_t12/sage_qa_t12_r40", "/root/sage_qa"]) {
     const message = stopOf(path, hidden);
@@ -416,7 +385,6 @@ test("T461: a report that the Claude stop gate refuses cannot pass in Codex: the
     assert.deepEqual(stopOf(path, FULL), {}, `${path}: a report that the reader can read passes`);
   }
   for (const path of ["/root/sage_implementer_t12", "/root/sage_pe_t12", "/root/sage_lead_t12", "/root/sage_quality_t12", "/root/explorer"]) assert.deepEqual(stopOf(path, hidden), {}, `${path} backs no verdict, so its FINDINGS are not read`);
-  // A field in a list item, on an indented line or in a code block is not a field, for each sage role.
   const noStatus = (form) => FULL.replace("STATUS done", form);
   for (const path of ["/root/sage_implementer_t12", "/root/sage_qa_t12_r40"]) {
     for (const [why, message] of [["a list item", noStatus("- STATUS done")], ["an indented line", noStatus("  STATUS done")], ["a numbered list item", noStatus("1. STATUS done")], ["a code block", noStatus("```\nSTATUS done\n```")]]) {
@@ -438,17 +406,11 @@ test("an input that the gate cannot read stops nothing and gives one plain line"
     stop({ agent_transcript_path: notMeta })]) assert.deepEqual(gate(input), UNREAD, JSON.stringify(input));
 });
 
-// The tools that the chief and role texts may name. STOCK: the tool lists of stock Codex 0.160.0 in run R1648
-// (gpt-6.1-sol: functions, clock and collaboration namespaces; fake-model: the multi_agent_v1 list), with the
-// spawn_agent parameters. MCP: the tools of the plugin's sage MCP server (T454, PR 327), read from the server itself.
-// V2: the gpt-6.1-sol part of that list, with the tools of multi-agent v2, the only place where a lead runs.
-// timeout_ms: the one parameter of wait_agent (run R2221, Q6).
 const V2 = ["exec", "wait", "request_user_input", "request_user_input_async", "sleep", "followup_task", "interrupt_agent",
   "list_agents", "send_message", "spawn_agent", "wait_agent", "task_name", "fork_turns", "reasoning_effort", "exec_command",
   "write_stdin", "view_image", "timeout_ms"];
 const STOCK = [...V2, "close_agent", "resume_agent", "send_input", "fork_context", "get_goal", "create_goal", "update_goal", "web_search"];
 const MCP = Object.keys((await import(pathToFileURL(join(ROOT, "plugins/sage-codex/mcp/state-server.mjs")))).TOOLS);
-/** Each tool-like name (snake case in a code span) that a binding text names, except an example sage task name. */
 const named = (text) => [...text.matchAll(/`([a-z][a-z0-9]*(?:_[a-z0-9]+)+)`/g)].map((m) => m[1]).filter((name) => !/^sage_[a-z_]+_t\d+(?:_r\d+)?$/.test(name));
 
 test("every tool that a Codex chief or role binding names is a stock Codex tool or a sage MCP tool", () => {
@@ -465,12 +427,10 @@ test("role.mjs prints the role text and the sage report, and refuses an unknown 
   assert.equal(r.status, 0, r.stderr);
   assert.match(r.stdout, /^# Implementer\n\nYou build one task for the chief of staff\./);
   assert.match(r.stdout, /\n# The sage report\n[\s\S]*\nSTATUS {8}done, blocked or question\n/);
-  // T586: the arena judge is a Codex child too, with the report and no slot left open.
   const judge = spawnSync("node", [ROLE, "arena-judge"], { encoding: "utf8" });
   assert.equal(judge.status, 0, judge.stderr);
   assert.match(judge.stdout, /^# Arena judge\n[\s\S]*End with the report format included below\.[\s\S]*\n# The sage report\n/);
   assert.doesNotMatch(judge.stdout, /\{\{/);
-  // T586: a judge's spawn message holds only this text, so the text itself leaves the pull request to the chief.
   assert.match(judge.stdout, /\n {3}- For a build: leave the pull request to the chief\. Report your branch and head SHA: the chief pushes the branch and opens the pull request\. Do not push, and never run `gh`\.\n/);
   assert.doesNotMatch(judge.stdout, /push your branch|open a draft pull request|as an implementer does|, the pull request\./);
   const bad = spawnSync("node", [ROLE, "chief"], { encoding: "utf8" });
@@ -488,21 +448,18 @@ test("T925, T946: role.mjs gives each role, and the mode hook gives the chief, t
     assert.equal(r.status, 0, r.stderr);
     return r.stdout;
   };
-  // One role in full: its three principles, in the map's order, between the role text and the approvals line.
   const qa = role("qa");
   const part = qa.slice(qa.indexOf("\n# The principles of your role\n"), qa.indexOf("\n# The sage report\n"));
   assert.deepEqual([...part.matchAll(/^## (.+)$/gm)].map(([, t]) => t), ["Prove it works", "Test behaviour, not implementation", "Explain the number"]);
   assert.match(part, /^\n# The principles of your role\n\n## Prove it works\n\nVerify the result by checking the real thing directly\./);
   const all = [...new Set(Object.values(ROLE_PRINCIPLES).flat())];
   for (const [name, principles] of Object.entries(ROLE_PRINCIPLES)) {
-    // The Codex chief's text comes from the mode hook, not from role.mjs. The chief and the lead get the path of each one.
     const text = name === "chief-of-staff" ? chiefText() : role(name);
     for (const p of all) {
       const has = ["chief-of-staff", "lead"].includes(name) ? text.includes(`/skills/principle-${p}/SKILL.md\``) : text.includes(`\n## ${title(p)}\n`);
       assert.equal(has, principles.includes(p), `${name} ${p}`);
     }
   }
-  // The chief and the lead read their principles from the plugin's own skills: each path is a file.
   const paths = (text) => [...text.matchAll(/`(\/[^`]+\/principle-[a-z-]+\/SKILL\.md)`/g)].map(([, path]) => path);
   assert.equal(paths(chiefText()).length, 4, "the chief's four principles");
   assert.match(chiefText(), /\n\nThe principles of your role: read `\/[^`]+\/skills\/principle-never-block-on-the-human\/SKILL\.md` and `/);
@@ -513,29 +470,24 @@ test("T553: role.mjs lead adds the Codex steps to the lead's text, and no other 
   const r = spawnSync("node", [ROLE, "lead"], { encoding: "utf8" });
   assert.equal(r.status, 0, r.stderr);
   assert.match(r.stdout, /^# Lead\n\nYou coordinate one task[\s\S]*\n## Your steps in Codex\n[\s\S]*\n# The sage report\n/);
-  // How a lead starts each helper: the name form, the role text from a command that it can run, and the brief.
   assert.match(r.stdout, /`task_name`: `sage_<role>_t<n>_r<k>`, with `_` for `-` in the role, for example `sage_code_reviewer_t12_r41`/);
   assert.match(r.stdout, /`message`: the whole output of step 2, a blank line, then the brief\./);
   const [, node, script] = /Run `(\S+) (\S+) <role>`/.exec(r.stdout) ?? [];
   assert.equal(node, process.execPath, "the command uses this Node executable");
   assert.equal(script, join(ROOT, "plugins/sage-codex/skills/sage/role.mjs"), "the real path of the script");
   assert.match(spawnSync(node, [script, "qa"], { encoding: "utf8" }).stdout, /^# QA\n/, "the command that the lead runs prints a helper's role text");
-  // How it waits, reads and records, and that its messages are refused.
   assert.match(r.stdout, /Call `wait_agent` again until that helper's report comes\./);
   assert.match(r.stdout, /Save the whole report verbatim with `pages`/);
   for (const tool of ["run_add", "run_done", "brief", "finding_add", "finding_triage", "finding_close", "round", "verdict", "task_set"]) assert.ok(r.stdout.includes(`\`${tool}\``), tool);
   assert.match(r.stdout, /The gate refuses `send_message`, `followup_task` and `send_input` from a lead/);
   assert.match(r.stdout, /The `checks-pass` and `checks-fail` verdicts are the chief's/);
-  // The carried limits, each with what to do.
   assert.match(r.stdout, /record every finding of the report, before you end its run/);
   assert.match(r.stdout, /the gate refuses your next `run_add` of that role, your `run_done` of that run, a state move and a `round` \(the gap rule, as in Claude\)/);
   assert.match(r.stdout, /`collab spawn failed: agent thread limit reached` means that no thread is free/);
   assert.doesNotMatch(r.stdout, /\{\{|<role\.mjs>/);
-  // Each tool that the steps give a lead exists on v2. The two v1 names are there only as refusals (F-T553-1).
   assert.deepEqual(named(r.stdout).filter((name) => !V2.includes(name) && !MCP.includes(name)), ["send_input", "resume_agent"], "each tool that the steps name exists on v2");
   assert.match(r.stdout, /stop it with `interrupt_agent`, end its run as failed/);
   assert.match(r.stdout, /wait for a helper that runs, then call `spawn_agent` again/);
-  // The tools' real inputs (F-T553-2, F-T553-3, F-T553-8).
   assert.match(r.stdout, /For an implementer, also give `branch`, the task's branch\./);
   assert.match(r.stdout, /`\{"task": "T12", "fields": \{"state": "reviewing"\}\}`/);
   assert.match(r.stdout, /`finding_triage`: give `task`, `key` and `decision`: `fix`/);
@@ -555,7 +507,6 @@ test("T603: the lead's text holds the pilot's rules, each role that writes git o
   assert.doesNotMatch(lead, /AgentLimitReached|the chief does the lead's work|Multi-agent v1|wait_agent` for the helper/);
   const line = /\n\*\*Approvals in Codex\.\*\* Read the active sandbox and approval policy\.[\s\S]*With approval policy `never`, never request escalated permissions\.[\s\S]*Continue independent allowed work\.[\s\S]*# The sage report\n/;
   for (const role of ["lead", "implementer", "designer", "arena-judge"]) assert.match(text(role), line, role);
-  // A role that does not build gets the short line: a sandbox refusal never reads as a failed check or a finding.
   const short = /\n\*\*Sandbox refusals in Codex\.\*\* Follow the active approval policy\.[\s\S]*A refusal is not a failed check or a finding\.[\s\S]*Continue independent allowed work\.[\s\S]*# The sage report\n/;
   for (const role of ["pe", "code-reviewer", "security-reviewer", "ux-reviewer", "qa", "investigate", "evidence-review"]) {
     assert.match(text(role), short, role);
@@ -584,7 +535,6 @@ test("T553: the helper name of a lead's steps is one that keeps the helper's rep
   assert.match(text, /A name with no run still starts, but sage keeps no report for that run, and no verdict can use it/);
 });
 
-// T83: run the public renderer from the generated package, as the chief does.
 for (const [role, heading] of [["investigate", "# Investigate"], ["evidence-review", "# Evidence review"]]) {
   test(`T83 public role renderer supplies ${role} and the report contract`, () => {
     const result = spawnSync(process.execPath, [ROLE, role], { encoding: "utf8", env: ENV });
@@ -620,7 +570,6 @@ for (const role of ["investigate", "evidence-review", "pe", "designer"]) {
     let threads = 0;
     let writers = 0;
     const run = () => ok("run", "add", "T1", "--role", role, ...(role === "designer" ? ["--branch", `codex/t1-sample-${++writers}`] : [])).split(" ")[0];
-    // Synthetic hook metadata in a disposable fixture, never native execution receipts.
     const child = (id, { path = `/root/sage_${role.replaceAll("-", "_")}_t1_${id.toLowerCase()}`, thread = `sample-${++threads}` } = {}) => {
       const file = join(project, `sample-${++threads}.jsonl`);
       writeFileSync(file, JSON.stringify({ type: "session_meta", payload: { id: thread, agent_path: path } }) + "\n");
@@ -646,7 +595,6 @@ for (const role of ["investigate", "evidence-review", "pe", "designer"]) {
       assert.deepEqual(end(file, text), {}, "an exact retry keeps the first report");
       assert.match(end(file, text + "Different report").systemMessage, /already has a kept report/);
       assert.equal(readFileSync(saved(id), "utf8"), JSON.stringify(kept));
-      // One token is a sample fixture value, not measured agent usage.
       ok("run", "done", id, "--status", status, "--tokens", "1");
       if (taskNumber === "T85") {
         const refused = sage("verdict", "T1", "--kind", "review-clean", "--sha", "1".repeat(40), "--run", id);
@@ -666,7 +614,6 @@ for (const role of ["investigate", "evidence-review", "pe", "designer"]) {
       if (issue !== "no start") begin(file);
       if (issue === "ended after start") ok("run", "done", id, "--status", "blocked");
       end(file, FULL);
-      // A run that ended as blocked after its child started keeps the late report, in every logbook (T970 F3).
       assert.equal(existsSync(saved(id)), issue === "ended after start", issue);
     }
     const id = run(), first = child(id), conflicting = child(id);
@@ -682,8 +629,6 @@ for (const role of ["investigate", "evidence-review", "pe", "designer"]) {
   });
 }
 
-// T954: a Codex run's tokens. The fixture is a child's session record in the form of Codex b514f638 (TokenUsageRecord in
-// protocol/src/protocol.rs, written after each model response by core/src/session/mod.rs): sample values, two token lines.
 const RECORD = join(ROOT, "scripts/fixtures/codex-token-usage.jsonl");
 const recordLines = () => readFileSync(RECORD, "utf8").trimEnd().split("\n").map((line) => JSON.parse(line));
 test("T954: at its stop, a Codex run's own token total from its session record becomes the run's tokens, on the board too; a record with no total leaves the usage unavailable, with the reason", async () => {
@@ -700,21 +645,17 @@ test("T954: at its stop, a Codex run's own token total from its session record b
     const cells = lines.map((line) => line.split("\t")).find((c) => c[0] === id);
     return Object.fromEntries(head.split("\t").map((key, i) => [key, cells[i] ?? ""]));
   };
-  // A child of the chief (or a lead), with the run in its task name and the record lines that edit gives.
   const record = (role, id, edit = (lines) => lines) => {
     const lines = recordLines(), thread = lines[0].payload.id, path = `/root/sage_${role}_t12_${id.toLowerCase()}`;
     Object.assign(lines[0].payload, { agent_path: path });
     const file = join(dir, `tokens-${id}.jsonl`);
     writeFileSync(file, edit(lines, thread).map((line) => typeof line === "string" ? line : JSON.stringify(line)).join("\n") + "\n");
-    // A review child starts as the brief hook binds it, so that the gate also keeps its report (T483); a lead binds nothing.
     if (role !== "lead") assert.equal(spawnSync("node", [BRIEF_HOOK], { input: JSON.stringify({ hook_event_name: "SubagentStart", session_id: "s", transcript_path: file, cwd: project }), encoding: "utf8", env: ENV }).status, 0);
     return file;
   };
-  // The chief's run_done of the Codex dispatch text: usage unavailable is its fallback for a run that kept no count.
   const fallback = ["--usage", "unavailable", "--usage-source", "codex collaboration-tools", "--usage-evidence", "wait_agent gives no token count", "--report", "pages/report.md"];
   const add = (role) => ok("run", "add", "T12", "--role", role, "--usage-interface", "collaboration-tools").split(" ")[0];
 
-  // A lead and a QA child: the last token line's thread total, 25811, is the run's tokens, as a Claude run records them.
   const lead = add("lead");
   assert.deepEqual(gate(stop({ agent_transcript_path: record("lead", lead), cwd: project, last_assistant_message: FULL })), {});
   ok("run", "done", lead, "--status", "done", ...fallback);
@@ -729,7 +670,6 @@ test("T954: at its stop, a Codex run's own token total from its session record b
   }
   assert.match(ok("status"), /about 52k tokens · 2 measured, 0 unavailable, 0 legacy-unrecorded/);
   assert.match(ok("board", "T12", "--view", "task"), new RegExp(`${lead} [^\\n]*· lead · done · [^\\n]*· tokens 25811\\n${qa} [^\\n]*· qa · done · [^\\n]*· tokens 25811`));
-  // A blocked lead with a kept count needs no fallback; a later stop of the same agent replaces its count, which only grows.
   const blocked = add("lead"), file = record("lead", blocked);
   gate(stop({ agent_transcript_path: file, cwd: project, last_assistant_message: FULL }));
   writeFileSync(file, readFileSync(file, "utf8") + JSON.stringify({ ...recordLines()[5], payload: { ...recordLines()[5].payload, thread_token_usage: { ...recordLines()[5].payload.thread_token_usage, total_tokens: 30000 } } }) + "\n");
@@ -737,7 +677,6 @@ test("T954: at its stop, a Codex run's own token total from its session record b
   ok("run", "done", blocked, "--status", "blocked", "--report", "pages/report.md");
   assert.deepEqual([row(blocked).tokens, row(blocked).usage_status], ["30000", "measured"]);
 
-  // A record with no total for the agent: the usage is unavailable with the gate's reason, and the gate never stops the agent.
   const total = (value) => (lines) => lines.map((line) => line.type === "token_usage_record" ? { ...line, payload: { ...line.payload, thread_token_usage: { ...line.payload.thread_token_usage, total_tokens: value } } } : line);
   for (const [why, edit, reason] of [
     ["no token line", (lines) => lines.filter((line) => line.type !== "token_usage_record"), /^unavailable: the session record has no token_usage_record line of this agent in its last 8 MiB$/],
@@ -747,7 +686,6 @@ test("T954: at its stop, a Codex run's own token total from its session record b
     ["a total of the wrong type", total("25811"), /\("25811"\)$/],
     ["a total of 0", total(0), /\(0\)$/],
     ["no thread total", (lines) => lines.map((line) => line.type === "token_usage_record" ? { ...line, payload: { ...line.payload, thread_token_usage: undefined } } : line), /\(none\)$/],
-    // A record that holds only another thread's token lines: only the agent's own thread counts.
     ["only another thread's token lines", (lines) => lines.map((line) => line.type === "token_usage_record" ? { ...line, payload: { ...line.payload, thread_id: "01a1b6ff-0000-7000-8000-000000000001" } } : line), /no token_usage_record line of this agent/],
   ]) {
     const id = add("qa");
@@ -757,24 +695,19 @@ test("T954: at its stop, a Codex run's own token total from its session record b
     assert.deepEqual([r.tokens, r.usage_status, r.usage_source], ["", "unavailable", "Codex session record: thread_token_usage.total_tokens of the agent's last token_usage_record line"], why);
     assert.match(r.usage_evidence, reason, why);
   }
-  // Another thread's line after the agent's own last token line: the agent's own line still counts.
   const mixed = add("qa");
   gate(stop({ agent_transcript_path: record("qa", mixed, (lines) => [...lines, { ...lines[5], payload: { ...lines[5].payload, thread_id: "01a1b6ff-0000-7000-8000-000000000001", thread_token_usage: { total_tokens: 999999 } } }]), cwd: project, last_assistant_message: FULL }));
   ok("run", "done", mixed, "--status", "done", ...fallback);
   assert.equal(row(mixed).tokens, "25811");
-  // No record that the gate can read: no count is kept, and the chief's fallback stands, with its own reason.
   const none = add("qa");
   assert.deepEqual(gate(stop({ agent_transcript_path: join(dir, "no-such-record.jsonl"), cwd: project, last_assistant_message: FULL })), UNREAD);
   ok("run", "done", none, "--status", "done", ...fallback);
   assert.deepEqual([row(none).tokens, row(none).usage_status, row(none).usage_evidence], ["", "unavailable", "wait_agent gives no token count"]);
-  // The reader alone: a file that it cannot open gives its reason, and never a number.
   const { tokenTotal } = await import(pathToFileURL(GATE).href);
   assert.deepEqual(tokenTotal(join(dir, "no-such-record.jsonl"), "x"), { reason: "the session record cannot be read (ENOENT)" });
   assert.deepEqual(tokenTotal(RECORD, recordLines()[0].payload.id), { tokens: "25811" });
 });
 
-// T969 (F-T954-6): at a later stop of the same agent, a half-written last line of its record gave no count, and that
-// unavailable replaced the count of the earlier stop. A stop that reads no count now keeps the measured one.
 test("T969: a later stop whose record ends in a half-written line keeps the count of the earlier stop", () => {
   const project = realpathSync(mkdtempSync(join(dir, "tokens-later-")));
   spawnSync("git", ["-C", project, "init", "-q", "-b", "codex/t1-a"]);
@@ -793,7 +726,7 @@ test("T969: a later stop whose record ends in a half-written line keeps the coun
   const file = join(dir, `tokens-later-${lead}.jsonl`);
   writeFileSync(file, lines.map((line) => JSON.stringify(line)).join("\n") + "\n");
   gate(stop({ agent_transcript_path: file, cwd: project, last_assistant_message: FULL }));
-  writeFileSync(file, readFileSync(file, "utf8") + '{"timestamp":"2026-11-10T17:07:00.000Z","type":"token_usage_rec'); // a line that Codex still writes
+  writeFileSync(file, readFileSync(file, "utf8") + '{"timestamp":"2026-11-10T17:07:00.000Z","type":"token_usage_rec');
   assert.deepEqual(gate(stop({ agent_transcript_path: file, cwd: project, last_assistant_message: FULL })), {});
   ok("run", "done", lead, "--status", "blocked", "--report", "pages/report.md");
   assert.deepEqual(tokensOf(lead), ["25811", "measured"]);

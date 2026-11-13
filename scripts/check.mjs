@@ -1,4 +1,3 @@
-// Checks the sources and that the generated files match them. Fails with a list of every problem.
 import { existsSync, readFileSync, readdirSync } from "node:fs";
 import { dirname, join, relative } from "node:path";
 import { GENERATED, ROOT, outputs, filesUnder, parseSource } from "./build.mjs";
@@ -18,7 +17,7 @@ import { unrunTestFiles } from "./test-commands.mjs";
 import { referenceFiles, startTextProblems } from "./start-text.mjs";
 import { priorArtProblems } from "./prior-art.mjs";
 import { KINDS as MESSAGE_KINDS } from "../packages/sage-core/message.mjs";
-import { ruleTestProblems } from "./lint-rules.mjs";
+import { commentProblems, ruleTestProblems } from "./lint-rules.mjs";
 import { npxPinProblems } from "./npx-pin.mjs";
 
 const problems = [];
@@ -36,7 +35,6 @@ for (const f of readdirSync(join(ROOT, "principles")).filter((f) => f.endsWith("
   } catch (e) { problems.push(String(e.message)); }
 }
 
-// Every skill, generated or own, follows the shared agentskills.io core: name (= folder, ≤64, lowercase-hyphen) and description (≤1024).
 const skillsDir = join(ROOT, "plugins/sage/skills");
 for (const d of readdirSync(skillsDir)) {
   const f = join(skillsDir, d, "SKILL.md");
@@ -49,13 +47,11 @@ for (const d of readdirSync(skillsDir)) {
   if (!name || name.length > 64 || !/^[a-z0-9]+(-[a-z0-9]+)*$/.test(name)) problems.push(`skills/${d}/SKILL.md: name must be lowercase words joined by hyphens, at most 64 characters`);
   if (!desc) problems.push(`skills/${d}/SKILL.md: missing description`);
   else if (yamlText(desc).length > 1024) problems.push(`skills/${d}/SKILL.md: description over 1024 characters`);
-  // The shared skill format (agentskills.io) has only these top-level keys.
   for (const key of m[1].split("\n").filter((l) => /^[A-Za-z-]+:/.test(l)).map((l) => l.split(":")[0])) {
     if (!["name", "description", "license", "allowed-tools", "metadata"].includes(key)) problems.push(`skills/${d}/SKILL.md: key "${key}" is not in the shared skill format`);
   }
 }
 
-// Sage mode (Claude Code only). Agents: name equals the file, a description, preloaded skills that exist, sage names that exist.
 const PLUGIN = join(ROOT, "plugins/sage");
 const frontmatter = (file) => /^---\n([\s\S]*?)\n---\n([\s\S]*)$/.exec(readFileSync(file, "utf8"));
 const agents = readdirSync(join(PLUGIN, "agents")).filter((f) => f.endsWith(".md"));
@@ -71,21 +67,16 @@ for (const f of agents) {
   for (const [, name] of m[2].matchAll(/`sage:([a-z-]+)`/g)) {
     if (!agents.includes(`${name}.md`) && !existsSync(join(skillsDir, name, "SKILL.md"))) problems.push(`agents/${f}: names sage:${name}, which is neither an agent nor a skill`);
   }
-  // Every agent writes for a person, in sage's words; every agent but the chief ends with the report.
   for (const skill of f === "chief-of-staff.md" ? ["dictionary"] : ["report", "dictionary"]) if (!new RegExp(`^  - sage:${skill}$`, "m").test(m[1])) problems.push(`agents/${f}: must preload sage:${skill}`);
-  // Each agent preloads exactly the principles that core's role map gives its role.
   const preloaded = [...m[1].matchAll(/^  - sage:principle-(\S+)$/gm)].map(([, p]) => p).sort().join(", ");
   const mapped = [...(ROLE_PRINCIPLES[f.slice(0, -3)] ?? [])].sort().join(", ");
   if (preloaded !== mapped) problems.push(`agents/${f}: preloads the principles [${preloaded}], but ROLE_PRINCIPLES in packages/sage-core/roles.mjs gives [${mapped}]`);
 }
-// Each role of the role map has its Claude agent file, so no role starts as a general agent without its principles (T932).
 for (const role of Object.keys(ROLE_PRINCIPLES)) if (!agents.includes(`${role}.md`)) problems.push(`ROLE_PRINCIPLES names the role ${role}, which has no agent file in packages/sage-claude/agents/`);
-// Every principle has a role, and the role map names only principles that exist.
 const principleNames = readdirSync(join(ROOT, "principles")).filter((f) => f.endsWith(".md") && f !== "README.md").map((f) => f.slice(0, -3));
 const mappedPrinciples = new Set(Object.values(ROLE_PRINCIPLES).flat());
 for (const p of principleNames) if (!mappedPrinciples.has(p)) problems.push(`principles/${p}.md: no role in ROLE_PRINCIPLES (packages/sage-core/roles.mjs) gets it`);
 for (const p of mappedPrinciples) if (!principleNames.includes(p)) problems.push(`ROLE_PRINCIPLES names ${p}, which is not a file of principles/`);
-// The chief's brief template and the report skill list the same fields as the hook's gates, in the same order.
 const template = /## The brief[\s\S]*?```\n([\s\S]*?)```/.exec(frontmatter(join(PLUGIN, "agents/chief-of-staff.md"))?.[2] ?? "")?.[1] ?? "";
 const briefFields = template.split("\n").map((l) => l.split(/\s+/)[0]).filter(Boolean);
 if (CORE_BRIEF_FIELDS.join(" ") !== BRIEF_FIELDS.join(" ")) problems.push("the core brief fields differ from the hook contract");
@@ -93,24 +84,18 @@ if (briefFields.join(" ") !== BRIEF_FIELDS.join(" ")) problems.push(`agents/chie
 const report = /```\n([\s\S]*?)```/.exec(readFileSync(join(skillsDir, "report/SKILL.md"), "utf8"))?.[1] ?? "";
 const reportFields = report.split("\n").map((l) => l.split(/\s{2,}/)[0].trim()).filter(Boolean);
 if (reportFields.join("|") !== REPORT_FIELDS.join("|")) problems.push(`skills/report: the template has ${reportFields.join(", ")}, the hook checks ${REPORT_FIELDS.join(", ")}`);
-// The sage skill of each provider lists the task kinds that the state tool takes, in the same order (T314).
 for (const file of ["plugins/sage/skills/sage/references/commands.md", "plugins/sage-codex/skills/sage/references/commands.md"])
   if (!readFileSync(join(ROOT, file), "utf8").includes(`A kind is one of: ${TASK_KINDS.join(", ")}.`)) problems.push(`${file}: the kind list is not "A kind is one of: ${TASK_KINDS.join(", ")}.", the kinds of the state tool`);
-// The hook reads a helper's findings only in its one line form (F-T289-11): the template's FINDINGS line gives that form.
 if (!/^FINDINGS\s.*$/m.exec(report)?.[0].includes(FINDING_FORM)) problems.push(`skills/report: the FINDINGS line does not give the hook's finding form ${FINDING_FORM}`);
-// The hook's reader takes a finding's detail only on indented lines under its line (F-T289-29): the report skill, and each
-// agent that asks for detail for each finding, say where it goes.
 for (const [name, text] of [["skills/report", readFileSync(join(skillsDir, "report/SKILL.md"), "utf8")], ...agents.map((f) => [`agents/${f}`, readFileSync(join(PLUGIN, "agents", f), "utf8")])]) {
   if ((name === "skills/report" || /For each finding, the/.test(text)) && !text.includes("on indented lines under")) problems.push(`${name}: a finding's detail must go on indented lines under the finding's line, the one form that the hook reads`);
 }
-// Every hook command runs a script that exists.
 for (const [event, groups] of Object.entries(JSON.parse(readFileSync(join(PLUGIN, "hooks/claude.json"), "utf8")).hooks)) for (const g of groups) for (const h of g.hooks) {
   const script = /\$\{CLAUDE_PLUGIN_ROOT\}\/([^"]+)"/.exec(h.command)?.[1];
   if (!script || !existsSync(join(PLUGIN, script))) problems.push(`hooks/claude.json ${event}: runs ${script ?? h.command}, which does not exist`);
 }
 if (JSON.parse(readFileSync(join(PLUGIN, ".claude-plugin/plugin.json"), "utf8")).hooks !== "./hooks/claude.json") problems.push("plugin.json: Claude Code must load hooks/claude.json, the sage mode hook");
 
-// pstack: its MIT licence ships with the principles adapted from it, and every link between skills resolves.
 if (!existsSync(join(ROOT, "principles/LICENSE-pstack"))) problems.push("principles/LICENSE-pstack: missing; pstack's MIT licence must ship with the principles adapted from it");
 for (const d of readdirSync(skillsDir)) {
   const f = join(skillsDir, d, "SKILL.md");
@@ -118,8 +103,6 @@ for (const d of readdirSync(skillsDir)) {
   for (const [, target] of readFileSync(f, "utf8").matchAll(/\]\(\.\.\/([a-z0-9-]+)\/SKILL\.md\)/g)) if (!existsSync(join(skillsDir, target, "SKILL.md"))) problems.push(`skills/${d}: links to ${target}, which does not ship`);
 }
 
-// The README's graphics are exactly what scripts/graphics.mjs draws, so nobody edits or adds an SVG by hand. Each text
-// stays 7 px or more on a phone, where GitHub shows a graphic 324 px wide (the README column on a 390 px screen).
 const drawn = new Map(graphics());
 for (const [f, svg] of drawn) {
   const file = join(ROOT, "docs/assets", f);
@@ -130,10 +113,6 @@ for (const [f, svg] of drawn) {
   if ((small * PHONE) / width < 7) problems.push(`docs/assets/${f}: a ${small} px text is ${((small * PHONE) / width).toFixed(1)} px on a phone; make it ${Math.ceil((7 * width) / PHONE)} px or more`);
 }
 for (const f of readdirSync(join(ROOT, "docs/assets")).filter((f) => f.endsWith(".svg") && !drawn.has(f))) problems.push(`docs/assets/${f}: scripts/graphics.mjs does not draw it; draw it there, or delete it`);
-// A page of the README or the docs shows each graphic in the reader's theme, with an alt text, inside a link to the SVG's
-// file page, so that a tap opens it. Not to the raw SVG ("?raw=true"): GitHub's in-page navigation fails on the redirect
-// to it and shows "Error loading page". The <a> line stands alone: on the same line as <picture>, GitHub makes it a
-// paragraph and drops the dark version.
 const readme = readFileSync(join(ROOT, "README.md"), "utf8");
 const pages = docFiles(ROOT).map((f) => [relative(dirname(join(ROOT, f)), join(ROOT, "docs/assets")).replace(/\\/g, "/"), readFileSync(join(ROOT, f), "utf8")]);
 for (const name of new Set([...drawn.keys()].map((f) => f.replace(/-(light|dark)\.svg$/, "")))) {
@@ -144,33 +123,23 @@ for (const name of new Set([...drawn.keys()].map((f) => f.replace(/-(light|dark)
   if (!pages.some(shown)) problems.push(`docs/assets/${name}-light.svg: no page shows it; show it in the README or a docs page as <a href="<path>/${name}-light.svg">, then <picture> with its dark <source> and an <img> with alt text, each on its own line`);
 }
 
-// The README is a short front page, every relative link of the README and the docs resolves, and no paragraph of the
-// README or the guide has more than 3 sentences (T381).
 problems.push(...readmeProblems(readme), ...linkProblems(ROOT));
 for (const f of docFiles(ROOT).filter((f) => f === "README.md" || f.startsWith("docs/guide/"))) problems.push(...paragraphProblems(f, readFileSync(join(ROOT, f), "utf8")));
-// The board screenshots come from scripts/board-shots.mjs with its sample logbook: both files exist, and the record
-// names the sample that they show. It compares no pixels, so a renderer change does not fail the check by itself.
 for (const f of [...Object.values(SHOTS), SHOTS_RECORD]) if (!existsSync(join(ROOT, f))) problems.push(`${f}: missing; run node scripts/board-shots.mjs (see CONTRIBUTING.md)`);
 if (existsSync(join(ROOT, SHOTS_RECORD)) && JSON.parse(readFileSync(join(ROOT, SHOTS_RECORD), "utf8")).sample !== sampleHash()) problems.push(`${SHOTS_RECORD}: the sample logbook changed after the board screenshots; run node scripts/board-shots.mjs (see CONTRIBUTING.md)`);
 
-// sage's words (writing/dictionary.md): no flagged word in the text that a person reads. The generated skills are left
-// out: their words come from the principles and the dictionary itself. Code is left out too: its names stay.
 let dictionary;
 try { dictionary = checkWords(parseSource(readFileSync(join(ROOT, "writing/dictionary.md"), "utf8"), "writing/dictionary.md").body); } catch (e) { problems.push(e.message); }
 const readByPeople = [
   ...agents.map((f) => `plugins/sage/agents/${f}`),
   ...readdirSync(skillsDir).map((d) => `plugins/sage/skills/${d}/SKILL.md`).filter((f) => existsSync(join(ROOT, f)) && !readFileSync(join(ROOT, f), "utf8").includes(GENERATED)),
-  // The references that the start texts point to (T934): the agents read them as part of their instructions.
   ...referenceFiles().map((f) => `plugins/sage/${f}`),
-  // The README and the docs: every page that docFiles reads for links.
   ...docFiles(ROOT),
   ...readdirSync(join(ROOT, "docs/assets")).filter((f) => f.endsWith(".svg")).map((f) => `docs/assets/${f}`),
 ];
 for (const f of dictionary ? readByPeople : []) {
   const text = readFileSync(join(ROOT, f), "utf8");
-  // The principles table is generated from the principles, like the generated skills that this check leaves out.
   const found = flaggedWords(f === PRINCIPLES_PAGE ? withoutPrinciplesTable(text) : text, dictionary, { html: !f.endsWith(".md") });
-  // A graphic's text comes from scripts/graphics.mjs, and nobody edits an SVG by hand.
   for (const h of found) problems.push(`${f}:${h.line}: "${h.word}" is a flagged word${h.use.length ? `; say ${h.use.join(" or ")}` : ""} (writing/dictionary.md)${f.startsWith("docs/assets/") ? "; fix it in scripts/graphics.mjs, then run npm run graphics" : ""}`);
 }
 
@@ -181,14 +150,8 @@ try {
     const f = join(ROOT, rel);
     if (!existsSync(f) || readFileSync(f, "utf8") !== text) problems.push(`${rel}: out of date; run npm run build`);
   }
-} catch (e) { problems.push(String(e.message)); } // a source that the build cannot read, such as a README without its markers
+} catch (e) { problems.push(String(e.message)); }
 
-// T1014: the repository keeps no history file, because an agent that arrives fresh reads old history as current fact.
-// Git history and the merged pull requests are the record: a task pull request says what changed for users in its
-// description, and each release gets its notes on the releases page (CONTRIBUTING.md). So a CHANGELOG.md (in any
-// letter case, so that the check is the same on every file system) or a changes/ folder that comes back, for example
-// from a branch made before T1014, fails here. A dot file, such as a Finder .DS_Store that git leaves behind in the
-// old folder, is not a change file.
 const NO_HISTORY = "the repository keeps no history file (T1014); delete it, and say what changed for users in the pull request description. Each release gets its notes on the releases page, https://github.com/erickb336/sage-stack/releases (CONTRIBUTING.md)";
 for (const f of readdirSync(ROOT).filter((f) => f.toLowerCase() === "changelog.md")) problems.push(`${f}: ${NO_HISTORY}`);
 if (existsSync(join(ROOT, "changes"))) for (const f of readdirSync(join(ROOT, "changes")).filter((f) => !f.startsWith("."))) problems.push(`changes/${f}: ${NO_HISTORY}`);
@@ -196,24 +159,17 @@ if (existsSync(join(ROOT, "changes"))) for (const f of readdirSync(join(ROOT, "c
 const core = readFileSync(join(ROOT, "instructions/core.md"), "utf8");
 if (Buffer.byteLength(core) > 8 * 1024) problems.push(`instructions/core.md: ${Buffer.byteLength(core)} bytes; keep it under 8 KiB (it loads into every session, so each byte costs context there)`);
 
-// T494: the chief in Codex must get every rule. Codex counts hook context at 4 bytes a token
-// (codex-rs utils/string/src/truncate.rs) and cuts a text above the hook's limit (hooks/src/output_spill.rs).
 try {
   const tokens = Math.min(...["UserPromptSubmit", "SessionStart"].map((e) => CODEX_EVENTS[e].additionalContextLimit ?? 2500));
   const limit = tokens * 4;
   const role = Buffer.byteLength(codexModeHook({ hook_event_name: "UserPromptSubmit", session_id: "check", prompt: "sage mode" }, {}).hookSpecificOutput.additionalContext);
   if (role > limit) problems.push(`Codex chief role: the sage hook gives ${role} bytes, ${role - limit} bytes over its limit of ${limit} bytes (0 bytes left; additionalContextLimit ${tokens} tokens at 4 bytes each, in packages/sage-codex/hooks/entries.mjs), so Codex would cut the rules. Shorten the chief text (packages/sage-core/roles/chief-of-staff.md) or raise the limit`);
 } catch (e) { problems.push(`Codex chief role: ${e.message} (packages/sage-core/roles/chief-of-staff.md)`); }
-// T934: the Claude chief's and lead's start texts stay under their limits, and each reference that they name exists
-// and has its trigger. node scripts/start-text.mjs prints the bytes of each part.
 try { problems.push(...await startTextProblems()); } catch (e) { problems.push(`start texts: ${e.message} (scripts/start-text.mjs)`); }
 try { problems.push(...npxPinProblems()); } catch (e) { problems.push(`npx pin: ${e.message} (scripts/npx-pin.mjs)`); }
 try { problems.push(...ruleTestProblems()); } catch (e) { problems.push(`packages/sage-core/lint: ${e.message} (scripts/lint-rules.mjs)`); }
-// T1016: the designer, PE, investigate and chief texts and the design and architecture playbooks ask for the prior art.
+try { problems.push(...commentProblems(ROOT)); } catch (e) { problems.push(`comment scan: ${e.message} (scripts/lint-rules.mjs)`); }
 problems.push(...priorArtProblems());
-// T985, T1015: each playbook (one file each, which the chief reads only when its line holds) has its five parts in order,
-// and its moment names message kinds that exist (the words "message kind" in any letter case) and the default with no
-// answer. The chief's Playbooks list has one trigger line for each file, with the file's name and title, and names no other.
 {
   const PARTS = ["How the chief knows", "Agents prepare", "The owner's moment", "After the answer", "The owner learns"];
   const dir = "packages/sage-core/references/playbooks", at = "packages/sage-core/roles/chief-of-staff.md";
@@ -235,25 +191,21 @@ problems.push(...priorArtProblems());
   for (const file of triggers.keys()) if (!files.includes(file)) problems.push(`${at}: the Playbooks list names ${file}, which ${dir} does not have`);
 }
 
-// A test must not hold wall-clock or CPU time under a tight fixed bound: load and machine differences can fail a
-// correct test (T53, T188). A name takes the clock when it is set from a clock reading or from a
-// name that took it, or when it is a function that returns one. A lower bound may stay: a busy machine only adds time.
 const CLOCK = String.raw`(?:(?:Date\.now|performance\.now|process\.hrtime(?:\.bigint)?)\(\)|process\.cpuUsage\([^)]*\))`;
-const FIX = 'assert CPU time (process.cpuUsage) as a ratio between two sizes with a generous bound, an order of events or a flag (for example: the lock holder still holds when the command returns), or a count. If none can, end the line with "// timing-ok: <reason>"';
+const FIX = 'assert CPU time (process.cpuUsage) as a ratio between two sizes with a generous bound, an order of events or a flag (for example: the lock holder still holds when the command returns), or a count. If none can, give the line a message that holds "timing-ok: <reason>"';
 let timingOk = 0;
-// Every test source: each test file and each file of scripts/ that a test file imports, such as sage-hook-tests.mjs,
-// which the six sage-hook-<n>.test.mjs parts run (F-T289-61).
 const testFiles = readdirSync(join(ROOT, "scripts")).filter((f) => f.endsWith(".test.mjs"));
 const imported = testFiles.flatMap((f) => [...readFileSync(join(ROOT, "scripts", f), "utf8").matchAll(/["']\.\/([\w.-]+\.mjs)["']/g)].map((m) => m[1]));
 for (const f of [...new Set([...testFiles, ...imported])].filter((f) => existsSync(join(ROOT, "scripts", f)))) {
-  const lines = readFileSync(join(ROOT, "scripts", f), "utf8").split("\n").map((l) => l.replace(/(["'`])(?:\\.|(?!\1)[^\\])*\1/g, '""').replace(/(^|\s)\/\/(?! timing-ok:).*$/, "$1")); // no strings, no comments
+  const raw = readFileSync(join(ROOT, "scripts", f), "utf8").split("\n"), STRING = /(["'`])(?:\\.|(?!\1)[^\\])*\1/g;
+  const marked = raw.map((l) => (l.match(STRING) ?? []).some((text) => /timing-ok: \S/.test(text)));
+  const lines = raw.map((l) => l.replace(STRING, '""'));
   const clocked = new Set();
   const takes = (text) => new RegExp(`${CLOCK}${clocked.size ? `|(?<![\\w$.])(?:${[...clocked].join("|")})(?![\\w$])` : ""}`).test(text);
   for (let before = -1; before !== clocked.size; ) {
     before = clocked.size;
     let fn;
     for (const line of lines) {
-      // The function that a return line is in: the last one that a line named, or none after an unnamed one.
       const named = /(?:function\s+([\w$]+)|([\w$]+)\s*=\s*(?:async\s*)?(?:\([^)]*\)|[\w$]+)\s*=>)/.exec(line)?.slice(1).find(Boolean);
       fn = named ?? (/=>\s*\{|function\s*\(/.test(line) ? undefined : fn);
       const set = /(\[[^\]]*\]|\{[^}]*\}|[\w$]+)\s*=(?![=>])([^;]*)/.exec(line);
@@ -262,22 +214,19 @@ for (const f of [...new Set([...testFiles, ...imported])].filter((f) => existsSy
     }
   }
   const term = `(?:${CLOCK}${clocked.size ? `|(?<![\\w$.])(?:${[...clocked].join("|")})(?![\\w$])` : ""})`;
-  // The number must be the complete bound: `big < 30 * small` is a ratio, not a fixed cap.
   const number = String.raw`[\d_.]+`;
   const under = new RegExp(`${term}[^<>&|,;?]*?<=?\\s*${number}\\s*(?=[),;]|&&|\\|\\||$)|(?:^|[,(;]|&&|\\|\\|)\\s*${number}\\s*>=?[^<>&|,;?]*?${term}[^<>&|,;?]*`, "g");
-  const ratio = new RegExp(`/\\s*\\(*\\s*${term}`); // divide by another measured size, not by a unit such as 1000
+  const ratio = new RegExp(`/\\s*\\(*\\s*${term}`);
   lines.forEach((line, i) => {
-    const comparisons = [...line.replace(/\/\/ timing-ok:.*$/, "").matchAll(under)];
+    const comparisons = [...line.matchAll(under)];
     if (!comparisons.some(([comparison]) => !ratio.test(comparison))) return;
-    if (/\/\/ timing-ok: \S/.test(line)) timingOk++;
+    if (marked[i]) timingOk++;
     else problems.push(`scripts/${f}:${i + 1}: a test holds a wall-clock or CPU time under a fixed number, so a busy machine can break it. Instead, ${FIX}.`);
   });
 }
 
-// Each test file of the repository runs in CI: npm test or npm run test:browser names it (R1534-3, T350).
 for (const f of unrunTestFiles(ROOT)) problems.push(`${f}: no test command runs it; add it to "test" or "test:browser" in package.json`);
 
-// Provider build outputs must be exact, including the absence of obsolete or foreign files.
 for (const dir of ["plugins/sage", "plugins/sage-codex"]) {
   for (const file of filesUnder(join(ROOT, dir))) {
     const rel = file.slice(ROOT.length + 1);
@@ -285,6 +234,5 @@ for (const dir of ["plugins/sage", "plugins/sage-codex"]) {
   }
 }
 
-// The build reads the dictionary too, so a problem in it comes twice: report it once.
 if (problems.length) { console.error([...new Set(problems)].map((p) => `✗ ${p}`).join("\n")); process.exit(1); }
-console.log(`✓ all checks pass (${timingOk} timing ${timingOk === 1 ? "bound carries" : "bounds carry"} "// timing-ok:")`);
+console.log(`✓ all checks pass (${timingOk} timing ${timingOk === 1 ? "bound carries" : "bounds carry"} "timing-ok:")`);

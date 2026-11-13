@@ -1,4 +1,3 @@
-// Public API. Providers import this entry point only.
 export { balancedModels, createStateTool } from "./state.mjs";
 export { sharedRoot } from "./shared-root.mjs";
 export { writerClass } from "./chiefs.mjs";

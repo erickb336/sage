@@ -1,4 +1,4 @@
-import "./test-env.mjs"; // first: no variable of the developer's shell changes a result
+import "./test-env.mjs";
 import assert from "node:assert/strict";
 import { spawnSync } from "node:child_process";
 import { createHash } from "node:crypto";
@@ -8,11 +8,6 @@ import { dirname, join } from "node:path";
 import { test } from "node:test";
 import { fileURLToPath } from "node:url";
 
-// The Codex merge command of autopilot (T663, T677), run as Codex runs a shell command: one node process with Codex's
-// CODEX_SESSION_ID, CODEX_THREAD_ID and CODEX_TOOL_CALL_ID. gh is a fake: PATH holds only the fakes folder, the permit
-// names the fake by its absolute path, and node runs by its absolute path, so no real gh can run. The fake is proven
-// first, by its absolute path and by its name. The command runs from a copy of the built plugin installed as Codex
-// installs it (<CODEX_HOME>/plugins/cache/<marketplace>/<plugin>/<version>), because its permits live in that Codex home.
 const BUILT = fileURLToPath(new URL("../plugins/sage-codex", import.meta.url));
 const RECORDS = JSON.parse(readFileSync(fileURLToPath(new URL("./fixtures/codex-owner-records.json", import.meta.url)), "utf8"));
 const SCRATCH = realpathSync(mkdtempSync(join(tmpdir(), "sage-autopilot-merge-")));
@@ -21,7 +16,6 @@ const INSTALL_HOME = join(SCRATCH, "install-codex-home");
 const PLUGIN = join(INSTALL_HOME, "plugins/cache/sage/sage/0.0.0");
 cpSync(BUILT, PLUGIN, { recursive: true });
 const MERGE = join(PLUGIN, "skills/sage/merge.mjs");
-// The gate's import and calls read the home and the sage root: both are scratch for this whole file.
 process.env.HOME = SCRATCH;
 process.env.SAGE_HOME = join(SCRATCH, "sage");
 delete process.env.CODEX_HOME;
@@ -31,12 +25,7 @@ const GH = join(FAKES, "gh");
 const GH_LOG = join(SCRATCH, "gh.log");
 const MARKER = "FAKE-gh T663";
 mkdirSync(FAKES);
-/**
- * The variables that the fake gh logs: the four that send gh elsewhere must be gone, the owner's gh config stays, and
- * PATH is the permit's (F-T677-4).
- */
 const GH_VARIABLES = ["GH_HOST", "GH_REPO", "GH_ENTERPRISE_TOKEN", "GITHUB_ENTERPRISE_TOKEN", "GH_CONFIG_DIR", "PATH"];
-/** The PATH that the gate kept, as the permit names it: here another one than the caller's, which is FAKES. */
 const TRUSTED_PATH = `${FAKES}:/fixture-trusted/bin`;
 writeFileSync(GH, `#!${process.execPath}
 const { appendFileSync, readdirSync } = require("node:fs");
@@ -60,7 +49,6 @@ const { ghFolder, mergeCommand, permitFile } = await import(MERGE);
 const SESSION = "019a0000-0000-7000-8000-00000000beef";
 const SHA = "a1b2c3d4e5f60718293a4b5c6d7e8f9012345678";
 const REPO = "example-owner/example.repo";
-/** The record with the owner's mode phrase (sage mode on) in a turn of its own, before its first turn. */
 function withMode(lines) {
   const template = RECORDS["exec-on"].find((o) => o.payload.role === "user" && o.payload.content?.[0]?.text === "autopilot on");
   const first = lines.findIndex((o) => o.payload.type === "task_started");
@@ -72,10 +60,6 @@ function withMode(lines) {
   return [...lines.slice(0, first), start, mode, ...lines.slice(first)];
 }
 let homes = 0;
-/**
- * A scratch home, the session's record (one of the proof records, after the owner's mode phrase unless mode is false)
- * and the environment that Codex gives the command, with every variable that would send gh elsewhere.
- */
 function session(recordName = "exec-on", { mode = true } = {}) {
   const home = join(SCRATCH, `home-${++homes}`);
   const project = join(home, "project");
@@ -86,14 +70,12 @@ function session(recordName = "exec-on", { mode = true } = {}) {
   const env = { PATH: FAKES, HOME: home, CODEX_HOME: join(home, "codex"), SAGE_HOME: join(home, "sage"), SAGE_SHARED_HOME: process.env.SAGE_SHARED_HOME,
     CODEX_SESSION_ID: SESSION, CODEX_THREAD_ID: SESSION, CODEX_TOOL_CALL_ID: `call_${homes}`, GH_HOST: "other.example", GH_REPO: "other/repository",
     GH_ENTERPRISE_TOKEN: "fake-enterprise-1", GITHUB_ENTERPRISE_TOKEN: "fake-enterprise-2", GH_CONFIG_DIR: join(home, "gh-config") };
-  const turn = RECORDS[recordName].find((line) => line.payload.type === "task_started").payload.turn_id; // the proof record's turn, not the mode phrase's
-  // The session's mode file, as the mode hook saves it: sage mode and autopilot on, from the record's last on phrase.
+  const turn = RECORDS[recordName].find((line) => line.payload.type === "task_started").payload.turn_id;
   const onTurn = lines.findLast((line) => line.payload.role === "user" && line.payload.content?.at(-1)?.text === "autopilot on")?.payload.internal_chat_message_metadata_passthrough.turn_id;
   const modeFile = join(home, "mode.json");
   writeFileSync(modeFile, JSON.stringify({ sage: true, autopilot: true, given: true, onTurn }), { mode: 0o600 });
   return { env, project, transcript, turn, lines, mode: modeFile };
 }
-/** Save a merge permit for the call, as the gate saves it (gate-hook.mjs). */
 function permit(s, fields = {}) {
   const file = permitFile(s.env.CODEX_TOOL_CALL_ID);
   mkdirSync(dirname(file), { recursive: true, mode: 0o700 });
@@ -109,7 +91,6 @@ function merge(s, args = ["41", SHA], env = {}) {
 const refused = (reason) => ({ status: 1, stdout: "", stderr: `sage: the merge command refuses: ${reason}.\n` });
 const AGAIN = "Ask for the merge again";
 const SWITCH_ON = 'To merge on autopilot, the owner sends "autopilot on" alone while sage mode is on, then asks for the merge again. Or the owner merges the pull request in GitHub';
-/** Each refusal runs no gh. */
 function assertRefused(result, reason, label) {
   assert.deepEqual(result, refused(reason), label);
   assert.deepEqual(ghCalls(), [], `${label}: no gh call`);
@@ -119,9 +100,6 @@ test("with a valid merge permit and the owner's on switch, it runs gh pr merge o
   const s = session();
   const file = permit(s);
   assert.deepEqual(merge(s), { status: 0, stdout: `${MARKER}\n`, stderr: "" });
-  // F-T663-4: --repo from the permit, an empty private folder of sage as the working folder (not the agent's), and no
-  // variable that sends gh to another host or repository. The owner's gh config stays, for the owner's login.
-  // The folder is in the Codex home of the install, not in the caller's SAGE_HOME, CODEX_HOME or HOME (F-T663-21).
   const folder = ghFolder();
   assert.equal(folder, join(INSTALL_HOME, "sage", ".hooks", "codex", "merge-folder"));
   assert.deepEqual(ghCalls(), [{ args: ["pr", "merge", "41", "--repo", REPO, "--squash", "--delete-branch", "--match-head-commit", SHA],
@@ -134,8 +112,6 @@ test("with a valid merge permit and the owner's on switch, it runs gh pr merge o
 });
 
 test("F-T663-21: a permit that the caller writes in a folder of its own SAGE_HOME, CODEX_HOME or HOME is not taken", () => {
-  // The attack of R2676: the caller writes a permit and a record in a folder that it can write, and points the command
-  // there with its own environment. The permit folder of PR 1 followed SAGE_HOME, then CODEX_HOME/sage, then HOME/.codex/sage.
   const s = session();
   const forged = join(SCRATCH, `forged-${s.env.CODEX_TOOL_CALL_ID}`);
   const name = `${createHash("sha256").update(s.env.CODEX_TOOL_CALL_ID).digest("hex")}.json`;
@@ -205,17 +181,13 @@ test("a merge permit that is damaged, old, or for another session, pull request,
     [{ pr: 41 }, "the merge permit is damaged"],
     [{ turn: undefined }, "the merge permit is damaged"],
     [{ time: "now" }, "the merge permit is damaged"],
-    // The start mark is required (F-T663-5): a permit without it never falls back to a boundary of its own.
     [{ mark: undefined }, "the merge permit is damaged"],
     [{ mark: 0 }, "the merge permit is damaged"],
     [{ mark: null }, "the merge permit is damaged"],
-    // T677: the permit names the working folder, the mode file, the gh file (absolute: its real file, which can be a
-    // launcher of another name, F-T677-1) and the PATH (absolute folders, F-T677-4) that the gate checked.
     [{ cwd: undefined }, "the merge permit is damaged"],
     [{ mode: undefined }, "the merge permit is damaged"],
     ...[undefined, "gh", "bin/gh", ""].map((gh) => [{ gh }, "the merge permit is damaged"]),
     ...[undefined, "", "bin", `${FAKES}:bin`, `${FAKES}::/usr/bin`, ["/usr/bin"]].map((path) => [{ path }, "the merge permit is damaged"]),
-    // The repository is owner/name only (F-T663-4): no host, no flag, no path.
     ...[undefined, "", "example-owner", "github.com/example-owner/example.repo", "--admin/x", "example-owner/-x", "a/b/c", "a b/c", "../x", "x/..", "x/.", "-x/y"].map((repo) => [{ repo }, "the merge permit is damaged"]),
   ];
   for (const [fields, reason] of cases) {
@@ -248,8 +220,6 @@ test("right before gh it reads the record again: the owner's switch must be on, 
   const off = session("tui-on-then-off");
   permit(off);
   assertRefused(merge(off), `the owner's latest autopilot switch is off. ${SWITCH_ON}`, "on, then off");
-  // F-T663-11: the off phrase with an image switches the sage hook off (Codex gives it the text items only), so the
-  // merge command reads that off too.
   const picture = session();
   const on = picture.lines.find((line) => line.payload.role === "user" && line.payload.content?.[0]?.text === "autopilot on");
   const p = on.payload;
@@ -258,7 +228,6 @@ test("right before gh it reads the record again: the owner's switch must be on, 
   writeFileSync(picture.transcript, `${readFileSync(picture.transcript, "utf8")}${JSON.stringify(offWithImage)}\n`);
   permit(picture);
   assertRefused(merge(picture), `the owner's latest autopilot switch is off. ${SWITCH_ON}`, "on, then off with an image");
-  // F-T663-18: the real Codex 0.164.0 record, where Codex wraps the image in its own tag items.
   const real = session("image-off", { mode: false });
   permit(real);
   assertRefused(merge(real), `the owner's latest autopilot switch is off. ${SWITCH_ON}`, "a real record: the off with a local image");
@@ -267,7 +236,6 @@ test("right before gh it reads the record again: the owner's switch must be on, 
     permit(s);
     assertRefused(merge(s), NONE, name);
   }
-  // F-T663-2: the on phrase while sage mode is off is no switch, as core told the owner.
   const modeOff = session("exec-on", { mode: false });
   permit(modeOff);
   assertRefused(merge(modeOff), NONE, "the on without the mode phrase");
@@ -280,12 +248,10 @@ test("right before gh it reads the record again: the owner's switch must be on, 
   assertRefused(merge(marked), NONE, "a mark after the on");
   const outside = session();
   permit(outside, { mark: { lines: outside.lines.length + 1 } });
-  // F-T663-14: each record refusal gives a plain cause and one next step; a short technical detail comes last, in brackets.
   assertRefused(merge(outside), "sage's note of this session start does not match Codex's record of this session. Resume the session, then the owner turns autopilot on again. Or the owner merges the pull request in GitHub", "a mark past the record");
   const missing = session();
   permit(missing, { transcript: join(SCRATCH, "no-record.jsonl") });
   assertRefused(merge(missing), "sage cannot read Codex's record of this session. Ask for the merge again. If it refuses again, the owner merges the pull request in GitHub (ENOENT)", "no record");
-  // T951: no upper bound. A record of a newer Codex reads, and the merge runs gh once.
   for (const cli of ["0.168.0", "0.169.0-alpha.8", "1.0.0"]) {
     const newer = session();
     const text = readFileSync(newer.transcript, "utf8");
@@ -314,7 +280,6 @@ test("right before gh it reads the record again: the owner's switch must be on, 
 });
 
 test("F-T677-13, F-T677-15: right before gh, an on that joins a running turn counts for nothing; one that starts its turn counts", () => {
-  // The owner's first message of the turn, then the on phrase in the same turn (sent while Codex works).
   const joined = session();
   const at = joined.lines.findIndex((o) => o.payload.role === "user" && o.payload.content?.[0]?.text === "autopilot on");
   const first = { ...joined.lines[at], payload: { ...joined.lines[at].payload, content: [{ type: "input_text", text: "merge pull request 41" }] } };
@@ -328,8 +293,6 @@ test("F-T677-13, F-T677-15: right before gh, an on that joins a running turn cou
 });
 
 test("F-T677-33: right before gh, the record's latest on must be the on whose turn the mode file saved", () => {
-  // An off from a fork turned the mode file off after the gate's admission; then an on that joined a running turn turned
-  // it on again with that turn. The record still counts only the earlier on, so the merge stops.
   const s = session();
   writeFileSync(s.mode, JSON.stringify({ sage: true, autopilot: true, given: true, onTurn: "019a0000-0000-7000-8000-00000000a0a1" }));
   permit(s);

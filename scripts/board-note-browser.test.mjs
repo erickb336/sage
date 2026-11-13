@@ -1,8 +1,3 @@
-// Standalone browser check of R1509-2: a task page over the page limit (8 MB) shows the board with a note, and the note
-// stays on screen with scripts on, also after the board's stream would send its first update. It starts the real board
-// server on a free loopback port (never 4173 or 43123) over a SAMPLE logbook in a temporary folder. It runs in
-// `npm run test:browser`, not in `npm test`, with Playwright's bundled Chromium, or the headless shell at
-// BOARD_BROWSER_PATH; never an installed Chrome.
 import "./test-env.mjs";
 import assert from "node:assert/strict";
 import { mkdirSync, mkdtempSync, realpathSync, rmSync, writeFileSync } from "node:fs";
@@ -26,7 +21,6 @@ const HEADERS = {
 const tsv = (name, ...rows) => [HEADERS[name].replaceAll(" ", "\t"), ...rows].join("\n") + "\n";
 const NOTE = "The page that you opened is too large to show (over 8 MB), so the board shows this page instead.";
 
-/** A free loopback port that is not one of the owner's own (4173, 43123). */
 async function freePort() {
   for (;;) {
     const socket = createServer();
@@ -43,7 +37,6 @@ before(async () => {
   mkdirSync(project, { recursive: true });
   for (const name of Object.keys(HEADERS)) writeFileSync(join(project, `${name}.tsv`), tsv(name));
   writeFileSync(join(project, "tasks.tsv"), tsv("tasks", "T1\tSample first task\tsmall\t\tbuild\tframed\tcodex/sample\t\t0\t"));
-  // Each "<" of a finding's summary is 4 bytes of HTML: the task page passes 8 MB, the board does not (a card shows no summary).
   writeFileSync(join(project, "findings.tsv"), tsv("findings", `T1\tF-1\t1\tcode-review\tlow\t${"<".repeat(3.9 * 1024 * 1024)}\t\t\topen`));
   port = await freePort();
   server = createBoardServer({ sources: [{ id: "sample", path: join(dir, "source"), label: "Sample source" }], port });
@@ -58,7 +51,6 @@ test("R1509-2: with scripts on, the note of a too-large task page stays on scree
   const page = await context.newPage();
   const errors = [];
   page.on("pageerror", error => errors.push(String(error)));
-  // Each stream that the page opens resolves window.sampleUpdate at its first update, so the check waits for it.
   await page.addInitScript(() => {
     const Real = window.EventSource;
     window.sampleStreams = 0;

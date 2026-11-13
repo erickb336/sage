@@ -1,5 +1,3 @@
-// T624 (PR 5a of the T306 shared logbook): the board reads one shared project across Claude and Codex, read-only, and a
-// legacy project exactly as before. Every logbook here is sample data that the test writes; no test writes a real root.
 import "./test-env.mjs";
 import test from "node:test";
 import assert from "node:assert/strict";
@@ -33,7 +31,6 @@ const COLS = {
 };
 const LEGACY = { ...COLS, tasks: "id title size risk route state branch pr round keys priority kind", runs: "id task role round candidate branch status tokens report started ended", gates: "id task question options recommendation default answer at" };
 const sheet = (columns, rows) => `${[columns.split(" "), ...rows.map(row => columns.split(" ").map(column => row[column] ?? ""))].map(cells => cells.join("\t")).join("\n")}\n`;
-/** A logbook folder with these rows; the other tables have no rows. */
 function logbook(dir, rows, columns = COLS, extra = {}) {
   mkdirSync(dir, { recursive: true });
   for (const [name, list] of Object.entries(columns)) writeFileSync(join(dir, `${name}.tsv`), sheet((extra.cols ?? {})[name] ?? list, rows[name] ?? []));
@@ -43,7 +40,6 @@ const BUILD = "build,code-review,qa";
 const task = (id, title, state, fields = {}) => ({ id, title, size: "small", route: BUILD, state, branch: `sage/${id.toLowerCase()}`, round: "0", priority: "P2", ...fields });
 const run = (id, taskId, role, status, started, fields = {}) => ({ id, task: taskId, role, round: "0", status, started, ...fields });
 
-/** Lantern: a shared logbook with two chiefs, two old logbooks (one of each provider), and Harbor, a legacy Claude project. */
 function world(t, { bindings } = {}) {
   const base = realpathSync(mkdtempSync(join(tmpdir(), "sage-board-shared-")));
   t.after(() => rmSync(base, { recursive: true, force: true }));
@@ -77,7 +73,6 @@ function world(t, { bindings } = {}) {
     "chiefs.tsv": "id\tprovider\tnative\tat\nC1\tclaude\tsession-a\t2026-10-01T00:00:00Z\nC2\tcodex\tsession-b\t2026-10-01T00:00:00Z\n",
     "sources.tsv": `provider\tpath\tat\nclaude\t${join(claudeRoot, FOLDER)}\t2026-10-02T00:00:00Z\ncodex\t${join(codexRoot, FOLDER)}\t2026-10-02T00:00:00Z\n`,
   } });
-  // The old logbooks: what PR 7's move leaves (moved.json, the moved cell of each open row). Fixtures only: no code writes them.
   logbook(join(claudeRoot, FOLDER), {
     tasks: [task("T316", "Old finished task of Claude", "merged"), { ...task("T90", "Open task that moved", "building"), moved: "T325" }],
     decisions: [{ at: iso(-DAY), task: "T316", decision: "state merged" }],
@@ -90,7 +85,6 @@ function world(t, { bindings } = {}) {
     tasks: [task("T41", "Legacy task at work", "building")],
     runs: [run("R5", "T41", "implementer", "running", iso(-5 * MIN))],
   }, LEGACY, { files: { "checkout.txt": `${harbor}\n` } });
-  // The Claude hook's slots: the lead's slot carries the hook's name of the shared logbook (the sha256 of its folder).
   const slot = (name, marks) => { const dir = join(claudeRoot, ".hooks", "slots", name); mkdirSync(dir, { recursive: true }); for (const mark of marks) writeFileSync(join(dir, mark), ""); };
   slot("slot-1", ["ok", "project-lantern", "role-sage_lead", "run-R420", `logbook-${createHash("sha256").update(join(shared, FOLDER)).digest("hex")}`]);
   slot("slot-2", ["ok", "project-lantern", "role-sage_qa", "run-R407"]);
@@ -111,7 +105,6 @@ test("a shared project shows once, named from its bindings.tsv row, with its old
   assert.deepEqual(model.notes, [], "no note that the checkout is not known");
   assert.equal(card(model, "T321").repository, "https://github.com/sample-owner/lantern");
   assert.match(renderTaskText(card(model, "T321")), /PR \[88\]\(https:\/\/github\.com\/sample-owner\/lantern\/pull\/88\)/);
-  // Each old logbook shows once: its provider source's copy (it has moved.json) leaves that source's list.
   assert.deepEqual(model.tasks.filter(item => item.id === "T316").map(item => item.key), [`claude/${FOLDER}/T316`]);
   assert.deepEqual(model.tasks.filter(item => item.id === "T96").map(item => item.key), [`codex/${FOLDER}/T96`]);
   const damaged = world(t, { bindings: "root\tfolder\n/x\ty\n" }), broken = readBoardSources(damaged.sources, { now: NOW }).find(source => source.id === "shared").projects.find(project => project.key === `shared/${FOLDER}`);
@@ -149,7 +142,6 @@ test("each shared card names its owning chief, an open offer, or Unclaimed; the 
   assert.match(html, /<div class="offerline"><span aria-hidden="true">⇄<\/span> Offered to Codex · C2\. It waits for R407 and R420 to end, then Codex · C2 accepts\.<\/div>/);
   assert.match(html, /<button type="button" id="who-claude" data-who="claude"/);
   assert.doesNotMatch(html, /data-who="shared"/, "no Shared button");
-  // The page's own filter rule: an Unclaimed card shows only under All.
   assert.equal(cardFits({ provider: "", priority: "P2", kind: "", milestone: "" }, { who: "claude" }), false);
   assert.equal(cardFits({ provider: "", priority: "P2", kind: "", milestone: "" }, { who: "" }), true);
   assert.equal(cardFits({ provider: "claude", priority: "P2", kind: "", milestone: "" }, { who: "claude" }), true);
@@ -162,7 +154,6 @@ test("Needs you: an open takeover gate asks its question in one line, and a stal
   const replace = card(model, "T320").reasons, unknown = card(model, "T319").reasons;
   assert.deepEqual(replace.map(reason => reason.text), ["Hand T320 from Claude · C1 to Codex · C2? R410 and R411 end as failed."]);
   assert.deepEqual(unknown.map(reason => [reason.kind, reason.text, reason.recommendation]), [["chief-unknown", "The owning chief, Codex · C2, may have stopped: R412 shows no change for over 24 h.", "if it stopped, ask any chief to open a takeover gate."]]);
-  // A stale run of another chief is not the owning chief's: T326 belongs to C1, and its stale run to C2.
   assert.deepEqual(card(model, "T326").reasons, []);
   const lantern = model.projects.find(project => project.name === "lantern");
   assert.deepEqual(model.needsOwner.filter(item => item.group === lantern.key).map(item => item.id).sort(), ["T319", "T320"]);
@@ -179,10 +170,8 @@ test("old logbooks: finished tasks show in Done with their old label, a moved ro
   const html = renderBoardHtml(model, { snapshot: false });
   assert.match(html, /<span class="who oldtag" title="A finished task in the old Codex logbook\. It did not move\.">Old · Codex · read-only<\/span>/);
   assert.match(renderBoardHtml(model, { taskKey: `claude/${FOLDER}/T316`, snapshot: false }), /<div class="banner info oldnote"><div><b>A finished task of the old Claude logbook\.<\/b>[^<]*so T316 here is not a task of the shared logbook\./);
-  // The 7-day Done rule stays: an old task that ended 8 days ago is not on a column.
   writeFileSync(join(w.codexRoot, FOLDER, "decisions.tsv"), sheet(COLS.decisions, [{ at: iso(-8 * DAY), task: "T96", decision: "state concluded" }]));
   assert.equal(card(modelOf(w.sources), "T96").visible, false);
-  // A row outside the provider roots, a link and a folder of another name: a note each, and no read.
   const outside = join(w.base, "elsewhere", FOLDER), link = join(w.claudeRoot, "other-111111");
   logbook(outside, { tasks: [task("T1", "Outside", "merged")] }, LEGACY);
   symlinkSync(join(w.codexRoot, FOLDER), link);
@@ -190,7 +179,6 @@ test("old logbooks: finished tasks show in Done with their old label, a moved ro
   const read = readBoardSources(w.sources, { now: NOW }), shared = read.find(source => source.id === "shared");
   assert.deepEqual(shared.projects.map(project => project.key), [`shared/${FOLDER}`]);
   assert.deepEqual([shared.projects[0].diagnostics, shared.projects[0].notes], [[], [2, 3, 4].map(line => `sources: line ${line} does not name a moved logbook of its provider under a provider root`)]);
-  // The in-session board knows the other provider's root from the state tool (providerRoots), not as a source.
   writeFileSync(join(w.shared, FOLDER, "sources.tsv"), `provider\tpath\tat\ncodex\t${join(w.codexRoot, FOLDER)}\tx\n`);
   const session = sources => readBoardSources([{ id: "current", path: w.claudeRoot }, { id: "shared", path: w.shared }], { now: NOW, ...sources }).find(source => source.id === "shared");
   assert.deepEqual(session({ providerRoots: view.sessionRoots(w.claudeRoot, [w.claudeRoot, w.codexRoot], "claude") }).projects.map(project => project.key), [`shared/${FOLDER}`, `old-codex/${FOLDER}`]);
@@ -220,13 +208,11 @@ test("a lead slot's logbook mark, as the hook writes it for a linked project, eq
   claude.sage(["link", "--separate", "--project", project], env);
   const chief = claude.chiefFor(project, "session-a", env);
   claude.sage(["task", "add", "--title", "Sample shared task", "--size", "small", "--priority", "P2", "--project", project, "--chief", chief], env);
-  // The hook's mark: sha256 of the logbook view's folder (sage-hook.mjs, digest(view.dir)).
   const mark = createHash("sha256").update(claude.logbookView(project, env).dir).digest("hex");
   const read = readBoardSources([{ id: "shared", path: sharedRoot(env) }], { now: NOW }).find(source => source.id === "shared");
   assert.equal(read.projects.length, 1);
   assert.equal(read.projects[0].logbook, mark);
   assert.equal(read.projects[0].checkout, realpathSync(project), "the checkout comes from the bindings.tsv row");
-  // C1: "show board" in the session finds the shared project, and a role's task view finds its task, also from a subfolder.
   const files = () => readdirSync(sharedRoot(env), { recursive: true, withFileTypes: true }).filter(entry => entry.isFile()).map(entry => [join(entry.parentPath, entry.name), readFileSync(join(entry.parentPath, entry.name), "hex")]).sort();
   const before = files();
   const chat = claude.sage(["board", "this", "--view", "chat", "--project", project], env);
@@ -268,18 +254,15 @@ const get = (port, path) => new Promise((done, fail) => {
   req.once("error", fail); req.setTimeout(120_000, () => req.destroy(new Error("board request did not finish"))); req.end();
 });
 
-/** A writer that renames a new tasks.tsv over the old one, as the state tool's swap does: a new inode each time. */
 const rewrite = (dir, title) => { writeFileSync(join(dir, "tasks.next"), sheet(LEGACY.tasks, [task("T41", title, "building")])); renameSync(join(dir, "tasks.next"), join(dir, "tasks.tsv")); };
 
 test("a table that changes during a read gives a retry; after two more differences the third read stays with the changing note", t => {
   const w = world(t), dir = join(w.claudeRoot, HARBOR), sources = [w.sources[0]];
   const title = key => readBoardSources(sources, { now: NOW, duringRead: key }).find(Boolean).projects.find(project => project.name === HARBOR);
-  // One change: the second read has no difference, so it counts, with no note.
   let writes = 0;
   const once = title((key, attempt) => { if (key.endsWith(HARBOR) && attempt === 1) rewrite(dir, `Write ${++writes}`); });
   assert.equal(once.changing, undefined);
   assert.equal(once.tables.tasks[0].title, "Write 1");
-  // A change in each of the 3 reads: the third read stays, with the note, and no diagnostic.
   writes = 0;
   const busy = title((key, attempt) => { if (key.endsWith(HARBOR)) rewrite(dir, `Write ${++writes} after read ${attempt}`); });
   assert.deepEqual([busy.changing?.at, busy.diagnostics, writes], [iso(), [], 3]);
@@ -299,7 +282,6 @@ test("the server shows the changing note over its last good read, not stale, and
   t.after(() => server.close());
   await server.start();
   assert.match((await get(port, "/")).body, /Legacy task at work/);
-  // A write starts a read, and the writer changes the table in each of its 3 attempts.
   churn = true;
   rewrite(dir, "Trigger title");
   const busy = await until(port, body => body.includes("The logbook is changing"));
@@ -312,9 +294,8 @@ test("the server shows the changing note over its last good read, not stale, and
   assert.doesNotMatch(calm, /The logbook is changing/);
 });
 
-/** The board page, asked again until it matches. The 30 s are a guard against a hang, not a time check: a pass never waits for them. */
 async function until(port, ok) {
-  for (const start = Date.now(); Date.now() - start < 30_000;) { // timing-ok: a hang guard only, as EVENT_GUARD in board-server.test.mjs
+  for (const hangGuardEnd = Date.now() + 30_000; Date.now() < hangGuardEnd;) {
     const { body } = await get(port, "/");
     if (ok(body)) return body;
     await new Promise(done => setTimeout(done, 100));
@@ -330,7 +311,6 @@ test("a legacy project's board is the same with the shared root missing, empty o
   assert.deepEqual(views(harbor([...legacy, { id: "shared", label: "Shared", path: join(w.base, "no-shared-root") }])), today, "missing shared root");
   const empty = join(w.base, "empty-shared"); mkdirSync(empty);
   assert.deepEqual(views(harbor([...legacy, { id: "shared", label: "Shared", path: empty }])), today, "empty shared root");
-  // With Lantern there too, Harbor's own card, task page and chat line stay as they are.
   const both = buildBoardModel(readBoardSources([...legacy, w.sources[2]], { now: NOW }), { now: iso() });
   const t41 = both.tasks.find(item => item.id === "T41"), alone = harbor(legacy).tasks[0];
   assert.equal(renderTaskText(t41), renderTaskText(alone));
@@ -339,7 +319,6 @@ test("a legacy project's board is the same with the shared root missing, empty o
   assert.doesNotMatch(renderBoardHtml(harbor(legacy)), /Owning chief: |class="offerline"|class="who oldtag"|The logbook is changing|<th>Provider<\/th>/);
 });
 
-// Repair round 1 of PR 419 (R2402): one test for each fix key.
 test("F-T624-1: a slot joins the run of its own source when a legacy project runs the same run id in Claude and Codex", t => {
   const base = realpathSync(mkdtempSync(join(tmpdir(), "sage-board-shared-twin-")));
   t.after(() => rmSync(base, { recursive: true, force: true }));
@@ -355,7 +334,6 @@ test("F-T624-1: a slot joins the run of its own source when a legacy project run
   assert.deepEqual(agents.unmatched, []);
 });
 
-/** A writer that replaces the whole logbook folder with a new one, as a move or a restore would. */
 const replaceFolder = dir => { renameSync(dir, `${dir}.gone`); mkdirSync(dir); for (const name of readdirSync(`${dir}.gone`)) writeFileSync(join(dir, name), readFileSync(join(`${dir}.gone`, name))); rmSync(`${dir}.gone`, { recursive: true }); };
 
 test("F-T624-2: when the third read lost its data, the changing note says what does not show", t => {
@@ -367,7 +345,6 @@ test("F-T624-2: when the third read lost its data, the changing note says what d
   assert.deepEqual(model.changing, [{ project: "harbor", at: iso(), dropped: ["the whole logbook"] }]);
   assert.match(renderBoardHtml(model), /<li>harbor · last read \d\d:\d\d UTC · not shown, as it changed during that read: the whole logbook<\/li>/);
   assert.match(renderBoardText(model), /⧗ The logbook is changing: harbor · read at \d\d\\:\d\d UTC, without what changed during it \(the whole logbook\)\. The board shows that read;/);
-  // A third read that lost nothing has no such line.
   const calm = buildBoardModel(readBoardSources(sources, { now: NOW, duringRead: key => key.endsWith(HARBOR) && rewrite(dir, "Busy") }), { now: iso() });
   assert.deepEqual(calm.changing, [{ project: "harbor", at: iso() }]);
   assert.doesNotMatch(renderBoardText(calm), /without what changed/);
@@ -396,7 +373,6 @@ test("F-T624-4 and F-T624-7: a chief id that chiefs.tsv does not list shows on i
 
 test("F-T624-6: a sources.tsv row reads an old logbook only when it has moved.json and its provider is its root's", t => {
   const w = world(t);
-  // A Codex row that names the live Claude project Harbor, a Claude row for it (no moved.json), and a Codex row for a Claude old logbook.
   writeFileSync(join(w.shared, FOLDER, "sources.tsv"), `provider\tpath\tat\ncodex\t${join(w.codexRoot, "..", "..", "claude", "sage", HARBOR)}\tx\nclaude\t${join(w.claudeRoot, HARBOR)}\tx\ncodex\t${join(w.claudeRoot, FOLDER)}\tx\n`);
   const read = readBoardSources(w.sources, { now: NOW });
   assert.deepEqual(read.find(source => source.id === "shared").projects.map(project => [project.key, project.diagnostics, project.notes]), [[`shared/${FOLDER}`, [], [2, 3, 4].map(line => `sources: line ${line} does not name a moved logbook of its provider under a provider root`)]]);
@@ -414,7 +390,6 @@ test("F-T624-8: a damaged chiefs.tsv gives its one table diagnostic, and no warn
   assert.doesNotMatch(renderBoardHtml(model, { taskKey: `shared/${FOLDER}/T321`, snapshot: false }), /not in chiefs\.tsv/);
 });
 
-// Repair round 2 of PR 419 (R2413): one test for each fix key.
 test("F-T624-12: a milestone that moved with its open task leaves the old logbook, as no stuck or second milestone; a finished old milestone stays", t => {
   const w = world(t), old = join(w.claudeRoot, FOLDER);
   rmSync(old, { recursive: true });
@@ -441,7 +416,6 @@ test("F-T624-13: the board server reads an old logbook under a provider root tha
   const page = (await get(port, "/")).body;
   assert.match(page, /Old · Codex · read-only/);
   assert.doesNotMatch(page, /Incomplete sources|does not name a moved logbook/);
-  // The CLI gives the server the provider roots of the standard sources, with their providers.
   assert.deepEqual(providerRoots({ HOME: "/h" }), [{ path: "/h/.claude/sage", provider: "claude" }, { path: "/h/.codex/sage", provider: "codex" }]);
   assert.deepEqual(providerRoots({ HOME: "/h", SAGE_HOME: "/s" }), [{ path: "/s", provider: null }]);
 });
@@ -450,7 +424,6 @@ test("F-T624-9 and F-T624-10: the chat board and the server judge a sources.tsv 
   const w = world(t);
   const oldOf = (sources, roots) => { const model = modelOf(sources, { providerRoots: roots }); return [model.notes.map(item => item.message), model.tasks.filter(item => item.old).map(item => [item.id, item.holder])]; };
   const refused = [["sources: line 2 does not name a moved logbook of its provider under a provider root"], []];
-  // Two roots: a Claude row for the Codex root's folder, and a Codex row for the Claude root's folder, are refused in both.
   const session = view.sessionSources(w.claudeRoot, w.shared, "claude"), roots = view.sessionRoots(w.claudeRoot, [w.claudeRoot, w.codexRoot], "claude");
   for (const row of [`claude\t${join(w.codexRoot, FOLDER)}`, `codex\t${join(w.claudeRoot, FOLDER)}`]) {
     writeFileSync(join(w.shared, FOLDER, "sources.tsv"), `provider\tpath\tat\n${row}\tx\n`);
@@ -460,7 +433,6 @@ test("F-T624-9 and F-T624-10: the chat board and the server judge a sources.tsv 
   writeFileSync(join(w.shared, FOLDER, "sources.tsv"), `provider\tpath\tat\ncodex\t${join(w.codexRoot, FOLDER)}\tx\n`);
   assert.deepEqual(oldOf(session, roots), [[], [["T96", "Old · Codex · read-only"]]], "the right provider reads");
   assert.deepEqual(roots, [{ path: w.claudeRoot, provider: "claude" }, { path: w.codexRoot, provider: null }]);
-  // One root for both providers (SAGE_HOME): the chat board and the server both read a Codex row there.
   const one = view.sessionRoots(w.codexRoot, [w.codexRoot], "claude");
   assert.deepEqual(one, [{ path: w.codexRoot, provider: null }]);
   const read = [[], [["T96", "Old · Codex · read-only"]]];
@@ -469,18 +441,15 @@ test("F-T624-9 and F-T624-10: the chat board and the server judge a sources.tsv 
 });
 
 test("F-T624-11: the changing note names the whole logbook, a table, a file or an artifact in plain words, not a code message", t => {
-  // The whole logbook: a folder that a writer replaced during the read (the F-T624-2 test shows it in the note too).
   const w = world(t), dir = join(w.claudeRoot, HARBOR);
   const read = readBoardSources([w.sources[0]], { now: NOW, duringRead: key => key.endsWith(HARBOR) && replaceFolder(dir) });
   const text = renderBoardText(buildBoardModel(read, { now: iso() }));
   assert.match(text, /without what changed during it \(the whole logbook\)/);
   assert.doesNotMatch(text, /changed during the read/);
-  // Each message of a file that changed while the board read it, as the reader writes it.
   assert.deepEqual(["tasks: file changed during the read", "chiefs: file changed during the read", "observations: file changed during the read", "checkout: file changed during the read", "artifact A3: artifact parent changed during the read", "artifact A4: file changed during the read", "project changed during the read"].map(changedPart),
     ["tasks.tsv", "chiefs.tsv", "observations.json", "checkout.txt", "artifact A3", "artifact A4", "the whole logbook"]);
 });
 
-// T625 (PR 5b of the T306 shared logbook): a shared run names its checkout. The task page shows the folder name only.
 test("T625: a shared run shows its checkout folder under its role, never the path; a gone folder says so, with one note while the task is active", t => {
   const w = world(t), dir = join(w.shared, FOLDER), moved = join(w.base, "moved", "lantern");
   writeFileSync(join(dir, "tasks.tsv"), readFileSync(join(dir, "tasks.tsv"), "utf8") + sheet(COLS.tasks, [task("T330", "Retry a sync", "reviewing", { chief: "C1" }), task("T318", "An ended task", "merged", { chief: "C1" })]).split("\n").slice(1).join("\n"));
@@ -498,8 +467,6 @@ test("T625: a shared run shows its checkout folder under its role, never the pat
   assert.match(text, /^R407 Claude · qa · checkout lantern · running · /m);
   assert.match(text, /^R420 Claude · lead · running · /m);
   assert.doesNotMatch(html, /class="cknote"/);
-  // The folder is gone: each row says so. The folder of the branch's newest writer run (R451) stops the review, so it
-  // has the warning colour, and an active task gets one note under its table and one line after its runs (F-T625-4).
   const note = "The folder lantern of R451 is not on this Mac now, so sage cannot read the branch there. The next review step of T330 stops until the folder is back.";
   const active = page("T330"), activeText = renderTaskText(card(model, "T330"));
   assert.equal(active.match(/checkout lantern <span class="gone gone-active" tabindex="0"[^>]*>· gone/g)?.length, 1);
@@ -509,15 +476,12 @@ test("T625: a shared run shows its checkout folder under its role, never the pat
   assert.match(activeText, /^R451 Claude · implementer · checkout lantern \(gone\) · done · /m);
   assert.match(activeText, /^R452 Claude · code-reviewer · checkout lantern \(gone\) · running · /m);
   assert.ok(activeText.includes(`\n${note}\n\n**Evidence**`), "one line after the runs");
-  // An ended task: the faint mark only, no note.
   const ended = page("T318"), endedText = renderTaskText(card(model, "T318"));
   assert.match(ended, /checkout lantern <span class="gone" tabindex="0"[^>]*>· gone/);
   assert.doesNotMatch(ended, /class="cknote"|class="gone gone-active"/);
   assert.match(endedText, /^R460 Claude · implementer · checkout lantern \(gone\) · done · /m);
   assert.ok(!endedText.includes("is not on this Mac now"));
-  // No page and no chat text holds a run checkout's full path, and neither does the model.
   for (const out of [html, text, active, activeText, ended, endedText, renderBoardHtml(model), renderBoardText(model), renderAgentsHtml(model), JSON.stringify(model.tasks)]) assert.ok(!out.includes(moved), "no full path");
-  // A legacy task page has no checkout line, also with a checkout cell in its runs table.
   writeFileSync(join(w.claudeRoot, HARBOR, "runs.tsv"), sheet(`${LEGACY.runs} checkout`, [run("R5", "T41", "implementer", "running", iso(-5 * MIN), { checkout: moved })]));
   const legacy = modelOf(w.sources), t41 = renderBoardHtml(legacy, { taskKey: `claude/${HARBOR}/T41`, snapshot: false });
   assert.match(t41, /<td class="id">R5<\/td><td>[^<]*(<[^>]*>[^<]*)*? · implementer<\/td>/);
@@ -526,8 +490,6 @@ test("T625: a shared run shows its checkout folder under its role, never the pat
   assert.ok(!t41.includes(moved));
 });
 
-// T633 (PR 6b of the T306 shared logbook): one shared project with two or more linked checkouts.
-/** Lantern with more rows in bindings.tsv, each [folder, at, commits], after the world's own row. A live folder has a Git config of sample-owner/lantern. */
 function linked(t, extra, { live = extra.map(([path]) => path) } = {}) {
   const w = world(t), at = path => join(w.base, path);
   const row = ([root, when, commits = "a".repeat(40)]) => `${root}\t${FOLDER}\t${commits}\t${when}`;
@@ -535,9 +497,7 @@ function linked(t, extra, { live = extra.map(([path]) => path) } = {}) {
   for (const path of live) { mkdirSync(join(at(path), ".git"), { recursive: true }); writeFileSync(join(at(path), ".git", "config"), `[remote "origin"]\n\turl = git@github.com:sample-owner/lantern.git\n`); }
   return { ...w, at };
 }
-/** The views that a person reads: the board (shared page, own page, chat), T321's task page and chat text, and the Agents page. */
 const viewsOf = model => [renderBoardHtml(model), renderBoardHtml(model, { snapshot: false }), renderBoardText(model), renderBoardHtml(model, { taskKey: `shared/${FOLDER}/T321`, snapshot: false }), renderTaskText(card(model, "T321")), renderAgentsHtml(model)];
-/** T321's runs from these checkouts, then the model, the Lantern project and the views. */
 function withRuns(w, checkouts) {
   writeFileSync(join(w.shared, FOLDER, "runs.tsv"), sheet(`${COLS.runs} checkout`, checkouts.map((checkout, i) => run(`R50${i}`, "T321", "implementer", "running", iso(-(10 + i) * MIN), { chief: "C1", checkout }))));
   const model = modelOf(w.sources), views = viewsOf(model);
@@ -550,7 +510,6 @@ test("T633: one checkout reads as before: its row adds nothing to the board, the
   writeFileSync(join(w.shared, FOLDER, "runs.tsv"), sheet(`${COLS.runs} checkout`, [run("R500", "T321", "implementer", "running", iso(-10 * MIN), { chief: "C1", checkout: w.checkout })]));
   const read = readBoardSources(w.sources, { now: NOW });
   assert.deepEqual(read.find(source => source.shared).projects[0].checkouts, [{ root: w.checkout, gone: false }], "the reader has the row");
-  // The input as it was before T633: a shared logbook with no rows of its own.
   const before = read.map(source => ({ ...source, projects: source.projects.map(({ checkouts, foreignCheckouts, ...project }) => project) }));
   const now = buildBoardModel(read, { now: iso() });
   assert.deepEqual(viewsOf(now), viewsOf(buildBoardModel(before, { now: iso() })));
@@ -570,7 +529,6 @@ test("T633: two live checkouts show both names in the picker line and on their r
   assert.match(text, /^R501 Claude · implementer · checkout lantern-b · running · /m);
   assert.ok(lantern.terms.includes("lantern-b"));
   noPath(w, views);
-  // Only the Mac's own page carries the paths, as search terms.
   assert.ok(renderBoardHtml(model, { snapshot: false, paths: true }).includes(w.at("lantern-b")));
 });
 
@@ -608,7 +566,6 @@ test("T633 (Q3): the in-session board of an unlinked clone does not show a share
   assert.match(board(join(w.base, "harbor")), /T41 Legacy task at work/, "a legacy logbook still matches by folder name");
 });
 
-// B1 of the PE plan (R2439): the board of "this" project finds a shared logbook from each linked clone, by its logbook.
 test("T633: one project with two linked clones: the board of this project from either clone, the owner when one is gone, one Agents group", t => {
   const base = realpathSync(mkdtempSync(join(tmpdir(), "sage-board-clones-")));
   t.after(() => rmSync(base, { recursive: true, force: true }));
@@ -627,10 +584,8 @@ test("T633: one project with two linked clones: the board of this project from e
   for (const project of [a, b]) for (const title of ["T1 Task from clone A", "T2 Task from clone B"]) assert.ok(chat(project).includes(title), `${title} from ${basename(project)}`);
   const sources = [{ id: "shared", label: "Shared", path: sharedRoot(env) }];
   assert.deepEqual(modelOf(sources).projects.map(project => [project.name, project.sub]), [["lantern", "no GitHub remote · 2 checkouts: lantern, lantern-b"]]);
-  // The Agents page: a lead slot of each clone carries the hook's name of the one logbook (digest(view.dir)), so they are one group.
   const mark = createHash("sha256").update(claude.logbookView(b, env).dir).digest("hex"), slots = join(env.CLAUDE_CONFIG_DIR, "sage", ".hooks", "slots");
   assert.equal(mark, createHash("sha256").update(claude.logbookView(a, env).dir).digest("hex"));
-  // A running lead of each task, from its own clone (sample rows in the scratch logbook's runs table).
   const runsFile = join(claude.logbookView(a, env).dir, "runs.tsv"), columns = readFileSync(runsFile, "utf8").split("\n")[0].split("\t").join(" ");
   writeFileSync(runsFile, sheet(columns, [run("R1", "T1", "lead", "running", iso(-MIN), { chief: "C1", checkout: a }), run("R2", "T2", "lead", "running", iso(-MIN), { chief: "C2", checkout: b })]));
   mkdirSync(join(env.CLAUDE_CONFIG_DIR, "sage", ".hooks", "helpers"), { recursive: true });
@@ -638,18 +593,15 @@ test("T633: one project with two linked clones: the board of this project from e
   const agents = modelOf([{ id: "claude", label: "Claude", provider: "claude", path: join(env.CLAUDE_CONFIG_DIR, "sage") }, ...sources]).agents.projects;
   assert.deepEqual(agents.map(group => group.name), ["lantern"]);
   assert.deepEqual(agents[0].agents.map(agent => [agent.runId, agent.state]).sort(), [["R1", "work"], ["R2", "work"]], "each slot holds its run");
-  // A gone owner: the board from B still shows the project, and B's row names it now.
   renameSync(a, `${a}.away`);
   assert.ok(chat(b).includes("T1 Task from clone A"));
   assert.equal(readBoardSources(sources, { now: NOW })[0].projects[0].checkout, b);
   assert.equal(modelOf(sources).projects[0].sub, "no GitHub remote · folder lantern-b");
-  // A gone B: the board from A shows the project, and A owns it again.
   renameSync(`${a}.away`, a); renameSync(b, `${b}.away`);
   assert.ok(chat(a).includes("T2 Task from clone B"));
   assert.equal(modelOf(sources).projects[0].sub, "no GitHub remote · folder lantern");
 });
 
-// T630: old-logbook and sources hardening before the move (PR 7). Each test names the finding it fixes.
 test("F-T630-1 and F-T624-23: a sources.tsv row that the board cannot search, or a folder name over 255 characters, refuses only its own row", t => {
   const w = world(t), locked = join(w.claudeRoot, "locked-abcdef"), long = join(w.claudeRoot, `${"a".repeat(260)}-abcdef`);
   logbook(locked, { tasks: [task("T1", "Locked", "merged")] }, LEGACY, { files: { "moved.json": "{}\n" } });
@@ -710,7 +662,6 @@ test("F-T624-20: a sources.tsv row that stays refused is a note: the server stay
   await server.start();
   assert.match((await get(port, "/")).body, /Legacy task at work/);
   rmSync(join(w.codexRoot, FOLDER), { recursive: true, force: true });
-  // The refused row shows (before T630 too, as a diagnostic); a later change of another project must show after it.
   await until(port, body => body.includes("sources: line 3 does not name a moved logbook"));
   rewrite(dir, "A change after the refused row");
   const page = await until(port, body => body.includes("A change after the refused row"));
@@ -761,7 +712,6 @@ test("F-T625-2, F-T625-5 and F-T625-6: a checkout name loses bidi characters; a 
   assert.match(renderTaskText(t320), /^R90 Claude · qa · checkout lantern \(not checked\) · running · /m);
 });
 
-// T631: the copy, layout and hardening follow-ups of PRs 5a, 5b, 6b and T630.
 test("F-T624-5: the takeover gate's recommendation says when, as the design does: when you know that the chief stopped", t => {
   const model = modelOf(world(t).sources);
   assert.equal(card(model, "T320").reasons[0].recommendation, "approve, when you know that Claude · C1 stopped");
@@ -772,20 +722,15 @@ test("F-T624-5: the takeover gate's recommendation says when, as the design does
 test("T656: the takeover gate's recommendation says that the owning chief offered the task, when its open offer names the gate's new chief; a task with no owning chief says so", t => {
   const w = world(t), file = join(w.shared, FOLDER, "gates.tsv"), label = id => `${id} (${id === "C1" ? "claude" : "codex"})`;
   const gate = (id, taskId, from, to, fresh = false) => [id, taskId, replaceQuestion({ from, to, task: taskId, title: "x", runs: [], label, fresh }), "approve|decline", "approve", "", "", iso(-MIN), "replace"].join("\t");
-  // A gate that an older sage left: its own question form, with replace|keep. It still reads, with its own words.
   const old = ["G11", "T324", "Replace chief C9 of T324 with C1 (claude)? Runs that end as failed: none. Replace: C1 owns T324, each of those runs ends as failed and work that it did not report may be lost, C9 can no longer write T324, and an open offer is cleared. Then C1 goes on with T324. Keep: nothing changes, and C9 stays the owning chief. Title of T324: x", "replace|keep", "replace", "", "", iso(-MIN), "replace"].join("\t");
-  // T321 has the open offer O1 from C1 to C2 (as an accept leaves it); T323 has O2 from C2 to C1, so a gate to C2 is no offer's; T322 has no chief.
   writeFileSync(file, `${readFileSync(file, "utf8")}${[gate("G8", "T321", "C1", "C2"), gate("G9", "T323", "C2", "C2"), gate("G10", "T322", "", "C1", true), old].join("\n")}\n`);
   const model = modelOf(w.sources), first = id => card(model, id).reasons.find(reason => reason.replace);
   assert.deepEqual([first("T321").text, first("T321").recommendation], ["Hand T321 and PR 88 from Claude · C1 to Codex · C2? No run ends as failed.", "approve, because Claude · C1 offered T321 to Codex · C2"]);
-  // F-T656-25: a gate with no offer and no run that ends recommends approve with a reason; "when you know" is for a gate that ends a run (T320).
   assert.equal(first("T323").recommendation, "approve, because no run of T323 ends as failed", "an offer to another chief is not this gate's");
   assert.deepEqual([first("T322").text, first("T322").recommendation], ["Hand T322 to Claude · C1? It has no owning chief. No run ends as failed. Claude · C1 runs one fresh cycle before it merges.", "approve, because T322 has no owning chief"]);
   assert.deepEqual([first("T324").text, first("T324").recommendation], ["Hand T324 from C9 to Claude · C1? No run ends as failed.", "replace, because no run of T324 ends as failed"]);
   assert.equal(card(model, "T320").reasons[0].recommendation, "approve, when you know that Claude · C1 stopped", "a gate with no offer keeps the T631 text");
-  // F-T656-13: the two recommendation forms read alike, with no second colon.
   assert.match(renderBoardText(model), /Recommended: approve, because Claude · C1 offered T321 to Codex · C2/);
-  // F-T656-9: after the accept, the offer line says that the recipient asked, and names the gate; an offer with no gate stays as it was.
   assert.equal(card(model, "T321").offer, "Codex · C2 asks to take this. Needs you: G8.");
   assert.equal(card(model, "T323").offer, "Offered to Claude · C1. Ready: Claude · C1 can accept.");
 });
@@ -806,10 +751,8 @@ test("F-T624-24 and F-T624-19: a shared run with no chief stands in as Unknown, 
   assert.match(page, /<td class="id">R430<\/td><td><span class="standin" tabindex="0" title="Stand-in: the run names no chief, so the board does not know its provider\." data-why="[^"]*">Unknown<span class="vh">/);
   assert.match(renderTaskText(t322), /^R430 Unknown \(the run names no chief\) · implementer · done/m);
   assert.doesNotMatch(page + renderTaskText(t322), /Shared(<span| \(logbook source\))/);
-  // An old logbook's runs stand in with its provider; a legacy run keeps its source (Claude).
   assert.equal(card(model, "T316").providerStandIn, "claude");
   assert.equal(card(model, "T41").providerStandIn, "claude");
-  // A finished milestone of the old Claude logbook says "Old Claude" where a shared milestone says "Shared".
   const old = join(w.claudeRoot, FOLDER);
   rmSync(old, { recursive: true });
   logbook(old, {
@@ -828,21 +771,18 @@ test("F-T625-4, F-T625-8 and F-T625-9: only the gone folder of the branch's newe
   const runs = list => writeFileSync(join(dir, "runs.tsv"), sheet(`${COLS.runs} checkout`, list));
   const writer = (id, at, checkout) => run(id, "T330", "implementer", "done", iso(-at * MIN), { chief: "C1", ended: iso(-(at - 5) * MIN), checkout, branch: "sage/t330" });
   const view = () => { const model = modelOf(w.sources); return { html: renderBoardHtml(model, { taskKey: `shared/${FOLDER}/T330`, snapshot: false }), text: renderTaskText(card(model, "T330")), task: card(model, "T330") }; };
-  // The newest writer run's folder is here: an older run's gone folder does not stop the review, so no note and no warning.
   runs([writer("R451", 90, gone1), writer("R455", 40, w.checkout), run("R456", "T330", "qa", "done", iso(-30 * MIN), { chief: "C1", checkout: gone2 })]);
   let page = view();
   assert.equal(page.task.goneRun, null);
   assert.doesNotMatch(page.html, /class="cknote"|class="gone gone-active"/);
   assert.equal(page.html.match(/· gone<span class="vh"> \(The folder is not on this Mac now\. A review reads the branch in the folder of a newer run, so nothing waits on it\.\)/g)?.length, 2);
   assert.ok(!page.text.includes("is not on this Mac now"));
-  // Two gone writer folders, and a present folder of the same name (lantern, R407's): one note, for the newest, by its run.
   runs([writer("R451", 90, gone1), writer("R455", 40, gone2), run("R407", "T330", "qa", "done", iso(-20 * MIN), { chief: "C1", checkout: w.checkout })]);
   page = view();
   assert.equal(page.task.goneRun, "R455");
   assert.equal(page.html.match(/class="gone gone-active"/g)?.length, 1);
   assert.match(page.html, /<span>The folder <b>lantern<\/b> of R455 is not on this Mac now, so sage cannot read the branch there\. The next review step of T330 stops until the folder is back\.<\/span>/);
   assert.ok(page.text.includes("\nThe folder lantern of R455 is not on this Mac now, so sage cannot read the branch there. The next review step of T330 stops until the folder is back.\n"));
-  // A writer run of another branch is not this branch's writer.
   runs([writer("R451", 90, w.checkout), { ...writer("R460", 10, gone1), branch: "sage/other" }]);
   assert.equal(view().task.goneRun, null);
 });
@@ -859,7 +799,7 @@ test("F-T630-2 and F-T633-10: a project named by its folder, and the picker's fo
 
 test("F-T630-3: the picker counts a linked checkout by the run rule: a folder with no Git checkout is gone in both", t => {
   const w = linked(t, [["clones/lantern-b", "2026-10-02T00:00:00Z"]], { live: [] });
-  mkdirSync(w.at("clones/lantern-b"), { recursive: true }); // here, but no .git: git cannot read a branch there
+  mkdirSync(w.at("clones/lantern-b"), { recursive: true });
   const { model, lantern } = withRuns(w, [w.checkout, w.at("clones/lantern-b")]);
   assert.equal(lantern.sub, "sample-owner/lantern · folder lantern", "one live checkout");
   assert.equal(card(model, "T321").runs.find(item => item.id === "R501").checkoutGone, true);

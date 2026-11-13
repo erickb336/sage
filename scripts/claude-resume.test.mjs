@@ -1,7 +1,3 @@
-// The chief's row in chiefs.tsv depends on this fact: a Claude resume keeps one
-// session id. The test runs the real CLI in a scratch home against a fake API,
-// so it runs only on request: set SAGE_PROBE_CLAUDE=1 on a machine with the CLI.
-// CI has no CLI, so a plain run skips it.
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
 import { probeResume } from './probe-claude-resume.mjs';

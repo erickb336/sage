@@ -1,10 +1,3 @@
-// Codex SessionStart hook: one short sage status at the start of a session, for the owner (systemMessage) and the
-// model (additionalContext). Startup and resume turn autopilot off in the mode file before status, as a new start does
-// in Claude; the owner record reader needs a new on after the start mark anyway. Startup, resume and clear save the
-// session's start mark (start-mark.mjs); a failed save is a limit line and never blocks. The dispatcher (dispatch.mjs)
-// runs it for the sources startup, resume and clear (T957); the start status follows oh-my-codex (MIT, github.com/Yeachan-Heo/oh-my-codex). Startup and clear also turn sage mode on when the project's
-// logbook has start=sage-mode (core's startsInSageMode, T948), as in Claude; the start mark keeps that start, so that the
-// owner record reader starts its replay with sage mode on.
 import { existsSync, readFileSync } from "node:fs";
 import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -24,7 +17,6 @@ const RESET_UNAVAILABLE = 'sage: the hook could not turn autopilot off in the sa
 const readJson = (path) => JSON.parse(readFileSync(path, "utf8"));
 const minor = (version) => /^(\d+)\.(\d+)/.exec(version)?.slice(1).map(Number);
 
-/** The Codex version from the session's first transcript line (session_meta, in the file's first MiB), or null. */
 function codexVersion(transcriptPath) {
   try {
     const version = sessionMeta(transcriptPath).cli_version;
@@ -32,15 +24,12 @@ function codexVersion(transcriptPath) {
   } catch { return null; }
 }
 
-/** A TOML integer (with + and _, F-T952-5) or boolean, or undefined for any other value. */
 const scalar = (value) => (/^\+?(?:0|[1-9](?:_?\d)*)$/.test(value) ? Number(value.replace(/[+_]/g, "")) : { true: true, false: false }[value]);
 
-/** The integers and booleans of a config.toml by their dotted key: plain key = value lines, under [table] headers, and inline tables, also nested ones. */
 function tomlValues(text) {
   const path = (key) => key.split(".").map((part) => part.trim().replace(/^"(.*)"$|^'(.*)'$/, "$1$2"));
   const pair = (text) => /^([^=]+?)\s*=\s*(.+)$/.exec(text.trim());
   const values = new Map();
-  // One value by its key: an inline table gives each of its pairs, split at the commas outside a nested { } or [ ].
   const read = (key, value) => {
     const inline = /^\{(.*)\}$/.exec(value.trim()), one = scalar(value.trim());
     if (!inline) return void (one !== undefined && values.set(key.join("."), one));
@@ -61,17 +50,12 @@ function tomlValues(text) {
     const line = raw.replace(/(^|\s)#.*$/, "").trim();
     const header = /^\[\s*([^[\]]+?)\s*\]$/.exec(line), p = pair(line);
     if (header) table = path(header[1]);
-    else if (line.startsWith("[")) table = null; // an array of tables: no key of sage's is in one
+    else if (line.startsWith("[")) table = null;
     else if (table && p) read([...table, ...path(p[1])], p[2]);
   }
   return values;
 }
 
-/**
- * The config files that Codex reads for a session's folder, lowest first: $CODEX_HOME/config.toml, then each
- * .codex/config.toml from the project root (the nearest folder with .git, else the folder itself) down to the folder
- * (codex-rs/config/src/loader/mod.rs, discover_project_layers, F-T952-2).
- */
 function configFiles(codexHome, cwd) {
   const user = join(codexHome, "config.toml"), up = [];
   for (let dir = resolve(cwd); ; dir = dirname(dir)) {
@@ -82,14 +66,6 @@ function configFiles(codexHome, cwd) {
   return [user, ...up.reverse().map((dir) => join(dir, ".codex", "config.toml")).filter((file) => file !== user)];
 }
 
-/**
- * How many agents Codex runs at once by one set of config layers, with the value's source and the line to change.
- * Multi-agent v2 counts features.multi_agent_v2.max_concurrent_threads_per_session (the chief's own thread included,
- * whatever its enabled says), else agents.max_concurrent_threads_per_session (or max_threads), else 4 threads: 3 agents
- * (resolve_multi_agent_v2_config). Codex runs v2 for sure only when features.multi_agent_v2 is turned on; else the model
- * may run v1, which counts the agents key, else 6 agents (effective_agent_max_threads). Then the lower of the two counts
- * (F-T952-10). values: each dotted key with its value and its file.
- */
 function agentLimit(values, need, user) {
   const V2 = "features.multi_agent_v2.max_concurrent_threads_per_session", get = (key) => values.get(key)?.value;
   const agentsKey = ["agents.max_concurrent_threads_per_session", "agents.max_threads"].find((key) => get(key) !== undefined);
@@ -102,15 +78,9 @@ function agentLimit(values, need, user) {
   return v1.allowed < v2.allowed ? v1 : v2;
 }
 
-/**
- * The warning when Codex runs fewer agents at once than the project's agent cap (T952), or undefined. It reads the
- * user's config and the project's .codex/config.toml files (configFiles). Codex skips a project's file in a project that
- * it does not trust, so a project's file counts only where it lowers the limit. A -c override, a profile and a managed
- * config are not seen. A plugin cannot set this value.
- */
 function threadWarning(input, codexHome, env) {
   const cwd = input.cwd ?? process.cwd(), [user, ...project] = configFiles(codexHome, cwd);
-  const layer = (file) => { try { return [...tomlValues(readFileSync(file, "utf8"))].map(([key, value]) => [key, { value, file }]); } catch { return []; } }; // no file: no layer
+  const layer = (file) => { try { return [...tomlValues(readFileSync(file, "utf8"))].map(([key, value]) => [key, { value, file }]); } catch { return []; } };
   const own = layer(user), need = agentCaps(tool.config(env)).cap(tool.projectName(cwd));
   const [all, alone] = [new Map([...own, ...project.flatMap(layer)]), new Map(own)].map((values) => agentLimit(values, need, user));
   const { allowed, from, fix, file } = alone.allowed < all.allowed ? alone : all;
@@ -118,16 +88,10 @@ function threadWarning(input, codexHome, env) {
   return `sage: Codex runs at most ${allowed} agents at once in this session (${from}), and this project's agent cap is ${need} (max_agents, or cap.<project>). An agent over Codex's limit fails to start with "agent thread limit reached". To raise it, set ${fix} in ${file}, then start a new session. sage reads only ${user} and the project's .codex/config.toml (it counts that file only where it lowers the limit, because Codex skips it in a project that Codex does not trust), not a -c override, a profile or a managed config.`;
 }
 
-/** Whether sage mode is on in the session, from the mode hook's file (a resumed session keeps it). */
 function sageOn(input, env) {
   try { return readModeFile(readState, join(modeDirectory(env), `${stateKey(input)}.json`)).state.sage === true; } catch { return false; }
 }
 
-/**
- * Turn sage mode on at a new start (startup or clear) of the root thread when the project's logbook says so (T948). It
- * returns { on } (sage mode is on from this start), or { warning } when the hook could not save it. As in the Claude
- * hook, it turns on only a mode that nothing set yet, so an off phrase in the same session holds.
- */
 function startMode(input, env) {
   if (!["startup", "clear"].includes(input.source) || typeof input.session_id !== "string" || !input.session_id || "agent_id" in input) return {};
   let on;
@@ -146,7 +110,6 @@ function startMode(input, env) {
   }
 }
 
-/** Turn autopilot off before status. The gate does not depend on this write: the start mark ends every earlier on. */
 function resetAutopilot(input, env) {
   if (input.source !== "startup" && input.source !== "resume") return undefined;
   if (typeof input.session_id !== "string" || !input.session_id || "agent_id" in input) return RESET_UNAVAILABLE;
@@ -161,12 +124,6 @@ function resetAutopilot(input, env) {
   return undefined;
 }
 
-/**
- * The hook's output JSON for one SessionStart input, or undefined for any other event. The chief always gets the
- * status. The user gets a warning (a systemMessage) only for a limit: a sage entry of hooks.json that is missing or
- * changed, a sage hook without a trust record, a launcher older than this version's, a marketplace pinned to one
- * commit (T971), or a Codex outside the tested range. codexHome is the launcher's (its real path), and launcherVersion its LAUNCHER_VERSION (T957).
- */
 export function sessionStatus(input, { pluginRoot, codexHome, launcherVersion, env = process.env }) {
   if (input?.hook_event_name !== "SessionStart") return undefined;
   const resetWarning = resetAutopilot(input, env);
@@ -187,8 +144,6 @@ export function sessionStatus(input, { pluginRoot, codexHome, launcherVersion, e
   const pin = pinWarning(codexHome);
   if (pin) limits.push(pin);
   if (!inRange) limits.push(`sage: ${version ? `sage was not tested with Codex ${version}` : "the hook could not read the Codex version"}, so some sage rules may not run. Autopilot merges in Codex ${RECORD_RANGE}.`);
-  // Codex trusts a user hook only when its record matches the hash of the entry. Codex computes it, so the status counts
-  // only the records, and says that Codex checks each hash.
   const threads = threadWarning(input, codexHome, env);
   if (threads) limits.push(threads);
   const status = [
@@ -200,7 +155,6 @@ export function sessionStatus(input, { pluginRoot, codexHome, launcherVersion, e
   return { ...(limits.length ? { systemMessage: limits.join("\n") } : {}), hookSpecificOutput: { hookEventName: "SessionStart", additionalContext: status } };
 }
 
-/** The start status for the dispatcher (dispatch.mjs): nothing when it fails, because a status line must not break a session. */
 export function startStatus(input, { codexHome, launcherVersion }) {
   try { return sessionStatus(input, { pluginRoot: join(dirname(fileURLToPath(import.meta.url)), ".."), codexHome, launcherVersion }); } catch { return undefined; }
 }

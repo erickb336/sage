@@ -1,5 +1,3 @@
-// T1002: the six state words of a task, a milestone and a release (the T995 design, gate G141, with the PE's corrections),
-// read from real board cards, and the agreement of "needs you" with the board's Needs you box. SAMPLE DATA only.
 import test from "node:test";
 import assert from "node:assert/strict";
 import { buildBoardModel, milestoneWord, releaseWord, renderBoardHtml, renderBoardText, renderMilestonesHtml, renderTaskText, taskWord } from "../packages/sage-core/index.mjs";
@@ -12,15 +10,12 @@ const observation = (kind, data) => ({ id: "O1", task: "T1", kind, source: "samp
 const gate = (answer = "") => ({ id: "G1", task: "T1", question: "Sample: which layout?", recommendation: "the first", answer });
 const clean = ["checks-pass", "review-clean", "qa-pass"].map(kind => ({ task: "T1", pr: "41", sha: head, kind, cycle: "1", at: now }));
 const autopilot = on => [observation("pr", { number: 41, head, state: "open" }), observation("mode", { autopilot: on })];
-// A failed verdict on the head after a clean one (as in T294): the board shows it only while the merge check does not pass.
 const failed = kind => [...clean, { task: "T1", pr: "41", sha: head, kind, cycle: "1", at: now }];
 const passes = () => ({ ok: true, reason: "" });
 const refuses = () => ({ ok: false, reason: "T1 has open findings: F-T1-1. Fix them." });
-/** The board model of one logbook: T1 and the tasks it waits for. */
 const model = ({ row, others = [], gates = [], ledger = [], records = [], landing = passes }) =>
   buildBoardModel([{ id: "one", label: "one", diagnostics: [], config: {}, projects: [{ key: "one/sample-abcdef", name: "sample-abcdef", diagnostics: [], tables: { tasks: [row, ...others], gates, ledger }, observations: { version: 1, records } }] }], { now, landing });
 
-// Each recorded state, each edge case F1 to F6 and each PE correction: the fixture, then the word that the design gives.
 const CASES = [
   ["framed: no agent works on it", { row: task("T1", "framed") }, "not started"],
   ["framed with an unmet wait", { row: task("T1", "framed", { waits: "T2" }), others: [task("T2", "building")] }, "waiting"],
@@ -90,7 +85,6 @@ test("T1002: a state that the state tool does not write has no word, also one na
   assert.equal(taskWord(cardOf({ row: task("T1", "half-done") })).word, null);
   for (const state of ["constructor", "toString", "__proto__", "hasOwnProperty"]) {
     assert.equal(taskWord({ state, reasons: [] }).word, null, state);
-    // A milestone state with no table row takes its tasks' word, as an active milestone does.
     assert.deepEqual(milestoneWord({ state }, ["done"]), { word: "done", reason: "1 of 1 done." }, state);
   }
 });
@@ -104,8 +98,6 @@ test("T1002: a missing card, reasons or words read as an unknown state or an emp
 });
 
 test("T1002: 'needs you' agrees with the board's Needs you box, but for the design's two changes", () => {
-  // The box is the board's own output: the cards of model.needsOwner. The design changes two cases, which T997 shows:
-  // a task that is done or stopped keeps its word, and a refused head is the chief's to repair (F5).
   const changed = new Set([...CASES.map(([name]) => name).filter(name => name.startsWith("F5:")), "a done task with an open gate keeps its word"]);
   const sample = MILESTONES_NOW, board = buildBoardModel([milestonesSource()], { now: sample });
   const cards = [...CASES.map(([name, fixture]) => [name, model(fixture)]).map(([name, built]) => [name, built.tasks.find(card => card.id === "T1"), built]),
@@ -131,17 +123,16 @@ test("T1002: each milestone's word, from its state and its tasks' words", () => 
   const byKey = new Map(board.tasks.map(card => [card.key, card]));
   const words = Object.fromEntries(board.milestones.map(milestone => [milestone.id, milestoneWord(milestone, milestone.tasks.map(key => taskWord(byKey.get(key)).word)).word]));
   assert.deepEqual(words, {
-    M1: "in progress", // active: 3 merged, one in review
-    M2: "needs you", // stuck: its pilot was abandoned, so the owner chooses a new pilot or drops it
-    M3: "needs you", // proposed: its breakdown waits for the owner
-    M4: "in progress", // active: the pilot builds
-    M5: "done", // each task merged, concluded or abandoned (progressOf)
-    M6: "stopped", // dropped by the owner
-    M7: "needs you", // lost: its breakdown gate is not in the logbook
-    M8: "in progress", // active: the pilot merged, the others wait
-    M9: "in progress", // changing: the chief revises the breakdown
+    M1: "in progress",
+    M2: "needs you",
+    M3: "needs you",
+    M4: "in progress",
+    M5: "done",
+    M6: "stopped",
+    M7: "needs you",
+    M8: "in progress",
+    M9: "in progress",
   });
-  // Each milestone that needs you has its question in the board's Needs you: its own item, or its gate on a card in the box.
   for (const milestone of board.milestones) {
     const inBox = !!milestone.need || board.needsOwner.some(card => card.reasons.some(reason => reason.breakdown?.id === milestone.id));
     assert.equal(words[milestone.id] === "needs you", inBox, milestone.id);
@@ -169,8 +160,6 @@ test("T1002 F6: a release's word, from the words of its items", () => {
   assert.equal(releaseWord(["done", "stopped", "in progress", "not started"]).reason, "1 of 4 done.");
 });
 
-// T997: the owner sees the six words on the board. One logbook with a task for each word (SAMPLE DATA): the word on the
-// model's card, on the web card with its mark (the T995 design), and on the chat board's line, after the title.
 const SHOWN = { T1: "not started", T2: "waiting", T3: "in progress", T4: "needs you", T5: "done", T6: "stopped" };
 const MARKS = { "not started": "○", waiting: "⧗", "needs you": "!", "in progress": "▶", done: "✓", stopped: "■" };
 const sixBoard = () => model({

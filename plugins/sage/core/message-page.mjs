@@ -1,8 +1,3 @@
-// The page of a message (T984): one self-contained HTML file that the owner opens beside the chat. It draws the same
-// blocks as the text form, and each picture as an image from its own text (pictureSvg). Agents and the logbook write
-// the text, so every text is escaped, the page loads nothing, and its Content-Security-Policy allows only its own style
-// and the hash of its one script: the Today switch of a design (C7). Known limit: a page that the owner opens can still
-// send its own content out through a navigation (T1000, section 3). Pure functions: no file access.
 import { createHash } from "node:crypto";
 import { escapeHtml as esc, pictureSvg } from "./picture.mjs";
 import { headOf } from "./message.mjs";
@@ -10,7 +5,6 @@ import { headOf } from "./message.mjs";
 const inline = (s) => esc(s).replace(/\*\*(.+?)\*\*/g, "<strong>$1</strong>").replace(/`([^`]+)`/g, "<code>$1</code>");
 const hash = (s) => `'sha256-${createHash("sha256").update(s).digest("base64")}'`;
 
-/** The one script: a design's Today switch. Without it, both pictures show, one under the other. */
 export const SWITCH_SCRIPT = "(function(){document.querySelectorAll('.tg').forEach(function(t){var bar=t.querySelector('.tg-bar');bar.hidden=false;t.classList.add('js');bar.querySelectorAll('button').forEach(function(b){b.addEventListener('click',function(){t.classList.toggle('show-today',b.dataset.v==='today');bar.querySelectorAll('button').forEach(function(x){x.setAttribute('aria-pressed',String(x===b))})})})})})();";
 
 const CSS = `:root{color-scheme:light dark;--bg:#f7f6f2;--fg:#1c1b19;--muted:#5d5952;--line:#d9d5cc;--panel:#fff;--panel2:#f0eee8;--accent:#2d5bc4;--accent-fill:#e8eefc;--new:#fff0b3;--new-line:#c99a00;--pic-f0:#fff;--pic-f1:#f4f2ec;--pic-line:#57534c;--st-prog:#1f5fcf;--st-wait:#8a6510;--st-need:#c2410c;--st-done:#1d7a3e;--st-stop:#9b2c2c;--st-not:#6b6760}
@@ -47,7 +41,6 @@ pre{background:var(--panel2);border:1px solid var(--line);border-radius:6px;padd
 details.text-form{margin-top:28px;border-top:1px solid var(--line);padding-top:10px}details.text-form summary{cursor:pointer;font-size:13px;color:var(--muted)}
 details.text-form pre{font-size:12.5px;line-height:1.45;white-space:pre;background:var(--panel)}`;
 
-/** The policy of every page: nothing loads, and only the page's own style and its one script run. */
 export const PAGE_POLICY = `default-src 'none'; style-src ${hash(CSS)}; script-src ${hash(SWITCH_SCRIPT)}; img-src 'none'; base-uri 'none'; form-action 'none'`;
 
 const figure = (title, lines, key) => `<figure><figcaption>${esc(title)}</figcaption><div class="m-pic">${pictureSvg(lines, { title })}</div>${key ? `<p class="m-key">${inline(key)}</p>` : ""}</figure>`;
@@ -58,7 +51,6 @@ function blockHtml(b, level = 2) {
     case "p": return `<p>${inline(b.text)}</p>`;
     case "section": return `<section><h${level}>${esc(b.label)}</h${level}>${b.body.map((x) => blockHtml(x, Math.min(level + 1, 6))).join("")}</section>`;
     case "list": { const tag = b.ordered ? "ol" : "ul"; return `<${tag}>${b.items.map((i) => `<li>${inline(i)}</li>`).join("")}</${tag}>`; }
-    // A question's answers (a table with a pick) are a list, as in the text form: a table makes long answers hard to read (T1023).
     case "table": if (b.pick !== undefined) return `${b.caption ? `<p class="m-label">${esc(b.caption)}</p>` : ""}<ol class="m-answers">${b.rows.map((r, i) => `<li${b.pick === i ? ' class="pick"' : ""}><p class="m-label">${inline(r[0])}${b.pick === i && !/\(my pick\)/i.test(r[0]) ? ' <span class="pick-mark">(my pick)</span>' : ""}</p>${r.slice(1).map((c, k) => `<p><span class="m-label">${esc(b.head[k + 1])}:</span> ${inline(c)}</p>`).join("")}</li>`).join("")}</ol>`;
       return `<div class="m-table"><table>${b.caption ? `<caption>${esc(b.caption)}</caption>` : ""}<thead><tr>${b.head.map((h) => `<th>${esc(h)}</th>`).join("")}</tr></thead><tbody>${b.rows.map((r) => `<tr>${r.map((c) => `<td>${inline(c)}</td>`).join("")}</tr>`).join("")}</tbody></table></div>`;
     case "picture": return figure(b.title, b.lines, b.key);
@@ -67,8 +59,6 @@ function blockHtml(b, level = 2) {
       return `<div class="tg"><div class="tg-bar" hidden role="group" aria-label="Which picture"><button type="button" data-v="after" aria-pressed="true">After this change</button><button type="button" data-v="today" aria-pressed="false">Today</button></div>${side("tg-after", "After this change", b.after)}${side("tg-today", "Today", b.today)}</div>`;
     }
     case "changes": return `<div class="m-table"><table><thead><tr><th>Where you see it</th><th>Today</th><th>After this change</th><th>Why</th></tr></thead><tbody>${b.rows.map((r) => `<tr>${[r.where, r.today, r.after, r.why].map((c) => `<td>${inline(c)}</td>`).join("")}</tr>`).join("")}</tbody></table></div>`;
-    // The link is text, not a link. A page opens with no origin, so a click on a link in it is a click from another site:
-    // the board opens a page by a person's click from any site, but never ?scripts=1, and the page loads nothing from it.
     case "page": return `<div class="m-page"><div class="m-page-title">Page · ${inline(b.title)}</div>${b.url ? `<div class="m-page-path">${esc(b.url)}</div>` : ""}<div class="m-page-path">${esc(b.path ?? b.file)}</div></div>`;
     case "code": return `<pre>${esc(b.lines.join("\n"))}</pre>`;
     case "steps": return `<ol>${b.items.map((s) => `<li>${inline(s.text)}${s.cmd ? `<pre>${esc(s.cmd.join("\n"))}</pre>` : ""}${s.see ? `<p class="m-see">${inline(s.see)}</p>` : ""}</li>`).join("")}</ol>`;
@@ -76,10 +66,6 @@ function blockHtml(b, level = 2) {
   }
 }
 
-/**
- * The page of a prepared message (prepareMessage's msg): the message with its pictures as images, and at its end the
- * same message as plain text (text: what the command prints), so that a check can compare each image with its text.
- */
 export function messagePage(msg, text) {
   const body = `<main${msg.long !== undefined ? ' class="long"' : ""}><div class="m-kind">${esc(headOf(msg))}</div><h1>${inline(msg.title)}</h1>${msg.blocks.map((b) => blockHtml(b)).join("")}${msg.ref ? `<p class="m-ref">Ref: ${esc(msg.ref)}</p>` : ""}<details class="text-form"><summary>The same message as plain text</summary><pre>${esc(text)}</pre></details></main>`;
   return `<!DOCTYPE html><html lang="en"><head><meta charset="utf-8"><meta http-equiv="Content-Security-Policy" content="${PAGE_POLICY}"><meta name="referrer" content="no-referrer"><meta name="viewport" content="width=device-width, initial-scale=1"><title>${esc(msg.title)}</title><style>${CSS}</style></head><body>${body}<script>${SWITCH_SCRIPT}</script></body></html>\n`;

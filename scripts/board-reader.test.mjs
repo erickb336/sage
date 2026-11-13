@@ -147,21 +147,16 @@ test("T233 C3: the milestones table: missing is no rows while no task names a mi
     return readBoardSources([{ id: "one", path }])[0].projects[0];
   };
   const MILESTONES = "id\tname\tgoal\tpilot\tgate\tat\n";
-  // A logbook from before milestones: no milestones table, and no task names a milestone.
   const old = read([task("T1")]);
   assert.deepEqual(old.diagnostics, []);
   assert.deepEqual(old.tables.milestones, []);
-  // A task names a milestone, and the table is missing: a diagnostic.
   const lost = read([task("T1", "M1")]);
   assert.deepEqual(lost.diagnostics, ["milestones: ENOENT"]);
   assert.equal(lost.tables.milestones, undefined);
-  // A good table: its rows as stored, also a name with marks (the renderers escape it).
   const good = read([task("T1", "M1"), task("T2", "M1", "T1")], `${MILESTONES}M1\t<b>Codex</b> *support*\tSample goal\tT1\tG1\t2026-10-20T10:00:00Z\n`);
   assert.deepEqual(good.diagnostics, []);
   assert.deepEqual(good.tables.milestones, [{ id: "M1", name: "<b>Codex</b> *support*", goal: "Sample goal", pilot: "T1", gate: "G1", at: "2026-10-20T10:00:00Z" }]);
   assert.equal(good.tables.tasks[1].waits, "T1");
-  // Unreadable: a damaged header, two rows of one id or of one gate (T383 item 1), a bad id, pilot or gate cell. The other
-  // tables stay readable. Each error names the row's line in the file (a blank line counts) and its id when it is one (T383 item 8).
   for (const [why, text, message] of [
     ["header", "id\tname\tgoal\tpilot\n", "damaged table header"],
     ["twice", `${MILESTONES}M1\tA\tg\tT1\tG1\t\n\nM1\tB\tg\tT2\tG2\t\n`, "line 4 has the milestone M1 again (first on line 2)"],
@@ -169,7 +164,6 @@ test("T233 C3: the milestones table: missing is no rows while no task names a mi
     ["id", `${MILESTONES}P1 <b>\tA\tg\tT1\tG1\t\n`, "line 2 has a milestone id that is not M and a number"],
     ["pilot", `${MILESTONES}M1\tA\tg\tX1\tG1\t\n`, "line 2: the pilot of M1 is not a task id"],
     ["gate", `${MILESTONES}M1\tA\tg\tT1\tgate 1\t\n`, "line 2: the gate of M1 is not a gate id"],
-    // R1307-1: a row with too few cells says its line in the file (a blank line counts) and its count of cells.
     ["row", `${MILESTONES}\nM1\tA\tg\n`, "line 3 has 3 cells, and its header has 6"],
   ]) {
     const bad = read([task("T1", "M1")], text);
@@ -177,7 +171,6 @@ test("T233 C3: the milestones table: missing is no rows while no task names a mi
     assert.deepEqual(bad.diagnostics, [`milestones: ${message}`], why);
     assert.equal(bad.tables.tasks.length, 1, why);
   }
-  // A milestone cell that is not a milestone id shows as ?; a good one stays.
   const cell = read([task("T1", "<img src=x>"), task("T2", "M1")], `${MILESTONES}M1\tA\tg\tT2\tG1\t\n`);
   assert.deepEqual(cell.tables.tasks.map(row => row.milestone), ["?", "M1"]);
 });

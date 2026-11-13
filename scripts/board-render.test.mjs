@@ -63,7 +63,6 @@ function twoProjectModel() {
   }, observations: { records: [pr("O2", "T4", 8)] } };
   return buildBoardModel([{ id: "sample", label: "Sample source", diagnostics: [], projects: [alpha, beta] }], { now: at });
 }
-// T218: the approved look. Each test reads the rendered page as the browser gets it.
 const at = "2026-10-08T20:00:00Z";
 const sample = (tasks, tables = {}, extra = {}) => buildBoardModel([{ id: "sample", label: "sample", diagnostics: [], projects: [{ key: "sample/project-abcdef", name: "project-abcdef", diagnostics: [], tables: { tasks, ...tables }, ...extra }] }], { now: at });
 const row = (id, state, extra = {}) => ({ id, title: `Sample ${id}`, size: "small", risk: "", route: "build,code-review,qa", state, branch: "", pr: "", round: "0", keys: "", ...extra });
@@ -116,7 +115,6 @@ test("T218: a task page opens by its anchor offline and at its route on the serv
   assert.ok(served.includes(`href="/task/${Buffer.from(task.key).toString("base64url")}"`));
   assert.ok(!served.includes('class="page'));
   const page = renderBoardHtml(data, { snapshot: false, live: true, taskKey: task.key });
-  // F-T218-14: one h1 (the task title) inside main, and the way back before the theme switch.
   assert.ok(page.includes(`<main class="page open" id="${id}" aria-label="T2"><div class="pagebar"><a class="back" href="/">← Board</a><span class="livepill" id="live-state">`));
   assert.deepEqual(page.match(/<h1\b[^>]*>[^<]*<\/h1>/g), ['<h1 class="ptitle">Sample T2</h1>']);
   assert.ok(page.indexOf('<h1 class="ptitle">') > page.indexOf("<main ") && page.indexOf('<h1 class="ptitle">') < page.indexOf("</main>"));
@@ -193,7 +191,6 @@ test("T218: the chat board shows 5 cards a column in the page's order, with the 
   const decisions = tasks.map((task, i) => ({ at: new Date(Date.parse(at) - (60 - i) * 60000).toISOString(), task: task.id, decision: "sample", why: "sample" }));
   const runs = [{ id: "R1", task: "T50", role: "implementer", status: "running", started: at }];
   const data = sample(tasks, { decisions, runs, gates }), text = renderBoardText(data);
-  // The same order as the page: newest activity first (F-T218-2), 5 a column and the rest counted (F-T218-6).
   const backlog = /### 📋 Backlog \(40\)\n([\s\S]*?)\n\n###/.exec(text)[1];
   assert.deepEqual([...backlog.matchAll(/\*\*(T\d+) /g)].map(m => m[1]), ["T40", "T39", "T38", "T37", "T36"]);
   assert.deepEqual(data.columns.find(c => c.key === "backlog").tasks.slice(0, 5).map(t => t.id), ["T40", "T39", "T38", "T37", "T36"]);
@@ -201,11 +198,9 @@ test("T218: the chat board shows 5 cards a column in the page's order, with the 
   const building = /### 🔨 Building \(8\)\n([\s\S]*?)\n\n###/.exec(text)[1];
   assert.deepEqual([...building.matchAll(/\*\*(T\d+) /g)].map(m => m[1]), ["T60", "T50", "T56", "T55", "T54"], "needs you first, then the newest activity");
   assert.ok(building.endsWith("3 more in Building: open the board page for all."));
-  // F-T218-11: titles stop at 80 characters with an ellipsis.
   const title = /\*\*T40 ([^*]*)\*\*/.exec(text)[1];
   assert.ok([...title].length <= 80 && [...title].length >= 75, title);
   assert.ok(title.endsWith("…"));
-  // F-T218-12: the page's date, summary words and column names; one note for the provider stand-in.
   assert.ok(text.startsWith("**sage board** · built 2026-10-08 20\\:00 UTC\\\n🔴 1 needs you · 1 agents at work · 🔁 1 in review · 49 tasks\\\n"));
   assert.ok(text.includes("### 🏁 Done, last 7 days (0)"));
   assert.ok(text.includes("**T41 Sample T41** · in progress · sample · project · PR 3\\\n✓ Plan › ✓ Build › ▷ Review 1 of 1 › ○ Merge\\\nNow: No agent works on review cycle 1 of 1 now\\. The board does not know the PR's last commit\\."), text.slice(text.indexOf("**T41"), text.indexOf("**T41") + 200));
@@ -252,7 +247,6 @@ test("T500: a card of an open task with no priority shows a no priority tag; a c
   assert.deepEqual([page("T1"), page("T3")], [true, false], "the task page has the tag too, but not for an ended task");
 });
 
-/** One source with a live project and an archived one, each a list of tasks; extra goes to the live project. */
 const twoBooks = (live, old, extra = {}) => buildBoardModel([{ id: "sample", label: "sample", diagnostics: [], projects: [
   { key: "sample/live-abcdef", name: "live-abcdef", diagnostics: [], tables: { tasks: live }, ...extra },
   { key: "sample/old-abcdef", name: "old-abcdef", diagnostics: [], tables: { tasks: old }, displayName: "Old app", archived: true },
@@ -290,7 +284,6 @@ test("T314 R1045-3: the task text shows the priority and the kind when they are 
   assert.equal(renderTaskText(model.tasks[1]).split("\n")[1], "sample · live · not started · small");
 });
 
-// T305: the picker, the filter bar, the theme and the live pill, as the page gives them. Sample data only.
 const providers = () => buildBoardModel([
   { id: "claude", label: "claude", provider: "Claude", diagnostics: [], projects: [{ key: "claude/sage-43265b", name: "sage-43265b", checkout: "/sample/sage", diagnostics: [], tables: { tasks: [row("T1", "awaiting-you", { priority: "P0", kind: "ui" })] } }, { key: "claude/demo-111111", name: "demo-111111", checkout: "/sample/sdc/product-demos", displayName: "seacc (Council Record)", diagnostics: [], tables: { tasks: [row("T2", "framed")] } }] },
   { id: "codex", label: "codex", provider: "Codex", diagnostics: [], projects: [{ key: "codex/sage-43265b", name: "sage-43265b", checkout: "/sample/sage", diagnostics: [], tables: { tasks: [row("T1", "framed")] } }] },
@@ -307,7 +300,6 @@ test("T305: the picker is one button with an ARIA combobox and listbox, every pr
   const sage = /<li role="option" id="pick-o-[^"]+" class="opt" data-key="sage-43265b"[^>]*>/.exec(html)[0];
   assert.ok(sage.includes('data-name="sage"') && sage.includes('data-provider="claude codex"') && sage.includes('data-providers="Claude + Codex"'), sage);
   assert.ok(sage.includes('data-terms="sage\nsage-43265b\nclaude/sage-43265b\ncodex/sage-43265b"'), sage);
-  // R1069-2: the checkout paths go only to the Mac's own page, which the server asks for with paths.
   assert.ok(!html.includes("/sample/sage") && !renderBoardHtml(providers()).includes("/sample/sage"), "no path for a tunnel viewer or in the offline snapshot");
   assert.ok(renderBoardHtml(providers(), { snapshot: false, paths: true }).includes('data-terms="sage\nsage-43265b\nclaude/sage-43265b\ncodex/sage-43265b\n/sample/sage"'));
   assert.ok(html.includes('data-list="needs"><div class="grp" id="pick-g-needs"><span>Needs you</span><span class="n">1</span></div>'));
@@ -384,7 +376,6 @@ test("T305 R1056-2: a backlog card shows only its step line; a card in another c
 test("R1245-1: a breakdown gate's lines (U+2028 in its cell) show as lines on the card, in the text board and on the task text, with the recommendation on a line of its own", () => {
   const question = ["Approve milestone M1? No task builds before you approve.", "Name: Codex support", "Pilot, runs first:", "  T1: <b>Ship</b> it: 100% done"].join(" ");
   const data = sample([row("T1", "framed", { milestone: "M1" })], { milestones: [{ id: "M1", name: "Codex support", goal: "Sample", pilot: "T1", gate: "G1", at }], gates: [{ id: "G1", task: "T1", question, options: "approve|change|drop", recommendation: "approve", answer: "" }] });
-  // T368 QF: the card shows the stored lines in the frame; the task page keeps them in its Needs you line.
   assert.ok(renderBoardHtml(data, { snapshot: false }).includes('<b>Needs you:</b> the breakdown of milestone 1.</span></div><p class="q">Approve milestone M1? No task builds before you approve.</p><p class="q">Name: Codex support</p><p class="q">Pilot, runs first:</p><p class="q">  T1: &lt;b&gt;Ship&lt;/b&gt; it: 100% done</p><p class="q"><b>I recommend:</b> approve</p>'));
   const html = renderBoardHtml(data, { snapshot: false, taskKey: data.tasks[0].key });
   assert.ok(html.includes("<b>Needs you:</b> Approve milestone M1? No task builds before you approve.<br>Name: Codex support<br>Pilot, runs first:<br>  T1: &lt;b&gt;Ship&lt;/b&gt; it: 100% done<br>I recommend: approve</span>"), html);
@@ -453,8 +444,6 @@ test("T305: the live pill is no live region; a hidden status line is there for a
   assert.ok(html.includes("@media (min-width:701px) and (max-width:1180px){\n .board{grid-auto-flow:row;grid-template-columns:repeat(3,minmax(0,1fr));overflow-x:visible}"));
 });
 
-// T233: the chat board's milestones (PR A). SAMPLE DATA from scripts/fixtures/board-milestones.mjs.
-/** The lines of one block that break the F1 rule: each line before another line of its block ends with a hard break (an odd count of backslashes), but not the line before a quote or a heading. */
 const breaksOf = text => text.split("\n").flatMap((line, i, lines) => {
   const next = lines[i + 1];
   if (!line || !next || line.startsWith("#") || line.startsWith("- ")) return [];
@@ -471,7 +460,6 @@ test("T233: the chat board has the Milestone approval and Other headings, the Mi
   assert.ok(text.includes("\n\n**T41 Sample T41** · in progress · claude · sage \\(sample\\) · ◫ Milestone 4\\: Agent caps\\\n▷ Plan › ○ Build › ○ Review 1 of 1 › ○ Merge\\\n⧗ Waits for T40 \\(pilot, in progress\\)\\. Design and PE may run\\.\n\n"), text);
   assert.ok(text.includes("### 🔨 Building (1)\n**T40 Sample T40** · in progress · claude · sage \\(sample\\) · ◫ Milestone 4\\: Agent caps \\(pilot\\)\\\n"), text);
   assert.deepEqual(breaksOf(text), [], "one hard break per line of a block");
-  // With no breakdown gate, no headings; with no milestone, no Milestones section.
   const plain = renderBoardText(sample([row("T1", "framed")], { gates: [{ id: "G1", task: "T1", question: "Ship it?", options: "yes|no", answer: "" }] }));
   assert.ok(plain.includes("### 🔴 Needs you\n**1 · T1 Sample T1** · needs you · sample · project\n> sample/project-abcdef/G1 · Ship it?\\\n> Options: 1: yes · 2: no\n\n### 📋 Backlog (1)\n"), plain);
   assert.ok(!plain.includes("####") && !plain.includes("Milestones"), plain);
@@ -489,14 +477,13 @@ test("T233 F1: md() escapes the backslash and the tilde, so a title that ends wi
   assert.deepEqual(breaksOf(text), []);
 });
 
-// T233 repair round 1 (cycle 1 findings). SAMPLE DATA from scripts/fixtures/board-milestones.mjs.
 const milestonesText = tables => renderBoardText(buildBoardModel([milestonesSource("claude", tables)], { now: MILESTONES_NOW }));
 const sectionOf = (text, head) => text.slice(text.indexOf(head), text.indexOf("\n\n###", text.indexOf(head) + 1));
 
 test("F-T233-9: a pilot's plain gate and a forged copy of the breakdown text are items under Other, never in the Milestone approval block", () => {
   const tables = milestonesTables();
   tables.gates.push({ id: "G50", task: "T30", question: "Pick a colour for the logo?", options: "red|blue", recommendation: "red", default: "", answer: "", at: "" });
-  tables.gates.push({ ...tables.gates.find(gate => gate.id === "G12"), id: "G99" }); // the breakdown's text and options, but no milestones row names G99
+  tables.gates.push({ ...tables.gates.find(gate => gate.id === "G12"), id: "G99" });
   const text = milestonesText(tables);
   const approval = sectionOf(text, "#### ◫ Milestone approval").split("\n\n#### Other")[0];
   assert.equal(approval, "#### ◫ Milestone approval\n**1 · Milestone 3\\: Board milestones** · needs you · claude · sage \\(sample\\) · pilot T30 · gate G12\n> claude/sage-ff5ee2/G12 · Approve milestone M3? No task builds before you approve\\.\\\n> Name\\: Board milestones\\\n> Goal\\: Sample goal\\.\\\n> Pilot, runs first\\:\\\n>   T30\\: Sample T30\\\n> Options: 1: approve · 2: change · 3: drop\\\n> Recommended: approve");
@@ -522,7 +509,6 @@ test("F-T233-1: the page counts the items that need you and have no card: the Ne
   assert.deepEqual([...html.matchAll(/<li data-need data-project="([^"]*)" data-milestone="([^"]*)">/g)].map(m => [m[1], m[2]]), [[group, pg2], [group, pg7]], "the strip holds one item for each");
   assert.ok(BOARD_ENHANCEMENT.includes("need=needCounts(cards.map(c=>c.dataset),S,items.map(i=>i.dataset))"), "the page script passes them");
   assert.ok(BOARD_ENHANCEMENT.includes("set('s-needs',shown.filter(c=>c.dataset.needs==='true').length+need.milestones)"));
-  // The page's cards: T30 and T70 need you. With the two items, the page says 4, as the chat does.
   const cards = [{ project: group, needs: "true", provider: "claude", priority: "", kind: "", milestone: "" }, { project: group, needs: "true", provider: "claude", priority: "", kind: "", milestone: "" }];
   const none = { project: "", who: "", priority: "", kind: "", milestone: "" }, items = [{ project: group, milestone: pg2 }, { project: group, milestone: pg7 }];
   assert.deepEqual(needCounts(cards, none, items), { all: 4, milestones: 2, projects: { [group]: 4 } });
@@ -555,7 +541,6 @@ test("F-T233-10: a dropped milestone that still has open tasks has its own Miles
 });
 
 test("F-T233-2, F-T233-3, F-T233-7: a milestone whose gate is not its breakdown gate by the data rule says so in one way on every line, and Needs you shows that problem once", () => {
-  // F-T233-2: G12 is a plain gate (yes|no) that M3 names: the Milestones line and the gate's own item agree, and it counts once.
   const plain = milestonesTables();
   plain.gates.find(gate => gate.id === "G12").options = "yes|no";
   const model = buildBoardModel([milestonesSource("claude", plain)], { now: MILESTONES_NOW }), text = renderBoardText(model);
@@ -563,17 +548,13 @@ test("F-T233-2, F-T233-3, F-T233-7: a milestone whose gate is not its breakdown 
   assert.ok(text.includes("\n> claude/sage-ff5ee2/G12 · Approve milestone M3? No task builds before you approve\\. Name\\: Board milestones Goal\\: Sample goal\\. Pilot, runs first\\:   T30\\: Sample T30\\\n> The gate G12 of M3 is not a breakdown gate on its pilot T30\\: ask the chief to repair the logbook, or to propose M3 again\\.\\\n> Options: 1: yes · 2: no\\\n"), sectionOf(text, "### 🔴 Needs you"));
   assert.equal(text.split("G12 of M3").length, 2, "one item says it");
   assert.equal(model.counts.needsOwner, 4, "T30, T70 and the two other milestone items: G12 counts once");
-  // F-T233-3: a hand edit changes G12's question; its options and pilot stay. No line says that the breakdown waits for you.
   const edited = milestonesTables();
   edited.gates.find(gate => gate.id === "G12").question = "Ship it?";
   const shipped = milestonesText(edited);
   assert.ok(!shipped.includes("breakdown waits for you") && !shipped.includes("Milestone approval"), shipped);
-  // T383 item 12: the gate is on its pilot with the breakdown options, so every line names its question as the reason.
   assert.ok(shipped.includes("\n- Milestone 3\\: Board milestones · needs you · its gate G12 names no milestone in its question \\(see Needs you\\)\n"), sectionOf(shipped, "### ◫ Milestones"));
   assert.ok(shipped.includes("\n> claude/sage-ff5ee2/G12 · Ship it?\\\n> The gate G12 of M3 names no milestone in its question\\: ask the chief to repair the logbook, or to propose M3 again\\.\\\n"), shipped);
   assert.ok(shipped.includes("⊘ Waits for the breakdown of milestone 3, whose gate G12 names no milestone in its question\\: it cannot start\\."), "the cards agree");
-  // F-T233-7: M1 and M2 both name G1, whose text names M2: G1 is M2's breakdown, and M1 is lost, never "waits for you".
-  // (The reader refuses such a milestones table since T383 item 1; the model still reads it in one way.)
   const one = milestonesTables().tasks[0];
   const twin = {
     tasks: [{ ...one, id: "T1", state: "framed", milestone: "M1" }, { ...one, id: "T2", state: "framed", milestone: "M2" }],
@@ -585,8 +566,6 @@ test("F-T233-2, F-T233-3, F-T233-7: a milestone whose gate is not its breakdown 
   assert.equal(both.split("breakdown waits for you").length, 2, "only M2's breakdown waits for you");
 });
 
-// T233 repair round 2 (cycle 2 findings). SAMPLE DATA from scripts/fixtures/board-milestones.mjs.
-// The sample logbook as the reader gives it when it cannot read the milestones table: no milestones rows, and the reason.
 const noMilestones = (reason = "milestones: line 3 has 4 cells, and its header has 6") => {
   const tables = milestonesTables();
   delete tables.milestones;
@@ -598,14 +577,12 @@ const noMilestones = (reason = "milestones: line 3 has 4 cells, and its header h
 test("R1307-1: when the milestones table cannot be read, the cards show no milestone, and Needs you says why, in full, and counts it", () => {
   const model = buildBoardModel([noMilestones()], { now: MILESTONES_NOW }), text = renderBoardText(model);
   assert.ok(text.startsWith("**sage board** · built 2026-10-20 12\\:00 UTC\\\n🔴 3 needs you · 0 agents at work · 🔁 1 in review · 18 tasks\n\n### 🔴 Needs you\n**1 · The milestones table cannot be read** · claude · sage \\(sample\\)\n> milestones\\.tsv line 3 has 4 cells, and its header has 6\\. The board shows the tasks without their milestones\\. Ask the chief to repair the logbook\\.\n\n**2 · T30 Sample T30** · needs you · claude · sage \\(sample\\)\n"), text);
-  // No milestone tag, no milestone wait line, no Milestones section; a wait of the waits cell stays.
   assert.ok(!text.includes("◫") && !text.includes("Waits for the M") && !text.includes("pilot\\)") && !text.includes("Waits for T21"), text);
   assert.ok(text.includes("\n\n**T11 Sample T11** · waiting · claude · sage \\(sample\\)\\\n○ Plan › ○ Build › ○ Review 1 of 1 › ○ Merge\\\n⊘ Waits for T10 \\(stopped\\)\\: it cannot start\\.\n\n"), text);
   assert.ok(text.includes("\n\n**T22 Sample T22** · not started · claude · sage \\(sample\\)\\\n○ Plan › ○ Build › ○ Review 1 of 1 › ○ Merge\\\nNow: In the backlog\\. No agent works on it\\.\n\n"), text);
   assert.deepEqual([model.counts.needsOwner, model.projects[0].needsOwner, model.milestoneNeeds.length, model.projects[0].name], [3, 3, 1, "sage (sample)"]);
   assert.deepEqual(model.tasks.filter(task => task.milestone || task.waits.some(wait => wait.breakdown || wait.pilot)).map(task => task.id), []);
   assert.deepEqual(breaksOf(text), []);
-  // A missing table while a task names a milestone says so in plain words.
   assert.equal(buildBoardModel([noMilestones("milestones: ENOENT")], { now: MILESTONES_NOW }).milestoneNeeds[0].text, "milestones.tsv is missing. The board shows the tasks without their milestones. Ask the chief to repair the logbook.");
 });
 
@@ -616,7 +593,6 @@ test("R1307-2: a logbook that the board cannot read is an item of Needs you, und
   assert.ok(text.includes("\n🔴 5 needs you · "), text.slice(0, 200));
   assert.ok(sectionOf(text, "#### Other").startsWith("#### Other\n**2 · Milestone 2\\: Lead build is stuck** · claude · sage \\(sample\\)\n> The pilot T21 was abandoned\\. Choose a new pilot, or drop the milestone\\.\n\n**3 · The breakdown gate G30 of M7 is not in the logbook** · claude · sage \\(sample\\)\n> Ask the chief to repair the logbook, or to propose M7 again\\.\n\n**4 · The Codex logbook cannot be read** · codex · sage \\(sample\\)\n> tasks\\.tsv line 14 has 9 cells, and its header has 16\\. The board shows only the Claude logbook of sage \\(sample\\)\\. Ask the chief to repair the logbook\\.\n\n**5 · T70 Sample T70**"), sectionOf(text, "#### Other"));
   assert.deepEqual([model.projects[0].needsOwner, model.milestoneNeeds.length], [5, 3]);
-  // One logbook, with its tasks: the board says which rows it does not show. An artifact problem is no item.
   const runs = sample([row("T1", "framed")], {}, { diagnostics: ["runs: EACCES", "artifact A1: artifact digest does not match"] });
   assert.deepEqual(runs.milestoneNeeds.map(need => [need.title, need.text]), [["The Sample logbook cannot be read", "runs.tsv has no read permission. The board shows its tasks without the rows of runs.tsv. Ask the chief to repair the logbook."]]);
   assert.equal(runs.counts.needsOwner, 1);
@@ -639,10 +615,8 @@ test("R1309-2: md() escapes ':' and '@', so a bare URL or an email in a mileston
   assert.ok(!/[^\\](:\/\/|@)/.test(text), "every :// and @ has its escape");
 });
 
-// T368 (T233 PR B): the HTML views of milestones. SAMPLE DATA from scripts/fixtures/board-milestones.mjs.
 const KEY = id => `claude/sage-ff5ee2/${id}`, B64 = value => Buffer.from(value).toString("base64url");
 const milestonesModel = (tables = milestonesTables()) => buildBoardModel([milestonesSource("claude", tables)], { now: MILESTONES_NOW });
-/** One card of the page, from its opening tag to its end. */
 const cardIn = (html, id) => { const at = html.indexOf(`id="card-${B64(KEY(id))}"`); return html.slice(html.lastIndexOf("<a ", at), html.indexOf("</a>", at)); };
 
 test("T368 Q1, QF: a card has its milestone tag and pilot tag, and a wait line instead of its Now line; only a breakdown gate by data gets the band and the frame", () => {
@@ -653,7 +627,6 @@ test("T368 Q1, QF: a card has its milestone tag and pilot tag, and a wait line i
   assert.ok(t30.includes('<b>Needs you:</b> the breakdown of milestone 3.</span></div><p class="q">Approve milestone M3? No task builds before you approve.</p><p class="q">Name: Board milestones</p><p class="q">Goal: Sample goal.</p><p class="q">Pilot, runs first:</p><p class="q">  T30: Sample T30</p><p class="q"><b>I recommend:</b> approve</p><div class="answer"><b>Answer in the chat:</b> approve, change (say what to change) or drop the milestone.</div>'), t30);
   assert.ok(t30.includes('<span class="tag prog" title="Milestone M3: Board milestones"><span class="pm" aria-hidden="true">◫</span>Milestone 3: Board milestones</span><span class="tag pilot">pilot</span>'), t30);
   assert.ok(!t30.includes('class="waitline'), "the pilot's wait is the same question: no wait line");
-  // Sample T70: a plain gate whose text copies the breakdown words gets no band, no frame and no milestone tag.
   assert.ok(t70.startsWith('<a class="card needs" ') && !t70.includes("Milestone approval") && !t70.includes("tag prog"), t70);
   assert.ok(t70.includes(`data-milestone=""`) && t11.includes(`data-milestone="${B64(KEY("M1"))}"`), "the filter value is the key's base64url, never a name");
   assert.ok(t11.includes('<div class="waitline cant"><span class="wm" aria-hidden="true">⊘</span><span>Waits for T10 (stopped): it cannot start.</span></div>') && !t11.includes('class="nowline'), t11);
@@ -667,9 +640,7 @@ test("T368: Needs you, not on a card: a stuck milestone and a lost gate, with wh
   assert.ok(strip.includes('Needs you, not on a card <span class="n" id="needstrip-n">2</span>'), strip);
   assert.ok(strip.includes(`<span class="what">Milestone 2: Lead build is stuck: the pilot T21 was abandoned. Choose a new pilot, or drop the milestone. <span class="faint">· sage (sample) · Claude logbook</span></span><span class="act">Answer in the chat. <a href="/milestone/${B64(KEY("M2"))}">Open the milestone</a></span>`), strip);
   assert.ok(strip.includes("The breakdown gate G30 of M7 is not in the logbook"), strip);
-  // Offline, the link is the milestone's anchor in the same file.
   assert.ok(renderBoardHtml(milestonesModel()).includes(`<a href="#milestone-${B64(KEY("M2"))}">Open the milestone</a>`));
-  // No item, no strip.
   assert.ok(!renderBoardHtml(sample([row("T1", "framed")]), { snapshot: false }).includes('class="needstrip"'));
 });
 
@@ -681,12 +652,10 @@ test("T368 QD: the Milestone filter lists the milestones by key, with No milesto
     [KEY("M6"), "M6 Dropped idea"], [KEY("M7"), "M7 Lost gate"], [KEY("M8"), "M8 Loop"], [KEY("M9"), "M9 Changes"], ["none", "No milestone"]]);
   assert.ok(select.includes(`<option value="${B64(KEY("M5"))}" data-project="sage-ff5ee2" data-why="Its tasks ended more than 7 days ago, and the board shows the last 7 days of Done." data-href="/milestone/${B64(KEY("M5"))}">`), select);
   assert.ok(html.includes('<div class="emptyboard" id="noprog" hidden><b>No task of <span id="noprog-name"></span> shows on the board.</b>'));
-  // A dropped milestone with no task left is no option; with no milestone at all there is no filter.
   const out = milestonesTables(); out.tasks.find(task => task.id === "T60").milestone = "";
   assert.ok(!renderBoardHtml(milestonesModel(out), { snapshot: false }).includes(`value="${B64(KEY("M6"))}"`));
   assert.ok(!renderBoardHtml(sample([row("T1", "framed")]), { snapshot: false }).includes('id="f-milestone"'));
   assert.ok(renderBoardHtml(buildBoardModel([noMilestones()], { now: MILESTONES_NOW }), { snapshot: false }).includes('<label class="f">Milestone <select disabled><option>Cannot be read</option></select></label>'));
-  // The page keeps a card by the same rule (the page script carries cardFits).
   const fits = milestone => cardFits({ provider: "claude", priority: "", kind: "", milestone }, { who: "", priority: "", kind: "", milestone: B64(KEY("M1")) });
   assert.deepEqual([fits(B64(KEY("M1"))), fits(B64(KEY("M2"))), fits("")], [true, false, false]);
   assert.equal(cardFits({ provider: "claude", priority: "", kind: "", milestone: "" }, { who: "", priority: "", kind: "", milestone: "none" }), true);
@@ -723,10 +692,8 @@ test("T368: a milestone's page: goal and progress, what moves next, the tasks in
   assert.ok(pg1.includes('<div class="trow ab"><span class="id">T10</span>'));
   assert.deepEqual([...pg1.matchAll(/<li><span class="faint" title="[^"]+">([^<]+)<\/span> ([^<]+)<\/li>/g)].map(m => `${m[1]} ${m[2]}`), ["14 Oct T1 (pilot) merged: sample", "12 Oct T1: M1 proposed with gate G1, pilot T1: sage"], "a decision that names the milestone or ends a task, with its reason, in the short form (T374); not a state move");
   assert.ok(pg1.includes(`new EventSource("/milestone/${B64(KEY("M1"))}?events=1")`));
-  // M3 waits for you: the gate's own lines, in the frame, with the band (QF).
   const pg3 = renderMilestonesHtml(model, { milestoneKey: KEY("M3") });
   assert.ok(pg3.includes('<section class="wide card approval"><div class="band"><span aria-hidden="true">◫</span>Milestone approval<span class="bk">· gate G12 · the pilot T30</span></div><p class="q">Approve milestone M3? No task builds before you approve.'), pg3);
-  // M2 is stuck (QE: "drop the milestone").
   assert.ok(renderMilestonesHtml(model, { milestoneKey: KEY("M2") }).includes('<b>Needs you:</b> The pilot T21 was abandoned. Choose a new pilot, or drop the milestone.</span></div><div class="answer"><b>Answer in the chat:</b> a new pilot (a task of the milestone), or drop the milestone.</div>'));
   const missing = renderMilestonesHtml(model, { milestoneKey: KEY("M99") });
   assert.ok(missing.includes("<b>No milestone M99 on the board.</b>") && missing.includes('<a href="/milestones">milestones list</a>'));
@@ -768,7 +735,6 @@ test("T368: every logbook text in the milestone views is escaped: a name, a goal
   }
 });
 
-// T368 repair round 1 (R1322, R1324, R1325). SAMPLE DATA from scripts/fixtures/board-milestones.mjs.
 test("R1324-1: the milestone page's Latest decisions keeps each decision's reason, as the task page does", () => {
   const tables = milestonesTables();
   tables.decisions.push({ at: "2026-10-15T09:00:00Z", task: "T10", decision: "state abandoned", why: "the sandbox profile moved" }, { at: "2026-10-16T09:00:00Z", task: "T2", decision: "state merged", why: "" });
@@ -842,7 +808,6 @@ test("T349: each board page keeps the CSP: one bare style element, no style attr
   }
 });
 
-// T382, the board polish batch (T374, T375, T378). SAMPLE DATA from scripts/fixtures/board-milestones.mjs.
 const rowOf = (html, id) => { const at = html.indexOf(`<span class="id">${id}</span><a class="t"`); return html.slice(at, html.indexOf("</div>", at)); };
 test("T374-2: the picker's All projects row says 1 project, and 2 projects", () => {
   const other = milestonesSource("codex");
@@ -888,7 +853,6 @@ const decisionsOf = html => [...html.matchAll(/<li><span class="faint" title="([
 test("T374-10, R1368-1, R1370-1: a milestone page's Latest decisions are in the short form, with short dates: a proposal once, an answer with its gate, a merge with its PR", () => {
   const tables = milestonesTables(), question = tables.gates.find(gate => gate.id === "G1").question;
   tables.tasks.find(task => task.id === "T2").pr = "66";
-  // The rows that the state tool's milestone propose writes: a move row for each task but the pilot, then the pilot's own row.
   tables.decisions.push(
     { at: "2026-10-10T09:00:00Z", task: "T2", decision: "milestone none → M1", why: "milestone propose" }, { at: "2026-10-10T09:00:00Z", task: "T3", decision: "milestone none → M1", why: "milestone propose" },
     { at: "2026-10-10T09:00:00Z", task: "T1", decision: "M1 proposed with gate G1, pilot T1, tasks T2,T3, name: Codex support", why: "milestone propose" },
@@ -909,7 +873,6 @@ test("R1368-1: a milestone with only its pilot shows its proposal once, and a ne
 test("R1375-1, R1375-3, R1375-4: over three rounds each answer names its own gate, a task that a later round takes in joins, and an older round has no name", () => {
   const tables = milestonesTables(), question = tables.gates.find(gate => gate.id === "G1").question, round = n => question.replace("Approve milestone M1?", `Approve milestone M1 (round ${n})?`);
   Object.assign(tables.milestones.find(row => row.id === "M1"), { gate: "G21", name: "Codex support v2" });
-  // The rows in the forms that the state tool writes: milestone propose (rounds 1 to 3, round 2 takes in T11) and two answers.
   tables.decisions.push(
     { at: "2026-10-10T09:00:00Z", task: "T2", decision: "milestone none → M1", why: "milestone propose" },
     { at: "2026-10-10T09:00:00Z", task: "T1", decision: "M1 proposed with gate G1, pilot T1, tasks T2, name: Codex support", why: "milestone propose" },
@@ -1036,7 +999,6 @@ test("T383 item 4: in a proposed milestone whose pilot is abandoned or not in th
   const missing = page(tables => { tables.tasks = tables.tasks.filter(task => task.id !== "T30"); });
   assert.ok(rowOf(missing, "T31").includes('<span class="sw stw-wait"><span aria-hidden="true">⧗</span> waiting</span><span class="sub">⊘ waits for T30 (not in the logbook): it cannot start</span>'), rowOf(missing, "T31"));
   assert.ok(rowOf(missing, "T32").includes('<span class="sw stw-wait"><span aria-hidden="true">⧗</span> waiting</span>'), rowOf(missing, "T32"));
-  // A live pilot keeps the wait that can be met.
   assert.ok(rowOf(renderMilestonesHtml(milestonesModel(), { milestoneKey: KEY("M3") }), "T31").includes('<span class="sw stw-wait"><span aria-hidden="true">⧗</span> waiting</span><span class="sub">⧗ waits for T30 (pilot, needs you)</span>'));
 });
 test("T390: the board calls the main session the chief, never the sage, on every page and in the chat board", () => {
@@ -1053,18 +1015,14 @@ test("T385: the task and milestone pages read right: no gate null, the odd waits
   const tables = milestonesTables();
   tables.tasks.push({ ...tables.tasks[0], id: "T96", state: "building", milestone: "M20" });
   const model = milestonesModel(tables);
-  // R1391-1: a task whose milestone row is missing names no gate.
   const page = renderBoardHtml(model, { snapshot: false, taskKey: KEY("T96") });
   assert.ok(page.includes("</span>The breakdown of milestone 20: the milestone is not in the logbook · "), page);
   assert.ok(!/gate (null|undefined)/.test(page));
-  // R1391-2: odd text in the waits cell is its own clause, and a loop of waits says so.
   const pg8 = renderMilestonesHtml(model, { milestoneKey: KEY("M8") });
   assert.ok(pg8.includes("<span>T83 cannot start: its waits cell has text that is not a task id. Ask the chief to set its waits again, or to drop T83.</span>"), pg8);
   assert.ok(pg8.includes("<span>T81 cannot start: it waits for T82, in a loop of waits that never ends. Ask the chief to remove the wait, or to drop T81.</span>"), pg8);
-  // R1391-3: the server's note for a page that is too large is its own banner, not a line of Incomplete sources.
   const noted = renderBoardHtml({ ...model, pageNote: "Sample page note." }, { snapshot: false });
   assert.ok(noted.includes("<div>Sample page note.</div></div>") && !noted.includes("Incomplete sources"), noted);
-  // A source's own problem has no project, so its line has no empty field.
   const source = renderBoardHtml({ ...model, diagnostics: [{ source: "codex", message: "Sample problem." }] }, { snapshot: false });
   assert.ok(source.includes('<ul class="diag"><li>codex · Sample problem.</li></ul>'), source);
 });
@@ -1080,14 +1038,12 @@ test("R1508-1: a milestone row with an empty gate cell names no breakdown gate; 
   const pg41 = renderMilestonesHtml(model, { milestoneKey: KEY("M41") });
   assert.ok(pg41.includes("<b>Needs you:</b> M41 names no breakdown gate. Ask the chief to repair the logbook, or to propose M41 again.</span>"), pg41);
   assert.ok(!/gate {2}of/.test(pg41 + renderMilestonesHtml(model)), "no double space where the gate is empty");
-  // R1534-1: the chat board's milestone line says the same, by the same rule (lostClause).
   const text = renderBoardText(model);
   assert.ok(text.includes("\n- Milestone 41\\: No gate · needs you · the milestone names no breakdown gate \\(see Needs you\\)"), text);
   assert.ok(!/gate {2}is/.test(text), "no double space where the gate is empty");
 });
 
 test("R1509-1, R1535-1: in a proposed milestone, a loop of waits shows first on the card and the Now and Next lines, as on the milestone page, for the pilot too", () => {
-  // M40 is proposed (its gate G40 is open). The pilot T66 waits for T67, and T67 waits for T66: a hand edit's loop.
   const tables = milestonesTables();
   tables.tasks.push({ ...tables.tasks[0], id: "T66", title: "Sample pilot of a loop", state: "framed", milestone: "M40", waits: "T67" }, { ...tables.tasks[0], id: "T67", state: "framed", milestone: "M40", waits: "T66" });
   tables.milestones.push({ ...tables.milestones[0], id: "M40", name: "Loop in a proposal", pilot: "T66", gate: "G40" });
@@ -1100,7 +1056,6 @@ test("R1509-1, R1535-1: in a proposed milestone, a loop of waits shows first on 
   assert.ok(page.includes("<b>Next:</b> Nothing until the wait changes. Ask the chief to remove the wait, or to drop this task.</div>"), page);
   const milestone = renderMilestonesHtml(model, { milestoneKey: KEY("M40") });
   for (const [id, other, sub, word, chip] of [["T67", "T66", "", "needs you", '<span class="sw stw-wait"><span aria-hidden="true">⧗</span> waiting</span>'], ["T66", "T67", "pilot · ", "waiting", '<span class="sw stw-need"><span aria-hidden="true">!</span> needs you</span>']]) assert.ok(rowOf(milestone, id).includes(`${chip}<span class="sub">${sub}⊘ waits for ${other} (${word}, in a loop): it cannot start</span>`), rowOf(milestone, id));
-  // R1535-1: the pilot keeps the question of its breakdown, and by the same rule its wait line says that it cannot start.
   const wait = `<div class="waitline cant"><span class="wm" aria-hidden="true">⊘</span><span>${line("T67", "waiting")}</span></div>`;
   const pilot = renderBoardHtml(model, { snapshot: false, taskKey: KEY("T66") });
   assert.ok(pilot.includes(`<b>Needs you:</b> Approve milestone M40?`) && pilot.includes(`</div>${wait}<div class="nextline"><b>Next:</b> Nothing until the wait changes. Ask the chief to remove the wait, or to drop this task.</div>`), pilot);
@@ -1111,23 +1066,18 @@ test("R1509-1, R1535-1: in a proposed milestone, a loop of waits shows first on 
 });
 test("F-T420-1, R1551: the chat task lookup and the milestones card show a stuck wait with the task page's words", () => {
   const tables = milestonesTables();
-  // SAMPLE DATA: T33 of the proposed M3 and T91 of the changing M9 wait for abandoned tasks; T11 also has an open gate.
   const sample = (id, milestone, waits) => ({ ...tables.tasks.find(task => task.id === "T32"), id, title: `Sample ${id}`, milestone, waits });
   tables.tasks.push(sample("T33", "M3", "T52"), sample("T91", "M9", "T10"));
   const model = milestonesModel(tables), lookup = id => renderTaskText(model.tasks.find(task => task.id === id)).split("\n\n**Brief**")[0];
   const pageNow = id => renderBoardHtml(model, { snapshot: false, taskKey: KEY(id) }).match(/<div class="waitline[\s\S]*?<div class="nextline">[\s\S]*?<\/div>/)[0].replace(/<[^>]+>/g, "");
-  // A wait that is never met: the lookup says what the task page says, not "In the backlog" and "Next: The build".
   assert.equal(pageNow("T11"), "⊘Now: Waits for T10 (stopped): it cannot start.Next: Nothing until the wait changes. Ask the chief to remove the wait, or to drop this task.");
   assert.ok(lookup("T11").includes("\n○ Plan › ○ Build › ○ Review 1 of 1 › ○ Merge\n⊘ Now: Waits for T10 \\(stopped\\)\\: it cannot start\\.\nNext: Nothing until the wait changes\\. Ask the chief to remove the wait, or to drop this task\\.\n○ Plan: not started"), lookup("T11"));
   assert.ok(!lookup("T11").includes("Next: The build"), lookup("T11"));
-  // A wait that is not met yet: the lookup says when the task starts, as the page does.
   assert.equal(pageNow("T13"), "⧗Now: Waits for T12 (in progress).Next: Starts when T12 merges.");
   assert.ok(lookup("T13").includes("\n⧗ Now: Waits for T12 \\(in progress\\)\\.\nNext: Starts when T12 merges\\.\n"), lookup("T13"));
-  // A task that needs you keeps its question first; a wait that is never met follows it, as on the page.
   tables.gates.push({ id: "G40", task: "T11", question: "Sample: go on?", options: "yes|no", recommendation: "yes", default: "", answer: "", at: "2026-10-20T10:00:00Z" });
   const asked = renderTaskText(milestonesModel(tables).tasks.find(task => task.id === "T11"));
   assert.ok(/\nNeeds you: [^\n]*go on\?[^\n]*\n⊘ Waits for T10 \\\(stopped\\\)\\: it cannot start\\\.\nNext: Nothing until the wait changes/.test(asked), asked);
-  // The milestones card and the chat's milestones line of a proposed or a changing milestone name the tasks that cannot start.
   const list = renderMilestonesHtml(model), card = id => list.slice(list.indexOf(`<span class="id">${id}</span>`), list.indexOf("</a></li>", list.indexOf(`<span class="id">${id}</span>`)));
   assert.ok(card("M3").endsWith('<div class="nx need">The breakdown waits for you. Open it to see the 4 tasks, then answer in the chat. <span class="stw-cant">T33 cannot start.</span></div>'), card("M3"));
   assert.ok(card("M9").endsWith('<div class="nx">You asked for changes (gate G9). The chief revises the breakdown and proposes it again. <span class="stw-cant">T91 cannot start.</span></div>'), card("M9"));
@@ -1137,7 +1087,6 @@ test("F-T420-1, R1551: the chat task lookup and the milestones card show a stuck
 });
 
 test("T671: a card counts the task's open low findings, and its task page lists them as its polish list, apart from the findings that block", () => {
-  // SAMPLE DATA: one task with two open lows (one marked fix), an open medium and a dismissed low; one task with none.
   const task = (id, title) => ({ id, title, size: "small", risk: "", route: "build,code-review,qa", state: "reviewing", branch: "", pr: "", round: "0", keys: "" });
   const finding = (key, severity, summary, status = "open", triage = "") => ({ task: "T1", key, round: "0", source: "qa", severity, summary, triage, reason: status === "dismissed" ? "Sample reason" : "", status });
   const model = buildBoardModel([{ id: "sample", label: "Sample source", diagnostics: [], projects: [{ key: "sample/project-abcdef", name: "project-abcdef", diagnostics: [], tables: {
@@ -1156,8 +1105,6 @@ test("T671: a card counts the task's open low findings, and its task page lists 
   assert.ok(blocking.includes("Sample: a lost write") && !blocking.includes("Sample: a typo"), "the medium stays above the polish list");
 });
 
-// T995 (risk 6 of its PE): "program" cannot be a flagged dictionary word, as it keeps its meaning of a computer program.
-// So this test holds the rename on the board: no page of the sample logbook says program or names an old PG id.
 test("T995: no page of the milestones sample says program or names an old program id", () => {
   const model = milestonesModel();
   const pages = { board: renderBoardHtml(model), live: renderBoardHtml(model, { snapshot: false }), list: renderMilestonesHtml(model), chat: renderBoardText(model), status: renderBoardStatus(model),

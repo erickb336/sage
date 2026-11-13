@@ -4,12 +4,6 @@ import { buildBoardModel, projectName } from "./board-model.mjs";
 import { renderBoardHtml, renderBoardText, renderTaskText, renderBoardStatus } from "./board-render.mjs";
 import { createStateTool } from "./state.mjs";
 
-/**
- * T280: the landing rule of each board source, for buildBoardModel: (source id, head SHA, PR) to { ok, reason }. It is
- * the state tool's own merge check, read-only, on that source's root, so the board never has a second copy of the rule.
- * The root's path leaves the reason: a remote board page shows it. book: the card's logbook, whose checkout is where the
- * check carries earlier cycles (T805), as the merge check does in the merged project's folder (F-T805-1).
- */
 export function landingRule(sources, logbookKey = null) {
   const { mergeCheck, boardLandingCheck } = createStateTool({ defaultRoot: () => { throw new Error("the board names each root"); } });
   const roots = new Map(sources.map(source => [source.id, source.path]));
@@ -22,34 +16,18 @@ export function landingRule(sources, logbookKey = null) {
   };
 }
 
-/**
- * The sources of the in-session board: the provider's root, with today's label and the provider whose hook writes its
- * notes (F-T624-3), and the shared root (T306), where a shared project's logbook is, its key shared/<folder>.
- */
 export const sessionSources = (root, shared, provider) => [{ id: "current", label: "Current provider", path: root, hookProvider: provider }, { id: "shared", label: "Shared", path: shared }];
-/**
- * The provider roots of the in-session board, where an old logbook may be: the tool's own root, then the adapter's legacy
- * roots. The own root is its provider's when the adapter names another root; one root for both (SAGE_HOME) has no
- * provider, and the board does not know another root's provider (F-T624-10).
- */
 export const sessionRoots = (root, legacy, provider) => [...new Set([root, ...legacy].map(path => resolve(path)))].map((path, i, roots) => ({ path, provider: i === 0 && roots.length > 1 ? provider : null }));
 
 const fold = value => String(value).normalize("NFC").toLowerCase();
-/**
- * here: the key of the current project's shared logbook (T306), which names "this" project from any folder of it.
- * providerRoots: the provider roots where an old logbook of a shared project may be, beyond the sources.
- */
 export function boardView({ sources, scope = "all", project = null, logbookKey = null, here = null, providerRoots = [], taskId = null, format = "chat", now = new Date().toISOString() }) {
   if (!["chat", "task", "status", "html"].includes(format)) throw new TypeError("unknown board format");
   if (taskId !== null && !/^T[1-9]\d*$/.test(taskId)) throw new TypeError("task id must be T followed by a positive number");
   const snapshots = readBoardSources(sources, { now: Date.parse(now), logbookKey, providerRoots });
   const projects = snapshots.flatMap(source => source.projects);
   let keys = new Set(projects.map(book => book.key));
-  // An exact logbook key (source/folder) chooses that one logbook. Any other scope chooses projects as the board shows them:
-  // the Claude and the Codex logbook of one checkout are one project (R1069-3), and two clones stay two.
   if (logbookKey !== null) {
     if (!projects.some(book => book.key === logbookKey)) throw new RangeError("No recorded logbook matches this project.");
-    // A shared logbook's old logbooks are part of it, so the task view finds an old finished task (F-T624-21).
     keys = new Set([logbookKey, ...projects.filter(book => book.old?.of === logbookKey).map(book => book.key)]);
   }
   else if (projects.some(book => book.key === scope)) keys = new Set([scope]);
@@ -60,20 +38,15 @@ export function boardView({ sources, scope = "all", project = null, logbookKey =
       if (!project) throw new RangeError("this board needs the current project");
       let mine = projects.filter(book => book.key === here);
       if (!mine.length) mine = projects.filter(book => book.checkout && resolve(book.checkout) === resolve(project));
-      // A linked checkout of a shared logbook is its row's root, also a second clone of the same folder name (F-T633-11).
       if (!mine.length) mine = projects.filter(book => book.shared && (book.checkouts ?? []).some(item => item.root === resolve(project)));
-      // A folder name never finds a shared logbook or its old ones: an unlinked clone of one name is not linked (T633).
       if (!mine.length) mine = projects.filter(book => !book.shared && !book.old && fold(bare(book.name)) === fold(basename(project)));
       selected = groups.filter(group => group.books.some(key => mine.some(book => book.key === key)));
-    // A scope is any name that the board shows or that the logbook has: its key, its folder with or without the hash, its
-    // checkout's folder, or its shown name (the display name, else the upstream or origin repository's name).
     } else selected = groups.filter(group => [group.key, group.name, ...group.terms, ...group.terms.map(bare), ...projects.filter(book => group.books.includes(book.key)).map(projectName)].some(name => fold(name) === fold(scope)));
     if (!selected.length || scope !== "this" && selected.length !== 1) throw new RangeError(selected.length ? `The project is ambiguous. Choose: ${selected.flatMap(group => group.books).join(", ")}` : "No recorded project matches this board scope.");
     keys = new Set(selected.flatMap(group => group.books));
   }
   const model = buildBoardModel(snapshots.map(source => ({ ...source, projects: source.projects.filter(book => keys.has(book.key)) })), { now, landing: landingRule(sources, logbookKey) });
   if (taskId) {
-    // A task id names the shared logbook's task: an old logbook's number belongs to that old logbook (T306), and its key scope finds it.
     const found = model.tasks.filter(task => task.id === taskId), own = found.filter(task => !task.old);
     const tasks = found.length > 1 && own.length === 1 ? own : found;
     if (tasks.length !== 1) {

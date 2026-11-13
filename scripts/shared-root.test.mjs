@@ -11,7 +11,6 @@ import { tool } from "../plugins/sage-codex/skills/sage/sage.mjs";
 import { buildBoardModel, createStateTool, readBoardSources, renderBoardHtml, renderBoardText, renderTaskText, sharedRoot } from "../packages/sage-core/index.mjs";
 import { githubRemote } from "../packages/sage-core/shared-root.mjs";
 
-/** A write of a shared logbook names its chief (T604): each call here acts as one chief of its provider, as the hooks and the MCP server do. */
 const acting = (run, options) => (argv, env) => run([...argv, ...options(argv[argv.indexOf("--project") + 1], argv, { native: "test-chief" }, env)], env);
 const claudeSage = acting(claudeRun, actorOptions), codexSage = acting(tool.sage, tool.actorOptions);
 
@@ -20,7 +19,6 @@ const FIRST = "1".repeat(40), OTHER = "2".repeat(40);
 const gitEnv = { ...process.env, GIT_AUTHOR_NAME: "t", GIT_AUTHOR_EMAIL: "t@example.com", GIT_COMMITTER_NAME: "t", GIT_COMMITTER_EMAIL: "t@example.com" };
 const git = (cwd, ...args) => execFileSync("git", args, { cwd, env: gitEnv, encoding: "utf8", stdio: ["ignore", "pipe", "ignore"] }).trim();
 
-/** A scratch home with both provider roots and a shared root. No SAGE_HOME: each tool uses its own root, as in production. */
 function world(t, { commit = true } = {}) {
   const base = realpathSync(mkdtempSync(join(tmpdir(), "sage-shared-")));
   t.after(() => rmSync(base, { recursive: true, force: true }));
@@ -47,7 +45,6 @@ function world(t, { commit = true } = {}) {
   return { base, env, claudeRoot, codexRoot, shared, repo, project, claude, codex, name, table, rows, bind };
 }
 const commitOf = (project) => git(project, "rev-list", "--max-parents=0", "HEAD");
-/** The text of the refusal that a call throws. */
 const refusalOf = (call) => {
   try {
     call();
@@ -56,7 +53,6 @@ const refusalOf = (call) => {
   }
   assert.fail("no refusal");
 };
-/** The warning of every link prompt (T633 design), before its choices. */
 const NOTE = "Note: no sage command can change this answer later.";
 
 test("one function picks the shared root: the fixed option, SAGE_SHARED_HOME, <SAGE_HOME>/shared, then ~/.sage", () => {
@@ -67,7 +63,6 @@ test("one function picks the shared root: the fixed option, SAGE_SHARED_HOME, <S
   assert.equal(sharedRoot({ HOME: "/h" }), "/h/.sage");
 });
 
-/** Puts the process's own HOME in a scratch folder, so that os.homedir() returns it and nothing below can reach the real root. */
 function processHome(t, home) {
   const saved = { HOME: process.env.HOME, SAGE_HOME: process.env.SAGE_HOME };
   t.after(() => { for (const [key, value] of Object.entries(saved)) if (value === undefined) delete process.env[key]; else process.env[key] = value; });
@@ -84,7 +79,6 @@ test("each default root reads the HOME of the env that the caller gives, and the
   assert.equal(claudeRootOf({}), "/process-home/.claude/sage");
   assert.equal(tool.sageRoot({}), "/process-home/.codex/sage");
   assert.equal(modeDirectory({}), "/process-home/.codex/sage/.hooks/codex");
-  // The order of the settings stays.
   assert.equal(claudeRootOf({ HOME: "/h", CLAUDE_CONFIG_DIR: "/c" }), "/c/sage");
   assert.equal(tool.sageRoot({ HOME: "/h", CODEX_HOME: "/c" }), "/c/sage");
   assert.equal(modeDirectory({ HOME: "/h", CODEX_HOME: "/c" }), "/c/sage/.hooks/codex");
@@ -96,7 +90,6 @@ test("T944: in a test, sage code that falls back to the home folder of the test'
   const home = realpathSync(mkdtempSync(join(tmpdir(), "sage-guard-home-")));
   t.after(() => rmSync(home, { recursive: true, force: true }));
   const href = (path) => JSON.stringify(pathToFileURL(join(REPO, path)).href);
-  // A test file of its own: it calls the shared root as the provider test called config({}), and catches the throw.
   const run = (env) => spawnSync(process.execPath, ["--input-type=module", "-e", `import ${href("scripts/test-env.mjs")};
 import { sharedRoot } from ${href("packages/sage-core/shared-root.mjs")};
 try { console.log(sharedRoot(${env})); } catch (e) { console.log(e.message); }`], { encoding: "utf8", env: { ...process.env, HOME: home } });
@@ -113,16 +106,13 @@ test("T969: the guard also refuses the account's home after a test deletes HOME,
   const home = realpathSync(mkdtempSync(join(tmpdir(), "sage-guard-home-")));
   t.after(() => rmSync(home, { recursive: true, force: true }));
   const href = (path) => JSON.stringify(pathToFileURL(join(REPO, path)).href);
-  // A test file of its own that starts with a scratch HOME, as an agent's run does, and catches each throw.
   const run = (body) => spawnSync(process.execPath, ["--input-type=module", "-e", `import ${href("scripts/test-env.mjs")};
 import { spawnSync } from "node:child_process";
 import { sharedRoot } from ${href("packages/sage-core/shared-root.mjs")};
 try { ${body} } catch (e) { console.log(e.message); }`], { encoding: "utf8", env: { ...process.env, HOME: home } });
-  // F-T944-1, F-T944-5: with HOME deleted, os.homedir() gives the account's home, which is not the home of the start.
   const deleted = run("delete process.env.HOME; console.log(sharedRoot({}));");
   assert.equal(deleted.status, 1, deleted.stdout);
   assert.match(deleted.stdout, /^a test reached the real home folder: os\.homedir\(\) at sharedRoot \(file:.*shared-root\.mjs:\d+:\d+\)\. Give that env a scratch HOME\.\n$/);
-  // F-T944-4: a child whose env has no HOME gets the account's home; one whose env has a HOME, or that inherits the env, runs.
   const child = run(`spawnSync(process.execPath, ["-e", ""], { env: { PATH: process.env.PATH } });`);
   assert.equal(child.status, 1, child.stdout);
   assert.match(child.stdout, /^a test reached the real home folder: spawnSync\(\) with an env that has no HOME at file:.*\[eval1\]:\d+:\d+\. Give that env a scratch HOME\.\n$/);
@@ -137,11 +127,10 @@ test("a run with SAGE_HOME removed and HOME in scratch writes under that HOME, a
   t.after(() => rmSync(base, { recursive: true, force: true }));
   const decoy = join(base, "decoy");
   mkdirSync(decoy);
-  processHome(t, decoy); // Before any sage call: os.homedir() now returns the decoy, in place of the real home folder.
+  processHome(t, decoy);
   const all = { ...process.env, SAGE_TEST_PIDS: "{}" };
   for (const name of ["SAGE_SHARED_HOME", "CLAUDE_CONFIG_DIR", "CODEX_HOME", "SAGE_WORKTREES"]) delete all[name];
   for (const [name, run, root] of [["claude", claudeSage, ".claude"], ["codex", tool.sage, ".codex"]]) {
-    // A HOME for each provider: in one HOME, the second plugin's row would make both ready, and rule 3 would start shared.
     const home = join(base, "home", name), env = { ...all, HOME: home };
     const project = join(base, name);
     mkdirSync(project);
@@ -238,7 +227,6 @@ for (const [name, leave] of [
   const folder = w.name(), there = join(w.base, "there");
   leave(w, there);
   for (const run of [claudeSage, tool.sage]) {
-    // Neither folder has a GitHub remote (a moved folder's old path is gone, and a local clone's origin is a path), so the link is recommended.
     const next = new RegExp(`: \\*\\*This folder has no logbook yet:\\*\\* ${there}\\n\\nIt has the same first commit as the project project \\(logbook ${folder}, used by ${w.project}\\)\\. sage cannot compare GitHub remotes: [^\\n]*\\n\\nNote: no sage command can change this answer later\\.\\n\\nChoose one:\\n1\\. \\*\\*Link to project\\*\\* \\(recommended\\)\\.[\\s\\S]*For the chief: after the reply, run one command in ${there}: for 1, sage link --to ${folder}; for 2, sage link --separate\\.$`);
     assert.throws(() => run(["status", "--project", there], w.env), next, "a command names the link");
     assert.throws(() => run(["init", "--project", there], w.env), next, "init never makes the logbook that traps the link");
@@ -268,7 +256,6 @@ test("a checkout with other first commits still starts a legacy logbook while sh
   assert.match(claudeSage(["init", "--project", plain], w.env), /^logbook /);
 });
 
-/** sample-owner/lantern with a shared logbook, and a clone of it, lantern-b, with no row: the link prompt's world (T633 design 4a to 4d). */
 function lanternWorld(t) {
   const w = world(t), lantern = w.repo("lantern"), clone = join(w.base, "lantern-b");
   git(lantern, "remote", "add", "origin", "https://github.com/sample-owner/lantern.git");
@@ -320,7 +307,6 @@ test("two shared logbooks with one first commit: the prompt names both, and reco
   assert.equal(prompts(third)[0], ask(["", `1. **Link to lantern.** Logbook ${folder}, used by ${lantern}.`, `2. **Link to lantern-x.** Logbook ${forkFolder}, used by ${fork}.`, "3. **Start separate** (recommended: no logbook has its GitHub remote, third-owner/lantern-c). A new, empty logbook."], `for 1, sage link --to ${folder}; for 2, sage link --to ${forkFolder}; for 3, sage link --separate`), "a remote that no logbook has: separate");
   git(third, "remote", "remove", "origin");
   assert.equal(prompts(third)[0], ask([" sage cannot recommend one: this folder has no GitHub remote that sage can read.", `1. **Link to lantern.** Logbook ${folder}, used by ${lantern}.`, `2. **Link to lantern-x.** Logbook ${forkFolder}, used by ${fork}.`, "3. **Start separate.** A new, empty logbook."], `for 1, sage link --to ${folder}; for 2, sage link --to ${forkFolder}; for 3, sage link --separate`), "no remote: no recommendation");
-  // F-T633-6: the folder with no remote is named, here the fork's checkout.
   git(third, "remote", "add", "origin", "https://github.com/sample-owner/lantern");
   git(fork, "remote", "remove", "origin");
   assert.match(prompts(third)[0], new RegExp(`\\(recommended: the same GitHub remote, sample-owner/lantern\\)`), "the same remote still links");
@@ -328,7 +314,6 @@ test("two shared logbooks with one first commit: the prompt names both, and reco
   assert.ok(prompts(third)[0].includes(` sage cannot recommend one: ${fork} has no GitHub remote that sage can read.\n`), "the fork's folder has none");
 });
 
-// T631: the link prompt's copy and hardening follow-ups of T633 (F-T633-4 to -9, F-T638-1, F-T639-1).
 test("F-T633-4: a remote with a user or a token in its URL reads as its repository, and the prompt never prints the token", (t) => {
   assert.equal(githubRemote("https://x-access-token:SECRET123@github.com/sample-owner/lantern.git"), "sample-owner/lantern");
   assert.equal(githubRemote("https://someone@github.com/sample-owner/lantern"), "sample-owner/lantern");
@@ -497,7 +482,7 @@ for (const [name, lines, expected] of [
   ["a row of three cells", (w) => [`${w.project}\tshared-123456\t2026-11-01T00:00:00Z`], /has a damaged row/],
 ]) test(`a binding row with ${name} refuses reads and writes, and never falls through to the legacy logbook`, (t) => {
   const w = world(t);
-  w.claude("init"); // a legacy logbook that a fall-through would use
+  w.claude("init");
   const tasks = join(w.claudeRoot, w.name(), "tasks.tsv"), before = readFileSync(tasks, "utf8");
   mkdirSync(join(w.shared, "shared-123456"), { recursive: true });
   writeFileSync(join(w.shared, "shared-123456", "tasks.tsv"), "");
@@ -519,11 +504,10 @@ test("a foreign row refuses only in the foreign checkout: the owner keeps workin
   w.claude(...ADD);
   const folder = w.name(), foreign = w.repo("foreign", false);
   const inForeign = (...args) => claudeSage([...args, "--project", foreign], w.env);
-  inForeign("link", "--to", folder); // no commits yet, so no compare
+  inForeign("link", "--to", folder);
   git(foreign, "commit", "-q", "--allow-empty", "-m", "own first");
   const conflict = `**This folder's link is wrong:** ${foreign}\n\nIts row links it to the logbook ${folder}, but that logbook belongs to another project (${w.project}): the two folders have no first commit in common. So sage does not use that logbook here, and nothing has changed. The project tasks are safe.\n\nIf this folder is a shallow clone, its first commit is its newest one. Then run \`git fetch --unshallow\` in it, and ask me again.\n\n${NOTE}\n\nChoose one:\n1. **Start separate** (recommended). This folder gets a new, empty logbook in place of the wrong link.\n2. **Link to another project.** Tell me its name. The link stops if that project does not have this folder's first commit.\n\nReply 1, or 2 and the name.\n\nFor the chief: after the reply, run one command in ${foreign}: for 1, sage link --separate; for 2, sage link --to <the folder of the project that the user names>.`;
   for (const run of [claudeSage, codexSage]) assert.equal(refusalOf(() => run([...ADD, "--project", foreign], w.env)), conflict);
-  // The owner reads, writes and merges as before, and a link there is a retry.
   assert.match(w.claude("status"), /T1/);
   assert.match(w.claude(...ADD), /T2/);
   const sha = "a".repeat(40);
@@ -531,7 +515,6 @@ test("a foreign row refuses only in the foreign checkout: the owner keeps workin
   assert.match(w.claude("merge-check", "--sha", sha), /T1 may merge/);
   assert.equal(w.claude("link", "--to", folder), `already linked: ${join(w.shared, folder)}. Nothing changed.`);
   assert.equal(w.claude("link", "--separate"), `already linked: ${join(w.shared, folder)}. Nothing changed.`);
-  // The foreign checkout repairs itself with the command that the refusal names.
   assert.match(inForeign("link", "--separate"), /now uses the shared logbook/);
   assert.notEqual(inForeign("logbook"), join(w.shared, folder));
 });
@@ -559,15 +542,12 @@ test("a gone older row never refuses the only live checkout, and a checkout with
   assert.match(w.claude("status"), /T1/);
   assert.match(w.claude(...ADD), /T2/);
   assert.match(w.codex(...ADD), /T3/);
-  // While a gone row is back on the disk, it owns the logbook again: gone means gone now, and no row is rewritten.
   mkdirSync(gone);
   assert.throws(() => w.claude("status"), /belongs to another project/);
   rmSync(gone, { recursive: true });
-  // A newcomer meets the live owner, also while an older gone row shares its first commit.
   w.bind(`${gone}\t${folder}\t${commits}\t2020-01-01T00:00:00Z`, `${root}\t${folder}\t${OTHER}\t${at}`);
   const stranger = w.repo("stranger");
   assert.throws(() => claudeSage(["link", "--to", folder, "--project", stranger], w.env), new RegExp(`belongs to another project \\(${root}\\)`));
-  // With no live row, the oldest gone row still keeps a stranger out.
   w.bind(`${gone}\t${folder}\t${OTHER}\t2020-01-01T00:00:00Z`);
   assert.throws(() => claudeSage(["link", "--to", folder, "--project", stranger], w.env), new RegExp(`belongs to another project \\(${gone}\\)`));
 });
@@ -579,7 +559,7 @@ test("the older row owns a logbook whichever row filled its commits first", (t) 
   const inLater = (...args) => claudeSage([...args, "--project", later], w.env);
   inLater("link", "--to", folder);
   git(w.project, "commit", "-q", "--allow-empty", "-m", "own first");
-  w.claude(...ADD); // fills the older row, which then owns the logbook
+  w.claude(...ADD);
   assert.equal(w.claude("logbook"), join(w.shared, folder));
   assert.throws(() => inLater("status"), /belongs to another project/);
 });
@@ -593,12 +573,11 @@ test("a shallow clone's refusal says to fetch its full history", (t) => {
   assert.throws(() => claudeSage(["link", "--to", w.name(), "--project", shallow], w.env), /belongs to another project .*A shallow clone needs its full history here: run git fetch --unshallow/);
 });
 
-// T610 (F-T599-3): the two conditions of the new-logbook guard that had no test.
 test("M6: a clone with a legacy logbook in the other provider's root gets no link offer: this provider keeps today's refusal", (t) => {
   const w = world(t);
   const clone = join(w.base, "clone");
   git(w.base, "clone", "-q", w.project, clone);
-  codexSage(["init", "--project", clone], w.env); // before any row: a legacy Codex logbook
+  codexSage(["init", "--project", clone], w.env);
   w.claude("link", "--separate");
   assert.deepEqual([claudeLocate(clone, w.env).shared, claudeLocate(clone, w.env).legacy], [false, true]);
   assert.throws(() => claudeSage(["status", "--project", clone], w.env), (e) => /no logbook for the project/.test(e.message) && !/sage link/.test(e.message));
@@ -613,12 +592,11 @@ test("M7: a clone whose first commit cannot be read gets past the guard: init ma
   const broken = join(w.base, "broken"), shallow = join(w.base, "shallow");
   git(w.base, "clone", "-q", w.project, broken);
   const config = join(broken, ".git", "config"), good = readFileSync(config, "utf8");
-  writeFileSync(config, "[core\n"); // Git cannot read it, so the guard has no first commit to compare
+  writeFileSync(config, "[core\n");
   assert.match(claudeSage(["init", "--project", broken], w.env), new RegExp(`^logbook ${w.claudeRoot}/`));
   assert.throws(() => claudeSage(["link", "--to", w.name(), "--project", broken], w.env), /git cannot read the repository at .*broken/);
-  writeFileSync(config, good); // the repair: now the legacy logbook stops the link
+  writeFileSync(config, good);
   assert.throws(() => claudeSage(["link", "--to", w.name(), "--project", broken], w.env), /this project has a logbook at .*A link would hide its tasks/);
-  // A shallow clone's first commit is its newest one: it no longer gets past the guard, but gets a prompt (F-T633-9, see its test).
   git(w.base, "clone", "-q", "--depth", "1", `file://${w.project}`, shallow);
   assert.throws(() => claudeSage(["init", "--project", shallow], w.env), /It is a shallow clone/);
 });
@@ -666,7 +644,6 @@ test("a lost bindings.tsv refuses every project and never falls through; a root 
   }
   assert.equal(existsSync(join(w.claudeRoot, folder)), false, "no new legacy logbook hides the open tasks");
   assert.match(tool.mergeCheck("a".repeat(40), w.env, { project: w.project }).reason, lost);
-  // The owner's way out: the table back from a copy.
   w.bind(`${w.project}\t${folder}\t\t2026-11-01T00:00:00Z`);
   assert.match(w.claude("status"), /T1/);
   const fresh = world(t);
@@ -698,7 +675,6 @@ test("a planted repository runs no program at link or at a fill, and a replace r
   assert.throws(() => claudeSage(["link", "--separate", "--project", repo], w.env), /git cannot read the history of .*which has a HEAD commit.*made no row/);
   assert.equal(existsSync(marker), false);
   assert.equal(existsSync(join(w.shared, "bindings.tsv")), false);
-  // The same repository at the next write of a row that has no commits yet: no program, and the row stays empty.
   const empty = w.repo("empty", false);
   claudeSage(["link", "--separate", "--project", empty], w.env);
   git(empty, "commit", "-q", "--allow-empty", "-m", "first");
@@ -706,7 +682,6 @@ test("a planted repository runs no program at link or at a fill, and a replace r
   claudeSage([...ADD, "--project", empty], w.env);
   assert.equal(existsSync(marker), false);
   assert.equal(w.rows()[0][2], "");
-  // A replace ref that cuts a commit's parents would show that commit as a first commit.
   const forged = w.repo("forged"), first = commitOf(forged);
   git(forged, "commit", "-q", "--allow-empty", "-m", "second");
   git(forged, "replace", "--graft", "HEAD");
@@ -730,7 +705,7 @@ test("a filled row that shows a folder of another project refuses at that write"
   const other = w.repo("other", true);
   claudeSage(["link", "--separate", "--project", other], w.env);
   const folder = basename(tool.storeDir(other, w.env));
-  w.claude("link", "--to", folder); // no commits yet, so no compare
+  w.claude("link", "--to", folder);
   git(w.project, "commit", "-q", "--allow-empty", "-m", "own first");
   assert.throws(() => w.claude("task", "add", "--title", "x", "--size", "tiny", "--priority", "P2"), /belongs to another project/);
 });
@@ -743,7 +718,6 @@ test("a folder that is not a Git repository links with no commits: no first comm
   assert.equal(w.rows()[0][2], "");
 });
 
-/** Each way that Git cannot read a repository with commits. Each returns the folder to link. */
 const UNREADABLE = {
   "an unknown repository extension": (w, repo) => {
     git(repo, "config", "core.repositoryformatversion", "1");
@@ -839,7 +813,6 @@ test("no commit is not a failed read: a real empty repository and a folder with 
   }
 });
 
-/** A branch ref that blocks each reader of HEAD: the hardened Git call uses a fixed binary, so a fake on PATH cannot stand in for it. */
 function hangHead(project) {
   const ref = join(project, ".git", "refs", "heads", "main");
   rmSync(ref);
@@ -963,13 +936,11 @@ test("the first shared write takes the larger of the provider values, and a shar
   assert.deepEqual(counts(w.shared), { "cycles.small": 1, "cycles.large": 5, "cycles.risk": 3, max_rounds: 4 });
   assert.match(w.claude("config"), /cycles\.large=5/);
   assert.match(w.codex("config"), /cycles\.large=5/);
-  // A write goes to the shared root only, and a provider root's own value no longer counts for this project.
   w.claude("config", "cycles.large=7");
   assert.equal(counts(w.shared)["cycles.large"], 7);
   assert.equal(counts(w.claudeRoot)["cycles.large"], 3);
   assert.equal(counts(w.codexRoot)["cycles.large"], 5);
   assert.match(w.codex("config"), /cycles\.large=7/);
-  // The keys of a provider stay there, also in one command with a shared key.
   w.claude("config", "cycles.small=2", "arena=4", "max_agents=7", "cap_total=9");
   assert.equal(counts(w.shared)["cycles.small"], 2);
   assert.deepEqual(Object.keys(counts(w.shared)).sort(), ["cycles.large", "cycles.risk", "cycles.small", "max_rounds"]);
@@ -1008,13 +979,11 @@ test("the merge check of a shared project reads its verdicts from the shared roo
   assert.match(w.claude("merge-check", "--sha", sha), /T1 may merge/);
   assert.match(tool.sage(["merge-check", "--sha", sha, "--project", w.project], w.env), /T1 may merge/, "from either provider");
   assert.throws(() => w.codex("merge-check", "--sha", sha), /^Error: T1 belongs to chief C1 \(claude\), not to C2\./, "T656: a Codex chief's check judges for its chief");
-  // A folder of the shared root with verdicts on the SHA, that link never listed, refuses.
   const planted = join(w.shared, "planted-123456");
   mkdirSync(planted);
   for (const file of readdirSync(join(w.shared, folder)).filter((name) => name.endsWith(".tsv"))) writeFileSync(join(planted, file), readFileSync(join(w.shared, folder, file)));
   assert.throws(() => w.claude("merge-check", "--sha", sha), new RegExp(`not in the known project list \\(${join(w.shared, "projects.tsv")}\\)`));
   rmSync(planted, { recursive: true });
-  // An invalid shared count refuses, and names the shared config.
   writeFileSync(join(w.shared, "config.json"), JSON.stringify({ "cycles.small": "lots" }));
   assert.throws(() => w.claude("merge-check", "--sha", sha), new RegExp(`cycles\\.small in ${join(w.shared, "config.json")} is not a number`));
 });
@@ -1039,16 +1008,10 @@ test("the worktree root follows the HOME of its env, SAGE_WORKTREES comes first,
 });
 
 
-/**
- * Two provider roots that the test names (T641): a Claude tool and a Codex tool from the core, each with its own root and
- * the legacyRoots that the test gives, so that HOME, SAGE_HOME and the shared root all stay in scratch. named: false gives
- * bare paths, as an adapter that does not name its roots yet.
- */
 function twoRoots(t, { named = true } = {}) {
   const base = realpathSync(mkdtempSync(join(tmpdir(), "sage-two-roots-")));
   t.after(() => rmSync(base, { recursive: true, force: true }));
   const claudeRoot = join(base, "claude-root"), codexRoot = join(base, "codex-root"), shared = join(base, "shared");
-  // Each provider sets SAGE_HOME to its own root, as the Codex runtime does in production.
   const env = { ...process.env, HOME: join(base, "home"), SAGE_HOME: claudeRoot, SAGE_SHARED_HOME: shared, SAGE_TEST_PIDS: "{}" }, codexEnv = { ...env, SAGE_HOME: codexRoot };
   const roots = () => (named ? [{ provider: "claude", path: claudeRoot }, { provider: "codex", path: codexRoot }] : [claudeRoot, codexRoot]);
   const claudeTool = createStateTool({ provider: "claude", defaultRoot: () => claudeRoot, legacyRoots: roots });
@@ -1070,7 +1033,6 @@ function twoRoots(t, { named = true } = {}) {
   const name = basename(claudeTool.storeDir(project, env)), folder = () => name;
   return { base, env, codexEnv, claudeRoot, codexRoot, shared, repo, project, claudeTool, codexTool, claude: runner(claudeTool, env), codex: runner(codexTool, codexEnv), folder };
 }
-/** Replaces a file's text with an edit of it. */
 const rewrite = (file, edit) => writeFileSync(file, edit(readFileSync(file, "utf8")));
 
 test("the core names the provider of each old logbook of a project, and a bare path from an adapter still works with no name (T641)", (t) => {
@@ -1125,11 +1087,10 @@ test("a writer that found the old logbook and waited on its lock during the move
   w.claude("init");
   w.claude("task", "add", "--title", "before the move", "--size", "tiny", "--priority", "P2");
   const dir = join(w.claudeRoot, w.folder());
-  // The writer runs in its own process with the same roots. It finds the old logbook, then waits on the lock that the move holds.
   const runner = join(w.base, "writer.mjs");
   writeFileSync(runner, `import { createStateTool } from ${JSON.stringify(join(REPO, "packages/sage-core/index.mjs"))};\ncreateStateTool({ provider: "claude", defaultRoot: () => ${JSON.stringify(w.claudeRoot)}, legacyRoots: () => [{ provider: "claude", path: ${JSON.stringify(w.claudeRoot)} }, { provider: "codex", path: ${JSON.stringify(w.codexRoot)} }] }).runCli();\n`);
   const saved = process.env.SAGE_TEST_PIDS;
-  process.env.SAGE_TEST_PIDS = "{}"; // the lock's probe in this process is the fake one too: no real process is asked
+  process.env.SAGE_TEST_PIDS = "{}";
   t.after(() => { if (saved === undefined) delete process.env.SAGE_TEST_PIDS; else process.env.SAGE_TEST_PIDS = saved; });
   const writer = spawn(process.execPath, [runner, "task", "add", "--title", "late", "--size", "tiny", "--priority", "P2", "--project", w.project], { env: { ...w.env, NODE_TEST_CONTEXT: "child" }, stdio: ["ignore", "pipe", "pipe"] });
   let out = "";
@@ -1138,7 +1099,6 @@ test("a writer that found the old logbook and waited on its lock during the move
   const ended = new Promise((done) => writer.on("close", done));
   const before = readFileSync(join(dir, "tasks.tsv"), "utf8");
   w.claudeTool.withLock(dir, () => {
-    // The writer's temporary lock folder shows that it found this logbook and waits. The bound only ends a broken run.
     for (let i = 0; !readdirSync(dir).some((name) => name.startsWith(".lock.")); i++) {
       if (i > 4000) assert.fail("the writer never waited on the lock");
       Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, 5);
@@ -1148,7 +1108,6 @@ test("a writer that found the old logbook and waited on its lock during the move
   assert.equal(await ended, 1, out);
   assert.match(out, /this logbook moved to the shared root \(.*moved\.json\), so sage writes no more to it\. Nothing changed\. Run the command again: it then finds the shared logbook\./);
   assert.equal(readFileSync(join(dir, "tasks.tsv"), "utf8"), before, "the old logbook keeps its rows");
-  // The end of the move: the shared logbook and its row. The same command now writes there.
   mkdirSync(w.shared, { recursive: true });
   cpSync(dir, join(w.shared, w.folder()), { recursive: true, filter: (from) => basename(from) !== "moved.json" });
   writeFileSync(join(w.shared, "bindings.tsv"), `root\tfolder\tcommits\tat\n${realpathSync(w.project)}\t${w.folder()}\t${commitOf(w.project)}\t2026-11-03T00:00:00Z\n`);
@@ -1164,7 +1123,6 @@ test("the id floors of the move make nextId give the next number above both old 
   w.claude("task", "add", "--title", "old claude task", "--size", "tiny", "--priority", "P2");
   w.claude("run", "add", "T1", "--role", "qa");
   w.claude("gate", "add", "T1", "--question", "Go?", "--options", "yes|no", "--recommend", "yes");
-  // The shape of the real Claude logbook: tasks to T644, runs to R2469, gates to G103.
   const renumber = (root, map) => {
     for (const name of readdirSync(join(root, w.folder())).filter((n) => n.endsWith(".tsv"))) rewrite(join(root, w.folder(), name), (text) => text.replace(/(?<![A-Za-z0-9])(T|R|G)1(?![0-9])/g, (_, p) => map[p]));
   };
@@ -1197,8 +1155,6 @@ test("the id floors of the move make nextId give the next number above both old 
 });
 
 test("an older sage reads the floor rows as they are written: plain decision rows whose first word is the id (T641)", (t) => {
-  // These rows are the text that writeIdFloors writes. nextId has read a decision's first word since T46, so an older
-  // plugin that writes this logbook still gives the next number above the floor.
   const w = twoRoots(t);
   w.claude("init");
   const dir = w.claudeTool.storeDir(w.project, w.env);
@@ -1241,16 +1197,12 @@ test("waitingPlugins names each provider that is not at the move's contract, and
   assert.throws(() => waiting(), /plugins\.tsv does not start with the column names provider, contract, at/);
 });
 
-// The move (T640, PR 7b): sage move --preview, --plan and --gate, with two provider roots in scratch (twoRoots).
-
-/** Sets the state cell of tasks in a logbook's tasks.tsv, as a run of the route would have left them. */
 function setStates(dir, states) {
   rewrite(join(dir, "tasks.tsv"), (text) => {
     const [head, ...lines] = text.split("\n").filter(Boolean), cols = head.split("\t"), at = cols.indexOf("state");
     return [head, ...lines.map((line) => { const v = line.split("\t"); if (states[v[0]]) v[at] = states[v[0]]; return v.join("\t"); })].join("\n") + "\n";
   });
 }
-/** A project with a Claude and a Codex logbook: open and finished tasks, a met wait, a finding, a gate and standing orders. */
 function moveWorld(t) {
   const w = twoRoots(t);
   const claudeDir = join(w.claudeRoot, w.folder()), codexDir = join(w.codexRoot, w.folder());
@@ -1268,7 +1220,6 @@ function moveWorld(t) {
   w.codex("standing", "add", "Codex order five.");
   setStates(codexDir, { T2: "merged" });
   const planOf = (preview) => /plan ([0-9a-f]{8})\n/.exec(preview)[1];
-  /** The preview, the gate and the owner's answer: what the chief does before the move. */
   const ask = (option = "1") => {
     const plan = planOf(w.claude("move", "--preview"));
     const gate = w.claude("move", "--plan", plan), id = /^(G\d+) /.exec(gate)[1];
@@ -1278,7 +1229,6 @@ function moveWorld(t) {
   return { ...w, claudeDir, codexDir, planOf, ask };
 }
 
-/** The rows of a table file as objects, with every column that the file has (also moved). */
 const rowsIn = (file) => {
   const [head, ...lines] = readFileSync(file, "utf8").split("\n").filter(Boolean), cols = head.split("\t");
   return lines.map((line) => Object.fromEntries(cols.map((c, i) => [c, line.split("\t")[i] ?? ""])));
@@ -1305,7 +1255,6 @@ test("T1003: the move takes the releases by name, each name once with the first 
   const dir = join(w.shared, w.folder());
   assert.deepEqual(rowsIn(join(dir, "releases.tsv")).map((r) => [r.name, r.goal]), [["1.0", "The Claude goal"], ["Beta", ""]]);
   assert.deepEqual(rowsIn(join(dir, "tasks.tsv")).filter((r) => r.release).map((r) => [r.id, r.title, r.release]), [["T4", "claude open", "1.0"], ["T6", "codex open", "Beta"]]);
-  // T4 has the open gate "Ship it?", so its card needs you and its release has started (T1009).
   assert.deepEqual(w.claude("status").split("\n").filter((l) => l.startsWith("release ")), ["release 1.0 · in progress · 0 of 1 task done · single tasks T4 · goal: The Claude goal", "release Beta · not started · 0 of 1 task done · single tasks T6"]);
 });
 
@@ -1340,7 +1289,6 @@ test("the move takes the open tasks of both old logbooks into one shared logbook
   ].join("\n"));
   assert.equal(existsSync(dir), false, "the preview changes nothing");
   assert.equal(existsSync(join(w.shared, "moves")), false);
-  // The gate takes its G number before the floors: G2 here, so the moved gate is G3.
   assert.equal(w.claude("move", "--plan", plan), [
     `G2 · move · plan ${plan}`,
     "Move the project project into one shared logbook?",
@@ -1383,7 +1331,6 @@ test("the move takes the open tasks of both old logbooks into one shared logbook
     `6. Rename the folder ${join(w.shared, folder)} to ${join(w.shared, `.${folder}.restored-${plan}`)}: the board reads no folder whose name starts with a dot. Keep it until you are sure.`,
     `7. If the plan ${join(w.shared, "moves", `${folder}.json`)} is there (an end check that did not match keeps it), rename it to ${folder}.json.aside: while it is there, every command of this project refuses.`,
   ].join("\n"));
-  // Both providers find the one shared logbook now.
   assert.equal(w.claudeTool.storeDir(w.project, w.env), dir);
   assert.equal(w.codexTool.storeDir(w.project, w.codexEnv), dir);
   const tasks = rowsIn(join(dir, "tasks.tsv"));
@@ -1396,11 +1343,9 @@ test("the move takes the open tasks of both old logbooks into one shared logbook
   assert.deepEqual(decisions, [
     ["T4", "T4 was Claude T2"], ["T5", "T5 was Claude T3"], ["T6", "T6 was Codex T1"],
     ["", "T3 is the task floor of the move from claude and codex"], ["", "G2 is the gate floor of the move from claude and codex"]]);
-  // The board shows this row, so it names the old logbook's folder and no path of the Mac (F-T640-13).
   assert.equal(rowsIn(join(dir, "decisions.tsv"))[0].why, `the move from the Claude logbook ${folder}; its pages stay in ${folder}/pages/T2 of the worktree root; waits met before the move: T1 (merged)`);
   assert.match(readFileSync(join(dir, "standing.md"), "utf8"), /\n5\. Claude order five\.\n\n## From the Codex logbook \(moved \d+ [A-Z][a-z]{2}; the old Codex number in brackets\)\n\n6\. Work only in your own worktree and branch\. Never merge, never force-push, never push to main\. \(Codex 1\)\n(?:.*\n){3}10\. Codex order five\. \(Codex 5\)\n$/);
   assert.deepEqual(rowsIn(join(dir, "sources.tsv")).map((r) => [r.provider, r.path]), [["claude", w.claudeDir], ["codex", w.codexDir]]);
-  // The old logbooks: a backup copy of the task table before the mark, moved.json, and the moved column with each new id.
   assert.equal(readFileSync(join(w.claudeDir, "tasks.before-move.tsv"), "utf8"), before.claude);
   assert.equal(readFileSync(join(w.codexDir, "tasks.before-move.tsv"), "utf8"), before.codex);
   assert.deepEqual(rowsIn(join(w.claudeDir, "tasks.tsv")).map((r) => [r.id, r.moved]), [["T1", ""], ["T2", "T4"], ["T3", "T5"]]);
@@ -1409,18 +1354,15 @@ test("the move takes the open tasks of both old logbooks into one shared logbook
   assert.deepEqual(rowsIn(join(w.shared, "bindings.tsv")).map((r) => [r.root, r.folder, r.commits]), [[realpathSync(w.project), folder, commitOf(w.project)]]);
   assert.match(readFileSync(join(w.shared, "projects.tsv"), "utf8"), new RegExp(`\n${folder}\t\\S+\tinit\n`), "the shared root knows the new logbook");
   assert.deepEqual(readdirSync(join(w.shared, "moves")), [], "the plan and the asked plan are gone");
-  // New ids come after both old logbooks and the moved rows, in either provider.
   assert.match(w.codex("task", "add", "--title", "after", "--size", "tiny", "--priority", "P2"), /^T7 /);
   assert.match(w.claude("gate", "add", "--question", "Go?", "--options", "yes|no", "--recommend", "yes"), /^G4 /);
   assert.match(w.claude("status"), /T4/);
-  // The board reads the move's output: one project, the old logbooks' finished tasks in it, and no moved task twice.
   const results = readBoardSources([{ id: "shared", path: w.shared }, { id: "claude", path: w.claudeRoot, provider: "claude" }, { id: "codex", path: w.codexRoot, provider: "codex" }]);
   const shared = results.find((r) => r.id === "shared");
   assert.deepEqual(shared.projects.map((p) => [p.key, p.old?.provider ?? null, (p.tables.tasks ?? []).map((task) => task.id).join(",")]), [
     [`shared/${folder}`, null, "T4,T5,T6,T7"], [`claude/${folder}`, "claude", "T1"], [`codex/${folder}`, "codex", "T2"]]);
   assert.deepEqual(shared.projects[0].notes, []);
   assert.deepEqual(results.filter((r) => r.id !== "shared").map((r) => r.projects.length), [0, 0], "an old logbook shows once, in its shared project");
-  // A moved card keeps its old number in view; a finished old task keeps its Old label and no such line (option A).
   const model = buildBoardModel(results), card = (key) => model.tasks.find((task) => task.key === key);
   assert.deepEqual([card(`shared/${folder}/T4`).was, card(`shared/${folder}/T6`).was, card(`shared/${folder}/T7`).was, card(`claude/${folder}/T1`).was], ["was Claude T2", "was Codex T1", undefined, undefined]);
   assert.equal(card(`claude/${folder}/T1`).old.label, "Old · Claude · read-only");
@@ -1470,7 +1412,6 @@ test("a move that stops after any step: every command of the project refuses and
 test("a move gate whose plan no longer matches the logbooks moves nothing and says what changed; a move gate answers once (T640)", (t) => {
   const w = moveWorld(t), { plan, id } = w.ask();
   w.codex("task", "add", "--title", "added after the preview", "--size", "tiny", "--priority", "P2");
-  // The refusal says that the gate closed, and the next step (F-T640-17, F-T640-58).
   assert.throws(() => w.claude("move", "--gate", id), new RegExp(`^Error: sage: refused: the logbooks changed after plan ${plan}\\n  Codex: 1 more open task \\(T3\\)\\nNothing changed\\. G2 is closed: its answer covers plan ${plan} only, and a move gate answers once\\. Show the owner a new preview \\(sage move --preview\\), then open a new gate \\(sage move --plan <plan>\\)\\.$`));
   assert.equal(existsSync(join(w.shared, w.folder())), false);
   assert.equal(existsSync(join(w.claudeDir, "moved.json")) || existsSync(join(w.codexDir, "moved.json")), false);
@@ -1488,7 +1429,6 @@ test("the owner's keep answer moves nothing, and a stale plan of a stopped move 
   const kept = moveWorld(t), { id } = kept.ask("2");
   assert.throws(() => kept.claude("move", "--gate", id), /^Error: sage: refused: the owner answered G2 with "keep", so nothing moves\. Nothing changed\. To move later, run the preview again\.$/);
   assert.match(kept.claude("task", "add", "--title", "still legacy", "--size", "tiny", "--priority", "P2"), /^T4 /);
-  // An older plugin, which does not know the plan, writes an old logbook after a stop at step 2: the re-run sets the build aside.
   const w = moveWorld(t), ask = w.ask();
   w.claudeTool.command(["move", "--gate", ask.id, "--project", w.project], { ...w.env, SAGE_TEST_MOVE_STOP: "2" });
   rewrite(join(w.codexDir, "tasks.tsv"), (text) => text.replace("codex open", "codex open, renamed by hand"));
@@ -1497,7 +1437,6 @@ test("the owner's keep answer moves nothing, and a stale plan of a stopped move 
   assert.match(w.claude("status"), /T2/, "the old logbooks work again");
 });
 
-/** Sets the time zone of this process for one test: the move prints the Mac's own time (F-T640-15). */
 function zone(t, tz) {
   const saved = process.env.TZ;
   process.env.TZ = tz;
@@ -1529,7 +1468,6 @@ test("a provider with no plugin row: the gate offers to record it as unused and 
   const preview = w.claude("move", "--preview");
   assert.match(preview, /\nok    Claude plugin: contract 2\nwarn  Codex plugin: no row in plugins\.tsv, so the gate asks whether you use Codex here\n/);
   const gate = w.claude("move", "--plan", w.planOf(preview));
-  // A plain move refuses at --gate while Codex has no row, so the gate does not offer it (F-T640-20).
   assert.match(gate, / restarted after the update\.\n1 · move, and record Codex as unused\nOnly if you do not use Codex on this project\. Sage writes "Codex: unused" and does not wait for the Codex plugin\. This answer counts for every project of this shared root: a later move or a new project does not wait for the Codex plugin either\.\n2 · keep RECOMMENDED\nNothing changes\. Both logbooks keep working\. Ask again any time\.\nDefault: keep\. Recommendation: keep\. This repository has Codex checkouts, so you likely use Codex here: update sage in Codex first, then ask again\. Choose 1 only if you never use Codex on this project\.\n/);
   assert.equal(rowsIn(join(w.claudeDir, "gates.tsv")).at(-1).options, "move, and record Codex as unused|keep");
   w.claude("gate", "answer", "G2", "--option", "1");
@@ -1562,12 +1500,10 @@ test("a milestone moves with its tasks: new number, pilot and breakdown gate, an
   assert.equal(id, "G3");
   w.claude("move", "--gate", id);
   const dir = join(w.shared, w.folder());
-  // The open gates take the first numbers (G1 of T2 is G4), then the answered ones (the breakdown gate G2 is G5).
   assert.deepEqual(rowsIn(join(dir, "milestones.tsv")).map((p) => [p.id, p.name, p.pilot, p.gate]), [["M2", "Two steps", "T4", "G5"]]);
   assert.deepEqual(rowsIn(join(dir, "tasks.tsv")).map((r) => [r.id, r.milestone]), [["T4", "M2"], ["T5", ""], ["T6", ""]]);
   const breakdown = rowsIn(join(dir, "gates.tsv")).find((g) => g.id === "G5");
   assert.deepEqual([breakdown.task, /^Approve milestone M2[ ?]/.test(breakdown.question), breakdown.answer], ["T4", true, "approve"]);
-  // Its pilot T4 has the open gate "Ship it?", so its card needs you and the milestone has started (T1009).
   assert.match(w.claude("status"), /\nmilestone M2 · in progress · pilot T4: 0 of 1 merged · name: Two steps\n/, "approved, as before the move");
 });
 
@@ -1578,21 +1514,16 @@ test("an older plugin stops at the moved logbook's milestone column, and a repai
   w.claude("move", "--gate", w.ask().id);
   const dir = join(w.shared, w.folder());
   assert.ok(rowsIn(join(dir, "decisions.tsv")).some((d) => d.decision === "R3 is the run floor of the move from claude and codex"));
-  // The plugin as it was before the move's contract (T630, 0e13a3ff): its own code, run in its own process.
   const old = join(w.base, "old-plugin");
   mkdirSync(old);
   execFileSync("tar", ["-x", "-C", old], { input: execFileSync("git", ["-C", REPO, "archive", "0e13a3ff", "plugins/sage/core", "plugins/sage/skills/sage"], { maxBuffer: 64 * 1024 * 1024 }) });
   w.claude("task", "add", "--title", "a chief's first write", "--size", "tiny", "--priority", "P2");
   const chief = rowsIn(join(dir, "chiefs.tsv"))[0].id;
   const older = (...args) => spawnSync(process.execPath, [join(old, "plugins/sage/skills/sage/sage.mjs"), ...args, "--chief", chief, "--project", w.project], { env: { ...w.env, NODE_TEST_CONTEXT: "child" }, encoding: "utf8" });
-  // T995: the moved logbook's tasks table has the milestone column, which an older plugin does not know, so it writes
-  // nothing there and so takes no id under the move's floors (F-T641-4). It still reads the logbook.
   const refused = older("task", "add", "--title", "older", "--size", "tiny", "--priority", "P2");
   assert.equal(refused.status, 1);
   assert.match(refused.stderr, /tasks\.tsv has columns that this version of sage does not know \(milestone\): a newer sage wrote this logbook/);
   assert.equal(older("status").status, 0);
-  // A lost decisions table: the repair takes the floors again from the old logbooks. Each old logbook holds the floors of
-  // the move's map too (F-T640-47), so the repair's floors are the map's highest numbers: T6 and the moved gate G3.
   writeFileSync(join(dir, "decisions.tsv"), "");
   assert.match(w.claude("logbook", "repair", "--accept-loss", "decisions"), /The move's id floors are in it again, from the old logbooks\./);
   assert.deepEqual(rowsIn(join(dir, "decisions.tsv")).map((d) => d.decision).filter((d) => / floor /.test(d)), [
@@ -1619,7 +1550,6 @@ test("a writer that found an old logbook before the move and waited on its lock 
   const waiting = (n) => readdirSync(w.claudeDir).filter((name) => name.startsWith(".lock.")).length >= n;
   let writer, mover;
   w.claudeTool.withLock(w.claudeDir, () => {
-    // The writer finds the old logbook and waits on its lock; the move then takes the shared root's lock and waits too.
     writer = start(script("writer", ["task", "add", "--title", "late", "--size", "tiny", "--priority", "P2"]));
     for (let i = 0; !waiting(1); i++) { if (i > 4000) assert.fail("the writer never waited"); Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, 5); }
     mover = start(script("mover", ["move", "--gate", id]));
@@ -1628,12 +1558,10 @@ test("a writer that found an old logbook before the move and waited on its lock 
   const [wrote, moved] = await Promise.all([writer, mover]);
   const old = rowsIn(join(w.claudeDir, "tasks.tsv"));
   if (moved.code === 0) {
-    // The move took the lock first: the writer's turn finds the moved marker and writes nothing there.
     assert.equal(wrote.code, 1, wrote.out);
     assert.match(wrote.out, /this logbook moved to the shared root/);
     assert.equal(old.some((r) => r.title === "late"), false);
   } else {
-    // The writer took it first: its task changed the logbook, so the plan no longer matches, and nothing moved.
     assert.equal(wrote.code, 0, wrote.out);
     assert.match(moved.out, /refused: the logbooks changed after plan/);
     assert.equal(existsSync(join(w.shared, w.folder())), false);
@@ -1643,7 +1571,6 @@ test("a writer that found an old logbook before the move and waited on its lock 
 
 test("the move leaves a legacy project and a shared project as they were (T640)", (t) => {
   const w = moveWorld(t), other = w.repo("other");
-  // other is a project from before the Codex update: with Codex at contract 1, rule 3 gives it a legacy logbook.
   const ready = readFileSync(join(w.shared, "plugins.tsv"), "utf8");
   writeFileSync(join(w.shared, "plugins.tsv"), ready.replace(/\ncodex\t2\t/, "\ncodex\t1\t"));
   w.claude("init", "--project", other);
@@ -1658,18 +1585,13 @@ test("the move leaves a legacy project and a shared project as they were (T640)"
   assert.throws(() => w.claude("move", "--preview", "--project", w.repo("none")), /refused: this project has no logbook in the Claude or the Codex root, so nothing moves/);
 });
 
-// The repairs of the move's first review (T640, round 1). Each test fails on the build before them (f38a4a53).
-
-/** Sets cells of one task row by column name, as a hand edit or an older run would have left them. */
 function setCells(dir, id, cells) {
   rewrite(join(dir, "tasks.tsv"), (text) => {
     const [head, ...lines] = text.split("\n").filter(Boolean), cols = head.split("\t");
     return [head, ...lines.map((line) => { const v = line.split("\t"); if (v[0] === id) for (const [k, x] of Object.entries(cells)) v[cols.indexOf(k)] = x; return v.join("\t"); })].join("\n") + "\n";
   });
 }
-/** An adoption record of version 1: a Claude task adopted the Codex task, before the move. */
 const adoptionV1 = (codexDir, project, task) => ({ version: 1, provider: "codex", task, logbook: realpathSync(codexDir), project: realpathSync(project), pr: "7", branch: `sage/${task.toLowerCase()}-shared`, round: 0, digest: "a".repeat(64), at: "2026-11-01T00:00:00Z" });
-/** The preview, the gate and the owner's answer in a world of twoRoots, with the gate's id. */
 const askPlain = (w) => {
   const plan = /plan ([0-9a-f]{8})\n/.exec(w.claude("move", "--preview"))[1];
   const id = /^(G\d+) /.exec(w.claude("move", "--plan", plan))[1];
@@ -1692,7 +1614,6 @@ test("an adopted task's open gate and finding move with the task that adopted it
   const dir = join(w.shared, w.folder());
   assert.deepEqual(rowsIn(join(dir, "findings.tsv")).map((f) => [f.task, f.key, f.summary]), [["T4", "F-T4-1", "a loose end (was Claude F-T2-1)"], ["T4", "F-T4-2", "codex loose end (was Codex F-T1-1)"]]);
   assert.deepEqual(rowsIn(join(dir, "gates.tsv")).map((g) => [g.id, g.task, g.question]), [["G3", "T4", "Ship it?"], ["G4", "T4", "Codex T4 ready?"]], "the task id in its question is the new one too (F-T640-3)");
-  // The board shows both on the task that adopted them.
   const card = boardOf(w).tasks.find((task) => task.key === `shared/${w.folder()}/T4`);
   assert.deepEqual([card.findings.filter((f) => f.status === "open").length, card.gates.filter((g) => !g.answer).length], [2, 2]);
 });
@@ -1750,7 +1671,6 @@ test("a move from a linked clone makes the same plan, a stopped move finishes fr
     const plan = w.planOf(preview), gate = w.claude("move", "--plan", plan), id = /^(G\d+) /.exec(gate)[1];
     w.claude("gate", "answer", id, "--option", "1");
     if (from === "clone") {
-      // The gate is in the main checkout's logbook: the clone makes the plan from there, so it matches.
       assert.match(w.claude("move", "--gate", id, "--project", clone), new RegExp(`^ok  plan ${plan} matches the 3 logbooks\n`));
     } else {
       assert.match(stopAt(w, id, 2).text, /test stop after step 2/);
@@ -1760,7 +1680,6 @@ test("a move from a linked clone makes the same plan, a stopped move finishes fr
     assert.deepEqual(readdirSync(join(w.shared, "moves")), []);
     assert.deepEqual(rowsIn(join(w.shared, w.folder(), "tasks.tsv")).map((r) => r.title), ["claude open", "claude verified", "clone open", "codex open"]);
     assert.equal(w.claudeTool.storeDir(clone, w.env), join(w.shared, w.folder()), "the clone uses the new logbook");
-    // The preview and the gate name the other checkout by its path, so the owner can tell a clone from a fork (F-T640-6).
     assert.ok(preview.includes(`\nwarn  1 other Claude checkout of this repository:\n      the move links it to the new logbook:\n      ${clone}\n`), preview);
     assert.ok(gate.includes(`\nThe move also links 1 other checkout of this repository to the new logbook: Claude ${clone}. If one of them is a separate project, answer keep.\n`), gate);
   }
@@ -1798,7 +1717,6 @@ test("the move's refusals show logbook text through visible(): a run's cells and
   const w = moveWorld(t);
   w.claude("run", "add", "T2", "--role", "qa");
   rewrite(join(w.claudeDir, "runs.tsv"), (text) => text.replace("\tqa\t", "\tqa\u001b[2J\t"));
-  // The state tool's own text, before the CLI's output filter: an adapter (the Codex MCP server) may show it as it is.
   const running = refusalOf(() => w.claudeTool.sage(["move", "--preview", "--project", w.project], w.env));
   assert.match(running, /\n  Claude  R1     T2    qa\\x1b\[2J/);
   assert.equal(running.includes("\u001b"), false);
@@ -1815,7 +1733,6 @@ test("an end check that does not match names the missing record and no command, 
   rewrite(join(dir, "findings.tsv"), (text) => text.split("\n")[0] + "\n");
   const out = refusalOf(() => w.claude("move", "--gate", id));
   assert.match(out, /\nfindings \(open\)     1     0        0     0   MISMATCH\n/);
-  // The refusal starts with its own line, and names the missing record once, in the end check (F-T640-57).
   assert.ok(out.startsWith("sage: refused: the end check of the move of project project does not match the plan\nok  saved plan found: plan "), out);
   assert.equal(out.split("missing in the new logbook: F-T4-1 (was Claude F-T2-1)").length, 2, out);
   assert.ok(out.endsWith([
@@ -1836,14 +1753,13 @@ test("an end check that does not match names the missing record and no command, 
 });
 
 test("the move prints the Mac's own time with its zone, which the board's UTC times agree with: a stopped move, a running run and the map page (F-T640-15, F-T640-26)", (t) => {
-  zone(t, "Asia/Tokyo"); // UTC+9 all year
+  zone(t, "Asia/Tokyo");
   const w = moveWorld(t), { id } = w.ask();
   stopAt(w, id, 2);
   const tokyo = (iso) => new Date(Date.parse(iso) + 9 * 3600000).toISOString().slice(11, 16);
   const plan = JSON.parse(readFileSync(planFileOf(w), "utf8"));
   assert.match(refusalOf(() => w.claude("status")), new RegExp(`\\n  stopped after step 2 of 6 at ${tokyo(plan.at)} UTC\\+09:00 \\(`));
   const local = new Date(Date.parse(plan.saved) + 9 * 3600000).toISOString(), utc = plan.saved;
-  // The map page also gives the UTC time that the board's banner uses, so both name the same day (F-T640-53).
   assert.ok(readFileSync(join(w.shared, w.folder(), "move-map.html"), "utf8").includes(` on ${local.slice(0, 10)} at ${local.slice(11, 16)} UTC+09:00 (${utc.slice(0, 10)} ${utc.slice(11, 16)} UTC on the board). `), "the map page names the zone too");
   const r = moveWorld(t);
   r.claude("run", "add", "T2", "--role", "qa");
@@ -1851,7 +1767,7 @@ test("the move prints the Mac's own time with its zone, which the board's UTC ti
 });
 
 test("a zone behind UTC with half an hour prints its offset with a minus sign (F-T640-26)", (t) => {
-  zone(t, "America/St_Johns"); // UTC-3:30, or UTC-2:30 in summer time
+  zone(t, "America/St_Johns");
   const n = moveWorld(t);
   n.claude("run", "add", "T2", "--role", "qa");
   assert.match(refusalOf(() => n.claude("move", "--preview")), /qa         started \d\d:\d\d UTC-0[23]:30\n/);
@@ -1859,7 +1775,6 @@ test("a zone behind UTC with half an hour prints its offset with a minus sign (F
 
 test("after the printed restore steps the board shows each task once, and a later move and a second restore work (F-T640-19, F-T640-29)", (t) => {
   const w = moveWorld(t), folder = w.folder();
-  /** The move, then the restore steps that its end prints, done by hand: step 6 renames the folder to the printed name. */
   const moveAndRestore = () => {
     const { plan, id } = w.ask(), out = w.claude("move", "--gate", id);
     const name = new RegExp(`\\n6\\. Rename the folder \\S+/${folder} to \\S+/(\\.${folder}\\.restored[^:\\s]*): the board reads no folder whose name starts with a dot\\. Keep it until you are sure\\.\\n7\\. `).exec(out)?.[1];
@@ -1868,7 +1783,7 @@ test("after the printed restore steps the board shows each task once, and a late
     const drop = (file, column) => { const [head, ...lines] = readFileSync(file, "utf8").split("\n").filter(Boolean); writeFileSync(file, [head, ...lines.filter((l) => l.split("\t")[column] !== folder)].join("\n") + "\n"); };
     drop(join(w.shared, "bindings.tsv"), 1);
     drop(join(w.shared, "projects.tsv"), 0);
-    renameSync(join(w.shared, folder), join(w.shared, name)); // the old fixed name made this fail on a second restore
+    renameSync(join(w.shared, folder), join(w.shared, name));
     return { name, plan };
   };
   const first = moveAndRestore();
@@ -1916,7 +1831,6 @@ test("a resumed plan must name the old logbook of this repository that holds its
   const w = moveWorld(t), { id } = w.ask(), file = join(w.shared, "moves", "other-abcdef.json");
   mkdirSync(join(w.shared, "other-abcdef"), { recursive: true });
   writeFileSync(join(w.shared, "other-abcdef", "tasks.tsv"), `${readFileSync(join(w.claudeDir, "tasks.tsv"), "utf8").split("\n")[0]}\n`);
-  // A planted plan for another folder that links this checkout and moves no logbook: the old code linked the checkout to it.
   const planted = { version: 1, folder: "other-abcdef", checkout: realpathSync(w.project), sources: [], checkouts: [{ root: realpathSync(w.project), commits: "" }], gate: { id, dir: w.claudeDir }, step: 3, saved: "2026-11-03T00:00:00Z", at: "2026-11-03T00:00:00Z", digest: "0".repeat(64), raw: {}, marks: [], map: { tasks: [], findings: [], gates: [], milestones: [], standing: [], waits: {}, finished: {} } };
   mkdirSync(dirname(file), { recursive: true });
   writeFileSync(file, JSON.stringify(planted));
@@ -1925,7 +1839,6 @@ test("a resumed plan must name the old logbook of this repository that holds its
   try { out = w.claude("move", "--gate", id); } catch (e) { out = e.message; }
   assert.equal(existsSync(join(w.shared, "bindings.tsv")), false, `no row links the checkout to the planted folder (the move printed: ${out.split("\n")[0]})`);
   assert.equal(out, `sage: refused: the plan ${file} names no old logbook of this repository that holds its answered move gate ${id}. ${check}`);
-  // The same plan with this project's logbooks, but a gate that is not its answered move gate, refuses too.
   writeFileSync(file, JSON.stringify({ ...planted, sources: [{ provider: "claude", dir: w.claudeDir, checkout: realpathSync(w.project) }] }));
   assert.match(refusalOf(() => w.claude("move", "--gate", id)), /names no old logbook of this repository that holds its answered move gate/);
   assert.equal(existsSync(join(w.claudeDir, "moved.json")), false, "a refused plan marks nothing");
@@ -1939,7 +1852,6 @@ test("the end check prints a missing record's old id through visible() (F-T640-2
   const { id } = w.ask();
   stopAt(w, id, 2);
   rewrite(join(dir, "findings.tsv"), (text) => text.split("\n")[0] + "\n");
-  // The state tool's own text, before the CLI's output filter: an adapter (the Codex MCP server) may show it as it is.
   const out = refusalOf(() => w.claudeTool.sage(["move", "--gate", id, "--project", w.project], w.env));
   assert.ok(out.includes("\nmissing in the new logbook: F-T4-1 (was Claude F-T2-1\\x1b[2J)\n"), out);
   assert.equal(out.includes("\u001b"), false);
@@ -1947,12 +1859,10 @@ test("the end check prints a missing record's old id through visible() (F-T640-2
 
 test("an open gate of a finished task refuses the preview, because no one could answer it after the move (F-T640-27)", (t) => {
   const w = moveWorld(t);
-  // An open gate of T1, which merged after the gate was asked.
   const row = { id: "G9", task: "T1", question: "Still want the docs?", options: "yes|no", recommendation: "yes", default: "no", answer: "", at: "2026-11-03T00:00:00Z" };
   rewrite(join(w.claudeDir, "gates.tsv"), (text) => `${text.trimEnd()}\n${text.split("\n")[0].split("\t").map((c) => row[c] ?? "").join("\t")}\n`);
   assert.equal(refusalOf(() => w.claude("move", "--preview")), [
     "sage: refused: 1 open gate is of a finished task, and a finished task does not move, so no one could answer it after the move",
-    // The options show, so the owner can answer from this text, and the refusal says whose chief records it (F-T640-37, F-T640-60).
     "  Claude  G9     T1    merged     Still want the docs? (options: 1 yes, 2 no)",
     "Nothing changed. Ask the owner to answer it first. The chief of the gate's provider records the answer (sage gate answer <G> --option <n>): the Claude chief for a Claude gate. Then run the preview again.",
   ].join("\n"));
@@ -1983,7 +1893,6 @@ test("two tasks with the same finding key keep their own findings: round keys ma
   });
   w.claude("gate", "add", "T2", "--question", "Move F1 to a follow-up task?", "--options", "move|keep", "--recommend", "move");
   w.claude("gate", "add", "T3", "--question", "Fix F1 in T3 now?", "--options", "fix|wait", "--recommend", "fix");
-  // An open gate with no task: a key of one task maps, and a key that two tasks have stays whole.
   const row = { id: "G9", task: "", question: "F-T2-1 first, or F1?", options: "first|F1", recommendation: "first", default: "first", answer: "", at: "2026-11-03T00:00:00Z" };
   rewrite(join(w.claudeDir, "gates.tsv"), (text) => `${text.trimEnd()}\n${text.split("\n")[0].split("\t").map((c) => row[c] ?? "").join("\t")}\n`);
   w.claude("move", "--gate", w.ask().id);
@@ -1997,7 +1906,6 @@ test("two tasks with the same finding key keep their own findings: round keys ma
 
 test("a later logbook's own heading before its first order stays, and the end check counts it (F-T640-31)", (t) => {
   const w = moveWorld(t);
-  // The first sentence that init writes since T669 goes too; the test above has the older one.
   writeFileSync(join(w.codexDir, "standing.md"), "# Standing orders\n\nEvery agent reads these orders before it starts; a brief points to them. Add a line when you notice that you repeat an instruction.\n\n# My own title line\n\n1. Codex order one.\n");
   const out = w.claude("move", "--gate", w.ask().id);
   assert.match(out, /\nstanding orders     5     5        1     1   match\nstanding notes      0     0        1     1   match\n/);
@@ -2016,9 +1924,6 @@ test("the board shows a banner for 7 days after a move, with the map page by nam
   assert.equal(renderBoardHtml(after(8)).includes("moved to one shared logbook"), false, "gone after 7 days, as Done is");
 });
 
-// The move's recovery and edge cases (T647), from the reviews of PR 7b. Each test fails on the build before them (6e9bde73).
-
-/** The printed restore steps 2 to 7, done by hand as the user does them; step 1 (stop every session) holds in a test. */
 function restoreByHand(w, plan) {
   const folder = w.folder();
   for (const d of [join(w.claudeRoot, folder), join(w.codexRoot, folder)]) { renameSync(join(d, "tasks.before-move.tsv"), join(d, "tasks.tsv")); rmSync(join(d, "moved.json")); }
@@ -2038,7 +1943,6 @@ test("a move gate moves once: after a restore by hand its answer moves nothing, 
   assert.equal(existsSync(join(w.shared, folder)), false, "the old answer built no new logbook");
   assert.equal(existsSync(join(w.claudeDir, "moved.json")), false, "and marked nothing");
   assert.ok(rowsIn(join(w.claudeDir, "decisions.tsv")).some((d) => d.decision === `${id} moved this project to the shared logbook ${folder} with plan ${plan}`), "the logbook of the gate keeps that the gate moved");
-  // The restored folder alone refuses too: a decisions table that lost the row still keeps the gate from moving again.
   rewrite(join(w.claudeDir, "decisions.tsv"), (text) => text.split("\n").filter((l) => !l.includes(" moved this project to the shared logbook ")).join("\n"));
   assert.equal(refusalOf(() => w.claude("move", "--gate", id)), used);
   assert.match(w.claude("move", "--gate", w.ask().id), /\nReconciliation · every count matches the plan\n/, "the owner's new answer moves it");
@@ -2078,7 +1982,6 @@ test("a milestone whose pilot merged moves whole: the pilot as a merged task, it
   setStates(w.claudeDir, { T4: "merged" });
   assert.match(w.claude("status"), /\nmilestone M1 · in progress · pilot T4: 1 of 2 merged · name: Two\n/);
   const preview = w.claude("move", "--preview");
-  // The merged pilot takes T8, between the open tasks, so the range leaves it out (F-T647-3).
   assert.match(preview, /\nopen tasks          3  T6–T7, T9      1  T10\n/);
   assert.match(preview, /\nfinished tasks      1                 1\n/);
   assert.match(preview, /\nnote  1 finished task moves with its milestone, as it is: Claude T4 \(merged\)$/);
@@ -2108,7 +2011,6 @@ test("a task moved after a key of its repair round closed keeps that key, so its
   assert.deepEqual([moved.round, moved.keys], ["1", "F-T4-2,F-T4-1"], "the closed key F-T2-1 is F-T4-2, and the open F-T2-2 is F-T4-1");
   assert.match(w.claude("round", "T4"), /^T4 repairing · round 2 of \d+ · fix F-T4-1 /, "as before the move: F-T2-1 closed, so the round fixed one key");
   assert.equal(rowsIn(join(dir, "tasks.tsv")).find((r) => r.id === "T4").keys, "F-T4-1", "round 2 holds only the open key");
-  // F-T4-2 is in no round now, and no finding row has it: its decision row keeps it taken (F-T647-4).
   assert.match(w.claude("finding", "add", "T4", "--source", "sage", "--severity", "low", "--summary", "new"), /^F-T4-3 /, "a new finding never takes the carried key F-T4-2");
   assert.deepEqual(rowsIn(join(dir, "decisions.tsv")).filter((d) => d.task === "T4").map((d) => d.decision).slice(0, 2), ["T4 was Claude T2", "F-T4-2 was the round key F-T2-1 of Claude T2, whose finding closed before the move"]);
 });
@@ -2122,7 +2024,6 @@ test("a repair of the decisions keeps a carried round key taken, so a finding af
   w.claude("finding", "close", "T2", "F-T2-1");
   setStates(w.claudeDir, { T2: "reviewing" });
   w.claude("move", "--gate", w.ask().id);
-  // The decisions table is lost while round 1 holds the carried key F-T4-2.
   writeFileSync(join(dir, "decisions.tsv"), "");
   w.claude("logbook", "repair", "--accept-loss", "decisions");
   assert.ok(rowsIn(join(dir, "decisions.tsv")).some((d) => d.task === "T4" && d.decision === "F-T4-2 is a round key of T4 with no finding"));
@@ -2134,7 +2035,7 @@ test("a repair of the decisions keeps a carried round key taken, so a finding af
 
 test("after a restore by hand, a new task or gate takes a number above the move's map (F-T640-47)", (t) => {
   const w = moveWorld(t), { id, plan } = w.ask();
-  w.claude("move", "--gate", id); // the map: tasks T4 to T6, gate G3
+  w.claude("move", "--gate", id);
   restoreByHand(w, plan);
   assert.match(w.claude("task", "add", "--title", "after the restore", "--size", "tiny", "--priority", "P2"), /^T7 /);
   assert.match(w.codex("task", "add", "--title", "after the restore", "--size", "tiny", "--priority", "P2"), /^T7 /);
@@ -2146,7 +2047,6 @@ test("a chain of adoptions gives every old row the number of the task that moves
   const w = moveWorld(t), dir = join(w.shared, w.folder());
   w.codex("task", "add", "--title", "codex adopter", "--size", "tiny", "--priority", "P2");
   const v1 = (provider, task, logbook, branch, pr) => JSON.stringify({ version: 1, provider, task, logbook: realpathSync(logbook), project: realpathSync(w.project), pr, branch, round: 1, digest: "a".repeat(64), at: "2026-11-01T00:00:00Z" });
-  // Codex T3 adopted Claude T2, which adopted Codex T1.
   setCells(w.claudeDir, "T2", { branch: "sage/t1-a", pr: "7", adoption: v1("codex", "T1", w.codexDir, "sage/t1-a", "7") });
   setCells(w.codexDir, "T3", { branch: "sage/t2-b", pr: "8", adoption: v1("claude", "T2", w.claudeDir, "sage/t2-b", "8") });
   const out = w.claude("move", "--gate", w.ask().id);
@@ -2157,18 +2057,13 @@ test("a chain of adoptions gives every old row the number of the task that moves
   assert.deepEqual(rowsIn(join(dir, "findings.tsv")).map((f) => [f.task, f.key]), [["T5", "F-T5-1"]], "the finding of Claude T2 moves with the task that adopted it");
 });
 
-/**
- * A Codex writer that waits on the Codex logbook's lock while the move saves its plan and marks only the Claude logbook (T647).
- * root gives the writer's root path; aside gives the path by which the plan names the Codex logbook; said is the writer's
- * refusal; finish says whether the same command then finishes the move (a plan with another path no longer matches its own records).
- */
 const STOPPED = /^sage: refused: the move of project project did not finish\n  stopped after step 2 of 6 .*\n.*\n.*\n  To finish: sage move --gate G2 \(the same command\)\n$/;
 async function waitingWriter(t, root = (w) => w.codexRoot, { aside, said = STOPPED, finish = !aside } = {}) {
   const w = moveWorld(t), { id } = w.ask(), file = planFileOf(w), codexRoot = root(w);
   stopAt(w, id, 2);
   let plan = readFileSync(file, "utf8");
   if (aside) plan = JSON.stringify({ ...JSON.parse(plan), sources: JSON.parse(plan).sources.map((s) => (s.dir === w.codexDir ? { ...s, dir: aside(w) } : s)) });
-  rmSync(file); // the moment before the move saved its plan: the writer finds the Codex logbook then
+  rmSync(file);
   const runner = join(w.base, "codex-writer.mjs");
   writeFileSync(runner, `import { createStateTool } from ${JSON.stringify(join(REPO, "packages/sage-core/index.mjs"))};\nconst roots = () => [{ provider: "claude", path: ${JSON.stringify(w.claudeRoot)} }, { provider: "codex", path: ${JSON.stringify(codexRoot)} }];\nconst { code, text } = createStateTool({ provider: "codex", defaultRoot: () => ${JSON.stringify(codexRoot)}, legacyRoots: roots }).command(${JSON.stringify(["task", "add", "--title", "late", "--size", "tiny", "--priority", "P2", "--project", w.project])}, process.env, { project: ${JSON.stringify(w.project)}, native: "test-chief" });\nconsole.log(text);\nprocess.exit(code);\n`);
   const saved = process.env.SAGE_TEST_PIDS;
@@ -2177,7 +2072,6 @@ async function waitingWriter(t, root = (w) => w.codexRoot, { aside, said = STOPP
   const before = readFileSync(join(w.codexDir, "tasks.tsv"), "utf8");
   let writer;
   w.codexTool.withLock(w.codexDir, () => {
-    // SAGE_HOME gives the writer's root, as each provider sets it in production.
     const child = spawn(process.execPath, [runner], { env: { ...w.codexEnv, SAGE_HOME: codexRoot, NODE_TEST_CONTEXT: "child" }, stdio: ["ignore", "pipe", "pipe"] });
     let out = "";
     child.stdout.on("data", (b) => { out += b; });
@@ -2187,7 +2081,6 @@ async function waitingWriter(t, root = (w) => w.codexRoot, { aside, said = STOPP
       if (i > 4000) assert.fail("the writer never waited on the lock");
       Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, 5);
     }
-    // The move saves its plan, marks the Claude logbook as step 3 does, and the Mac stops before it marks the Codex one.
     writeFileSync(file, plan);
     writeFileSync(join(w.claudeDir, "tasks.before-move.tsv"), readFileSync(join(w.claudeDir, "tasks.tsv"), "utf8"));
     writeFileSync(join(w.claudeDir, "moved.json"), `${JSON.stringify({ folder: w.folder(), shared: w.shared, gate: id, at: JSON.parse(plan).saved })}\n`);
@@ -2199,7 +2092,6 @@ async function waitingWriter(t, root = (w) => w.codexRoot, { aside, said = STOPP
   if (finish) assert.match(w.claude("move", "--gate", id), /\nReconciliation · every count matches the plan\n/, "the same command finishes the move");
 }
 test("a writer that waited on an old logbook's lock refuses while a move plan names that logbook, so a stop inside step 3 still finishes (T647)", (t) => waitingWriter(t));
-// The plan names each old logbook as the mover's roots give it; a writer whose root is another path to the same folder refuses too (F-T648-1).
 test("a waiting writer whose root is a link to the old root refuses too (F-T648-1)", (t) => waitingWriter(t, (w) => {
   const link = join(w.base, "codex-link");
   symlinkSync(w.codexRoot, link);
@@ -2212,7 +2104,6 @@ test("a waiting writer whose root differs in letter case refuses too, on a volum
   return waitingWriter(t, (w) => join(w.base, "CODEX-ROOT"));
 });
 
-/** A move that Claude saved and stopped after step 2, finished from a Codex tool whose two roots are other paths to the same folders (F-T648-4). */
 function finishFromAlias(t, alias) {
   const w = moveWorld(t), { id } = w.ask();
   stopAt(w, id, 2);
@@ -2236,7 +2127,6 @@ test("a stopped move finishes from the other provider when its roots differ in l
   return finishFromAlias(t, (w, root) => join(w.base, basename(root).toUpperCase()));
 });
 
-/** A plan of another folder that names only this project's Claude logbook, by a link to its root: it stops the project all the same (F-T648-2). */
 function aliasPlan(w) {
   const link = join(w.base, "claude-link");
   symlinkSync(w.claudeRoot, link);
@@ -2256,8 +2146,6 @@ test("a move preview refuses while a plan names an old logbook of the project by
   assert.equal(existsSync(join(w.shared, w.folder())), false, "no new logbook");
 });
 
-// A plan of another project names a dir that reaches no folder (a bad name, or a missing path): it names no logbook of this
-// project, so a writer writes and gets no raw error (F-T648-3).
 for (const [what, dir] of [["a dir with a NUL byte", "/tmp/sage-\u0000-nul"], ["a dir with a name too long", `/tmp/${"x".repeat(300)}/${"y".repeat(5000)}`], ["a missing dir", "/sage-t648-missing/project-abcdef"], ["a dir under a file", "/dev/null/project-abcdef"]]) {
   test(`a writer writes when another project's plan names ${what} (F-T648-3)`, (t) => {
     const w = moveWorld(t), file = join(w.shared, "moves", "elsewhere-abcdef.json");
@@ -2268,11 +2156,8 @@ for (const [what, dir] of [["a dir with a NUL byte", "/tmp/sage-\u0000-nul"], ["
   });
 }
 
-// A plan path that the system cannot stat for another reason than a missing path or a bad name (no right to search a
-// folder on the way, a link loop) may be another path to this very logbook, so a writer refuses and changes nothing (F-T648-6).
 const UNREAD = (code) => new RegExp(`^sage: refused: sage cannot read .* \\(${code}\\), so it cannot tell whether a move plan names this logbook through it\\. Nothing changed\\.`);
 const asRoot = () => process.getuid?.() === 0;
-/** A folder of mode 000 with a link to the Claude root in it: a plan that names the Claude logbook through it names it out of reach. */
 const shut = (w, root = w.claudeRoot) => {
   const locked = join(w.base, "locked");
   mkdirSync(locked, { recursive: true });
@@ -2332,7 +2217,6 @@ test("a stopped move refuses to finish while its plan names an old logbook behin
   }
 });
 
-/** Rule 3 (T642): a two-root world whose plugins.tsv holds the rows that the test gives, and its bindings as rows. */
 function ruleThree(t, rows, options) {
   const w = twoRoots(t, options);
   const plugins = (...lines) => {
@@ -2359,13 +2243,12 @@ test("rule 3: a new project starts in the shared root when both plugins are at c
 });
 
 test("rule 3: a new project starts legacy, as before, while a plugin is below contract 2, has no row, or has a root with no name (T642)", (t) => {
-  // The provider that runs init writes its own row at contract 2 first, so the one that waits is always the other.
   for (const [by, rows, options] of [["claude", ["claude\t2", "codex\t1"]], ["claude", ["claude\t2"]], ["codex", ["claude\t1", "codex\t2"]], ["claude", ["claude\t2", "codex\t2"], { named: false }]]) {
     const w = ruleThree(t, rows, options);
     assert.equal(w[by]("init"), `logbook ${join(by === "claude" ? w.claudeRoot : w.codexRoot, w.folder())}`, rows.join(" "));
     assert.deepEqual(w.bound(), []);
     assert.equal(existsSync(join(w.shared, w.folder())), false);
-    if (options) continue; // roots with no name never start shared
+    if (options) continue;
     w.plugins("claude\t2", "codex\t2");
     assert.match(w[by]("init", "--project", w.repo("after")), / now uses the shared logbook /, "after the update, the next new project starts shared");
   }
@@ -2411,9 +2294,6 @@ test("rule 3: a repository with no commit yet starts shared, and its row gets th
   assert.equal(w.bound()[0].commits, commitOf(empty));
 });
 
-// T645: the follow-ups of the move (T640, T647, T648), the fork leave-out (T646) and rule 3's edge cases (T649).
-
-/** A move world whose Claude logbook has a milestone M1 with a merged pilot T4 and an open member T5 (as in F-T640-59). */
 function milestoneWorld(t) {
   const w = moveWorld(t);
   w.claude("task", "add", "--title", "pilot", "--size", "small", "--priority", "P1");
@@ -2429,7 +2309,6 @@ test("the same --plan again shows the open gate and opens no second one, and an 
   const first = w.claude("move", "--plan", plan);
   assert.equal(w.claude("move", "--plan", plan), first, "the same gate text again");
   assert.equal(rowsIn(join(w.claudeDir, "gates.tsv")).filter((g) => g.question.startsWith("move · plan")).length, 1, "no second gate");
-  // A new preview after G2 opened gives a new plan, and its gate is G3.
   const newer = w.planOf(w.claude("move", "--preview"));
   assert.match(w.claude("move", "--plan", newer), /^G3 · move · plan /);
   w.claude("gate", "answer", "G2", "--option", "1");
@@ -2487,7 +2366,6 @@ test("a milestone whose breakdown gate its logbook lost moves with a gate number
   assert.deepEqual(shared.projects[0].tables.milestones.map((p) => p.id), [milestone.id]);
 });
 
-/** A move after a key of T2's repair round closed: T4 carries the key F-T4-2 with no finding (as in F-T640-61). */
 function carriedWorld(t) {
   const w = moveWorld(t);
   w.claude("finding", "add", "T2", "--source", "sage", "--severity", "medium", "--summary", "second");
@@ -2513,7 +2391,7 @@ test("a repair of the decisions after round 2 started keeps the carried round ke
 
 test("after a repair of the decisions, the line about the move's id floors prints only when those floors came back (F-T648-8)", (t) => {
   const w = carriedWorld(t);
-  rmSync(join(w.dir, "sources.tsv")); // no old logbook to take the id floors from: only the round key comes back
+  rmSync(join(w.dir, "sources.tsv"));
   writeFileSync(join(w.dir, "decisions.tsv"), "");
   const out = w.claude("logbook", "repair", "--accept-loss", "decisions");
   assert.equal(out.includes("id floors"), false, out);
@@ -2589,7 +2467,6 @@ test("the map page has a tab for each kind of row, and its search box fits a pho
   assert.match(page, /input\{[^}]*box-sizing:border-box/);
 });
 
-/** Sets the GitHub origin of a checkout. */
 const origin = (checkout, url) => { try { git(checkout, "remote", "remove", "origin"); } catch {} git(checkout, "remote", "add", "origin", url); };
 
 test("the move leaves out a fork with another GitHub remote, and the fork keeps its own logbook working (T646)", (t) => {
@@ -2608,7 +2485,6 @@ test("the move leaves out a fork with another GitHub remote, and the fork keeps 
   assert.equal(gate.includes("The move also links"), false);
   w.claude("gate", "answer", id, "--option", "1");
   assert.match(w.claude("move", "--gate", id), /\n4\/6 checkouts linked: 1 \(this one\)\n/);
-  // The fork's logbook is as it was, with no mark, and it takes new work; it has no row in bindings.tsv.
   assert.equal(readFileSync(join(forkDir, "tasks.tsv"), "utf8"), before);
   assert.equal(existsSync(join(forkDir, "moved.json")), false);
   assert.equal(w.claudeTool.storeDir(fork, w.env), forkDir);
@@ -2622,8 +2498,6 @@ test("a GitHub remote that Git cannot read refuses the move preview, never takes
   origin(w.project, "https://github.com/owner/sage.git");
   w.claude("init", "--project", clone);
   git(clone, "remote", "remove", "origin");
-  // A URL over sage's 32 MiB output cap fails only the read that prints it (ENOBUFS, not Git's "no such key"): the first
-  // commit and every other read of this checkout still work, so only the remote read can refuse.
   writeFileSync(join(clone, ".git", "config"), `[remote "origin"]\n\turl = https://github.com/someone/${"s".repeat(32 * 1024 * 1024)}\n`, { flag: "a" });
   assert.equal(refusalOf(() => w.claude("move", "--preview")), `sage: refused: sage cannot read the GitHub remote of ${clone} (ENOBUFS), so it cannot tell a clone of this repository from a fork. Nothing changed. Ask the owner to check that checkout's Git config.`);
 });
@@ -2677,7 +2551,6 @@ test("rule 3: a shallow clone starts a legacy logbook when the shared root has n
   git(w.base, "clone", "-q", "--depth", "1", `file://${w.project}`, shallow);
   assert.match(w.claude("init", "--project", shallow), new RegExp(`^logbook ${w.claudeRoot}/shallow-[0-9a-f]{6}$`));
   assert.deepEqual(w.bound(), []);
-  // Once the shared root has a logbook, a shallow clone gets T631's prompt (F-T633-9), not a legacy logbook.
   assert.equal(w.claude("init"), SHARED_INIT(w.project, join(w.shared, w.folder())));
   git(w.base, "clone", "-q", "--depth", "1", `file://${w.project}`, later);
   assert.match(refusalOf(() => w.claude("init", "--project", later)), /It is a shallow clone, so its first commit is its newest one/);

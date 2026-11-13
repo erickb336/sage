@@ -1,11 +1,3 @@
-// The offline replay of past PRs (T485, step 1 of T344): it reads one logbook folder and prints, for the 10 merged PRs
-// with the most review data, which roles ran, their tokens per round, their findings by severity, class and round, and
-// which findings came later than round 0 or in a later task; then the totals per role and class. It only measures: it
-// reads tasks, runs, findings, ledger and decisions, and it never writes the logbook.
-//
-//   node scripts/review-replay.mjs <logbook folder> [--out <file>]
-//
-// Without --out it prints the report. --out never names a file in the logbook folder.
 import { closeSync, constants, lstatSync, openSync, readdirSync, readFileSync, statSync, writeFileSync } from "node:fs";
 import { dirname, join, resolve } from "node:path";
 import { FINDING_CLASSES } from "../packages/sage-core/logbook-fields.mjs";
@@ -16,7 +8,6 @@ const PICK = 10;
 const SEVERITIES = ["high", "medium", "low"];
 const CLEAN = /-clean$|^qa-pass$/;
 
-/** The rows of one table of the logbook, as objects by its header. It counts in `ragged` the rows whose cell count differs from the header. */
 function table(dir, name, ragged) {
   const [head = "", ...lines] = readFileSync(resolve(dir, `${name}.tsv`), "utf8").replace(/^\uFEFF/, "").split(/\r?\n/).filter(Boolean);
   const cols = head.split("\t");
@@ -37,7 +28,6 @@ const kept = (f) => f.triage !== "dismiss";
 const serious = (f) => kept(f) && f.severity !== "low";
 const one = (s) => s.replace(/\s+/g, " ").replace(/\|/g, "\\|");
 
-/** The report, as Markdown, from the logbook folder `dir`. `at` is the date it prints. Read only. */
 export function replay(dir, at = new Date().toISOString().slice(0, 10)) {
   const ragged = {}, read = (name) => table(dir, name, ragged);
   const tasks = read("tasks"), allRuns = read("runs"), rows = read("findings"), ledger = read("ledger"), decisions = read("decisions");
@@ -45,10 +35,6 @@ export function replay(dir, at = new Date().toISOString().slice(0, 10)) {
   const runs = allRuns.filter((r) => REVIEW_ROLES.includes(r.role));
   const keyRun = (key) => /^(?:F-)?(R\d+)-/.exec(key)?.[1];
 
-  // A finding that came back after a fix ("<key> opened again"), and one moved to a follow-up task ("<key> moved to T9
-  // as F-T9-1: …"). A move rewrites the row to the new task and key, round 0 and no run, and its old task keeps only
-  // the decision. So each moved row counts once, back on the task and key where a review found it, as kept, in the
-  // round of the run that its old key names, else in round 1: a move is for a finding of a repair round.
   const again = new Set(), moved = new Map(), from = new Map();
   for (const d of decisions) {
     const m = /^(\S+) (?:opened again|moved to (T\d+) as (\S+):)/.exec(d.decision);
@@ -59,7 +45,7 @@ export function replay(dir, at = new Date().toISOString().slice(0, 10)) {
   }
   const originOf = (f) => {
     let o = from.get(`${f.task}\t${f.key}`);
-    for (let n = 0, up; o && n < from.size && (up = from.get(`${o.task}\t${o.key}`)); n++) o = up; // moved again
+    for (let n = 0, up; o && n < from.size && (up = from.get(`${o.task}\t${o.key}`)); n++) o = up;
     return o;
   };
   const allFindings = rows.map((f) => {
@@ -73,16 +59,13 @@ export function replay(dir, at = new Date().toISOString().slice(0, 10)) {
   const verdictOf = new Map(ledger.filter((l) => l.run && !l.kind.startsWith("checks-")).map((l) => [l.run, l.kind]));
   const movedRow = new Map(allFindings.filter((f) => f.movedTo).map((f) => [`${f.task}\t${f.key}`, f]));
 
-  // The run of a finding: its run cell, else the run that its key names (R12-3 or F-R12-3), when that run is of its task.
   const runOf = (f) => {
     const id = f.run || keyRun(f.key);
     return id && runById.get(id)?.task === f.task ? { id, how: f.run ? "cell" : "key" } : undefined;
   };
   const classOf = (f) => f.class || "untagged";
-  // A later task's finding whose summary names this task id: a rough sign that a problem shipped (a proxy, not a record).
   const namedBy = (id) => allFindings.filter((f) => f.task !== id && new RegExp(`\\b${id}\\b`).test(f.summary));
 
-  // The pick: merged tasks with a PR and done review runs that all have tokens, by review findings, then review tokens.
   const candidates = tasks.filter((t) => t.state === "merged" && t.pr).map((t) => {
     const own = runsOf.get(t.id) ?? [], done = own.filter(ran);
     const found = (findingsOf.get(t.id) ?? []).filter((f) => REVIEW_ROLES.includes(f.source));
@@ -100,7 +83,7 @@ export function replay(dir, at = new Date().toISOString().slice(0, 10)) {
     `A review role is ${REVIEW_ROLES.join(", ")}. Tokens are of done runs only. "Kept" is a finding that was not dismissed. A class is the reviewer's tag (finding add --class); "untagged" is a finding without one.`,
     "",
   ];
-  const all = []; // [pick, finding] over the picked PRs, for the totals
+  const all = [];
   for (const c of picked) {
     const { t, own, found } = c;
     const rounds = [...new Set(own.map((r) => Number(r.round) || 0))].sort((a, b) => a - b);
@@ -115,7 +98,7 @@ export function replay(dir, at = new Date().toISOString().slice(0, 10)) {
       const keptRounds = [...new Set(ff.filter(kept).map((f) => Number(f.round) || 0))].sort((a, b) => a - b)
         .map((n) => `r${n} ${ff.filter((f) => kept(f) && (Number(f.round) || 0) === n).length}`).join(" · ") || "none";
       out.push(`| ${role} | ${rr.length} | ${byRound} | ${SEVERITIES.map((s) => ff.filter((f) => f.severity === s).length).join(" · ")} | ${ff.filter((f) => !kept(f)).length} | ${keptRounds} |`);
-      if (!rr.some(ran)) continue; // a role whose runs all failed did not look
+      if (!rr.some(ran)) continue;
       if (!ff.some(kept)) silent.push(role);
       else if (!ff.some(serious)) noSerious.push(role);
     }
@@ -136,7 +119,6 @@ export function replay(dir, at = new Date().toISOString().slice(0, 10)) {
     for (const f of found) all.push([c, f]);
   }
 
-  // The totals over the picked PRs.
   const pickedRuns = picked.flatMap((c) => c.own), total = sum(pickedRuns, tokensOf);
   out.push("## Totals over the picked PRs", "", "| Role | PRs | Runs | Tokens | Kept | Medium or high kept | Kept per M tokens | Medium or high per M tokens | PRs where it found nothing kept | PRs with no medium or high kept | Clean verdicts |", "| --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- |");
   let pairs = 0, silentPairs = 0, lowPairs = 0;
@@ -168,7 +150,6 @@ export function replay(dir, at = new Date().toISOString().slice(0, 10)) {
   const ser = all.filter(([, f]) => serious(f));
   out.push("", `Medium or high kept: ${ser.length}. After round 0: ${ser.filter(([, f]) => Number(f.round) > 0).length}. Opened again after a fix: ${ser.filter(([c, f]) => again.has(`${c.t.id}\t${f.key}`)).length}. Moved to a follow-up task (any severity): ${sum(picked, (c) => (moved.get(c.t.id) ?? []).length)}. Findings of other tasks that name a picked task: ${sum(picked, (c) => namedBy(c.t.id).length)}.`, "");
 
-  // What the data cannot tell, with the counts behind each gap.
   const reviewFindings = allFindings.filter((f) => REVIEW_ROLES.includes(f.source));
   const doneRuns = runs.filter(ran);
   const linked = all.filter(([, f]) => runOf(f));
@@ -203,10 +184,6 @@ if (isMain(import.meta.url)) {
   }
 }
 
-/**
- * Writes the report to `file`, never into the logbook folder `dir`: it is only read. The check compares device and
- * inode, not path text, so a link, a hard link or another letter case of a logbook path is refused too.
- */
 function writeOutside(dir, file, report) {
   const refuse = (why) => { console.error(`refused: --out ${file} ${why}`); process.exit(2); };
   const id = (s) => `${s.dev}:${s.ino}`, book = new Set();

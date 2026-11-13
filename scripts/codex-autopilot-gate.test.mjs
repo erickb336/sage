@@ -1,4 +1,4 @@
-import "./test-env.mjs"; // first: no variable of the developer's shell changes a result
+import "./test-env.mjs";
 import assert from "node:assert/strict";
 import { spawnSync } from "node:child_process";
 import { chmodSync, cpSync, existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, realpathSync, rmSync, symlinkSync, utimesSync, writeFileSync } from "node:fs";
@@ -7,12 +7,6 @@ import { dirname, join } from "node:path";
 import { test } from "node:test";
 import { fileURLToPath } from "node:url";
 
-// The gate's admission of the Codex merge command (T677), with the gate of a copy of the built plugin installed as Codex
-// installs it, so that its merge permits live in that Codex home. The record is a real Codex 0.164.0 record of the T662
-// proof with the owner's mode phrase added; the call is its own function call. The fakes: gh (it logs each call and
-// names the repository), and the running Codex, found as Codex shows it to a hook: a codex-arg0 folder on PATH whose
-// apply_patch link names the Codex binary, here a script that prints a version. No real gh or Codex runs: PATH holds
-// only the fake folders, and each fake is proven first by its absolute path.
 const BUILT = fileURLToPath(new URL("../plugins/sage-codex", import.meta.url));
 const RECORDS = JSON.parse(readFileSync(fileURLToPath(new URL("./fixtures/codex-owner-records.json", import.meta.url)), "utf8"));
 const SCRATCH = realpathSync(mkdtempSync(join(tmpdir(), "sage-autopilot-gate-")));
@@ -62,7 +56,6 @@ const TURN = RECORDS["exec-on"].find((o) => o.payload.type === "task_started").p
 const SHA = "a1b2c3d4e5f60718293a4b5c6d7e8f9012345678";
 const COMMAND = mergeCommand("41", SHA);
 const PPID = 4242;
-/** The record with the owner's mode phrase (sage mode on) in a turn of its own, before the turn of the on phrase and the call. */
 function withMode(lines) {
   const template = lines.find((o) => o.payload.role === "user" && o.payload.content?.[0]?.text === "autopilot on");
   const first = lines.findIndex((o) => o.payload.type === "task_started");
@@ -72,10 +65,6 @@ function withMode(lines) {
   return [...lines.slice(0, first), start, mode, ...lines.slice(first)];
 }
 let worlds = 0;
-/**
- * A scratch world: the hook's environment, the record, the mode file with sage mode and autopilot on (from the on of
- * the turn TURN, as the mode hook saves it), and the start mark.
- */
 function world({ lines = withMode(RECORDS["exec-on"]), mode = { sage: true, autopilot: true, given: true, onTurn: TURN }, mark = { lines: 0, pid: PPID } } = {}) {
   const home = join(SCRATCH, `world-${++worlds}`);
   const project = join(home, "project");
@@ -89,8 +78,6 @@ function world({ lines = withMode(RECORDS["exec-on"]), mode = { sage: true, auto
   if (mode) writeFileSync(modeFile, typeof mode === "string" ? mode : JSON.stringify(mode), { mode: 0o600 });
   if (mark) writeFileSync(join(dir, "marks", `${stateKey({ session_id: SESSION })}.json`), JSON.stringify({ session: SESSION, source: "startup", ...mark }), { mode: 0o600 });
   const checks = [], paths = [];
-  // The fakes are under the test's temporary folder (/tmp on Linux), which the gate counts as writable by the sandbox:
-  // so the tests give the gate no fixed temporary folder, and the R2611 test gives it this one.
   const deps = { env, ppid: PPID, temporary: [], check: async (merge, cwd, checkEnv) => (checks.push({ ...merge, cwd }), paths.push(checkEnv.PATH), { ok: true }) };
   const input = (command = COMMAND, extra = {}) => ({ hook_event_name: "PreToolUse", session_id: SESSION, turn_id: TURN, transcript_path: transcript, cwd: project,
     model: "m", permission_mode: "default", tool_name: "Bash", tool_use_id: CALL, tool_input: { command }, ...extra });
@@ -99,12 +86,10 @@ function world({ lines = withMode(RECORDS["exec-on"]), mode = { sage: true, auto
   return { home, project, env, transcript, modeFile, checks, paths, deps, input, ask, run: (i, d = {}) => gate(i, { ...deps, ...d }) };
 }
 const denied = (out) => (out?.hookSpecificOutput?.permissionDecision === "deny" ? out.hookSpecificOutput.permissionDecisionReason : out);
-// A plugin with no permit folder (the PR 1 base) has no permits: each test then fails on what the gate does.
 const permits = () => (permitFolder && existsSync(permitFolder) ? readdirSync(permitFolder) : []);
 const clearPermits = () => permitFolder && rmSync(permitFolder, { recursive: true, force: true });
 const ALLOW = { hookSpecificOutput: { hookEventName: "PermissionRequest", decision: { behavior: "allow" } } };
 const READY = "Report the pull request as ready: the owner merges it in GitHub";
-/** The gate's refusal when the mode file has autopilot off. */
 const OFF = 'sage: autopilot is off, so the owner merges. Report the pull request as ready. To turn autopilot on while sage mode is on, the owner sends "autopilot on" alone, as a new message while Codex is idle (press Esc first if Codex is busy)';
 
 test("admission: with the mode file on, the owner's on, the call in the record and a passing merge check, the gate saves one permit, the escalation is allowed, and the merge command merges", async () => {
@@ -118,7 +103,6 @@ test("admission: with the mode file on, the owner's on, the call in the record a
     transcript: w.transcript, mark: { session: SESSION, source: "startup", lines: 0, pid: PPID }, mode: w.modeFile, gh: join(FAKES, "gh"), path: `${ARG0}:${FAKES}`, time: "number" });
   assert.deepEqual(ghCalls(), [["repo", "view", "--json", "nameWithOwner", "--jq", ".nameWithOwner"]], "the gate sets the repository from gh in the call's folder");
   rmSync(GH_LOG);
-  // R2611: the escalation is allowed only for the same session, turn, exact command and working folder, from the root thread.
   assert.deepEqual(await w.run(w.ask()), ALLOW);
   for (const [name, request] of [["another folder", w.ask(COMMAND, { cwd: w.home })], ["another command", w.ask(mergeCommand("42", SHA))], ["another turn", w.ask(COMMAND, { turn_id: "turn-2" })],
     ["another session", w.ask(COMMAND, { session_id: "019a0000-0000-7000-8000-000000000bad" })], ["a child", w.ask(COMMAND, { agent_id: "agent-1" })], ["more words", w.ask(`${COMMAND} && echo done`)]]) {
@@ -160,8 +144,6 @@ test("F-T663-21: the gate treats every run of merge.mjs as a merge: only the exa
 });
 
 test("F-T663-1: the gate checks the version of the Codex that runs, also when the record is from an older Codex (a resume by a newer one)", async () => {
-  // R2690's proof: Codex 0.166.0-alpha.6 resumed a record of 0.164.0 and wrote no session_meta and no version into it.
-  // T951: 0.164 and later admit, with no upper bound; an older Codex refuses.
   try {
     for (const version of ["0.163.0", "0.163.9-alpha.1", "0.99.0"]) {
       clearPermits();
@@ -178,7 +160,6 @@ test("F-T663-1: the gate checks the version of the Codex that runs, also when th
       assert.equal(permits().length, 1, version);
       rmSync(GH_LOG);
     }
-    // A new session of a newer Codex: its record names that version too.
     for (const version of ["0.168.0", "0.169.0", "1.0.0"]) {
       writeFileSync(VERSION, `${version}\n`);
       clearPermits();
@@ -188,11 +169,10 @@ test("F-T663-1: the gate checks the version of the Codex that runs, also when th
       assert.equal(permits().length, 1, version);
       rmSync(GH_LOG);
     }
-    // The desktop app's Codex today, with its own record (R2721, scrubbed): the on phrase starts a turn, then the call.
     writeFileSync(VERSION, "0.167.0-alpha.3.2\n");
     clearPermits();
     const app = RECORDS["app-steer"];
-    const offTurn = app.findLast((o) => o.payload.type === "task_started"); // the last turn: the off phrase joins it
+    const offTurn = app.findLast((o) => o.payload.type === "task_started");
     const call = RECORDS["exec-on"].find((o) => o.payload.type === "function_call");
     const onTurn = app.slice(0, app.indexOf(offTurn)).findLast((o) => o.payload.role === "user" && o.payload.content?.[0]?.text === "autopilot on").payload.internal_chat_message_metadata_passthrough.turn_id;
     const desktop = world({ lines: [{ ...app[0], payload: { ...app[0].payload, id: SESSION } }, ...app.slice(1, app.indexOf(offTurn)), call], mode: { sage: true, autopilot: true, given: true, onTurn } });
@@ -239,7 +219,6 @@ test("the call must be in Codex's record after the start mark, and the owner's o
 
 test("R2611: node and gh never come from a folder that Codex's sandbox can write", async () => {
   clearPermits();
-  // gh only in the project folder, or only in the temporary folder: refused.
   for (const where of ["project", "tmp"]) {
     const w = world();
     const dir = where === "project" ? join(w.project, "bin") : w.env.TMPDIR;
@@ -248,7 +227,6 @@ test("R2611: node and gh never come from a folder that Codex's sandbox can write
     chmodSync(join(dir, "gh"), 0o755);
     assert.equal(denied(await w.run(w.input(), { env: { ...w.env, PATH: `${ARG0}:${dir}` } })), `sage: sage found no gh outside the folders that Codex's sandbox can write, so autopilot merges nothing. ${READY}`, where);
   }
-  // A gh in the project folder first on PATH is skipped, and the one outside it is the one that the permit names.
   const first = world();
   mkdirSync(join(first.project, "bin"));
   writeFileSync(join(first.project, "bin", "gh"), "#!/bin/sh\nexit 0\n", { mode: 0o755 });
@@ -257,11 +235,9 @@ test("R2611: node and gh never come from a folder that Codex's sandbox can write
   assert.deepEqual(first.paths, [`${ARG0}:${FAKES}`], "the merge check runs with the trusted PATH too");
   clearPermits();
   rmSync(GH_LOG);
-  // A fixed temporary folder of the sandbox (here the folder that holds the fakes): gh and the Codex binary there do not count.
   const temporary = world();
   assert.equal(denied(await temporary.run(temporary.input(), { temporary: [SCRATCH] })), `sage: sage cannot tell which Codex runs this session, and autopilot merges only in Codex 0.164 and later. ${READY}`);
   assert.deepEqual(permits(), []);
-  // node: the gate's own node, which must be outside those folders too (here the temporary folder names node's folder).
   const node = world();
   assert.match(denied(await node.run(node.input(), { env: { ...node.env, TMPDIR: dirname(process.execPath) } })) ?? "", /^sage: node runs from a folder that Codex's sandbox can write/);
   assert.deepEqual(permits(), []);
@@ -280,11 +256,6 @@ test("F-T677-2: a gh link in a folder outside the sandbox's folders, whose real 
   assert.deepEqual([w.checks, permits(), ghCalls()], [[], [], []], "no merge check, no permit, and no gh ran");
 });
 
-/**
- * A logging gh for the PATH and launcher tests: it logs its called name (argv0), its arguments and its PATH, and names
- * the repository. kind "script" is a node script; kind "launcher" is node itself linked as gh, with a preload that acts
- * as a shared launcher (snap, mise): it runs gh only when it is called by the name gh, and else refuses.
- */
 function loggingGh(kind) {
   const dir = join(SCRATCH, `${kind}-gh-${++worlds}`);
   const log = join(dir, "calls.log");
@@ -307,7 +278,6 @@ if (["repo", "pr"].includes(args[0])) {
   const calls = () => (existsSync(log) ? readFileSync(log, "utf8").trim().split("\n").map((line) => JSON.parse(line)) : []);
   return { dir, env, calls };
 }
-/** Run the merge command of the world's admitted call, with this environment. */
 const runMerge = (w, env) => spawnSync(process.execPath, [MERGE, "41", SHA], { cwd: w.project, encoding: "utf8", env: { HOME: w.home, CODEX_SESSION_ID: SESSION, CODEX_THREAD_ID: SESSION, CODEX_TOOL_CALL_ID: CALL, ...env } });
 
 test("F-T677-1: gh runs with the name gh, so a shared launcher that picks its tool by name (snap, mise) runs gh", async () => {
@@ -330,8 +300,6 @@ test("F-T677-4: the trusted PATH drops missing folders, and every gh child (repo
   clearPermits();
   const w = world();
   const gh = loggingGh("script");
-  // TMPDIR given in a form that is not its real form (here a link, as /var is on macOS), and a PATH folder under it
-  // that does not exist yet: the sandbox could make it later. A missing folder elsewhere goes too.
   mkdirSync(join(w.home, "tmp-real"));
   symlinkSync(join(w.home, "tmp-real"), join(w.home, "tmp-link"));
   mkdirSync(join(w.project, "bin"));
@@ -348,19 +316,15 @@ test("F-T677-4: the trusted PATH drops missing folders, and every gh child (repo
 });
 
 test("F-T677-3, F-T677-34: the gate allows no network approval of the admitted call, also for GitHub's API: Codex asks the owner", async () => {
-  // When gh asks for the network, the merge command has already used the permit, so an allow there could never apply
-  // (F-T677-34). The gate allows only the escalation, while the permit is unused.
   clearPermits();
   const w = world();
   assert.equal(await w.run(w.input()), undefined);
   rmSync(GH_LOG);
   const ask = (description) => w.ask(COMMAND, { tool_input: description === undefined ? { command: COMMAND } : { command: COMMAND, description } });
-  // Codex 0.164 gives a network approval as Bash with the call's command and "network-access <protocol>://<host>:<port>".
   for (const description of ["network-access https://api.github.com:443", "network-access https://example.com:443", "network-access http://api.github.com:80", "network-access https://api.github.com.example.com:443",
     "network-access socks5-tcp://api.github.com:443", "network-access https://api.github.com:443 ", 7, null]) {
     assert.equal(await w.run(ask(description)), undefined, String(description));
   }
-  // The escalation itself: no description, or the model's own reason.
   assert.deepEqual(await w.run(ask(undefined)), ALLOW, "no description");
   assert.deepEqual(await w.run(ask("merge the verified pull request")), ALLOW, "a reason of the model");
 });
@@ -381,12 +345,10 @@ test("the off path never blocks and is never missed: an off after the admission 
     assert.equal(await w.run(w.input()), undefined);
     rmSync(GH_LOG);
     if (kind === "saved") {
-      // The mode hook saves the off: it answers with no block, and the merge command reads the mode file.
       const out = answer({ hook_event_name: "UserPromptSubmit", session_id: SESSION, turn_id: "t-off", transcript_path: w.transcript, cwd: w.project, prompt: "autopilot off" }, w.env);
       assert.equal(out?.decision, undefined, "the off is never blocked");
       assert.deepEqual(JSON.parse(readFileSync(w.modeFile, "utf8")).autopilot, false);
     } else {
-      // The off reaches Codex's record even when its hook fails (T662 proof 3b): here only the record has it.
       const image = RECORDS["image-off"].filter((o) => o.payload.role === "user").at(-1);
       const off = kind === "image" ? image : { ...image, payload: { ...image.payload, content: [{ type: "input_text", text: "autopilot off" }], internal_chat_message_metadata_passthrough: { ...image.payload.internal_chat_message_metadata_passthrough, content_item_metadata: [{ provenance: { type: "user" } }] } } };
       writeFileSync(w.transcript, `${readFileSync(w.transcript, "utf8")}${JSON.stringify(off)}\n`);
@@ -396,7 +358,6 @@ test("the off path never blocks and is never missed: an off after the admission 
     assert.match(r.stderr, kind === "saved" ? /autopilot is off in sage's mode file of this session/ : /the owner's latest autopilot switch is off/, kind);
     assert.deepEqual(ghCalls(), [], `${kind}: no gh`);
   }
-  // A mode folder that cannot change: the mode hook gives one line and blocks nothing; the record's off still stops merges.
   clearPermits();
   const w = world();
   assert.equal(await w.run(w.input()), undefined);
@@ -416,10 +377,6 @@ test("the off path never blocks and is never missed: an off after the admission 
 });
 
 test("F-T677-24, F-T677-29: an off from a subagent's thread, a fork, a fork of a fork, a fork's subagent or a side conversation stops the main session's merges; an on from there counts for nothing", async () => {
-  // The threads, as Codex 0.164.0 gives them to the hook: a subagent's prompt has its root thread's session id and an
-  // agent_id; a fork has its own session id and a record that names the thread it came from (forked_from_id), which
-  // can be a fork too; a subagent of a fork has the fork's session id; a side conversation (/side) is a fork with no
-  // record.
   const FORK = "019a0000-0000-7000-8000-00000000f0f1", FORK2 = "019a0000-0000-7000-8000-00000000f0f2", CHILD = "019a0000-0000-7000-8000-0000000000c1";
   const child = (root) => ({ session: root, agent: CHILD, meta: { id: CHILD, session_id: root, source: { subagent: { thread_spawn: { parent_thread_id: root, depth: 1, agent_path: "/root/sage_lead_t1" } } } } });
   const THREADS = {
@@ -465,19 +422,16 @@ test("F-T677-24, F-T677-29: an off from a subagent's thread, a fork, a fork of a
     assert.equal(denied(await w.run(w.input())), OFF, `${name}: the gate refuses the next merge`);
   }
   assert.deepEqual(lines, cases.map(([, , said]) => said), "one line in the thread where the owner sent it");
-  // An on from a subagent's thread, a fork's subagent or a side conversation changes nothing in the main session.
   clearPermits();
   const w = world({ mode: { sage: true, autopilot: false, given: true } });
   for (const thread of ["subagent", "fork's subagent", "side"]) for (const phrase of ["sage mode", "autopilot on"]) assert.equal(prompt(w, phrase, thread)?.systemMessage, undefined, `${phrase} from a ${thread}`);
   assert.deepEqual(JSON.parse(readFileSync(w.modeFile, "utf8")), { sage: true, autopilot: false, given: true });
   assert.equal(denied(await w.run(w.input())), OFF);
   assert.deepEqual([w.checks, permits(), ghCalls().filter((call) => call.includes("merge"))], [[], [], []]);
-  rmSync(GH_LOG, { force: true }); // the side's own on asks gh for the branch protection (protectionNote)
+  rmSync(GH_LOG, { force: true });
 });
 
 test("F-T677-33, F-T677-18: after an off from a fork, an on that joins the main thread's running turn merges nothing; only a new on that starts its own turn turns merges on again", async () => {
-  // Owner decision 2026-11-08 (option A). The main thread's record keeps the owner's on of the turn TURN, and the off
-  // from the fork reaches only the mode files. The real lines of exec-on give the shapes of the new lines.
   const exec = RECORDS["exec-on"];
   const startOf = (turn) => { const s = exec.find((o) => o.payload.type === "task_started"); return { ...s, payload: { ...s.payload, turn_id: turn, turn_attribution: { ...s.payload.turn_attribution, turn_id: turn } } }; };
   const message = (turn, text) => { const m = exec.find((o) => o.payload.role === "user" && o.payload.content?.[0]?.text === "autopilot on"); return { ...m, payload: { ...m.payload, content: [{ type: "input_text", text }], internal_chat_message_metadata_passthrough: { ...m.payload.internal_chat_message_metadata_passthrough, turn_id: turn } } }; };
@@ -503,7 +457,6 @@ test("F-T677-33, F-T677-18: after an off from a fork, an on that joins the main 
     clearPermits();
     rmSync(GH_LOG);
     offFromFork(w);
-    // Turn X: "WAIT" starts it, and the owner's on joins it (Enter while Codex works). Then the chief asks for a merge.
     if (!early) append(w, [startOf("X"), message("X", "WAIT")]);
     const out = prompt(w, SESSION, "X", "autopilot on", w.transcript);
     if (early) append(w, [startOf("X"), message("X", "WAIT")]);
@@ -511,9 +464,7 @@ test("F-T677-33, F-T677-18: after an off from a fork, an on that joins the main 
     assert.equal(denied(await w.run(w.input(COMMAND, { tool_use_id: "call-x", turn_id: "X" }))), refusal, `${name}: the gate refuses the merge`);
     assert.deepEqual([w.checks.length, permits()], [1, []], `${name}: no merge check after the off, and no permit`);
     assert.equal(out?.hookSpecificOutput?.additionalContext.startsWith('sage: this "autopilot on" did not count') ? out.hookSpecificOutput.additionalContext : undefined, said, `${name}: the chief's note`);
-    // Turn Y: the owner's on starts it, as a new message while Codex is idle. Merges run again.
     append(w, [startOf("Y")]);
-    // (In the second case the mode file is already on, from the on of turn X, so the hook only saves the new turn.)
     const again = prompt(w, SESSION, "Y", "autopilot on", w.transcript)?.hookSpecificOutput?.additionalContext;
     if (!early) assert.match(again ?? "", /^sage: autopilot is on\./, `${name}: the new on switches`);
     assert.deepEqual(JSON.parse(readFileSync(w.modeFile, "utf8")), { sage: true, autopilot: true, given: true, onTurn: "Y" }, `${name}: the mode file saves the new on's turn`);
@@ -536,7 +487,6 @@ test("PermissionRequest: an old permit, or a permit of another call, allows noth
   assert.equal(await w.run(w.ask()), undefined, "older than 300 s");
   writeFileSync(file, "{not json");
   assert.equal(await w.run(w.ask()), undefined, "a damaged permit");
-  // A new admission removes permits older than 300 s.
   const old = Date.now() / 1000 - 400;
   utimesSync(file, old, old);
   const next = world();

@@ -1,4 +1,3 @@
-// A two-minute deadlock guard allows native startup on a busy machine. It is not a speed assertion.
 export function waitNative(child, { deadlineMs = 120_000, onTimeout = () => {} } = {}) {
   return new Promise(resolve => {
     let settled = false;
@@ -30,8 +29,6 @@ export function waitNative(child, { deadlineMs = 120_000, onTimeout = () => {} }
       if (signal === "SIGTERM" && !settled) escalation = setTimeout(() => terminate("SIGKILL"), 30_000);
     };
     const timer = setTimeout(() => {
-      // End our transport, but retain the child handle until closure proves it stopped.
-      // A deadline is a failed probe, not proof of shutdown. Allow graceful closure before escalating.
       timedOut = true;
       child.stdin.end();
       child.stdin.destroy();

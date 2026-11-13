@@ -1,9 +1,3 @@
-// The native packaging check, in a scratch HOME and CODEX_HOME that it deletes at the end: no model turn, and no write
-// outside that folder. SAGE_CODEX_BIN names the codex binary, for example the desktop app's own (default: codex on PATH).
-//   1. plugin/read finds every sage skill and no plugin hook (T957: sage's hooks are the user's entries).
-//   2. sage's `hooks install` puts its entries in the scratch hooks.json; hooks/list shows the 7 as user hooks.
-//   3. config/batchWrite trusts them, as the app's hook review does; then an update swaps the plugin's version folder,
-//      and hooks/list must still show each sage entry as trusted, with the same key and hash.
 import assert from "node:assert/strict";
 import { spawn } from "node:child_process";
 import { cpSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, realpathSync, renameSync, rmSync, writeFileSync } from "node:fs";
@@ -14,7 +8,6 @@ import { waitNative } from "./wait-child.mjs";
 import { EVENTS, install } from "../plugins/sage-codex/hooks/entries.mjs";
 
 const PLUGIN = join(ROOT, "plugins/sage-codex");
-// Codex names each event in camel case.
 const sageEvents = Object.keys(EVENTS).map((event) => event[0].toLowerCase() + event.slice(1)).sort();
 const binary = process.env.SAGE_CODEX_BIN ?? "codex";
 const scratch = realpathSync(mkdtempSync(join(tmpdir(), "sage-codex-check-")));
@@ -54,7 +47,6 @@ try {
       finished = true;
       child.stdin.end();
     };
-    /** sage's entries in one hooks/list reply: each with its event, key, hash, source and trust. */
     const sageHooks = (result) => result.data[0].hooks.filter((hook) => /sage-hooks\/launch\.mjs/.test(hook.command ?? ""))
       .map(({ eventName, key, currentHash, source, trustStatus, matcher }) => ({ eventName, key, currentHash, source, trustStatus, matcher }));
     child.stderr.resume();
@@ -92,7 +84,6 @@ try {
             assert.ok(before.every((hook) => hook.source === "user" && hook.trustStatus === "untrusted" && hook.matcher === null), JSON.stringify(before));
             send("config/batchWrite", { edits: [{ keyPath: "hooks.state", value: Object.fromEntries(before.map((hook) => [hook.key, { trusted_hash: hook.currentHash }])), mergeStrategy: "upsert" }], reloadUserConfig: true }, 4);
           } else if (reply.id === 4) {
-            // An update of sage: a new version folder with changed files, and the old one gone.
             renameSync(join(cache, "0.1.0"), join(cache, "0.2.0"));
             const manifest = join(cache, "0.2.0/.codex-plugin/plugin.json");
             writeFileSync(manifest, JSON.stringify({ ...JSON.parse(readFileSync(manifest, "utf8")), version: "0.2.0" }));

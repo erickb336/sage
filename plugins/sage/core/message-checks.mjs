@@ -1,6 +1,3 @@
-// The pure checks of sage's messages (T984). textProblems reads the text form of a message, as the chat shows it, so a
-// hook can run it on a message that the chief wrote by hand (T1004, T1005, in note mode). pageProblems reads a message's
-// page. Each returns a list of problems, empty when the message passes.
 import { createHash } from "node:crypto";
 import { CHIEF } from "./chiefs.mjs";
 import { KINDS, INCIDENT_STATUS, LONG_WIDTH, TREE, WIDTH, messageText, partsOf, pictureProblems, prepareMessage } from "./message.mjs";
@@ -9,35 +6,22 @@ import { GATE_ID, MILESTONE_ID, TASK_ID } from "./milestone-rules.mjs";
 import { PR } from "./pull-request.mjs";
 import { pictureSvg } from "./picture.mjs";
 
-// The ids of the state tool, in its own forms: a task, a milestone, a gate, a chief, a run, a finding's key and a pull
-// request (PR 12). A message names work by its words; its ids go only in the Ref line. A milestone, gate or chief form
-// that a product name follows is that product, not an id: "the M4 Mac", "an M2 chip", "a G5 server", "a C3 chord".
-// Only these three forms, and only before these words, so that M12, G7 and C2 alone stay ids.
 const bare = (re) => re.source.replace(/^\^|\$$/g, "");
 const PRODUCT = String.raw`(?!\s+(?:Mac|MacBook|iMac|chips?|Pro|Max|Ultra|servers?|chords?)\b)`;
 const RAW_ID = new RegExp(`(?<![\\w-])(?:${bare(TASK_ID)}|(?:${[MILESTONE_ID, GATE_ID, CHIEF].map(bare).join("|")})(?![\\w-])${PRODUCT}|R[1-9]\\d*|F-T[1-9]\\d*-[1-9]\\d*|PR ?#?${bare(PR)})(?![\\w-])`, "g");
-// A code span: in one paragraph, and it may wrap onto the next line.
 const CODE_SPAN = /`(?:[^`\n]|\n(?!\s*\n))*`/g;
 const HEADS = Object.entries(KINDS).map(([kind, k]) => [kind, k.head]);
 const BOX_MARK = /[─-╿]/u;
 const FENCE = /^\s*(`{3,}|~{3,})/;
 const TABLE_ROW = /^\s*\|.*\|\s*$/;
-/** The most problems that a note lists, and the most ids that the raw-id problem lists: the rest are "and N more". */
 const SHOWN = 20;
 
-/** The kind that a text names on its first line (its head), or null. */
 export function kindOf(text) {
   const first = String(text).split("\n").find((l) => l.trim())?.trim().replace(/^#+\s*|\*\*/g, "") ?? "";
   const hit = HEADS.find(([, head]) => first === head || (head === "INCIDENT" && INCIDENT_STATUS.some((s) => first === `${head} · ${s}`)));
   return hit ? hit[0] : null;
 }
 
-/**
- * The parts of a text: its fenced blocks, and its other lines. A fenced block is a picture when its fence comes right
- * under its title (the text form writes a picture so, and code after a blank line), or when it has box marks: a picture
- * may be only arrows, such as "Brief ▶ Run ▶ Report". The board's chat text, from its "**sage board**" line on, is not
- * the message's own text.
- */
 function partsOfText(text) {
   const lines = String(text).split("\n"), out = { lines: [], pictures: [], code: [] };
   for (let i = 0; i < lines.length; i++) {
@@ -51,7 +35,6 @@ function partsOfText(text) {
   return out;
 }
 
-/** The lines that may name ids: not the Ref line, nor a Page block (its first line, wrapped, and its path). */
 function ownWords(lines) {
   const out = [];
   for (let i = 0; i < lines.length; i++) {
@@ -70,30 +53,17 @@ const labelAt = (line, label) => {
   return l === label || l.startsWith(`${label}:`);
 };
 
-/**
- * The problems of a message's text form: each picture over the width, a tree mark, a box that does not close, a raw id
- * outside the Ref line and the Page block, and a part of its kind that is missing or out of order. Only a message that
- * names its kind on its first line is checked: a message with no kind gives no problem.
- */
 export const textProblems = (text, options) => namedProblems(text, options).problems.map(([, problem]) => problem);
 
-/**
- * The kind of a text and its problems, each as [name, text]. A name has no word of the message, only words of sage's
- * checks and of the kind's parts, so that a count of the misses keeps no message text.
- */
 function namedProblems(text, { width = WIDTH } = {}) {
   const kind = kindOf(text);
   if (!kind) return { kind, problems: [] };
   const { lines, pictures } = partsOfText(text), problems = [];
-  // One push for each problem: a spread of a long list into push() overflows the stack (F-T1004-5).
   pictures.forEach((pic, k) => { for (const p of pictureProblems(pic, width)) problems.push(["picture", `picture ${k + 1}: ${p}`]); });
   if (lines.some((l) => TREE.test(l))) problems.push(["tree marks", "the message has tree marks (├ └ ┬ ┴ ┼ ┤ ┌ ┐ ┘): draw boxes inside boxes, or write a list"]);
-  // A word in code is not an id: the text form keeps each code span's marks.
   const ids = [...new Set([ownWords(lines).join("\n").replace(CODE_SPAN, ""), ...pictures.flat()].flatMap((l) => [...l.matchAll(RAW_ID)].map((m) => m[0])))];
   const some = ids.length > SHOWN ? `${ids.slice(0, SHOWN).join(", ")} and ${ids.length - SHOWN} more` : ids.join(", ");
   if (ids.length) problems.push(["raw ids", `raw ids in the message: ${some}. Name the work in words; put its ids in the Ref line`]);
-  // The parts, in order: each labelled part that the kind needs, at the start of a line. A long message gives its main
-  // point and its Page block: its parts are on its page.
   if (lines.some((l) => /^Main point:/.test(l)) && lines.some((l) => /^Page · /.test(l))) return { kind, problems };
   let at = 0;
   for (const part of partsOf(kind).filter((p) => p.need)) {
@@ -107,10 +77,6 @@ function namedProblems(text, { width = WIDTH } = {}) {
     else problems.push([`missing: ${part.name}`, `a ${kind} needs "${part.name}"`]);
   }
   if (KINDS[kind].pick && !/\(my\s+pick\)/i.test(text)) problems.push(["no pick", `a ${kind} marks your pick with "(my pick)"`]);
-  // The owner's rules for a kind on the choice card (T1023): each part apart, under its bold label on its own line, and
-  // the answers as a list, because a table makes long answers hard to read.
-  // A bold label may keep its colon, in or after the bold. A table of short data stays allowed: only a table of answers
-  // (a row with the pick, or the answers' head) gets the note.
   const alone = (l, name) => l.trim().replace(/:?(\*\*):?$/, "$1") === `**${name}**`;
   if (KINDS[kind].card) for (const part of partsOf(kind)) {
     if (/^[A-Z]/.test(part.name) && lines.some((l) => labelAt(l, part.name) && !alone(l, part.name))) problems.push([`inline label: ${part.name}`, `"${part.name}" goes in bold on its own line, with its text under it`]);
@@ -120,12 +86,6 @@ function namedProblems(text, { width = WIDTH } = {}) {
   return { kind, problems };
 }
 
-/**
- * The check of a message that the chief wrote by hand, for a hook in note mode (T1004, T1005): undefined when the text
- * names no kind or fits its kind's shape, else { kind, names, note }. names are the problems' names, with no word of
- * the message, for the count of the misses. note is the line for the chief at its next prompt: the kind, and each problem,
- * at most SHOWN of them, so that a message with thousands of problems keeps a small note (F-T1004-2).
- */
 export function messageMiss(text) {
   const { kind, problems } = namedProblems(text);
   if (!problems.length) return undefined;
@@ -141,20 +101,12 @@ export function messageMiss(text) {
 }
 
 const unescape = (s) => s.replace(/&lt;/g, "<").replace(/&gt;/g, ">").replace(/&quot;/g, '"').replace(/&#39;/g, "'").replace(/&amp;/g, "&");
-// LOADS and EVENT read a tag without its quoted values: a value is escaped text, such as a picture's title in its
-// aria-label ("Where data = truth"), not an attribute. REFRESH reads the whole tag.
 const LOADS = /\s(?:src|srcset|href|action|formaction|poster|data|xlink:href|background)\s*=|^<(?:link|iframe|object|embed|img|image|use|base|frame|audio|video|source|track|form)\b/i;
 const EVENT = /\son[a-z]+\s*=/i, REFRESH = /^<meta\s+http-equiv="refresh"/i;
 const withoutValues = (tag) => tag.replace(/"[^"]*"|'[^']*'/g, '""');
 
-/**
- * The problems of a message's page: a load from outside the page, a policy other than sage's (each script and style
- * must match its hash), an image that is not drawn from a picture of the page's own text form, and the faults of that
- * text form. The text form is the page's "same message as plain text" block, at 66 columns on a long page.
- */
 export function pageProblems(html) {
   const problems = [];
-  // A tag is markup: the page escapes every text, so a "<" in the page starts a real tag.
   const tags = String(html).match(/<[a-z][^>]*>/gi) ?? [], styles = (html.match(/<style\b[^>]*>([\s\S]*?)<\/style>/gi) ?? []).join("");
   const loads = [...tags.filter((t) => LOADS.test(withoutValues(t)) || REFRESH.test(t)), ...(/@import|url\(/i.test(styles) ? ["a style that loads a file"] : [])];
   if (loads.length) problems.push(`the page loads from outside itself: ${[...new Set(loads)].join(", ")}`);
@@ -167,7 +119,6 @@ export function pageProblems(html) {
   if (text === undefined) return [...problems, "the page has no plain-text form of its message, so no image can be checked against its text"];
   const plain = unescape(text), wide = /<main class="long">/.test(html);
   for (const p of textProblems(plain, { width: wide ? LONG_WIDTH : WIDTH })) problems.push(`the text form: ${p}`);
-  // Each image must be the one that pictureSvg draws from a picture of the text form, character for character.
   const drawn = new Set(partsOfText(plain).pictures.map((lines) => pictureSvg(lines).replace(/ aria-label="[^"]*"/, "")));
   const images = [...html.matchAll(/<svg class="pic"[\s\S]*?<\/svg>/g)].map((m) => m[0].replace(/ aria-label="[^"]*"/, ""));
   const strays = images.filter((svg) => !drawn.has(svg)).length;
@@ -176,12 +127,6 @@ export function pageProblems(html) {
   return problems;
 }
 
-/**
- * A message from its JSON, as the state tool's message command gives it: the text for the chat and, for a message with
- * a picture or a long message, its page. pagePath(name) gives the path of the page with that file name, and pageUrl(name)
- * the board's link to it. A message that fails
- * its shape or its checks gives only its problems, so that no message reaches the owner in another shape.
- */
 export function renderMessage(input, { pagePath = (name) => name, pageUrl = () => undefined } = {}) {
   const { problems, msg, width } = prepareMessage(input);
   if (problems.length) return { problems };

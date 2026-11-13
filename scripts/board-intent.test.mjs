@@ -1,4 +1,3 @@
-// Requests stay typed until the provider makes a command. Payloads reach only the parser or the hook's JSON input.
 import "./test-env.mjs";
 import assert from "node:assert/strict";
 import { spawnSync } from "node:child_process";
@@ -99,7 +98,7 @@ test("T205: the Claude owner boundary rejects agent events and quoted or framed 
 
 test("T205: board commands encode project names and retain safe folder and task boundaries", (t) => {
   const send = hook(t);
-  const first = send("sage board for 日本語").split("\n")[1]; // line 0 starts the board server (T216)
+  const first = send("sage board for 日本語").split("\n")[1];
   assert.match(first, /board --name-hex e697a5e69cace8aa9e --project '\/work\/sage' --view chat$/);
   assert.match(first.slice(first.indexOf(" board ")), /^[ -~]+$/);
   assert.equal(send("sage board for $(never-execute)"), "");

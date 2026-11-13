@@ -1,5 +1,3 @@
-// T547: when autopilot turns on, the hook warns once if the default branch needs no pull request. It warns only. Both hooks
-// run as their hosts run them (one process for each event), with a fake gh on PATH: no test reaches GitHub.
 import "./test-env.mjs";
 import assert from "node:assert/strict";
 import { spawnSync } from "node:child_process";
@@ -14,10 +12,6 @@ const CODEX_HOOK = fileURLToPath(new URL("../plugins/sage-codex/hooks/sage-codex
 const scratch = realpathSync(mkdtempSync(join(tmpdir(), "sage-protection-")));
 after(() => rmSync(scratch, { recursive: true, force: true }));
 
-// The fake gh answers FAKE_GH_MODE: rules (a ruleset needs a pull request), classic (a branch protection rule does),
-// status (protection with no pull request rule), none, or broken (every read fails). private answers HTTP 403 "Upgrade to
-// GitHub Pro" to both protection reads, and private-classic only to the classic read. slow waits 3 seconds before each answer
-// and then answers as none. It logs each call to FAKE_GH_LOG.
 const BIN = join(scratch, "bin");
 mkdirSync(BIN);
 writeFileSync(join(BIN, "gh"), `#!/usr/bin/env node
@@ -44,7 +38,6 @@ else if (path === "repos/o/r/branches/main/protection") {
 chmodSync(join(BIN, "gh"), 0o755);
 
 let sessions = 0;
-/** A session of one host, with a fake gh in the given mode: prompt() sends one typed message, and calls() counts the gh reads. */
 function session(host, mode) {
   const id = `s${++sessions}`;
   const dir = join(scratch, id);
@@ -53,7 +46,6 @@ function session(host, mode) {
   writeFileSync(log, "");
   const env = { PATH: `${BIN}:${dirname(process.execPath)}:/usr/bin:/bin`, HOME: join(dir, "home"), SAGE_HOME: join(dir, "sage"), SAGE_HOOKS_STATE: join(dir, "state"), CODEX_HOME: join(dir, "codex"), FAKE_GH_MODE: mode, FAKE_GH_LOG: log };
   const script = host === "claude" ? CLAUDE_HOOK : CODEX_HOOK;
-  // A Codex session has Codex's record (an on counts only when the hook can read it, F-T896-1), and each prompt starts a new turn.
   const codexId = `019a0000-0000-7000-8000-${String(sessions).padStart(12, "0")}`;
   const transcript = join(dir, `rollout-${codexId}.jsonl`);
   if (host === "codex") writeFileSync(transcript, `${JSON.stringify({ type: "session_meta", payload: { id: codexId, session_id: codexId, cli_version: "0.164.0", source: "cli" } })}\n`);
@@ -129,7 +121,7 @@ for (const host of ["claude", "codex"]) {
     const took = Date.now() - start;
     assert.match(note, AUTOPILOT, "autopilot still turns on");
     assert.match(note, UNREADABLE, note);
-    assert.ok(took < 8000, `the hook took ${took} ms`); // timing-ok: the host kills a hook at 10 s; the deadline is 5 s, the old code took 9 s, and the fake gh is the slow part
+    assert.ok(took < 8000, `the hook took ${took} ms (timing-ok: the host kills a hook at 10 s; the deadline is 5 s, the old code took 9 s, and the fake gh is the slow part)`);
     assert.ok(s.calls().length <= 2, "no read starts after the deadline");
   });
 

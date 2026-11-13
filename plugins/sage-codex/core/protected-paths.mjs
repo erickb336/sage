@@ -3,7 +3,6 @@ import { lstatSync, readlinkSync, realpathSync, statSync } from "node:fs";
 
 const refuse = () => { throw Error("File write paths are unavailable"); };
 const textPath = path => typeof path === "string" && path.length > 0 && path.length <= 4096 && !/\p{Cc}/u.test(path);
-// Array iteration skips holes. Require an own data value at every index.
 function pathList(value) {
   if (!Array.isArray(value)) refuse();
   const length = value.length;
@@ -19,7 +18,6 @@ function pathList(value) {
 const from = (cwd, path) => isAbsolute(path) ? path : `${cwd}/${path}`;
 const fold = text => text.normalize("NFKC").toLowerCase();
 
-// Resolve links before '..'. Preserve missing suffixes so new files are checked too.
 export function canonical(path) {
   let rest = [], hops = 0;
   for (;;) {
@@ -38,21 +36,19 @@ export function canonical(path) {
 }
 const contains = (root, path) => path === root || path.startsWith(root.endsWith(sep) ? root : root + sep);
 
-/** Does a path part name name, also as a shell pattern (sag?, .cl*, [.]claude, {a,b})? */
 export function partNames(part, name) {
   if (part === name) return true;
   if (!/[*?[{]/.test(part)) return false;
-  if (part.replace(/[^*?[{]/g, "").length > 8) return true; // many wildcards could name anything, and would make a slow match
-  if (/\[[^\]]*\[[:=.]/.test(part)) return true; // a class such as [[:alpha:]] or [[.v.]], which the match below does not read
+  if (part.replace(/[^*?[{]/g, "").length > 8) return true;
+  if (/\[[^\]]*\[[:=.]/.test(part)) return true;
   const re = part.replace(/[.+^$()|\\]/g, "\\$&").replace(/\*/g, ".*").replace(/\?/g, ".").replace(/\[!/g, "[^").replace(/\{([^{}]*)\}/g, (_, alts) => `(?:${alts.split(",").join("|")})`);
   try {
     return new RegExp(`^${re}$`).test(name);
   } catch {
-    return true; // a pattern that the hook cannot read could name anything
+    return true;
   }
 }
 
-/** A path check only. The caller supplies trusted roots and execution cwd, then enforces the decision. */
 export function fileWriteOutsideRoots({ paths, cwd, roots }) {
   paths = pathList(paths);
   roots = pathList(roots);
@@ -63,10 +59,8 @@ export function fileWriteOutsideRoots({ paths, cwd, roots }) {
       const absolute = from(cwd, path);
       if (!textPath(absolute)) refuse();
       const resolved = canonical(absolute);
-      // An ancestor can remove or replace the protected tree as a whole.
       if (protectedRoots.some(root => contains(root, resolved) || contains(resolved, root))) return false;
       const existing = statSync(absolute, { throwIfNoEntry: false });
-      // A second name can reach a protected inode without sharing its directory.
       if (existing?.isFile() && existing.nlink > 1) return false;
     }
     return true;

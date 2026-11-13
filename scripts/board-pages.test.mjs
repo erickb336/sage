@@ -1,7 +1,3 @@
-// T1001: the board's pages route. Each task's pages folder, read-only, on the Mac only, at /pages/<logbook>/<task>/ (an
-// index) and /pages/<logbook>/<task>/<file>, with a sandbox policy in place of the board's. A board on a free port over a
-// SAMPLE logbook, with its worktree root (SAGE_WORKTREES) in a temporary folder; and the state tool's message command,
-// whose Page link opens on that board.
 import "./test-env.mjs";
 import test from "node:test";
 import assert from "node:assert/strict";
@@ -26,7 +22,6 @@ const LOGBOOK = "project-abcdef";
 const PASSWORD = "sample board pass 01", RECORD = await hashPassword(PASSWORD);
 const SWITCH = `<script>${SWITCH_SCRIPT}</script>`;
 
-/** A free loopback port that is not one of the owner's own (4173, 43123). */
 async function freePort() {
   for (;;) {
     const socket = createServer();
@@ -37,7 +32,6 @@ async function freePort() {
   }
 }
 
-/** A logbook folder in root/<name> with three tasks: T1 has a pages folder, T4 has none, and T7's is a link (sampleRoot). */
 function logbook(root, name) {
   const dir = join(root, name);
   mkdirSync(dir, { recursive: true });
@@ -45,10 +39,6 @@ function logbook(root, name) {
   writeFileSync(join(dir, "tasks.tsv"), `${HEADERS[0].replaceAll(" ", "\t")}\n${["T1", "T4", "T7"].map((id) => `${id}\tSample task\tsmall\t\tbuild\tframed\tsample/${id.toLowerCase()}\t\t0\t\n`).join("")}`);
 }
 
-/**
- * The sample worktree root: the logbook's pages, with every kind of file that the route must serve or refuse, a task
- * checkout and a run folder beside the pages folder, and the pages of a logbook that the board does not know.
- */
 function sampleRoot(base) {
   const root = join(base, "worktrees"), pages = join(root, LOGBOOK, "pages"), t1 = join(pages, "T1");
   mkdirSync(join(t1, "sub", "deep", "deeper"), { recursive: true });
@@ -64,22 +54,18 @@ function sampleRoot(base) {
     "upper.HTML": "<p>case</p>", "v1..v2.html": "<p>two dots</p>", "notes..md": "two dots", "locked.html": "<p>locked</p>",
   };
   for (const [name, text] of Object.entries(files)) writeFileSync(join(t1, name), text);
-  chmodSync(join(t1, "locked.html"), 0o000); // a file that the board cannot open
+  chmodSync(join(t1, "locked.html"), 0o000);
   writeFileSync(join(t1, "big.html"), "");
   truncateSync(join(t1, "big.html"), 16 * 1024 * 1024 + 1);
-  // Beside the pages folder: a task checkout and a run folder, which must never be reachable.
   for (const dir of ["t1-checkout", "R12"]) { mkdirSync(join(root, LOGBOOK, dir), { recursive: true }); writeFileSync(join(root, LOGBOOK, dir, "secret.html"), "<p>CHECKOUT SECRET</p>"); }
   writeFileSync(join(base, "outside.html"), "<p>OUTSIDE SECRET</p>");
-  // A link in each place: the file, a folder in the path, the task folder; and a hard link to a file outside.
   symlinkSync(join(base, "outside.html"), join(t1, "link.html"));
   symlinkSync(join(root, LOGBOOK, "t1-checkout"), join(t1, "checkout"));
   symlinkSync(join(t1, "sub"), join(t1, "alias"));
   symlinkSync(join(root, LOGBOOK, "t1-checkout"), join(pages, "T7"));
   linkSync(join(base, "outside.html"), join(t1, "hard.html"));
-  // A task folder with more files than the index lists.
   mkdirSync(join(pages, "T2"));
   for (let i = 0; i < 260; i++) writeFileSync(join(pages, "T2", `page-${String(i).padStart(3, "0")}.html`), "<p>x</p>");
-  // The pages of a logbook that no board source holds.
   mkdirSync(join(root, "other-123456", "pages", "T1"), { recursive: true });
   writeFileSync(join(root, "other-123456", "pages", "T1", "research.html"), "<p>OTHER</p>");
   return root;
@@ -106,7 +92,6 @@ function get(f, path, { method = "GET", headers = {}, raw } = {}) {
   });
 }
 
-/** The status line of a request written by hand, for headers that the HTTP client does not send. */
 function raw(f, text) {
   return new Promise((accept, reject) => {
     const socket = connect(f.port, "127.0.0.1", () => socket.end(text));
@@ -116,7 +101,6 @@ function raw(f, text) {
 }
 
 const FILE_POLICY = /^sandbox; script-src 'sha256-[A-Za-z0-9+/]+=*'; default-src 'none'; style-src 'unsafe-inline'; img-src data:; font-src data:; media-src data:; base-uri 'none'; form-action 'none'; frame-ancestors 'none'$/;
-/** The headers that every pages response carries: a sandbox policy in place of the board's, and the board's others. */
 function pageHeaders(response, policy = FILE_POLICY) {
   assert.match(response.headers["content-security-policy"], policy);
   assert.doesNotMatch(response.headers["content-security-policy"], /connect-src|allow-same-origin.*allow-scripts|allow-scripts.*allow-same-origin/);
@@ -138,12 +122,10 @@ test("the pages route serves each page type with its own type and the sandbox po
     pageHeaders(r);
   }
   assert.equal((await get(f, `/pages/${LOGBOOK}/T1/research.html`, { method: "HEAD" })).body, "");
-  // Only sage's own script may run: a message page gets scripts, with the hash of its Today switch only; any other page none.
   const message = await get(f, `/pages/${LOGBOOK}/T1/message.html`);
   assert.equal(message.headers["content-security-policy"], (await get(f, `/pages/${LOGBOOK}/T1/research.html`)).headers["content-security-policy"].replace(/^sandbox;/, "sandbox allow-scripts;"));
   pageHeaders(message, /^sandbox allow-scripts; script-src 'sha256-/);
   assert.match((await get(f, `/pages/${LOGBOOK}/T1/scripted.html`)).headers["content-security-policy"], FILE_POLICY);
-  // With ?scripts=1, the page's own inline scripts run, in the same sandbox, and still connect nowhere.
   const scripted = await get(f, `/pages/${LOGBOOK}/T1/scripted.html?scripts=1`);
   assert.equal(scripted.status, 200);
   pageHeaders(scripted, /^sandbox allow-scripts; script-src 'unsafe-inline'; default-src 'none';/);
@@ -151,18 +133,15 @@ test("the pages route serves each page type with its own type and the sandbox po
   const index = await get(f, `/pages/${LOGBOOK}/T1/`);
   assert.equal(index.status, 200);
   assert.equal(index.headers["content-type"], "text/html; charset=utf-8");
-  // The index has no sandbox, so that its opener policy holds (F-T1001-6): it cuts another site's handle to its tab.
   pageHeaders(index, /^script-src 'none'; default-src 'none';/);
   assert.equal(index.headers["cross-origin-opener-policy"], "same-origin");
   const listed = [...index.body.matchAll(/<a href="\/pages\/project-abcdef\/T1\/([^"?]+)">/g)].map((m) => m[1]).sort();
   assert.deepEqual(listed, ["anim.gif", "brief.pdf", "chart.svg", "handler.html", "message.html", "notes.md", "notes.txt", "photo.jpg", "pic.webp", "prose.html", "research.html", "scripted.html", "shot.png", "sub/deep/deepest.txt", "sub/inner.html"]);
-  // The scripts link only for a page with a script of its own: a script element or an event attribute in a tag, not prose.
   assert.deepEqual([...index.body.matchAll(/href="([^"]+\?scripts=1)"/g)].map((m) => m[1]), [`/pages/${LOGBOOK}/T1/handler.html?scripts=1`, `/pages/${LOGBOOK}/T1/scripted.html?scripts=1`]);
   assert.match(index.body, /a page may link to sites outside this Mac/);
   assert.match(index.body, /the link "open with its scripts" runs the page's own scripts/);
   assert.equal((await get(f, `/pages/${LOGBOOK}/T1`)).body, index.body, "the index also without the last slash");
 
-  // The index is bounded: a folder with more pages lists 200 and says that it stops.
   const many = await get(f, `/pages/${LOGBOOK}/T2/`);
   assert.equal([...many.body.matchAll(/<li>/g)].length, 200);
   assert.match(many.body, /The list stops at 200 pages/);
@@ -174,7 +153,6 @@ test("F-T1013-1: a page with sage's switch and an http-equiv refresh in any spel
   const policy = async (name, text) => { writeFileSync(join(f.t1, name), text); return (await get(f, `/pages/${LOGBOOK}/T1/${name}`)).headers["content-security-policy"]; };
   const none = await policy("plain.html", "<!DOCTYPE html><title>plain</title><p>SAMPLE</p>");
   assert.match(none, /^sandbox; /);
-  // A message page as the message command writes it: its own policy tag (an http-equiv), its style and its switch.
   const design = JSON.parse(readFileSync(join(HERE, "fixtures", "messages", "07-design.json"), "utf8"));
   const page = renderMessage(design, { pagePath: (name) => join(f.base, name) }).page?.html;
   assert.match(page ?? "", /<meta http-equiv="Content-Security-Policy"/, "the message page names its own policy");
@@ -189,18 +167,15 @@ test("F-T1013-1: a page with sage's switch and an http-equiv refresh in any spel
     "a second meta after sage's policy tag": `<meta http-equiv="Content-Security-Policy" content="default-src 'none'"><meta http-equiv="refresh" content="${url}">`,
     "inside a value that looks like sage's policy tag": `<p title='<meta http-equiv="Content-Security-Policy" content="'><meta http-equiv=refresh content=${url}>">x</p>`,
     "in a comment (fails closed)": `<!-- <meta http-equiv="refresh" content="${url}"> -->`,
-    // F-T1013-2: the browser reads the policy-like tag as the value of a, and http-equiv=refresh as the outer meta's.
     "a single-quoted value that holds a policy-like tag": `<meta a='<meta http-equiv="Content-Security-Policy" content="' http-equiv=refresh content='${url}'">`,
-    // F-T1013-6: a srcdoc value is decoded and read as a new page, so its refresh needs no http-equiv in these bytes.
     "in an iframe srcdoc, as entities": `<iframe srcdoc="&lt;meta http&#45;equiv=&quot;refresh&quot; content=&quot;${url}&quot;&gt;"></iframe>`,
   };
   for (const [kind, meta] of Object.entries(refreshes)) assert.equal(await policy("refresh.html", `${page.replace("<title>", `${meta}<title>`)}`), none, kind);
-  // A UTF-16 byte order mark makes the browser read other characters than the bytes that hold the switch.
   assert.equal(await policy("utf16.html", Buffer.concat([Buffer.from([0xff, 0xfe]), Buffer.from(page)])), none, "a UTF-16 byte order mark");
 });
 
 test("F-T1001-24: a tag with millions of quoted values keeps the index whole: no link for its quoted values, a link for an event attribute after them", async (t) => {
-  const f = await fixture(t), t3 = join(f.root, LOGBOOK, "pages", "T3"), values = "\"x\" ".repeat(3_000_000); // 11.4 MiB in one tag
+  const f = await fixture(t), t3 = join(f.root, LOGBOOK, "pages", "T3"), values = "\"x\" ".repeat(3_000_000);
   mkdirSync(t3);
   writeFileSync(join(t3, "quoted.html"), `<a ${values}>`);
   writeFileSync(join(t3, "handler.html"), `<a ${values} onclick=1>`);
@@ -255,30 +230,22 @@ test("the pages route refuses each path that leaves a task's pages, a link, a se
     assert.doesNotMatch(r.body, /SECRET|OTHER|SAMPLE/, why);
     pageHeaders(r);
   }
-  // The index never lists what the route refuses, also after a refused file has a page's name.
   const index = (await get(f, `/pages/${LOGBOOK}/T1/`)).body;
   for (const name of ["link.html", "hard.html", "checkout", "alias", "big.html", "state.json", ".hidden.html", "too-deep.txt", "upper.HTML", "v1..v2.html", "notes..md", "locked.html"]) assert.equal(index.includes(name), false, name);
-  // The board's other routes keep the board's own policy.
   assert.match((await get(f, "/")).headers["content-security-policy"], /^default-src 'none'; script-src 'sha256-.*connect-src 'self'/);
 });
 
-/**
- * F-T1001-7: an agent that cannot read a file of the owner's may still give it a second name in a task's pages folder (a
- * hard link), and remove and add the outside name while the board checks the page. The test acts at the board's own
- * check of the opened file: it removes the outside name just before that check and adds it back just after. once: only
- * at the first check; each: at every check, with a pause, so that the file's change time moves between them.
- */
 function swapAtCheck(secret, inside, each) {
   const real = fs.fstatSync, { ino } = statSync(secret);
   let acted = false;
-  const pause = (ms) => Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, ms); // a wide gap on any clock
+  const pause = (ms) => Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, ms);
   const mock = test.mock.method(fs, "fstatSync", (fd, options) => {
     if (real(fd).ino !== ino || acted && !each) return real(fd, options);
     acted = true;
     unlinkSync(secret);
     try { return real(fd, options); } finally { pause(20); linkSync(inside, secret); }
   });
-  syncBuiltinESMExports(); // the named imports of node:fs see the mock too
+  syncBuiltinESMExports();
   return () => { mock.mock.restore(); syncBuiltinESMExports(); };
 }
 
@@ -298,12 +265,6 @@ test("a page whose names change while the board checks it is refused: a hard lin
   }
 });
 
-/**
- * F-T1001-14: an agent may make a folder of a task's pages a link to a folder of the owner's, and flip it between a link
- * and a real folder while the board checks the page: a real folder at the board's path check, and the link again at its
- * stat of the path. The test flips at the board's own calls: to a real folder at the check of the opened file, and back
- * to the link at the stat of the path. macOS refuses the link at the open; other systems have no such flag.
- */
 test("a page whose folder flips between a link and a folder while the board checks it is refused", { skip: process.platform !== "darwin" && "the board refuses a link in the path at the open on macOS only" }, async (t) => {
   const f = await fixture(t);
   const owner = join(f.base, "owner-docs"), decoy = join(f.base, "decoy"), flip = join(f.t1, "flip"), want = join(flip, "notes.md");
@@ -334,21 +295,18 @@ test("T1010: a task page links the task's pages index with core's URL, on the Ma
   const taskPage = (id, options) => get(f, `/task/${Buffer.from(`sample/${LOGBOOK}/${id}`).toString("base64url")}`, options);
   const pagesHref = (body) => [...body.matchAll(/<a href="([^"]+)"[^>]*>Pages<\/a>/g)].map((m) => m[1]);
   const authorization = `Basic ${Buffer.from(`sage:${PASSWORD}`).toString("base64")}`;
-  // On the Mac: one link, with core's URL, and its path opens the index on this board.
   const mac = await taskPage("T1");
   assert.equal(mac.status, 200);
   assert.deepEqual(pagesHref(mac.body), [pageUrl(LOGBOOK, "T1", "")]);
   const index = await get(f, new URL(pageUrl(LOGBOOK, "T1", "")).pathname);
   assert.equal(index.status, 200);
   assert.match(index.body, /<h1>Pages of T1<\/h1>/);
-  // Off the Mac (signed in through a tunnel), where the route answers 404: the same task page has no link.
   for (const options of [{ headers: { "X-Forwarded-For": "203.0.113.9", Authorization: authorization } }, { raw: { Host: "board.example.test", Authorization: authorization } }]) {
     const off = await taskPage("T1", options);
     assert.equal(off.status, 200, JSON.stringify(options));
     assert.match(off.body, /Sample task/);
     assert.deepEqual(pagesHref(off.body), [], JSON.stringify(options));
   }
-  // On the Mac, a task without a pages folder, or whose folder is a link that the route refuses: no link.
   for (const id of ["T4", "T7"]) {
     const r = await taskPage(id);
     assert.equal(r.status, 200, id);
@@ -360,7 +318,6 @@ test("T1010: a task page links the task's pages index with core's URL, on the Ma
 test("the pages route answers only on the Mac, only GET and HEAD, and only to the board's own pages or a person's click", async (t) => {
   const f = await fixture(t);
   const page = `/pages/${LOGBOOK}/T1/research.html`, authorization = `Basic ${Buffer.from(`sage:${PASSWORD}`).toString("base64")}`;
-  // Off the Mac (a tunnel adds a forwarding header, or names the tunnel's host), also signed in: not found.
   for (const headers of [{ "X-Forwarded-For": "203.0.113.9" }, { Forwarded: "for=203.0.113.9" }, { "X-Forwarded-For": "203.0.113.9", Authorization: authorization }]) {
     const r = await get(f, page, { headers });
     assert.equal(r.status, 404, JSON.stringify(headers));
@@ -368,14 +325,11 @@ test("the pages route answers only on the Mac, only GET and HEAD, and only to th
   }
   assert.equal((await get(f, page, { raw: { Host: "board.example.test", Authorization: authorization } })).status, 404, "the tunnel's own host");
   assert.equal((await get(f, page, { raw: { Host: "evil.example" } })).status, 404, "a rebound name");
-  // No Host (HTTP/1.0) or two Host headers: refused, and the board still answers.
   for (const head of ["HTTP/1.0\r\n", `HTTP/1.1\r\nHost: 127.0.0.1:${f.port}\r\nHost: 127.0.0.1:${f.port}\r\n`]) assert.match(await raw(f, `GET ${page} ${head}\r\n`), /^HTTP\/1\.[01] 4\d\d /, head);
   assert.equal((await get(f, page)).status, 200);
-  // On the Mac: a page opened from an address, from the board's own page, or by a person's click on another site.
   const click = { "Sec-Fetch-Site": "cross-site", "Sec-Fetch-Mode": "navigate", "Sec-Fetch-Dest": "document", "Sec-Fetch-User": "?1" };
   for (const headers of [{}, { "Sec-Fetch-Site": "none" }, { "Sec-Fetch-Site": "same-origin" }, click, { ...click, "Sec-Fetch-Site": "same-site" }])
     assert.equal((await get(f, page, { headers })).status, 200, JSON.stringify(headers));
-  // Refused: a read from another site, a navigation that no person started, the scripts link from another site, a foreign Origin.
   for (const headers of [{ "Sec-Fetch-Site": "cross-site", "Sec-Fetch-Mode": "cors", "Sec-Fetch-Dest": "empty" }, { ...click, "Sec-Fetch-User": undefined }, { ...click, "Sec-Fetch-Dest": "iframe" },
     { "Sec-Fetch-Site": "cross-site", "Sec-Fetch-Mode": "no-cors", "Sec-Fetch-Dest": "image" }, { Origin: "null" }, { Origin: "http://evil.example" }]) {
     for (const name of Object.keys(headers)) if (headers[name] === undefined) delete headers[name];
@@ -392,7 +346,6 @@ test("the pages route answers only on the Mac, only GET and HEAD, and only to th
   }
 });
 
-// The state tool's message command, in a sandbox: the link that its Page block prints opens on the board.
 test("a message's Page block prints the board's link, and the link opens the page on the board", async (t) => {
   const { sage, folder, name, port } = await messageSandbox(t);
   writeFileSync(join(folder, "research.html"), "<!DOCTYPE html><title>SAMPLE</title><p>SAMPLE research page</p>");
@@ -407,9 +360,6 @@ test("a message's Page block prints the board's link, and the link opens the pag
   assert.match(opened.body, /SAMPLE research page/);
 });
 
-// The one promise of F-T1001-1, -2 and -13: a link that the message command prints, or that the index lists, never gets
-// 404. For each file, the command accepts its Page block exactly when the board serves it, and the index lists exactly
-// those.
 test("the message command, the index and the board agree on every file: a link that the command prints or the index lists opens", async (t) => {
   const { base, sage, folder, name, port } = await messageSandbox(t);
   const t2 = dirname(folder) + "/T2", elsewhere = join(base, "elsewhere");
@@ -423,7 +373,6 @@ test("the message command, the index and the board agree on every file: a link t
   mkdirSync(join(folder, "real"));
   writeFileSync(join(folder, "real", "in.html"), "<p>SAMPLE</p>");
   symlinkSync(join(folder, "real"), join(folder, "via"));
-  // A task whose pages folder is a link to a real folder elsewhere.
   assert.equal(sage("task", "add", "--priority", "P2", "--title", "t2", "--size", "small").status, 0);
   mkdirSync(elsewhere);
   writeFileSync(join(elsewhere, "x.html"), "<p>SAMPLE</p>");
@@ -441,7 +390,6 @@ test("the message command, the index and the board agree on every file: a link t
     if (status === 200) served.push(`${task}/${file}`);
   }
   assert.deepEqual(served, ["T1/research.html", "T1/sub/ok.txt"]);
-  // The message's own page: the command writes none into a pages folder that is a link, as the board serves none there.
   const design = JSON.parse(readFileSync(join(HERE, "fixtures", "messages", "07-design.json"), "utf8"));
   const own = sage("message", "T2", "--json", JSON.stringify({ ...design, blocks: design.blocks.filter((b) => b.t !== "page") }));
   assert.equal(own.status, 1, own.out);
@@ -449,7 +397,6 @@ test("the message command, the index and the board agree on every file: a link t
   assert.deepEqual(readdirSync(elsewhere), ["x.html"], "nothing written through the link");
 });
 
-/** A sandboxed state tool with one task and its pages folder, and a board over its logbook on a free port. */
 async function messageSandbox(t) {
   const base = realpathSync(mkdtempSync(join(tmpdir(), "sage-t1001-")));
   t.after(() => rmSync(base, { recursive: true, force: true }));
@@ -462,7 +409,6 @@ async function messageSandbox(t) {
   assert.equal(sage("init").status, 0);
   assert.equal(sage("task", "add", "--priority", "P2", "--title", "t", "--size", "small").status, 0);
   const folder = sage("pages", "T1").out, name = basename(dirname(dirname(folder)));
-  // A board over the sandbox's logbook, on a free port instead of the owner's 43123.
   const book = readdirSync(base, { recursive: true }).map((path) => join(base, path)).find((path) => basename(path) === name && !path.includes(`${join(base, "worktrees")}`));
   assert.ok(book, "the sandbox's logbook");
   const port = await freePort(), before = process.env.SAGE_WORKTREES;

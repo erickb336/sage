@@ -1,6 +1,4 @@
-// T483: the state tool's verdict command records a review or QA verdict only when a report that a stop hook kept backs
-// it. Each test runs the real state tool of the Claude plugin as a command, against a temporary logbook.
-import "./test-env.mjs"; // first: no variable of the developer's shell changes a result
+import "./test-env.mjs";
 import assert from "node:assert/strict";
 import { spawnSync } from "node:child_process";
 import { cpSync, mkdtempSync, readFileSync, realpathSync, renameSync, rmSync } from "node:fs";
@@ -18,20 +16,12 @@ const PLUGIN = fileURLToPath(new URL("../plugins/sage", import.meta.url));
 const SPY = fileURLToPath(new URL("kill-spy.mjs", import.meta.url));
 const SHA = "a1b2c3d4e5f60718293a4b5c6d7e8f9012345678";
 const OTHER = "0123456789abcdef0123456789abcdef01234567";
-/** The FINDINGS report of a code review with one medium finding. */
 const FINDINGS = reportFor("findings");
-/** A new temp folder (its physical path), removed after the tests. */
 const temps = [];
 const temp = (prefix) => (temps.push(realpathSync(mkdtempSync(join(tmpdir(), prefix)))), temps.at(-1));
 after(() => temps.forEach((dir) => rmSync(dir, { recursive: true, force: true })));
 
-/**
- * A logbook for one made-up project. cli(args, { cwd, tool }) runs a command as given, with no --project added; ok() and
- * no() add --project and expect success or a refusal. Each command preloads the kill spy and asks SAGE_TEST_PIDS about a
- * lock's holder, so no command reads or signals a real process.
- */
 function logbook() {
-  // The project's physical path, as a process in its folder sees it (macOS gives /private/var for /var).
   const home = temp("sage-home-"), project = temp("sage-project-");
   const env = { ...process.env, SAGE_HOME: home, SAGE_TEST_PIDS: "{}", SAGE_TEST_KILLS: join(home, "kills"), NODE_OPTIONS: `--import=${JSON.stringify(SPY)}` };
   const cli = (args, { cwd = project, tool = TOOL } = {}) => spawnSync("node", [tool, ...args], { cwd, env, encoding: "utf8", timeout: 60_000 });
@@ -45,8 +35,7 @@ function logbook() {
     assert.equal(r.status, 1, `sage ${args.join(" ")} should be refused, printed: ${r.stdout}`);
     return r.stderr.trim();
   };
-  const dir = ok("init").replace(/^\S+ /, ""); // init prints "logbook <folder>"
-  /** A review or QA run of a task that ended done, with its helper's report kept as a stop hook keeps it (or none). */
+  const dir = ok("init").replace(/^\S+ /, "");
   const reviewed = (task, role, text, sha = SHA) => {
     const run = ok("run", "add", task, "--role", role).split(" ")[0];
     if (text !== undefined) keepReport(project, { task, run, role, sha, text }, env);
@@ -62,17 +51,11 @@ test("T483: a FINDINGS report never backs review-clean, in every form in which t
   const s = logbook();
   s.ok("task", "add", "--priority", "P2", "--title", "a", "--size", "small");
   const run = s.reviewed("T1", "code-reviewer", FINDINGS);
-  // A copy of the plugin whose state tool is at SKILLS/SAGE/sage.mjs: another letter case of the tool's path, which a
-  // case-insensitive file system also gives the real file (R1847-2). Node runs no .MJS file, so the case is in the folders.
-  // The copy's code is the same, so it refuses as the tool does.
   const copy = join(temp("sage-copy-"), "plugin");
   cpSync(PLUGIN, copy, { recursive: true });
   renameSync(join(copy, "skills"), join(copy, "SKILLS"));
   renameSync(join(copy, "SKILLS/sage"), join(copy, "SKILLS/SAGE"));
   const words = ["verdict", "T1", "--kind", "review-clean", "--sha", SHA, "--cycle", "1", "--run", run];
-  // The process that each shell form starts. A glob (node /…/sage/*.mjs) and a variable (node $T) give node the tool's
-  // plain path after the shell expands them (R1848-2, R1845-1); --project= and a relative --project name the logbook
-  // as the state tool resolves it, from the command's folder (R1848-1).
   const forms = {
     "a plain command, also a glob or a variable after the shell": [[...words, "--project", s.project]],
     "--project=": [[...words, `--project=${s.project}`], { cwd: tmpdir() }],
@@ -92,18 +75,15 @@ test("T483: a FINDINGS report never backs review-clean, in every form in which t
 test("T483: a FINDINGS report backs a clean verdict after triage of each of its findings: dismissed, moved or closed", () => {
   const s = logbook();
   s.ok("task", "add", "--priority", "P2", "--title", "a", "--size", "small");
-  // Dismissed: the finding is recorded for the run, then dismissed with a reason.
   const r1 = s.reviewed("T1", "code-reviewer", FINDINGS);
   s.ok("finding", "add", "T1", "--source", "code-reviewer", "--severity", "medium", "--summary", "a wrong claim", "--run", r1, "--class", "other");
   assert.match(s.no("verdict", "T1", "--kind", "review-clean", "--sha", SHA, "--run", r1), new RegExp(`^sage: ${r1}'s report has findings \\(RESULT FINDINGS with medium findings\\), and F-T1-1 \\(medium\\) is still open: so it backs findings, or review-clean after each one is dismissed with a reason, moved or closed\\. Nothing changed\\.$`));
   s.ok("finding", "triage", "T1", "F-T1-1", "dismiss", "--reason", "the code does check it");
   assert.match(s.ok("verdict", "T1", "--kind", "review-clean", "--sha", SHA, "--run", r1), /^T1 review-clean · a1b2c3d · cycle 1$/);
-  // Moved: the finding goes to a follow-up task, and the move's decision keeps its run.
   const r2 = s.reviewed("T1", "qa", reportFor("qa-fail"));
   s.ok("finding", "add", "T1", "--source", "qa", "--severity", "medium", "--summary", "a slow page", "--run", r2, "--class", "speed");
   s.ok("finding", "move", "T1", "F-T1-2", "--to", "Make the page fast");
   assert.match(s.ok("verdict", "T1", "--kind", "qa-pass", "--sha", SHA, "--run", r2), /^T1 qa-pass · a1b2c3d · cycle 1$/);
-  // By its key: a finding whose key starts with the run's id is that run's finding.
   const r3 = s.reviewed("T1", "code-reviewer", FINDINGS);
   s.ok("finding", "add", "T1", "--source", "sage", "--severity", "high", "--summary", "a lost row", "--key", `${r3}-1`);
   s.ok("finding", "triage", "T1", `${r3}-1`, "dismiss", "--reason", "the row is kept");
@@ -121,7 +101,7 @@ test("T483: each review or QA verdict that no kept report backs is refused, with
   assert.equal(s.ledger(), before);
   const qa = s.reviewed("T1", "qa", reportFor("qa-pass"));
   assert.equal(verdict("review-clean", qa), `sage: ${qa} is a qa run, so it backs no review-clean verdict: only a code-reviewer run does. Nothing changed.`);
-  const lead = s.reviewed("T1", "lead"); // a lead run reports to the sage, and no stop keeps its report as a review (R1965-1)
+  const lead = s.reviewed("T1", "lead");
   assert.equal(verdict("review-clean", lead), `sage: ${lead} is a lead run, so it backs no review-clean verdict: only a code-reviewer run does. Nothing changed.`);
   const running = s.ok("run", "add", "T1", "--role", "code-reviewer").split(" ")[0];
   assert.equal(verdict("review-clean", running), `sage: ${running} still runs: end it after its helper's report (sage run done ${running} --status done --tokens <n>), then record its verdict. Nothing changed.`);
@@ -129,10 +109,8 @@ test("T483: each review or QA verdict that no kept report backs is refused, with
   assert.equal(verdict("review-clean", other), `sage: ${other} is a run of T2, not of T1: name the code-reviewer run of T1 whose report backs this verdict. Nothing changed.`);
   const bare = s.reviewed("T1", "code-reviewer");
   assert.equal(verdict("review-clean", bare), `sage: ${bare} has no kept report: sage keeps a helper's report at its stop only when it knows the helper's run, by the first line of its brief, "Run ${bare} · task T1", or by its task name with the run (sage_<role>_t<n>_r<n>). Run the review again under a new run (sage run add T1 --role code-reviewer), whose helper's brief starts with "Run <R> · task T1" (or whose task name carries the run), and record its verdict with --run after it ends. Nothing changed.`);
-  // No full head SHA from the hook or from BRANCH: the report may be of an older head (R1908-1).
   const short = s.reviewed("T1", "code-reviewer", reportFor("review-clean").replace("BRANCH none", "BRANCH sage/t1-a at a1b2c3d"), "");
   assert.match(verdict("review-clean", short), new RegExp(`^sage: ${short}'s report names no full 40-character head SHA in BRANCH, and the hook saw none, so it backs no verdict`));
-  // A base and a head in BRANCH: the SHA after the word head is the report's commit (R1907-1); with no such word, none is.
   const both = (line) => s.reviewed("T1", "code-reviewer", reportFor("review-clean").replace("BRANCH none", `BRANCH ${line}`), "");
   const baseHead = both(`sage/t1-a, base ${OTHER}, head ${SHA}, PR 7`), seenOne = s.reviewed("T1", "code-reviewer", reportFor("review-clean").replace("BRANCH none", `BRANCH ${OTHER} ${SHA}`));
   assert.match(verdict("review-clean", both(`sage/t1-a, base ${SHA}, head ${OTHER}`)), /report is on 0123456, not on a1b2c3d/);
@@ -140,15 +118,12 @@ test("T483: each review or QA verdict that no kept report backs is refused, with
   const failed = s.ok("run", "add", "T1", "--role", "code-reviewer").split(" ")[0];
   s.ok("run", "done", failed, "--status", "failed");
   assert.match(verdict("review-clean", failed), new RegExp(`^sage: ${failed} ended as failed, so it backs no verdict\\. Run the review again under a new run`));
-  // The hook saw the helper review another commit, or the report's BRANCH names another one.
   const seen = s.reviewed("T1", "code-reviewer", reportFor("review-clean"), OTHER);
   assert.equal(verdict("review-clean", seen), `sage: ${seen}'s report is on 0123456, not on a1b2c3d: a verdict names the commit that its helper reviewed. Record it on ${OTHER}, or review a1b2c3d under a new run. Nothing changed.`);
   const named = s.reviewed("T1", "code-reviewer", reportFor("review-clean").replace("BRANCH none", `BRANCH sage/t1-a at ${OTHER.toUpperCase()}`), "");
   assert.match(verdict("review-clean", named), new RegExp(`^sage: ${named}'s report is on 0123456, not on a1b2c3d`));
-  // The hook saw one commit and BRANCH names another: neither is pointed to, the review runs again (R1932-1).
   const split = s.reviewed("T1", "code-reviewer", reportFor("review-clean").replace("BRANCH none", `BRANCH sage/t1-a head ${OTHER}`), SHA);
   assert.match(verdict("review-clean", split), new RegExp(`^sage: ${split}'s report names 0123456 as its head, and the hook saw it review a1b2c3d: the report and the hook disagree, so it backs no verdict\\. Run the review again under a new run`));
-  // A clean report backs no problem verdict, and a report that the reader cannot read backs none.
   s.ok("finding", "add", "T1", "--source", "sage", "--severity", "medium", "--summary", "an open problem");
   assert.match(verdict("findings", qa), /only a code-reviewer, security-reviewer or ux-reviewer run does/);
   const clean =s.reviewed("T1", "code-reviewer", reportFor("review-clean"));
@@ -156,10 +131,8 @@ test("T483: each review or QA verdict that no kept report backs is refused, with
   const odd = s.reviewed("T1", "code-reviewer", "STATUS done\nRESULT LGTM\nEVIDENCE x\nFINDINGS none\nQUESTIONS none\nNOT VERIFIED none\nBRANCH none");
   assert.match(verdict("review-clean", odd), new RegExp(`^sage: ${odd}'s kept report cannot be read \\(RESULT starts with "LGTM"`));
   assert.equal(s.ledger(), before, "no refused verdict is recorded");
-  // One run backs one verdict.
   assert.match(s.ok("verdict", "T1", "--kind", "review-clean", "--sha", SHA, "--run", clean), /^T1 review-clean · a1b2c3d · cycle 1/);
   assert.match(s.no("verdict", "T1", "--kind", "review-clean", "--sha", SHA, "--cycle", "2", "--run", clean), new RegExp(`^sage: ${clean} already backs the review-clean verdict of T1 on a1b2c3d: one run backs one review or QA verdict\\. Run the review again under a new run\\.$`));
-  // A check verdict needs no run, and the report that the hook saw on the verdict's commit backs it.
   s.ok("verdict", "T1", "--kind", "checks-pass", "--sha", SHA);
   const match = s.reviewed("T1", "qa", reportFor("qa-pass").replace("BRANCH none", `BRANCH sage/t1-a ${SHA}`));
   assert.match(s.ok("verdict", "T1", "--kind", "qa-pass", "--sha", SHA, "--run", match), /^T1 qa-pass · a1b2c3d · cycle 1$/);
@@ -225,17 +198,14 @@ test("T483: a kept report stays as it was first kept, and only a run of its task
   assert.match(s.no("verdict", "T1", "--kind", "review-clean", "--sha", SHA, "--run", run), /report has 1 medium or high finding/);
 });
 
-/** A code review with one finding line for each of these, each with its proof (T947). */
 const proven = (...lines) => reportFor("findings", { findings: lines.map((line) => `\n- ${line}\n  proof: npm test\n  saw: not ok 1`).join("") });
-/** A proof check's report: EVIDENCE lists each finding key with its outcome; BRANCH names the head that it checked. */
 const proofCheck = (lines, sha = SHA) => ["STATUS done", "RESULT PASS", "EVIDENCE", ...lines, "FINDINGS none", "QUESTIONS none", "NOT VERIFIED none", `BRANCH b · head ${sha}`].join("\n");
-/** Adds a finding of run to T1, as a lead records a review's finding. */
 const found = (s, run, severity, summary) => s.ok("finding", "add", "T1", "--source", "code-reviewer", "--severity", severity, "--summary", summary, "--run", run, "--class", "other").split(" ")[0];
 
 test("T947: a triage with --proof needs a done proof check of the task, on the head of the finding's report, that lists the finding with an outcome that fits", () => {
   const s = logbook();
-  s.ok("task", "add", "--priority", "P2", "--title", "a", "--size", "small"); // T1
-  s.ok("task", "add", "--priority", "P2", "--title", "b", "--size", "small"); // T2
+  s.ok("task", "add", "--priority", "P2", "--title", "a", "--size", "small");
+  s.ok("task", "add", "--priority", "P2", "--title", "b", "--size", "small");
   const review = s.reviewed("T1", "code-reviewer", proven("K1 medium a", "K2 medium b", "K3 high c", "K4 medium d"));
   const [gone, real, high, skipped] = [found(s, review, "medium", "a"), found(s, review, "medium", "b"), found(s, review, "high", "c"), found(s, review, "medium", "d")];
   const lines = [`- ${gone} not reproduced`, "  npm test", "  ok 1", `- ${real} reproduced`, `- ${high} could not run`];
@@ -285,7 +255,6 @@ test("F-T947-1: a proof check that gives its first outcome on the EVIDENCE line,
   s.ok("task", "add", "--priority", "P2", "--title", "a", "--size", "small");
   const review = s.reviewed("T1", "code-reviewer", proven("K1 medium a", "K2 medium b"));
   const [gone, real] = [found(s, review, "medium", "a"), found(s, review, "medium", "b")];
-  // The report skill's template style: the first item on the field's own line, then a numbered item with a bold key and a note.
   const check = s.reviewed("T1", "qa", proofCheck([]).replace("EVIDENCE", `EVIDENCE      - ${gone} not reproduced\n1. **${real}**: reproduced (saw not ok 1)`));
   assert.match(s.no("verdict", "T1", "--kind", "qa-pass", "--sha", SHA, "--run", check), new RegExp(`^sage: ${check}'s report is a proof check`));
   assert.equal(s.ok("finding", "triage", "T1", gone, "dismiss", "--proof", check), `${gone} dismissed · dismiss`);

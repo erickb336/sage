@@ -1,4 +1,3 @@
-// Product behavior through entry points that also exist on main. No new board module is imported here.
 import "./test-env.mjs";
 import test from "node:test";
 import assert from "node:assert/strict";
@@ -19,7 +18,6 @@ const HEADERS = {
   decisions: "at task decision why",
 };
 const AT = "2026-01-01T00:00:00.000Z", HEAD = "a".repeat(40), OLD_HEAD = "b".repeat(40);
-// A running run that started 10 minutes ago. A run of AT has had no news for months, so the board says it may have stopped.
 const FRESH = () => new Date(Date.now() - 600000).toISOString();
 const task = (id, state, extra = {}) => ({ id, title: `Sample ${id}`, size: "small", risk: "", route: "build,code-review,qa", state, branch: "sample", pr: "", round: "0", keys: "", ...extra });
 function table(directory, name, rows) {
@@ -61,18 +59,14 @@ function fixture(t) {
   return { dir, project, sources, add, ...first, invoke, view };
 }
 const cards = html => /<main class="board"[^>]*>([\s\S]*?)<\/main>/.exec(html)?.[1] ?? "";
-/** The verdicts of one clean cycle of a small task on a head, and the known project list that lets the merge check read the logbook. */
 const clean = (id, number, sha, kinds = ["checks-pass", "review-clean", "qa-pass"]) => kinds.map(kind => ({ task: id, pr: number, sha, kind, cycle: "1", run: "", at: AT }));
 const known = f => writeFileSync(join(f.root, "projects.tsv"), `logbook\tat\thow\nproject-abcdef\t${AT}\tinit\n`);
-/** The column of each task card on the HTML board: the h2 of the section that holds it. */
 const columnsOf = html => Object.fromEntries([...cards(html).matchAll(/<h2>([^<]+?) <span class="n">\d+<\/span><\/h2>([\s\S]*?)(?=<h2>|$)/g)].flatMap(([, name, body]) => [...body.matchAll(/Sample (T\d+)/g)].map(([, id]) => [id, name])));
 
 test("T280 acceptance: the board shows a PR ready to merge only when sage's own merge check passes on its head", t => {
   const f = fixture(t);
   const [one, two, three, five] = ["1", "2", "3", "5"].map(digit => digit.repeat(40));
   table(f.book, "tasks", [task("T1", "verified", { pr: "21" }), task("T2", "verified", { pr: "22" }), task("T3", "verified", { pr: "23" }), task("T4", "verified", { pr: "24" }), task("T5", "verified", { pr: "25" })]);
-  // T1 clean; T2 clean with an open finding; T3 misses its QA verdict; T4 has no verdict, so the board knows no head;
-  // T5 is clean, but a folder that is not in the known project list has a verdict on its head too.
   table(f.book, "ledger", [...clean("T1", "21", one), ...clean("T2", "22", two), ...clean("T3", "23", three, ["checks-pass", "review-clean"]), ...clean("T5", "25", five)]);
   const stranger = join(f.root, "stranger-123456"); mkdirSync(stranger);
   table(stranger, "ledger", clean("T5", "25", five, ["checks-pass"]));
@@ -93,7 +87,6 @@ test("T280 acceptance: the board shows a PR ready to merge only when sage's own 
 test("T205 acceptance: HTML state columns and phone text describe the same recorded tasks without logbook writes", t => {
   const f = fixture(t);
   table(f.book, "tasks", [task("T1", "framed"), task("T2", "designing"), task("T3", "held"), task("T4", "reviewing"), task("T5", "pr-ready", { pr: "12" }), task("T6", "merged"), task("T7", "abandoned")]);
-  // T280: T5 is ready to merge only because the merge check passes on its head: one clean cycle in a known logbook.
   table(f.book, "ledger", clean("T5", "12", HEAD));
   known(f);
   const recent = new Date(Date.now() - 86400000).toISOString();
@@ -131,7 +124,6 @@ test("T205 acceptance: provider roots keep duplicate task identities separate an
   const detail = f.view("task", { id: "T1", sourceScope: other.key });
   assert.ok(detail.includes("Sample second provider")); assert.ok(!detail.includes("Source sample"));
   assert.throws(() => f.invoke("task", { id: "T9", sourceScope: other.key }), /Nearest recorded ids: T1.*No task was opened/);
-  // R1069-3: the shown name chooses the project, with both its logbooks; it is not ambiguous.
   const named = f.view("chat", { sourceScope: "project" });
   assert.ok(named.includes("Sample T1") && named.includes("Sample second provider"), named);
   assert.deepEqual([snapshot(f.root), snapshot(other.root)], before);
@@ -228,11 +220,6 @@ test("T205 acceptance: existing Claude hook dispatches owner board/task/status p
   assert.match(send("sage board for all"), /board all .*--view chat/);
 });
 
-// T922 (F-T922-1): Codex runs the board note's chat board in its sandbox, where a write outside the workspace fails with
-// EPERM. The chat board writes nothing (no board.json, no lock): what is done comes from the logbook's completion records
-// (Done, last 7 days). So in the sandbox, a second board shows a task that merged after the first one, as in Claude Code.
-// T938 (F-T922-3): the command comes from core's board note, as the hooks send it. The write check runs outside the
-// sandbox, where a write would succeed and show; inside it, the sandbox would block the write and hide it.
 test("T922: in a sandbox that blocks every write, as Codex's does, the note's chat board shows a merge after the first board, and writes nothing", { skip: process.platform !== "darwin" && "macOS sandbox-exec only" }, t => {
   const f = fixture(t), home = join(f.dir, "home"), hour = new Date(Date.now() - 3600000).toISOString();
   mkdirSync(home);
@@ -243,7 +230,6 @@ test("T922: in a sandbox that blocks every write, as Codex's does, the note's ch
   const env = { PATH: process.env.PATH, HOME: home, SAGE_HOME: f.root };
   const sandboxed = args => spawnSync("/usr/bin/sandbox-exec", ["-p", `(version 1)(allow default)(deny network*)(deny file-write* (subpath "${f.dir}"))`, process.execPath, ...args], { env, encoding: "utf8" });
   assert.match(sandboxed(["-e", `require("fs").writeFileSync(${JSON.stringify(join(f.root, "board.json"))}, "{}")`]).stderr, /EPERM/, "the profile blocks the write of board.json at the sage root");
-  // The state tool's words in the note for "show board for all": each word, a quoted one ('…') without its quotes.
   let args;
   boardNote({ kind: "board", scope: "all" }, f.project, { state: words => { args ??= words; return words; }, ensure: "", choice: "" });
   const argv = args.match(/'(?:[^']|'\\'')*'|\S+/g).map(word => word.startsWith("'") ? word.slice(1, -1).replaceAll("'\\''", "'") : word);

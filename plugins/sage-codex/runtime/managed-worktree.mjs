@@ -3,11 +3,9 @@ import { join, relative, resolve } from "node:path";
 import { checkoutContains, fileWriteOutsideRoots, resolveCheckoutPath, sharedRoot, verifiedCheckout } from "../core/index.mjs";
 import { legacyRoots } from "./logbook-env.mjs";
 
-/** Provider policy: only a verified outer checkout under the trusted home gets an exception. */
 export function managedPatchPath(path, { cwd, env, pluginRoot }) {
   try {
     const target = resolveCheckoutPath(path, cwd);
-    // Direct patches name files. Refuse directory replacement, including protected descendants.
     if (target.directory) return false;
     const home = resolveCheckoutPath(resolve(env.CODEX_HOME ?? join(env.HOME ?? homedir(), ".codex"))).canonicalTarget;
     const event = verifiedCheckout(cwd), destination = verifiedCheckout(target.canonicalTarget);
@@ -21,7 +19,6 @@ export function managedPatchPath(path, { cwd, env, pluginRoot }) {
       || target.traversed.some(place => canonicalRoots.some(root => checkoutContains(root, place)))) return false;
     const names = value => value.split("/").some(part => [".codex", ".git"].includes(part.normalize("NFKC").toLowerCase()));
     const worktrees = join(home, "worktrees");
-    // Keep the first outer checkout crossed in filesystem order, before a link or .. can leave it.
     const entered = target.traversed.find(place => checkoutContains(worktrees, place)
       && relative(worktrees, place).split("/").length >= 2);
     if (entered) {
@@ -39,14 +36,11 @@ export function managedPatchPath(path, { cwd, env, pluginRoot }) {
         const eventOuter = verifiedCheckout(join(worktrees, ...eventParts.slice(0, 2)));
         if (!eventOuter.verified || eventOuter.commonGitDir !== proof.commonGitDir) return false;
       } else if (names(event.checkoutRoot)) return false;
-      // The outer boundary never moves to a nested checkout, including one under .codex.
       if (target.traversed.some(place => checkoutContains(home, place) && names(relative(home, place)))) return false;
-      // A supplied alias/traversal outside the managed ancestor cannot hide a protected component.
       if (target.traversed.some(place => !checkoutContains(home, place) && names(place))) return false;
       return true;
     }
     if (checkoutContains(home, target.canonicalTarget)) return false;
-    // Ordinary paths keep their existing behavior, but never hide a protected component above a nested checkout.
     if (target.traversed.some(names)) return false;
     return true;
   } catch { return false; }

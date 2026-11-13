@@ -10,8 +10,6 @@ import { test } from "node:test";
 import { gate } from "../plugins/sage-codex/hooks/gate-hook.mjs";
 import { checkoutContains, resolveCheckoutPath, verifiedCheckout } from "../plugins/sage-codex/core/index.mjs";
 
-// Only local Git initialization and worktree creation run in disposable fixtures.
-// No gate mode reader, shell command, process control, or installed plugin runs.
 function fixture(t, homeName = ".codex") {
   const dir = realpathSync(mkdtempSync(join(tmpdir(), "sage-managed-admission-")));
   t.after(() => rmSync(dir, { recursive: true, force: true }));
@@ -51,7 +49,6 @@ for (const homeName of ["codex-home", ".codex"]) {
     mkdirSync(join(outside, "deep"));
     symlinkSync(outside, join(w.linked, "escape"));
     symlinkSync(join(outside, "deep"), join(w.linked, "ordered-escape"));
-    // The destination itself is ordinary and admitted; only the escaping traversal must refuse.
     assert.equal(await w.send(join(outside, "new.mjs")), undefined);
     for (const sage of [false, true]) {
       for (const [cwd, path] of [
@@ -92,7 +89,6 @@ test("T119: unavailable trusted Git grants no checkout exception", async t => {
   const w = fixture(t);
   assert.equal(await w.send(join(w.linked, "new")), undefined);
   const original = fs.lstatSync;
-  // Simulate an untrusted system Git binary. No executable or permission changes occur.
   const mock = t.mock.method(fs, "lstatSync", (path, ...args) => {
     if (String(path).endsWith("/usr/bin/git") || String(path) === "/bin/git") return { uid: -1, mode: 0 };
     if (path === join(w.linked, "inaccessible")) throw Object.assign(Error("fixture permission refusal"), { code: "EACCES" });

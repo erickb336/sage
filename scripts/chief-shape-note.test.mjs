@@ -1,9 +1,4 @@
-// The chief's message against the shape of its kind (T1004), through the built hook as Claude Code runs it: a Stop event
-// of the main session with the message that the owner now sees, then the next UserPromptSubmit. A message that names its
-// kind and misses its shape gives the chief one note at that prompt and one line in the count of misses; a message that
-// fits, a message with no kind, a session out of sage mode and an error in the check give no note, and the Stop is
-// never blocked. The Stop event has the fields of a real one, captured from Claude Code 2.1.289.
-import "./test-env.mjs"; // first: no variable of the developer's shell changes a result
+import "./test-env.mjs";
 import assert from "node:assert/strict";
 import { spawnSync } from "node:child_process";
 import { cpSync, existsSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, statSync, writeFileSync } from "node:fs";
@@ -15,12 +10,9 @@ import { renderMessage, textProblems } from "../packages/sage-core/message-check
 
 const PLUGIN = fileURLToPath(new URL("../plugins/sage", import.meta.url));
 const fixture = (name) => JSON.parse(readFileSync(fileURLToPath(new URL(`./fixtures/messages/${name}`, import.meta.url)), "utf8"));
-/** The text of the approved example question, as the chat shows it: it fits its shape. */
 const QUESTION = renderMessage(fixture("02-question.json")).text;
-/** The same question, written by hand with no "Needed by" part and with a task's raw id. */
 const MISSED = QUESTION.replace(/\n\n\*\*Needed by\*\*\n[\s\S]*?(?=\n\n)/, "").replace("Should sage stop", "Should T77 stop");
 
-/** A session with its own scratch home, sage home and hook state. send() returns the hook's answer, or undefined. */
 function session(plugin = PLUGIN) {
   const dir = realpathSync(mkdtempSync(join(tmpdir(), "sage-shape-")));
   mkdirSync(join(dir, "project"));
@@ -52,7 +44,6 @@ test("a chief's message that names its kind and misses its shape gives one note 
   assert.match(note, /^sage: your last message names the kind "question"/, "the note names the kind");
   for (const p of problems) assert.ok(note.includes(`- ${p}`), `the note names the problem: ${p}`);
   assert.equal(s.prompt("and then?"), undefined, "the note comes once");
-  // The count: one line for the miss, with its time, its kind and its problem names, and no text of the message.
   const [miss, ...more] = s.misses();
   assert.deepEqual(more, []);
   assert.deepEqual(Object.keys(miss), ["at", "kind", "problems"]);
@@ -61,7 +52,6 @@ test("a chief's message that names its kind and misses its shape gives one note 
   assert.deepEqual(miss.problems, ["raw ids", "missing: Needed by"]);
   const line = readFileSync(join(s.dir, "state", "shape-misses.jsonl"), "utf8");
   assert.ok(!line.includes("T77") && !line.includes("Should"), "no id and no words of the message");
-  // A second miss is a second line.
   s.stop(MISSED);
   assert.equal(s.misses().length, 2);
 });
@@ -85,7 +75,6 @@ test("out of sage mode, a message that misses its shape gives no note: only the 
 });
 
 test("an error in the check gives no note and no block", () => {
-  // A copy of the plugin whose check throws: the hook's other work still loads.
   const plugin = realpathSync(mkdtempSync(join(tmpdir(), "sage-plugin-")));
   cpSync(PLUGIN, plugin, { recursive: true });
   const checks = join(plugin, "core/message-checks.mjs"), text = readFileSync(checks, "utf8");
@@ -96,16 +85,12 @@ test("an error in the check gives no note and no block", () => {
   assert.equal(s.stop(MISSED), undefined, "no block");
   assert.equal(s.prompt("go on"), undefined, "no note");
   assert.deepEqual(s.misses(), []);
-  // The same events through the real check give the note, so the copy differs only in its check.
   const real = session();
   real.prompt("sage mode");
   real.stop(MISSED);
   assert.match(real.prompt("go on"), /the kind "question"/);
 });
 
-// Round 1 of T1004's repair: the note is about the chief's last message only, and a message with very many problems
-// still gives a short note and a count.
-/** The problem lines of a note: "- " and a problem, or "- and N more". */
 const problemLines = (note) => note.split("\n").filter((line) => line.startsWith("- "));
 
 test("F-T1004-1, F-T1004-3: a later message that fits, or that names no kind, leaves no note of an earlier miss", () => {
@@ -122,8 +107,8 @@ test("F-T1004-1, F-T1004-3: a later message that fits, or that names no kind, le
 test("F-T1004-4: the note is about the last message before a prompt: of two misses, the last one; after a message that fits, none; and each miss is counted", () => {
   const s = session();
   s.prompt("sage mode");
-  const onlyId = QUESTION.replace("Should sage stop", "Should T77 stop"); // a raw id, and every part
-  const onlyPart = QUESTION.replace(/\n\n\*\*Needed by\*\*\n[\s\S]*?(?=\n\n)/, ""); // no "Needed by", and no id
+  const onlyId = QUESTION.replace("Should sage stop", "Should T77 stop");
+  const onlyPart = QUESTION.replace(/\n\n\*\*Needed by\*\*\n[\s\S]*?(?=\n\n)/, "");
   assert.deepEqual(textProblems(onlyId).length, 1);
   assert.deepEqual(textProblems(onlyPart).length, 1);
   s.stop(onlyId);
@@ -132,7 +117,6 @@ test("F-T1004-4: the note is about the last message before a prompt: of two miss
   assert.match(note, /^sage: your last message /);
   assert.deepEqual(problemLines(note), [`- ${textProblems(onlyPart)[0]}`], "the problem of the last message only");
   assert.deepEqual(s.misses().map((m) => m.problems), [["raw ids"], ["missing: Needed by"]]);
-  // The last message fits: no note at all, also after two misses.
   s.stop(onlyId);
   s.stop(onlyPart);
   s.stop(QUESTION);
@@ -142,7 +126,6 @@ test("F-T1004-4: the note is about the last message before a prompt: of two miss
 test("F-T1004-2: a message with thousands of problems gives a note of 20 problems and the count of the rest, and the session's hook state stays readable", () => {
   const s = session();
   s.prompt("sage mode");
-  // 12,000 small pictures, each with a tree mark: the note once listed each one, and the hook state passed its 1 MB limit.
   const many = `PROGRESS\n\nThe build moved on\n\n${"```\n├\n```\n".repeat(12_000)}`;
   const all = textProblems(many);
   assert.ok(all.length > 12_000);
@@ -153,7 +136,6 @@ test("F-T1004-2: a message with thousands of problems gives a note of 20 problem
   const [{ problems: names }] = s.misses();
   assert.equal(names[0], "picture");
   assert.equal(new Set(names).size, names.length, "the count names each kind of problem once");
-  // The state is still read: the next miss gives its own note.
   s.stop(MISSED);
   assert.match(s.prompt("and then?"), /needs "Needed by"/);
 });
@@ -171,7 +153,6 @@ test("F-T1004-2: the raw-id problem lists at most 20 ids, and the count of the r
 test("F-T1004-5: a picture with very many problems gives a note and a count, not an error", () => {
   const s = session();
   s.prompt("sage mode");
-  // 200,000 lines over the width of 46 columns in one picture: their problems once overflowed the stack in one push.
   const wide = `PROGRESS\n\nThe build moved on\n\nThe flow\n\`\`\`\n${`${"x".repeat(47)}\n`.repeat(200_000)}\`\`\`\n`;
   assert.equal(s.stop(wide), undefined);
   const lines = problemLines(s.prompt("go on"));

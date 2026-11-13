@@ -1,5 +1,3 @@
-// The main guard of graphics.mjs and board-shots.mjs (scripts/is-main.mjs): a script on standard input can import
-// either module, and a run of graphics.mjs through a linked path still draws.
 import "./test-env.mjs";
 import assert from "node:assert/strict";
 import { spawnSync } from "node:child_process";

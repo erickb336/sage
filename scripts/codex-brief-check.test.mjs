@@ -1,4 +1,4 @@
-import "./test-env.mjs"; // first: no variable of the developer's shell changes a result
+import "./test-env.mjs";
 import assert from "node:assert/strict";
 import { spawnSync } from "node:child_process";
 import { mkdirSync, mkdtempSync, realpathSync, rmSync, writeFileSync } from "node:fs";
@@ -7,9 +7,6 @@ import { join } from "node:path";
 import { test } from "node:test";
 import { fileURLToPath } from "node:url";
 
-// The brief check of the Codex plugin (T462, form A of T463), through Codex 0.160.0's hook input and output shapes. The
-// inputs are the SubagentStart and PostToolUse inputs that stock Codex 0.160.0 sent in run R1657 (paths replaced). The
-// built hook runs as Codex runs it: JSON on stdin, JSON on stdout, with a scratch CODEX_HOME and logbook.
 const HOOK = fileURLToPath(new URL("../plugins/sage-codex/hooks/brief-hook.mjs", import.meta.url));
 const TOOL = fileURLToPath(new URL("../plugins/sage-codex/skills/sage/sage.mjs", import.meta.url));
 const { recordBrief, readBrief, briefChecked } = await import(HOOK);
@@ -19,7 +16,6 @@ const FIELDS = ["GOAL", "SCOPE", "CONTEXT", "DECISIONS", "ACCEPTANCE", "VERIFY",
 const brief = (skip = []) => FIELDS.filter((f) => !skip.includes(f)).map((f) => (f === "FORBIDDEN" ? "FORBIDDEN: never push to main.\nNever run real ps." : `${f}: the ${f.toLowerCase()} of T1.`)).join("\n");
 const NO_BRIEF = "sage: no checked brief for this task.";
 
-/** A git project with a Codex logbook (init through the state tool), and the hook run with that CODEX_HOME. */
 function world(t) {
   const dir = realpathSync(mkdtempSync(join(tmpdir(), "sage-codex-brief-")));
   t.after(() => rmSync(dir, { recursive: true, force: true }));
@@ -28,7 +24,6 @@ function world(t) {
   const { SAGE_HOME, ...inherited } = process.env;
   const env = { ...inherited, HOME: join(dir, "home"), CODEX_HOME: join(dir, "codex-home"), SAGE_WORKTREES: join(dir, "worktrees") };
   const sage = (...args) => spawnSync(process.execPath, [TOOL, ...args, "--project", project], { encoding: "utf8", env });
-  /** A child's transcript as Codex writes it: the session_meta line with the agent path first. */
   const child = (name) => {
     const file = join(dir, `rollout-${name}.jsonl`);
     writeFileSync(file, JSON.stringify({ timestamp: "2026-10-25T04:16:57.000Z", type: "session_meta", payload: { id: "01a172c7-2925-7dc2-b8f3-9e601eab16f1", agent_path: `/root/${name}`, source: { subagent: { thread_spawn: { depth: 1, agent_path: `/root/${name}`, agent_role: null } } } } }) + "\n");

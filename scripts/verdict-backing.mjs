@@ -1,24 +1,14 @@
-// A test helper (T483). The state tool records a review or QA verdict on a task with a build only when a report that a
-// stop hook kept backs it. A test whose story records such a verdict as one of its steps first does what a review does:
-// it adds the run, keeps its helper's report as the hook does, and ends the run, then names the run with --run.
-
 import { readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 
-/** The role of the run that backs each review or QA verdict kind in these tests. */
 export const BACKER = { "review-clean": "code-reviewer", "security-clean": "security-reviewer", "ux-clean": "ux-reviewer", "qa-pass": "qa", findings: "code-reviewer", "qa-fail": "qa" };
 
-/** A full report of a run's helper that backs the kind: clean, or with one medium finding. */
 export function reportFor(kind, { result, findings } = {}) {
   const problem = ["findings", "qa-fail"].includes(kind), qa = BACKER[kind] === "qa";
   const word = result ?? (problem ? (qa ? "FAIL" : "FINDINGS") : qa ? "PASS" : "CLEAN");
   return ["STATUS done", `RESULT ${word}`, "EVIDENCE the test's review", `FINDINGS ${findings ?? (problem ? "\n- K1 medium the test's finding" : "none")}`, "QUESTIONS none", "NOT VERIFIED none", "BRANCH none"].join("\n");
 }
 
-/**
- * Gives the task's last open medium or high finding this run, in the logbook folder, as a review's finding add does: a
- * problem verdict needs its report's finding on record for its run, and a story adds the finding before backed adds the run.
- */
 export function linkFinding(dir, task, run) {
   const file = join(dir, "findings.tsv"), [head, ...rows] = readFileSync(file, "utf8").split("\n"), cols = head.split("\t");
   const of = (row, col) => row.split("\t")[cols.indexOf(col)];
@@ -27,19 +17,11 @@ export function linkFinding(dir, task, run) {
   writeFileSync(file, [head, ...rows].join("\n"));
 }
 
-/** The value of an option in a command's words, as --name value or --name=value. */
 const valueOf = (args, name) => {
   const k = args.findIndex((a) => a === name || a.startsWith(`${name}=`));
   return k < 0 ? undefined : args[k] === name ? args[k + 1] : args[k].slice(name.length + 1);
 };
 
-/**
- * The words of a state tool command, with --run of a new run that backs the verdict when the command is a review or QA
- * verdict without --run; else the words as they are. cli(...words) runs a command and returns its output or throws;
- * keep(fields) keeps the run's report as a stop hook does; link(task, run), when given, links a story's finding to a run
- * of a problem verdict (linkFinding). When a step cannot be made (the task is held, or it is not in
- * the logbook), the words stay as they are, so that the test sees the verdict's own refusal.
- */
 export function backed(args, { cli, keep, link }) {
   const kind = valueOf(args, "--kind"), role = BACKER[kind];
   if (args[0] !== "verdict" || !role || valueOf(args, "--run") !== undefined) return args;
@@ -57,7 +39,6 @@ export function backed(args, { cli, keep, link }) {
   return [...args, "--run", id];
 }
 
-/** A state tool's command in this process (tool.sage), on one project, that backs a review or QA verdict first. */
 export const backedSage = (tool, project, env) => {
   const sage = (...args) => tool.sage([...args, "--project", project], env);
   return (...args) => sage(...backed(args, { cli: sage, keep: (fields) => tool.keepReport(project, fields, env) }));

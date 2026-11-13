@@ -1,6 +1,4 @@
-// Runs the remote-control skill's script as the skill does: against a settings file in a temporary config folder, and
-// for the server, in a temporary home folder with stand-ins for launchctl and claude, so that the tests run on any computer.
-import "./test-env.mjs"; // first: no variable of the developer's shell changes a result
+import "./test-env.mjs";
 import assert from "node:assert/strict";
 import { spawnSync } from "node:child_process";
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, statSync, writeFileSync } from "node:fs";
@@ -62,7 +60,6 @@ test("an unknown command changes nothing", () => {
   assert.match(r.stderr, /Use on, off, status or server/);
 });
 
-/** The stand-in launchctl records each call, and answers print with FAKE_STATE (running by default) while the item is loaded. */
 const FAKE_LAUNCHCTL = `#!/bin/sh
 echo "$*" >> "$HOME/launchctl.calls"
 case "$1" in

@@ -1,11 +1,8 @@
-// Optional local files only. The caller selects stable paths and starts launchd separately.
 import { accessSync, closeSync, constants, fstatSync, lstatSync, mkdirSync, openSync, readSync, realpathSync, readdirSync, writeFileSync } from "node:fs";
 import { basename, delimiter, dirname, isAbsolute, join, parse, relative, resolve, sep } from "node:path";
 import { fileURLToPath } from "node:url";
 
 const here = dirname(fileURLToPath(import.meta.url)), packages = dirname(here);
-// The checkout has packages/sage-board and packages/sage-core; a provider plugin has board/ and core/. The copy keeps
-// the names, so the board's import of core works in the installation too.
 const [BOARD, CORE] = basename(here) === "sage-board" ? ["sage-board", "sage-core"] : [basename(here), "core"];
 const MAX_BYTES = 64 * 1024 * 1024;
 const refuse = reason => { throw new TypeError(`board install: ${reason}`); };
@@ -15,7 +12,6 @@ function absolute(value, name) {
   return value;
 }
 
-// Check every existing component; a missing final file does not make a linked parent safe.
 function inspect(path, name, kind, missing = false) {
   const root = parse(path).root, parts = relative(root, path).split(sep).filter(Boolean);
   let cursor = root, result;
@@ -42,7 +38,6 @@ function directory(path) {
   }
 }
 
-// Directory identity handles differently cased paths without assuming a filesystem's case rules.
 function containsDirectory(parent, child) {
   let identity;
   try { identity = lstatSync(parent); }
@@ -66,7 +61,6 @@ function controlledAlias(path) {
   }
 }
 
-/** Select the current Node through PATH without pinning a Homebrew Cellar version. */
 export function stableNodePath(path = process.env.PATH ?? "") {
   const running = realpathSync(process.execPath);
   let direct;
@@ -79,7 +73,7 @@ export function stableNodePath(path = process.env.PATH ?? "") {
       if (realpathSync(candidate) !== running || /(?:^|\/)Cellar\//.test(candidate)) continue;
       if (lstatSync(candidate).isSymbolicLink()) { controlledAlias(candidate); return candidate; }
       if (lstatSync(candidate).isFile()) direct ??= candidate;
-    } catch { /* Another PATH entry may name the same running Node through a stable location. */ }
+    } catch {}
   }
   return direct ?? refuse("put an upgrade-stable Node command on PATH before creating the login file");
 }
@@ -140,7 +134,6 @@ function packageFiles() {
   return { files, folders };
 }
 
-/** Copy provider-neutral packages into an explicit stable directory. No file is overwritten or removed. */
 export function installBoard(options) {
   const checked = paths(options);
   if (inspect(checked.installDir, "installDir", "directory", true) && readdirSync(checked.installDir).length) refuse("installDir must be absent or empty");
@@ -156,7 +149,6 @@ export function installBoard(options) {
   return { cliPath: checked.cliPath, plist: plistFor(checked) };
 }
 
-/** Write the requested per-user login artifact. Loading or starting it is a separate owner action. */
 export function writeLoginFile({ plistPath, ...options } = {}) {
   absolute(plistPath, "plistPath");
   const checked = paths(options, true);

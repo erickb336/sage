@@ -1,12 +1,8 @@
 #!/usr/bin/env node
-// Prints the text that goes at the top of a role agent's spawn message: the role text, the principles of the role (from
-// core's ROLE_PRINCIPLES) and the sage report.
 import { readFileSync, realpathSync } from "node:fs";
 import { fileURLToPath } from "node:url";
 import { renderReportInstructions, renderRoleInstructions, ROLE_PRINCIPLES } from "../../core/index.mjs";
 
-// These roles write git or reach the network, so Codex's default sandbox asks the owner each time.
-// Every other role only runs checks and reads, and gets the short text.
 const approvalRoles = new Set(["implementer", "designer", "arena-judge", "lead"]);
 
 export function roleMessage(role) {
@@ -18,10 +14,6 @@ export function roleMessage(role) {
 const reference = (name) => readFileSync(new URL(`references/${name}`, import.meta.url), "utf8").trim();
 const principleFile = (name) => new URL(`../principle-${name}/SKILL.md`, import.meta.url);
 
-/**
- * The principles of the role. A helper gets their text; the lead, whose text is long, gets the path of each one to read.
- * The text is the skill without its frontmatter and its generated-file note, with its title one level down.
- */
 function principles(role) {
   const names = ROLE_PRINCIPLES[role] ?? [];
   if (!names.length) return "";
@@ -30,7 +22,6 @@ function principles(role) {
   return `\n\n# The principles of your role\n\n${names.map(text).join("\n\n")}`;
 }
 
-/** The shared lead text names no tool, so Codex adds its own dispatch steps, with the real paths of this script (each helper's role text) and of the CI wait. */
 const leadSteps = () => `\n\n${reference("lead-steps.md").replaceAll("<node>", process.execPath).replaceAll("<role.mjs>", fileURLToPath(import.meta.url))
   .replaceAll("<ci-wait.mjs>", fileURLToPath(new URL("ci-wait.mjs", import.meta.url)))}`;
 

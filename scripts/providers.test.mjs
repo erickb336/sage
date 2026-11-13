@@ -18,7 +18,6 @@ const context = (output) => output?.hookSpecificOutput?.additionalContext ?? "";
 const source = (path) => readFileSync(join(ROOT, path), "utf8");
 const json = (path) => JSON.parse(source(path));
 
-// T91 fixtures contain only synthetic reports and disposable logbooks.
 const reportDigest = text => createHash("sha256").update(text, "utf8").digest("hex");
 function comparisonFixture(t) {
   const home = realpathSync(mkdtempSync(join(tmpdir(), "sage-report-compare-")));
@@ -67,7 +66,6 @@ test("T91: comparison preserves exact UTF-8, newline and whitespace bytes after 
 test("T91: comparison validates stored identities, integrity and legacy records honestly", t => {
   const f = comparisonFixture(t); f.retain();
   const original = JSON.parse(readFileSync(f.file, "utf8"));
-  // Existing six-field records have no digest. Recompute it; do not invent a native authenticity claim.
   assert.deepEqual(f.compare(), { status: "match" });
   for (const changed of [{ task: "T2" }, { run: "R2" }, { role: "designer" }, { sha: "bad" }, { at: "yesterday" },
     { text: 1 }, { text: "x".repeat((1 << 20) + 1) }, { reportHash: "0".repeat(64) }]) {
@@ -139,16 +137,11 @@ test("T91: bundled provider cores compare the same synthetic retained report", a
     assert.deepEqual(f.snapshot(), before);
   }
 });
-/**
- * A fake readGit for the push policy (T536): the checkout's branch (a name, or a function of the folder), git's settings
- * with one remote named origin, and origin's default branch (main unless given; undefined when git cannot read it).
- */
 const fakeGit = (branch, { head = "main", settings = "remote.origin.url\nhttps://github.com/acme/project.git\0" } = {}) => (dir, args) =>
   args[1] === "--symbolic-full-name" ? `refs/heads/${args[2].replace(/^(?:refs\/)?(?:heads\/)?/, "")}\n`
     : args[0] === "rev-parse" ? (typeof branch === "function" ? branch(dir) : branch)
       : args[0] === "config" ? settings
         : head === undefined ? undefined : `refs/remotes/origin/${head}\n`;
-/** A fake readGh (T536): GitHub names main as the default branch of every repository. */
 const fakeGh = (args) => (args.at(-1) === ".default_branch" ? "main\n" : undefined);
 
 test("T51: external command operands do not become executable evidence", async t => {
@@ -201,7 +194,6 @@ test("T51: Bash builtin spellings do not hide external executable identity", asy
     assert.ok(api.programsRun("eval 'git stash'", f.dir, bin).some(run => run.word === "git"));
     if (provider === "claude") {
       const hook = await import(pathToFileURL(join(f.plugin, "hooks/sage-hook.mjs")));
-      // T815: gh by another name (a copy or a link) is a limit of the hook; gh by its name is judged.
       assert.equal(hook.agentProblem("COMMAND pr create", f.dir, bin), undefined, "gh under another name");
       assert.match(hook.agentProblem("gh repo delete o/r", f.dir, bin) ?? "", /an agent runs only these gh commands/);
     }
@@ -210,8 +202,6 @@ test("T51: Bash builtin spellings do not hide external executable identity", asy
 
 test("T51: built hook normalizes agent stash, process, reader and writer executable names", async t => {
   const f = isolated(t, "claude"), logbook = join(f.dir, "logbook"); mkdirSync(logbook);
-  // The hook resolves each name on PATH and allows a temporary fake by design. An empty PATH folder keeps the result the
-  // same with or without the caller's fake ps first on PATH: on a case-insensitive file system, "PS" finds that fake (T469).
   const saved = { SAGE_HOME: process.env.SAGE_HOME, PATH: process.env.PATH }, bin = join(f.dir, "bin"); mkdirSync(bin);
   Object.assign(process.env, { SAGE_HOME: logbook, PATH: bin });
   t.after(() => { for (const [name, value] of Object.entries(saved)) if (value === undefined) delete process.env[name]; else process.env[name] = value; });
@@ -272,7 +262,6 @@ test("T49: built Claude hook protects the logbook from output writers while pres
     `git show --format='--output=${logbook}/tasks.tsv'`,
     `curl --header '--output=${logbook}/tasks.tsv' https://example.invalid`,
   ];
-  // In sage mode the chief changes no file from the shell at all (T960), so its writes outside the logbook pass outside sage mode.
   for (const [actor, sage] of [[{}, false], [{ agent_id: "fixture-child", agent_type: "sage:implementer" }, true]]) {
     for (const command of commands) {
       const result = hook.handle({ hook_event_name: "PreToolUse", tool_name: "Bash", cwd: f.dir,
@@ -293,8 +282,6 @@ test("T49: built Claude hook protects the logbook from output writers while pres
         const command = broken ? `curl -o ${logbook}/tasks.tsv https://example.invalid` : `curl -o ${logbook}/tasks.tsv 'open`;
         const result = hook.handle({ hook_event_name: "PreToolUse", tool_name: "Bash", cwd: f.dir,
           tool_input: { command }, ...actor }, { sage: true }, { touch() {} });
-        // T815: a broken core refuses every command; a line that the reader cannot read is refused only when it names a
-        // merge, a push or the state tool, and for the chief in sage mode, whose write rule fails closed as in Codex (T960).
         assert.equal(result?.hookSpecificOutput?.permissionDecision, broken || !actor.agent_id ? "deny" : undefined, `${broken}: ${JSON.stringify(result)}`);
       }
     } finally { if (previous === undefined) delete process.env.SAGE_HOME; else process.env.SAGE_HOME = previous; }
@@ -329,9 +316,7 @@ test("T933: a redirection into a scratch folder outside the project is no write;
       "echo x > $TMPDIR/out.txt", `echo x > ${scratch}/*.txt`, `cp a.txt ${scratch}/b.txt`, `tee ${scratch}/out.txt`,
       `sed -i s/a/b/ ${scratch}/out.txt`, `rm -rf ${scratch}/old`])
       assert.equal(commandWrites(command, project, [scratch]), true, command);
-    // With no scratch folder, as every caller before T933, a redirection into it counts.
     assert.equal(commandWrites(`echo x > ${scratch}/out.txt`, project), true);
-    // A project inside the scratch folder stays the project.
     assert.equal(commandWrites(`echo x > ${scratch}/inner/a.txt`, join(scratch, "inner"), [scratch]), true);
     assert.equal(commandWrites(`echo x > ${scratch}/other/a.txt`, join(scratch, "inner"), [scratch]), false);
   }
@@ -441,12 +426,11 @@ test("T216: each plugin's board is a cross-provider reader: it imports only Node
     const { parse } = await import("es-module-lexer/minimal");
     for (const file of files) {
       const [imports] = parse(readFileSync(file, "utf8"));
-      for (const { n: name } of imports.filter((item) => item.d !== -2)) { // -2 is import.meta, not an import
+      for (const { n: name } of imports.filter((item) => item.d !== -2)) {
         const allowed = name?.startsWith("node:") || name === "../core/index.mjs" || /^\.\/(?:cli|install|pages|server)\.mjs$/.test(name ?? "");
         assert.ok(allowed, `${provider} ${relative(plugin, file)} imports ${name}`);
       }
     }
-    // The install copies the plugin's board and core, so the stable copy runs without the checkout or the plugin.
     const env = { ...process.env, HOME: join(dir, "home") };
     delete env.SAGE_HOME; delete env.CODEX_HOME;
     const config = join(dir, "board.json"), installDir = join(dir, "stable");
@@ -467,7 +451,6 @@ test("core instances isolate provider defaults and validation without changing p
   t.after(() => rmSync(dir, { recursive: true, force: true }));
   const a = createStateTool({ defaultRoot: () => join(dir, "a"), models: ["a", "inherit"], modelDefaults: { arena_models: "a" } });
   const b = createStateTool({ defaultRoot: () => join(dir, "b") });
-  // T944: an env of its own, with a scratch HOME: with no HOME, the shared root of the config command is the real ~/.sage.
   const env = { HOME: join(dir, "home") };
   assert.equal(a.config(env).arena_models, "a");
   assert.equal(b.config(env).arena_models, "inherit,inherit,inherit");
@@ -484,8 +467,6 @@ test("core instances isolate provider defaults and validation without changing p
 test("manifests point to disjoint plugin roots and only supported Codex hooks", async () => {
   assert.equal(json(".claude-plugin/marketplace.json").plugins[0].source, "./plugins/sage");
   assert.equal(json(".agents/plugins/marketplace.json").plugins[0].source.path, "./plugins/sage-codex");
-  // T957: the Codex plugin declares no hooks, and has no hooks/hooks.json, which Codex loads by default (core-plugins
-  // loader.rs): sage's hooks are the user's entries, so no hook runs twice.
   assert.equal("hooks" in json("plugins/sage-codex/.codex-plugin/plugin.json"), false);
   assert.equal(existsSync(join(ROOT, "plugins/sage-codex/hooks/hooks.json")), false);
   const { EVENTS } = await import(pathToFileURL(join(ROOT, "plugins/sage-codex/hooks/entries.mjs")).href);
@@ -733,8 +714,6 @@ test("shared merge and push extraction classifies merges in both isolated bundle
       `sh -c '${candidate}'`, "gh pr 'merge"]) {
       assert.equal(typeof policy.mergeRun(text, f.dir)?.problem, "string", text);
     }
-    // T815, T909: text is no merge, and text piped into a shell, a file that a later command runs, a substitution in the
-    // program word and the GitHub API are limits of the hook.
     for (const text of ["git status", "git merge topic", "gh api repos/o/r/pulls/12/merge -X PUT", `echo '${candidate}'`, `echo '${candidate}' | head -1`,
       `node '${tool}' log --why '${candidate}'`, `node '/other/sage.mjs' log --why '${candidate}'`,
       `echo '${candidate}' | sh`, `echo '${candidate}' > run; sh run`, "$(echo gh) pr merge 12"]) assert.equal(policy.mergeRun(text, f.dir), undefined, text);
@@ -756,10 +735,8 @@ test("shared merge and push extraction applies push rules and injected branch ev
     const f = isolated(t, provider);
     const api = await import(pathToFileURL(join(f.plugin, "core/index.mjs")));
     const tool = join(f.plugin, "skills/sage/sage.mjs");
-    mkdirSync(join(f.dir, "project/nested"), { recursive: true }); // the reader follows a cd into a folder that exists
+    mkdirSync(join(f.dir, "project/nested"), { recursive: true });
     const policy = api.createPushPolicy({ readGh: fakeGh, readGit: fakeGit(dir => dir === join(f.dir, "project/nested") ? "main" : "topic") });
-    // T815: push text given to another program is no push, and text piped into a shell is a limit of the hook. T909: each
-    // push that the reader finds, also inside another command, meets the push form; the GitHub API is a limit.
     for (const text of ["git push origin topic", "git push -u --follow-tags origin topic", "git push --delete origin topic",
       "echo 'git push origin main'", "git status", `node '${tool}' log --why 'git push origin main'`,
       "node /other/sage.mjs log --why 'git push origin main'", "echo 'git push origin main' | sh", "sudo git push origin topic",
@@ -831,33 +808,24 @@ test("T815 repair: core's readers in both bundles (F-T815-4, -6, -9, -16, -27; F
     for (const folder of [join(root, "p"), shared, work]) mkdirSync(folder, { recursive: true });
     symlinkSync(root, link);
     const write = (command) => api.logbookWrite(command, work, [root, shared], home);
-    // F-T815-4: a remove, a move or a recursive lock of a root or a folder above one, also by a pattern in it.
     for (const [command, word] of [["rm -rf ~/.claude", "~/.claude"], ["mv ~/.claude ~/.claude.bak", "~/.claude"], [`rm -rf ${home}`, home], [`rm -rf ${home}/..`, `${home}/..`],
       ["rm -rf ~/*", "~/*"], ["rm -rf /", "/"], [`find ${shared} -delete`, shared],
       [`rsync -a --delete ${work}/ ${home}/`, `${home}/`], [`sudo rm -rf ${home}`, home],
-      // F-T909-5: a recursive mode or owner change of a root or a path in one, in a line with no write form.
       ["chmod -R 000 ~/.claude/sage", "~/.claude/sage"], [`chmod -R 000 ${shared}`, shared], ["chown -R x ~/.sage", "~/.sage"],
       [`chgrp -R staff ${root}/p`, `${root}/p`], [`cd ${shared} && chmod -R u+w .`, "u+w"]]) assert.equal(write(command), word, `${provider}: ${command}`);
-    // Not a remove of a root: mv's last word is where it moves to, a copy or a plain mode change, a remove elsewhere, a
-    // find that deletes only the files it matches and a recursive mode change (F-T903-7), and rm of a link to a root, which
-    // removes the link (F-T903-10).
     for (const command of ["mv a.txt ~/", "rm -rf build", "rm *.log", `cp -R ${home}/.claude /tmp/x`, `chmod 644 ${home}/.claude`, `find ${work} -name '*.o' -delete`, "ls ~",
       "find ~ -name '*.tmp' -delete", `find ${home} -name x -exec rm -rf {} +`, "chmod -R u+w ~", `chmod -R 000 ${home}`, `chown -R x ${home}/.claude`, `rm ${link}`, `unlink ${link}`]) {
       assert.equal(write(command), undefined, `${provider}: ${command}`);
     }
-    // F-T815-16: pushd moves as cd does; popd goes back. A path through a link is a limit (T909).
     for (const [command, word] of [[`pushd ${root} && echo x >> tasks.json`, "tasks.json"],
       [`pushd ${root} && rm -rf p`, "p"], [`pushd ${shared} && echo x > a.json`, "a.json"], [`pushd /usr && popd && pushd ${root} && rm x`, "x"]]) assert.equal(write(command), word, `${provider}: ${command}`);
     assert.equal(write(`pushd ${root} && popd && echo x > tasks.json`), undefined, "popd goes back to the work folder");
-    // F-T815-6: one method reader, with cobra's bundled -iX.
     for (const [command, method] of [["gh api -iXDELETE repos/o/r/x", "DELETE"], ["gh api -iX DELETE repos/o/r/x", "DELETE"], ["gh api -iX POST repos/o/r/x", "POST"], ["gh api -i repos/o/r", "GET"], ["gh api -f a=b repos/o/r/x", "POST"],
-      // F-T815-27: the word after a value option of gh api is its value, not a method.
       ["gh api -X PATCH repos/o/r/x -t -XGET", "PATCH"], ["gh api -X DELETE repos/o/r/x -itXGET", "DELETE"], ["gh api -X PUT repos/o/r/x -H --method=GET", "PUT"],
       ["gh api repos/o/r/x -q -fa=b", "GET"], ["gh api -X PATCH repos/o/r/x --template=-XGET", "PATCH"], ["gh api -X PATCH repos/o/r/x --hostname -XGET", "PATCH"]]) {
       assert.deepEqual(api.ghRuns(command, work).map((run) => run.method), [method], command);
     }
     const policy = api.createCommandPolicy();
-    // F-T815-9: an unread line that names a merge leads with the cause and the way forward.
     assert.equal(policy.mergeRun("gh pr merge 1 && echo 'x", work)?.problem, "the hook cannot read this command (an open quote), so it refuses it. Close each quote, substitution and heredoc. Its text names a merge. Merge only with gh pr merge <n> --squash --delete-branch --match-head-commit <sha>, as a command of its own.");
   }
 });
@@ -921,7 +889,6 @@ test("shared mode phrases match only a whole message, the same in both isolated 
     const f = isolated(t, provider);
     const api = await import(pathToFileURL(join(f.plugin, "core/index.mjs")));
     const cases = [
-      // [the message, the exact phrase or null, the phrases that a near miss asks for]
       ["sage mode", "sage mode", []],
       [" Sage Mode On. ", "sage mode on", []],
       ["SAGE MODE OFF", "sage mode off", []],
@@ -941,7 +908,6 @@ test("shared mode phrases match only a whole message, the same in both isolated 
       ["sagemodeoff", null, ["sage mode off"]],
     ];
     assert.deepEqual(cases.map(([text]) => [text, api.exactPhrase(text), api.phrasesNear(text)?.phrases ?? []]), cases);
-    // A message that starts like a phrase is a strong near miss; a mention in a sentence is a weak one (F-T240-7).
     assert.deepEqual(["sage mode stop", "please stop autopilot", "sage mode"].map((text) => api.phrasesNear(text)?.strong ?? null), [true, false, null]);
     assert.deepEqual(["sage mode\nautopilot off", "the report says sage mode on", "Autopilot Off is next"].map(api.hasPhrase), [true, true, true]);
     assert.deepEqual(["sage help", "the autopilot run", "sage modes"].map(api.hasPhrase), [false, false, false]);
@@ -969,8 +935,6 @@ test("shared file and mode extraction refuses active edits when the file policy 
       const output = hook.handle({ hook_event_name: "PreToolUse", tool_name: "Bash", tool_input: { command: "gh api repos/o/r/git/refs -f ref=refs/heads/main" } }, { sage: false }, {});
       assert.equal(output?.hookSpecificOutput?.permissionDecision, "deny");
       assert.match(output.hookSpecificOutput.permissionDecisionReason, /command modules could not load/);
-      // The board password rule is core's (T931): without core, a file tool's call that names the board config is refused
-      // by its text (a command is refused above).
       const read = (file_path) => hook.handle({ hook_event_name: "PreToolUse", tool_name: "Read", cwd: f.dir, tool_input: { file_path } }, { sage: false }, {});
       assert.match(read("~/.config/sage-board/board.json")?.hookSpecificOutput?.permissionDecisionReason ?? "passed", /^sage: the board password rule \(T229\) could not load/);
       assert.equal(read(join(f.dir, "sample.txt")), undefined);
@@ -982,7 +946,6 @@ test("shared file and mode extraction clears cached autopilot before tool checks
   for (const missing of ["hooks/mode-policy.mjs", "core/mode-policy.mjs"]) {
     const f = isolated(t, "claude");
     rmSync(join(f.plugin, missing), { force: true });
-    // A passing fixture ledger makes a stale autopilot flag an actual bypass; no real logbook is read.
     writeFileSync(join(f.plugin, "skills/sage/sage.mjs"), `export const sageRoot = () => ${JSON.stringify(join(f.dir, "logbooks"))};\nexport const mergeCheck = () => ({ ok: true });\n`);
     const hook = await import(pathToFileURL(join(f.plugin, "hooks/sage-hook.mjs")));
     const state = { sage: true, autopilot: true };
@@ -1109,7 +1072,6 @@ test("shared role instructions ship outside the checkout and generate existing s
     const qa = f.api.renderRoleInstructions("qa", f.bindings.qa);
     assert.match(qa, /You do not fix anything/);
     assert.match(qa, /PASS or FAIL/);
-    // The investigation's two roles have one text in core (T932); each provider says where its agent may write.
     const investigate = f.api.renderRoleInstructions("investigate", f.bindings.investigate);
     const review = f.api.renderRoleInstructions("evidence-review", f.bindings["evidence-review"]);
     assert.match(investigate, /^# Investigate\n\nYou investigate one task for the chief\. /);
@@ -1157,7 +1119,6 @@ test("shared chief instructions preserve the packaged agent and every brief fiel
   assert.equal(agent.split("\n---\n")[1].trim(), text);
   const fields = /```\n(GOAL[\s\S]*?)```/.exec(text)[1].trim().split("\n").map(line => line.split(/\s{2,}/)[0]);
   assert.deepEqual(fields, api.BRIEF_FIELDS);
-  // The chief has every tool, so the off phrase gives a full normal session; the sage hook refuses its edits (T398).
   assert.doesNotMatch(agent.split("\n---\n")[0], /^(?:tools|disallowedTools):/m);
   assert.match(agent.split("\n---\n")[0], /^skills:\n {2}- sage:sage$/m);
   assert.match(text, /The hook refuses a brief without them/);
@@ -1166,18 +1127,14 @@ test("shared chief instructions preserve the packaged agent and every brief fiel
 
 test("T586: the Codex arena steps come in Claude's order, and the Codex steps name only Codex's tools", () => {
   const titles = (text) => [...text.matchAll(/^\d\. \*\*(.+?)\*\*/gm)].map(([, title]) => title.replace(/[.:,]$/, ""));
-  // Claude's arena steps are in a reference of its sage skill, which the chief's arena binding points to (T934).
   assert.match(JSON.parse(source("packages/sage-claude/chief-bindings.json")).ARENA, /first read `skills\/sage\/references\/arena\.md`/);
   const claude = titles(source("packages/sage-claude/skills/sage/references/arena.md"));
   const steps = source("packages/sage-codex/skills/sage/references/arena.md");
   assert.equal(claude.length, 9);
-  // Two titles differ by provider: Claude names its agent, and its judge opens the pull request.
   assert.deepEqual(titles(steps), claude.map((title) => title.replace("`sage:arena-judge`", "the arena judge").replace("draft pull request", "branch")));
   assert.doesNotMatch(steps, /sage:arena-judge|sage run add|sage task|\bopus\b|\bsonnet\b/);
-  // A design arena's task has no branch, and the state tool refuses a PE run on any other branch.
   assert.match(steps, /Run the PE with the judge's branch and page in its brief\. Give its `run_add` no `branch`/);
   assert.doesNotMatch(steps, /PE on the judge's branch/);
-  // Claude's judge still opens its draft pull request, and its text no longer says anything about the chief's work.
   const judge = source("plugins/sage/agents/arena-judge.md");
   assert.match(judge, /\n {3}- For a build: push your branch and open a draft pull request from it, as an implementer does\.\n/);
   assert.doesNotMatch(judge, /leaves? the pull request to the chief/);
@@ -1204,7 +1161,6 @@ test("shared chief Codex instructions keep unsupported routes inactive, and merg
   assert.match(text, /The plugin's hook admits only this exact command, while autopilot is on and the merge check passes: no prompt\./);
   assert.match(text, /state tool checks at least one cycle/);
   assert.doesNotMatch(text, /CLAUDE\.md|~\/workspace|\.claude|sage:report|model fable|opus|sonnet|gh api|gate G15|\{\{|sage-core-chief/);
-  // Rendering this document must not register the chief as an admitted child role.
   assert.throws(() => api.renderRoleInstructions("chief-of-staff", bindings), /Unknown child role/);
 });
 
@@ -1266,7 +1222,7 @@ test("package public imports package both quote styles and dynamic imports outsi
       "export const words = shellCommands('echo fixture')[0].words;",
     ].join("\n");
     const rewritten = rewriteCoreImports(original, "./core/index.mjs");
-    assert.match(rewritten, /from "sage-core"/); // Text data and comments remain unchanged.
+    assert.match(rewritten, /from "sage-core"/);
     const entry = join(f.plugin, "import-fixture.mjs"); writeFileSync(entry, rewritten);
     const result = await import(pathToFileURL(entry));
     assert.deepEqual(result.words, ["echo", "fixture"]);
@@ -1360,7 +1316,6 @@ test("shared command policy classifies merge candidates and executable text in b
       `sh -c '${candidate}'`, "gh pr 'merge"]) {
       assert.equal(typeof policy.mergeRun(text, f.dir)?.problem, "string", text);
     }
-    // T815: the merge rule judges the programs that run, never text.
     for (const text of ["git status", "git merge topic", `echo '${candidate}'`, `echo '${candidate}' | head -1`, `node '${tool}' log --why '${candidate}'`, `node '/other/sage.mjs' log --why '${candidate}'`]) {
       assert.equal(policy.mergeRun(text, f.dir), undefined, text);
       assert.equal(api.createCommandPolicy().mergeRun(text, f.dir), undefined, text);
@@ -1423,11 +1378,10 @@ test("shared push policy derives checkout paths and scopes the state-tool text e
   assert.equal(typeof api.createPushPolicy, "function");
   const tool = join(f.dir, "sage.mjs");
   const calls = [];
-  mkdirSync(join(f.dir, "project/nested"), { recursive: true }); // the reader follows a cd into a folder that exists
+  mkdirSync(join(f.dir, "project/nested"), { recursive: true });
   const policy = api.createPushPolicy({ readGh: fakeGh, readGit: fakeGit(dir => { calls.push(dir); return "topic"; }) });
   assert.equal(policy.pushProblem("cd project; git -C nested push origin topic", f.dir), undefined);
   assert.deepEqual(calls, [join(f.dir, "project/nested")]);
-  // T815: push text in another program's words is no push, whatever the program.
   assert.equal(policy.pushProblem(`node '${tool}' log --why 'git push origin main'`, f.dir), undefined);
   assert.equal(policy.pushProblem("node /other/sage.mjs log --why 'git push origin main'", f.dir), undefined);
   assert.deepEqual(calls, [join(f.dir, "project/nested")]);
@@ -1437,19 +1391,15 @@ test("shared push policy validates and snapshots trusted branch readers and mess
   const f = isolated(t, "codex");
   const api = await import(pathToFileURL(join(f.plugin, "core/index.mjs")));
   assert.equal(typeof api.createPushPolicy, "function");
-  // T815: both providers use core's readers by default; a reader that is given must be a function.
   assert.equal(typeof api.createPushPolicy().pushProblem, "function");
   assert.throws(() => api.createPushPolicy({ readGit: 7 }), /readGit/);
   assert.throws(() => api.createPushPolicy({ readGit: fakeGit("topic"), readGh: "gh" }), /readGh/);
   for (const value of [null, 7, Promise.resolve("main")]) {
     assert.throws(() => api.createPushPolicy({ readGit: fakeGit("topic"), readGh: () => value }).pushProblem("git push origin topic", f.dir), /readGh/);
   }
-  // The repository of a remote URL, in the forms git writes, and nothing for another host.
   assert.deepEqual(["https://github.com/acme/site.git", "git@github.com:acme/site", "ssh://git@github.com/acme/site.git", "https://gitlab.com/acme/site", "https://github.com/acme/../x", "../site.git",
-    // R1949-2: a user in the URL, a capital host and ssh.github.com:443 name the same repository; an ssh host alias does not.
     "https://someone@GitHub.com/acme/site", "ssh://git@ssh.github.com:443/acme/site.git", "git@GITHUB.COM:acme/site.git", "github-work:acme/site", "https://github.com.evil.test/acme/site"].map(api.gitHubRepository),
     ["acme/site", "acme/site", "acme/site", undefined, undefined, undefined, "acme/site", "acme/site", "acme/site", undefined, undefined]);
-  // R1971-2: a ?, # or % in the user part makes the part before it the host, so the URL is not GitHub's.
   assert.deepEqual(["https://evil.example?@github.com/acme/site", "https://evil.example#@github.com/acme/site", "https://evil%2eexample@github.com/acme/site",
     "ssh://evil.example?@github.com/acme/site", "evil?x@github.com:acme/site"].map(api.gitHubRepository), [undefined, undefined, undefined, undefined, undefined]);
   for (const mainReason of [null, "", " ", "bad\nmessage", "x".repeat(2049)]) {
@@ -1463,16 +1413,13 @@ test("shared push policy validates and snapshots trusted branch readers and mess
   for (const value of [null, "", " ", "topic\tname", "topic\0name", true, Promise.resolve("topic")]) {
     assert.throws(() => api.createPushPolicy({ readGh: fakeGh, readGit: fakeGit(value) }).pushProblem("git push origin topic", f.dir), /readGit/);
   }
-  // git ends its output with a line break; the policy reads the name without it.
   for (const value of ["main\n", "master\r\n"]) assert.match(api.createPushPolicy({ readGh: fakeGh, readGit: fakeGit(value) }).pushProblem("git push origin topic", f.dir), /checkout is on ma/);
-  // Git permits Unicode spaces inside branch names. These strings reach the parser, never a shell.
   for (const value of ["topic\u00a0name", "topic\u2003name"]) {
     assert.equal(execFileSync("git", ["check-ref-format", "--branch", value], { encoding: "utf8" }).trimEnd(), value);
     assert.equal(api.createPushPolicy({ readGh: fakeGh, readGit: fakeGit(value) }).pushProblem(`git push origin '${value}'`, f.dir), undefined);
   }
   const broken = api.createPushPolicy({ readGh: fakeGh, readGit: () => { throw new Error("fixture read failure"); } });
   assert.throws(() => broken.pushProblem("git push origin topic", f.dir), /fixture read failure/);
-  // Preserve the existing Claude rule; Codex can require its reader to throw on missing evidence.
   assert.equal(api.createPushPolicy({ readGh: fakeGh, readGit: fakeGit(undefined) }).pushProblem("git push origin topic", f.dir), undefined);
 });
 
@@ -1532,7 +1479,6 @@ test("Codex hook state refuses a folder below a foreign-owned ancestor even when
     const parent = nested ? join(foreign, "owned-child") : foreign;
     if (nested) mkdirSync(parent, { mode: 0o700 });
     const base = join(parent, "state");
-    // Simulate only the UID that stat would return for another user's ancestor; the filesystem does every real read.
     fs.lstatSync = (path, ...args) => {
       const info = original(path, ...args);
       if (path === foreign) Object.defineProperty(info, "uid", { value: process.getuid() + 1 });
@@ -1630,7 +1576,6 @@ test("shared shell write classification detects writes without executing payload
     const f = isolated(t, provider);
     const { commandWrites } = await import(pathToFileURL(join(f.plugin, "core/index.mjs")));
     assert.equal(typeof commandWrites, "function");
-    // All strings below reach the parser only. None reaches a shell or interpreter.
     for (const command of [
       "printf fixed > ledger.tsv", "cat <> ledger.tsv", "echo fixed >& ledger.tsv",
       "cp source target", "rm target", "ln source target", "uniq source target", "less -o target source",
@@ -1732,7 +1677,7 @@ test("native deadline waits for child closure when the timeout callback throws",
   assert.equal(settled, false, "closing pipes must not report an unclosed child as stopped");
   child.emit("close", 0, null);
   assert.deepEqual(await result, { code: null, exitCode: 0, signal: null, timedOut: true, reason: "native_deadline", timeoutCallbackFailed: true });
-  t.mock.timers.tick(300_000); // A gracefully closed child must never reach either signal timer.
+  t.mock.timers.tick(300_000);
   assert.deepEqual(signals, []);
   assert.equal(child.stdin.writableEnded, true);
   for (const stream of [child.stdin, child.stdout, child.stderr]) assert.equal(stream.destroyed, true);
@@ -1759,7 +1704,6 @@ test("native spawn error waits for closure before releasing its owner", async t 
   assert.equal(child.listenerCount("error"), 0);
 });
 
-// Signals are intercepted in the check process: even the old implementation cannot signal a test child.
 for (const scenario of ['success', 'exit-error', 'bad-manifest']) test(`Codex package check: ${scenario} closes its child without signals`, async t => {
   const dir = mkdtempSync(join(tmpdir(), 'sage-package-check-'));
   t.after(() => rmSync(dir, { recursive: true, force: true }));
@@ -1772,7 +1716,6 @@ for (const scenario of ['success', 'exit-error', 'bad-manifest']) test(`Codex pa
     summary: {source: {path: join(ROOT, 'plugins/sage-codex')}},
   };
   if (scenario === 'bad-manifest') plugin.hooks = [{eventName: 'preToolUse'}];
-  // hooks/list: sage's entries of the scratch CODEX_HOME's hooks.json, trusted after config/batchWrite, as Codex lists user hooks.
   const list = `const hooks = Object.entries(JSON.parse(readFileSync(process.env.CODEX_HOME + '/hooks.json', 'utf8')).hooks).map(([e, [g]]) => ({eventName: e[0].toLowerCase() + e.slice(1), key: process.env.CODEX_HOME + '/hooks.json:' + e + ':0:0', currentHash: 'sha256:1', source: 'user', matcher: null, command: g.hooks[0].command, trustStatus: trusted ? 'trusted' : 'untrusted'}));`;
   writeFileSync(binary, `#!${process.execPath}\nimport {createInterface} from 'node:readline';\nimport {readFileSync, writeFileSync} from 'node:fs';\nlet trusted = false;\nif (process.argv.includes('--version')) { console.log('codex-cli 0.160.0'); } else {\nconst reader = createInterface({input: process.stdin});\nreader.on('line', line => { const request = JSON.parse(line); if (!request.id) return; let result = {}; if (request.method === 'plugin/read') result = {plugin:${JSON.stringify(plugin)}}; if (request.method === 'config/batchWrite') trusted = true; if (request.method === 'hooks/list') { ${list} result = {data: [{hooks}]}; } console.log(JSON.stringify({id:request.id,result})); });\nreader.on('close', () => { writeFileSync(${JSON.stringify(closed)}, 'stdin closed'); process.exitCode=${scenario === 'exit-error' ? 7 : 0}; });\n}\n`, {mode: 0o700});
   const child = spawn(process.execPath, ['--import', preload, join(ROOT, 'scripts/check-codex.mjs')], {
@@ -2110,7 +2053,6 @@ test('T47: build refuses the published SDK validator graph even without a root f
   assert.match(readFileSync(join(ROOT, provider), 'utf8'), /fast-uri@3\.1\.0/);
   assert.ok(/require_fast_uri/.test(raw.outputFiles[0].text), 'the diagnostic bundle retains the embedded resolver');
   assert.throws(() => assertSdkBundleGraph(raw.metafile), /excluded JSON Schema validator dependency/);
-  // A new published chunk name must not hide an old embedded resolver.
   assert.throws(() => assertSdkBundleGraph({ inputs: { 'renamed-sdk.mjs': {} } },
     () => '// node_modules/.pnpm/fast-uri@3.1.0/node_modules/fast-uri/index.js'), /excluded JSON Schema validator dependency/);
   const built = outputs().get('plugins/sage-codex/runtime/mcp-sdk.mjs');
@@ -2127,9 +2069,7 @@ test("T85 isolated public PE and designer helpers render shared contracts and tr
   for (const role of ["pe", "designer"]) {
     const result = spawnSync(process.execPath, [helper, role], { encoding: "utf8", cwd: f.dir });
     assert.equal(result.status, 0, result.stderr);
-    // T603: the designer writes git, so it gets the approval line; the PE gets the short line.
     const approvals = readFileSync(join(f.plugin, `skills/sage/references/${role === "designer" ? "approvals" : "sandbox-refusal"}.md`), "utf8").trim();
-    // T925: the principles of the role go between the role text and that line.
     assert.ok(result.stdout.startsWith(`${f.api.renderRoleInstructions(role, f.bindings[role])}\n\n# The principles of your role\n\n## `));
     assert.ok(result.stdout.endsWith(`\n\n${approvals}\n\n${f.api.renderReportInstructions(f.bindings.report)}\n`));
     for (const field of f.api.REPORT_FIELDS) assert.match(result.stdout, new RegExp(`^${field} +`, "m"));

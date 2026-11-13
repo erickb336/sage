@@ -1,8 +1,3 @@
-// Standalone browser check of the T233 milestone views (T368): the Milestone filter, the Needs you strip and its counts, the
-// address that keeps the milestone, and no sideways scroll on the board, the milestones list, a milestone page and a task page
-// at 375 and 1280 px, light and dark. SAMPLE DATA from scripts/fixtures/board-milestones.mjs. It runs in
-// `npm run test:browser`, not in `npm test`, with Playwright's bundled Chromium, or the headless shell at
-// BOARD_BROWSER_PATH; never an installed Chrome.
 import "./test-env.mjs";
 import assert from "node:assert/strict";
 import { createRequire } from "node:module";
@@ -21,7 +16,6 @@ let browser;
 before(async () => { browser = await chromium.launch({ headless: true, ...(process.env.BOARD_BROWSER_PATH ? { executablePath: process.env.BOARD_BROWSER_PATH } : {}) }); });
 after(async () => { await browser?.close(); });
 
-/** The served pages at a made-up origin; every other request fails. */
 const PAGES = {
   "/": () => renderBoardHtml(model, { snapshot: false }),
   "/milestones": () => renderMilestonesHtml(model),
@@ -29,9 +23,7 @@ const PAGES = {
   [`/task/${key("T13")}`]: () => renderBoardHtml(model, { snapshot: false, taskKey: `claude/sage-ff5ee2/T13` }),
   "/snapshot": () => renderBoardHtml(model),
 };
-// The offline snapshot holds its task, milestones and milestone pages; an address hash opens each (R1347-1).
 const SNAPSHOT_PAGES = [`#task-${key("T13")}`, "#milestones", `#milestone-${key("M1")}`];
-// Two projects, each with the sample milestones: the picker and the address have a project to choose (R1322-1, R1324-5).
 const other = milestonesSource("codex");
 Object.assign(other.projects[0], { key: "codex/other-abc123", name: "other-abc123", checkout: "/sample/other", displayName: "other (sample)" });
 const two = buildBoardModel([milestonesSource(), other], { now: NOW });
@@ -40,13 +32,11 @@ const TWO = {
   "/milestones": () => renderMilestonesHtml(two),
   [`/milestone/${key("M1")}`]: () => renderMilestonesHtml(two, { milestoneKey: `claude/sage-ff5ee2/M1` }),
 };
-/** A page at the made-up origin. The theme is dark; theme "light" flips the switch, as a person does. */
 async function open(t, path = "/", { width = 1280, height = 900, theme = "dark", hash = "", pages = PAGES, project = null } = {}) {
   const context = await browser.newContext({ viewport: { width, height }, colorScheme: "light", reducedMotion: "reduce", ...(width < 700 ? { isMobile: true, hasTouch: true } : {}) });
   t.after(() => context.close());
   await context.route("**/*", route => route.abort());
   for (const [at, html] of Object.entries(pages)) await context.route(`http://board.test${at}`, route => route.fulfill({ status: 200, contentType: "text/html; charset=utf-8", body: html() }));
-  // A project that the viewer chose before, kept in localStorage.
   if (project) await context.addInitScript(value => localStorage.setItem("board-project", value), project);
   const page = await context.newPage(), errors = [];
   page.on("pageerror", error => errors.push(String(error)));
@@ -118,7 +108,6 @@ test("R1324-5: the milestones list's picker keeps one project's milestones with 
   assert.equal(await page.locator("#sum-dropped").textContent(), "Dropped (1)");
   assert.equal(await page.locator("#needs-count").textContent(), "8", "the count is the server's: a milestones page has no cards to count");
   await page.click("a.chip.need");
-  // The board takes needs=1 out of the address as it loads (T374), so wait for the board itself, not for needs=1.
   await page.waitForURL(url => url.pathname === "/");
   assert.equal(await page.locator("[data-filter=needs]").getAttribute("aria-pressed"), "true");
   assert.ok((await shownIds(page)).length > 0 && (await page.locator(".card[data-key]:not([hidden])").evaluateAll(cards => cards.every(card => card.dataset.needs === "true"))));
@@ -128,12 +117,10 @@ for (const [width, height] of [[375, 812], [1280, 900]]) for (const theme of ["l
   test(`T368, T349, R1347-1: no sideways scroll at ${width} px, ${theme}: the board, the milestones list, a milestone page, a task page and the snapshot's pages; the page shell is edge to edge below 700 px`, async t => {
     for (const [path, hash] of [...Object.keys(PAGES).map(path => [path, ""]), ...SNAPSHOT_PAGES.map(hash => ["/snapshot", hash])]) {
       const at = path + hash, page = await open(t, path, { width, height, theme });
-      // The snapshot's page hides the board header and its switch, so the hash comes after the theme.
       if (hash) await page.evaluate(value => { location.hash = value; }, hash);
       await expectTheme(page, theme, at);
       const { scroll, client } = await page.evaluate(() => ({ scroll: document.documentElement.scrollWidth, client: document.documentElement.clientWidth }));
       assert.ok(scroll <= client, `${at}: ${scroll} > ${client}`);
-      // The shell: the rounded panel on the shell colour that holds the page, inset 8 px or more on a wide screen, the whole width on a phone.
       const shells = page.locator(".boardview:visible, body > main.page:visible, #pages > .page:visible");
       assert.equal(await shells.count(), 1, `${at}: one shell shows`);
       const [left, right, radius, back] = await shells.evaluate(element => { const box = element.getBoundingClientRect(), style = getComputedStyle(element); return [Math.round(box.left), Math.round(box.right), style.borderTopLeftRadius, style.backgroundColor]; });
@@ -144,7 +131,6 @@ for (const [width, height] of [[375, 812], [1280, 900]]) for (const theme of ["l
   });
 }
 
-// R1334-1, R1334-2: long milestone names (SAMPLE DATA). M1 (T13's milestone) gets 41 characters, M2 (T22's) gets 108.
 const MID = "Provider neutral board core for all tools", LONG = `${"A long milestone. ".repeat(5)}that ends here now`;
 const named = milestonesTables();
 for (const row of named.milestones) row.name = { M1: MID, M2: LONG }[row.id] ?? row.name;
@@ -168,7 +154,6 @@ test("R1334-1, R1334-2: at 375 px, a 41- and a 108-character milestone name make
   }
 });
 
-// T996: two projects with releases (SAMPLE DATA from scripts/fixtures/board-releases.mjs); the picker keeps one project's frame.
 const otherReleases = releasesSource(undefined, "codex");
 Object.assign(otherReleases.projects[0], { key: "codex/other-abc123", name: "other-abc123", checkout: "/sample/other", displayName: "other (sample)" });
 const released = buildBoardModel([releasesSource(), otherReleases], { now: RELEASES_NOW });
