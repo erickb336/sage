@@ -173,7 +173,9 @@ for (const [name, own, other] of pairs) {
     for (const words of held) assert.throws(() => w.lead("R1", ...words), { message: gap(review, "code-reviewer", "medium") }, words.join(" "));
     assert.equal(w.tables(), before, "nothing changed");
     w.owner("finding", "add", "T1", "--source", "code-reviewer", "--severity", "medium", "--summary", "a bad value", "--run", review, "--class", "other");
-    assert.equal(w.lead("R1", ...held[1]), `${review} done`);
+    w.owner("task", "add", "--title", "b", ...ADD);
+    w.owner("finding", "move", "T1", "F-T1-1", "--into", "T2");
+    assert.equal(w.lead("R1", ...held[1]), `${review} done`, "a row moved into an open task still holds the finding");
     const qa = id(w.lead("R1", "run", "add", "T1", "--role", "qa"));
     w.owner("run", "done", qa, "--status", "failed");
     keep(qa, "qa", "qa-fail", "\n- K1 high a.js:1 a crash");

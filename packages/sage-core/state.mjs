@@ -671,7 +671,7 @@ function compareRetainedReport(input, env = process.env) {
 
 const blockingOf = (findings, id) => findings.filter((f) => f.task === id && f.status === "open" && f.severity !== "low");
 const ofRun = (f, run) => f.run === run || f.key.startsWith(`${run}-`);
-const movedOf = (decisions, task, run, severity = "") => decisions.filter((d) => d.task === task.id && / moved to T[1-9]\d* as /.test(d.decision) && d.why.startsWith(`the follow-up task (from ${run}, ${severity}`));
+const movedOf = (decisions, task, run, severity = "") => decisions.filter((d) => d.task === task.id && / moved to T[1-9]\d* as /.test(d.decision) && ["the follow-up task", "the open task"].some((to) => d.why.startsWith(`${to} (from ${run}, ${severity}`)));
 
 function unheld(findings, decisions, task, run, reported) {
   const level = { medium: 2, high: 3 }, down = (a, b) => b - a;

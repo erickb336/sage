@@ -1109,7 +1109,7 @@ function failedReview(s, task, kind, { sha = SHA, cycle = "1", summaries = ["a r
   for (const summary of summaries) s.ok("finding", "add", task, "--source", role, "--severity", "medium", "--summary", summary, "--run", run, "--class", "other");
   s.ok("verdict", task, "--sha", sha, "--kind", kind, "--run", run, "--cycle", cycle);
 }
-const CLEARS = { moved: (s, key) => s.ok("finding", "move", "T1", key, "--to", "Later"), dismissed: (s, key) => s.ok("finding", "triage", "T1", key, "dismiss", "--reason", "not a real problem") };
+const CLEARS = { moved: (s, key) => s.ok("finding", "move", "T1", key, "--to", "Later"), "moved into an open task": (s, key) => (s.ok("task", "add", "--priority", "P2", "--title", "Later", "--size", "small"), s.ok("finding", "move", "T1", key, "--into", "T2")), dismissed: (s, key) => s.ok("finding", "triage", "T1", key, "dismiss", "--reason", "not a real problem") };
 
 for (const kind of ["findings", "qa-fail"]) for (const [how, clear] of Object.entries(CLEARS)) {
   test(`T294: a ${kind} verdict whose finding was ${how} no longer refuses a head with its full clean cycle`, () => {
