@@ -401,7 +401,7 @@ test("T1043: a question or confirm in its fallback text form gives each part und
   const page = messagePage(prepareMessage(resolved(fixture("02-question.json"))).msg, "");
   assert.match(page, /<ol class="m-answers"><li class="pick"><p class="m-label"><strong>Stop: use the link to your Mac only<\/strong> <span class="pick-mark">\(my pick\)<\/span><\/p><p><span class="m-label">What happens next:<\/span> Every page/);
   assert.doesNotMatch(page, /<table/);
-  assert.match(messagePage(prepareMessage(fixture("13-confirm.json")).msg, ""), /<table><thead><tr><th>Folder<\/th>/);
+  assert.match(messagePage(prepareMessage(fixture("13-confirm.json")).msg, ""), /<ol class="m-answers"><li><p class="m-label">~\/sage-worktrees\/old-board-shots<\/p><p><span class="m-label">What is in it:<\/span> 41 pictures/);
 });
 
 test("T1043: a section in a question or a confirm has the same ### heading, and the check passes it", () => {
@@ -488,6 +488,53 @@ test("F-T1043-4: a question, a confirm or a progress note with its parts as a li
     assert.deepEqual(messageMiss(text.replace(/^### (.+)\n\n/gm, "- **$1:** ")).names, labels.map((l) => `inline label: ${l}`), text.split("\n")[0]);
     assert.equal(messageMiss(text.replace(/^### (.+)\n\n/gm, "- $1: ")), undefined, `${text.split("\n")[0]}: a plain list item`);
   }
+});
+
+test("F-T1026-1: a question gives its pick as answer 1; a pick on another answer gets a note, also from the message command", () => {
+  const question = render(fixture("02-question.json")).text;
+  assert.equal(messageMiss(question), undefined);
+  const second = question.replace(" (my\n   pick)", "").replace("2. Keep the file tool as an extra for some\n   pages", "2. Keep the file tool as an extra for some\n   pages (my pick)");
+  assert.deepEqual(messageMiss(second).names, ["pick not first"]);
+  assert.match(messageMiss(second).note, /answer 2 says "\(my pick\)", so make it answer 1/);
+  const json = fixture("02-question.json");
+  const out = render({ ...json, blocks: json.blocks.map((b) => (b.t === "table" ? { ...b, pick: 1 } : b)) });
+  assert.match(out.problems.join("\n"), /gives your pick first: answer 2/);
+  assert.equal(messageMiss(question.replace("### If you do not answer\n\nThe page link build uses my pick.", "### If you do not answer\n\nThe build uses answer 1 (my pick).")), undefined, "the pick named again in a later part");
+});
+
+test("F-T1026-2 and F-T1026-3: a table of answers gets the note with the head Answer, Answers, Option, Options or Choice, also with no pick in the table", () => {
+  const question = render(fixture("02-question.json")).text;
+  for (const head of ["Answer", "Answers", "Option", "options", "**Choice**"]) {
+    const table = question.replace(/\n\n1\. [\s\S]*?(?=\n\n### If you do not answer)/, `\n\n| ${head} | Cost |\n| --- | --- |\n| Stop | None. |\n| Keep | Small. |\n\nMy pick is Stop (my pick).`);
+    assert.deepEqual(messageMiss(table).names, ["table"], head);
+  }
+  assert.equal(messageMiss(question.replace("\n\n### If you do not answer", "\n\n| Folder | Size |\n| --- | --- |\n| pages | 12 MB |\n\n### If you do not answer")), undefined, "a table of short data");
+});
+
+test("F-T1026-6: a field keeps its own letter case under its heading", () => {
+  const confirm = fixture("13-confirm.json");
+  const out = render({ ...confirm, blocks: confirm.blocks.map((b) => (b.label === "What stays" ? { ...b, text: "iPhone pages and npm updates stay." } : b)) });
+  assert.match(out.text, /\n### What stays\n\niPhone pages and npm updates stay\.\n/);
+});
+
+test("F-T1026-7: a bold label with its text in the same line gets the inline-label note, not a note that the part is missing", () => {
+  const question = render(fixture("02-question.json")).text;
+  const inline = messageMiss(question.replace("### Needed by\n\n", "**Needed by** "));
+  assert.deepEqual(inline.names, ["inline label: Needed by"]);
+  assert.match(inline.note, /"Needed by" is in the line: use a ### heading on its own line/);
+});
+
+test("F-T1026-11 and F-T1026-13: a confirm page draws its items as a list, like its text form; a kind that is not on the choice card keeps its table", () => {
+  const page = messagePage(prepareMessage(fixture("13-confirm.json")).msg, "");
+  assert.doesNotMatch(page, /<table/);
+  assert.equal((page.match(/<li>/g) ?? []).length, 3, "one item for each folder");
+  assert.match(messagePage(prepareMessage(fixture("11-estimate.json")).msg, ""), /<table><thead>/);
+});
+
+test("F-T1026-12: a plain list item with bold text later in the line gets no inline-label note; a bold label at its start still does", () => {
+  const progress = "PROGRESS\n\nReview is clean\n\n### Where this is\n\nRelease 1.0 › single task › step: review\n\n### What changed\n\n- The review is clean.\n\n### Next\n\nQA.\n\n### What I need from you\n\nNothing.";
+  assert.equal(messageMiss(progress.replace("### Next\n\nQA.", "- Next: QA, with a **big** test set.")), undefined);
+  assert.deepEqual(messageMiss(progress.replace("### Next\n\nQA.", "- **Next:** QA, with a **big** test set.")).names, ["inline label: Next"]);
 });
 
 test("T1043: a message after a --- rule keeps its kind, so the check still reads it; a message with no kind is not checked", () => {

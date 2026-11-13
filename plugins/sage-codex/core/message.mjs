@@ -215,7 +215,7 @@ const heading = (label, depth) => `${"#".repeat(Math.min(3 + depth, 6))} ${plain
 
 function blockText(b, width, today = false, depth = 0) {
   switch (b.t) {
-    case "field": return [heading(b.label, depth), "", ...wrap(cap(plain(b.text)), width)];
+    case "field": return [heading(b.label, depth), "", ...wrap(plain(b.text), width)];
     case "p": return wrap(plain(b.text), width);
     case "section": {
       const body = b.body.map((x) => (x.t === "field" ? bullet(`${x.label}: ${x.text}`, width) : blockText(x, width, today, depth + 1)));

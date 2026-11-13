@@ -5,7 +5,7 @@
     {
       "t": "field",
       "label": "What it covers",
-      "text": "the three pull requests for the new words. Each one builds, gets its reviews and QA, and is ready to merge."
+      "text": "The three pull requests for the new words. Each one builds, gets its reviews and QA, and is ready to merge."
     },
     {
       "t": "table",
@@ -59,32 +59,32 @@
     {
       "t": "field",
       "label": "Basis",
-      "text": "the engineer's check, from a past large task that the logbook measured: the clean-up of the hook's command rules took 8.1 M tokens and 11 h."
+      "text": "The engineer's check, from a past large task that the logbook measured: the clean-up of the hook's command rules took 8.1 M tokens and 11 h."
     },
     {
       "t": "field",
       "label": "How sure",
-      "text": "an estimate, not a measurement. The range is wide because review rounds vary."
+      "text": "An estimate, not a measurement. The range is wide because review rounds vary."
     },
     {
       "t": "field",
       "label": "What would change it",
-      "text": "each repair round adds a new review cycle: about 0.7 M tokens for one round of a small task (measured, the clean-up of leftover folders), more for a large one."
+      "text": "Each repair round adds a new review cycle: about 0.7 M tokens for one round of a small task (measured, the clean-up of leftover folders), more for a large one."
     },
     {
       "t": "field",
       "label": "So far",
-      "text": "part 1 has used 1.0 M tokens (measured; the lead's own tokens come at its end)."
+      "text": "Part 1 has used 1.0 M tokens (measured; the lead's own tokens come at its end)."
     },
     {
       "t": "field",
       "label": "Your time",
-      "text": "three reports to read and one update of sage. I have no measured basis for your time."
+      "text": "Three reports to read and one update of sage. I have no measured basis for your time."
     },
     {
       "t": "field",
       "label": "What I need from you",
-      "text": "nothing. If the cost is too high, tell me: parts 2 and 3 have not started."
+      "text": "Nothing. If the cost is too high, tell me: parts 2 and 3 have not started."
     }
   ],
   "ref": "T995 · T996 · T997"

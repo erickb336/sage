@@ -10,12 +10,12 @@
     {
       "t": "field",
       "label": "What you approve",
-      "text": "how pages reach you in the Claude desktop app. Today I sometimes send a page with Claude's file tool, which can show it inside the chat."
+      "text": "How pages reach you in the Claude desktop app. Today I sometimes send a page with Claude's file tool, which can show it inside the chat."
     },
     {
       "t": "field",
       "label": "The one real choice in it",
-      "text": "a page inside the chat, or a page that never leaves your Mac. The file tool sends a copy through Anthropic's servers. A link to the page on your Mac sends nothing."
+      "text": "A page inside the chat, or a page that never leaves your Mac. The file tool sends a copy through Anthropic's servers. A link to the page on your Mac sends nothing."
     },
     {
       "t": "table",
@@ -41,22 +41,22 @@
     {
       "t": "field",
       "label": "If you do not answer",
-      "text": "the page link build uses my pick. You can change the answer until that pull request merges."
+      "text": "The page link build uses my pick. You can change the answer until that pull request merges."
     },
     {
       "t": "field",
       "label": "Needed by",
-      "text": "before the page link build starts. Nothing waits for it now."
+      "text": "Before the page link build starts. Nothing waits for it now."
     },
     {
       "t": "field",
       "label": "Judged by",
-      "text": "your rule that pages stay on your Mac; the same view in Claude and Codex."
+      "text": "Your rule that pages stay on your Mac; the same view in Claude and Codex."
     },
     {
       "t": "field",
       "label": "The bad side of my pick",
-      "text": "in the Claude app, a page opens beside the chat, not inside it."
+      "text": "In the Claude app, a page opens beside the chat, not inside it."
     },
     {
       "t": "field",

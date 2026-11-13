@@ -10,7 +10,7 @@
     {
       "t": "field",
       "label": "Try it",
-      "text": "the design page, with sample data and every case:"
+      "text": "The design page, with sample data and every case:"
     },
     {
       "t": "page",
@@ -21,7 +21,7 @@
     {
       "t": "field",
       "label": "How you will use it",
-      "text": "you ask for the board. Above the columns, a “Where we are” frame shows the release, the milestone and the task that runs now. Each task card has one of six words: not started, waiting, needs you, in progress, done, stopped."
+      "text": "You ask for the board. Above the columns, a “Where we are” frame shows the release, the milestone and the task that runs now. Each task card has one of six words: not started, waiting, needs you, in progress, done, stopped."
     },
     {
       "t": "toggle",
@@ -159,12 +159,12 @@
     {
       "t": "field",
       "label": "Goals",
-      "text": "you see where the work stands in your words, at once."
+      "text": "You see where the work stands in your words, at once."
     },
     {
       "t": "field",
       "label": "Non-goals",
-      "text": "dates; new kinds of work. The tool keeps its own 15 states."
+      "text": "Dates; new kinds of work. The tool keeps its own 15 states."
     },
     {
       "t": "section",
@@ -185,22 +185,22 @@
     {
       "t": "field",
       "label": "Why we might not do this",
-      "text": "it costs 10.5 to 21 M tokens and 13 to 26 h of agent time, and every logbook moves once to the new words."
+      "text": "It costs 10.5 to 21 M tokens and 13 to 26 h of agent time, and every logbook moves once to the new words."
     },
     {
       "t": "field",
       "label": "Safety and cost",
-      "text": "the move of the logbook is a one-time migration, so the route adds the security review. Cost as above (estimate, from the engineer's check)."
+      "text": "The move of the logbook is a one-time migration, so the route adds the security review. Cost as above (estimate, from the engineer's check)."
     },
     {
       "t": "field",
       "label": "Open questions",
-      "text": "seven, each with my pick, on the design page."
+      "text": "Seven, each with my pick, on the design page."
     },
     {
       "t": "field",
       "label": "What you approve",
-      "text": "the levels, the six words, the board frame, the chat board, the status lines, the approval question and the command words."
+      "text": "The levels, the six words, the board frame, the chat board, the status lines, the approval question and the command words."
     }
   ]
 }

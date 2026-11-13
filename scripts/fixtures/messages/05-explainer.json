@@ -5,17 +5,17 @@
     {
       "t": "field",
       "label": "What it is",
-      "text": "a milestone is a group of tasks for one goal, where at least one task waits for another. You approve its plan before any of its tasks builds."
+      "text": "A milestone is a group of tasks for one goal, where at least one task waits for another. You approve its plan before any of its tasks builds."
     },
     {
       "t": "field",
       "label": "Why it exists",
-      "text": "some requests are too big for one pull request. A milestone keeps their tasks together and runs one pilot task first. The other tasks start only after the pilot merges, so a wrong idea costs one task, not eight."
+      "text": "Some requests are too big for one pull request. A milestone keeps their tasks together and runs one pilot task first. The other tasks start only after the pilot merges, so a wrong idea costs one task, not eight."
     },
     {
       "t": "field",
       "label": "A real example",
-      "text": "milestone 5, Sage feel, has 8 tasks. The pilot is the presentation skill; the 7 playbooks wait for it. You approved its plan on 10 Nov. It is done when each task that is not stopped is done."
+      "text": "Milestone 5, Sage feel, has 8 tasks. The pilot is the presentation skill; the 7 playbooks wait for it. You approved its plan on 10 Nov. It is done when each task that is not stopped is done."
     },
     {
       "t": "picture",
@@ -45,12 +45,12 @@
     {
       "t": "field",
       "label": "Like, and where the likeness stops",
-      "text": "it is like a milestone in a project plan: one goal and the work for it. But a sage milestone has no date. It ends when its tasks are done, not on a day."
+      "text": "It is like a milestone in a project plan: one goal and the work for it. But a sage milestone has no date. It ends when its tasks are done, not on a day."
     },
     {
       "t": "field",
       "label": "What it is not",
-      "text": "it is not a release: a release is a version that you ship, such as 1.0, and it holds milestones and single tasks. It is not a task: a task is one pull request or one study."
+      "text": "It is not a release: a release is a version that you ship, such as 1.0, and it holds milestones and single tasks. It is not a task: a task is one pull request or one study."
     },
     {
       "t": "section",

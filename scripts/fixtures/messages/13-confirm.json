@@ -9,7 +9,7 @@
     {
       "t": "field",
       "label": "What I will do",
-      "text": "delete these 3 folders from your worktrees folder, with all the files in them. They do not go to the Trash."
+      "text": "Delete these 3 folders from your worktrees folder, with all the files in them. They do not go to the Trash."
     },
     {
       "t": "table",
@@ -39,7 +39,7 @@
     {
       "t": "field",
       "label": "What stays",
-      "text": "every task worktree, every branch and pull request, and each task's pages folder. The 9 empty folders that my own runs left: I remove those without asking, by your rule of 24 Oct."
+      "text": "Every task worktree, every branch and pull request, and each task's pages folder. The 9 empty folders that my own runs left: I remove those without asking, by your rule of 24 Oct."
     },
     {
       "t": "field",
@@ -49,7 +49,7 @@
     {
       "t": "field",
       "label": "If you say no, or nothing",
-      "text": "nothing is deleted. I do not ask again."
+      "text": "Nothing is deleted. I do not ask again."
     },
     {
       "t": "p",
