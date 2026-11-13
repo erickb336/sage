@@ -36,17 +36,17 @@
     {
       "t": "field",
       "label": "What I did not check",
-      "text": "how many review tokens the wait saves; that needs a week of runs after your update. I did not see either change in a live session, because your sessions run the older sage."
+      "text": "How many review tokens the wait saves; that needs a week of runs after your update. I did not see either change in a live session, because your sessions run the older sage."
     },
     {
       "t": "field",
       "label": "Weak points",
-      "text": "seven small findings stay on the polish list of the clean-up change. For example, git's forced remove still runs when its option name is shortened."
+      "text": "Seven small findings stay on the polish list of the clean-up change. For example, git's forced remove still runs when its option name is shortened."
     },
     {
       "t": "field",
       "label": "What you need to do",
-      "text": "update sage in Claude Code and in Codex, and start new sessions. Until you do, your sessions run the older sage."
+      "text": "Update sage in Claude Code and in Codex, and start new sessions. Until you do, your sessions run the older sage."
     }
   ],
   "ref": "T803 · PR 513 · T807 · PR 514"

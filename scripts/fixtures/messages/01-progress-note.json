@@ -14,7 +14,7 @@
     {
       "t": "field",
       "label": "Since my last note",
-      "text": "your approval of the design, at 18:43."
+      "text": "Your approval of the design, at 18:43."
     },
     {
       "t": "field",
@@ -34,7 +34,7 @@
     {
       "t": "field",
       "label": "What I need from you",
-      "text": "nothing."
+      "text": "Nothing."
     }
   ],
   "ref": "T995 · PR 515"

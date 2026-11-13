@@ -5,12 +5,12 @@
     {
       "t": "field",
       "label": "When",
-      "text": "after the three pull requests for the new words merge. I tell you when the last one merges."
+      "text": "After the three pull requests for the new words merge. I tell you when the last one merges."
     },
     {
       "t": "field",
       "label": "Why",
-      "text": "your sessions run the sage that you installed. The new words reach the board and the chat only after the update."
+      "text": "Your sessions run the sage that you installed. The new words reach the board and the chat only after the update."
     },
     {
       "t": "p",
@@ -46,17 +46,17 @@
     {
       "t": "field",
       "label": "How you know it worked",
-      "text": "the board names “Milestone 5: Sage feel”, and each task has a state word such as “in progress”."
+      "text": "The board names “Milestone 5: Sage feel”, and each task has a state word such as “in progress”."
     },
     {
       "t": "field",
       "label": "Your time",
-      "text": "about 5 minutes of human time (estimate, 3 to 10: four commands and two new sessions)."
+      "text": "About 5 minutes of human time (estimate, 3 to 10: four commands and two new sessions)."
     },
     {
       "t": "field",
       "label": "If a step fails",
-      "text": "tell me the step and what you see."
+      "text": "Tell me the step and what you see."
     }
   ],
   "ref": "after T995 · T996 · T997"
