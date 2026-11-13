@@ -1,4 +1,68 @@
-# Task board design (T205)
+# Board design
+
+This page holds two designs. The first part is the board redesign of milestone M7, which the owner approved (gates G154, G156 and G159). It replaces the board step by step at `/app/`. The second part, from "The classic board (T205)", is the board that stays at `/` until task T770 retires it.
+
+## The board redesign (M7)
+
+The new board is a React app that the build bundles into each plugin. The server on the Mac serves it at `http://127.0.0.1:<port>/app/` under a strict content security policy: no inline script or style, no `eval`, and no source outside the board's own address. It is for a desktop browser only. The text board in the chat stays the view that needs no scripts and no server.
+
+The app gets its data from one event stream, `/app/events`. Each message is `event: model` with the Overview model as JSON (`boardOverview` in core). The model holds text only, never HTML, and React escapes each text. When the stream breaks, the app keeps the last data, says when it is from, and connects again.
+
+### The board tenets
+
+The owner approved these tenets (G156). Each page and each element of the board follows them.
+
+0. **Useful before beautiful.** Each element helps the owner decide or act. The Overview answers each of the seven jobs in at most two clicks.
+1. **Needs you first.** What waits for the owner comes before everything else, with its full context.
+2. **Overview first, details on demand.** A row is one short line. Its details open when the owner asks for them.
+3. **The logbook is the truth.** The board shows what the logbook records. A value that the logbook does not record shows as unknown, never as a guess.
+4. **One truth, many views.** The board, the chat and each chief read the same logbook. When two answers race, the first answer wins.
+5. **Calm by default.** Only running work moves. Colour shows state only. Words come before ids.
+6. **The owner stays in control.** Each action of the owner has an Undo.
+7. **Every chief is visible.** Claude and Codex chiefs show alike.
+8. **Local and private.** The board runs on the Mac and loads nothing from the network: no CDN, font or picture from outside.
+
+### The seven jobs
+
+| Job | The owner wants to know | Served by |
+| --- | --- | --- |
+| J1 | What needs me, with full context | Overview, "Needs you" (read-only in T1054; answers come in T1059) |
+| J2 | Where each milestone and task stands, by priority | Overview, "Milestones" (T1054); the Tasks page |
+| J3 | Where a task is in its dev cycle, and what its agents made | The Tasks page and its side panel; the artifact viewer |
+| J4 | Which agents run, for which chief, against the limit | The Agents page |
+| J5 | Which PRs are open, merged or waiting, and what depends on what | The Pull requests page |
+| J6 | What changed since I looked | Overview, the counts (the last 24 hours until T1059 adds "since you looked") |
+| J7 | Whether each chief runs, and whether autopilot is on | The chief chips under the top bar |
+
+### The ux-review checklist
+
+A ux review of a board page checks each line. A line that fails is a finding.
+
+| # | Check | Tenet |
+| --- | --- | --- |
+| 1 | Each element answers one of the seven jobs, or helps the owner act on one. | 0 |
+| 2 | Each job that the page serves is reachable from the Overview in at most two clicks. | 0 |
+| 3 | What needs the owner comes first on the page, oldest first, with its chief, its task and when it was asked. | 1 |
+| 4 | A row is one line of words; ids come second; details open on demand. | 2, 5 |
+| 5 | Each value comes from the logbook. A value that the logbook does not record says "not known" or "not recorded". Sample data says so. | 3 |
+| 6 | The page shows its states: loading, live, stale ("not updated since"), lost link, failure and empty. A failure keeps the last data and never shows an empty board. | 3 |
+| 7 | An answer shows where it came from. A later answer from another place is refused and names the first. | 4 |
+| 8 | Only running work moves. Colour shows state only, and each colour has a word beside it. Motion stops when the system asks for reduced motion. | 5 |
+| 9 | Each action of the owner has an Undo until a chief picks it up. | 6 |
+| 10 | Each chief, Claude or Codex, shows with its id and provider. | 7 |
+| 11 | The page makes no request outside 127.0.0.1, and its content security policy has no `unsafe-inline`, no `unsafe-eval` and no outside source. | 8 |
+| 12 | Text and controls meet WCAG AA contrast in the dark and the light theme. | – |
+| 13 | Each control is reachable by the keyboard, in reading order, with a visible focus ring. | – |
+| 14 | The page fits a desktop window from 1024 px wide. | – |
+
+### What T1054 built
+
+- The bundle: `scripts/board-app.mjs` bundles `packages/sage-board/app/` with esbuild into a vendor file (React), an app file and one CSS file, each named by its content hash, with a manifest. The build fails when a bundled package is not pinned to its exact version in `package.json`, or when a file is over its size budget.
+- The `/app/` route, its HTML shell and its content security policy; the `/app/events` stream.
+- The Overview, read-only: "Needs you", the milestones by priority with their progress, and the counts of the last 24 hours. The pages Tasks, Agents and Pull requests say that they come next, and link to the classic board.
+- The logbook keeps no time when a task is added, so "New tasks" shows as not known (tenet 3).
+
+## The classic board (T205)
 
 This is the approved design for issue #74. The implementation is under review. All 17 requirements remain in scope. The owner approved the recommended sample layout and recorded-data extension on 2026-10-08. Backend work may proceed; all runtime acceptance remains required.
 

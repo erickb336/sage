@@ -1,8 +1,9 @@
 import { createHash, randomBytes, scrypt, timingSafeEqual } from "node:crypto";
-import { lstatSync, readdirSync, watch } from "node:fs";
+import { lstatSync, readFileSync, readdirSync, watch } from "node:fs";
 import { createServer } from "node:http";
 import { dirname, isAbsolute, join, resolve, sep } from "node:path";
-import { readBoardSources, buildBoardModel, landingRule, renderBoardHtml, renderAgentsHtml, renderMilestonesHtml, renderReleasesHtml, BOARD_PORT } from "../core/index.mjs";
+import { fileURLToPath } from "node:url";
+import { readBoardSources, buildBoardModel, boardOverview, landingRule, renderBoardHtml, renderAgentsHtml, renderMilestonesHtml, renderReleasesHtml, BOARD_PORT } from "../core/index.mjs";
 import { pagesRequest, servePages } from "./pages.mjs";
 
 const MAX_HTML = 8 * 1024 * 1024;
@@ -64,6 +65,25 @@ function securityHeaders(response, html = null) {
   response.setHeader("Cross-Origin-Resource-Policy", "same-origin");
 }
 
+const APP_DIR = fileURLToPath(new URL("./app/", import.meta.url));
+const APP_FILE = /^(?:app|vendor)-[A-Z0-9]{8}\.(?:js|css)$/;
+const APP_TYPES = { js: "text/javascript; charset=utf-8", css: "text/css; charset=utf-8" };
+const NO_APP = "The board app is not built in this copy of the board. Run the board from the sage plugin, or run npm run build.";
+
+export function loadBoardApp(dir = APP_DIR) {
+  let manifest;
+  try { manifest = JSON.parse(readFileSync(join(dir, "manifest.json"), "utf8")); } catch { return null; }
+  const names = [manifest?.script, manifest?.style, manifest?.vendor];
+  if (!names.every(name => typeof name === "string" && APP_FILE.test(name)) || !manifest.script.endsWith(".js") || !manifest.style.endsWith(".css") || !manifest.vendor.endsWith(".js")) return null;
+  const files = new Map(names.map(name => [name, { type: APP_TYPES[name.split(".").pop()], body: readFileSync(join(dir, name)) }]));
+  const shell = `<!doctype html><html lang="en" data-theme="dark"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>Sage board</title><link rel="stylesheet" href="/app/${manifest.style}"><link rel="modulepreload" href="/app/${manifest.vendor}"><script type="module" src="/app/${manifest.script}"></script></head><body><div id="root"></div><noscript><p>This board needs scripts. The board in the chat needs none: send a message that starts with "show board".</p></noscript></body></html>`;
+  return { files, shell };
+}
+
+function appPolicy(origin) {
+  return `default-src 'none'; script-src ${origin}/app/; style-src ${origin}/app/; connect-src 'self'; img-src 'self'; base-uri 'none'; object-src 'none'; frame-ancestors 'none'; form-action 'none'`;
+}
+
 const b64 = /^[A-Za-z0-9_-]+$/;
 const derive = (password, { N, r, p, salt }) => new Promise((done, fail) => scrypt(password.normalize("NFC"), Buffer.from(salt, "base64url"), 32, { N, r, p, maxmem: 256 * N * r }, (error, key) => error ? fail(error) : done(key)));
 export function validPasswordRecord(record) {
@@ -84,7 +104,7 @@ const WRONG_PASSWORD_DELAY = 1000;
 const forwarded = name => name === "forwarded" || name.startsWith("x-forwarded-");
 
 const OFF = "Access from outside this Mac is off until the owner sets a board password on the Mac.";
-export function createBoardServer({ sources, password, port = BOARD_PORT, allowedHosts = [], id, clock = () => new Date().toISOString(), settleReads = SETTLE_READS, duringRead = null, providerRoots = [] } = {}) {
+export function createBoardServer({ sources, password, port = BOARD_PORT, allowedHosts = [], id, clock = () => new Date().toISOString(), settleReads = SETTLE_READS, duringRead = null, providerRoots = [], app = loadBoardApp() } = {}) {
   if (!Number.isSafeInteger(port) || port < 1024 || port > 65535) throw new TypeError("board port must be an integer from 1024 through 65535");
   if (typeof clock !== "function") throw new TypeError("the board clock must be a function that gives an ISO time");
   if (password !== undefined && !validPasswordRecord(password)) throw new TypeError("the board password must be a record from hashPassword");
@@ -106,7 +126,7 @@ export function createBoardServer({ sources, password, port = BOARD_PORT, allowe
   let checking = false;
   let boardHeader = null;
   const watchers = new Map(), watchErrors = new Map(), clients = new Set();
-  let model, lastGood, revision = 0, refreshTimer, boundaryTimer, settleTimer, startTimer, startPromise, closePromise, closed = false;
+  let model, overview, lastGood, revision = 0, refreshTimer, boundaryTimer, settleTimer, startTimer, startPromise, closePromise, closed = false;
 
   async function authenticated(request) {
     const value = oneHeader(request, "authorization");
@@ -174,6 +194,13 @@ export function createBoardServer({ sources, password, port = BOARD_PORT, allowe
   }
 
   function publish(client) {
+    if (client.app) {
+      const data = JSON.stringify(overview);
+      if (client.sent === data) return;
+      client.sent = data;
+      if (Buffer.byteLength(data) > MAX_HTML) { client.response.end(); removeClient(client); return; }
+      return send(client, `id: ${revision}\nevent: model\ndata: ${data}\n\n`);
+    }
     try {
       const payload = { revision: String(revision), ...pageFor(client, client.paths, true) };
       const sent = digest(JSON.stringify([payload.html, payload.stale, payload.diagnostics])).toString("base64");
@@ -267,12 +294,13 @@ export function createBoardServer({ sources, password, port = BOARD_PORT, allowe
     if (!next.diagnostics.length && !changing.length) { lastGood = next; model = { ...next, stale: false }; }
     else if (!next.diagnostics.length) model = lastGood ? { ...lastGood, stale: false, changing: changing.map(item => ({ project: item.project, at: lastGood.at })) } : { ...next, stale: false };
     else model = { ...(lastGood ?? next), stale: true, diagnostics: next.diagnostics, notSetUp: next.notSetUp, changing };
+    overview = boardOverview(model);
     revision++;
     for (const client of clients) publish(client);
     const now = Date.now(), boundary = model.tasks.reduce((first, task) => {
       const at = task.completedAt === null ? NaN : task.completedAt + 7 * 86400000 + 1;
       return Number.isFinite(at) && at > now ? Math.min(first, at) : first;
-    }, model.agents?.next > now ? model.agents.next : Infinity);
+    }, Math.min(model.agents?.next > now ? model.agents.next : Infinity, overview.next > now ? overview.next : Infinity));
     if (Number.isFinite(boundary)) { boundaryTimer = setTimeout(schedule, Math.min(boundary - now, 2_147_483_647)); boundaryTimer.unref(); }
   }
 
@@ -290,6 +318,7 @@ export function createBoardServer({ sources, password, port = BOARD_PORT, allowe
       if (!signedIn) { response.setHeader("WWW-Authenticate", 'Basic realm="Sage board", charset="UTF-8"'); return fail(401, "Sign in to the Sage board."); }
     }
     if (!["GET", "HEAD"].includes(request.method)) { response.setHeader("Allow", "GET, HEAD"); return fail(405, "This method is not permitted."); }
+    if (request.url === "/app" || request.url.startsWith("/app/")) return serveApp(request, response, fail);
     let selected = route(request.url);
     if (selected?.renamed !== undefined) {
       const key = selected.renamed && (model.milestones.find(milestone => milestone.was && `${milestone.project}/${milestone.was}` === selected.renamed)?.key ?? selected.renamed);
@@ -318,6 +347,26 @@ export function createBoardServer({ sources, password, port = BOARD_PORT, allowe
       response.end(request.method === "HEAD" ? undefined : html);
     } catch { fail(503, "The board snapshot is unavailable."); }
   });
+  function serveApp(request, response, fail) {
+    if (request.url === "/app") { response.writeHead(301, { Location: "/app/" }); return response.end(); }
+    if (!app) return fail(503, NO_APP);
+    const name = request.url.slice("/app/".length);
+    if (name === "events") {
+      if (clients.size >= MAX_CLIENTS && request.method !== "HEAD") return fail(503, "There are too many open board streams.");
+      response.writeHead(200, { "Content-Type": "text/event-stream; charset=utf-8", "X-Accel-Buffering": "no" });
+      if (request.method === "HEAD") return response.end();
+      response.flushHeaders();
+      const client = { response, app: true, blocked: false, pending: null, deadline: null, sent: null };
+      clients.add(client); response.once("close", () => removeClient(client)); publish(client);
+      return;
+    }
+    const body = name === "" ? Buffer.from(app.shell) : app.files.get(name)?.body;
+    if (!body) return fail(404, "This board page does not exist.");
+    if (name === "") response.setHeader("Content-Security-Policy", appPolicy(origins.get(oneHeader(request, "host").toLowerCase())));
+    response.writeHead(200, { "Content-Type": name === "" ? "text/html; charset=utf-8" : app.files.get(name).type, "Content-Length": body.length });
+    response.end(request.method === "HEAD" ? undefined : body);
+  }
+
   server.headersTimeout = 10_000;
   server.requestTimeout = 15_000;
   server.keepAliveTimeout = 5_000;
