@@ -76,7 +76,7 @@ export const TOOLS = {
     pos: ["milestone", "release"], argv: (i) => ["milestone", i.milestone, "set", `release=${i.release}`],
   },
   config: {
-    describe: "Set config keys, only when the owner asks, and print the values. name (the project's name on the board; an empty value removes it), archived (yes or no) and start (sage-mode: each new session of the project starts in sage mode, also in Claude when the two share the logbook; normal: it starts off) are keys of this project's logbook: set them in a call of their own. "
+    describe: "Set config keys, only when the owner asks, and print the values. name (the project's name on the board; an empty value removes it), archived (yes or no) and start (sage-mode: each new session of the project starts in sage mode, also in Claude when the two share the logbook; normal: it starts off) and lint_offer (never: the lint offer does not come back; ask: it may) are keys of this project's logbook: set them in a call of their own. "
       + "cycles.small, cycles.large, cycles.risk, max_rounds, max_leads, max_agents, arena, cap_total, cap.<project> and the model keys are for all projects.",
     input: { settings: z.record(z.string().regex(/^[a-z][a-z0-9_.-]*$/), z.string()).describe('the keys and values to set, for example {"cycles.large": "3", "max_leads": "4"} or {"name": "Council Record"}') },
     pos: ["settings"], argv: (i) => ["config", ...Object.entries(i.settings).map(([k, v]) => `${k}=${v}`)],
@@ -134,7 +134,7 @@ export const TOOLS = {
     pos: ["task"], argv: (i) => ["verdict", i.task],
   },
   lint: {
-    describe: "Lint a head SHA of a task with the rules of the tip of origin/main: it scans the lines that the commit adds since its merge base with origin/main, with the root sgconfig.yml of origin/main, and records lint-pass or lint-fail. It prints each problem with its file and line, and the files that it did not check. When origin/main has no sgconfig.yml, lint records nothing. Run it before merge_check; a lead may run it on its own task.",
+    describe: "Lint a head SHA of a task with the rules of the tip of origin/main: it scans the lines that the commit adds since its merge base with origin/main, with the root sgconfig.yml of origin/main, and records lint-pass or lint-fail. It prints each problem with its file and line, and the files that it did not check. When origin/main has no sgconfig.yml, lint records nothing, and its first run opens the lint offer, a gate for the owner (add the rules, not now, never for this project): ask it as any gate. The answer add frames a small task with its brief in the task's pages folder. Run it before merge_check; a lead may run it on its own task.",
     input: { task, sha }, pos: ["task"], argv: (i) => ["lint", i.task],
   },
   claim: {

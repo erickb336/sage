@@ -191,7 +191,8 @@ test("lint finds ast-grep in the project's node_modules only at the pinned versi
   p.place(join(p.folder, "node_modules", ".bin"), fake);
   const r = p.sage("lint", "T1", "--sha", sha);
   assert.equal(r.status, 1);
-  assert.match(r.stderr.trim(), new RegExp(`ast-grep ${AST_GREP_VERSION.replaceAll(".", "\\.")} is not in .* or in sage's tools folder .*, so lint cannot run, and it writes no verdict\\. Install it in the tools folder: npm install --prefix \\S+ @ast-grep/cli@${AST_GREP_VERSION.replaceAll(".", "\\.")}$`));
+  assert.match(r.stderr.trim(), new RegExp(`ast-grep ${AST_GREP_VERSION.replaceAll(".", "\\.")} is not in .* or in sage's tools folder .*, so lint cannot run, and it writes no verdict\\. With the owner's yes, install it in the tools folder from the lockfile that sage pins: npm ci --ignore-scripts --prefix ${p.tools.slice(0, -"/node_modules/.bin".length)}$`));
+  for (const name of ["package.json", "package-lock.json"]) assert.equal(readFileSync(join(p.tools, "..", "..", name), "utf8"), readFileSync(join(RULE_SET, "tools", name), "utf8"), `the tools folder gets the pinned ${name}, so npm ci installs only the pin`);
   assert.deepEqual(p.lints(), []);
   p.place(p.tools, AST_GREP);
   assert.match(lint(p, sha), /^T1 lint-pass /, "the tools folder's ast-grep runs");
@@ -200,7 +201,7 @@ test("lint finds ast-grep in the project's node_modules only at the pinned versi
 test("a repository whose origin/main has no sgconfig.yml gets a note and no lint verdict, and its merge check needs none", () => {
   const p = project({ config: false });
   const sha = p.commit({ "c.js": "f(); // why\n" });
-  assert.match(lint(p, sha), /^T1 · \S+: origin\/main \S+ has no sgconfig\.yml at its root, so there is nothing to lint, and the merge check needs no lint verdict\. Nothing changed\.$/);
+  assert.match(lint(p, sha), /^T1 · \S+: origin\/main \S+ has no sgconfig\.yml at its root, so there is nothing to lint, and the merge check needs no lint verdict\.\nG1 open · /, "the open lint offer does not hold the merge");
   assert.deepEqual(p.lints(), []);
   p.ok("verdict", "T1", "--sha", sha, "--kind", "checks-pass");
   assert.match(p.ok("merge-check", "--sha", sha), /^T1 may merge/);

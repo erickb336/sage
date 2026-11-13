@@ -253,7 +253,7 @@ function addedLines(out) {
   return lines;
 }
 
-function attributes(git, main, paths) {
+export function attributes(git, main, paths) {
   if (!paths.length) return new Map();
   const out = git(["-c", "core.attributesFile=/dev/null", "check-attr", "-z", "--stdin", "--source", main, "linguist-generated", "linguist-vendored"], `${paths.join("\0")}\0`).toString("utf8").split("\0");
   const marked = new Map();

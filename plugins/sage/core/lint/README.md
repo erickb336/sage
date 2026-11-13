@@ -67,13 +67,48 @@ sage's state tool checks a pull request with a project's own rules: `sage lint <
 | A changed file that ast-grep skips (not UTF-8, too large), or one of more than 10 MiB, fails, by name. lint reads no file that it does not scan. | A skipped file is not checked, and a large asset with no rule does not stop lint. |
 | A YAML file of more than 10 MiB in a rule or util folder of `origin/main` makes lint refuse, by name, with no verdict. | lint copies no larger YAML file, so the rules in it would not run. |
 | A symbolic link, a submodule, a file marked `linguist-generated` or `linguist-vendored` in `origin/main`, and a file with no ast-grep language or no rule are not checked. lint lists each one by name. | They hold no code that the rules read. |
-| With no `sgconfig.yml` at the root of `origin/main`, lint records nothing, and the merge check needs no lint verdict. With no `origin/main` and a root `sgconfig.yml` in the checkout, lint and the merge check refuse. | Like a required status check that a repository has not turned on; a repository that turned it on is never let through. |
+| With no `sgconfig.yml` at the root of `origin/main`, lint records nothing, and the merge check needs no lint verdict. The chief's lint offers this rule set (see [Adopt the rules](#adopt-the-rules)). With no `origin/main` and a root `sgconfig.yml` in the checkout, lint and the merge check refuse. | Like a required status check that a repository has not turned on; a repository that turned it on is never let through. |
 
-lint runs ast-grep 0.51.1 from the `node_modules/.bin` at the root of the project's checkout when it is that version, else from sage's tools folder (`tools/` beside the logbook folders). With neither, it refuses, writes no verdict, and prints the command that installs it in the tools folder.
+lint runs ast-grep 0.51.1 from the `node_modules/.bin` at the root of the project's checkout when it is that version, else from sage's tools folder (`tools/` beside the logbook folders). With neither, it refuses and writes no verdict. It puts the pinned lockfile in the tools folder and prints the command that installs from it, which the chief runs only with the owner's yes.
 
-## Add a language
+## Adopt the rules
 
-The rule set has a rule only for each language that sage itself uses. A language joins when a project that uses it adopts the rules. Task T1020 then adds that language's rule and its rule tests, with a mutant in `scripts/lint-rules.test.mjs`.
+sage offers this rule set to a project that has no `sgconfig.yml` at the root of `origin/main`. Nothing reaches a project without its owner's yes.
+
+1. The chief runs `sage lint <T> --sha <sha>` on such a project. The note opens one gate, the lint offer: add the rules, not now, or never for this project. sage recommends add; the default is not now.
+2. Not now keeps the offer quiet for 30 days. Never keeps it away (`sage config lint_offer=never`), until `sage config lint_offer=ask`.
+3. Add frames one small task. Its brief, `brief.md` in the task's pages folder, lists the project's languages: those of the files of `origin/main`, by extension, as ast-grep reads them (`languages.json`). A file marked `linguist-generated` or `linguist-vendored` adds no language.
+4. The same yes covers ast-grep 0.51.1 in sage's tools folder, when the project has no copy at that version. sage puts its pinned `tools/package.json` and `tools/package-lock.json` there, and the chief runs `npm ci --ignore-scripts --prefix <tools folder>`, so npm installs only the pin and checks its integrity. sage installs nothing else.
+
+The implementer of that task does these steps in the project, on a branch from `origin/main`:
+
+1. Write a root `sgconfig.yml`:
+
+   ```yaml
+   ruleDirs: [lint/rules]
+   utilDirs: [lint/utils]
+   testConfigs:
+     - testDir: lint/rule-tests
+   ```
+
+2. Copy `utils/` to `lint/utils/`. For each language of the brief that has a rule here, copy its rule to `lint/rules/` and its rule tests to `lint/rule-tests/`.
+3. For a language with no rule here, write `lint/rules/no-comments-<language>.yml` and its rule tests, like the rules here: the language's comment kinds (`ast-grep run --lang <language> --pattern '<a comment>' --debug-query=cst` shows each kind), `severity: error`, the same message, the `spdx` util, and only the directives that a tool reads with no free text after them. Refuse a directive that demands free text.
+4. Write `lint/README.md`: for each rule, the directives that stay. The message of each rule points to it.
+5. Turn off each repository linter setting that requires a comment (the table below), and list each one in the pull request.
+6. Run `ast-grep test --skip-snapshot-tests`, then `ast-grep scan --config sgconfig.yml .` on the whole tree. The scan does not check a file that ast-grep cannot parse: list each one in the pull request. Keep the comments that the code has now: lint checks only the lines that a later pull request adds.
+
+| Language | Rule here | Settings that require comments |
+| --- | --- | --- |
+| Go | none yet | revive: the exported rule |
+| Html | `no-comments-html` | none |
+| JavaScript | `no-comments-js` | ESLint: jsdoc/require-jsdoc (eslint-plugin-jsdoc) and require-jsdoc |
+| Python | none yet | Ruff: the D1 rules (D100 to D107) |
+| Rust | none yet | rustc: missing_docs; Clippy: undocumented_unsafe_blocks |
+| TypeScript | none yet | ESLint: jsdoc/require-jsdoc (eslint-plugin-jsdoc) |
+| Tsx | none yet | ESLint: jsdoc/require-jsdoc (eslint-plugin-jsdoc) |
+| Yaml | `no-comments-yaml` | none |
+
+A language that is not in the table has no rule here and no known setting. `scripts/lint-offer.test.mjs` checks that this table matches `languages.json`, and that each extension there is the language that ast-grep 0.51.1 gives it. A rule that a project writes stays in that project. sage adds a language's rule here only when sage itself uses the language.
 
 ## Change the rule set
 
