@@ -370,3 +370,16 @@ test("F-T1027-17: the strip of a repository with no sgconfig.yml uses the rule s
   } finally { own.done(); }
 });
 
+test("F-T1027-18: the proof fails a workflow whose run block lost a shell comment, and each step that runs the proof says to check that file by hand", () => {
+  const f = repository({ "w.yml": "steps:\n  - run: |\n      npm test # why\n" });
+  try {
+    script("strip-comments.mjs", ["w.yml"], f.dir);
+    assert.equal(f.read("w.yml"), "steps:\n  - run: |\n      npm test\n");
+    const proof = script("comment-proof.mjs", [], f.dir);
+    assert.equal(proof.status, 1, proof.stdout);
+    assert.match(proof.stdout, /^✗ w\.yml$/m);
+  } finally { f.done(); }
+  const steps = ["CONTRIBUTING.md", "packages/sage-core/lint/README.md"].flatMap((file) => readFileSync(join(ROOT, file), "utf8").split("\n").filter((line) => /^\d+\. .*comment-proof\.mjs/.test(line)));
+  assert.equal(steps.length, 3);
+  for (const step of steps) assert.match(step, /`run:` block .*by hand/, step);
+});

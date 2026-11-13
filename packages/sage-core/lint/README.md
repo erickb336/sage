@@ -46,9 +46,9 @@ A file in another language is not checked. The comment kinds differ by language,
 
 ast-grep reads each `<script>` block of an HTML file as JavaScript, whatever its `type`. So text in a template script, such as `https://example.com`, can look like a `//` comment, and it fails. Put a template in a `<template>` element: ast-grep reads its content as HTML.
 
-ast-grep reads the `|` or `>` sign at the start of a `run:` block as shell too. A `|` block whose only line is a comment then passes.
+ast-grep reads the `|` or `>` sign at the start of a `run:` block as shell too. So when the `run:` key is at the top level of a YAML document, a comment on the first line of its `|` block passes if no command follows it in the block, as in `run: |` with only `# why` under it. A `run:` key in a mapping or a list, such as a step of a GitHub Actions workflow, does not have this limit.
 
-A shell comment in a `run:` block is part of the YAML value. So after the strip removes one, the proof of that file fails: check its change by hand.
+A shell comment in a `run:` block is part of the YAML value. So after the strip removes one, the proof of that file fails. Check its change by hand with `git diff -- <file>`: each line that changed must only have lost a `#` comment.
 
 ast-grep's own suppression comment, `ast-grep-ignore`, hides comments from a scan. After code, it hides its own line. On its own line, it hides the next line, but the rule flags it. As the first line with a blank line after it, it hides the whole file. A rule cannot refuse it, because the suppression hides that rule too. So sage's lint command fails each changed file whose text holds `ast-grep-ignore` anywhere, as a whole file (see [The lint command](#the-lint-command)). `scripts/lint-rules.test.mjs` shows this limit of the scan. sage's own code that must hold the word, such as a test of this rule, builds it from parts, so that a change to the file passes lint.
 
@@ -89,7 +89,7 @@ In sage, `scripts/lint-rules.test.mjs` also changes the rules in a copy, one mut
 
 1. Commit your change.
 2. Run `node scripts/strip-comments.mjs [path ...]`. It removes each comment that the scan flags, and keeps the allowed directives. A second run changes nothing. A path is relative to the current folder, or absolute. A path that is not there, or that is outside the repository, fails by name.
-3. Run `node scripts/comment-proof.mjs [base] [head]` (by default, from `HEAD` to the working tree). For each changed JavaScript or YAML file, it compares the code tokens and the minified code (for YAML, the parsed value). A deleted, added or renamed file fails, because a strip only edits files. A file of another type, such as `.json`, is "not proved", and does not fail the run. It must report 0 failed.
+3. Run `node scripts/comment-proof.mjs [base] [head]` (by default, from `HEAD` to the working tree). For each changed JavaScript or YAML file, it compares the code tokens and the minified code (for YAML, the parsed value). A deleted, added or renamed file fails, because a strip only edits files. A file of another type, such as `.json`, is "not proved", and does not fail the run. It must report 0 failed, except for a YAML file whose `run:` block lost a shell comment: check that file by hand (see [Limits](#limits)).
 4. Put a reason that a reader needs in a name, a test name or a doc, never in a comment.
 
 Both scripts work in the git repository of the current folder, and print its path. `--help` gives the usage of each script. The scan skips `.git`, `node_modules` and the files that the repository's `.gitattributes` marks `linguist-generated` or `linguist-vendored`. It reads every other file, also a file that a `.gitignore` or `.ignore` file names, so that an ignore file cannot hide code from the check. The lint command skips the same `.gitattributes` files: the plugins, which the build makes, and these folders:
