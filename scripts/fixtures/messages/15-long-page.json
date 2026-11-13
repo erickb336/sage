@@ -145,17 +145,17 @@
     {
       "t": "field",
       "label": "What I did not check",
-      "text": "the rules in a live session: they run only after you update sage."
+      "text": "The rules in a live session: they run only after you update sage."
     },
     {
       "t": "field",
       "label": "Weak points",
-      "text": "seven small findings stay on the polish list. For example: git's forced remove still runs when its option name is shortened, and mkdir runs in every folder."
+      "text": "Seven small findings stay on the polish list. For example: git's forced remove still runs when its option name is shortened, and mkdir runs in every folder."
     },
     {
       "t": "field",
       "label": "What you need to do",
-      "text": "update sage in Claude Code and in Codex, and start new sessions."
+      "text": "Update sage in Claude Code and in Codex, and start new sessions."
     }
   ],
   "ref": "T807 · PR 514 · merge commit 3d9eacbd"

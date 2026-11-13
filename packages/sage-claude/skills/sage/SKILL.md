@@ -38,8 +38,8 @@ Read `skills/sage/references/commands.md` for the full row of a command before y
 | `round <T> [--why "<reason>"]` | Starts a repair round on the open findings marked fix, also on low findings only, and names the roles to re-run on the repair's diff. |
 | `run add <T> --role <role> [--branch <b>] [--candidate <k>]` · `run done <R> --status done\|blocked\|question\|failed [--tokens <n>] [--report <path>]` | Records an agent run. |
 | `finding add <T> --source <role> --severity high\|medium\|low --summary "<s>" [--key <K>] [--run <R>] [--class <class>]` | Records a finding. |
-| `finding triage <T> <K> fix\|dismiss\|ask [--reason "<r>"] [--proof <R>]` · `finding close <T> <K>` | Triage every finding; `--proof` names the proof check that reran it. |
-| `finding move <T> <K> --to "<title>" [--size tiny\|small\|large]` | Moves an open medium or low finding to a new follow-up task (small by default), which it frames. |
+| `finding triage <T> <K> fix\|dismiss\|ask [--reason "<r>"] [--proof <R>]` · `finding close <T> <K>` | Triage every finding; `--proof` names the proof check that reran it. Close a fix, also a moved finding, after a re-check confirms it. |
+| `finding move <T> <K> --to "<title>" [--size tiny\|small\|large]` · `finding move <T> <K> --into <T>` | Moves an open medium or low finding to a new follow-up task (small by default), which it frames, or into an open task of this logbook. `--to` takes a title, never a task id. The finding arrives triaged fix, with the reason "moved from <K>", and needs no proof check there. |
 | `verdict <T> --sha <sha> --kind <kind> [--cycle <n>] [--pr <n>] [--run <R>]` | Records a verdict on a head SHA. |
 | `lint <T> --sha <sha>` | Checks the head's added lines with the rules of `origin/main`; records lint-pass or lint-fail. |
 | `gate add <T> --question "<q>" --options "<a\|b>" --recommend <a> [--default <a>]` · `gate answer <G> --option <n> --project <folder>` · `gate answer <G> --other-hex <hex> --project <folder>` | Parks a question for the user, with your recommendation and the default. |

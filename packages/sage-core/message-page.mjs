@@ -1,6 +1,6 @@
 import { createHash } from "node:crypto";
 import { escapeHtml as esc, pictureSvg } from "./picture.mjs";
-import { headOf } from "./message.mjs";
+import { KINDS, headOf } from "./message.mjs";
 
 const inline = (s) => esc(s).replace(/\*\*(.+?)\*\*/g, "<strong>$1</strong>").replace(/`([^`]+)`/g, "<code>$1</code>");
 const hash = (s) => `'sha256-${createHash("sha256").update(s).digest("base64")}'`;
@@ -45,13 +45,13 @@ export const PAGE_POLICY = `default-src 'none'; style-src ${hash(CSS)}; script-s
 
 const figure = (title, lines, key) => `<figure><figcaption>${esc(title)}</figcaption><div class="m-pic">${pictureSvg(lines, { title })}</div>${key ? `<p class="m-key">${inline(key)}</p>` : ""}</figure>`;
 
-function blockHtml(b, level = 2) {
+function blockHtml(b, listed, level = 2) {
   switch (b.t) {
     case "field": return `<p><span class="m-label">${esc(b.label)}:</span> ${inline(b.text)}</p>`;
     case "p": return `<p>${inline(b.text)}</p>`;
-    case "section": return `<section><h${level}>${esc(b.label)}</h${level}>${b.body.map((x) => blockHtml(x, Math.min(level + 1, 6))).join("")}</section>`;
+    case "section": return `<section><h${level}>${esc(b.label)}</h${level}>${b.body.map((x) => blockHtml(x, listed, Math.min(level + 1, 6))).join("")}</section>`;
     case "list": { const tag = b.ordered ? "ol" : "ul"; return `<${tag}>${b.items.map((i) => `<li>${inline(i)}</li>`).join("")}</${tag}>`; }
-    case "table": if (b.pick !== undefined) return `${b.caption ? `<p class="m-label">${esc(b.caption)}</p>` : ""}<ol class="m-answers">${b.rows.map((r, i) => `<li${b.pick === i ? ' class="pick"' : ""}><p class="m-label">${inline(r[0])}${b.pick === i && !/\(my pick\)/i.test(r[0]) ? ' <span class="pick-mark">(my pick)</span>' : ""}</p>${r.slice(1).map((c, k) => `<p><span class="m-label">${esc(b.head[k + 1])}:</span> ${inline(c)}</p>`).join("")}</li>`).join("")}</ol>`;
+    case "table": if (b.pick !== undefined || listed) return `${b.caption ? `<p class="m-label">${esc(b.caption)}</p>` : ""}<ol class="m-answers">${b.rows.map((r, i) => `<li${b.pick === i ? ' class="pick"' : ""}><p class="m-label">${inline(r[0])}${b.pick === i && !/\(my pick\)/i.test(r[0]) ? ' <span class="pick-mark">(my pick)</span>' : ""}</p>${r.slice(1).map((c, k) => `<p><span class="m-label">${esc(b.head[k + 1])}:</span> ${inline(c)}</p>`).join("")}</li>`).join("")}</ol>`;
       return `<div class="m-table"><table>${b.caption ? `<caption>${esc(b.caption)}</caption>` : ""}<thead><tr>${b.head.map((h) => `<th>${esc(h)}</th>`).join("")}</tr></thead><tbody>${b.rows.map((r) => `<tr>${r.map((c) => `<td>${inline(c)}</td>`).join("")}</tr>`).join("")}</tbody></table></div>`;
     case "picture": return figure(b.title, b.lines, b.key);
     case "toggle": {
@@ -67,6 +67,6 @@ function blockHtml(b, level = 2) {
 }
 
 export function messagePage(msg, text) {
-  const body = `<main${msg.long !== undefined ? ' class="long"' : ""}><div class="m-kind">${esc(headOf(msg))}</div><h1>${inline(msg.title)}</h1>${msg.blocks.map((b) => blockHtml(b)).join("")}${msg.ref ? `<p class="m-ref">Ref: ${esc(msg.ref)}</p>` : ""}<details class="text-form"><summary>The same message as plain text</summary><pre>${esc(text)}</pre></details></main>`;
+  const body = `<main${msg.long !== undefined ? ' class="long"' : ""}><div class="m-kind">${esc(headOf(msg))}</div><h1>${inline(msg.title)}</h1>${msg.blocks.map((b) => blockHtml(b, KINDS[msg.kind].card)).join("")}${msg.ref ? `<p class="m-ref">Ref: ${esc(msg.ref)}</p>` : ""}<details class="text-form"><summary>The same message as plain text</summary><pre>${esc(text)}</pre></details></main>`;
   return `<!DOCTYPE html><html lang="en"><head><meta charset="utf-8"><meta http-equiv="Content-Security-Policy" content="${PAGE_POLICY}"><meta name="referrer" content="no-referrer"><meta name="viewport" content="width=device-width, initial-scale=1"><title>${esc(msg.title)}</title><style>${CSS}</style></head><body>${body}<script>${SWITCH_SCRIPT}</script></body></html>\n`;
 }

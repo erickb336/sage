@@ -1072,13 +1072,34 @@ test("finding move: a medium or low finding goes to a follow-up task, which hold
   assert.equal(s.no("finding", "move", "T1", "F-T1-2", "--to", "Fix the save"), "sage: F-T1-2 is high, so it blocks T1 until it is fixed: a high finding never moves to a follow-up task.");
   assert.match(s.no("finding", "move", "T1", "F-T1-1"), /missing --to/);
   assert.equal(s.ok("finding", "move", "T1", "F-T1-1", "--to", "Export every row"), "F-T1-1 moved to T2 as F-T2-1 · T2 framed · small · route build,code-review,qa · P2");
-  assert.deepEqual(rows(s.dir, "findings").map((f) => `${f.task} ${f.key} ${f.severity} ${f.status} ${f.triage}|${f.summary}`), ["T2 F-T2-1 medium open |the export skips the last row", "T1 F-T1-2 high open |the save crashes"]);
+  assert.deepEqual(rows(s.dir, "findings").map((f) => `${f.task} ${f.key} ${f.severity} ${f.status} ${f.triage} ${f.reason}|${f.summary}`), ["T2 F-T2-1 medium open fix moved from F-T1-1|the export skips the last row", "T1 F-T1-2 high open  |the save crashes"]);
   assert.match(readFileSync(join(s.dir, "decisions.tsv"), "utf8"), /\tT1\tF-T1-1 moved to T2 as F-T2-1: the export skips the last row\tthe follow-up task \(from R1, medium\): Export every row\n$/);
   assert.match(s.no("finding", "move", "T1", "F-T1-1", "--to", "x"), /no finding F-T1-1 on T1/);
   s.ok("finding", "triage", "T1", "F-T1-2", "dismiss", "--reason", "a test token");
   assert.equal(s.ok("merge-check", "--sha", SHA), "T1 may merge: 1 clean cycle on this SHA", "the moved finding no longer blocks T1");
   assert.match(s.no("finding", "move", "T1", "F-T1-2", "--to", "x"), /F-T1-2 is dismissed: only an open finding moves/);
   assert.equal(s.ok("finding", "move", "T2", "F-T2-1", "--to", "Export later", "--size", "tiny"), "F-T2-1 moved to T3 as F-T3-1 · T3 framed · tiny · route build · P2", "a moved finding can move again, with a size");
+});
+
+test("T1025: --to refuses a task id and names --into; --into moves a finding into an open task, triaged fix, and refuses an ended, unknown or the same task and --to or --size with it", () => {
+  const s = store();
+  for (const title of ["Fix the crash", "Export every row", "Old work"]) s.ok("task", "add", "--priority", "P2", "--title", title, "--size", "small");
+  toReviewing(s, "T1");
+  s.ok("task", "T3", "set", "state=abandoned");
+  finding(s, "T1", "--source", "code-reviewer", "--severity", "medium", "--summary", "the export skips the last row");
+  const before = ["tasks", "findings", "decisions"].map((t) => readFileSync(join(s.dir, `${t}.tsv`), "utf8")).join("\f");
+  for (const [to, id] of [["T1027", "T1027"], [" t12 ", "T12"]]) assert.match(s.no("finding", "move", "T1", "F-T1-1", "--to", to), new RegExp(`is a task id\\. To move F-T1-1 into that open task, use --into ${id}\\. Nothing changed\\.$`), JSON.stringify(to));
+  for (const extra of [["--to", "Later"], ["--size", "tiny"]]) assert.match(s.no("finding", "move", "T1", "F-T1-1", "--into", "T2", ...extra), /--into moves F-T1-1 into an open task, so it takes no --to and no --size/, extra[0]);
+  assert.match(s.no("finding", "move", "T1", "F-T1-1", "--into", "T9"), /no task T9/);
+  assert.match(s.no("finding", "move", "T1", "F-T1-1", "--into", "T1"), /F-T1-1 is on T1 already/);
+  assert.match(s.no("finding", "move", "T1", "F-T1-1", "--into", "T3"), /T3 is abandoned: a finding moves only into an open task/);
+  assert.equal(["tasks", "findings", "decisions"].map((t) => readFileSync(join(s.dir, `${t}.tsv`), "utf8")).join("\f"), before, "nothing changed");
+  assert.equal(s.ok("finding", "move", "T1", "F-T1-1", "--into", " t2 "), "F-T1-1 moved to T2 as F-T2-1 · T2 framed");
+  assert.deepEqual(rows(s.dir, "tasks").map((t) => t.id), ["T1", "T2", "T3"], "no new task");
+  assert.deepEqual(rows(s.dir, "findings").map((f) => `${f.task} ${f.key} ${f.status} ${f.triage} ${f.reason}`), ["T2 F-T2-1 open fix moved from F-T1-1"]);
+  assert.match(readFileSync(join(s.dir, "decisions.tsv"), "utf8"), /\tT1\tF-T1-1 moved to T2 as F-T2-1: the export skips the last row\tthe open task \(from R\d+, medium\): Export every row\n$/);
+  toReviewing(s, "T2");
+  assert.match(s.ok("round", "T2"), /^T2 repairing · round 1 of 3 · fix F-T2-1 /, "the moved finding is a fix of the task that holds it");
 });
 
 function failedReview(s, task, kind, { sha = SHA, cycle = "1", summaries = ["a real problem"] } = {}) {
@@ -1088,7 +1109,7 @@ function failedReview(s, task, kind, { sha = SHA, cycle = "1", summaries = ["a r
   for (const summary of summaries) s.ok("finding", "add", task, "--source", role, "--severity", "medium", "--summary", summary, "--run", run, "--class", "other");
   s.ok("verdict", task, "--sha", sha, "--kind", kind, "--run", run, "--cycle", cycle);
 }
-const CLEARS = { moved: (s, key) => s.ok("finding", "move", "T1", key, "--to", "Later"), dismissed: (s, key) => s.ok("finding", "triage", "T1", key, "dismiss", "--reason", "not a real problem") };
+const CLEARS = { moved: (s, key) => s.ok("finding", "move", "T1", key, "--to", "Later"), "moved into an open task": (s, key) => (s.ok("task", "add", "--priority", "P2", "--title", "Later", "--size", "small"), s.ok("finding", "move", "T1", key, "--into", "T2")), dismissed: (s, key) => s.ok("finding", "triage", "T1", key, "dismiss", "--reason", "not a real problem") };
 
 for (const kind of ["findings", "qa-fail"]) for (const [how, clear] of Object.entries(CLEARS)) {
   test(`T294: a ${kind} verdict whose finding was ${how} no longer refuses a head with its full clean cycle`, () => {

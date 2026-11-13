@@ -30,19 +30,19 @@
         {
           "t": "field",
           "label": "If you acted on it",
-          "text": "you approved the three pull requests at 18:43, after the check. Parts 2 and 3 have not started, so you can still change that answer."
+          "text": "You approved the three pull requests at 18:43, after the check. Parts 2 and 3 have not started, so you can still change that answer."
         }
       ]
     },
     {
       "t": "field",
       "label": "What it changed for you",
-      "text": "nothing to undo. The work costs more than I told you. Part 1 has used 1.0 M tokens so far."
+      "text": "Nothing to undo. The work costs more than I told you. Part 1 has used 1.0 M tokens so far."
     },
     {
       "t": "field",
       "label": "What I did",
-      "text": "recorded the corrected range and its basis in the logbook, and used it in the estimate for the three pull requests."
+      "text": "Recorded the corrected range and its basis in the logbook, and used it in the estimate for the three pull requests."
     },
     {
       "t": "section",
@@ -61,7 +61,7 @@
     {
       "t": "field",
       "label": "Has it happened before",
-      "text": "not that the logbook shows. The logbook does not keep my estimates, so a repeat would not show either."
+      "text": "Not that the logbook shows. The logbook does not keep my estimates, so a repeat would not show either."
     },
     {
       "t": "section",
@@ -80,12 +80,12 @@
     {
       "t": "field",
       "label": "What you need to do",
-      "text": "nothing. If 10.5 to 21 M tokens is too much for the new words, tell me: parts 2 and 3 can wait."
+      "text": "Nothing. If 10.5 to 21 M tokens is too much for the new words, tell me: parts 2 and 3 can wait."
     },
     {
       "t": "field",
       "label": "Next update",
-      "text": "none. This case is closed; the estimate format carries the fix."
+      "text": "None. This case is closed; the estimate format carries the fix."
     }
   ],
   "ref": "T995 · T996 · T997"

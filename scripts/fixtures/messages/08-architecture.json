@@ -84,12 +84,12 @@
     {
       "t": "field",
       "label": "What changes for you",
-      "text": "nothing. This is the map that later design questions start from."
+      "text": "Nothing. This is the map that later design questions start from."
     },
     {
       "t": "field",
       "label": "What I need from you",
-      "text": "nothing. Tell me if a box or an arrow is wrong."
+      "text": "Nothing. Tell me if a box or an arrow is wrong."
     }
   ]
 }

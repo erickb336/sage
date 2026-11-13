@@ -14,10 +14,13 @@ const HEADS = Object.entries(KINDS).map(([kind, k]) => [kind, k.head]);
 const BOX_MARK = /[─-╿]/u;
 const FENCE = /^\s*(`{3,}|~{3,})/;
 const TABLE_ROW = /^\s*\|.*\|\s*$/;
+const RULE = /^\s*(?:-{3,}|\*{3,}|_{3,})\s*$/;
 const SHOWN = 20;
+const PICK = /\(my\s+pick\)/i;
+const ANSWERS_HEAD = /^(?:answer|option|choice)s?$/i;
 
 export function kindOf(text) {
-  const first = String(text).split("\n").find((l) => l.trim())?.trim().replace(/^#+\s*|\*\*/g, "") ?? "";
+  const first = String(text).split("\n").find((l) => l.trim() && !RULE.test(l))?.trim().replace(/^#+\s*|\*\*/g, "") ?? "";
   const hit = HEADS.find(([, head]) => first === head || (head === "INCIDENT" && INCIDENT_STATUS.some((s) => first === `${head} · ${s}`)));
   return hit ? hit[0] : null;
 }
@@ -49,9 +52,21 @@ function ownWords(lines) {
 }
 
 const labelAt = (line, label) => {
-  const l = line.trim().replace(/^#+\s*|\*\*/g, "").replace(/^- /, "");
-  return l === label || l.startsWith(`${label}:`);
+  const l = line.trim().replace(/^#+\s*/, "").replace(/^- /, ""), bare = l.replace(/\*\*/g, "");
+  return bare === label || bare.startsWith(`${label}:`) || l.startsWith(`**${label}**`);
 };
+
+function answers(lines) {
+  const out = [];
+  let open = false;
+  for (const l of lines) {
+    const item = /^(\d+)\. /.exec(l), more = open && /^\s+\S/.test(l);
+    if (item) out.push({ n: Number(item[1]), text: l });
+    else if (more) out.at(-1).text += `\n${l}`;
+    open = !!item || more;
+  }
+  return out;
+}
 
 export const textProblems = (text, options) => namedProblems(text, options).problems.map(([, problem]) => problem);
 
@@ -76,12 +91,21 @@ function namedProblems(text, { width = WIDTH } = {}) {
     else if (lines.some((l) => labelAt(l, part.name))) problems.push([`out of order: ${part.name}`, `"${part.name}" is out of order in a ${kind}`]);
     else problems.push([`missing: ${part.name}`, `a ${kind} needs "${part.name}"`]);
   }
-  if (KINDS[kind].pick && !/\(my\s+pick\)/i.test(text)) problems.push(["no pick", `a ${kind} marks your pick with "(my pick)"`]);
-  const alone = (l, name) => l.trim().replace(/:?(\*\*):?$/, "$1") === `**${name}**`;
-  if (KINDS[kind].card) for (const part of partsOf(kind)) {
-    if (/^[A-Z]/.test(part.name) && lines.some((l) => labelAt(l, part.name) && !alone(l, part.name))) problems.push([`inline label: ${part.name}`, `"${part.name}" goes in bold on its own line, with its text under it`]);
+  if (KINDS[kind].pick) {
+    const picked = answers(lines).find((a) => PICK.test(a.text));
+    if (!PICK.test(text)) problems.push(["no pick", `a ${kind} marks your pick with "(my pick)"`]);
+    else if (picked && picked.n !== 1) problems.push(["pick not first", `a ${kind} gives your pick first: answer ${picked.n} says "(my pick)", so make it answer 1`]);
   }
-  const answersRow = (l) => TABLE_ROW.test(l) && (/\(my\s+pick\)/i.test(l) || l.split("|")[1].trim().replace(/\*\*/g, "") === KINDS[kind].tableHead[0]);
+  const bold = (l, name) => l.trim().replace(/:?(\*\*):?$/, "$1") === `**${name}**`;
+  for (const part of partsOf(kind).filter((p) => /^[A-Z]/.test(p.name))) {
+    if (lines.some((l) => /^#{1,6} /.test(l) && labelAt(l, part.name))) continue;
+    const label = lines.find((l) => /^(?:[^\s#-]|-\s+\*\*)/.test(l) && labelAt(l, part.name));
+    if (label === undefined) continue;
+    problems.push(bold(label, part.name)
+      ? [`bold label: ${part.name}`, `"${part.name}" is a bold line: use a ### heading, with its text under it`]
+      : [`inline label: ${part.name}`, `"${part.name}" is in the line: use a ### heading on its own line, with its text under it`]);
+  }
+  const answersRow = (l) => TABLE_ROW.test(l) && (PICK.test(l) || ANSWERS_HEAD.test(l.split("|")[1].trim().replace(/\*\*/g, "")));
   if (KINDS[kind].pick && lines.some(answersRow)) problems.push(["table", `a ${kind} gives its answers as a numbered list, not a table: put what happens next and the cost under each answer`]);
   return { kind, problems };
 }

@@ -10,7 +10,7 @@
     {
       "t": "field",
       "label": "What I understood",
-      "text": "you want sage's pages and pictures to reach you the same way in each app that you use, so that you never need to know which provider runs the work. This is a study first: compare the ways, then recommend one."
+      "text": "You want sage's pages and pictures to reach you the same way in each app that you use, so that you never need to know which provider runs the work. This is a study first: compare the ways, then recommend one."
     },
     {
       "t": "section",
@@ -29,17 +29,17 @@
     {
       "t": "field",
       "label": "In",
-      "text": "a comparison of each way in each app, with evidence, and one recommendation."
+      "text": "A comparison of each way in each app, with evidence, and one recommendation."
     },
     {
       "t": "field",
       "label": "Out",
-      "text": "how a picture is drawn (decided: an image, and the same picture as text); the build."
+      "text": "How a picture is drawn (decided: an image, and the same picture as text); the build."
     },
     {
       "t": "field",
       "label": "Appetite",
-      "text": "about 0.5 M tokens and 1 h of agent time for the study and its evidence review (estimate, range 0.3 to 1 M). Past 1 M tokens, I stop and ask you."
+      "text": "About 0.5 M tokens and 1 h of agent time for the study and its evidence review (estimate, range 0.3 to 1 M). Past 1 M tokens, I stop and ask you."
     },
     {
       "t": "section",

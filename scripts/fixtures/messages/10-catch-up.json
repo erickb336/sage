@@ -92,12 +92,12 @@
     {
       "t": "field",
       "label": "If this happens",
-      "text": "if a review of part 1 finds a high finding, I start a repair round and do not ask you."
+      "text": "If a review of part 1 finds a high finding, I start a repair round and do not ask you."
     },
     {
       "t": "field",
       "label": "What I need from you",
-      "text": "nothing now. Next: look at the example pages and tell me what to change."
+      "text": "Nothing now. Next: look at the example pages and tell me what to change."
     }
   ],
   "ref": "T984 · T995 to T997 · T998 to T1000"

@@ -84,6 +84,11 @@ test("T483: a FINDINGS report backs a clean verdict after triage of each of its 
   s.ok("finding", "add", "T1", "--source", "qa", "--severity", "medium", "--summary", "a slow page", "--run", r2, "--class", "speed");
   s.ok("finding", "move", "T1", "F-T1-2", "--to", "Make the page fast");
   assert.match(s.ok("verdict", "T1", "--kind", "qa-pass", "--sha", SHA, "--run", r2), /^T1 qa-pass · a1b2c3d · cycle 1$/);
+  s.ok("task", "add", "--priority", "P2", "--title", "b", "--size", "small");
+  const r4 = s.reviewed("T1", "qa", reportFor("qa-fail"));
+  s.ok("finding", "add", "T1", "--source", "qa", "--severity", "medium", "--summary", "a lost filter", "--run", r4, "--class", "other");
+  s.ok("finding", "move", "T1", "F-T1-3", "--into", "T2");
+  assert.match(s.ok("verdict", "T1", "--kind", "qa-pass", "--sha", SHA, "--cycle", "3", "--run", r4), /^T1 qa-pass · a1b2c3d · cycle 3$/, "a finding moved into an open task backs the clean verdict too");
   const r3 = s.reviewed("T1", "code-reviewer", FINDINGS);
   s.ok("finding", "add", "T1", "--source", "sage", "--severity", "high", "--summary", "a lost row", "--key", `${r3}-1`);
   s.ok("finding", "triage", "T1", `${r3}-1`, "dismiss", "--reason", "the row is kept");

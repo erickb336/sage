@@ -23,7 +23,10 @@ Before you send a message, read it as the owner would after a week away, with no
 - **The first line** is the kind's head, for example `QUESTION` or `INCIDENT · Resolved`. The checks read the kind from it.
 - **Where this is**: release › milestone or single task › step, for example "Release 1.0 › milestone 5, Sage feel › step: review". Leave out the release when the logbook has none.
 - **State words**: a task, a milestone or a release is not started, waiting, needs you, in progress, done or stopped. Use these six words, not the tool's states.
+- **A heading for each part**: start each part with a `### <label>` heading line, such as `### Where this is`, with a blank line before and after it. Never write a part's label as a bold line: it looks like one more progress line. Bold inside the text is still allowed for a word that needs it.
 - **One blank line** between the parts. A table becomes numbered rows, with one line for each column.
+- **Progress lines stay plain**: between tool calls, write one plain sentence, such as "Starting the lead for the new words now." No heading, no bold, no list.
+- **A rule before the message**: when the turn had progress lines, start the final message with a `---` line and a blank line, so that the message is separate from them. The checks read the kind from the first line after the rule.
 - **No raw ids** (a task, run, gate, milestone, chief, finding or pull request number) in the text or in a picture. Put them in one last line: `Ref: T12 · PR 40`.
 - **Large choices only**: "Judged by" and "The bad side of my pick" go in a question only when the choice is large.
 
@@ -50,7 +53,7 @@ For a message with a picture, a long message, or any message where the shape mat
 
 1. Make a temp folder, and write the JSON in it, for example `mkdir -p /tmp/sage-message`, then `cat > /tmp/sage-message/T12.json <<'EOF'` … `EOF`.
 2. Run `sage message <task> --file /tmp/sage-message/T12.json`. In Codex, call the `message` tool with the task and the message.
-3. Send the text that it prints, word for word. It ends with the Page block when the message has a page.
+3. Send the text that it prints, word for word, after a `---` line when the turn had progress lines. It ends with the Page block when the message has a page.
 
 The command refuses a message that is not in its kind's shape, and names each problem: fix them and run it again. Write a short message with no picture by hand, in the same shape: the checks read the text in the same way.
 
@@ -58,11 +61,11 @@ The JSON: `{ "kind", "title", "blocks": [ … ], "ref" }`, and `"status"` for an
 
 | Block | Fields | Text form |
 | --- | --- | --- |
-| `field` | `label`, `text` | `Label: text`; in a question or a confirm, `**Label**` on its own line, then the text |
+| `field` | `label`, `text` | `### Label`, a blank line, then the text in its own letter case: start a sentence with a capital |
 | `p` | `text` | a paragraph, anywhere |
-| `section` | `label`, `body` (blocks) | the label, then its blocks; in a question or a confirm, the label in bold |
+| `section` | `label`, `body` (blocks) | `### Label`, a blank line, then its blocks; a section inside a section gets `####`, and a field inside it is a line `- Label: text`, because only a part gets a heading |
 | `list` | `items`, `ordered` | `- item` or `1. item` |
-| `table` | `head`, `rows`, `pick` (the row of your pick, from 0), `caption` | numbered rows; your pick says "(my pick)" |
+| `table` | `head`, `rows`, `pick` (the row of your pick, from 0), `caption` | numbered rows; your pick is row 0 and says "(my pick)"; on the page of a question or a confirm, a list too |
 | `picture` | `title`, `lines` or `frame`, `key` | the title, the lines in a fence, the key |
 | `toggle` | `after`, `today`: each a list of `{ title, lines }` | the pictures after the change; the page adds a Today switch |
 | `changes` | `rows` of `{ where, today, after, why }` | numbered rows; for changes without a screen |
@@ -72,37 +75,42 @@ The JSON: `{ "kind", "title", "blocks": [ … ], "ref" }`, and `"status"` for an
 
 A catch-up's picture is a `frame`: boxes inside boxes that the command lays out and gives their state words. Each box is `{ "box": "release" | "milestone" | "task" | "group", "name", "items": [ boxes or lines of text ] }`. A task gives its recorded `state` (for example `"reviewing"`), and may give `waits` (what it waits for) and `needs` (the owner's question). A milestone may give its state (`"proposed"`, or `"done"`, which the boxes inside it must agree with); its word and a release's word come from the boxes inside them, and the tasks inside a group count too. A group gives its `word`, and so does a box whose items are only lines of text. Any box may give a `note` for its first line. Exactly one box is `"here": true`: the double box, the task that runs now.
 
-In the text of a field, a list or a cell, `**bold**` and a code span show on the page. The chat text shows bold words without their marks, except the bold label of each part of a question or a confirm, and keeps a code span's backticks: a word in code, such as a chip name, is not an id.
+In the text of a field, a list or a cell, `**bold**` and a code span show on the page. The chat text shows bold words without their marks, and keeps a code span's backticks: a word in code, such as a chip name, is not an id.
 
 ## Ask with the question tool
 
-Ask a `question` or a `confirm` with the host's question tool when the session has one: the owner picks an option on a card, the choice card. The text form of the kind is the fallback only.
+Ask a `question` or a `confirm` with the host's question tool when the session has one and the card rule allows it: the owner picks an option on a card, the choice card. Else send the text form of the kind.
 
 Use the tool only for a choice that is the owner's: product direction, or an act that cannot be undone. Never use it for reversible work: decide that, and report it.
 
+**The card rule.** Use the card only when both are true. Else send the text form.
+
+- **No lead or other background run of yours runs.** Claude's card holds your turn until the owner answers. While it waits, the reports of background runs wait too, and the gate's default never applies. The text form keeps your turn free, so reports keep arriving and the default can apply. Approval prompts that must not block work, such as GitHub's and Slack's, are a message with a default and a timeout for the same reason.
+- **The batch fits the card:** at most 4 questions, each with at most 4 options. A gate with more options, or a batch of more questions, goes in the text form.
+
 1. Park each question with `sage gate add` first.
 2. Send a short chat message: the kind's parts, except the title and the answers, which go on the card, and the Ref line last. The card can hide the chat, so the message has no head line: the card is the question.
-3. Call the tool. Put the whole batch in one call when it fits, the most important question first.
-4. Record the answer with `gate answer`: the option's number, or the owner's own words (the tool's Other) as `--other-hex`.
+3. Call the tool. Put the whole batch in one call, the most important question first.
+4. Record the answer with `gate answer`: the gate's own option number, or the owner's own words (the tool's Other) as `--other-hex`. Find the number by the option's label in the gate, never by its place on the card or in the text form: both put your pick first, and the gate keeps its own order.
 
-The owner's rules for the chat message and the text form (12 Nov 2026), because the parts ran together and a table made long answers hard to read:
+The owner's rules for the chat message and the text form (12 Nov 2026), because the parts ran together and a table made long answers hard to read. Then the owner asked for clearer labels, because a bold label looked like one more progress line, so each label is now a heading:
 
-1. **Separate segments.** Give each part a bold label on its own line, such as **Where this is** or **If you do not answer**, with its text on the next line. Put a blank line between the parts. Keep each part to one or two short sentences.
+1. **Separate segments.** Give each part a `###` heading line, such as `### Where this is` or `### If you do not answer`, with a blank line before and after it, and its text under it. Keep each part to one or two short sentences.
 2. **No tables for answers or explanations.** On the card, the long text goes in the option's description. In the text form, the answers are a short numbered list, with what happens next and the cost under each answer. Use a table only for short, uniform data, such as numbers or dates.
-3. **The same rules with no tool.** The text form has the same bold labels and the same list of answers. `sage message` prints it so, and the message check notes a label in the line or a table of answers.
+3. **The same rules with no tool.** The text form has the same headings and the same list of answers, your pick first. `sage message` prints it so, and the message check notes a bold label, a label in the line, a table of answers or a pick that is not answer 1.
 
 | Part of the question | On the card |
 | --- | --- |
 | The title | The question text. It stands alone: it names the items that it asks about. |
 | A short name of the topic | The header chip, at most 12 characters. |
 | Each answer | One option. Its label is the answer, in 1 to 5 words. |
-| Your pick | The first option, with "(Recommended)" at the end of its label. |
+| Your pick | The first option, with "(Recommended)" at the end of its label. In the text form, it is answer 1, with "(my pick)". |
 | What happens next, and the cost | The option's description. |
 | If you do not answer | Not on the card: it stays in the chat message. |
 
 Each host has its tool:
 
-- **Claude Code:** `AskUserQuestion`, with 1 to 4 questions a call and 2 to 4 options a question. The tool adds Other.
+- **Claude Code:** `AskUserQuestion`, with 1 to 4 questions a call and 2 to 4 options a question. The tool adds Other. It waits for the answer, so the card rule applies.
 - **Codex:** `request_user_input_async`, when your tools have it. An option is one line with no description, so write it as "label: what happens next, cost". The tool returns at once, and the answer comes as the owner's next message. Codex's `request_user_input` works only in Plan mode: do not use it.
 - **No tool:** send the kind's text form, with the rules above.
 
@@ -123,25 +131,33 @@ Should pages reach you only by a link to your Mac? Where this is: Release 1.0 �
 | Keep the file tool too | Some pages open inside the Claude chat. A copy of each goes through Anthropic's servers. | Small: one more rule for the chief. |
 ```
 
-**After, with the tool:** first the chat message, in segments.
+**After, with the tool:** first the chat message, in segments. The turn had progress lines, so the message starts with a rule.
 
 ```text
-**Where this is**
+---
+
+### Where this is
+
 Release 1.0 › single task: one way to show visuals › step: investigate
 
-**What you approve**
+### What you approve
+
 How pages reach you in the Claude app.
 
-**The one real choice in it**
+### The one real choice in it
+
 A page inside the chat, or a page that never leaves your Mac.
 
-**If you do not answer**
+### If you do not answer
+
 The build uses my pick.
 
-**Needed by**
+### Needed by
+
 Before the page link build starts.
 
-**After you answer**
+### After you answer
+
 I say in one line what I recorded.
 ```
 
@@ -175,14 +191,17 @@ QUESTION
 Should pages reach you only by a link to your
 Mac?
 
-**Where this is**
+### Where this is
+
 Release 1.0 › single task: one way to show
 visuals › step: investigate
 
-**What you approve**
+### What you approve
+
 How pages reach you in the Claude app.
 
-**The one real choice in it**
+### The one real choice in it
+
 A page inside the chat, or a page that never
 leaves your Mac.
 
@@ -199,13 +218,16 @@ leaves your Mac.
      through Anthropic's servers.
    - Cost: Small: one more rule for the chief.
 
-**If you do not answer**
+### If you do not answer
+
 The build uses my pick.
 
-**Needed by**
+### Needed by
+
 Before the page link build starts.
 
-**After you answer**
+### After you answer
+
 I say in one line what I recorded.
 ```
 

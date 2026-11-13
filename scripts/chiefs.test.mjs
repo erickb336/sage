@@ -173,7 +173,9 @@ for (const [name, own, other] of pairs) {
     for (const words of held) assert.throws(() => w.lead("R1", ...words), { message: gap(review, "code-reviewer", "medium") }, words.join(" "));
     assert.equal(w.tables(), before, "nothing changed");
     w.owner("finding", "add", "T1", "--source", "code-reviewer", "--severity", "medium", "--summary", "a bad value", "--run", review, "--class", "other");
-    assert.equal(w.lead("R1", ...held[1]), `${review} done`);
+    w.owner("task", "add", "--title", "b", ...ADD);
+    w.owner("finding", "move", "T1", "F-T1-1", "--into", "T2");
+    assert.equal(w.lead("R1", ...held[1]), `${review} done`, "a row moved into an open task still holds the finding");
     const qa = id(w.lead("R1", "run", "add", "T1", "--role", "qa"));
     w.owner("run", "done", qa, "--status", "failed");
     keep(qa, "qa", "qa-fail", "\n- K1 high a.js:1 a crash");
@@ -890,6 +892,35 @@ for (const [name, own, other] of pairs) {
     w.owner("finding", "add", "T1", ...QA);
     w.owner("finding", "move", "T1", "F-T1-1", "--to", "later");
     assert.equal(row(w.cells("tasks"), "T2").chief, "C1");
+  });
+
+  test(`${name}: T1025: finding move --into refuses a task of another chief`, (t) => {
+    const w = world(t, own, other);
+    w.owner("task", "add", "--title", "a", ...ADD);
+    w.intruder("task", "add", "--title", "b", ...ADD);
+    w.owner("run", "add", "T1", "--role", "qa");
+    w.owner("finding", "add", "T1", ...QA);
+    const before = w.tables();
+    assert.throws(() => w.owner("finding", "move", "T1", "F-T1-1", "--into", "T2"), /T2 belongs to chief C2 .* Change only your own tasks\./);
+    assert.equal(w.tables(), before, "nothing changed");
+  });
+
+  test(`${name}: T1025: the lead of the task that a finding moved into closes it after a re-check, like any fix finding`, (t) => {
+    const w = world(t, own, other);
+    w.owner("task", "add", "--title", "a", ...ADD);
+    w.owner("run", "add", "T1", "--role", "qa");
+    w.owner("finding", "add", "T1", ...QA);
+    w.owner("finding", "move", "T1", "F-T1-1", "--to", "later");
+    w.owner("task", "T2", "set", "state=briefed");
+    const lead = w.owner("run", "add", "T2", "--role", "lead").split(" ")[0];
+    for (const state of ["building", "reviewing"]) w.lead(lead, "task", "T2", "set", `state=${state}`);
+    assert.throws(() => w.lead(lead, "finding", "close", "T2", "F-T2-1"), /T2 has a medium or high finding triaged fix and is not repairing: run round T2 first/);
+    assert.match(w.lead(lead, "round", "T2"), /^T2 repairing · round 1 of 3 · fix F-T2-1 · re-run qa /);
+    const check = w.lead(lead, "run", "add", "T2", "--role", "qa").split(" ")[0];
+    own.keepReport(w.project, { task: "T2", run: check, role: "qa", sha: SHA, text: reportFor("qa-pass") }, w.env);
+    w.lead(lead, "run", "done", check, "--status", "done", "--tokens", "1");
+    assert.equal(w.lead(lead, "finding", "close", "T2", "F-T2-1"), "F-T2-1 closed · fix");
+    assert.match(w.lead(lead, "task", "T2", "set", "state=reviewing"), /^T2 reviewing/);
   });
 
   test(`${name}: F-T604-1: a write with a quoted value, read as the shell reads it, gives the plain write's result on both providers`, (t) => {
