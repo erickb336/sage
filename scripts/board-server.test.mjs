@@ -9,7 +9,7 @@ import { createServer } from "node:net";
 import { syncBuiltinESMExports } from "node:module";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { createBoardServer, hashPassword } from "../packages/sage-board/server.mjs";
+import { createBoardServer } from "../packages/sage-board/server.mjs";
 
 const HEADERS = {
   tasks: "id title size risk route state branch pr round keys",
@@ -40,22 +40,20 @@ async function freePort() {
 
 const EVENT_GUARD = 30_000, REQUEST_GUARD = 120_000;
 
-const PASSWORD = "sample board pass 01", RECORD = await hashPassword(PASSWORD);
-
-async function fixture(t, { missing = false, allowedHosts = [], password = RECORD, id, clock, before, settleReads } = {}) {
+async function fixture(t, { missing = false, id, clock, before, settleReads } = {}) {
   const dir = mkdtempSync(join(tmpdir(), "sage-board-server-")), root = join(dir, "source"), port = await freePort();
   if (!missing) populate(root);
   before?.(join(root, "project-abcdef"));
   const sources = [{ id: "sample", path: root, label: "Sample source" }];
-  const server = createBoardServer({ sources, ...(password ? { password } : {}), port, allowedHosts, id, ...(clock ? { clock } : {}), ...(settleReads ? { settleReads } : {}) });
+  const server = createBoardServer({ sources, port, id, ...(clock ? { clock } : {}), ...(settleReads ? { settleReads } : {}) });
   t.after(async () => { await server.close(); rmSync(dir, { recursive: true, force: true }); });
   await server.start();
-  return { dir, root, project: join(root, "project-abcdef"), port, sources, server, authorization: `Basic ${Buffer.from(`sage:${PASSWORD}`).toString("base64")}` };
+  return { dir, root, project: join(root, "project-abcdef"), port, sources, server };
 }
 
 function read(f, path = "/", { method = "GET", headers = {}, rawHeaders } = {}) {
   return new Promise((accept, reject) => {
-    const req = request({ host: "127.0.0.1", port: f.port, path, method, agent: false, headers: rawHeaders ?? { Host: `127.0.0.1:${f.port}`, Authorization: f.authorization, ...headers } }, response => {
+    const req = request({ host: "127.0.0.1", port: f.port, path, method, agent: false, headers: rawHeaders ?? { Host: `127.0.0.1:${f.port}`, ...headers } }, response => {
       let body = ""; response.setEncoding("utf8"); response.on("data", chunk => body += chunk);
       response.on("end", () => accept({ status: response.statusCode, headers: response.headers, body }));
       response.on("error", reject);
@@ -74,7 +72,7 @@ function events(f, path = "/?events=1") {
   const queue = [], waiters = new Set();
   let response, buffer = "", ended = false;
   const stop = error => { ended = true; for (const waiter of waiters) { clearTimeout(waiter.timer); waiter.reject(error); } waiters.clear(); };
-  const req = request({ host: "127.0.0.1", port: f.port, path, agent: false, headers: { Host: `127.0.0.1:${f.port}`, Authorization: f.authorization } }, incoming => {
+  const req = request({ host: "127.0.0.1", port: f.port, path, agent: false, headers: { Host: `127.0.0.1:${f.port}` } }, incoming => {
     response = incoming;
     if (incoming.statusCode !== 200) { stop(new Error(`event status ${incoming.statusCode}`)); incoming.resume(); return; }
     incoming.setEncoding("utf8");
@@ -109,7 +107,7 @@ function events(f, path = "/?events=1") {
   };
 }
 
-test("board server serves authenticated pages and HEAD with exact CSP hashes and no data writes", async t => {
+test("board server serves pages and HEAD with exact CSP hashes and no data writes", async t => {
   const f = await fixture(t), file = join(f.project, "tasks.tsv"), before = readFileSync(file);
   const page = await read(f);
   assert.equal(page.status, 200); assert.match(page.body, /Sample first task/); assert.match(page.body, /new EventSource/);
@@ -128,24 +126,20 @@ test("board server serves authenticated pages and HEAD with exact CSP hashes and
   assert.deepEqual(readFileSync(file), before);
 });
 
-test("board server authenticates every page and event route through an allowed host, with no credential or source disclosure", async t => {
-  const tailnet = "sample.tailnet.ts.net", f = await fixture(t, { allowedHosts: [tailnet] });
-  for (const path of ["/", `/task/${key}`, "/?events=1", `/?events=1&task=${key}`]) {
-    for (const authorization of [undefined, `Basic ${Buffer.from(`wrong:${PASSWORD}`).toString("base64")}`, `Basic ${Buffer.from("sage:wrong").toString("base64")}`]) {
-      const result = await read(f, path, { rawHeaders: ["Host", tailnet, ...(authorization ? ["Authorization", authorization] : [])] });
-      assert.equal(result.status, 401); assert.match(result.headers["www-authenticate"], /^Basic /);
-      assert.doesNotMatch(result.body, /Sample first task/); assert.ok(!result.body.includes(f.root)); assert.ok(!result.body.includes(PASSWORD));
+test("T1053: a request with any other Host gets 403 on every page and event route, also with a sign-in header, and discloses nothing", async t => {
+  const f = await fixture(t), basic = `Basic ${Buffer.from("sage:sample board pass 01").toString("base64")}`;
+  for (const path of ["/", `/task/${key}`, "/?events=1", `/?events=1&task=${key}`, "/agents", "/milestones", "/releases", "/app/", "/app/events"]) {
+    for (const rawHeaders of [["Host", "evil.example"], ["Host", "sample.tailnet.ts.net", "Authorization", basic], ["Host", `evil.example:${f.port}`]]) {
+      const result = await read(f, path, { rawHeaders });
+      assert.equal(result.status, 403, `${path} ${rawHeaders.join(" ")}`); assert.equal(result.body, "This request is not permitted.\n");
+      assert.equal(result.headers["www-authenticate"], undefined, "no sign-in dialog"); assert.equal(result.headers["x-sage-board"], undefined);
     }
   }
-  const duplicate = await read(f, "/", { rawHeaders: ["Host", tailnet, "Authorization", f.authorization, "Authorization", f.authorization] });
-  assert.equal(duplicate.status, 401);
-  const signed = await read(f, "/", { rawHeaders: ["Host", tailnet, "Authorization", f.authorization] });
-  assert.equal(signed.status, 200); assert.match(signed.body, /Sample first task/);
   const eventHead = await read(f, "/?events=1", { method: "HEAD" }); assert.equal(eventHead.status, 200); assert.equal(eventHead.body, "");
 });
 
 test("T216: on the Mac itself (a loopback Host) the board needs no sign-in, and the browser checks still hold", async t => {
-  const f = await fixture(t, { allowedHosts: ["sample.tailnet.ts.net"] });
+  const f = await fixture(t);
   for (const host of [`127.0.0.1:${f.port}`, `localhost:${f.port}`, `LOCALHOST:${f.port}`, `[::1]:${f.port}`]) {
     const page = await read(f, "/", { rawHeaders: ["Host", host] });
     assert.equal(page.status, 200, host); assert.match(page.body, /Sample first task/); assert.equal(page.headers["www-authenticate"], undefined);
@@ -160,84 +154,55 @@ test("T216: on the Mac itself (a loopback Host) the board needs no sign-in, and 
   assert.equal((await read(f, "/", { method: "POST", rawHeaders: ["Host", `127.0.0.1:${f.port}`] })).status, 405);
 });
 
-test("T216, T229: a request that a private HTTPS tunnel forwards signs in, also with a loopback Host (probe 4)", async t => {
-  const f = await fixture(t, { allowedHosts: ["sample.tailnet.ts.net"], id: "0123456789abcdef" });
-  const loopback = `127.0.0.1:${f.port}`;
-  for (const proxy of [["X-Forwarded-For", "100.64.0.7"], ["X-Forwarded-Host", loopback], ["X-Forwarded-Proto", "https"], ["Forwarded", "for=100.64.0.7"]]) {
-    const proxied = await read(f, "/", { rawHeaders: ["Host", loopback, ...proxy] });
-    assert.equal(proxied.status, 401, proxy[0]); assert.doesNotMatch(proxied.body, /Sample first task/);
-    assert.equal(proxied.headers["x-sage-board"], undefined, "a proxied request does not learn the board's pid");
-    const signed = await read(f, "/", { rawHeaders: ["Host", loopback, ...proxy, "Authorization", f.authorization] });
-    assert.equal(signed.status, 200, proxy[0]);
+test("T1053: a request with a forwarded header gets 403, also with a loopback Host; a vendor's own header changes nothing", async t => {
+  const f = await fixture(t, { id: "0123456789abcdef" }), loopback = `127.0.0.1:${f.port}`;
+  for (const proxy of [["X-Forwarded-For", "100.64.0.7"], ["X-Forwarded-Host", loopback], ["X-Forwarded-Proto", "https"], ["Forwarded", "for=100.64.0.7"], ["x-forwarded-for", "203.0.113.9"]]) {
+    for (const path of ["/", `/task/${key}`, "/?events=1", "/app/", "/app/events"]) {
+      const proxied = await read(f, path, { rawHeaders: ["Host", loopback, ...proxy] });
+      assert.equal(proxied.status, 403, `${path} ${proxy[0]}`); assert.equal(proxied.body, "This request is not permitted.\n");
+      assert.equal(proxied.headers["x-sage-board"], undefined, "a proxied request does not learn the board's pid");
+    }
   }
   const mac = await read(f, "/", { rawHeaders: ["Host", loopback] });
   assert.equal(mac.status, 200);
   assert.match(mac.headers["x-sage-board"], new RegExp(`^id=0123456789abcdef; pid=${process.pid}; started=\\d+$`));
+  const vendor = await read(f, "/", { rawHeaders: ["Host", loopback, "Tailscale-User-Login", "sample@example.test"] });
+  assert.equal(vendor.status, 200); assert.match(vendor.headers["x-sage-board"], /^id=0123456789abcdef; /);
 });
 
-test("R1069-2: the checkout's full path is a search term only on the Mac's own page; a tunnel viewer gets none", async t => {
-  const f = await fixture(t, { allowedHosts: ["sample.tailnet.ts.net"] }), checkout = join(f.dir, "work", "sample-checkout-folder");
+test("R1069-2: the board page has the checkout's full path as a search term", async t => {
+  const f = await fixture(t), checkout = join(f.dir, "work", "sample-checkout-folder");
   mkdirSync(checkout, { recursive: true }); writeFileSync(join(f.project, "checkout.txt"), `${checkout}\n`);
   const loopback = `127.0.0.1:${f.port}`;
   let mac;
   for (let i = 0; i < 600 && !(mac = await read(f, "/", { rawHeaders: ["Host", loopback] })).body.includes("folder sample-checkout-folder"); i++) await new Promise(wake => setTimeout(wake, 50));
   assert.ok(mac.body.includes(checkout), "the Mac's own page can search by the path");
-  for (const raw of [["Host", loopback, "X-Forwarded-For", "100.64.0.7", "Authorization", f.authorization], ["Host", "sample.tailnet.ts.net", "Authorization", f.authorization]]) {
-    const remote = await read(f, "/", { rawHeaders: raw });
-    assert.equal(remote.status, 200);
-    assert.ok(remote.body.includes("folder sample-checkout-folder") && !remote.body.includes(checkout), raw.join(" "));
-  }
 });
 
-test("T229: a generic proxy that adds only X-Forwarded-For needs the password, and the board knows no vendor's headers", async t => {
-  const f = await fixture(t, { id: "0123456789abcdef" }), loopback = `127.0.0.1:${f.port}`;
-  const proxied = await read(f, "/", { rawHeaders: ["Host", loopback, "X-Forwarded-For", "203.0.113.9"] });
-  assert.equal(proxied.status, 401); assert.match(proxied.headers["www-authenticate"], /^Basic realm="Sage board"/); assert.doesNotMatch(proxied.body, /Sample first task/);
-  assert.equal((await read(f, "/", { rawHeaders: ["Host", loopback, "X-Forwarded-For", "203.0.113.9", "Authorization", f.authorization] })).status, 200);
-  const vendor = await read(f, "/", { rawHeaders: ["Host", loopback, "Tailscale-User-Login", "sample@example.test"] });
-  assert.equal(vendor.status, 200); assert.match(vendor.headers["x-sage-board"], /^id=0123456789abcdef; /);
-});
-
-test("T229: with no password set, every request that is not the Mac path gets 403 with a fixed text that names no path", async t => {
-  const tailnet = "sample.tailnet.ts.net", f = await fixture(t, { allowedHosts: [tailnet], password: null }), loopback = `127.0.0.1:${f.port}`;
-  const text = "Access from outside this Mac is off until the owner sets a board password on the Mac.\n";
-  for (const rawHeaders of [["Host", tailnet], ["Host", tailnet, "Authorization", f.authorization], ["Host", loopback, "X-Forwarded-For", "203.0.113.9"], ["Host", loopback, "Forwarded", "for=203.0.113.9"], ["Host", loopback, "X-Forwarded-Proto", "https", "Authorization", f.authorization]]) {
-    for (const path of ["/", `/task/${key}`, "/?events=1"]) {
-      const refused = await read(f, path, { rawHeaders });
-      assert.equal(refused.status, 403, rawHeaders.join(" ")); assert.equal(refused.body, text);
-      assert.equal(refused.headers["www-authenticate"], undefined, "no sign-in dialog: no password can pass");
-    }
-  }
-  const mac = await read(f, "/", { rawHeaders: ["Host", loopback] });
-  assert.equal(mac.status, 200); assert.match(mac.body, /Sample first task/);
-});
-
-test("T216: the server checks one password at a time and waits after a wrong one", async t => {
-  const tailnet = "sample.tailnet.ts.net", f = await fixture(t, { allowedHosts: [tailnet], password: await hashPassword("sample board pass 01") });
-  const as = password => ["Host", tailnet, "Authorization", `Basic ${Buffer.from(`sage:${password}`).toString("base64")}`];
-  const began = Date.now();
-  const [first, second] = await Promise.all([read(f, "/", { rawHeaders: as("sample wrong pass 1") }), read(f, "/", { rawHeaders: as("sample wrong pass 2") })]);
-  assert.deepEqual([first.status, second.status].sort(), [401, 429]);
-  const busy = first.status === 429 ? first : second;
-  assert.equal(busy.headers["retry-after"], "1"); assert.doesNotMatch(busy.body, /Sample first task/);
-  assert.ok(Date.now() - began >= 900, "a wrong password waits");
-  assert.equal((await read(f, "/", { rawHeaders: as("sample board pass 01") })).status, 200, "the check is free again after the delay");
+test("T1053: the server listens on 127.0.0.1 only: no other address of the Mac reaches it", async t => {
+  const f = await fixture(t);
+  assert.equal(f.server.address().address, "127.0.0.1");
+  const other = await new Promise(done => {
+    const req = request({ host: "::1", port: f.port, path: "/", agent: false, headers: { Host: `[::1]:${f.port}` } }, response => { response.resume(); done(response.statusCode); });
+    req.on("error", error => done(error.code)); req.end();
+  });
+  assert.equal(typeof other, "string", `the IPv6 loopback address has no listener (got ${other})`);
 });
 
 test("board server rejects foreign, duplicate and mismatched browser authority headers", async t => {
-  const f = await fixture(t, { allowedHosts: ["sample.tailnet.ts.net"] });
+  const f = await fixture(t);
   for (const headers of [
     { Host: "attacker.test" }, { Host: `localhost:${f.port}.attacker.test` }, { Host: `127.0.0.1:${f.port}.` },
-    { Origin: "https://attacker.test" }, { Origin: "null" }, { Origin: "https://sample.tailnet.ts.net" },
+    { Origin: "https://attacker.test" }, { Origin: "null" }, { Origin: "https://sample.tailnet.ts.net" }, { Origin: `https://127.0.0.1:${f.port}` },
     { "Sec-Fetch-Site": "cross-site" }, { "Sec-Fetch-Site": "same-site" },
   ]) assert.equal((await read(f, "/", { headers })).status, 403);
   for (const name of ["Host", "Origin", "Sec-Fetch-Site"]) {
     const value = name === "Host" ? `127.0.0.1:${f.port}` : name === "Origin" ? `http://127.0.0.1:${f.port}` : "same-origin";
-    const headers = ["Authorization", f.authorization, ...(name === "Host" ? [] : ["Host", `127.0.0.1:${f.port}`]), name, value, name, value];
+    const headers = [...(name === "Host" ? [] : ["Host", `127.0.0.1:${f.port}`]), name, value, name, value];
     assert.equal((await read(f, "/", { rawHeaders: headers })).status, 403);
   }
   assert.equal((await read(f, "/", { headers: { Origin: `http://127.0.0.1:${f.port}`, "Sec-Fetch-Site": "same-origin" } })).status, 200);
-  assert.equal((await read(f, "/", { headers: { Host: "sample.tailnet.ts.net", Origin: "https://sample.tailnet.ts.net", "Sec-Fetch-Site": "same-origin" } })).status, 200);
+  assert.equal((await read(f, "/", { headers: { Host: "sample.tailnet.ts.net", Origin: "https://sample.tailnet.ts.net", "Sec-Fetch-Site": "same-origin" } })).status, 403);
 });
 
 function slot(root, name, marks) {
@@ -245,8 +210,8 @@ function slot(root, name, marks) {
   for (const mark of [...marks, "ok"]) writeFileSync(join(dir, mark), "");
 }
 
-test("T308: the Agents page is a route with the same sign-in, CSP and browser checks; its stream follows the hook's slots", async t => {
-  const f = await fixture(t, { allowedHosts: ["sample.tailnet.ts.net"] }), loopback = `127.0.0.1:${f.port}`;
+test("T308: the Agents page is a route with the same access check, CSP and browser checks; its stream follows the hook's slots", async t => {
+  const f = await fixture(t), loopback = `127.0.0.1:${f.port}`;
   writeFileSync(join(f.project, "runs.tsv"), `${HEADERS.runs.replaceAll(" ", "\t")}\nR1\tT1\tqa\t0\t\t\trunning\t\t\t${new Date(Date.now() - 60_000).toISOString()}\t\n`);
   slot(f.root, "slot-1", ["project-project", "role-sage_qa", "run-R1"]);
   let mac;
@@ -258,9 +223,9 @@ test("T308: the Agents page is a route with the same sign-in, CSP and browser ch
   assert.match((await read(f, "/", { rawHeaders: ["Host", loopback] })).body, /<a href="\/" aria-current="page">Task board<\/a><a href="\/milestones">Milestones<\/a><a href="\/agents">Agents \(1\)<\/a>/);
   for (const path of ["/agents", "/agents?events=1"]) {
     const refused = await read(f, path, { rawHeaders: ["Host", "sample.tailnet.ts.net"] });
-    assert.equal(refused.status, 401, path); assert.doesNotMatch(refused.body, /Sample first task/);
-    assert.equal((await read(f, path, { rawHeaders: ["Host", loopback, "X-Forwarded-For", "100.64.0.7"] })).status, 401, path);
-    assert.equal((await read(f, path, { method: "HEAD", rawHeaders: ["Host", "sample.tailnet.ts.net", "Authorization", f.authorization] })).status, 200, path);
+    assert.equal(refused.status, 403, path); assert.doesNotMatch(refused.body, /Sample first task/);
+    assert.equal((await read(f, path, { rawHeaders: ["Host", loopback, "X-Forwarded-For", "100.64.0.7"] })).status, 403, path);
+    assert.equal((await read(f, path, { method: "HEAD", rawHeaders: ["Host", loopback] })).status, 200, path);
     assert.equal((await read(f, path, { rawHeaders: ["Host", loopback, "Origin", "https://attacker.test"] })).status, 403, path);
   }
   for (const path of ["/agents/", "/agents?events=1&task=x", "/agents?x=1", "/Agents"]) assert.equal((await read(f, path)).status, 404, path);
@@ -277,13 +242,16 @@ test("board server exposes only canonical read routes and refuses invalid config
   for (const path of ["/tasks.tsv", "/../config.json", "/%2e%2e/config.json", "/?events=1&events=1", "/?events=1&other=x", `/?events=1&task=${key}&task=${key}`, `/?task=${key}&events=1`, `/task/${key}=`, "/task/_w", `/task/${Buffer.from("missing").toString("base64url")}`, "/task/YR"]) {
     const result = await read(f, path); assert.equal(result.status, 404, path); assert.doesNotMatch(result.body, /Sample first task/);
   }
-  assert.equal((await read(f, "/", { method: "POST" })).status, 405);
-  const options = { sources: f.sources, password: RECORD, port: f.port };
-  for (const changed of [{ password: { ...RECORD, scheme: "plain" } }, { password: { ...RECORD, hash: "short" } }, { port: 0 }, { sources: [] }, { sources: Array(1) }, { sources: [{ id: 2, path: f.root }] }, { sources: [{ id: "one", path: f.root, label: {} }] }, { allowedHosts: ["127.1"] }, { allowedHosts: ["name."] }, { allowedHosts: ["https://host"] }, { allowedHosts: Array(1) }]) assert.throws(() => createBoardServer({ ...options, ...changed }), TypeError);
+  for (const method of ["POST", "PUT", "DELETE", "PATCH", "OPTIONS"]) for (const path of ["/", `/task/${key}`, "/?events=1", "/agents", "/app/", "/app/events"]) {
+    const refused = await read(f, path, { method });
+    assert.equal(refused.status, 405, `${method} ${path}`); assert.equal(refused.headers.allow, "GET, HEAD");
+  }
+  const options = { sources: f.sources, port: f.port };
+  for (const changed of [{ port: 0 }, { sources: [] }, { sources: Array(1) }, { sources: [{ id: 2, path: f.root }] }, { sources: [{ id: "one", path: f.root, label: {} }] }]) assert.throws(() => createBoardServer({ ...options, ...changed }), TypeError);
 });
 
 test("board server fails on an occupied fixed port and closes without changing another listener", async t => {
-  const f = await fixture(t), other = createBoardServer({ sources: f.sources, password: RECORD, port: f.port });
+  const f = await fixture(t), other = createBoardServer({ sources: f.sources, port: f.port });
   t.after(() => other.close());
   await assert.rejects(other.start(), { code: "EADDRINUSE" });
   assert.equal((await read(f)).status, 200);
@@ -462,8 +430,8 @@ test("T996: /releases is a route with the CSP and a live stream; the board shows
   for (const path of ["/releases/", "/releases?x=1", "/Releases"]) assert.equal((await read(f, path)).status, 404, path);
 });
 
-test("T368 C9: /milestones and /milestone/KEY are routes with the same sign-in and CSP; an unknown key is the not-found page with 404; a bad key is 404", async t => {
-  const f = await fixture(t, { allowedHosts: ["sample.tailnet.ts.net"] });
+test("T368 C9: /milestones and /milestone/KEY are routes with the same access check and CSP; an unknown key is the not-found page with 404; a bad key is 404", async t => {
+  const f = await fixture(t);
   milestones(f.project);
   const list = await until(f, "/milestones", "Sample milestone");
   assert.equal(list.status, 200); assert.match(list.headers["content-type"], /^text\/html/);
@@ -474,7 +442,7 @@ test("T368 C9: /milestones and /milestone/KEY are routes with the same sign-in a
   const page = await read(f, `/milestone/${milestoneKey("M1")}`);
   assert.equal(page.status, 200); assert.ok(page.body.includes("Sample goal of M1.") && page.body.includes("<h1 class=\"ptitle\"><span aria-hidden=\"true\">◫</span> Sample milestone</h1>"), page.body.slice(-3000));
   assert.match((await read(f, "/")).body, /<a href="\/" aria-current="page">Task board<\/a><a href="\/milestones">Milestones<\/a><a href="\/agents">Agents \(0\)<\/a>/);
-  assert.ok((await read(f, `/task/${Buffer.from("sample/project-abcdef/T2").toString("base64url")}`)).body.includes(`<a class="back plink" href="/milestone/${milestoneKey("M1")}" title="Sample milestone">◫ <span class="cn">Sample milestone</span><span class="pid">M1</span></a>`));
+  assert.ok((await read(f, `/task/${Buffer.from("sample/project-abcdef/T2").toString("base64url")}`)).body.includes(`<a class="back plink" href="/milestone/${milestoneKey("M1")}" title="Sample milestone">◫ <span class="cn">Sample milestone</span></a>`));
   const missing = await read(f, `/milestone/${milestoneKey("M9")}`);
   assert.equal(missing.status, 404); assert.match(missing.headers["content-type"], /^text\/html/); assert.ok(missing.body.includes("<b>No milestone M9 on the board.</b>"));
   assert.equal((await read(f, `/milestone/${milestoneKey("M9")}`, { method: "HEAD" })).status, 404);
@@ -485,10 +453,10 @@ test("T368 C9: /milestones and /milestone/KEY are routes with the same sign-in a
   for (const [old, to] of [["/programs", "/milestones"], [`/program/${milestoneKey("M1")}`, `/milestone/${milestoneKey("M1")}`]]) {
     const moved = await read(f, old);
     assert.deepEqual([moved.status, moved.headers.location], [301, to], old);
-    assert.equal((await read(f, old, { rawHeaders: ["Host", "sample.tailnet.ts.net"] })).status, 401, `${old}: away from the Mac, the password comes first`);
+    assert.equal((await read(f, old, { rawHeaders: ["Host", "sample.tailnet.ts.net"] })).status, 403, `${old}: away from the Mac, the refusal comes first`);
   }
   for (const [old, text] of [["/programs?events=1", "1 of 2 merged"], [`/program/${milestoneKey("M1")}?events=1`, "Sample goal of M1."]]) {
-    assert.equal((await read(f, old, { rawHeaders: ["Host", "sample.tailnet.ts.net"] })).status, 401, `${old}: away from the Mac, the password comes first`);
+    assert.equal((await read(f, old, { rawHeaders: ["Host", "sample.tailnet.ts.net"] })).status, 403, `${old}: away from the Mac, the refusal comes first`);
     const stream = events(f, old); t.after(() => stream.close());
     assert.ok((await stream.next()).html.includes(text), old);
   }
@@ -496,8 +464,8 @@ test("T368 C9: /milestones and /milestone/KEY are routes with the same sign-in a
   assert.equal((await read(f, `/program/${milestoneKey("M9")}?events=1`)).status, 404, "no stream for an unknown milestone, also at its old address");
   for (const path of ["/milestones", "/milestones?events=1", `/milestone/${milestoneKey("M1")}`, `/milestone/${milestoneKey("M1")}?events=1`]) {
     const refused = await read(f, path, { rawHeaders: ["Host", "sample.tailnet.ts.net"] });
-    assert.equal(refused.status, 401, path); assert.doesNotMatch(refused.body, /Sample milestone/);
-    assert.equal((await read(f, path, { method: "HEAD", rawHeaders: ["Host", "sample.tailnet.ts.net", "Authorization", f.authorization] })).status, 200, path);
+    assert.equal(refused.status, 403, path); assert.doesNotMatch(refused.body, /Sample milestone/);
+    assert.equal((await read(f, path, { method: "HEAD" })).status, 200, path);
   }
   const stream = events(f, `/milestone/${milestoneKey("M1")}?events=1`); t.after(() => stream.close());
   assert.ok((await stream.next()).html.includes("Sample goal of M1."));
