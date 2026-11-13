@@ -14,10 +14,11 @@ const HEADS = Object.entries(KINDS).map(([kind, k]) => [kind, k.head]);
 const BOX_MARK = /[─-╿]/u;
 const FENCE = /^\s*(`{3,}|~{3,})/;
 const TABLE_ROW = /^\s*\|.*\|\s*$/;
+const RULE = /^\s*(?:-{3,}|\*{3,}|_{3,})\s*$/;
 const SHOWN = 20;
 
 export function kindOf(text) {
-  const first = String(text).split("\n").find((l) => l.trim())?.trim().replace(/^#+\s*|\*\*/g, "") ?? "";
+  const first = String(text).split("\n").find((l) => l.trim() && !RULE.test(l))?.trim().replace(/^#+\s*|\*\*/g, "") ?? "";
   const hit = HEADS.find(([, head]) => first === head || (head === "INCIDENT" && INCIDENT_STATUS.some((s) => first === `${head} · ${s}`)));
   return hit ? hit[0] : null;
 }
@@ -77,9 +78,13 @@ function namedProblems(text, { width = WIDTH } = {}) {
     else problems.push([`missing: ${part.name}`, `a ${kind} needs "${part.name}"`]);
   }
   if (KINDS[kind].pick && !/\(my\s+pick\)/i.test(text)) problems.push(["no pick", `a ${kind} marks your pick with "(my pick)"`]);
-  const alone = (l, name) => l.trim().replace(/:?(\*\*):?$/, "$1") === `**${name}**`;
-  if (KINDS[kind].card) for (const part of partsOf(kind)) {
-    if (/^[A-Z]/.test(part.name) && lines.some((l) => labelAt(l, part.name) && !alone(l, part.name))) problems.push([`inline label: ${part.name}`, `"${part.name}" goes in bold on its own line, with its text under it`]);
+  const bold = (l, name) => l.trim().replace(/:?(\*\*):?$/, "$1") === `**${name}**`;
+  for (const part of partsOf(kind).filter((p) => /^[A-Z]/.test(p.name))) {
+    const label = lines.find((l) => labelAt(l, part.name) && !/^#{1,6} /.test(l));
+    if (label === undefined) continue;
+    problems.push(bold(label, part.name)
+      ? [`bold label: ${part.name}`, `"${part.name}" is a bold line: use a ### heading, with its text under it`]
+      : [`inline label: ${part.name}`, `"${part.name}" is in the line: use a ### heading on its own line, with its text under it`]);
   }
   const answersRow = (l) => TABLE_ROW.test(l) && (/\(my\s+pick\)/i.test(l) || l.split("|")[1].trim().replace(/\*\*/g, "") === KINDS[kind].tableHead[0]);
   if (KINDS[kind].pick && lines.some(answersRow)) problems.push(["table", `a ${kind} gives its answers as a numbered list, not a table: put what happens next and the cost under each answer`]);

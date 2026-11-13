@@ -10,7 +10,7 @@ const LESSON_HEAD = ["Where the lesson lives now", "What it holds", "State"];
 export const KINDS = {
   progress: { head: "PROGRESS", use: "While a task runs: one short note when it moves to a new step, with nothing for the owner to do.",
     parts: ["Where this is", "?Since my last note", "What changed", "Next", "?Cost so far", "What I need from you"] },
-  question: { head: "QUESTION", use: "When work waits for the owner's choice. The title is the question. Ask it on the choice card (see above); this text form is the fallback. Each part goes under a bold label on its own line. The answers are a numbered list, never a table.", tableHead: QUESTION_HEAD, pick: true, card: true,
+  question: { head: "QUESTION", use: "When work waits for the owner's choice. The title is the question. Ask it on the choice card (see above); this text form is the fallback. Each part starts with a ### heading on its own line. The answers are a numbered list, never a table.", tableHead: QUESTION_HEAD, pick: true, card: true,
     parts: ["Where this is", "What you approve", "The one real choice in it", "table", "If you do not answer", "Needed by", "?Judged by", "?The bad side of my pick", "After you answer", "?page"] },
   report: { head: "REPORT", use: "When work ends: a pull request merged, or a study concluded. The title says what happened and what it needs.", tableHead: REPORT_HEAD,
     parts: ["Where this is", "?Why this change", "picture*", "table", "What I did not check", "Weak points", "What you need to do", "?page"] },
@@ -32,7 +32,7 @@ export const KINDS = {
     parts: ["What it covers", "table", "picture*", "Basis", "How sure", "?What would change it", "?So far", "?Your time", "What I need from you"] },
   "steps for you": { head: "STEPS FOR YOU", use: "When only the owner can do something: an install, an update, a setting, a sign-in. A warning goes before the steps it is about.",
     parts: ["When", "Why", "steps", "How you know it worked", "Your time", "If a step fails"] },
-  confirm: { head: "CONFIRM", use: "Just before an act that cannot be undone: a delete, a publish, a message to other people. The title names the act and says that it cannot be undone. Ask it on the choice card too; its text form is the fallback, with each part under a bold label.", card: true,
+  confirm: { head: "CONFIRM", use: "Just before an act that cannot be undone: a delete, a publish, a message to other people. The title names the act and says that it cannot be undone. Ask it on the choice card too; its text form is the fallback, with a ### heading for each part.", card: true,
     parts: ["What I will do", "table", "What stays", "If you say yes", "If you say no, or nothing"] },
   "lesson kept": { head: "LESSON KEPT", use: "When a mistake teaches sage something: the lesson once, and where it now lives.", tableHead: LESSON_HEAD,
     parts: ["What happened", "picture*", "The lesson", "Has it happened before", "table", "What changes for you", "What I need from you"] },
@@ -204,20 +204,22 @@ export function messageText(msg, { width = WIDTH, page, full = false, today = fa
   const own = page ? [pageBlock(page)] : [], ref = msg.ref ? [[`Ref: ${msg.ref}`]] : [];
   const parts = msg.long !== undefined && !full
     ? [[headOf(msg)], wrap(plain(msg.long.title), WIDTH), wrap(`Main point: ${plain(msg.long.main)}`, WIDTH), ...own, ...ref]
-    : [[headOf(msg)], wrap(plain(msg.title), width), ...msg.blocks.map((b) => blockText(b, width, today, KINDS[msg.kind].card)), ...own, ...ref];
+    : [[headOf(msg)], wrap(plain(msg.title), width), ...msg.blocks.map((b) => blockText(b, width, today)), ...own, ...ref];
   return parts.map((p) => p.join("\n")).join("\n\n");
 }
 
 const indentRows = (rows, n) => rows.map((r) => (r ? " ".repeat(n) + r : r));
 const bullet = (text, width, mark = "- ", ind = 0) => wrap(plain(text), width - ind - mark.length).map((l, j) => " ".repeat(ind) + (j ? " ".repeat(mark.length) : mark) + l);
 
-function blockText(b, width, today = false, card = false) {
+const heading = (label, depth) => `${"#".repeat(Math.min(3 + depth, 6))} ${plain(label)}`;
+
+function blockText(b, width, today = false, depth = 0) {
   switch (b.t) {
-    case "field": return card ? [`**${b.label}**`, ...wrap(cap(plain(b.text)), width)] : wrap(`${b.label}: ${plain(b.text)}`, width);
+    case "field": return [heading(b.label, depth), "", ...wrap(cap(plain(b.text)), width)];
     case "p": return wrap(plain(b.text), width);
     case "section": {
-      const body = b.body.map((x) => (x.t === "field" ? bullet(`${x.label}: ${x.text}`, width) : blockText(x, width, today, card)));
-      return [...(card ? [`**${b.label}**`] : [b.label, ""]), ...body.flatMap((rows, k) => (k && !(b.body[k].t === "field" && b.body[k - 1].t === "field") ? ["", ...rows] : rows))];
+      const body = b.body.map((x) => (x.t === "field" ? bullet(`${x.label}: ${x.text}`, width) : blockText(x, width, today, depth + 1)));
+      return [heading(b.label, depth), "", ...body.flatMap((rows, k) => (k && !(b.body[k].t === "field" && b.body[k - 1].t === "field") ? ["", ...rows] : rows))];
     }
     case "list": return b.items.flatMap((item, i) => bullet(item, width, b.ordered ? `${i + 1}. ` : "- "));
     case "table": return [...(b.caption ? [b.caption, ""] : []), ...b.rows.flatMap((r, i) => [
