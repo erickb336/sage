@@ -104,10 +104,10 @@ test("the strip keeps the shebang and each directive of the rule set, and remove
 test("a second strip changes nothing", () => {
   const f = folder({ "a.mjs": "// a\nconst a = 1; /* b */\n\n// c\n\nexport { a };\n", ".github/w.yml": "on: push # d\n" });
   try {
-    assert.deepEqual(stripComments(f.dir, ["."]), { files: 2, comments: 4, skipped: [] });
+    assert.deepEqual(stripComments(f.dir, ["."]), { files: 2, comments: 4, skipped: [], left: [] });
     const first = [f.read("a.mjs"), f.read(".github/w.yml")];
     assert.deepEqual(first, ["const a = 1;\n\nexport { a };\n", "on: push\n"]);
-    assert.deepEqual(stripComments(f.dir, ["."]), { files: 0, comments: 0, skipped: [] });
+    assert.deepEqual(stripComments(f.dir, ["."]), { files: 0, comments: 0, skipped: [], left: [] });
     assert.deepEqual([f.read("a.mjs"), f.read(".github/w.yml")], first);
   } finally { f.done(); }
 });
@@ -332,7 +332,7 @@ test("F-T1027-7: the proof fails each deleted, added and renamed file, because a
   } finally { f.done(); }
 });
 
-test("F-T1027-4, F-T1027-12: the steps for a branch from before the sweep strip only the files that the branch changed, and run npm ci after the merge", () => {
+test("F-T1027-4, F-T1027-12, F-T1027-30: the steps for a branch from before the sweep strip only the files that the branch changed, give the empty-list guard before each strip command, and run npm ci after the merge", () => {
   const text = readFileSync(join(ROOT, "CONTRIBUTING.md"), "utf8");
   const section = text.slice(text.indexOf("## A branch from before the sweep"), text.indexOf("\n## ", text.indexOf("## A branch from before the sweep") + 1));
   const commands = [...section.matchAll(/`([^`]+)`/g)].map(([, code]) => code);
@@ -342,6 +342,7 @@ test("F-T1027-4, F-T1027-12: the steps for a branch from before the sweep strip 
   const steps = section.split("\n").filter((line) => /^\d+\. .*strip-comments\.mjs/.test(line));
   assert.equal(steps.length, 2);
   for (const step of steps) assert.match(step, /If `git diff --name-only --diff-filter=d origin\/main\.\.\.HEAD` lists no file, skip to step \d+\./, step);
+  for (const step of steps) assert.ok(step.indexOf("lists no file") < step.indexOf("strip-comments.mjs"), step);
   const merge = commands.indexOf("git merge origin/main"), install = commands.indexOf("npm ci", merge);
   assert.ok(merge >= 0 && install > merge && install < commands.indexOf(strips[1]), commands.join("\n"));
 });
@@ -417,4 +418,43 @@ test("F-T1027-26: the strip in a folder that is not in a git repository fails by
     assert.equal(run.stdout, "");
     assert.equal(f.read("scripts/a.mjs"), "a(); // why\n");
   } finally { f.done(); }
+});
+
+test("F-T1027-28: the strip leaves the text of a script block that is not JavaScript and of a style block that is not CSS, and names each file and line that it left", () => {
+  const before = [
+    "<p>Größe 😀😀😀😀😀😀😀😀</p>",
+    "<script type=\"text/x-template\">",
+    "Visit https://example.com/docs for help.",
+    "</script>",
+    "<SCRIPT TYPE='Text/JavaScript'>a(); // why</SCRIPT>",
+    "<script type=module>b(); /* why */</script>",
+    "<style type=\"text/less\">a { b: c; } /* less */</style>",
+    "<script>c(); // why</script>",
+    "",
+  ].join("\n");
+  const f = repository({ "web/tpl.html": before, "web/only.html": "<script type=\"text/x-template\">See https://example.com</script>\n" });
+  try {
+    const run = script("strip-comments.mjs", ["web"], f.dir);
+    assert.equal(run.stderr, "");
+    assert.deepEqual(run.stdout.split("\n").sort(), [
+      "",
+      "left web/only.html:1: a script block of type text/x-template is not JavaScript; check it by hand",
+      "left web/tpl.html:3: a script block of type text/x-template is not JavaScript; check it by hand",
+      "left web/tpl.html:7: a style block of type text/less is not CSS; check it by hand",
+      `removed 3 comments from 1 files in ${f.dir}`,
+    ]);
+    assert.equal(f.read("web/tpl.html"), before
+      .replace("a(); // why</SCRIPT>", "a(); </SCRIPT>")
+      .replace("b(); /* why */</script>", "b(); </script>")
+      .replace("c(); // why</script>", "c(); </script>"));
+    assert.equal(f.read("web/only.html"), "<script type=\"text/x-template\">See https://example.com</script>\n");
+  } finally { f.done(); }
+});
+
+test("F-T1027-29: the strip removes the comments of an HTML file after multibyte text, in its HTML, its script block and its style block, and the comments of a CSS file, byte for byte", () => {
+  assert.equal(
+    stripped("page.html", "<p>Größe 😀 – ok</p>\n<!-- note -->\n<style>\n/* top */\na { color: red; } /* why */\n</style>\n<script>\n// lead\nconst s = \"é→\"; /* mid */ f(s); // tail\n</script>\n"),
+    "<p>Größe 😀 – ok</p>\n<style>\na { color: red; }\n</style>\n<script>\nconst s = \"é→\"; f(s);\n</script>\n",
+  );
+  assert.equal(stripped("a.css", "/* head */\nb::after { content: \"→ é\"; } /* why */\nc { d: e; }\n"), "b::after { content: \"→ é\"; }\nc { d: e; }\n");
 });

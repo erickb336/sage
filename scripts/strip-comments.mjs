@@ -1,6 +1,7 @@
 import { readFileSync, realpathSync, writeFileSync } from "node:fs";
 import { isAbsolute, join, relative, resolve } from "node:path";
 import { spawnSync } from "node:child_process";
+import { Lang, parse } from "@ast-grep/napi";
 import { isMain } from "./is-main.mjs";
 import { SCAN_FOLDERS, commentScan, excludedPaths } from "./lint-rules.mjs";
 
@@ -63,16 +64,40 @@ function distinctRanges(ranges) {
   return out;
 }
 
+const CODE_TYPES = {
+  script: { language: "JavaScript", types: ["", "module", "application/ecmascript", "application/javascript", "application/x-ecmascript", "application/x-javascript", "text/ecmascript", "text/javascript", "text/javascript1.0", "text/javascript1.1", "text/javascript1.2", "text/javascript1.3", "text/javascript1.4", "text/javascript1.5", "text/jscript", "text/livescript", "text/x-ecmascript", "text/x-javascript"] },
+  style: { language: "CSS", types: ["", "text/css"] },
+};
+
+function foreignBlocks(text) {
+  const blocks = [];
+  for (const element of parse(Lang.Html, text).root().findAll({ rule: { any: [{ kind: "script_element" }, { kind: "style_element" }] } })) {
+    const tag = element.kind().replace("_element", ""), [start, raw] = ["start_tag", "raw_text"].map((kind) => element.children().find((c) => c.kind() === kind));
+    const attribute = start?.children().find((c) => c.kind() === "attribute" && c.child(0)?.text().toLowerCase() === "type");
+    if (!attribute || !raw) continue;
+    const type = attribute.find({ rule: { kind: "attribute_value" } })?.text().trim() ?? "";
+    if (CODE_TYPES[tag].types.includes(type.split(";")[0].trim().toLowerCase())) continue;
+    const [from, to] = [raw.range().start.index, raw.range().end.index].map((index) => Buffer.byteLength(text.slice(0, index)));
+    blocks.push({ from, to, note: `a ${tag} block of type ${type} is not ${CODE_TYPES[tag].language}; check it by hand` });
+  }
+  return blocks;
+}
+
 export function stripComments(root, paths = SCAN_FOLDERS) {
-  const byFile = new Map();
-  for (const m of commentScan(root, paths)) byFile.set(m.file, [...byFile.get(m.file) ?? [], [m.range.byteOffset.start, m.range.byteOffset.end]]);
+  const byFile = new Map(), blocksOf = new Map(), left = [];
+  for (const m of commentScan(root, paths)) {
+    if (/\.(html?|xhtml)$/i.test(m.file) && !blocksOf.has(m.file)) blocksOf.set(m.file, foreignBlocks(readFileSync(join(root, m.file), "utf8")));
+    const block = blocksOf.get(m.file)?.find(({ from, to }) => m.range.byteOffset.start >= from && m.range.byteOffset.start < to);
+    if (block) left.push(`${m.file}:${m.range.start.line + 1}: ${block.note}`);
+    else byFile.set(m.file, [...byFile.get(m.file) ?? [], [m.range.byteOffset.start, m.range.byteOffset.end]]);
+  }
   let comments = 0;
   for (const [file, ranges] of byFile) {
     const path = join(root, file), distinct = distinctRanges(ranges);
     comments += distinct.length;
     writeFileSync(path, stripRanges(readFileSync(path, "utf8"), distinct, { yaml: /\.ya?ml$/.test(file) }));
   }
-  return { files: byFile.size, comments, skipped: excludedPaths(root, paths) };
+  return { files: byFile.size, comments, skipped: excludedPaths(root, paths), left };
 }
 
 const USAGE = `usage: node scripts/strip-comments.mjs [path ...]
@@ -98,8 +123,9 @@ if (isMain(import.meta.url)) {
     const top = spawnSync("git", ["rev-parse", "--show-toplevel"], { encoding: "utf8" }).stdout?.trim();
     if (!top) throw new Error(`${process.cwd()} is not in a git repository; run the strip in your checkout`);
     const root = realpathSync(top);
-    const { files, comments, skipped } = stripComments(root, paths.length ? paths.map((path) => repositoryPath(root, path)) : SCAN_FOLDERS);
+    const { files, comments, skipped, left } = stripComments(root, paths.length ? paths.map((path) => repositoryPath(root, path)) : SCAN_FOLDERS);
     for (const path of skipped) console.log(`skipped ${path}: .gitattributes marks it linguist-generated or linguist-vendored`);
+    for (const note of left) console.log(`left ${note}`);
     console.log(`removed ${comments} comments from ${files} files in ${root}`);
   } catch (error) {
     console.error(`strip-comments: ${error.message.split("\n")[0]}`);

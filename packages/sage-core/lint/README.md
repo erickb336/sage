@@ -44,7 +44,7 @@ A file in another language is not checked. The comment kinds differ by language,
 
 ## Limits
 
-ast-grep reads each `<script>` block of an HTML file as JavaScript, whatever its `type`. So text in a template script, such as `https://example.com`, can look like a `//` comment, and it fails. Put a template in a `<template>` element: ast-grep reads its content as HTML.
+ast-grep reads each `<script>` block of an HTML file as JavaScript, whatever its `type`, and each `<style>` block as CSS. So text in a template script, such as `https://example.com`, can look like a `//` comment, and the scan flags it. The strip in sage does not change a `<script>` block whose `type` is not JavaScript, or a `<style>` block whose `type` is not `text/css`. It prints each line that it left, and the scan still fails on that line. Put a template in a `<template>` element: ast-grep reads its content as HTML.
 
 ast-grep reads the `|` sign at the start of a `run:` block as shell too. So when the `run:` key is at the top level of a YAML document, a comment on the first line of its `|` block passes if no command follows it in the block, as in `run: |` with only `# why` under it. A `run:` key in a mapping or a list, such as a step of a GitHub Actions workflow, does not have this limit.
 
@@ -125,7 +125,7 @@ In sage, `scripts/lint-rules.test.mjs` also changes the rules in a copy, one mut
 `npm run check` scans sage's own sources (`packages/`, `scripts/` and `.github/`) with this rule set, through the `sgconfig.yml` at the root of the repository, which the lint command reads too. The root `sgconfig.yml` holds the same `languageInjections` as the rule set's own, and `scripts/lint-rules.test.mjs` fails when they differ. The code of the scan is in `scripts/lint-rules.mjs`. It fails on a comment, and on a file that ast-grep skips. When the check fails on a comment:
 
 1. Commit your change.
-2. Run `node scripts/strip-comments.mjs [path ...]`. It removes each comment that the scan flags, and keeps the allowed directives. A second run changes nothing. A path is relative to the current folder, or absolute. A path that is not there, or that is outside the repository, fails by name. A named file that `.gitattributes` marks `linguist-generated` or `linguist-vendored` is skipped, and the script names it, as the scan of a folder skips it.
+2. Run `node scripts/strip-comments.mjs [path ...]`. It removes each comment that the scan flags, except in a script or style block of another type (see [Limits](#limits)), and keeps the allowed directives. A second run changes nothing. A path is relative to the current folder, or absolute. A path that is not there, or that is outside the repository, fails by name. A named file that `.gitattributes` marks `linguist-generated` or `linguist-vendored` is skipped, and the script names it, as the scan of a folder skips it.
 3. Run `node scripts/comment-proof.mjs [base] [head]` (by default, from `HEAD` to the working tree). For each changed JavaScript or YAML file, it compares the code tokens and the minified code (for YAML, the parsed value). A deleted, added or renamed file fails, because a strip only edits files. A file of another type, such as `.json`, is "not proved", and does not fail the run. It must report 0 failed, except for a YAML file whose `run:` block lost a shell comment: check that file by hand (see [Limits](#limits)).
 4. Put a reason that a reader needs in a name, a test name or a doc, never in a comment.
 
