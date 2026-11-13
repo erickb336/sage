@@ -64,6 +64,26 @@ test("a multi-line comment between two tokens leaves a line break, so the automa
   assert.equal(new Function(`${after}; return f();`)(), undefined);
 });
 
+test("a comment before a template literal leaves the spaces at the end of the template's first line", () => {
+  for (const before of ["const t = /* c */ `abc   \ndef`;\n", "/* c */ `abc   \ndef`;\n"]) {
+    const after = stripped("a.mjs", before);
+    assert.equal(after, before.replace("/* c */ ", ""));
+    assert.deepEqual(prove("a.mjs", before, after), BOTH_PASS);
+  }
+});
+
+test("a YAML comment line and the blank lines after it go together, so a keep block (|+) keeps its value", () => {
+  for (const blanks of ["\n", "\n\n"]) {
+    const before = `a: |+\n  text\n# c\n${blanks}b: 1\n`;
+    const after = stripped("a.yml", before);
+    assert.equal(after, "a: |+\n  text\nb: 1\n");
+    assert.deepEqual(prove("a.yml", before, after), BOTH_PASS);
+  }
+  const grown = prove("a.yml", "a: |+\n  text\nb: 1\n", "a: |+\n  text\n\nb: 1\n");
+  assert.notEqual(grown.tokens, true);
+  assert.notEqual(grown.canonical, true);
+});
+
 test("the strip keeps the shebang and each directive of the rule set, and removes every other comment", () => {
   const before = "#!/usr/bin/env node\n// why\n\n/* c8 ignore next */\nrun(/* why */ a, b); // why\n/* eslint-disable no-console -- why */\n";
   assert.equal(stripped("a.mjs", before), "#!/usr/bin/env node\n/* c8 ignore next */\nrun(a, b);\n");

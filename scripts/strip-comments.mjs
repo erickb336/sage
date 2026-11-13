@@ -6,7 +6,7 @@ import { SCAN_FOLDERS, commentScan } from "./lint-rules.mjs";
 
 const MARK = "\u0000";
 
-export function stripRanges(text, byteRanges) {
+export function stripRanges(text, byteRanges, { yaml = false } = {}) {
   if (text.includes(MARK)) throw new Error("the file holds a NUL character, which the strip uses as its mark");
   const bytes = Buffer.from(text);
   let marked = "", at = 0, atByte = 0;
@@ -25,7 +25,7 @@ export function stripRanges(text, byteRanges) {
   let dropped = false;
   for (const line of marked.split("\n")) {
     if (!line.includes(MARK)) {
-      if (dropped && !line.trim() && (!lines.length || !lines.at(-1).trim() || /^#!/.test(lines.at(-1)) && lines.length === 1)) { dropped = false; continue; }
+      if (dropped && !line.trim() && (yaml || !lines.length || !lines.at(-1).trim() || /^#!/.test(lines.at(-1)) && lines.length === 1)) { dropped = yaml; continue; }
       dropped = false;
       lines.push(line);
       continue;
@@ -45,7 +45,7 @@ function tidyLine(line) {
     else if (!tail || /[([]$/.test(head) || /^[;,)\]}]/.test(tail)) out = head + tail;
     else out = head + (left.slice(head.length) || " ") + tail;
   }
-  return out.trimEnd();
+  return out;
 }
 
 export function stripComments(root, paths = SCAN_FOLDERS) {
@@ -53,7 +53,7 @@ export function stripComments(root, paths = SCAN_FOLDERS) {
   for (const m of commentScan(root, paths)) byFile.set(m.file, [...byFile.get(m.file) ?? [], [m.range.byteOffset.start, m.range.byteOffset.end]]);
   for (const [file, ranges] of byFile) {
     const path = join(root, file);
-    writeFileSync(path, stripRanges(readFileSync(path, "utf8"), ranges));
+    writeFileSync(path, stripRanges(readFileSync(path, "utf8"), ranges, { yaml: /\.ya?ml$/.test(file) }));
   }
   return { files: byFile.size, comments: [...byFile.values()].reduce((n, r) => n + r.length, 0) };
 }

@@ -36,7 +36,8 @@ function yamlTokens(src) {
     if (token === "\n" || token === "\r\n") { lineStart = true; indent = 0; continue; }
     if (/^[ \t]+$/.test(token)) { if (lineStart) indent = token.length; continue; }
     out.push(`${out.length && lineStart ? `NL${indent} ` : ""}${JSON.stringify(token)}`);
-    lineStart = false;
+    lineStart = token.endsWith("\n");
+    indent = 0;
   }
   return out;
 }
