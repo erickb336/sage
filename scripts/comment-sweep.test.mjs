@@ -8,10 +8,13 @@ import { test } from "node:test";
 import { Lang, parse } from "@ast-grep/napi";
 import { buildBoardModel } from "../packages/sage-core/board-model.mjs";
 import { renderAgentsHtml, renderBoardHtml, renderMilestonesHtml, renderReleasesHtml } from "../packages/sage-core/board-render.mjs";
+import { servePages } from "../packages/sage-board/pages.mjs";
 import { prepareMessage } from "../packages/sage-core/message.mjs";
 import { messagePage } from "../packages/sage-core/message-page.mjs";
 import { mapHtml } from "../packages/sage-core/move-text.mjs";
 import { ROOT } from "./build.mjs";
+import { NOW, milestonesSource } from "./fixtures/board-milestones.mjs";
+import { NOW as WALK_NOW, STAGES, walkthroughSource } from "./fixtures/board-walkthrough.mjs";
 import { prove } from "./comment-proof.mjs";
 import { RULE_SET } from "./lint-rules.mjs";
 import { stripComments } from "./strip-comments.mjs";
@@ -168,20 +171,177 @@ test("control: the page reader finds a comment in a page's HTML, its style and i
   assert.deepEqual(servedComments("<p>a</p><!-- h --><style>a{color:red}/* s */</style><script>f('https://x.test'); // j\n</script>"), ["<!-- h -->", "/* s */", "// j"]);
 });
 
-test("every page that the board, a message and a move serve has no comment in its HTML, its scripts or its styles, which the source scan reads as string text", () => {
-  const model = buildBoardModel([], { now: "2026-10-20T12:00:00Z" });
+function pagesIndex() {
+  const root = mkdtempSync(join(realpathSync(tmpdir()), "sage-pages-")), logbook = "sample-abcdef", saved = process.env.SAGE_WORKTREES;
+  mkdirSync(join(root, logbook, "pages", "T1"), { recursive: true });
+  writeFileSync(join(root, logbook, "pages", "T1", "scripted.html"), "<!DOCTYPE html><p>SAMPLE</p><script>f()</script>");
+  writeFileSync(join(root, logbook, "pages", "T1", "notes.txt"), "SAMPLE");
+  process.env.SAGE_WORKTREES = root;
+  try {
+    let status = 0, body = "";
+    const response = { setHeader() {}, writeHead(code) { status = code; }, end(text) { body = String(text); } };
+    servePages({ url: `/pages/${logbook}/T1/`, method: "GET", headersDistinct: { host: ["127.0.0.1:1"] } }, response, { onMac: () => true, model: { projects: [{ books: [`claude/${logbook}`] }] } });
+    assert.equal(status, 200, body);
+    assert.match(body, /scripted\.html\?scripts=1/);
+    return body;
+  } finally {
+    if (saved === undefined) delete process.env.SAGE_WORKTREES;
+    else process.env.SAGE_WORKTREES = saved;
+    rmSync(root, { recursive: true, force: true });
+  }
+}
+
+test("F-T1027-6, F-T1027-8: every page that the board, a message, a move and a pages folder serve has no comment in its HTML, its scripts or its styles, which the source scan reads as string text, also with sample logbooks", () => {
+  const models = {
+    empty: buildBoardModel([], { now: "2026-10-20T12:00:00Z" }),
+    milestones: buildBoardModel([milestonesSource()], { now: NOW }),
+    ...Object.fromEntries(Object.keys(STAGES).map((stage) => [stage, buildBoardModel([walkthroughSource(stage)], { now: WALK_NOW })])),
+  };
   const message = prepareMessage(JSON.parse(readFileSync(join(ROOT, "scripts/fixtures/messages/02-question.json"), "utf8"))).msg;
   const plan = { folder: "sample-abcdef.shared", digest: "0123456789abcdef", map: { tasks: [], gates: [], milestones: [], findings: [] } };
   const pages = {
-    board: renderBoardHtml(model, { live: true }),
-    agents: renderAgentsHtml(model, { live: true }),
-    releases: renderReleasesHtml(model, { live: true }),
-    milestones: renderMilestonesHtml(model, { live: true }),
     message: messagePage(message, ""),
     "move map": mapHtml(plan, { at: "2026-10-20T12:00:00Z", backups: [], shown: (name) => name }),
   };
+  for (const [name, model] of Object.entries(models)) {
+    Object.assign(pages, {
+      [`${name} board`]: renderBoardHtml(model, { live: true }),
+      [`${name} agents`]: renderAgentsHtml(model, { live: true }),
+      [`${name} releases`]: renderReleasesHtml(model, { live: true }),
+      [`${name} milestones`]: renderMilestonesHtml(model, { live: true }),
+    });
+    for (const task of model.tasks) pages[`${name} ${task.key}`] = renderBoardHtml(model, { taskKey: task.key, live: true });
+    for (const milestone of model.milestones) pages[`${name} ${milestone.key}`] = renderMilestonesHtml(model, { milestoneKey: milestone.key, live: true });
+  }
+  assert.ok(models.milestones.tasks.length && models.milestones.milestones.length && models.building.agents.count, "the sample logbooks hold tasks, milestones and running agents");
   for (const [name, html] of Object.entries(pages)) {
     assert.match(html, /<script>[^<]/, `${name}: the page has a script`);
     assert.deepEqual(servedComments(html), [], name);
   }
+  const index = pagesIndex();
+  assert.match(index, /<style>[^<]/, "the pages index has a style");
+  assert.deepEqual(servedComments(index), [], "pages index");
+});
+
+function repository(files) {
+  const f = folder(files);
+  const git = (...args) => {
+    const run = spawnSync("git", ["-C", f.dir, "-c", "user.name=Sample", "-c", "user.email=sample@example.com", ...args], { encoding: "utf8" });
+    assert.equal(run.status, 0, run.stderr);
+  };
+  git("init", "-q");
+  git("add", "-A");
+  git("commit", "-q", "-m", "sample");
+  return { ...f, git };
+}
+
+const script = (name, args, cwd) => spawnSync("node", [join(ROOT, "scripts", name), ...args], { cwd, encoding: "utf8" });
+
+function strippedAndProved(cases) {
+  for (const [name, before, after] of cases) {
+    assert.equal(stripped(name, before), after, JSON.stringify(before));
+    assert.deepEqual(prove(name, before, after), BOTH_PASS, JSON.stringify(before));
+  }
+}
+
+test("F-T1027-3: the strip keeps the final newline after a last comment line of a YAML file", () => strippedAndProved([
+  ["a.yml", "a: 1\n# c\n", "a: 1\n"],
+  ["a.yml", "a: |+\n  text\n# c\n\n", "a: |+\n  text\n"],
+]));
+
+test("F-T1027-9: the strip keeps the CR of a CRLF line that ends in a comment", () => strippedAndProved([
+  ["a.yml", "a: 1 # c\r\nb: 2\r\n# c\r\n", "a: 1\r\nb: 2\r\n"],
+  ["a.mjs", "a(); // c\r\nb();\r\n// c\r\n", "a();\r\nb();\r\n"],
+]));
+
+test("F-T1027-13: the strip reads a relative path from the current folder, and takes an absolute path as it is", () => {
+  const f = repository({ "a.mjs": "a(); // why\n", "sub/b.mjs": "b(); // why\n" });
+  try {
+    const absolute = script("strip-comments.mjs", [join(f.dir, "a.mjs")], f.dir);
+    assert.equal(absolute.stderr, "");
+    assert.equal(absolute.stdout, `removed 1 comments from 1 files in ${f.dir}\n`);
+    const relative = script("strip-comments.mjs", ["b.mjs"], join(f.dir, "sub"));
+    assert.equal(relative.stderr, "");
+    assert.equal(relative.stdout, `removed 1 comments from 1 files in ${f.dir}\n`);
+    assert.deepEqual([f.read("a.mjs"), f.read("sub/b.mjs")], ["a();\n", "b();\n"]);
+  } finally { f.done(); }
+});
+
+test("F-T1027-5: the strip fails by name on a path that is not there or is outside the repository, and changes no file", () => {
+  const f = repository({ "a.mjs": "a(); // why\n" });
+  const outside = folder({ "c.mjs": "c(); // why\n" });
+  try {
+    for (const [path, error] of [["no-such-path", "no-such-path: no such file or folder"], [outside.dir, `${outside.dir} is outside the repository ${f.dir}`]]) {
+      const failed = script("strip-comments.mjs", [path], f.dir);
+      assert.equal(failed.status, 1, failed.stdout);
+      assert.equal(failed.stderr, `strip-comments: ${error}\n`);
+      assert.equal(failed.stdout, "");
+    }
+    assert.deepEqual([f.read("a.mjs"), outside.read("c.mjs")], ["a(); // why\n", "c(); // why\n"]);
+  } finally { f.done(); outside.done(); }
+});
+
+test("F-T1027-10: both scripts run through a linked folder, and the strip works in a repository reached through a link", () => {
+  const f = repository({ "a.mjs": "a(); // why\n" });
+  const links = folder({});
+  try {
+    symlinkSync(join(ROOT, "scripts"), join(links.dir, "scripts"), "dir");
+    symlinkSync(f.dir, join(links.dir, "repo"), "dir");
+    for (const name of ["strip-comments.mjs", "comment-proof.mjs"]) {
+      const help = spawnSync("node", [join(links.dir, "scripts", name), "--help"], { encoding: "utf8" });
+      assert.match(help.stdout, new RegExp(`^usage: node scripts/${name} `), name);
+    }
+    const run = spawnSync("node", [join(links.dir, "scripts", "strip-comments.mjs"), "a.mjs"], { cwd: join(links.dir, "repo"), encoding: "utf8" });
+    assert.equal(run.stdout, `removed 1 comments from 1 files in ${f.dir}\n`, run.stderr);
+    assert.equal(f.read("a.mjs"), "a();\n");
+  } finally { f.done(); links.done(); }
+});
+
+test("F-T1027-14: both scripts say that they work in the git repository of the current folder, and the proof names that repository", () => {
+  for (const name of ["strip-comments.mjs", "comment-proof.mjs"]) assert.match(script(name, ["--help"], ROOT).stdout, /in the git repository of the current folder/, name);
+  const f = repository({ "sub/a.mjs": "a(); // why\n" });
+  try {
+    writeFileSync(join(f.dir, "sub/a.mjs"), "a();\n");
+    const run = script("comment-proof.mjs", [], join(f.dir, "sub"));
+    assert.equal(run.status, 0, run.stdout);
+    assert.match(run.stdout, new RegExp(`^1 changed files from HEAD to the working tree in ${f.dir}, `, "m"));
+  } finally { f.done(); }
+});
+
+test("F-T1027-15: the proof reports a file type with no proof as not proved, and the run passes", () => {
+  const f = repository({ "a.mjs": "a(); // why\n", "data.json": "{}\n" });
+  try {
+    writeFileSync(join(f.dir, "a.mjs"), "a();\n");
+    writeFileSync(join(f.dir, "data.json"), "{\"a\": 1}\n");
+    const run = script("comment-proof.mjs", [], f.dir);
+    assert.equal(run.status, 0, run.stdout);
+    assert.equal(run.stdout.split("\n")[0], "- data.json: not proved, because no proof reads this file type");
+    assert.match(run.stdout, /token proof passes for 1, canonical proof passes for 1, 1 not proved, 0 failed\n$/);
+  } finally { f.done(); }
+});
+
+test("F-T1027-7: the proof fails each deleted, added and renamed file, because a strip only edits files", () => {
+  const f = repository({ "a.mjs": "a(); // why\n", "gone.mjs": "g();\n", "old.yml": "a: 1\n" });
+  try {
+    writeFileSync(join(f.dir, "a.mjs"), "a();\n");
+    f.git("rm", "-q", "gone.mjs");
+    f.git("mv", "old.yml", "new.yml");
+    const run = script("comment-proof.mjs", [], f.dir);
+    assert.equal(run.status, 1, run.stdout);
+    assert.deepEqual(run.stdout.split("\n").filter((line) => line.startsWith("✗")), ["✗ gone.mjs", "✗ new.yml", "✗ old.yml"]);
+    assert.match(run.stdout, /✗ gone\.mjs\n {2}it was deleted, and a strip only removes comments\n/);
+    assert.match(run.stdout, /✗ new\.yml\n {2}it was added, and a strip only removes comments\n/);
+    assert.match(run.stdout, /, 3 failed\n$/);
+  } finally { f.done(); }
+});
+
+test("F-T1027-4, F-T1027-12: the steps for a branch from before the sweep strip only the files that the branch changed, and run npm ci after the merge", () => {
+  const text = readFileSync(join(ROOT, "CONTRIBUTING.md"), "utf8");
+  const section = text.slice(text.indexOf("## A branch from before the sweep"), text.indexOf("\n## ", text.indexOf("## A branch from before the sweep") + 1));
+  const commands = [...section.matchAll(/`([^`]+)`/g)].map(([, code]) => code);
+  const strips = commands.filter((code) => code.includes("strip-comments.mjs"));
+  assert.equal(strips.length, 2);
+  for (const strip of strips) assert.match(strip, /strip-comments\.mjs \$\(git diff --name-only --diff-filter=d origin\/main\.\.\.HEAD\)$/);
+  const merge = commands.indexOf("git merge origin/main"), install = commands.indexOf("npm ci", merge);
+  assert.ok(merge >= 0 && install > merge && install < commands.indexOf(strips[1]), commands.join("\n"));
 });

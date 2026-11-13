@@ -1,7 +1,7 @@
-import { readFileSync, writeFileSync } from "node:fs";
-import { join } from "node:path";
+import { readFileSync, realpathSync, writeFileSync } from "node:fs";
+import { isAbsolute, join, relative, resolve } from "node:path";
 import { spawnSync } from "node:child_process";
-import { fileURLToPath } from "node:url";
+import { isMain } from "./is-main.mjs";
 import { SCAN_FOLDERS, commentScan } from "./lint-rules.mjs";
 
 const MARK = "\u0000";
@@ -21,19 +21,23 @@ export function stripRanges(text, byteRanges, { yaml = false } = {}) {
     atByte = endByte;
   }
   marked += text.slice(at);
+  const finalNewline = marked.endsWith("\n");
   const lines = [];
   let dropped = false;
-  for (const line of marked.split("\n")) {
+  for (const line of (finalNewline ? marked.slice(0, -1) : marked).split("\n")) {
     if (!line.includes(MARK)) {
       if (dropped && !line.trim() && (yaml || !lines.length || !lines.at(-1).trim() || /^#!/.test(lines.at(-1)) && lines.length === 1)) { dropped = yaml; continue; }
       dropped = false;
       lines.push(line);
       continue;
     }
-    const tidy = tidyLine(line);
-    if (tidy.trim()) { lines.push(tidy); dropped = false; } else dropped = true;
+    const cr = line.endsWith("\r") ? "\r" : "";
+    const tidy = tidyLine(cr ? line.slice(0, -1) : line);
+    if (tidy.trim()) { lines.push(tidy + cr); dropped = false; } else dropped = true;
   }
-  return lines.join("\n");
+  if (dropped && !yaml) while (lines.length && !lines.at(-1).trim()) lines.pop();
+  const out = lines.join("\n");
+  return out && finalNewline ? `${out}\n` : out;
 }
 
 function tidyLine(line) {
@@ -59,18 +63,28 @@ export function stripComments(root, paths = SCAN_FOLDERS) {
 }
 
 const USAGE = `usage: node scripts/strip-comments.mjs [path ...]
-Removes each comment that the rule set in packages/sage-core/lint flags, in the paths (default: ${SCAN_FOLDERS.join(" ")}).`;
+Removes each comment that the rule set in packages/sage-core/lint flags, in the git repository of the current folder.
+Each path is a file or a folder of that repository, relative to the current folder or absolute (default: ${SCAN_FOLDERS.join(" ")} at the repository root).`;
 
-if (process.argv[1] === fileURLToPath(import.meta.url)) {
+function repositoryPath(root, path) {
+  let real;
+  try { real = realpathSync(resolve(path)); } catch { throw new Error(`${path}: no such file or folder`); }
+  const inside = relative(root, real);
+  if (inside.startsWith("..") || isAbsolute(inside)) throw new Error(`${path} is outside the repository ${root}`);
+  return inside || ".";
+}
+
+if (isMain(import.meta.url)) {
   const paths = process.argv.slice(2), option = paths.find((arg) => arg.startsWith("-"));
   if (option) {
     if (option === "--help" || option === "-h") console.log(USAGE);
     else console.error(`strip-comments: unknown option ${option}\n${USAGE}`);
     process.exit(option === "--help" || option === "-h" ? 0 : 2);
   }
-  const root = spawnSync("git", ["rev-parse", "--show-toplevel"], { encoding: "utf8" }).stdout.trim() || process.cwd();
   try {
-    const { files, comments } = stripComments(root, paths.length ? paths : SCAN_FOLDERS);
+    const top = spawnSync("git", ["rev-parse", "--show-toplevel"], { encoding: "utf8" }).stdout.trim();
+    const root = realpathSync(top || process.cwd());
+    const { files, comments } = stripComments(root, paths.length ? paths.map((path) => repositoryPath(root, path)) : SCAN_FOLDERS);
     console.log(`removed ${comments} comments from ${files} files in ${root}`);
   } catch (error) {
     console.error(`strip-comments: ${error.message.split("\n")[0]}`);
