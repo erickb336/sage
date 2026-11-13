@@ -50,16 +50,17 @@ sage's state tool checks a pull request with a project's own rules: `sage lint <
 
 | Rule | Why |
 | --- | --- |
-| The base is the merge base of the head and `origin/main`. The rules, `sgconfig.yml` and `.gitattributes` come from the base. | A pull request cannot weaken its own check. |
-| Only the lines that the head adds count: `git diff -U0 -M`, so a moved or an edited line counts, and a renamed file keeps its old lines. | An old comment on a line that the pull request does not touch is not its problem. |
+| The rules, `sgconfig.yml` and `.gitattributes` come from the tip of `origin/main`, never from the head. | A pull request cannot weaken its own check, and a branch that started before a rule reached main gets that rule too, like a required check that applies the branch's current settings. |
+| Only the lines that the head adds since its merge base with `origin/main` count, so a moved or an edited line counts. A renamed file keeps its old lines when a rule checked its old path; when no rule did (another language, no rule, generated or vendored, a symbolic link), every line counts. | An old comment on a line that the pull request does not touch is not its problem, and a rename cannot bring unchecked lines in. |
+| lint runs at the root of the repository, also when you run it from a subfolder. | The root `sgconfig.yml` decides. |
 | The scan reads a copy of the changed files, with the paths after `--`. | A file named like an option, such as `--off`, stays a path. |
 | Each match on an added line fails, whatever its severity. lint reads the JSON matches, never the exit code alone. | A rule without `severity: error` exits 0 when it finds matches. |
 | A changed file whose text holds `ast-grep-ignore` fails as a whole file. | The suppression hides lines from the rules. |
-| A changed file that ast-grep skips (not UTF-8, too large) fails, by name. | A skipped file is not checked. |
-| A symbolic link, a submodule, a file marked `linguist-generated` or `linguist-vendored` in the base, and a file with no ast-grep language or no rule are not checked. lint lists each one by name. | They hold no code that the rules read. |
-| With no `sgconfig.yml` at the base's root, lint records nothing, and the merge check needs no lint verdict. | Like a required status check that a repository has not turned on. |
+| A changed file that ast-grep skips (not UTF-8, too large), or one of more than 10 MiB, fails, by name. lint reads no file that it does not scan. | A skipped file is not checked, and a large asset with no rule does not stop lint. |
+| A symbolic link, a submodule, a file marked `linguist-generated` or `linguist-vendored` in `origin/main`, and a file with no ast-grep language or no rule are not checked. lint lists each one by name. | They hold no code that the rules read. |
+| With no `sgconfig.yml` at the root of `origin/main`, lint records nothing, and the merge check needs no lint verdict. With no `origin/main` and a root `sgconfig.yml` in the checkout, lint and the merge check refuse. | Like a required status check that a repository has not turned on; a repository that turned it on is never let through. |
 
-lint runs ast-grep 0.51.1 from the project's `node_modules/.bin` when it is that version, else from sage's tools folder (`tools/` beside the logbook folders). With neither, it refuses, writes no verdict, and prints the command that installs it in the tools folder.
+lint runs ast-grep 0.51.1 from the `node_modules/.bin` at the root of the project's checkout when it is that version, else from sage's tools folder (`tools/` beside the logbook folders). With neither, it refuses, writes no verdict, and prints the command that installs it in the tools folder.
 
 ## Add a language
 

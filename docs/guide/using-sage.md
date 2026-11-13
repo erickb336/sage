@@ -295,7 +295,8 @@ Nothing reaches main without a pull request, so a stopped task leaves at most a 
 A repository can have lint rules of its own: an [ast-grep](https://ast-grep.github.io) project file, `sgconfig.yml`, at its root. When the main branch has one, sage checks each pull request with those rules before it merges. Sage's own rules refuse code comments ([the no-comments rule set](../../packages/sage-core/lint/README.md)).
 
 - **What it checks:** only the lines that the pull request adds, also a moved or an edited line. A line that the pull request does not touch never fails.
-- **Whose rules:** the rules, `sgconfig.yml` and `.gitattributes` of the main branch, where the pull request started. A pull request that changes a rule does not change its own check.
+- **Whose rules:** the rules, `sgconfig.yml` and `.gitattributes` of the tip of `origin/main`, also when the pull request started before they changed. A pull request that changes a rule does not change its own check.
+- **Which lines:** the diff from the merge base of the head and `origin/main`, so a change that reached main after the pull request started is not its problem.
 - **When:** the chief runs `sage lint <T> --sha <sha>` on the final head, before the merge check. A lead may run it earlier.
 - **The result:** lint-pass, or lint-fail with each file and line and the rule's message. The merge check refuses a head without lint-pass.
 
@@ -303,10 +304,13 @@ A repository can have lint rules of its own: an [ast-grep](https://ast-grep.gith
 | --- | --- |
 | A new comment, or an old comment on an edited or moved line | Fails, and names the file and the line. |
 | ast-grep's suppression comment anywhere in a changed file | Fails for the whole file: the suppression hides lines from the rules. |
-| A changed file that ast-grep skips (not UTF-8, too large) | Fails, and names the file. |
+| A changed file that ast-grep skips (not UTF-8), or a file of more than 10 MiB | Fails, and names the file. |
+| A file renamed from a path that no rule checked, or a symbolic link that became a file | Every line counts as added. |
 | A file with no ast-grep language, no rule, a symbolic link, or a file marked `linguist-generated` or `linguist-vendored` in the main branch's `.gitattributes` | Passes, and lists the file as not checked. |
 
-A repository without `sgconfig.yml` at its root gets no lint verdict and no block. The check needs ast-grep 0.51.1 in the project's `node_modules/.bin`, or in sage's tools folder. When it finds neither, it refuses and prints the command that installs it in the tools folder.
+A repository without `sgconfig.yml` at the root of `origin/main` gets no lint verdict and no block. A repository with no `origin/main` and a root `sgconfig.yml` in its checkout gets no lint verdict, and the merge check refuses: lint needs a remote named origin with a branch named main.
+
+The check needs ast-grep 0.51.1 in the project's `node_modules/.bin`, or in sage's tools folder. When it finds neither, it refuses and prints the command that installs it in the tools folder.
 
 ## Clean up worktrees
 

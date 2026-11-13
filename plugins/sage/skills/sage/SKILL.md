@@ -41,7 +41,7 @@ Read `skills/sage/references/commands.md` for the full row of a command before y
 | `finding triage <T> <K> fix\|dismiss\|ask [--reason "<r>"] [--proof <R>]` · `finding close <T> <K>` | Triage every finding; `--proof` names the proof check that reran it. |
 | `finding move <T> <K> --to "<title>" [--size tiny\|small\|large]` | Moves an open medium or low finding to a new follow-up task (small by default), which it frames. |
 | `verdict <T> --sha <sha> --kind <kind> [--cycle <n>] [--pr <n>] [--run <R>]` | Records a verdict on a head SHA. |
-| `lint <T> --sha <sha>` | Scans the lines that the head adds, with the rules of its base's root `sgconfig.yml`, and records lint-pass or lint-fail. |
+| `lint <T> --sha <sha>` | Scans the lines that the head adds, with the rules of the root `sgconfig.yml` of `origin/main`, and records lint-pass or lint-fail. |
 | `gate add <T> --question "<q>" --options "<a\|b>" --recommend <a> [--default <a>]` · `gate answer <G> --option <n> --project <folder>` · `gate answer <G> --other-hex <hex> --project <folder>` | Parks a question for the user, with your recommendation and the default. |
 | `log <T\|-> "<decision>" --why "<reason>"` | Adds a line to the decision trail. |
 | `pages <T>` · `pages <T> record <file>` · `pages <T> record --run <R> --text <report>` | Makes (mode 700) and prints the folder where agents save the task's pages (research, designs, findings pages). |
