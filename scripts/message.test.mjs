@@ -7,6 +7,7 @@ import { tmpdir } from "node:os";
 import { basename, dirname, join } from "node:path";
 import { test } from "node:test";
 import { fileURLToPath } from "node:url";
+import { renderChiefInstructions } from "../packages/sage-core/roles.mjs";
 import { KINDS, frameLines, messageText, partsOf, prepareMessage } from "../packages/sage-core/message.mjs";
 import { PAGE_POLICY, SWITCH_SCRIPT, messagePage } from "../packages/sage-core/message-page.mjs";
 import { kindOf, messageMiss, pageProblems, renderMessage, textProblems } from "../packages/sage-core/message-checks.mjs";
@@ -496,9 +497,6 @@ test("F-T1026-1: a question gives its pick as answer 1; a pick on another answer
   const second = question.replace(" (my\n   pick)", "").replace("2. Keep the file tool as an extra for some\n   pages", "2. Keep the file tool as an extra for some\n   pages (my pick)");
   assert.deepEqual(messageMiss(second).names, ["pick not first"]);
   assert.match(messageMiss(second).note, /answer 2 says "\(my pick\)", so make it answer 1/);
-  const json = fixture("02-question.json");
-  const out = render({ ...json, blocks: json.blocks.map((b) => (b.t === "table" ? { ...b, pick: 1 } : b)) });
-  assert.match(out.problems.join("\n"), /gives your pick first: answer 2/);
   assert.equal(messageMiss(question.replace("### If you do not answer\n\nThe page link build uses my pick.", "### If you do not answer\n\nThe build uses answer 1 (my pick).")), undefined, "the pick named again in a later part");
 });
 
@@ -656,4 +654,75 @@ test("F-T984-24: on the message command's path, sections nested thousands deep a
   const r = sage("message", "T1", "--file", path);
   assert.equal(r.status, 1, r.out);
   assert.match(r.out, /^sage: the message is not in its kind's shape[^\n]*\n- blocks\[\d+\]\.body\[0\]\.body\[0\]\.body\[0\]\.body\[0\]\.body\[0\] is a section 6 deep: sections nest at most 5 deep/);
+});
+
+const batch = (picks) => {
+  const json = fixture("02-question.json"), table = json.blocks.find((b) => b.t === "table");
+  const rows = [["Fold them", "Old pages go under a closed group.", "Small."], ["List them all", "Every page stays.", "None."], ["Delete them", "Old pages go for good.", "Small."]];
+  const questions = [
+    { t: "section", label: "Question 1: Page links", body: [{ t: "p", text: "Should pages reach you only by a link?" }, { ...table, pick: picks[0] }] },
+    { t: "section", label: "Question 2: Old pages", body: [{ t: "p", text: "Should the board list old pages?" }, { t: "table", head: table.head, rows, pick: picks[1] }] },
+  ];
+  return { ...json, blocks: json.blocks.flatMap((b) => (b.t === "table" ? questions : [b])) };
+};
+
+test("F-T1046-1: a JSON pick in any row is rendered first, as answer 1 with (my pick), on the text form and on the page; the other rows keep their order", () => {
+  const json = fixture("02-question.json"), table = json.blocks.find((b) => b.t === "table");
+  const rows = [...table.rows, ["Wait a week", "Nothing changes now.", "None."]];
+  const plain = (cell) => cell.replace(/\*\*/g, "");
+  for (const pick of [0, 1, 2]) {
+    const msg = { ...json, blocks: json.blocks.map((b) => (b.t === "table" ? { ...b, rows, pick } : b)) }, out = render(msg);
+    assert.deepEqual(out.problems, undefined, `pick ${pick}`);
+    const order = [rows[pick], ...rows.filter((_, i) => i !== pick)].map((r) => plain(r[0]));
+    const firsts = [...out.text.matchAll(/^(\d)\. ((?:.|\n {3}(?!- ))+)/gm)].map((m) => [m[1], m[2].replace(/\n {3}/g, " ")]);
+    assert.deepEqual(firsts, order.map((label, i) => [String(i + 1), i ? label : `${label} (my pick)`]), `pick ${pick}`);
+    assert.equal(messageMiss(out.text), undefined);
+    const page = /<ol class="m-answers">([\s\S]*?)<\/ol>/.exec(messagePage(prepareMessage(resolved(msg)).msg, out.text))[1];
+    assert.deepEqual([...page.matchAll(/<li( class="pick")?><p class="m-label">(?:<strong>)?([^<]+)/g)].map((m) => [!!m[1], m[2].trim()]), order.map((label, i) => [i === 0, label]), `page, pick ${pick}`);
+  }
+});
+
+test("F-T1046-1: the JSON help and the refusal say that the message puts the pick's row first", () => {
+  const json = fixture("02-question.json");
+  const out = render({ ...json, blocks: json.blocks.map((b) => (b.t === "table" ? { ...b, pick: undefined } : b)) });
+  assert.match(out.problems.join("\n"), /pick is the number of its row, from 0, and the message puts that row first/);
+  const help = render({ ...json, blocks: [{ t: "table" }] }).problems.join("\n");
+  assert.match(help, /pick: the number of your pick's row, from 0, which the message puts first/);
+});
+
+test("F-T1046-2: a batch of 2 questions renders each under its own ### Question heading with its own answers, pick first; the check reads each question", () => {
+  const out = render(batch([0, 2]));
+  assert.equal(out.problems, undefined);
+  assert.match(out.text, /\n### The one real choice in it\n[\s\S]*\n\n### Question 1: Page links\n\nShould pages reach you only by a link\?\n\n1\. Stop: use the link to your Mac only \(my\n {3}pick\)\n[\s\S]*\n\n### Question 2: Old pages\n\nShould the board list old pages\?\n\n1\. Delete them \(my pick\)\n[\s\S]*\n2\. Fold them\n[\s\S]*\n3\. List them all\n[\s\S]*\n\n### If you do not answer\n/);
+  assert.equal(messageMiss(out.text), undefined);
+  const late = out.text.replace("1. Delete them (my pick)", "1. Delete them").replace("3. List them all", "3. List them all (my pick)");
+  assert.deepEqual(messageMiss(late).names, ["pick not first"]);
+  assert.match(messageMiss(late).note, /answer 3 in "Question 2: Old pages" says "\(my pick\)", so make it answer 1/);
+  const none = out.text.replace("1. Delete them (my pick)", "1. Delete them");
+  assert.deepEqual(messageMiss(none).names, ["no pick"]);
+  assert.match(messageMiss(none).note, /marks your pick with "\(my pick\)" in "Question 2: Old pages"/);
+  const first = out.text.replace(/\(my\n {3}pick\)/, "").replace("2. Keep the file tool as an extra for some\n   pages", "2. Keep the file tool as an extra for some\n   pages (my pick)");
+  assert.deepEqual(messageMiss(first).names, ["pick not first"], "the first question is read too");
+});
+
+test("F-T1046-2: a batch of questions in JSON needs a pick and one table in each question, and no bare table beside a question", () => {
+  assert.match(render(batch([0, undefined])).problems.join("\n"), /each table of a question marks your pick/);
+  const two = batch([0, 1]);
+  two.blocks.find((b) => b.label === "Question 2: Old pages").body.pop();
+  assert.match(render(two).problems.join("\n"), /"Question 2: Old pages" holds one table: the answers to that question/);
+  const mixed = batch([0, 1]);
+  mixed.blocks.splice(mixed.blocks.findIndex((b) => b.label === "Question 1: Page links"), 1, fixture("02-question.json").blocks.find((b) => b.t === "table"));
+  assert.match(render(mixed).problems.join("\n"), /a batch of questions puts each one in a section "Question <n>: <short title>"/);
+});
+
+test("F-T1046-3: the card rule holds the background condition only for Claude's card; in Codex the card may be used while work runs", () => {
+  const bindings = (provider) => JSON.parse(readFileSync(join(HERE, "..", "packages", `sage-${provider}`, "chief-bindings.json"), "utf8"));
+  const step4 = (provider) => /\n4\. \*\*Ask the product questions first:\*\*[^\n]*/.exec(renderChiefInstructions(bindings(provider)))[0];
+  assert.match(step4("claude"), /on a choice card \(`AskUserQuestion`\) only while no run of yours works in the background and the batch fits \(at most 4 questions of at most 4 options\), else in the text form;/);
+  assert.match(step4("codex"), /on a choice card \(`request_user_input_async` when you have it\) when the batch fits \(at most 4 questions of at most 4 options\), also while work runs, because it does not hold your turn; else in the text form;/);
+  assert.doesNotMatch(step4("codex"), /no run of yours works in the background/);
+  const skill = readFileSync(join(HERE, "..", "writing", "presentation.md"), "utf8");
+  const rule = /\*\*The card rule\.\*\*[\s\S]*?\n\n1\. /.exec(skill)[0];
+  assert.match(rule, /In Claude, no lead or other background run of yours runs\./);
+  assert.match(rule, /Codex's card does not hold your turn, so in Codex you may use it while work runs\./);
 });

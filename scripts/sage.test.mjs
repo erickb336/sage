@@ -1102,6 +1102,27 @@ test("T1025: --to refuses a task id and names --into; --into moves a finding int
   assert.match(s.ok("round", "T2"), /^T2 repairing · round 1 of 3 · fix F-T2-1 /, "the moved finding is a fix of the task that holds it");
 });
 
+test("T1045: a finding moved --into a verified or pr-ready task puts it back to reviewing; any other state keeps its state", () => {
+  for (const state of ["verified", "pr-ready", "reviewing", "building"]) {
+    const s = store();
+    for (const title of ["Fix the crash", "Export every row"]) s.ok("task", "add", "--priority", "P2", "--title", title, "--size", "small");
+    toReviewing(s, "T1");
+    if (state === "building") for (const st of ["briefed", "building"]) s.ok("task", "T2", "set", `state=${st}`);
+    else toReviewing(s, "T2");
+    if (state === "verified" || state === "pr-ready") {
+      s.ok("task", "T2", "set", "state=verifying");
+      for (const kind of ["checks-pass", "review-clean", "qa-pass"]) s.ok("verdict", "T2", "--sha", SHA, "--kind", kind);
+      s.ok("task", "T2", "set", "state=verified");
+      if (state === "pr-ready") s.ok("task", "T2", "set", "state=pr-ready");
+    }
+    finding(s, "T1", "--source", "code-reviewer", "--severity", "low", "--summary", "the export skips the last row");
+    const reopened = state === "verified" || state === "pr-ready";
+    assert.equal(s.ok("finding", "move", "T1", "F-T1-1", "--into", "T2"), reopened ? `F-T1-1 moved to T2 as F-T2-1 · T2 was ${state}, now reviewing` : `F-T1-1 moved to T2 as F-T2-1 · T2 ${state}`, state);
+    assert.equal(rows(s.dir, "tasks").find((t) => t.id === "T2").state, reopened ? "reviewing" : state, state);
+    assert.deepEqual(rows(s.dir, "decisions").filter((d) => d.decision.includes("→ reviewing")).map(({ task, decision, why }) => ({ task, decision, why })), reopened ? [{ task: "T2", decision: `${state} → reviewing`, why: "F-T2-1 moved in from T1" }] : [], state);
+  }
+});
+
 function failedReview(s, task, kind, { sha = SHA, cycle = "1", summaries = ["a real problem"] } = {}) {
   const role = BACKER[kind], run = s.ok("run", "add", task, "--role", role).split(" ")[0];
   s.keep({ task, run, role, sha, text: reportFor(kind) });

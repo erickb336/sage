@@ -65,7 +65,7 @@ The JSON: `{ "kind", "title", "blocks": [ … ], "ref" }`, and `"status"` for an
 | `p` | `text` | a paragraph, anywhere |
 | `section` | `label`, `body` (blocks) | `### Label`, a blank line, then its blocks; a section inside a section gets `####`, and a field inside it is a line `- Label: text`, because only a part gets a heading |
 | `list` | `items`, `ordered` | `- item` or `1. item` |
-| `table` | `head`, `rows`, `pick` (the row of your pick, from 0), `caption` | numbered rows; your pick is row 0 and says "(my pick)"; on the page of a question or a confirm, a list too |
+| `table` | `head`, `rows`, `pick` (the number of your pick's row, from 0: any row), `caption` | numbered rows; the command puts your pick first, as answer 1 with "(my pick)"; on the page of a question or a confirm, a list too |
 | `picture` | `title`, `lines` or `frame`, `key` | the title, the lines in a fence, the key |
 | `toggle` | `after`, `today`: each a list of `{ title, lines }` | the pictures after the change; the page adds a Today switch |
 | `changes` | `rows` of `{ where, today, after, why }` | numbered rows; for changes without a screen |
@@ -85,7 +85,7 @@ Use the tool only for a choice that is the owner's: product direction, or an act
 
 **The card rule.** Use the card only when both are true. Else send the text form.
 
-- **No lead or other background run of yours runs.** Claude's card holds your turn until the owner answers. While it waits, the reports of background runs wait too, and the gate's default never applies. The text form keeps your turn free, so reports keep arriving and the default can apply. Approval prompts that must not block work, such as GitHub's and Slack's, are a message with a default and a timeout for the same reason.
+- **In Claude, no lead or other background run of yours runs.** Claude's card holds your turn until the owner answers. While it waits, the reports of background runs wait too, and the gate's default never applies. The text form keeps your turn free, so reports keep arriving and the default can apply. Approval prompts that must not block work, such as GitHub's and Slack's, are a message with a default and a timeout for the same reason. Codex's card does not hold your turn, so in Codex you may use it while work runs.
 - **The batch fits the card:** at most 4 questions, each with at most 4 options. A gate with more options, or a batch of more questions, goes in the text form.
 
 1. Park each question with `sage gate add` first.
@@ -99,6 +99,8 @@ The owner's rules for the chat message and the text form (12 Nov 2026), because 
 2. **No tables for answers or explanations.** On the card, the long text goes in the option's description. In the text form, the answers are a short numbered list, with what happens next and the cost under each answer. Use a table only for short, uniform data, such as numbers or dates.
 3. **The same rules with no tool.** The text form has the same headings and the same list of answers, your pick first. `sage message` prints it so, and the message check notes a bold label, a label in the line, a table of answers or a pick that is not answer 1.
 
+**A batch in the text form.** Put each question under its own `### Question <n>: <short title>` heading, with the question in one sentence and its own numbered answers, your pick first. In the JSON, each question is a `section` with that label, a `p` and a `table`. The check reads the pick of each question. The shared parts, such as `### If you do not answer`, come once, after the last question.
+
 | Part of the question | On the card |
 | --- | --- |
 | The title | The question text. It stands alone: it names the items that it asks about. |
@@ -110,8 +112,8 @@ The owner's rules for the chat message and the text form (12 Nov 2026), because 
 
 Each host has its tool:
 
-- **Claude Code:** `AskUserQuestion`, with 1 to 4 questions a call and 2 to 4 options a question. The tool adds Other. It waits for the answer, so the card rule applies.
-- **Codex:** `request_user_input_async`, when your tools have it. An option is one line with no description, so write it as "label: what happens next, cost". The tool returns at once, and the answer comes as the owner's next message. Codex's `request_user_input` works only in Plan mode: do not use it.
+- **Claude Code:** `AskUserQuestion`, with 1 to 4 questions a call and 2 to 4 options a question. The tool adds Other. It waits for the answer, so the whole card rule applies.
+- **Codex:** `request_user_input_async`, when your tools have it. An option is one line with no description, so write it as "label: what happens next, cost". The tool returns at once, and the answer comes as the owner's next message. It does not hold your turn, so use it also while work runs; only the batch size limits it. Codex's `request_user_input` works only in Plan mode: do not use it.
 - **No tool:** send the kind's text form, with the rules above.
 
 ### Before and after

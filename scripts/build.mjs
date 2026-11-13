@@ -68,7 +68,8 @@ const KINDS_MARK = "<!-- sage-core-message-kinds -->";
 const TYPE_WORDS = { picture: "a picture", table: "a table", toggle: "a toggle", changes: "a change table", steps: "numbered steps", page: "a Page block" };
 export function kindsTable() {
   const part = (kind) => (p) => {
-    const name = TYPE_WORDS[p.name] ? `${p.name === "table" && KINDS[kind].pick ? "the answers, a numbered list" : TYPE_WORDS[p.name]}${p.name === "table" && KINDS[kind].tableHead ? ` (${KINDS[kind].tableHead.join(", ")}${KINDS[kind].pick ? "; your pick marked" : ""})` : ""}${p.many ? (p.need ? ", one or more" : ", any number") : ""}` : p.name;
+    const answers = p.name === "table" && KINDS[kind].pick;
+    const name = TYPE_WORDS[p.name] ? `${answers ? "the answers, a numbered list" : TYPE_WORDS[p.name]}${p.name === "table" && KINDS[kind].tableHead ? ` (${KINDS[kind].tableHead.join(", ")}${answers ? "; your pick first" : ""})` : ""}${answers ? "; for a batch, a section of its own for each question" : p.many ? (p.need ? ", one or more" : ", any number") : ""}` : p.name;
     return p.need ? name : `[${name}]`;
   };
   const rows = Object.entries(KINDS).map(([kind, k]) => `| \`${kind}\` | \`${k.head}\` | ${k.use} | ${partsOf(kind).map(part(kind)).join(" · ")} |`);

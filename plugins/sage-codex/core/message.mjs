@@ -10,8 +10,8 @@ const LESSON_HEAD = ["Where the lesson lives now", "What it holds", "State"];
 export const KINDS = {
   progress: { head: "PROGRESS", use: "While a task runs: one short note when it moves to a new step, with nothing for the owner to do.",
     parts: ["Where this is", "?Since my last note", "What changed", "Next", "?Cost so far", "What I need from you"] },
-  question: { head: "QUESTION", use: "When work waits for the owner's choice. The title is the question. Ask it on the choice card when the card rule above allows it, else in this text form. Each part starts with a ### heading on its own line. The answers are a numbered list, never a table.", tableHead: QUESTION_HEAD, pick: true, card: true,
-    parts: ["Where this is", "What you approve", "The one real choice in it", "table", "If you do not answer", "Needed by", "?Judged by", "?The bad side of my pick", "After you answer", "?page"] },
+  question: { head: "QUESTION", use: "When work waits for the owner's choice. The title is the question. Ask it on the choice card when the card rule above allows it, else in this text form. Each part starts with a ### heading on its own line. The answers are a numbered list, never a table. A batch puts each question in a section “Question <n>: <short title>”, with its own answers.", tableHead: QUESTION_HEAD, pick: true, card: true,
+    parts: ["Where this is", "What you approve", "The one real choice in it", "table+", "If you do not answer", "Needed by", "?Judged by", "?The bad side of my pick", "After you answer", "?page"] },
   report: { head: "REPORT", use: "When work ends: a pull request merged, or a study concluded. The title says what happened and what it needs. The table of the pieces of work goes under its own ### What changed heading.", tableHead: REPORT_HEAD, tableLabel: "What changed",
     parts: ["Where this is", "?Why this change", "picture*", "table", "What I did not check", "Weak points", "What you need to do", "?page"] },
   "request understood": { head: "REQUEST UNDERSTOOD", use: "Right after the owner asks for new work, before agents spend hours on it. It starts on its defaults unless the owner corrects it.",
@@ -58,7 +58,7 @@ const BLOCKS = {
 };
 const SHAPES = {
   field: "{ t: field, label, text }", p: "{ t: p, text }", section: "{ t: section, label, body: [blocks] }", list: "{ t: list, items: [text], ordered }",
-  table: "{ t: table, head: [text], rows: [[text]] with one cell for each head, pick: the row of your pick, caption }",
+  table: "{ t: table, head: [text], rows: [[text]] with one cell for each head, pick: the number of your pick's row, from 0, which the message puts first, caption }",
   picture: "{ t: picture, title, key, and lines: [text] or frame: a box }", page: "{ t: page, title, task, file }", code: "{ t: code, lines: [text] }",
   steps: "{ t: steps, items: [{ text, cmd: [text], see }] }", toggle: "{ t: toggle, after: [{ title, lines }], today: [{ title, lines }] }",
   changes: "{ t: changes, rows: [{ where, today, after, why }] }",
@@ -67,6 +67,7 @@ const SHAPES = {
 const LEVELS = ["release", "milestone", "task", "group"];
 const MIN_BOX = 8;
 export const MAX_SECTIONS = 5;
+export const BATCH = /^Question [1-9]\d*: \S/;
 const WORDS = ["not started", "waiting", "needs you", "in progress", "done", "stopped"];
 const cap = (s) => s.charAt(0).toUpperCase() + s.slice(1);
 
@@ -133,15 +134,19 @@ export function prepareMessage(input) {
       problems.push(...pictureProblems(lines.lines, width).map((p) => `${path}[${k}] (${b.title}): ${p}`));
       return { ...b, lines: lines.lines };
     }
+    if (b.t === "table" && b.pick) return { ...b, rows: [b.rows[b.pick], ...b.rows.filter((_, i) => i !== b.pick)], pick: 0 };
     if (b.t === "toggle") for (const p of [...b.after, ...b.today]) problems.push(...pictureProblems(p.lines, width).map((x) => `${path}[${k}] (${p.title}): ${x}`));
     return b;
   });
   const blocks = walk(msg.blocks, "blocks");
   if (problems.length) return { problems };
   problems.push(...shapeProblems(msg.kind, blocks, { long }));
-  const tables = blocks.filter((b) => b.t === "table");
-  if (kind.tableHead && tables[0] && tables[0].head.join("|") !== kind.tableHead.join("|")) problems.push(`the table of a ${msg.kind} has the columns: ${kind.tableHead.join(", ")}`);
-  if (kind.pick && tables[0] && tables[0].pick === undefined) problems.push(`the table of a ${msg.kind} marks your pick: pick is the number of its row, from 0`);
+  const answerBlocks = blocks.filter((b) => nameOf(b, msg.kind) === "table");
+  const tables = answerBlocks.flatMap((b) => (b.t === "table" ? [b] : b.body.filter((x) => x.t === "table")));
+  if (kind.tableHead && tables.some((t) => t.head.join("|") !== kind.tableHead.join("|"))) problems.push(`the table of a ${msg.kind} has the columns: ${kind.tableHead.join(", ")}`);
+  if (kind.pick && tables.some((t) => t.pick === undefined)) problems.push(`each table of a ${msg.kind} marks your pick: pick is the number of its row, from 0, and the message puts that row first`);
+  for (const b of answerBlocks) if (b.t === "section" && b.body.filter((x) => x.t === "table").length !== 1) problems.push(`"${b.label}" holds one table: the answers to that question`);
+  if (kind.pick && answerBlocks.length > 1 && answerBlocks.some((b) => b.t === "table")) problems.push(`a batch of questions puts each one in a section "Question <n>: <short title>", with its own table of answers`);
   if (msg.kind === "catch-up" && !blocks.some((b) => b.t === "picture" && b.frame !== undefined)) problems.push("a catch-up's picture is a frame: boxes inside boxes from release to task, so that each box gets its state word");
   if (msg.kind === "catch-up" && here !== 1) problems.push(here ? `a catch-up has one double box, not ${here}: mark only the task that runs now with "here": true` : 'a catch-up has one double box: mark the task that runs now with "here": true');
   if (msg.kind === "design" && !blocks.some((b) => b.t === "toggle" || b.t === "changes")) problems.push("a design shows its before and after: a toggle (the picture after the change, each change tagged [new] or [was: …], and today's picture), or a changes table for changes without a screen");
@@ -162,14 +167,14 @@ export const partsOf = (kind) => KINDS[kind].parts.map((p) => {
   return { name: m[2], need: !m[1] && m[3] !== "*", many: !!m[3] };
 });
 const LABELLED = new Set(["field", "section"]);
-const nameOf = (b) => (LABELLED.has(b.t) ? b.label : b.t);
+const nameOf = (b, kind) => (b.t === "section" && KINDS[kind].pick && BATCH.test(b.label) ? "table" : LABELLED.has(b.t) ? b.label : b.t);
 
 function shapeProblems(kind, blocks, { long }) {
   const parts = partsOf(kind), problems = [], list = parts.map((p) => p.name).join(", ");
   let at = 0;
   for (const b of blocks) {
     if (b.t === "p") continue;
-    const name = nameOf(b);
+    const name = nameOf(b, kind);
     let k = at;
     while (k < parts.length && parts[k].name !== name) k++;
     if (k === parts.length) {

@@ -3057,14 +3057,14 @@ function act(cmd, pos, opt, dir, env, skip, project) {
         if (roundKeys(taskOf(dir, id).task).includes(f.key) && !read(dir, "gates").some((g) => g.task === id && g.question.split(/[^\w-]+/).includes(f.key) && g.answer && g.answer === optionsOf(g)[0])) {
           refuse(`${f.key} is a fix of ${id}'s current round, so it stays on ${id}: it is fixed in a round, or dismissed with a reason. It moves to a follow-up task only after the owner chose the first option of a gate of ${id} whose question names ${f.key}: sage gate add ${id} --question "Move ${f.key} to a follow-up task?" --options "move|keep" --recommend <move or keep>.`);
         }
-        let to;
+        let to, tasks;
         if (into === undefined) {
           const size = opt.size ?? "small";
           const title = need(cell(opt.to), '--to "<the follow-up task\'s title>", or --into <an open task>');
           if (!SIZES[size] || size === "investigate") refuse("--size is tiny, small or large");
           to = frame(dir, title, size, [], [], { priority: "P2", ...chiefTag(opt) });
         } else {
-          to = taskOf(dir, into).task;
+          ({ task: to, tasks } = taskOf(dir, into));
           if (to.id === id) refuse(`${f.key} is on ${id} already: --into names another open task. Nothing changed.`);
           if (ENDED.includes(to.state)) refuse(`${to.id} is ${to.state}: a finding moves only into an open task. Nothing changed.`);
           const bar = opt.chief === undefined ? "" : ownerBar(dir, to, opt.chief);
@@ -3073,8 +3073,13 @@ function act(cmd, pos, opt, dir, env, skip, project) {
         const was = f.key, from = f.run || /^(R[1-9]\d*)-/.exec(was)?.[1];
         Object.assign(f, { task: to.id, key: nextId(dir, `F-${to.id}-`), round: to.round, triage: "fix", reason: `moved from ${was}`, run: "" });
         write(dir, "findings", findings);
-        write(dir, "decisions", [...read(dir, "decisions"), { at: now(), task: id, decision: `${was} moved to ${to.id} as ${f.key}: ${f.summary}`, why: `${into === undefined ? "the follow-up task" : "the open task"}${from ? ` (from ${from}, ${f.severity})` : ""}: ${to.title}` }]);
-        return `${was} moved to ${to.id} as ${f.key} · ${into === undefined ? framed(to) : `${to.id} ${to.state}`}`;
+        const reopened = into !== undefined && ["verified", "pr-ready"].includes(to.state) ? to.state : "";
+        write(dir, "decisions", [...read(dir, "decisions"), { at: now(), task: id, decision: `${was} moved to ${to.id} as ${f.key}: ${f.summary}`, why: `${into === undefined ? "the follow-up task" : "the open task"}${from ? ` (from ${from}, ${f.severity})` : ""}: ${to.title}` }, ...(reopened ? [{ at: now(), task: to.id, decision: `${reopened} → reviewing`, why: `${f.key} moved in from ${id}` }] : [])]);
+        if (reopened) {
+          move(to, "reviewing");
+          write(dir, "tasks", tasks);
+        }
+        return `${was} moved to ${to.id} as ${f.key} · ${into === undefined ? framed(to) : reopened ? `${to.id} was ${reopened}, now ${to.state}` : `${to.id} ${to.state}`}`;
       } else refuse("finding add, triage, close or move");
       write(dir, "findings", findings);
       return `${f.key} ${f.status} · ${f.triage}`;

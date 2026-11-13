@@ -24,7 +24,7 @@ const CODEX_BOARD = {
   state: (args) => `node "${TOOL}" ${args}`,
   ensure: `node "${BOARD}" board --ensure`,
   server: "Codex's sandbox blocks the first command below, because it opens a local port and writes the board config in the owner's home folder. So run it escalated (outside the sandbox), and Codex asks the owner to approve it; run the board's stop command in the same way. If it cannot run outside the sandbox (the owner declines, or approvals are off), still run the chat board, and give the owner the first command to run in Terminal on the Mac. ",
-  choice: "a choice card",
+  choice: "a choice card (request_user_input_async when you have it), also while work runs, because it does not hold your turn",
 };
 
 export const TESTED_CODEX = ["0.164", "0.167"];
