@@ -1,11 +1,11 @@
 import { TEAM } from "./role-policy.mjs";
 
-export const LEAD_COMMANDS = ["run add", "run done", "finding add", "finding close", "finding triage", "verdict", "round", "task set", "pages"];
+export const LEAD_COMMANDS = ["run add", "run done", "finding add", "finding close", "finding triage", "verdict", "lint", "round", "task set", "pages"];
 const LEAD_KINDS = ["review-clean", "security-clean", "ux-clean", "qa-pass", "qa-fail", "findings"];
 const LEAD_FIELDS = ["state", "branch", "pr"];
 const LEAD_MOVES = { framed: ["briefed"], briefed: ["building"], building: ["reviewing"], reviewing: ["verifying"], repairing: ["reviewing"], verifying: ["verified", "reviewing"], verified: ["reviewing"] };
 const LEAD_STOPS = ["held", "replan", "merged", "concluded", "abandoned"];
-const WORDS = { "run add": 2, "run done": 2, "finding add": 2, "finding close": 3, "finding triage": 4, verdict: 1, round: 1 };
+const WORDS = { "run add": 2, "run done": 2, "finding add": 2, "finding close": 3, "finding triage": 4, verdict: 1, lint: 1, round: 1 };
 const LIST = `A lead records only its own task, with ${LEAD_COMMANDS.slice(0, -1).filter((c) => c !== "task set").join(", ")}, pages, and task set of ${LEAD_FIELDS.join(", ")}. Put what else the logbook needs in your report.`;
 const TEAM_TEXT = [...TEAM].join(", ");
 

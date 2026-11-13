@@ -153,7 +153,7 @@ test("the transfer commands through the server: offer, accept, cancel, unclaim a
   assert.match((await s.call("merge_check", { sha: SHA })).error, /^sage: T1: 0 of 1 clean cycles on this SHA/, "the owning chief gets the cycle rule");
 });
 
-const OFF_LIST = (name) => `sage: "${name.replaceAll("_", " ")}" is not on a lead's list. A lead records only its own task, with run add, run done, finding add, finding close, finding triage, verdict, round, pages, and task set of state, branch, pr. Put what else the logbook needs in your report`;
+const OFF_LIST = (name) => `sage: "${name.replaceAll("_", " ")}" is not on a lead's list. A lead records only its own task, with run add, run done, finding add, finding close, finding triage, verdict, lint, round, pages, and task set of state, branch, pr. Put what else the logbook needs in your report`;
 const BRIEF = ["GOAL", "SCOPE", "CONTEXT", "DECISIONS", "ACCEPTANCE", "VERIFY", "BUDGET", "FORBIDDEN", "REPORT", "STANDING"].map((field) => `${field}: the ${field.toLowerCase()}.`).join("\n");
 const LEAD = "/root/sage_lead_t1_r1";
 async function leadWorld(t) {
@@ -562,7 +562,7 @@ test("the state server lists one tool for each state-tool command, and marks onl
   const s = await connect(t);
   const tools = await s.tools();
   assert.deepEqual(tools.map((tool) => tool.name).sort(), ["accept", "brief", "cancel", "claim", "config", "finding_add", "finding_close", "finding_move", "finding_triage", "gate_add", "gate_answer", "gate_replace",
-    "init", "link", "log", "merge_check", "message", "milestone_propose", "milestone_set", "move", "offer", "pages", "release_add", "report_compare", "round", "run_add", "run_done", "standing", "standing_add", "status", "task_add", "task_adopt", "task_set", "unclaim", "verdict", "worktrees"]);
+    "init", "link", "lint", "log", "merge_check", "message", "milestone_propose", "milestone_set", "move", "offer", "pages", "release_add", "report_compare", "round", "run_add", "run_done", "standing", "standing_add", "status", "task_add", "task_adopt", "task_set", "unclaim", "verdict", "worktrees"]);
   assert.deepEqual(tools.filter((tool) => tool.annotations.readOnlyHint).map((tool) => tool.name).sort(), ["merge_check", "report_compare", "standing", "status"]);
   assert.ok(tools.every((tool) => tool.inputSchema.required.includes("project") && tool.inputSchema.additionalProperties === false));
   const add = tools.find((tool) => tool.name === "task_add").inputSchema;
@@ -997,6 +997,14 @@ test("merge_check passes for a head with its clean cycle", async (t) => {
   assert.equal((await call("merge_check", { sha: SHA })).error, `sage: no verdicts recorded for ${SHA}. Record the reviews and QA with sage verdict first.`);
   await call("verdict", { task: "T1", kind: "checks-pass", sha: SHA });
   assert.equal(await call("merge_check", { sha: SHA }), "T1 may merge: 1 clean cycle on this SHA");
+});
+
+test("the lint tool runs the state tool's lint on the task and the SHA, and verdict refuses the lint kinds", async (t) => {
+  const { call } = await connect(t);
+  await call("init");
+  await call("task_add", { title: "one", size: "tiny", priority: "P1" });
+  assert.match((await call("lint", { task: "T1", sha: SHA })).error, /^sage: \S+ has no origin\/main, so lint finds no base for [0-9a-f]{7}: run git fetch origin, then lint again\. Nothing changed\./);
+  assert.match((await call("verdict", { task: "T1", kind: "lint-pass", sha: SHA })).error, /kind|lint-pass/);
 });
 
 test("merge_check gives the state tool's refusal for a task moved off a shared PR's head branch unchanged, with the branch= that puts it back (R1759-1)", async (t) => {

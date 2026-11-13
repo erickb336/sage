@@ -88,7 +88,7 @@ test("T995 F4: every command of the state tool is a read or has a writer class, 
   const WRITES = {
     init: [[]], logbook: [["repair"]], standing: [["add"]], pages: [["T1", "record"]], task: [["add"], ["T1", "set"]], "task-adopt": [["T1"]],
     milestone: [["propose"], ["M1", "set"]], release: [["add"], ["T1"]], round: [["T1"]], run: [["add", "T1"], ["done", "R1"], ["usage", "R1"]], finding: [["add", "T1"], ["triage", "T1"], ["close", "T1"], ["move", "T1"]],
-    verdict: [["T1"]], gate: [["add"], ["add", "T1"], ["answer", "G1"], ["replace", "T1"]], log: [["T1"], ["-"]], config: [["max_rounds=3"]], projects: [["rebuild"]],
+    verdict: [["T1"]], lint: [["T1"]], gate: [["add"], ["add", "T1"], ["answer", "G1"], ["replace", "T1"]], log: [["T1"], ["-"]], config: [["max_rounds=3"]], projects: [["rebuild"]],
     observe: [["T1"]], claim: [["T1"]], offer: [["T1"]], cancel: [["T1"]], accept: [["T1"]], unclaim: [["T1"]], move: [[]],
   };
   assert.deepEqual([...READS, ...Object.keys(WRITES)].sort(), [...listed].sort(), "each listed command is a read or has its write forms here");
@@ -1205,7 +1205,7 @@ test("T928: one lead policy in core: a lead's write to another task, a command o
   for (const [words, name, input, reason] of [
     [["round", "T2"], "round", { task: "T2" }, "T2 is not of T1, and a lead records only its own task. Report to your chief what T2 needs."],
     [["gate", "add", "T1", "--question", "q", "--options", "a|b", "--recommend", "a"], "gate_add", { task: "T1", question: "q", options: "a|b", recommend: "a" },
-      '"gate add" is not on a lead\'s list. A lead records only its own task, with run add, run done, finding add, finding close, finding triage, verdict, round, pages, and task set of state, branch, pr. Put what else the logbook needs in your report.'],
+      '"gate add" is not on a lead\'s list. A lead records only its own task, with run add, run done, finding add, finding close, finding triage, verdict, lint, round, pages, and task set of state, branch, pr. Put what else the logbook needs in your report.'],
     [["task", "T1", "set", "state=verified"], "task_set", { task: "T1", fields: { state: "verified" } }, "T1 is briefed: a lead moves it only to building."],
   ]) {
     for (const [provider, tool] of [["Claude", claude], ["Codex", codex]]) {

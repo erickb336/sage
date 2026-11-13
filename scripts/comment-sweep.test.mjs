@@ -13,11 +13,17 @@ import { messagePage } from "../packages/sage-core/message-page.mjs";
 import { mapHtml } from "../packages/sage-core/move-text.mjs";
 import { ROOT } from "./build.mjs";
 import { prove } from "./comment-proof.mjs";
+import { RULE_SET } from "./lint-rules.mjs";
 import { stripComments } from "./strip-comments.mjs";
+
+const PROJECT = {
+  "sgconfig.yml": `ruleDirs: [${JSON.stringify(join(RULE_SET, "rules"))}]\nutilDirs: [${JSON.stringify(join(RULE_SET, "utils"))}]\n`,
+  ".gitattributes": readFileSync(join(ROOT, ".gitattributes"), "utf8"),
+};
 
 function folder(files) {
   const dir = mkdtempSync(join(realpathSync(tmpdir()), "sage-strip-"));
-  for (const [name, text] of Object.entries(files)) {
+  for (const [name, text] of Object.entries({ ...PROJECT, ...files })) {
     mkdirSync(dirname(join(dir, name)), { recursive: true });
     writeFileSync(join(dir, name), text);
   }
