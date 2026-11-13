@@ -58,9 +58,22 @@ export function stripComments(root, paths = SCAN_FOLDERS) {
   return { files: byFile.size, comments: [...byFile.values()].reduce((n, r) => n + r.length, 0) };
 }
 
+const USAGE = `usage: node scripts/strip-comments.mjs [path ...]
+Removes each comment that the rule set in packages/sage-core/lint flags, in the paths (default: ${SCAN_FOLDERS.join(" ")}).`;
+
 if (process.argv[1] === fileURLToPath(import.meta.url)) {
+  const paths = process.argv.slice(2), option = paths.find((arg) => arg.startsWith("-"));
+  if (option) {
+    if (option === "--help" || option === "-h") console.log(USAGE);
+    else console.error(`strip-comments: unknown option ${option}\n${USAGE}`);
+    process.exit(option === "--help" || option === "-h" ? 0 : 2);
+  }
   const root = spawnSync("git", ["rev-parse", "--show-toplevel"], { encoding: "utf8" }).stdout.trim() || process.cwd();
-  const paths = process.argv.slice(2);
-  const { files, comments } = stripComments(root, paths.length ? paths : SCAN_FOLDERS);
-  console.log(`removed ${comments} comments from ${files} files in ${root}`);
+  try {
+    const { files, comments } = stripComments(root, paths.length ? paths : SCAN_FOLDERS);
+    console.log(`removed ${comments} comments from ${files} files in ${root}`);
+  } catch (error) {
+    console.error(`strip-comments: ${error.message.split("\n")[0]}`);
+    process.exitCode = 1;
+  }
 }

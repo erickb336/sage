@@ -90,8 +90,17 @@ export function proveChanges(root, base, head) {
   });
 }
 
-if (process.argv[1] === fileURLToPath(import.meta.url)) {
-  const [base = "HEAD", head] = process.argv.slice(2);
+const USAGE = `usage: node scripts/comment-proof.mjs [base] [head]
+Checks that each file that changed from base (default HEAD) to head (default: the working tree) lost only comments.`;
+
+function main(args) {
+  const option = args.find((arg) => arg.startsWith("-"));
+  if (option === "--help" || option === "-h") return console.log(USAGE);
+  if (option || args.length > 2) {
+    console.error(`comment-proof: ${option ? `unknown option ${option}` : "give at most two refs"}\n${USAGE}`);
+    return process.exitCode = 2;
+  }
+  const [base = "HEAD", head] = args;
   const root = git(process.cwd(), ["rev-parse", "--show-toplevel"]).trim();
   const results = proveChanges(root, base, head);
   const failed = results.filter((r) => r.tokens !== true || r.canonical !== true);
@@ -100,4 +109,11 @@ if (process.argv[1] === fileURLToPath(import.meta.url)) {
   const removed = results.reduce((n, r) => n + r.lines, 0);
   console.log(`${results.length} changed files from ${base} to ${head ?? "the working tree"}, ${removed} lines fewer: token proof passes for ${pass("tokens")}, canonical proof passes for ${pass("canonical")}, ${failed.length} failed`);
   process.exitCode = failed.length ? 1 : 0;
+}
+
+if (process.argv[1] === fileURLToPath(import.meta.url)) {
+  try { main(process.argv.slice(2)); } catch (error) {
+    console.error(`comment-proof: ${error.message.split("\n")[0]}`);
+    process.exitCode = 1;
+  }
 }

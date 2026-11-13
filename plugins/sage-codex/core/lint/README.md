@@ -56,6 +56,24 @@ The rule set has a rule only for each language that sage itself uses. A language
 
 In sage, `scripts/lint-rules.test.mjs` also changes the rules in a copy, one mutant at a time, and checks that the rule tests fail for each mutant. When you change a rule, update its mutant there.
 
+## In sage: the strip, the proof and the exclusions
+
+`npm run check` scans sage's own sources (`packages/`, `scripts/` and `.github/`) with this rule set. The code of the scan is in `scripts/lint-rules.mjs`. When the check fails on a comment:
+
+1. Commit your change.
+2. Run `node scripts/strip-comments.mjs [path ...]`. It removes each comment that the scan flags, and keeps the allowed directives. A second run changes nothing.
+3. Run `node scripts/comment-proof.mjs [base] [head]` (by default, from `HEAD` to the working tree). For each changed JavaScript or YAML file, it compares the code tokens and the minified code (for YAML, the parsed value). It must report 0 failed.
+4. Put a reason that a reader needs in a name, a test name or a doc, never in a comment.
+
+`--help` gives the usage of each script. The scan skips these folders (`SCAN_EXCLUSIONS` in `scripts/lint-rules.mjs`):
+
+| Folder | Why the scan skips it |
+| --- | --- |
+| `scripts/fixtures/sage-14c0d0c/**` | A frozen copy of the state tool at commit 14c0d0c, which `scripts/sage.test.mjs` runs as the old version. Its text is test data. |
+| `packages/sage-core/lint/rule-tests/**` | The rule set's own test cases. Their comments are the data that the rules must flag or pass. |
+
+The scan reads code, not the text in a string. A script or a style that a page serves from a string, such as the board's page script, is not in the scan. So a test in `scripts/comment-sweep.test.mjs` renders each page that the board, a message and a move serve, and fails on a comment in its HTML, its scripts or its styles.
+
 ## Credits and licence
 
 The rules run on [ast-grep](https://github.com/ast-grep/ast-grep) (MIT). They are part of sage, under its MIT licence.

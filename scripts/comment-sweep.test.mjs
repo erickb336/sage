@@ -115,6 +115,23 @@ test("the strip leaves the excluded folders alone", () => {
   } finally { f.done(); }
 });
 
+test("both scripts print their usage on --help, and one line with no stack trace for an unknown option or a ref that is not there", () => {
+  const run = (script, args) => spawnSync("node", [join(ROOT, "scripts", script), ...args], { cwd: ROOT, encoding: "utf8" });
+  for (const script of ["strip-comments.mjs", "comment-proof.mjs"]) {
+    const help = run(script, ["--help"]);
+    assert.equal(help.status, 0);
+    assert.match(help.stdout, new RegExp(`^usage: node scripts/${script} `));
+    assert.equal(help.stderr, "");
+    const unknown = run(script, ["--nope"]);
+    assert.equal(unknown.status, 2);
+    assert.equal(unknown.stderr.split("\n")[0], `${script.replace(".mjs", "")}: unknown option --nope`);
+    assert.doesNotMatch(unknown.stderr, /\n\s+at /);
+  }
+  const missing = run("comment-proof.mjs", ["no-such-ref"]);
+  assert.equal(missing.status, 1);
+  assert.match(missing.stderr, /^comment-proof: .*no-such-ref.*\n$/);
+});
+
 test("npm run check fails on one comment in the sources, and names the file and line", () => {
   const dir = mkdtempSync(join(realpathSync(tmpdir()), "sage-comment-check-"));
   try {

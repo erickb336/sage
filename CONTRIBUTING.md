@@ -48,11 +48,24 @@ To add a principle, add `principles/<name>.md`. A principle adapted from pstack 
    npm run build
    ```
 
-5. Run the checks. They include the README's limits, its links and sage's word check. They also run the tests of the no-comments rule set in [`packages/sage-core/lint/`](packages/sage-core/lint/README.md). For these tests, `ast-grep test` runs from the pinned `@ast-grep/cli` devDependency. The checks also scan `packages/`, `scripts/` and `.github/` with that rule set, and fail on each comment that is not an allowed directive. The scan skips each folder that `SCAN_EXCLUSIONS` in `scripts/lint-rules.mjs` lists, with its reason. To remove the comments of your change, commit it, then run `node scripts/strip-comments.mjs`. Then run `node scripts/comment-proof.mjs`: for each file that the strip changed, it checks that the code tokens and the minified code (for YAML, the parsed value) did not change. Put a reason that a reader needs in a name, a test name or a doc.
+5. Run the checks:
 
    ```sh
    npm run check
    ```
+
+   The checks do these things:
+   - They check the README's limits, its links and sage's word check.
+   - They run the tests of the no-comments rule set in [`packages/sage-core/lint/`](packages/sage-core/lint/README.md), with `ast-grep test` from the pinned `@ast-grep/cli` devDependency.
+   - They scan `packages/`, `scripts/` and `.github/` with that rule set, and fail on each comment that is not an allowed directive. The scan skips each folder that `SCAN_EXCLUSIONS` in `scripts/lint-rules.mjs` lists, with its reason.
+
+   To remove the comments of your change:
+   1. Commit your change.
+   2. Run `node scripts/strip-comments.mjs`.
+   3. Run `node scripts/comment-proof.mjs`. For each file that the strip changed, it checks that the code tokens and the minified code (for YAML, the parsed value) did not change. It must report 0 failed.
+   4. Put a reason that a reader needs in a name, a test name or a doc, never in a comment.
+
+   A branch made before the no-comments sweep (PR 540) has comments that main does not have. See [A branch from before the sweep](#a-branch-from-before-the-sweep).
 
 6. Run the tests. CI runs the check and the tests on each pull request. It runs `npm test` in 4 parts at the same time: `node --test` sorts the test files by path and gives each file to exactly one part. To run one part, set `TEST_SHARD`, for example `TEST_SHARD=2/4 npm test`. CI runs on Ubuntu 24.04, not on `ubuntu-latest`, because Playwright 1.55.1 has no headless shell for Ubuntu 26.04 (`ubuntu-latest` since 2026-10-19). The last job of the workflow, `check`, passes only when every other job passed. The protection of `main` requires that job by its name, so keep the name.
 
@@ -68,6 +81,19 @@ To add a principle, add `principles/<name>.md`. A principle adapted from pstack 
    ```
 
    To run one file: `node --test scripts/board-picker.test.mjs`. CI installs the same browser in each run, with no browser cache, as Playwright advises, and runs `npm run test:browser` after `npm run check`.
+
+## A branch from before the sweep
+
+PR 540 removed every comment from the sources. Strip a branch made before it with main's script first, so that the merge has only real conflicts:
+
+1. Commit your work.
+2. In a checkout of main that has PR 540, run `npm ci --ignore-scripts`.
+3. In your worktree, run `node <main checkout>/scripts/strip-comments.mjs`.
+4. In your worktree, run `node <main checkout>/scripts/comment-proof.mjs HEAD`. It must report 0 failed.
+5. Commit, then run `git merge origin/main`. In a conflict, take main's side of each line that only lost a comment.
+6. Run `node scripts/strip-comments.mjs` again. It removes the comments that the merge brought.
+7. Run `node scripts/comment-proof.mjs HEAD`. It must report 0 failed.
+8. Run `npm run build` and `npm run check`, then commit.
 
 ## The README and the docs
 
