@@ -119,7 +119,7 @@ function column(ctx, col) {
   if (!col.tasks.length) return `<section class="col empty-col" ${attrs}>${head}<div class="empty">No tasks.</div>${archived}</section>`;
   const fold = col.key === "backlog" ? col.tasks.slice(BACKLOG_SHOWN) : [];
   const shown = col.tasks.slice(0, col.tasks.length - fold.length);
-  return `<section class="col${col.needsOwner ? " needs-col" : ""}" ${attrs}>${head}${shown.map((task, i) => card(ctx, task, { i })).join("")}`
+  return `<section class="col" ${attrs}>${head}${shown.map((task, i) => card(ctx, task, { i })).join("")}`
     + (fold.length ? `<details class="rest" data-key="fold-${esc(col.key)}"><summary id="sum-fold-${esc(col.key)}"><span data-more>${foldText(fold.length)}</span></summary>${fold.map((task, i) => card(ctx, task, { i: shown.length + i })).join("")}</details>` : "")
     + `${archived}</section>`;
 }
@@ -209,7 +209,7 @@ function nowWaits(task) {
 const milestoneLink = (ctx, task) => {
   if (!task.milestone || !ctx.milestones.has(task.milestone.key)) return "";
   const name = task.milestone.name ?? task.milestone.id;
-  return `<a class="back plink" href="${esc(milestoneHref(ctx, task.milestone.key))}" title="${esc(name)}">◫ <span class="cn">${esc(name)}</span><span class="pid">${esc(task.milestone.id)}</span></a>`;
+  return `<a class="back plink" href="${esc(milestoneHref(ctx, task.milestone.key))}" title="${esc(name)}">◫ <span class="cn">${esc(name)}</span></a>`;
 };
 
 function pagesLink(task) {
@@ -288,7 +288,7 @@ h1{font-size:15px;margin:0;font-weight:600;letter-spacing:-.01em}.spacer{flex:1}
 .search{display:flex;align-items:center;gap:6px;padding:8px;border-bottom:1px solid var(--line)}
 .search input{flex:1;min-width:0;font:inherit;color:var(--text);background:var(--panel2);border:1px solid var(--line);border-radius:6px;padding:6px 8px}
 .kbd{font-family:ui-monospace,Menlo,monospace;font-size:10.5px;color:var(--muted);border:1px solid var(--line);border-radius:4px;padding:0 4px}
-.closebtn{flex:none;background:none;border:0;padding:0;font:inherit;color:var(--accent);cursor:pointer;display:inline-flex;align-items:center;min-height:24px}.closebtn .tap{display:none}
+.closebtn{flex:none;background:none;border:0;padding:0;font:inherit;color:var(--accent);cursor:pointer;display:inline-flex;align-items:center;min-height:24px}
 .list{overflow:auto;padding:4px;flex:1;margin:0}.list ul{list-style:none;margin:0;padding:0}
 .grp{font-size:11px;font-weight:650;color:var(--muted);padding:8px 8px 4px;display:flex;justify-content:space-between}
 .opt{display:grid;grid-template-columns:10px 1fr auto;gap:2px 8px;align-items:center;padding:7px 8px;border-radius:8px;cursor:pointer;min-height:40px}
@@ -363,7 +363,7 @@ details.rest>summary::before{content:"▸ "}details.rest[open]>summary::before{c
 body:has(.page:target) .boardview{display:none}
 .pagebar{display:flex;flex-wrap:wrap;align-items:center;gap:8px 12px;margin-bottom:12px}
 .back{display:inline-flex;align-items:center;min-height:24px;min-width:24px;padding:2px 4px 2px 0;color:var(--text);text-decoration:none;font-weight:600}
-.plink{min-width:0;gap:4px;color:var(--text)}.pagebar>:not(.plink,.spacer){flex:none}.plink .cn{overflow:hidden;text-overflow:ellipsis;white-space:nowrap;min-width:0}.plink .pid{display:none}
+.plink{min-width:0;gap:4px;color:var(--text)}.pagebar>:not(.plink,.spacer){flex:none}.plink .cn{overflow:hidden;text-overflow:ellipsis;white-space:nowrap;min-width:0}
 .ptop{display:flex;flex-wrap:wrap;align-items:center;gap:6px;color:var(--muted);font-size:12.5px}
 .ptitle{font-size:22px;margin:8px 0 14px;font-weight:600;letter-spacing:-.02em;line-height:1.3;overflow-wrap:anywhere}
 .detail{display:grid;grid-template-columns:minmax(0,3fr) minmax(0,2fr);gap:14px 18px;align-items:start}
@@ -464,28 +464,6 @@ a.prog:hover{transform:translateY(-1px);box-shadow:var(--ring),var(--lift)}a.pro
 @media (max-width:1116px){body>main.page,#pages>.page{margin:8px}}
 @media (min-width:701px) and (max-width:1180px){
  .board{grid-auto-flow:row;grid-template-columns:repeat(3,minmax(0,1fr));overflow-x:visible}
-}
-@media (max-width:700px){
- header{padding:12px 16px;gap:8px 10px}
- .fbar{padding:10px 16px 0}
- .summary,.legend{padding-left:16px;padding-right:16px;gap:6px 14px}
- .banner,.emptyboard,.where{margin:0 16px 10px}
- .pop{position:fixed;left:0;right:0;bottom:0;top:auto;width:100%;max-height:80vh;border-radius:14px 14px 0 0;margin:0}
- .board{grid-auto-flow:row;grid-auto-columns:auto;grid-template-columns:1fr;padding:6px 16px 20px;overflow:visible}
- .col{min-height:0}.col.needs-col{order:-1}.col.empty-col{display:none}
- .page{padding:14px 16px 32px}.detail{grid-template-columns:1fr}.ptitle{font-size:19px}
- .boardview,body>main.page,#pages>.page{margin:0;border-radius:0;box-shadow:none}
- .plink .cn{display:none}.plink .pid{display:inline}
- .needstrip{margin:0 16px 12px}.trow{grid-template-columns:3em minmax(0,1fr)}.trow .sw{grid-column:2}.pmeta{margin-left:0}
- .caps{padding:0 16px 10px}.agentsview{padding:0 16px 8px}.rules{margin:4px 16px 24px}
- .arow{grid-template-columns:minmax(0,1fr)}.rside{text-align:left;align-items:flex-start;flex-direction:row;flex-wrap:wrap;gap:4px 10px;max-width:none}
-}
-@media (max-width:700px),(pointer:coarse){
- .chip,.trigger,select,.seg button,.morebtn,.opt,.back,.boardtabs a{min-height:44px}.l2 a.t{display:inline-block;padding:13px 0;margin:-13px 0}.linkbtn{min-height:44px;display:inline-flex;align-items:center}
- .archived summary{min-height:44px;display:flex;align-items:center}.seg button{min-width:44px}
- details.fold>summary,details.rest>summary{min-height:44px;padding-top:13px;padding-bottom:13px;margin:0}
- .standin[tabindex],.ptop a[href]{display:inline-flex;align-items:center;justify-content:center;min-width:44px;min-height:44px;margin:-14px 0;vertical-align:middle;position:relative;z-index:1}table.runs .standin[tabindex]{margin:0}table.runs td{vertical-align:middle}.nowagents{row-gap:26px;margin:14px 0 22px}
- .closebtn{min-height:44px;min-width:44px;padding:0 10px;font-weight:600}.closebtn .kbd{display:none}.closebtn .tap{display:inline}.pop .foot{display:none}
 }`;
 
 export function matchProject(name, terms, query) {
@@ -539,7 +517,7 @@ function filter(){
   items.forEach(i=>{i.hidden=!itemFits(i.dataset,S)||!!S.project&&i.dataset.project!==S.project});const strip=$('needstrip');if(strip){const n=items.filter(i=>!i.hidden).length;strip.hidden=!n;const c=$('needstrip-n');if(c)c.textContent=String(n)}
   cards.forEach(c=>{const base=(S.project?c.dataset.project===S.project:!c.hasAttribute('data-archived'))&&cardFits(c.dataset,S);c.hidden=!(base&&(!S.needs||c.dataset.needs==='true'))});
   const shown=cards.filter(c=>!c.hidden),sum=key=>shown.reduce((n,c)=>n+Number(c.dataset[key]),0);
-  all('[data-col]').forEach(col=>{const visible=all('.card',col).filter(c=>!c.hidden);const count=col.querySelector('.n');if(count)count.textContent=String(visible.length);col.classList.toggle('empty-col',!visible.length);col.classList.toggle('needs-col',visible.some(c=>c.dataset.needs==='true'));const empty=col.querySelector('.empty');if(empty)empty.hidden=visible.length>0;const rest=col.querySelector('.rest');if(rest){const order=all('.card',col).sort((a,b)=>a.dataset.i-b.dataset.i),seen=order.filter(c=>!c.hidden);order.forEach(c=>{const at=seen.indexOf(c);if(at>-1&&at<SHOWN)rest.before(c);else rest.append(c)});const more=Math.max(0,seen.length-SHOWN);rest.hidden=!more;const m=rest.querySelector('[data-more]');if(m)m.textContent=foldText(more)}});
+  all('[data-col]').forEach(col=>{const visible=all('.card',col).filter(c=>!c.hidden);const count=col.querySelector('.n');if(count)count.textContent=String(visible.length);col.classList.toggle('empty-col',!visible.length);const empty=col.querySelector('.empty');if(empty)empty.hidden=visible.length>0;const rest=col.querySelector('.rest');if(rest){const order=all('.card',col).sort((a,b)=>a.dataset.i-b.dataset.i),seen=order.filter(c=>!c.hidden);order.forEach(c=>{const at=seen.indexOf(c);if(at>-1&&at<SHOWN)rest.before(c);else rest.append(c)});const more=Math.max(0,seen.length-SHOWN);rest.hidden=!more;const m=rest.querySelector('[data-more]');if(m)m.textContent=foldText(more)}});
   const set=(id,value)=>{const e=$(id);if(e)e.textContent=String(value)};
   if(list&&$('board-summary')){set('s-needs',shown.filter(c=>c.dataset.needs==='true').length+need.milestones);set('s-agents',sum('agents'));set('s-inferred',sum('inferred'));set('s-review',sum('review'));set('s-tasks',shown.length);set('needs-count',need.all)}
   all('[data-filter=needs]').forEach(b=>b.setAttribute('aria-pressed',String(S.needs)));
@@ -652,7 +630,7 @@ function picker(ctx, model, paths, board = true) {
   const count = `<span class="count" id="needs-count">${model.counts.needsOwner}</span>`;
   return `<div class="pick">${board ? `<button class="chip need" type="button" data-filter="needs" aria-pressed="false">${ICON}Needs you ${count}</button>` : `<a class="chip need" href="/#needs=1">${ICON}Needs you ${count}</a>`}`
     + `<div class="pickwrap"><button class="trigger" type="button" id="pick-trig" aria-haspopup="listbox" aria-expanded="false" aria-controls="pick-pop"><span class="vh">Project: </span><span class="dot none" id="pick-dot" aria-hidden="true"></span><span class="tname" id="pick-name">All projects</span><span class="archtag" id="pick-arch" hidden>Archived</span><span class="chev" aria-hidden="true">▾</span></button>`
-    + `<div class="pop" id="pick-pop" hidden><div class="search"><input id="pick-q" type="text" role="combobox" aria-expanded="true" aria-controls="pick-list" aria-autocomplete="list" aria-label="Find a project" placeholder="Find a project: name, repo or folder" autocomplete="off" spellcheck="false"><button type="button" class="closebtn" data-close aria-label="Close the project list"><span class="kbd">Esc</span><span class="tap">Close</span></button></div>`
+    + `<div class="pop" id="pick-pop" hidden><div class="search"><input id="pick-q" type="text" role="combobox" aria-expanded="true" aria-controls="pick-list" aria-autocomplete="list" aria-label="Find a project" placeholder="Find a project: name, repo or folder" autocomplete="off" spellcheck="false"><button type="button" class="closebtn" data-close aria-label="Close the project list"><span class="kbd">Esc</span></button></div>`
     + `<div class="list"><ul class="opts" role="listbox" id="pick-list" aria-label="Projects">${items}</ul>${after}</div><div class="vh" id="pick-say" role="status" aria-live="polite"></div><div class="foot"><span>↑ ↓ to move · Enter to choose</span><span>“/” opens</span></div></div></div>`
     + (board ? `<button class="chip" type="button" id="pick-all" data-pick="" hidden>All projects</button><span class="pickchips" id="pick-chips">${chips ? `<span class="vh">Projects that need you:</span>${chips}` : ""}</span>` : "") + "</div>";
 }

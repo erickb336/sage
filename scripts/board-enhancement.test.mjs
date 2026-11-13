@@ -49,8 +49,8 @@ function model({ gamma = null, delta = false, current = false, rich = false } = 
   return buildBoardModel([{ id: "sample", label: "Sample source", diagnostics: [], projects }, ...second], { now: NOW });
 }
 
-async function pageFor(t, { live = false, snapshot = !live, scripts = true, phone = false, current = false } = {}) {
-  const context = await browser.newContext({ javaScriptEnabled: scripts, colorScheme: "dark", reducedMotion: "reduce", viewport: phone ? { width: 390, height: 844 } : { width: 1280, height: 900 } });
+async function pageFor(t, { live = false, snapshot = !live, scripts = true, current = false } = {}) {
+  const context = await browser.newContext({ javaScriptEnabled: scripts, colorScheme: "dark", reducedMotion: "reduce", viewport: { width: 1280, height: 900 } });
   t.after(() => context.close());
   await context.route("**/*", route => route.abort());
   const page = await context.newPage();
@@ -120,30 +120,6 @@ test("T205, T305: real DOM keeps the chosen project, the needs filter and the th
   assert.deepEqual(await visibleCards(page), ["T6 · Sample delta queued"]);
 });
 
-test("T205: phone filtering puts visible owner work first and removes empty columns", async t => {
-  const page = await pageFor(t, { live: true, phone: true });
-  await pick(page, "alpha");
-  const columnOrder = () => page.locator("[data-col]").evaluateAll(columns => columns
-    .filter(column => getComputedStyle(column).display !== "none")
-    .sort((a, b) => a.getBoundingClientRect().top - b.getBoundingClientRect().top)
-    .map(column => column.getAttribute("aria-label")));
-  assert.deepEqual(await columnOrder(), ["In review", "Backlog"]);
-  assert.deepEqual(await visibleCards(page), ["T1 · Sample alpha queued", "T2 · Sample alpha review"]);
-  await needsButton(page).click();
-  assert.deepEqual(await columnOrder(), ["In review"]);
-  assert.deepEqual(await visibleCards(page), ["T2 · Sample alpha review"]);
-  await update(page, model({ gamma: "held" }));
-  assert.deepEqual(await columnOrder(), ["In review"]);
-  await pick(page, "gamma");
-  assert.deepEqual(await columnOrder(), ["Building"]);
-  assert.deepEqual(await visibleCards(page), ["T5 · Sample gamma work"]);
-  await update(page, model({ gamma: "building" }));
-  assert.deepEqual(await columnOrder(), []);
-  await needsButton(page).click();
-  assert.deepEqual(await columnOrder(), ["Building"]);
-  assert.equal(await page.locator(".col.needs-col:not(.empty-col)").count(), 0);
-});
-
 test("T218: offline task pages, the backlog fold and the theme work with scripts off", async t => {
   for (const scripts of [true, false]) {
     const page = await pageFor(t, { scripts });
@@ -199,9 +175,9 @@ test("T218 F-T218-8 and F-T218-10: faint text and skipped loop steps meet 4.5 co
   assert.ok(["board light provider on a pill", "board light provider on an alternate pill", "board dark legend alternate pill", "task light earlier head", "task dark earlier head"].every(kind => results.includes(kind)));
 });
 
-test("T349, R1347-1: every text on the board, a task page, the milestones list, a milestone page, the Agents page and the snapshot's task and milestone pages meets AA contrast, dark and light, at 375 and 1280 px", async t => {
+test("T349, R1347-1: every text on the board, a task page, the milestones list, a milestone page, the Agents page and the snapshot's task and milestone pages meets AA contrast, dark and light, at 1024 and 1280 px", async t => {
   const { pages, targets } = contrastPages(), low = [], seen = new Set();
-  for (const width of [375, 1280]) {
+  for (const width of [1024, 1280]) {
     const context = await browser.newContext({ viewport: { width, height: 900 }, colorScheme: "dark", reducedMotion: "reduce" });
     t.after(() => context.close());
     await context.route("**/*", route => route.abort());
@@ -319,13 +295,13 @@ test("T218 F-T218-9, F-T218-7 and F-T218-13: chips only with scripts, the stand-
   }
 });
 
-test("T205: sample desktop and phone text meets 4.5 contrast in both themes", async t => {
+test("T205: sample desktop text meets 4.5 contrast in both themes", async t => {
   const artifactDir = process.env.BOARD_BROWSER_ARTIFACT_DIR;
   if (artifactDir) mkdirSync(artifactDir, { recursive: true });
   const evidence = [];
-  for (const phone of [false, true]) {
-    const page = await pageFor(t, { phone, snapshot: false, current: true });
-    if (!phone) await page.setViewportSize({ width: 1600, height: 1000 });
+  {
+    const page = await pageFor(t, { snapshot: false, current: true });
+    await page.setViewportSize({ width: 1600, height: 1000 });
     await page.evaluate(() => {
       const label = document.createElement("aside");
       label.textContent = "SAMPLE DATA · Browser QA fixture · No live task data";
@@ -342,8 +318,8 @@ test("T205: sample desktop and phone text meets 4.5 contrast in both themes", as
         ["current", ".s-run"],
       ])).map(list => list[0]);
       assert.deepEqual(measurements.map(item => item.kind), ["normal", "muted", "link", "needs", "current"]);
-      for (const item of measurements) assert.ok(item.ratio >= 4.5, `${phone ? "phone" : "desktop"} ${theme} ${item.kind}: ${item.ratio}`);
-      const viewport = phone ? "phone" : "desktop";
+      for (const item of measurements) assert.ok(item.ratio >= 4.5, `desktop ${theme} ${item.kind}: ${item.ratio}`);
+      const viewport = "desktop";
       evidence.push({ viewport, theme, measurements });
       if (artifactDir) await page.screenshot({ path: join(artifactDir, `sample-${viewport}-${theme}.png`), fullPage: true });
     }
