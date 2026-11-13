@@ -15,7 +15,7 @@ export function writerClass(cmd, [sub, id] = []) {
     case "offer": case "unclaim": return onTask(sub);
     case "release": return TASK.test(sub ?? "") ? onTask(sub) : sub === "add" ? ANY : READ;
     case "cancel": return { ...onTask(sub), recipient: true };
-    case "task-adopt": case "round": case "verdict": return onTask(sub);
+    case "task-adopt": case "round": case "verdict": case "lint": return onTask(sub);
     case "finding": return onTask(id);
     case "milestone": case "program": return id === "set" ? ANY : { kind: "milestone" };
     case "run": return sub === "add" ? onTask(id) : sub === "done" ? { kind: "task", run: id } : sub === "usage" ? ANY : READ;

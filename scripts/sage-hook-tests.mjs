@@ -4474,7 +4474,7 @@ function linkedSession(env) {
 const stateRun = (s, args, actor = LEAD, extra = {}) => s.send(tool("Bash", { command: `node ${TOOL} ${args}` }, { cwd: s.dir, ...actor, ...extra }));
 const LEAD_TAIL = /A lead writes the logbook only with .* Report to the sage what else the logbook needs\.$/;
 const LEAD_RULE = /is not of T1, and a lead records only its own task\.|a lead adds only runs of its team|is not a branch of T1|a lead gives T1 one PR|is not a branch named for T1|is not triaged fix|is not a fix of T1's round|is triaged ask: only the chief|a lead asks the owner nothing|a lead dismisses it only with --proof|a lead never dismisses it|a lead triages it fix only with --proof|is a fix key of a round: only the chief|verdict is the chief's|a lead's verdict names|a lead sets only state, branch, pr|a lead moves it only to|only the chief moves it from there|only the chief ends it|only the chief opens a known finding again|is shared with/;
-const NOT_LISTED = /is not on a lead's list(?:, or it has other words)?\. A lead records only its own task, with run add, run done, finding add, finding close, finding triage, verdict, round, pages, and task set of state, branch, pr\./;
+const NOT_LISTED = /is not on a lead's list(?:, or it has other words)?\. A lead records only its own task, with run add, run done, finding add, finding close, finding triage, verdict, lint, round, pages, and task set of state, branch, pr\./;
 const LEAD_ALLOWED = [
   ...["implementer --branch claude/t1", "code-reviewer", "security-reviewer", "ux-reviewer", "qa", "qa --branch=claude/t1"].map((role) => `run add T1 --role ${role}`),
   "run done R2 --status done --tokens 10",

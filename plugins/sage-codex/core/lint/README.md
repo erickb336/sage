@@ -42,7 +42,26 @@ A file in another language is not checked. The comment kinds differ by language,
 
 In an HTML file (`.html`, `.htm` or `.xhtml`), the rule set checks only the HTML comments. It skips each `<script>` block, whatever its type. A block can hold a template, and text in a template, such as `https://example.com`, looks like a `//` comment. So a comment in JavaScript inside an HTML file passes. Comments in `.js`, `.mjs`, `.cjs` and `.jsx` files stay checked. The `ignores` line of the JavaScript rule does this.
 
-ast-grep's own suppression comment, `ast-grep-ignore`, hides comments from a scan. After code, it hides its own line. On its own line, it hides the next line, but the rule flags it. As the first line with a blank line after it, it hides the whole file. A rule cannot refuse it, because the suppression hides that rule too. sage's lint command (task T1019) is planned to refuse each file that contains `ast-grep-ignore`. `scripts/lint-rules.test.mjs` shows this limit.
+ast-grep's own suppression comment, `ast-grep-ignore`, hides comments from a scan. After code, it hides its own line. On its own line, it hides the next line, but the rule flags it. As the first line with a blank line after it, it hides the whole file. A rule cannot refuse it, because the suppression hides that rule too. So sage's lint command fails each changed file whose text holds `ast-grep-ignore` anywhere, as a whole file (see [The lint command](#the-lint-command)). `scripts/lint-rules.test.mjs` shows this limit of the scan. sage's own code that must hold the word, such as a test of this rule, builds it from parts, so that a change to the file passes lint.
+
+## The lint command
+
+sage's state tool checks a pull request with a project's own rules: `sage lint <T> --sha <sha>`. The chief runs it on the final head before the merge, and the merge check refuses a head without lint-pass. A project opts in with an ast-grep project file, `sgconfig.yml`, at the root of its main branch. sage's own `sgconfig.yml` names this rule set.
+
+| Rule | Why |
+| --- | --- |
+| The rules, `sgconfig.yml` and `.gitattributes` come from the tip of `origin/main`, never from the head. | A pull request cannot weaken its own check, and a branch that started before a rule reached main gets that rule too, like a required check that applies the branch's current settings. |
+| Only the lines that the head adds since its merge base with `origin/main` count, so a moved or an edited line counts. lint does not look for renames: a renamed file is a new file, so every line counts, under the rules of its new path. A rename with no match passes. | An old comment on a line that the pull request does not touch is not its problem. A rename can move a file into another language or into the `files` of a stricter rule, so its old lines need the rules of the new path. |
+| lint runs at the root of the repository, also when you run it from a subfolder. | The root `sgconfig.yml` decides. |
+| The scan reads a copy of the changed files, with the paths after `--`. | A file named like an option, such as `--off`, stays a path. |
+| Each match on an added line fails, whatever its severity. lint reads the JSON matches, never the exit code alone. | A rule without `severity: error` exits 0 when it finds matches. |
+| A changed file whose text holds `ast-grep-ignore` fails as a whole file. | The suppression hides lines from the rules. |
+| A changed file that ast-grep skips (not UTF-8, too large), or one of more than 10 MiB, fails, by name. lint reads no file that it does not scan. | A skipped file is not checked, and a large asset with no rule does not stop lint. |
+| A YAML file of more than 10 MiB in a rule or util folder of `origin/main` makes lint refuse, by name, with no verdict. | lint copies no larger YAML file, so the rules in it would not run. |
+| A symbolic link, a submodule, a file marked `linguist-generated` or `linguist-vendored` in `origin/main`, and a file with no ast-grep language or no rule are not checked. lint lists each one by name. | They hold no code that the rules read. |
+| With no `sgconfig.yml` at the root of `origin/main`, lint records nothing, and the merge check needs no lint verdict. With no `origin/main` and a root `sgconfig.yml` in the checkout, lint and the merge check refuse. | Like a required status check that a repository has not turned on; a repository that turned it on is never let through. |
+
+lint runs ast-grep 0.51.1 from the `node_modules/.bin` at the root of the project's checkout when it is that version, else from sage's tools folder (`tools/` beside the logbook folders). With neither, it refuses, writes no verdict, and prints the command that installs it in the tools folder.
 
 ## Add a language
 
@@ -58,14 +77,14 @@ In sage, `scripts/lint-rules.test.mjs` also changes the rules in a copy, one mut
 
 ## In sage: the strip, the proof and the exclusions
 
-`npm run check` scans sage's own sources (`packages/`, `scripts/` and `.github/`) with this rule set. The code of the scan is in `scripts/lint-rules.mjs`. When the check fails on a comment:
+`npm run check` scans sage's own sources (`packages/`, `scripts/` and `.github/`) with this rule set, through the `sgconfig.yml` at the root of the repository, which the lint command reads too. The code of the scan is in `scripts/lint-rules.mjs`. It fails on a comment, and on a file that ast-grep skips. When the check fails on a comment:
 
 1. Commit your change.
 2. Run `node scripts/strip-comments.mjs [path ...]`. It removes each comment that the scan flags, and keeps the allowed directives. A second run changes nothing.
 3. Run `node scripts/comment-proof.mjs [base] [head]` (by default, from `HEAD` to the working tree). For each changed JavaScript or YAML file, it compares the code tokens and the minified code (for YAML, the parsed value). It must report 0 failed.
 4. Put a reason that a reader needs in a name, a test name or a doc, never in a comment.
 
-`--help` gives the usage of each script. The scan skips these folders (`SCAN_EXCLUSIONS` in `scripts/lint-rules.mjs`):
+`--help` gives the usage of each script. The scan and the lint command skip the files that the repository's `.gitattributes` marks `linguist-generated` or `linguist-vendored`: the plugins, which the build makes, and these folders:
 
 | Folder | Why the scan skips it |
 | --- | --- |

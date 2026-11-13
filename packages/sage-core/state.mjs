@@ -27,6 +27,7 @@ import { renderMessage } from "./message-checks.mjs";
 import { MAX_SECTIONS, PAGE_MAX, PAGE_TYPES, pageType, pageUrl } from "./message.mjs";
 import { pageFile, pageTaskFolder } from "./page-files.mjs";
 import { taskWord } from "./state-words.mjs";
+import { AST_GREP_VERSION, LINT_CONFIG, LINT_KINDS, astGrepBinary, lintBase, lintChange } from "./lint.mjs";
 
 export const STUCK_WRITE = 'This command changed nothing. This project cannot save changes; other projects work. Tell the owner. There are two ways out. With a backup: the owner restores the folder that `sage logbook` prints; rows newer than the backup are lost. With no backup: after the owner accepts the loss of this saved change, the chief runs `sage logbook repair --accept-change-loss yes --project <the project>`, or the owner runs it in a terminal when the chief cannot; it keeps the file, and a half-published update keeps mixed tables. Do not remove review-pending.json by hand.';
 
@@ -102,7 +103,7 @@ const SPARSE = { tasks: [CHIEF_COLUMN, "offer", RELEASE_COLUMN], runs: [CHIEF_CO
 const TABLES = { ...PLAIN_TABLES, ...Object.fromEntries(Object.entries(SPARSE).map(([t, cols]) => [t, [...PLAIN_TABLES[t], ...cols]])) };
 const ADDED = { ...FILLED, ...Object.fromEntries(Object.entries(SPARSE).map(([t, cols]) => [t, [...(FILLED[t] ?? []), ...cols]])) };
 const RUN_ENDS = ["done", "blocked", "question", "failed"];
-const COMMANDS = ["init", "logbook", "standing", "pages", "message", "task", "task-adopt", "milestone", "release", "round", "run", "finding", "verdict", "gate", "log", "status", "stats", "merge-check", "config", "projects", "board", "observe", "link", "claim", "offer", "cancel", "accept", "unclaim", "move", "worktrees"];
+const COMMANDS = ["init", "logbook", "standing", "pages", "message", "task", "task-adopt", "milestone", "release", "round", "run", "finding", "verdict", "lint", "gate", "log", "status", "stats", "merge-check", "config", "projects", "board", "observe", "link", "claim", "offer", "cancel", "accept", "unclaim", "move", "worktrees"];
 const OPTIONS = {
   "logbook repair": ["accept-loss", "accept-change-loss"],
   link: ["to", "separate"],
@@ -127,6 +128,7 @@ const OPTIONS = {
   "finding triage": ["reason", "proof"],
   "finding move": ["to", "into", "size"],
   verdict: ["sha", "kind", "cycle", "pr", "run"],
+  lint: ["sha"],
   "gate add": ["question", "options", "recommend", "default"],
   "gate answer": ["option", "other-hex"],
   log: ["why"],
@@ -1782,7 +1784,7 @@ const prHistory = (pr, tasks, decisions, ledger) =>
 
 const notFull = (sha) => (/^[0-9a-f]{40}$/i.test(sha) ? "" : `${JSON.stringify(sha)} is not a full commit SHA: a short one can match another commit. Give all 40 characters: git rev-parse <branch>.`);
 
-function judge(dir, task, findings, decisions, id, rows, cycles, repaired, cfg, pr, from) {
+function judge(dir, task, findings, decisions, id, rows, cycles, repaired, cfg, pr, from, lint) {
   if (!task) return { ok: false, reason: `${id} is in ${join(dir, "ledger.tsv")} but not in its tasks.tsv: ${repaired ? `tasks.tsv was started again without rows (see decisions.tsv), so the verdicts of ${id} are on a lost task. Push a new commit, and record its verdicts under a task that the logbook has.` : `a stray or damaged logbook. If no project uses it, ask the user to remove ${dir}.`}` };
   const who = task.state === "abandoned" ? `${task.id} (abandoned)` : task.id;
   if (!rows.length && !builds(task)) return { ok: false, reason: `${who} is an investigation, so it has no pull request, but it has PR ${task.pr}: clear its PR (sage task ${task.id} set pr=).` };
@@ -1792,6 +1794,11 @@ function judge(dir, task, findings, decisions, id, rows, cycles, repaired, cfg, 
   const bad = rows.find((r) => NOT_CLEAN.includes(r.kind) && !cleared(r, task, findings, decisions));
   if (bad) return { ok: false, reason: `${who}: cycle ${bad.cycle} found problems on this SHA (${bad.kind}). Repair, then review the new SHA.` };
   if (!rows.some((r) => r.kind === "checks-pass")) return { ok: false, reason: `${who}: no checks-pass on this SHA. Run the checks on it and record checks-pass.` };
+  const linted = rows.filter((r) => LINT_KINDS.includes(r.kind)).at(-1)?.kind;
+  if (lint && linted !== "lint-pass") return { ok: false, reason: lint.error
+    ? `${who}: the merge check cannot read the git checkout of the project (${lint.error}), so it cannot tell if origin/main has a root ${LINT_CONFIG}. Run it with --project set to the project's git checkout.`
+    : !lint.main ? `${who}: ${visible(lint.top)} has a root ${LINT_CONFIG} but no origin/main, and lint reads its rules only from the tip of origin/main, so no SHA here can get lint-pass. lint needs a remote named origin with a branch named main.`
+    : `${who}: ${linted ? "lint-fail" : "no lint-pass"} on this SHA, and origin/main ${lint.main.slice(0, 7)} has a root ${LINT_CONFIG}. ${linted ? "Fix the lines that lint named in a new commit, then lint that commit" : `Run sage lint ${task.id} --sha <sha> on it`}.` };
   const perCycle = cleanKinds(task);
   const want = perCycle.length ? cycles : 1;
   const clean = perCycle.length ? cleanCycles(task, rows) : 1;
@@ -1947,6 +1954,16 @@ function rebuild(root) {
   });
 }
 
+function lintNeed(checkout) {
+  if (checkout === undefined) return null;
+  try {
+    const at = lintBase(checkout);
+    return at.config || (!at.main && at.local) ? at : null;
+  } catch (e) {
+    return { error: e?.code ?? (typeof e?.status === "number" ? `git exit ${e.status}` : e?.message ?? String(e)) };
+  }
+}
+
 function mergeCheck(sha, env = process.env, options = {}) {
   return assessMerge(sha, env, options);
 }
@@ -2008,10 +2025,11 @@ function judgeMerge(sha, env, { cycles, pr, readOnly, head, project, locked, ses
       if (head !== undefined && ofPr.size) absent.push(...tasks.filter((t) => !ofPr.has(t.id) && owns(t.id)).map((t) => ({ name: `${visible(dir)} ${t.id}`, how: how(t.id) })));
       const graph = waitGraph(tasks, book ? rowsOf(book.milestones) : [], book ? rowsOf(book.gates) : [], decisions);
       const chief = basename(dir) !== mine ? undefined : merger ?? (session !== undefined ? chiefFor(project, session, env) : undefined);
+      const lint = lintNeed(gitOf(dir));
       const checked =[...new Set([...rows.map((r) => r.task), ...ofPr])].map((id) => {
         const task = byId.get(id), carry = carryOver(gitOf(dir), task, sha, ownOf.get(id) ?? [], ledgerOf.get(id) ?? []), own = carry.rows;
         const held = task?.state === "held" && { ok: false, reason: `${id} is held: only the sage moves a held task, and it does not merge until then.` };
-        const judged = judge(dir, task, findingsOf.get(id) ?? [], decisionsOf.get(id) ?? [], id, own, task ? Math.max(cycles ?? 0, cyclesFor(task, cfg)) : cycles, repaired, cfg, pr, carry.from);
+        const judged = judge(dir, task, findingsOf.get(id) ?? [], decisionsOf.get(id) ?? [], id, own, task ? Math.max(cycles ?? 0, cyclesFor(task, cfg)) : cycles, repaired, cfg, pr, carry.from, lint);
         const note = carry.from ? `cycles from ${carry.from} carried to ${sha}: clean merge of main, same patch-id` : carry.why;
         const verdict = !note ? judged : judged.ok ? (carry.from ? { ...judged, reason: judged.reason.replace(/ on this SHA$/, `, ${note}`) } : judged) : { ...judged, reason: `${judged.reason} ${carry.from ? `(${note})` : note}` };
         const live = (runsOf.get(id) ?? []).filter((r) => r.status === "running" && CHECKERS.includes(r.role)).map((r) => `${r.id} (${r.role})`);
@@ -3070,6 +3088,7 @@ function act(cmd, pos, opt, dir, env, skip, project) {
       const { tasks, task } = taskOf(dir, need(sub, "the task id"));
       notHeld(task, "verdict");
       const kind = need(opt.kind, "--kind");
+      if (LINT_KINDS.includes(kind)) refuse(`${kind} comes only from the lint command, which scans the lines that the commit adds: sage lint ${task.id} --sha <sha>. Nothing changed.`);
       if (!KINDS.includes(kind)) refuse(`kind is one of ${KINDS.join(", ")}`);
       if (adoptionOf(task) && CLEAN.includes(kind)) {
         const role = { "review-clean": "code-reviewer", "security-clean": "security-reviewer", "ux-clean": "ux-reviewer", "qa-pass": "qa", "evidence-clean": "evidence-review" }[kind];
@@ -3108,6 +3127,29 @@ function act(cmd, pos, opt, dir, env, skip, project) {
       write(dir, "ledger", [...read(dir, "ledger"), { task: task.id, pr: task.pr, sha, kind, cycle: opt.cycle ?? "1", run: opt.run ?? "", at: now() }]);
       const open = NOT_CLEAN.includes(kind) ? [] : findings.filter((f) => f.triage === "fix");
       return `${task.id} ${kind}${sha ? ` · ${sha.slice(0, 7)}` : ""} · cycle ${opt.cycle ?? "1"}${backToReview ? " · reviewing" : ""}${open.length ? ` · still open: ${open.map((f) => f.key).join(", ")}. Close the ones that this review confirmed fixed.` : ""}`;
+    }
+    case "lint": {
+      if (pos.length !== 1) refuse("lint takes one task id and --sha: sage lint <T> --sha <sha>. Nothing changed.");
+      const { task } = taskOf(dir, sub);
+      notHeld(task, "lint");
+      if (!builds(task)) refuse(`${task.id} has no build block, so it has no commit to lint. Nothing changed.`);
+      const sha = need(opt.sha, "--sha with the full 40-character SHA of the head commit (git rev-parse <branch>)").toLowerCase();
+      if (notFull(sha)) refuse(notFull(sha));
+      let at, result;
+      try { at = lintBase(project); } catch (e) { refuse(`lint cannot read the git checkout ${visible(project)} (${e?.message ?? e}). Give --project the project's git checkout. Nothing changed.`); }
+      if (!at.main && at.local) refuse(`${visible(at.top)} has a root ${LINT_CONFIG} but no origin/main, and lint reads its rules only from the tip of origin/main, so it cannot lint ${sha.slice(0, 7)}. lint needs a remote named origin with a branch named main. Nothing changed.`);
+      if (!at.config) return `${task.id} · ${sha.slice(0, 7)}: ${at.main ? `origin/main ${at.main.slice(0, 7)} has` : `${visible(at.top)} has no origin/main and`} no ${LINT_CONFIG} at its root, so there is nothing to lint, and the merge check needs no lint verdict. Nothing changed.`;
+      const tools = join(dirname(dir), "tools"), binary = astGrepBinary(at.top, tools);
+      if (!binary) refuse(`ast-grep ${AST_GREP_VERSION} is not in ${visible(join(at.top, "node_modules", ".bin"))} or in sage's tools folder ${visible(tools)}, so lint cannot run, and it writes no verdict. Install it in the tools folder: npm install --prefix ${shell(tools)} @ast-grep/cli@${AST_GREP_VERSION}`);
+      try { result = lintChange(project, sha, binary, at); } catch (e) { refuse(`lint could not check ${sha.slice(0, 7)}: ${visible(String(e?.message ?? e))}. ${e?.fix ?? "lint has no known fix for this error: tell the owner, with this message."} Nothing changed.`); }
+      const short = `${sha.slice(0, 7)} · rules ${result.main.slice(0, 7)} · diff from ${result.base.slice(0, 7)}`;
+      const kind = result.problems.length ? "lint-fail" : "lint-pass";
+      write(dir, "ledger", [...read(dir, "ledger"), { task: task.id, pr: task.pr, sha, kind, cycle: "1", run: "", at: now() }]);
+      return [
+        `${task.id} ${kind} · ${short} · ${result.checked} ${result.checked === 1 ? "file" : "files"} checked${result.problems.length ? ` · ${result.problems.length} ${result.problems.length === 1 ? "problem" : "problems"}` : ""}`,
+        ...result.problems.map((p) => `  ${visible(p.file)}${p.line ? `:${p.line}` : ""}: ${visible(p.text)}`),
+        ...(result.notChecked.length ? [`  not checked: ${result.notChecked.map((n) => `${visible(n.file)} (${n.why})`).join(", ")}`] : []),
+      ].join("\n");
     }
     case "gate": {
       const gates = read(dir, "gates");

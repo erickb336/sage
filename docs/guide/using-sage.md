@@ -292,6 +292,30 @@ A new hook event or matcher needs a restart, and so do the instructions that a s
 
 Nothing reaches main without a pull request, so a stopped task leaves at most a branch and an open pull request. Close or delete them on GitHub when you do not want them.
 
+## The lint check
+
+A repository can have lint rules of its own: an [ast-grep](https://ast-grep.github.io) project file, `sgconfig.yml`, at its root. When the main branch has one, sage checks each pull request with those rules before it merges. Sage's own rules refuse code comments ([the no-comments rule set](../../packages/sage-core/lint/README.md)).
+
+- **What it checks:** only the lines that the pull request adds, also a moved or an edited line. A line that the pull request does not touch never fails.
+- **Whose rules:** the rules, `sgconfig.yml` and `.gitattributes` of the tip of `origin/main`, also when the pull request started before they changed. A pull request that changes a rule does not change its own check.
+- **Which lines:** the diff from the merge base of the head and `origin/main`, so a change that reached main after the pull request started is not its problem.
+- **When:** the chief runs `sage lint <T> --sha <sha>` on the final head, before the merge check. A lead may run it earlier.
+- **The result:** lint-pass, or lint-fail with each file and line and the rule's message. The merge check refuses a head without lint-pass.
+
+| The pull request has | lint |
+| --- | --- |
+| A new comment, or an old comment on an edited or moved line | Fails, and names the file and the line. |
+| ast-grep's suppression comment anywhere in a changed file | Fails for the whole file: the suppression hides lines from the rules. |
+| A changed file that ast-grep skips (not UTF-8), or a file of more than 10 MiB | Fails, and names the file. |
+| A renamed file, or a symbolic link or a submodule that became a file | Every line counts as added, under the rules of its new path. |
+| A file with no ast-grep language, no rule, a symbolic link, or a file marked `linguist-generated` or `linguist-vendored` in the main branch's `.gitattributes` | Passes, and lists the file as not checked. |
+
+A repository without `sgconfig.yml` at the root of `origin/main` gets no lint verdict and no block. A repository with no `origin/main` and a root `sgconfig.yml` in its checkout gets no lint verdict, and the merge check refuses: lint needs a remote named origin with a branch named main.
+
+When a YAML file in a rule folder of `origin/main` has more than 10 MiB, lint refuses, names the file and records no verdict.
+
+The check needs ast-grep 0.51.1 in the project's `node_modules/.bin`, or in sage's tools folder. When it finds neither, it refuses and prints the command that installs it in the tools folder.
+
 ## Clean up worktrees
 
 Each task builds in its own git worktree, so a busy project collects old ones. The idea of this clean-up comes from pstack's worktree audit playbook.

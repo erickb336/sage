@@ -335,6 +335,7 @@ The plugin starts a local MCP server, `sage`, in the desktop app and in the CLI.
 | `run_add`, `run_done` | `run add`, `run done` |
 | `finding_add`, `finding_triage`, `finding_close`, `finding_move` | `finding add`, `triage`, `close`, `move` |
 | `verdict`, `round`, `merge_check`, `log` | `verdict`, `round`, `merge-check`, `log` |
+| `lint` | `lint <T> --sha <sha>`: [the lint check](using-sage.md#the-lint-check) on a head, before the merge check |
 | `standing`, `standing_add`, `pages` | `standing`, `standing add`, `pages` |
 | `worktrees` | `worktrees`, `worktrees prune --yes`: [clean up worktrees](using-sage.md#clean-up-worktrees). Only the chief calls it |
 | `gate_add`, `gate_replace`, `gate_answer` | `gate add`, `gate replace`, `gate answer` |

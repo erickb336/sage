@@ -1,14 +1,18 @@
 import { spawnSync } from "node:child_process";
+import { existsSync, readFileSync } from "node:fs";
 import { createRequire } from "node:module";
+import { join } from "node:path";
 import { fileURLToPath } from "node:url";
+import { LINT_CONFIG, astGrepScan, skippedText } from "../packages/sage-core/lint.mjs";
 
 export const RULE_SET = fileURLToPath(new URL("../packages/sage-core/lint", import.meta.url));
 
-const binary = createRequire(import.meta.url)("@ast-grep/cli/postinstall.js").resolveBinaryPath();
+export const AST_GREP = createRequire(import.meta.url)("@ast-grep/cli/postinstall.js").resolveBinaryPath();
 
-export function astGrep(args, dir = RULE_SET, cwd = dir) {
-  if (!binary) throw new Error("@ast-grep/cli has no binary for this platform: it ships one for macOS, Windows and Linux with glibc");
-  return spawnSync(binary, [...args, "--config", `${dir}/sgconfig.yml`, "--color", "never"], { cwd, encoding: "utf8", maxBuffer: 1 << 28 });
+const binary = () => AST_GREP || (() => { throw new Error("@ast-grep/cli has no binary for this platform: it ships one for macOS, Windows and Linux with glibc"); })();
+
+export function astGrep(args, dir = RULE_SET, cwd = dir, paths = []) {
+  return spawnSync(binary(), [...args, "--config", `${dir}/sgconfig.yml`, "--color", "never", "--", ...paths], { cwd, encoding: "utf8", maxBuffer: 1 << 28 });
 }
 
 export function ruleTestProblems(dir = RULE_SET) {
@@ -21,18 +25,20 @@ export function ruleTestProblems(dir = RULE_SET) {
 
 export const SCAN_FOLDERS = ["packages", "scripts", ".github"];
 
-export const SCAN_EXCLUSIONS = [
-  { glob: "scripts/fixtures/sage-14c0d0c/**", reason: "a frozen copy of the state tool at commit 14c0d0c, which scripts/sage.test.mjs runs as the old version: its text is test data" },
-  { glob: "packages/sage-core/lint/rule-tests/**", reason: "the rule set's own test cases, whose comments are the data that the rules must flag or pass" },
-];
+export function scanExclusions(root) {
+  const file = join(root, ".gitattributes");
+  if (!existsSync(file)) return [];
+  return readFileSync(file, "utf8").split(/\r?\n/).map((line) => line.trim().split(/\s+/))
+    .filter(([glob, ...attributes]) => glob && !glob.startsWith("#") && attributes.some((a) => /^linguist-(generated|vendored)(=true)?$/.test(a)))
+    .map(([glob]) => glob);
+}
 
 export function commentScan(root, paths = SCAN_FOLDERS) {
-  const globs = ["!.git", ...SCAN_EXCLUSIONS.map(({ glob }) => `!${glob}`)].flatMap((glob) => ["--globs", glob]);
-  const run = astGrep(["scan", "--no-ignore", "hidden", ...globs, "--json=compact", ...paths], RULE_SET, root);
-  if (run.status !== 0 && run.status !== 1) throw new Error(`ast-grep scan exited with ${run.status ?? run.error?.code}: ${run.stderr.trim()}`);
-  const matches = JSON.parse(run.stdout || "[]");
+  const globs = ["!.git", ...scanExclusions(root).map((glob) => `!${glob}`)].flatMap((glob) => ["--globs", glob]);
+  const { matches, files } = astGrepScan(binary(), { config: join(root, LINT_CONFIG), cwd: root, paths, args: ["--no-ignore", "hidden", ...globs] });
+  const skipped = [...files].filter(([, f]) => f.skipped && f.skipped !== "emptyFile").map(([file, f]) => `${file}: ${skippedText(f.skipped)}`);
+  if (skipped.length) throw new Error(skipped.join("\n"));
   if (matches.some((m) => m.severity !== "error")) throw new Error(`ast-grep scan gave a match with a severity other than error; give each rule in ${RULE_SET}/rules severity: error`);
-  if ((run.status === 1) !== (matches.length > 0)) throw new Error(`ast-grep scan exited with ${run.status} and gave ${matches.length} matches`);
   return matches;
 }
 

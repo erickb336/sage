@@ -9,4 +9,5 @@
 - A new medium or low finding that a round raises goes to a follow-up task with `finding move`, not to another round. A high finding always blocks.
 - With autopilot on, merge with `gh pr merge <n> --squash --delete-branch --match-head-commit <sha>`. The sage hook runs `merge-check` first and refuses a SHA that is not ready. It refuses every merge by an agent.
 - A new commit is a new SHA. Its verdicts start again from cycle 1.
+- When the tip of `origin/main` has `sgconfig.yml` at its root, the merge check also needs lint-pass on the head, and the latest lint verdict of the SHA counts. Only `sage lint <T> --sha <sha>` records lint-pass or lint-fail, and a clean merge of main does not carry them: lint the new head.
 - Every task with verdicts on a SHA counts, also an abandoned one. When two tasks share a pull request, give both the same `branch=` and `pr=`, and record each verdict under both: autopilot merges it when each task passes on its own verdicts. Only the chief puts a task on a shared branch or takes it off one: a branch that another task names by its `branch=` or ran work on. To leave an old task's verdicts behind, push a new commit.

@@ -40,7 +40,7 @@ const RO = (role) => `sage: in sage mode, the ${role} agent changes no files. Re
 const RO_SHELL = (role) => `${RO(role)}. ${READ_ONLY_SHELL_WAY}`.replace(/\.$/, "");
 const LOGBOOK = "sage: role agents report; only the chief records the logbook. Put this in your report";
 const LEAD_EDIT = "sage: a lead changes no files. Start an implementer of your task to make this change";
-const OFF_LIST = (name) => `sage: "${name.replaceAll("_", " ")}" is not on a lead's list. A lead records only its own task, with run add, run done, finding add, finding close, finding triage, verdict, round, pages, and task set of state, branch, pr. Put what else the logbook needs in your report`;
+const OFF_LIST = (name) => `sage: "${name.replaceAll("_", " ")}" is not on a lead's list. A lead records only its own task, with run add, run done, finding add, finding close, finding triage, verdict, lint, round, pages, and task set of state, branch, pr. Put what else the logbook needs in your report`;
 const SPAWN = "sage: role agents start no agents; only the chief and a lead do. Put what you need in your report";
 const NO_BRIEF = (name) => `sage: ${name} does not start, because no brief for it was checked in the last 30 minutes. Run the sage tool brief with this task name and the whole brief until it says checked, then spawn the agent again`;
 const MALFORMED = (name) => `sage: "${name}" does not start, because its name is malformed: it starts with sage_, but a sage task name is sage_, the role with _ for -, the task, and the run, for example sage_implementer_t12_r40. Give the agent such a name`;
@@ -1003,7 +1003,7 @@ test("F-T950-1: the gate reads a sage spawn's brief, and a lead's run, in the lo
 test("F-T552-15: a lead's shell write of the state tool names the sage MCP tools; a role agent's keeps its own line", (t) => {
   const w = world(t), command = `node ${TOOL} verdict T1 --kind qa-pass`;
   assert.equal(denied(w.send(pre("Bash", command, w.child("/root/sage_lead_t1_r1")))),
-    "sage: a lead records with the sage MCP tools (run_add, run_done, finding_add, finding_close, finding_triage, verdict, round, task_set, pages, brief), not from the shell. Use one of these, or put what the logbook needs in your report");
+    "sage: a lead records with the sage MCP tools (run_add, run_done, finding_add, finding_close, finding_triage, verdict, lint, round, task_set, pages, brief), not from the shell. Use one of these, or put what the logbook needs in your report");
   assert.equal(denied(w.send(pre("Bash", command, w.child("/root/sage_lead_t1_r1/sage_qa_t1_r2")))), LOGBOOK);
   assert.equal(denied(w.send(pre("Bash", command, w.child("/root/sage_pe_t1/sage_lead_t1")))), LOGBOOK, "a lead's name below another sage name is no lead");
 });

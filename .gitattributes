@@ -1,3 +1,5 @@
 # Installable plugins are reproducible build output; review sources in packages/.
 plugins/sage/** linguist-generated=true
 plugins/sage-codex/** linguist-generated=true
+scripts/fixtures/sage-14c0d0c/** linguist-vendored=true
+packages/sage-core/lint/rule-tests/** linguist-vendored=true

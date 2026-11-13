@@ -133,6 +133,10 @@ export const TOOLS = {
     input: { task, kind: z.enum(tool.KINDS), sha: sha.optional(), cycle: count("the cycle number"), pr: count("the pull request number"), run: optional("the run id of the review or QA") },
     pos: ["task"], argv: (i) => ["verdict", i.task],
   },
+  lint: {
+    describe: "Lint a head SHA of a task with the rules of the tip of origin/main: it scans the lines that the commit adds since its merge base with origin/main, with the root sgconfig.yml of origin/main, and records lint-pass or lint-fail. It prints each problem with its file and line, and the files that it did not check. When origin/main has no sgconfig.yml, lint records nothing. Run it before merge_check; a lead may run it on its own task.",
+    input: { task, sha }, pos: ["task"], argv: (i) => ["lint", i.task],
+  },
   claim: {
     describe: "Take a task with no owning chief in a shared logbook: one that you unclaimed, or one that your provider started. The version is the one that the refusal of your last write printed. A task that another chief unclaimed last, or that came from the other provider's logbook, needs the owner's takeover gate (gate_replace).",
     input: { task, version }, pos: ["task"], argv: (i) => ["claim", i.task],
