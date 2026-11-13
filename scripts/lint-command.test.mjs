@@ -311,6 +311,23 @@ test("F-T1019-14: a large asset with no rule is listed and not read, and a file 
   assert.deepEqual(problems(fail), ["big.js: it is 12 MiB, more than the 10 MiB that lint scans, so no rule checked it. Split it into smaller files, or mark it linguist-generated or linguist-vendored in the .gitattributes of origin/main."]);
 });
 
+test("F-T1019-22: a YAML file of more than 10 MiB in a rule or util folder of origin/main makes lint refuse and name it, with no verdict; one outside those folders does not", () => {
+  const p = project();
+  const big = (text) => `${text}#${"x".repeat(11 * 1024 * 1024)}\n`;
+  const refused = (sha) => {
+    const r = p.sage("lint", "T1", "--sha", sha);
+    assert.equal(r.status, 1, r.stdout);
+    return r.stderr.trim();
+  };
+  p.onMain({ "data/big.yml": big("k: v\n") });
+  assert.match(lint(p, p.commit({ "c.js": "f();\n" })), /^T1 lint-pass /);
+  p.onMain({ "lint/rules/no-debugger.yml": big(rule("no-debugger", "error", "debugger_statement")) });
+  assert.match(refused(p.commit({ "d.js": "debugger;\n" })), /: origin\/main \S+ has lint\/rules\/no-debugger\.yml \(11 MiB\) in a rule or util folder of sgconfig\.yml, more than the 10 MiB that lint reads, so its rules cannot run\. Split it into smaller files on origin\/main, then lint again\. Nothing changed\.$/);
+  p.onMain({ "lint/rules/no-debugger.yml": null, "lint/utils/big.yml": big("id: big\nlanguage: JavaScript\nrule: { kind: comment }\n") });
+  assert.match(refused(p.commit({ "e.js": "g();\n" })), /: origin\/main \S+ has lint\/utils\/big\.yml \(11 MiB\) in a rule or util folder of sgconfig\.yml/);
+  assert.equal(p.lints().length, 1);
+});
+
 test("F-T1019-7: a missing head, a broken rule and a broken sgconfig.yml each name their own next step", () => {
   const p = project();
   const refused = (sha) => {

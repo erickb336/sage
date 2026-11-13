@@ -17,6 +17,7 @@ export const LINT_MAX_BYTES = 10 * 1024 * 1024;
 const BATCH_BYTES = 64 * 1024 * 1024;
 const BIG = { maxBuffer: 1 << 28, timeout: 300_000 };
 const ALL = "all";
+const TOO_LARGE = "sage-lint-too-large-";
 
 export function astGrepBinary(project, tools) {
   for (const folder of [project, tools]) {
@@ -32,7 +33,7 @@ export function astGrepScan(binary, { config, cwd, paths, args = [] }) {
   const run = spawnSync(binary, ["scan", "--config", config, "--color", "never", "--json=stream", "--inspect", "entity", ...args, "--", ...paths], { cwd, encoding: "utf8", maxBuffer: 1 << 28 });
   if (run.error) throw new Error(`ast-grep could not run (${run.error.code ?? run.error.message})`);
   const errors = run.stderr.split("\n").filter((line) => /^(ERROR|Error: (?!\d+ error\(s\) found in code))/.test(line));
-  if ((run.status !== 0 && run.status !== 1) || errors.length) throw new Error(`ast-grep scan exited with ${run.status ?? run.signal}: ${(errors.join(" ") || run.stderr.trim()).slice(0, 2000)}`);
+  if ((run.status !== 0 && run.status !== 1) || errors.length) throw Object.assign(new Error(`ast-grep scan exited with ${run.status ?? run.signal}: ${(errors.join(" ") || run.stderr.trim()).slice(0, 2000)}`), { stderr: run.stderr });
   const files = new Map();
   for (const line of run.stderr.split("\n")) {
     const m = /^sg: entity\|file\|(.*): (?:language=([^,]+),appliedRuleCount=(\d+)|skipped=(\w+))$/.exec(line);
@@ -83,23 +84,28 @@ export function lintChange(project, sha, binary, at = lintBase(project)) {
   status(["cat-file", "-e", `${sha}^{commit}`], 128, fault(`the commit ${sha.slice(0, 7)} is not in ${top}`, "Fetch the head (git fetch origin), then lint again."));
   const base = status(["merge-base", main, sha], 1, fault(`${sha.slice(0, 7)} shares no history with origin/main ${main.slice(0, 7)}`, "Start the branch from origin/main, then lint again."));
   const work = mkdtempSync(join(realpathSync(tmpdir()), "sage-lint-"));
-  const scan = (cwd, paths) => {
-    if (!paths.length) return { matches: [], files: new Map() };
-    try {
-      return astGrepScan(binary, { config: join(work, "rules", LINT_CONFIG), cwd, paths, args: NO_IGNORE });
-    } catch (e) {
-      throw fault(e.message, `Fix the rule or ${LINT_CONFIG} on origin/main that the message names, then lint again.`);
-    }
-  };
   try {
     const rules = join(work, "rules"), head = join(work, "head");
-    const yaml = treeOf(git(["ls-tree", "-r", "-z", "-l", "--full-tree", main])).filter((e) => REGULAR.test(e.mode) && /\.ya?ml$/i.test(e.path) && e.size <= LINT_MAX_BYTES);
-    eachBlob(git, yaml, (e, text) => {
+    const yaml = treeOf(git(["ls-tree", "-r", "-z", "-l", "--full-tree", main])).filter((e) => REGULAR.test(e.mode) && /\.ya?ml$/i.test(e.path));
+    const copy = (e, text) => {
       const full = inside(rules, e.path);
       if (!full) throw fault(`origin/main holds a path outside its tree: ${JSON.stringify(e.path)}`, MAIN_FIX);
       mkdirSync(dirname(full), { recursive: true });
       writeFileSync(full, text);
-    });
+    };
+    const large = yaml.filter((e) => e.size > LINT_MAX_BYTES);
+    eachBlob(git, yaml.filter((e) => e.size <= LINT_MAX_BYTES), copy);
+    large.forEach((e, i) => copy(e, `${TOO_LARGE}${i}: [\n`));
+    const scan = (cwd, paths) => {
+      if (!paths.length) return { matches: [], files: new Map() };
+      try {
+        return astGrepScan(binary, { config: join(rules, LINT_CONFIG), cwd, paths, args: NO_IGNORE });
+      } catch (e) {
+        const hit = large.filter((l, i) => e.stderr?.includes(`${TOO_LARGE}${i}: [`));
+        if (hit.length) throw fault(`origin/main ${main.slice(0, 7)} has ${hit.map((l) => `${l.path} (${mib(l.size)} MiB)`).join(", ")} in a rule or util folder of ${LINT_CONFIG}, more than the ${mib(LINT_MAX_BYTES)} MiB that lint reads, so its rules cannot run`, `Split ${hit.length === 1 ? "it" : "them"} into smaller files on origin/main, then lint again.`);
+        throw fault(e.message, `Fix the rule or ${LINT_CONFIG} on origin/main that the message names, then lint again.`);
+      }
+    };
     const problems = [], notChecked = [];
     const named = changesOf(git(["diff", "--raw", "-z", "--no-abbrev", "--no-renames", "--no-color", "--diff-filter=AMT", base, sha])).filter((c) => {
       const why = nameProblem(c.path);

@@ -57,6 +57,7 @@ sage's state tool checks a pull request with a project's own rules: `sage lint <
 | Each match on an added line fails, whatever its severity. lint reads the JSON matches, never the exit code alone. | A rule without `severity: error` exits 0 when it finds matches. |
 | A changed file whose text holds `ast-grep-ignore` fails as a whole file. | The suppression hides lines from the rules. |
 | A changed file that ast-grep skips (not UTF-8, too large), or one of more than 10 MiB, fails, by name. lint reads no file that it does not scan. | A skipped file is not checked, and a large asset with no rule does not stop lint. |
+| A YAML file of more than 10 MiB in a rule or util folder of `origin/main` makes lint refuse, by name, with no verdict. | lint copies no larger YAML file, so the rules in it would not run. |
 | A symbolic link, a submodule, a file marked `linguist-generated` or `linguist-vendored` in `origin/main`, and a file with no ast-grep language or no rule are not checked. lint lists each one by name. | They hold no code that the rules read. |
 | With no `sgconfig.yml` at the root of `origin/main`, lint records nothing, and the merge check needs no lint verdict. With no `origin/main` and a root `sgconfig.yml` in the checkout, lint and the merge check refuse. | Like a required status check that a repository has not turned on; a repository that turned it on is never let through. |
 
