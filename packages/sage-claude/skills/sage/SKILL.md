@@ -33,7 +33,7 @@ Read `skills/sage/references/commands.md` for the full row of a command before y
 | `task add --title "<t>" --size tiny\|small\|large\|investigate [--risk auth,data,schema,money,secrets,input] [--add <blocks> --why "<reason>"] --priority P0\|P1\|P2\|P3 [--kind <kind>] [--waits <T,T>] [--milestone <M>]` | Frames a task and its route. |
 | `task <T> set priority=P0\|P1\|P2\|P3` · `task <T> set kind=<kind>\|none` | Sets the task's priority, or sets or clears (`none`) its kind, from the lists of `task add`. |
 | `task <T> set waits=<T,T>` · `waits=` (or `waits=none`) | Sets or clears the tasks that this task waits for. |
-| `config name="<name>"` · `config archived=yes\|no` · `config start=sage-mode\|normal` | Sets a key of the project's own logbook, in `config.json` of its logbook folder (not the config for all projects). |
+| `config name="<name>"` · `config archived=yes\|no` · `config start=sage-mode\|normal` · `config lint_offer=never\|ask` | Sets a key of the project's own logbook, in `config.json` of its logbook folder (not the config for all projects). |
 | `task <T> set state=<state> [branch=<b>] [pr=<n>]` | Moves the task. |
 | `round <T> [--why "<reason>"]` | Starts a repair round on the open findings marked fix, also on low findings only, and names the roles to re-run on the repair's diff. |
 | `run add <T> --role <role> [--branch <b>] [--candidate <k>]` · `run done <R> --status done\|blocked\|question\|failed [--tokens <n>] [--report <path>]` | Records an agent run. |

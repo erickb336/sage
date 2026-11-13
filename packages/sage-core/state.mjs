@@ -28,6 +28,7 @@ import { MAX_SECTIONS, PAGE_MAX, PAGE_TYPES, pageType, pageUrl } from "./message
 import { pageFile, pageTaskFolder } from "./page-files.mjs";
 import { taskWord } from "./state-words.mjs";
 import { AST_GREP_VERSION, LINT_CONFIG, LINT_KINDS, astGrepBinary, lintBase, lintChange } from "./lint.mjs";
+import { adoptBrief, languageList, placeToolFiles, projectLanguages } from "./lint-offer.mjs";
 
 export const STUCK_WRITE = 'This command changed nothing. This project cannot save changes; other projects work. Tell the owner. There are two ways out. With a backup: the owner restores the folder that `sage logbook` prints; rows newer than the backup are lost. With no backup: after the owner accepts the loss of this saved change, the chief runs `sage logbook repair --accept-change-loss yes --project <the project>`, or the owner runs it in a terminal when the chief cannot; it keeps the file, and a half-published update keeps mixed tables. Do not remove review-pending.json by hand.';
 
@@ -1954,6 +1955,38 @@ function rebuild(root) {
   });
 }
 
+const LINT_GATE = "lint";
+const OFFER_OPTIONS = ["add the rules", "not now", "never for this project"];
+const OFFER_AGAIN_MS = 30 * 24 * 3600 * 1000;
+const toolsDir = (dir) => join(dirname(dir), "tools");
+const installCommand = (tools) => `npm ci --ignore-scripts --prefix ${shell(placeToolFiles(tools))}`;
+
+function lintOffer(dir, at, tools) {
+  const offers = read(dir, "gates").filter((g) => g.kind === LINT_GATE), open = offers.find((g) => !g.answer);
+  if (open) return ` Nothing changed. The offer of sage's lint rules waits in ${open.id} for the owner.`;
+  if (savedIn(dir).lint_offer === "never" || offers.some((g) => Date.now() - Date.parse(g.at) < OFFER_AGAIN_MS)) return " Nothing changed.";
+  const languages = projectLanguages(at.top, at.main);
+  if (!languages.length) return " Nothing changed.";
+  const install = astGrepBinary(at.top, tools) ? "" : ` The same yes installs ast-grep ${AST_GREP_VERSION} in sage's tools folder, from the lockfile that sage pins.`;
+  const g = { id: nextId(dir, "G"), task: "", question: `Add sage's no-comments lint rules to this project, for ${languageList(languages)}? A yes frames one small task that adds them through a pull request, and then the merge check needs lint-pass.${install}`, options: OFFER_OPTIONS.join("|"), recommendation: OFFER_OPTIONS[0], default: OFFER_OPTIONS[1], at: now(), kind: LINT_GATE };
+  write(dir, "gates", [...read(dir, "gates"), g]);
+  return `\n${g.id} open · ${g.question}\nAsk the owner to answer ${g.id}: ${OFFER_OPTIONS.join(", ")}.`;
+}
+
+function adoptTask(dir, g, opt, project, env) {
+  let at;
+  try { at = lintBase(project); } catch (e) { refuse(`the lint offer cannot read the git checkout ${visible(project)} (${e?.message ?? e}). Give --project the project's git checkout. Nothing changed.`); }
+  if (!at.main) refuse(`${visible(at.top)} has no origin/main, and sage reads the project's languages from it. Fetch origin, then answer ${g.id} again. Nothing changed.`);
+  if (at.config) return ` · origin/main ${at.main.slice(0, 7)} has a root ${LINT_CONFIG} now, so sage frames no task.`;
+  const languages = projectLanguages(at.top, at.main), tools = toolsDir(dir), own = astGrepBinary(at.top, tools);
+  const task = frame(dir, `Add the no-comments lint rules for ${languageList(languages) || "the project"}`, "small", [], [], { priority: "P2", ...chiefTag(opt) });
+  checkout(dir, project, env);
+  const folder = pagesDir(project, task.id, env), page = join(folder, "brief.md");
+  mkdirSync(folder, { recursive: true, mode: 0o700 });
+  writeFileSync(page, adoptBrief({ task: task.id, gate: g.id, top: at.top, main: at.main, languages, binary: own ?? join(tools, "node_modules", ".bin", "ast-grep"), standing: `sage standing --project ${shell(at.top)}` }), { mode: 0o600 });
+  return `\n${framed(task)} · its brief: ${page}${own ? "" : `\nThe owner's yes covers the install of ast-grep ${AST_GREP_VERSION} in sage's tools folder, from the lockfile that sage pins. Run it before the build: ${installCommand(tools)}`}`;
+}
+
 function lintNeed(checkout) {
   if (checkout === undefined) return null;
   try {
@@ -2240,19 +2273,20 @@ function fileOrNone(file) {
   const st = lstatSync(file, { throwIfNoEntry: false });
   if (st && !st.isFile()) refuse(`${file} is ${st.isSymbolicLink() ? "a link" : st.isDirectory() ? "a folder" : st.isFIFO() ? "a named pipe" : st.isSocket() ? "a socket" : "a device"}, not a regular file, so config writes nothing. Replace it with a regular file.`);
 }
-const ownKey = (kv) => /^(name|archived|start)(=|$)/.test(kv);
+const ownKey = (kv) => /^(name|archived|start|lint_offer)(=|$)/.test(kv);
 
 function logbookConfig(dir, pairs) {
   const set = {};
   for (const kv of pairs) {
     const at = kv.indexOf("="), k = at < 0 ? kv : kv.slice(0, at), v = at < 0 ? undefined : kv.slice(at + 1);
-    if (!ownKey(kv)) refuse(`"${visible(k)}" is a key for all projects, and name=, archived= and start= are keys of one logbook: set them in a config command of their own.`);
+    if (!ownKey(kv)) refuse(`"${visible(k)}" is a key for all projects, and name=, archived=, start= and lint_offer= are keys of one logbook: set them in a config command of their own.`);
     if (v === undefined) refuse(`${k} needs a value: write ${k}=<value>`);
     if (k === "name") {
       const name = v.normalize("NFC"), why = name && nameProblem(name);
       if (why) refuse(`the name "${visible(name)}" ${why}. Nothing changed.`);
       set.name = name || undefined;
-    } else if (k === "start") set.start = v === START_SAGE_MODE ? v : v === "normal" ? undefined : refuse(`start is ${START_SAGE_MODE} or normal, not "${visible(v)}". Nothing changed.`);
+    } else if (k === "lint_offer") set.lint_offer = v === "never" ? v : v === "ask" ? undefined : refuse(`lint_offer is never or ask, not "${visible(v)}". Nothing changed.`);
+    else if (k === "start") set.start = v === START_SAGE_MODE ? v : v === "normal" ? undefined : refuse(`start is ${START_SAGE_MODE} or normal, not "${visible(v)}". Nothing changed.`);
     else set.archived = v === "yes" ? true : v === "no" ? undefined : refuse(`archived is yes or no, not "${visible(v)}". Nothing changed.`);
   }
   const file = join(dir, "config.json");
@@ -2265,7 +2299,7 @@ function logbookConfig(dir, pairs) {
   const next = { ...old, ...set };
   for (const k of Object.keys(set)) if (set[k] === undefined) delete next[k];
   swap(file, JSON.stringify(next, null, 2) + "\n");
-  return `name=${visible(typeof next.name === "string" ? next.name : "")} archived=${next.archived === true ? "yes" : "no"} start=${next.start === START_SAGE_MODE ? START_SAGE_MODE : "normal"}`;
+  return `name=${visible(typeof next.name === "string" ? next.name : "")} archived=${next.archived === true ? "yes" : "no"} start=${next.start === START_SAGE_MODE ? START_SAGE_MODE : "normal"}${next.lint_offer === "never" ? " lint_offer=never" : ""}`;
 }
 
 
@@ -3138,9 +3172,10 @@ function act(cmd, pos, opt, dir, env, skip, project) {
       let at, result;
       try { at = lintBase(project); } catch (e) { refuse(`lint cannot read the git checkout ${visible(project)} (${e?.message ?? e}). Give --project the project's git checkout. Nothing changed.`); }
       if (!at.main && at.local) refuse(`${visible(at.top)} has a root ${LINT_CONFIG} but no origin/main, and lint reads its rules only from the tip of origin/main, so it cannot lint ${sha.slice(0, 7)}. lint needs a remote named origin with a branch named main. Nothing changed.`);
-      if (!at.config) return `${task.id} · ${sha.slice(0, 7)}: ${at.main ? `origin/main ${at.main.slice(0, 7)} has` : `${visible(at.top)} has no origin/main and`} no ${LINT_CONFIG} at its root, so there is nothing to lint, and the merge check needs no lint verdict. Nothing changed.`;
-      const tools = join(dirname(dir), "tools"), binary = astGrepBinary(at.top, tools);
-      if (!binary) refuse(`ast-grep ${AST_GREP_VERSION} is not in ${visible(join(at.top, "node_modules", ".bin"))} or in sage's tools folder ${visible(tools)}, so lint cannot run, and it writes no verdict. Install it in the tools folder: npm install --prefix ${shell(tools)} @ast-grep/cli@${AST_GREP_VERSION}`);
+      const tools = toolsDir(dir);
+      if (!at.config) return `${task.id} · ${sha.slice(0, 7)}: ${at.main ? `origin/main ${at.main.slice(0, 7)} has` : `${visible(at.top)} has no origin/main and`} no ${LINT_CONFIG} at its root, so there is nothing to lint, and the merge check needs no lint verdict.${at.main ? lintOffer(dir, at, tools) : " Nothing changed."}`;
+      const binary = astGrepBinary(at.top, tools);
+      if (!binary) refuse(`ast-grep ${AST_GREP_VERSION} is not in ${visible(join(at.top, "node_modules", ".bin"))} or in sage's tools folder ${visible(tools)}, so lint cannot run, and it writes no verdict. With the owner's yes, install it in the tools folder from the lockfile that sage pins: ${installCommand(tools)}`);
       try { result = lintChange(project, sha, binary, at); } catch (e) { refuse(`lint could not check ${sha.slice(0, 7)}: ${visible(String(e?.message ?? e))}. ${e?.fix ?? "lint has no known fix for this error: tell the owner, with this message."} Nothing changed.`); }
       const short = `${sha.slice(0, 7)} · rules ${result.main.slice(0, 7)} · diff from ${result.base.slice(0, 7)}`;
       const kind = result.problems.length ? "lint-fail" : "lint-pass";
@@ -3176,6 +3211,7 @@ function act(cmd, pos, opt, dir, env, skip, project) {
       if (sub === "answer") {
         const g = gates.find((x) => x.id === id) ?? missing(`gate ${id}`, gates.map((x) => x.id));
         if (g.answer && g.kind === "replace") refuse(`${g.id} is a takeover gate, and the owner answered it already (${visible(g.answer)}): a takeover gate answers once. Open a new one. Nothing changed.`);
+        if (g.answer && g.kind === LINT_GATE) refuse(`${g.id} is the lint offer, and the owner answered it already (${visible(g.answer)}): it answers once. Nothing changed.`);
         if (g.answer && moveOf(g)) refuse(`${g.id} is a move gate, and the owner answered it already (${visible(g.answer)}): a move gate answers once. To move later, run the preview again: sage move --preview. Nothing changed.`);
         if (g.answer && breakdownLine(g)) refuse(`${g.id} is a breakdown gate, and the owner answered it already (${visible(g.answer)}): a breakdown gate answers once. For a change of mind, the sage proposes the milestone again (sage milestone propose <M>) and the owner answers the new gate. A dropped milestone does not come back: propose a new one. Nothing changed.`);
         const options = optionsOf(g);
@@ -3187,11 +3223,13 @@ function act(cmd, pos, opt, dir, env, skip, project) {
         if (g.kind === "replace" && g.answer === options[0]) return replaceChief(dir, g, g.answer, project, env);
         const ended = g.kind === "replace" && g.answer === options[1] && declineOffer(dir, g, g.answer);
         if (ended) return ended;
+        const adopted = g.kind === LINT_GATE && g.answer === OFFER_OPTIONS[0] ? adoptTask(dir, g, opt, project, env) : "";
+        if (g.kind === LINT_GATE && g.answer === OFFER_OPTIONS[2]) logbookConfig(dir, ["lint_offer=never"]);
         write(dir, "gates", gates);
         write(dir, "decisions", [...read(dir, "decisions"), { at: now(), task: g.task, decision: `${g.question} → ${g.answer}`, why: own === undefined ? "the user's answer" : "the user's own words" }]);
         const kept = g.kind === "replace" && read(dir, "tasks").find((t) => t.id === g.task);
         if (kept) return `${g.id} answered · ${g.answer} · nothing replaced: ${kept.id} keeps ${kept.chief ? `its chief ${kept.chief}` : "no owning chief"}, and no run ended. ${g.id} is spent: to change the chief, open a new takeover gate.`;
-        return `${g.id} answered · ${g.answer}`;
+        return `${g.id} answered · ${g.answer}${adopted}`;
       }
       refuse("gate add, gate replace or gate answer");
     }

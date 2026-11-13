@@ -310,11 +310,25 @@ A repository can have lint rules of its own: an [ast-grep](https://ast-grep.gith
 | A renamed file, or a symbolic link or a submodule that became a file | Every line counts as added, under the rules of its new path. |
 | A file with no ast-grep language, no rule, a symbolic link, or a file marked `linguist-generated` or `linguist-vendored` in the main branch's `.gitattributes` | Passes, and lists the file as not checked. |
 
-A repository without `sgconfig.yml` at the root of `origin/main` gets no lint verdict and no block. A repository with no `origin/main` and a root `sgconfig.yml` in its checkout gets no lint verdict, and the merge check refuses: lint needs a remote named origin with a branch named main.
+A repository without `sgconfig.yml` at the root of `origin/main` gets no lint verdict and no block. The first lint there opens one gate for you, the lint offer: add the rules, not now, or never for this project ([The lint offer](#the-lint-offer)). A repository with no `origin/main` and a root `sgconfig.yml` in its checkout gets no lint verdict, and the merge check refuses: lint needs a remote named origin with a branch named main.
 
 When a YAML file in a rule folder of `origin/main` has more than 10 MiB, lint refuses, names the file and records no verdict.
 
-The check needs ast-grep 0.51.1 in the project's `node_modules/.bin`, or in sage's tools folder. When it finds neither, it refuses and prints the command that installs it in the tools folder.
+The check needs ast-grep 0.51.1 in the project's `node_modules/.bin`, or in sage's tools folder. When it finds neither, it refuses.
+
+It then puts sage's pinned lockfile in the tools folder and prints the command that installs from it: `npm ci --ignore-scripts --prefix <tools folder>`. The chief runs it only with your yes.
+
+### The lint offer
+
+sage offers its no-comments rules to a repository with no `sgconfig.yml` at the root of `origin/main`. The rules go into the repository only after your yes, through a pull request, and then the repository owns them.
+
+| Your answer | What happens |
+| --- | --- |
+| add the rules (recommended) | The chief frames one small task, whose brief lists the repository's languages (from the files of `origin/main`, by extension) and the linter settings that require comments. The task adds a root `sgconfig.yml`, a rule with rule tests for each of those languages only, and turns those settings off, in a pull request. The same yes installs ast-grep 0.51.1 in sage's tools folder from sage's lockfile, when the project has no copy. |
+| not now (the default) | Nothing changes. The offer comes back with a lint 30 days after the gate opened. |
+| never for this project | sage records `lint_offer=never` in the project's config, and the offer does not come back. `sage config lint_offer=ask` brings it back. |
+
+The steps of the task are in [Adopt the rules](../../packages/sage-core/lint/README.md#adopt-the-rules).
 
 ## Clean up worktrees
 
