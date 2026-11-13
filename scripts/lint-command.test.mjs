@@ -103,10 +103,28 @@ test("an old trailing comment on an edited line fails, and so does a comment blo
   assert.deepEqual(problems(lint(p, sha)), [`a.js:1: ${MESSAGE} (no-comments-js, error)`, `a.js:3: ${MESSAGE} (no-comments-js, error)`]);
 });
 
-test("a renamed file with its old comment, and a comment on an unchanged line, pass", () => {
+test("a renamed file has every line checked under the rules of its new path: a pure rename with no match passes, an old comment in it fails, and a comment on an unchanged line passes", () => {
   const p = project();
-  const sha = p.commit({ "old.js": null, "lib/old.js": BASE["old.js"], "a.js": "const a = 1; // an old comment\nconst b = 2;\nconst n = 5;\n" });
-  assert.match(lint(p, sha), /^T1 lint-pass · \S+ · rules \S+ · diff from \S+ · 1 file checked$/);
+  p.onMain({ "plain.js": "export const p = 1;\n" });
+  const clean = p.commit({ "plain.js": null, "lib/plain.js": "export const p = 1;\n", "a.js": "const a = 1; // an old comment\nconst b = 2;\nconst n = 5;\n" });
+  assert.match(lint(p, clean), /^T1 lint-pass · \S+ · rules \S+ · diff from \S+ · 2 files checked$/);
+  const moved = p.commit({ "old.js": null, "lib/old.js": BASE["old.js"] });
+  assert.deepEqual(problems(lint(p, moved)), [`lib/old.js:1: ${MESSAGE} (no-comments-js, error)`]);
+});
+
+test("F-T1019-16: a file renamed into another language has its old lines checked by the rules of the new language", () => {
+  const p = project();
+  p.onMain({ "lint/rules/ts-comment.yml": "id: ts-comment\nlanguage: TypeScript\nseverity: error\nmessage: ts-comment\nrule: { kind: comment }\n" });
+  const sha = p.commit({ "old.js": null, "old.ts": BASE["old.js"] });
+  assert.deepEqual(problems(lint(p, sha)), ["old.ts:1: ts-comment (ts-comment, error)"]);
+});
+
+test("F-T1019-17: a file renamed into the files of a stricter rule has its old lines checked by that rule", () => {
+  const p = project();
+  const text = "export function f() {\n  debugger;\n}\n";
+  p.onMain({ "lint/rules/src-debugger.yml": "id: src-debugger\nlanguage: JavaScript\nseverity: error\nmessage: src-debugger\nfiles: [\"src/**\"]\nrule: { kind: debugger_statement }\n", "scripts/tool.js": text });
+  const sha = p.commit({ "scripts/tool.js": null, "src/tool.js": text });
+  assert.deepEqual(problems(lint(p, sha)), ["src/tool.js:2: src-debugger (src-debugger, error)"]);
 });
 
 test("a pull request that edits sgconfig.yml or a rule at its head is still checked by the rules of origin/main", () => {

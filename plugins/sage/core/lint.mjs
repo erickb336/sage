@@ -92,7 +92,7 @@ export function lintChange(project, sha, binary, at = lintBase(project)) {
     }
   };
   try {
-    const rules = join(work, "rules"), head = join(work, "head"), old = join(work, "old");
+    const rules = join(work, "rules"), head = join(work, "head");
     const yaml = treeOf(git(["ls-tree", "-r", "-z", "-l", "--full-tree", main])).filter((e) => REGULAR.test(e.mode) && /\.ya?ml$/i.test(e.path) && e.size <= LINT_MAX_BYTES);
     eachBlob(git, yaml, (e, text) => {
       const full = inside(rules, e.path);
@@ -101,12 +101,12 @@ export function lintChange(project, sha, binary, at = lintBase(project)) {
       writeFileSync(full, text);
     });
     const problems = [], notChecked = [];
-    const named = changesOf(git(["diff", "--raw", "-z", "--no-abbrev", "-M", "--no-color", "--diff-filter=AMRTC", base, sha])).filter((c) => {
+    const named = changesOf(git(["diff", "--raw", "-z", "--no-abbrev", "--no-renames", "--no-color", "--diff-filter=AMT", base, sha])).filter((c) => {
       const why = nameProblem(c.path);
       if (why) problems.push({ file: JSON.stringify(c.path.toString("latin1")), text: why });
       return !why;
-    }).map((c) => ({ ...c, path: UTF8.decode(c.path), from: c.from && !nameProblem(c.from) ? UTF8.decode(c.from) : null }));
-    const marked = attributes(git, main, [...new Set(named.flatMap((c) => (c.from ? [c.path, c.from] : [c.path])))]);
+    }).map((c) => ({ ...c, path: UTF8.decode(c.path) }));
+    const marked = attributes(git, main, named.map((c) => c.path));
     const code = named.filter((c) => {
       const why = NOT_CODE[c.mode] ?? (marked.get(c.path) && `${marked.get(c.path)} in the .gitattributes of origin/main`);
       if (why) notChecked.push({ file: c.path, why });
@@ -124,14 +124,12 @@ export function lintChange(project, sha, binary, at = lintBase(project)) {
       return !why;
     });
     const sizes = sizesOf(git, ruled.flatMap((c) => (c.oldOid && REGULAR.test(c.oldMode) ? [c.oid, c.oldOid] : [c.oid])));
-    const moved = ruled.filter((c) => c.from && c.from !== c.path && REGULAR.test(c.oldMode) && !marked.get(c.from) && !putOne(old, c.from, "\n"));
-    const oldProbe = scan(old, moved.map((c) => c.from)).files;
     const files = ruled.filter((c) => {
       const size = sizes.get(c.oid);
       if (size > LINT_MAX_BYTES) problems.push({ file: c.path, text: `it is ${mib(size)} MiB, more than the ${mib(LINT_MAX_BYTES)} MiB that lint scans, so no rule checked it. Split it into smaller files, or mark it linguist-generated or linguist-vendored in the .gitattributes of origin/main.` });
       return size <= LINT_MAX_BYTES;
     }).map((c) => {
-      const checkedBefore = REGULAR.test(c.oldMode) && sizes.get(c.oldOid) <= LINT_MAX_BYTES && (c.from === c.path || oldProbe.get(c.from)?.rules > 0);
+      const checkedBefore = REGULAR.test(c.oldMode) && sizes.get(c.oldOid) <= LINT_MAX_BYTES;
       return { ...c, size: sizes.get(c.oid), lines: !checkedBefore ? ALL : c.oldOid === c.oid ? new Set() : addedLines(git(["diff", "-U0", "--text", "--no-color", "--no-ext-diff", "--no-textconv", c.oldOid, c.oid])) };
     }).filter((c) => c.lines === ALL || c.lines.size);
     const suppressed = new Set();
@@ -232,15 +230,10 @@ function nameProblem(path) {
 function changesOf(out) {
   const raw = [];
   for (let at = 0; at < out.length;) {
-    const end = out.indexOf(0, at), [oldMode, mode, oldOid, oid, status] = out.toString("latin1", at + 1, end).split(" ");
-    at = end + 1;
-    const paths = [];
-    for (let k = /^[RC]/.test(status) ? 2 : 1; k > 0; k--) {
-      const stop = out.indexOf(0, at);
-      paths.push(out.subarray(at, stop));
-      at = stop + 1;
-    }
-    raw.push({ mode, oid, oldMode, oldOid: /^0+$/.test(oldOid) ? null : oldOid, from: status === "A" ? null : paths[0], path: paths.at(-1) });
+    const end = out.indexOf(0, at), [oldMode, mode, oldOid, oid] = out.toString("latin1", at + 1, end).split(" ");
+    const stop = out.indexOf(0, end + 1);
+    raw.push({ mode, oid, oldMode, oldOid: /^0+$/.test(oldOid) ? null : oldOid, path: out.subarray(end + 1, stop) });
+    at = stop + 1;
   }
   return raw;
 }
