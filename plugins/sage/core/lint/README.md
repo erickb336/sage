@@ -51,7 +51,7 @@ sage's state tool checks a pull request with a project's own rules: `sage lint <
 | Rule | Why |
 | --- | --- |
 | The rules, `sgconfig.yml` and `.gitattributes` come from the tip of `origin/main`, never from the head. | A pull request cannot weaken its own check, and a branch that started before a rule reached main gets that rule too, like a required check that applies the branch's current settings. |
-| Only the lines that the head adds since its merge base with `origin/main` count, so a moved or an edited line counts. A renamed file keeps its old lines when a rule checked its old path; when no rule did (another language, no rule, generated or vendored, a symbolic link), every line counts. | An old comment on a line that the pull request does not touch is not its problem, and a rename cannot bring unchecked lines in. |
+| Only the lines that the head adds since its merge base with `origin/main` count, so a moved or an edited line counts. lint does not look for renames: a renamed file is a new file, so every line counts, under the rules of its new path. A rename with no match passes. | An old comment on a line that the pull request does not touch is not its problem. A rename can move a file into another language or into the `files` of a stricter rule, so its old lines need the rules of the new path. |
 | lint runs at the root of the repository, also when you run it from a subfolder. | The root `sgconfig.yml` decides. |
 | The scan reads a copy of the changed files, with the paths after `--`. | A file named like an option, such as `--off`, stays a path. |
 | Each match on an added line fails, whatever its severity. lint reads the JSON matches, never the exit code alone. | A rule without `severity: error` exits 0 when it finds matches. |
