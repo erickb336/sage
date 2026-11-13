@@ -307,10 +307,12 @@ A repository can have lint rules of its own: an [ast-grep](https://ast-grep.gith
 | A new comment, or an old comment on an edited or moved line | Fails, and names the file and the line. |
 | ast-grep's suppression comment anywhere in a changed file | Fails for the whole file: the suppression hides lines from the rules. |
 | A changed file that ast-grep skips (not UTF-8), or a file of more than 10 MiB | Fails, and names the file. |
-| A file renamed from a path that no rule checked, or a symbolic link that became a file | Every line counts as added. |
+| A renamed file, or a symbolic link or a submodule that became a file | Every line counts as added, under the rules of its new path. |
 | A file with no ast-grep language, no rule, a symbolic link, or a file marked `linguist-generated` or `linguist-vendored` in the main branch's `.gitattributes` | Passes, and lists the file as not checked. |
 
 A repository without `sgconfig.yml` at the root of `origin/main` gets no lint verdict and no block. A repository with no `origin/main` and a root `sgconfig.yml` in its checkout gets no lint verdict, and the merge check refuses: lint needs a remote named origin with a branch named main.
+
+When a YAML file in a rule folder of `origin/main` has more than 10 MiB, lint refuses, names the file and records no verdict.
 
 The check needs ast-grep 0.51.1 in the project's `node_modules/.bin`, or in sage's tools folder. When it finds neither, it refuses and prints the command that installs it in the tools folder.
 
