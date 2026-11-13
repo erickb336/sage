@@ -102,7 +102,7 @@ function switchModes(prompt, state, cwd) {
 
 function boardText(intent, cwd) {
   if (stateTool.error) return "sage: the owner asked for the board, but the state tool cannot load, so there is no board. Tell the owner so, and record no answer.";
-  return core.boardNote(intent, cwd, { state: stateCommand, ensure: nodeCommand(BOARD, "board --ensure"), prefix: SPACE_NOTE, choice: "a choice card (AskUserQuestion)" });
+  return core.boardNote(intent, cwd, { state: stateCommand, ensure: nodeCommand(BOARD, "board --ensure"), prefix: SPACE_NOTE, choice: "a choice card (AskUserQuestion), but in the text form while a run of yours works in the background, because the card holds your turn" });
 }
 
 const running = (n) => `${n} sage ${n === 1 ? "agent is" : "agents are"} running`;

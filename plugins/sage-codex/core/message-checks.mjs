@@ -1,6 +1,6 @@
 import { createHash } from "node:crypto";
 import { CHIEF } from "./chiefs.mjs";
-import { KINDS, INCIDENT_STATUS, LONG_WIDTH, TREE, WIDTH, messageText, partsOf, pictureProblems, prepareMessage } from "./message.mjs";
+import { BATCH, KINDS, INCIDENT_STATUS, LONG_WIDTH, TREE, WIDTH, messageText, partsOf, pictureProblems, prepareMessage } from "./message.mjs";
 import { PAGE_POLICY, messagePage } from "./message-page.mjs";
 import { GATE_ID, MILESTONE_ID, TASK_ID } from "./milestone-rules.mjs";
 import { PR } from "./pull-request.mjs";
@@ -68,6 +68,16 @@ function answers(lines) {
   return out;
 }
 
+const HEADING = /^#{1,6} /;
+function questions(lines) {
+  const heads = lines.flatMap((l, i) => (HEADING.test(l) && BATCH.test(l.replace(/^#+\s*/, "")) ? [i] : []));
+  if (!heads.length) return [{ name: "", lines }];
+  return heads.map((i) => {
+    const end = lines.findIndex((l, j) => j > i && HEADING.test(l));
+    return { name: ` in "${lines[i].replace(/^#+\s*/, "")}"`, lines: lines.slice(i + 1, end < 0 ? undefined : end) };
+  });
+}
+
 export const textProblems = (text, options) => namedProblems(text, options).problems.map(([, problem]) => problem);
 
 function namedProblems(text, { width = WIDTH } = {}) {
@@ -92,9 +102,11 @@ function namedProblems(text, { width = WIDTH } = {}) {
     else problems.push([`missing: ${part.name}`, `a ${kind} needs "${part.name}"`]);
   }
   if (KINDS[kind].pick) {
-    const picked = answers(lines).find((a) => PICK.test(a.text));
-    if (!PICK.test(text)) problems.push(["no pick", `a ${kind} marks your pick with "(my pick)"`]);
-    else if (picked && picked.n !== 1) problems.push(["pick not first", `a ${kind} gives your pick first: answer ${picked.n} says "(my pick)", so make it answer 1`]);
+    for (const q of questions(lines)) {
+      const picked = answers(q.lines).find((a) => PICK.test(a.text));
+      if (!PICK.test(q.lines.join("\n"))) problems.push(["no pick", `a ${kind} marks your pick with "(my pick)"${q.name}`]);
+      else if (picked && picked.n !== 1) problems.push(["pick not first", `a ${kind} gives your pick first: answer ${picked.n}${q.name} says "(my pick)", so make it answer 1`]);
+    }
   }
   const bold = (l, name) => l.trim().replace(/:?(\*\*):?$/, "$1") === `**${name}**`;
   for (const part of partsOf(kind).filter((p) => /^[A-Z]/.test(p.name))) {

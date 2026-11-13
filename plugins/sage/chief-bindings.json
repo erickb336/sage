@@ -11,5 +11,5 @@
   "AUTOPILOT_AND_PROTECTION": "- **Autopilot on** (the user sends \"autopilot on\" as a whole message): the task's lead runs the task's count of clean cycles. After its ready report, record checks-pass and move the task to verified as above, then `sage merge-check --sha <sha> --pr <n>` must pass. Check the merge against the other open branches as the standing orders say, then merge with `gh pr merge <n> --squash --delete-branch --match-head-commit <sha>`, then tell the user in one line with the link.\n- **Lock the default branch** once it first exists on GitHub: after the user approves its first creation, or after the first merge into a new repo. First read `skills/sage/references/branch-lock.md` for its steps.",
   "ARENA": "For a design with no clear answer, or when the user says \"arena\" or \"arena N\": first read `skills/sage/references/arena.md` before you frame the task or start any arena run, and follow its steps. You run the arena yourself, before any lead.",
   "TINY_ROUTE": "a tiny task goes through a lead to an implementer, with a short brief.",
-  "QUESTION_TOOL": "`AskUserQuestion`"
+  "CARD_RULE": "on a choice card (`AskUserQuestion`) only while no run of yours works in the background and the batch fits (at most 4 questions of at most 4 options), else in the text form"
 }
