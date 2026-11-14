@@ -43,7 +43,7 @@ const JOINED = "it did not start a new turn: it came while Codex worked, or from
 function joins(input, state) {
   if (state.onTurn === input.turn_id) return JOINED;
   const record = readRecord(input.transcript_path);
-  if (record.refused) return "sage could not read Codex's record of this session to see that it started a new turn";
+  if (record.refused) return record;
   return onCanCount(record, input.turn_id) ? undefined : JOINED;
 }
 
@@ -81,6 +81,7 @@ export function handle(input, state, env = process.env) {
   }
   const on = PHRASES[exactPhrase(input.prompt)]?.autopilot === true;
   const why = on && state.sage ? joins(input, state) : undefined;
+  if (why?.refused) return context(event, `sage: this request switched no mode. ${why.refused}`);
   if (why) return context(event, joinedOn(state.autopilot, why));
   const was = { sage: Boolean(state.sage), autopilot: Boolean(state.autopilot) };
   const notes = switchModes({ owner: true, text: input.prompt, all: input.prompt }, state, { autopilotOn: () => AUTOPILOT_ON + protectionNote(state, input.cwd, env), host: CODEX_HOST });

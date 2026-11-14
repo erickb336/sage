@@ -261,12 +261,12 @@ test("F-T677-18, F-T677-25, F-T677-33: an on that joins a running turn, or a que
   assert.equal(JSON.parse(readFileSync(modeFile(s), "utf8")).onTurn, "U");
 });
 
-const UNREAD_ON = "sage could not read Codex's record of this session to see that it started a new turn";
+const READ_CAUSE = (detail) => `sage: this request switched no mode. ${detail}`;
 
 test("F-T896-1: when the hook cannot read Codex's record, an on switches nothing and saves no turn, after an off from another thread too", async () => {
   const side = session(undefined, null);
   await side.prompt("sage mode");
-  assert.deepEqual(await side.prompt("autopilot on"), { hookSpecificOutput: { hookEventName: "UserPromptSubmit", additionalContext: JOINED(false, UNREAD_ON) } });
+  assert.equal(contextOf(await side.prompt("autopilot on")), READ_CAUSE("Codex keeps no record of this session, so sage cannot read the owner's autopilot switch. The owner merges the pull request in GitHub"));
   assert.deepEqual(JSON.parse(readFileSync(modeFile(side), "utf8")), { sage: true, given: true });
   const s = session();
   await s.prompt("sage mode");
@@ -277,12 +277,12 @@ test("F-T896-1: when the hook cannot read Codex's record, an on switches nothing
   const off = { sage: true, given: true, autopilot: false, onTurn: "A" };
   assert.deepEqual(JSON.parse(readFileSync(modeFile(s), "utf8")), off);
   writeFileSync(s.transcript, `${readFileSync(s.transcript, "utf8")}${JSON.stringify(turnStart("B", "user"))}\n{"type":"response_item","payl`);
-  assert.equal(contextOf(await s.prompt("autopilot on", { turn_id: "B" })), JOINED(false, UNREAD_ON), "a partial last line");
+  assert.equal(contextOf(await s.prompt("autopilot on", { turn_id: "B" })), READ_CAUSE("Codex is still writing its record of this session. Ask for the merge again in a moment (the last line is incomplete)"), "a partial last line");
   assert.deepEqual(JSON.parse(readFileSync(modeFile(s), "utf8")), off, "autopilot stays off, and the saved turn stays A");
   rmSync(s.transcript);
   const on = { ...off, autopilot: true };
   writeFileSync(modeFile(s), JSON.stringify(on));
-  assert.equal(contextOf(await s.prompt("autopilot on", { turn_id: "C" })), JOINED(true, UNREAD_ON), "no record file");
+  assert.equal(contextOf(await s.prompt("autopilot on", { turn_id: "C" })), READ_CAUSE("sage cannot read Codex's record of this session. Ask for the merge again. If it refuses again, the owner merges the pull request in GitHub (ENOENT)"), "no record file");
   assert.deepEqual(JSON.parse(readFileSync(modeFile(s), "utf8")), on);
 });
 
