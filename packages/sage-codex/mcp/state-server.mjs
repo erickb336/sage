@@ -201,7 +201,7 @@ export const TOOLS = {
     input: { task, to: chief }, pos: ["task"], argv: (i) => ["gate", "replace", i.task],
   },
   gate_answer: {
-    describe: "Record the owner's answer to a gate: the option's number, or the owner's own words as the hex of their UTF-8 bytes, and via, where the owner answered: codex-card for your choice card, chat for the chat. The first answer wins: a gate with an answer refuses, and names that answer, its place and its time.",
+    describe: "Record the owner's answer to a gate: the option's number, or the owner's own words as the hex of their UTF-8 bytes, and via, where the owner answered: codex-card for your choice card, chat for the chat. board only records the owner's board answer as pending: it acts when the owning chief's hook picks it up, and gate_undo takes it back before that. The first answer wins: a gate with an answer refuses, and names that answer, its place and its time.",
     input: { gate: id("G", "the gate id"), option: count("the number of the option"), "other-hex": optional("the owner's own words, as lower-case hex of their UTF-8 bytes"),
       via: z.enum(["codex-card", "chat", "claude-card", "board"]).optional().describe("where the owner answered; chat when left out") },
     pos: ["gate"], argv: (i) => ["gate", "answer", i.gate],

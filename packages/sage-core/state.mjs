@@ -2038,14 +2038,14 @@ const OFFER_AGAIN_MS = 30 * 24 * 3600 * 1000;
 const toolsDir = (dir) => join(dirname(dir), "tools");
 const installCommand = (tools) => `npm ci --ignore-scripts --prefix ${shell(placeToolFiles(tools))}`;
 
-function lintOffer(dir, at, tools) {
+function lintOffer(dir, at, tools, opt) {
   const offers = read(dir, "gates").filter((g) => g.kind === LINT_GATE), open = offers.find((g) => !g.answer);
   if (open) return ` Nothing changed. The offer of sage's lint rules waits in ${open.id} for the owner.`;
   if (savedIn(dir).lint_offer === "never" || offers.some((g) => Date.now() - Date.parse(g.at) < OFFER_AGAIN_MS)) return " Nothing changed.";
   const languages = projectLanguages(at.top, at.main);
   if (!languages.length) return " Nothing changed.";
   const install = astGrepBinary(at.top, tools) ? "" : ` The same yes installs ast-grep ${AST_GREP_VERSION} in sage's tools folder, from the lockfile that sage pins.`;
-  const g = { id: nextId(dir, "G"), task: "", question: `Add sage's no-comments lint rules to this project, for ${languageList(languages)}? A yes frames one small task that adds them through a pull request, and then the merge check needs lint-pass.${install}`, options: OFFER_OPTIONS.join("|"), recommendation: OFFER_OPTIONS[0], default: OFFER_OPTIONS[1], at: now(), kind: LINT_GATE };
+  const g = { id: nextId(dir, "G"), task: "", question: `Add sage's no-comments lint rules to this project, for ${languageList(languages)}? A yes frames one small task that adds them through a pull request, and then the merge check needs lint-pass.${install}`, options: OFFER_OPTIONS.join("|"), recommendation: OFFER_OPTIONS[0], default: OFFER_OPTIONS[1], at: now(), kind: LINT_GATE, ...chiefTag(opt) };
   write(dir, "gates", [...read(dir, "gates"), g]);
   return `\n${g.id} open · ${g.question}\nAsk the owner to answer ${g.id}: ${OFFER_OPTIONS.join(", ")}.`;
 }
@@ -2602,7 +2602,7 @@ const jsonCell = (text) => {
 const answeredOf = (g) => ((a) => (a && typeof a.at === "string" && Object.hasOwn(VIA, a.via) ? a : undefined))(jsonCell(g.answered));
 const pickedOf = (g) => ((p) => (p && typeof p.at === "string" ? p : undefined))(jsonCell(g.picked));
 const pendingOf = (g) => ((a) => (!g.answer && a?.via === "board" && typeof a.answer === "string" && a.answer ? a : undefined))(answeredOf(g));
-const gateChief = (g, tasks) => g.chief || (g.kind === "replace" && replaceOf(g)?.to) || tasks.find((t) => t.id === g.task)?.chief || "";
+const gateChief = (g, tasks) => (g.kind === "replace" && (g.chief || replaceOf(g)?.to)) || tasks.find((t) => t.id === g.task)?.chief || g.chief || "";
 const placeOf = (a) => (a ? `from ${VIA[a.via]} at ${a.at}` : "from a place and at a time that sage did not record");
 function pickerText(dir, g) {
   const chief = gateChief(g, read(dir, "tasks")), row = chief && chiefs(dir).find((r) => r.id === chief);
@@ -2612,7 +2612,8 @@ function pickerText(dir, g) {
 function firstAnswer(g) {
   const pending = pendingOf(g), answer = g.answer || pending?.answer;
   if (!answer) return undefined;
-  const after = pending ? ` No chief has picked it up yet, so the owner can take it back first: sage gate undo ${g.id}.` : g.kind === "replace" ? " To change the chief, open a new takeover gate." : moveOf(g) ? " To move later, run the preview again: sage move --preview." : "";
+  const after = pending ? ` No chief has picked it up yet, so the owner can take it back first: sage gate undo ${g.id}.` : g.kind === "replace" ? " To change the chief, open a new takeover gate." : moveOf(g) ? " To move later, run the preview again: sage move --preview."
+    : breakdownLine(g) ? ` ${g.id} is a breakdown gate, and a breakdown gate answers once: for a change of mind, the chief proposes the milestone again (sage milestone propose <M>) and the owner answers the new gate. A dropped milestone does not come back: propose a new one.` : "";
   return `${g.id} has the answer "${visible(answer)}" already, ${placeOf(answeredOf(g))}: the first answer wins, so this answer is not recorded.${after} Nothing changed.`;
 }
 function applyAnswer(dir, gates, g, answer, { answered, picked }, opt, project, env) {
@@ -2713,12 +2714,23 @@ function readMessage(file, json, project, env) {
   pages(input?.blocks);
   return { input, logbook };
 }
-function questionMessage(file, project, env) {
-  const { input } = readMessage(file, undefined, project, env);
-  if (input?.kind !== "question") refuse(`--message is the file of a question message ({ kind: "question", title, blocks }), not of ${JSON.stringify(input?.kind ?? null)}. Nothing written.`);
-  const out = renderMessage(input);
-  if (out.problems) refuse(`the message is not in its kind's shape, so the gate keeps no message in another shape. Nothing written.\n${out.problems.map((p) => `- ${p}`).join("\n")}`);
-  return { message: input, text: out.text };
+function writeMessage(project, taskId, { input, logbook }, shape, env) {
+  const folder = taskId && pagesDir(project, taskId, env);
+  const out = renderMessage(input, folder ? { pagePath: (name) => join(folder, name), pageUrl: (name) => pageUrl(logbook, taskId, name) } : {});
+  if (out.problems) refuse(`the message is not in its kind's shape, so ${shape}. Nothing written.\n${out.problems.map((p) => `- ${p}`).join("\n")}`);
+  if (!out.page) return out.text;
+  if (!folder) refuse("the message has a long form, a picture or a toggle, so it needs a page, and a page lives in a task's pages folder: give the gate its task. Nothing written.");
+  mkdirSync(folder, { recursive: true, mode: 0o700 });
+  if (!pageTaskFolder(logbook, taskId, env)) refuse(`the pages folder ${folder} is a link, or the pages folder or the logbook folder above it is one, and the board serves no page through a link. Make each a real folder. Nothing written.`);
+  const temp = `${out.page.path}.${randomUUID()}.tmp`;
+  writeFileSync(temp, out.page.html, { mode: 0o600, flag: "wx" });
+  renameSync(temp, out.page.path);
+  return out.text;
+}
+function questionMessage(file, project, taskId, env) {
+  const given = readMessage(file, undefined, project, env);
+  if (given.input?.kind !== "question") refuse(`--message is the file of a question message ({ kind: "question", title, blocks }), not of ${JSON.stringify(given.input?.kind ?? null)}. Nothing written.`);
+  return { message: given.input, text: writeMessage(project, taskId, given, "the gate keeps no message in another shape", env) };
 }
 function keepGateMessage(dir, g, { message, text }) {
   const folder = join(dir, "gates"), file = gateMessageFile(dir, g.id), temp = join(folder, `.${g.id}-${randomUUID()}.tmp`);
@@ -2795,7 +2807,9 @@ const askedMilestone = (id, renamed) => (id === undefined ? undefined : (renamed
 
 function guard(dir, cmd, pos, opt, project, env) {
   const need = writerClass(cmd, pos);
-  if (need.kind === "read" || (need.kind === "owner" && opt.lead === undefined)) return undefined;
+  if (need.kind === "read") return undefined;
+  const known = (chief) => chiefs(dir).some((r) => r.id === chief) || refuse(`${visible(chief)} is not a chief of this logbook (${join(dir, "chiefs.tsv")}). Nothing changed.`);
+  if (need.kind === "owner" && opt.lead === undefined) return opt.chief !== undefined && known(opt.chief) ? opt.chief : undefined;
   const name = [cmd, ...pos.slice(0, 1)].join(" ");
   if (opt.chief !== undefined && opt.lead !== undefined) refuse(`${name} takes --chief or --lead, not both. Nothing changed.`);
   const lead = opt.lead === undefined ? undefined : read(dir, "runs").find((r) => r.id === opt.lead && r.role === "lead" && r.status === "running")
@@ -2803,7 +2817,7 @@ function guard(dir, cmd, pos, opt, project, env) {
   const why = lead && leadProblem(logbookView(project, env), lead, leadRequest(cmd, pos, opt), project, env);
   if (why) refuse(`${why} Nothing changed.`);
   const chief = lead?.chief ?? opt.chief ?? refuse(`this logbook is shared, and a command with no chief only reads: add --chief <your C id> to ${name}. Nothing changed. Only a chief's session writes here. In a Claude session, run this write again as one command of its own, and the hook names your id. A Codex chief writes through the sage tools, which add its id. A terminal with no chief session only reads.`);
-  if (!lead && !chiefs(dir).some((r) => r.id === chief)) refuse(`${visible(chief)} is not a chief of this logbook (${join(dir, "chiefs.tsv")}). Nothing changed.`);
+  if (!lead) known(chief);
   const tasks = need.kind === "any" ? [] : read(dir, "tasks");
   const old = need.kind === "milestone" ? read(dir, "milestones").find((p) => p.id === askedMilestone(pos[1], renamedIds(read(dir, "decisions")))) : undefined;
   const ids = need.kind === "milestone"
@@ -2819,16 +2833,18 @@ function guard(dir, cmd, pos, opt, project, env) {
   return chief;
 }
 
-function chiefFor(project, native, env = process.env) {
+function chiefFor(project, native, env = process.env, known = false) {
   const { dir, shared } = locate(project, env);
   if (!shared) return undefined;
-  return rowOf(dir, native)?.id ?? withLock(dir, () => chiefRow(dir, native).id);
+  return rowOf(dir, native)?.id ?? (known ? undefined : withLock(dir, () => chiefRow(dir, native).id));
 }
 
 function actorOptions(project, [cmd, ...rest], { native, leadTask }, env = process.env) {
   const { pos } = parse(cmd, rest);
   if (cmd === "merge-check") return locate(project, env).shared ? [`--chief=${chiefFor(project, native, env)}`] : [];
-  if (["read", "owner"].includes(writerClass(cmd, pos).kind) || !locate(project, env).shared) return [];
+  const kind = writerClass(cmd, pos).kind, answers = cmd === "gate" && pos[0] === "answer" && !leadTask;
+  if (kind === "read" || (kind === "owner" && !answers) || !locate(project, env).shared) return [];
+  if (answers) return ((me) => (me ? [`--chief=${me}`] : []))(chiefFor(project, native, env, true));
   if (!leadTask) return [`--chief=${chiefFor(project, native, env)}`];
   const run = logbookView(project, env).leadRun(leadTask) ?? refuse(`${leadTask} has no running lead run, so this lead writes nothing. Report to your chief. Nothing changed.`);
   return [`--lead=${run.id}`];
@@ -3403,7 +3419,7 @@ function act(cmd, pos, opt, dir, env, skip, project) {
       try { at = lintBase(project); } catch (e) { refuse(`lint cannot read the git checkout ${visible(project)} (${e?.message ?? e}). Give --project the project's git checkout. Nothing changed.`); }
       if (!at.main && at.local) refuse(`${visible(at.top)} has a root ${LINT_CONFIG} but no origin/main, and lint reads its rules only from the tip of origin/main, so it cannot lint ${sha.slice(0, 7)}. lint needs a remote named origin with a branch named main. Nothing changed.`);
       const tools = toolsDir(dir);
-      if (!at.config) return `${task.id} · ${sha.slice(0, 7)}: ${at.main ? `origin/main ${at.main.slice(0, 7)} has` : `${visible(at.top)} has no origin/main and`} no ${LINT_CONFIG} at its root, so there is nothing to lint, and the merge check needs no lint verdict.${at.main ? lintOffer(dir, at, tools) : " Nothing changed."}`;
+      if (!at.config) return `${task.id} · ${sha.slice(0, 7)}: ${at.main ? `origin/main ${at.main.slice(0, 7)} has` : `${visible(at.top)} has no origin/main and`} no ${LINT_CONFIG} at its root, so there is nothing to lint, and the merge check needs no lint verdict.${at.main ? lintOffer(dir, at, tools, opt) : " Nothing changed."}`;
       const binary = astGrepBinary(at.top, tools);
       if (!binary) refuse(`ast-grep ${AST_GREP_VERSION} is not in ${visible(join(at.top, "node_modules", ".bin"))} or in sage's tools folder ${visible(tools)}, so lint cannot run, and it writes no verdict. With the owner's yes, install it in the tools folder from the lockfile that sage pins: ${installCommand(tools)}`);
       try { result = lintChange(project, sha, binary, at); } catch (e) { refuse(`lint could not check ${sha.slice(0, 7)}: ${visible(String(e?.message ?? e))}. ${e?.fix ?? "lint has no known fix for this error: tell the owner, with this message."} Nothing changed.`); }
@@ -3430,7 +3446,7 @@ function act(cmd, pos, opt, dir, env, skip, project) {
         if (readsAsBreakdown(question)) refuse(`a question that starts with "Approve milestone" or "Approve program" is a breakdown gate, and only milestone propose opens one. Ask it in other words.`);
         if (looks(question).startsWith("move · plan")) refuse(`a question that starts with "move · plan" is a move gate, and only sage move --plan opens one. Ask it in other words.`);
         const g = { id: nextId(dir, "G"), task: id ?? "", question: need(question, "--question"), options: flatOptions, recommendation, default: opt.default === undefined ? "" : pick(opt.default, "--default"), at: now(), ...chiefTag(opt) };
-        const message = opt.message === undefined ? undefined : questionMessage(opt.message, project, env);
+        const message = opt.message === undefined ? undefined : questionMessage(opt.message, project, g.task, env);
         if (message) keepGateMessage(dir, g, message);
         write(dir, "gates", [...gates, g]);
         return `${g.id} open · ${g.question}${message ? ` · its message: ${gateMessageFile(dir, g.id)}` : ""}`;
@@ -3449,7 +3465,6 @@ function act(cmd, pos, opt, dir, env, skip, project) {
         }
         const own = opt["other-hex"], via = opt.via ?? "chat";
         if (!Object.hasOwn(VIA, via)) refuse(`--via is the place of the owner's answer: ${Object.keys(VIA).join(", ")}. Nothing changed.`);
-        if (g.answer && breakdownLine(g)) refuse(`${g.id} is a breakdown gate, and the owner answered it already (${visible(g.answer)}): a breakdown gate answers once. For a change of mind, the sage proposes the milestone again (sage milestone propose <M>) and the owner answers the new gate. A dropped milestone does not come back: propose a new one. Nothing changed.`);
         const first = firstAnswer(g);
         if (first) refuse(first);
         const options = optionsOf(g);
@@ -3462,7 +3477,7 @@ function act(cmd, pos, opt, dir, env, skip, project) {
           write(dir, "gates", gates);
           return `${g.id} recorded · ${answer} · from the board, at ${at}. It acts when ${pickerText(dir, g)}; until then, sage gate undo ${g.id} takes it back.`;
         }
-        return applyAnswer(dir, gates, g, answer, { answered: { at, via }, picked: { chief: gateChief(g, read(dir, "tasks")), at } }, opt, project, env);
+        return applyAnswer(dir, gates, g, answer, { answered: { at, via }, picked: { chief: opt.chief ?? "", at } }, opt, project, env);
       }
       refuse("gate add, gate replace, gate give, gate answer or gate undo");
     }
@@ -3487,18 +3502,7 @@ function act(cmd, pos, opt, dir, env, skip, project) {
     case "message": {
       const taskId = taskOf(dir, need(sub, "the task id")).task.id;
       if (id !== undefined || (opt.file === undefined) === (opt.json === undefined)) refuse("message takes <task> and one of --file <the message's JSON file> or --json <the message's JSON>. Nothing written.");
-      const { input, logbook } = readMessage(opt.file, opt.json, project, env);
-      const folder = pagesDir(project, taskId, env);
-      const out = renderMessage(input, { pagePath: (name) => join(folder, name), pageUrl: (name) => pageUrl(logbook, taskId, name) });
-      if (out.problems) refuse(`the message is not in its kind's shape, so nothing reaches the owner in another shape. Nothing written.\n${out.problems.map((p) => `- ${p}`).join("\n")}`);
-      if (out.page) {
-        mkdirSync(folder, { recursive: true, mode: 0o700 });
-        if (!pageTaskFolder(logbook, taskId, env)) refuse(`the pages folder ${folder} is a link, or the pages folder or the logbook folder above it is one, and the board serves no page through a link. Make each a real folder. Nothing written.`);
-        const temp = `${out.page.path}.${randomUUID()}.tmp`;
-        writeFileSync(temp, out.page.html, { mode: 0o600, flag: "wx" });
-        renameSync(temp, out.page.path);
-      }
-      return out.text;
+      return writeMessage(project, taskId, readMessage(opt.file, opt.json, project, env), "nothing reaches the owner in another shape", env);
     }
     case "pages": {
       const taskId = taskOf(dir, need(sub, "the task id")).task.id, folder = pagesDir(project, taskId, env);

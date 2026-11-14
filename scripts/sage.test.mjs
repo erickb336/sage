@@ -3842,15 +3842,15 @@ test("R1208-3: the integrity check refuses a milestones file with two rows for o
   assert.equal(s.no("merge-check", "--sha", SHA), `sage: the merge check refuses every merge, because ${why}`);
 });
 
+const breakdownOnce = (id, answer) => new RegExp(`^sage: ${id} has the answer "${answer}" already, from (?:the chat at \\S+|a place and at a time that sage did not record): the first answer wins, so this answer is not recorded\\. ${id} is a breakdown gate, and a breakdown gate answers once: for a change of mind, the chief proposes the milestone again \\(sage milestone propose <M>\\) and the owner answers the new gate\\. A dropped milestone does not come back: propose a new one\\. Nothing changed\\.$`);
 test("R1208-1: a breakdown gate answers once, so no second answer undoes a drop; another gate refuses a second answer by the first-answer rule (T1058)", () => {
   const s = store();
   for (const title of ["Pilot", "Two"]) s.ok("task", "add", "--priority", "P2", "--title", title, "--size", "small");
   propose(s, "T1", "Codex support", "T2");
   s.ok("gate", "answer", "G1", "--option", "3");
   const before = ["gates", "decisions"].map((t) => readFileSync(join(s.dir, `${t}.tsv`), "utf8"));
-  const why = "sage: G1 is a breakdown gate, and the owner answered it already (drop): a breakdown gate answers once. For a change of mind, the sage proposes the milestone again (sage milestone propose <M>) and the owner answers the new gate. A dropped milestone does not come back: propose a new one. Nothing changed.";
-  assert.equal(s.no("gate", "answer", "G1", "--option", "1"), why);
-  assert.equal(s.no("gate", "answer", "G1", "--other-hex", Buffer.from("go", "utf8").toString("hex")), why);
+  assert.match(s.no("gate", "answer", "G1", "--option", "1"), breakdownOnce("G1", "drop"));
+  assert.match(s.no("gate", "answer", "G1", "--other-hex", Buffer.from("go", "utf8").toString("hex")), breakdownOnce("G1", "drop"));
   assert.deepEqual(["gates", "decisions"].map((t) => readFileSync(join(s.dir, `${t}.tsv`), "utf8")), before, "a refusal writes nothing");
   assert.equal(milestonesLine(s), "milestone M1 · stopped · dropped: 2 tasks still in it, take each out with milestone=none · name: Codex support");
   s.ok("gate", "add", "T2", "--question", "Which name?", "--options", "short|long", "--recommend", "short");
@@ -3869,12 +3869,12 @@ test("R1224-1: a breakdown gate that a newer round replaced answers once too, so
   s.ok("gate", "answer", "G1", "--option", "2");
   s.ok("milestone", "propose", "M1");
   const before = ["gates", "decisions"].map((t) => readFileSync(join(s.dir, `${t}.tsv`), "utf8"));
-  assert.equal(s.no("gate", "answer", "G1", "--option", "1"), "sage: G1 is a breakdown gate, and the owner answered it already (change): a breakdown gate answers once. For a change of mind, the sage proposes the milestone again (sage milestone propose <M>) and the owner answers the new gate. A dropped milestone does not come back: propose a new one. Nothing changed.");
+  assert.match(s.no("gate", "answer", "G1", "--option", "1"), breakdownOnce("G1", "change"));
   assert.deepEqual(["gates", "decisions"].map((t) => readFileSync(join(s.dir, `${t}.tsv`), "utf8")), before, "a refusal writes nothing");
   assert.deepEqual(rows(s.dir, "gates").map((g) => [g.id, g.answer]), [["G1", "change"], ["G2", ""]]);
   s.ok("gate", "answer", "G2", "--option", "2");
   s.ok("milestone", "propose", "M1");
-  assert.match(s.no("gate", "answer", "G2", "--option", "1"), /^sage: G2 is a breakdown gate, and the owner answered it already \(change\)/, "a round 2 gate answers once too");
+  assert.match(s.no("gate", "answer", "G2", "--option", "1"), breakdownOnce("G2", "change"), "a round 2 gate answers once too");
 });
 
 test("T337: milestone propose refuses a bad name or goal, a name in use or like a milestone id, a bad --tasks list, an unknown, ended or other milestone's task, and an open or dropped breakdown, and changes nothing", () => {
@@ -4225,7 +4225,7 @@ test("R1240-2: every breakdown gate answers once by its own question, also a rep
   writeFileSync(join(s.dir, "decisions.tsv"), "");
   s.ok("logbook", "repair", "--accept-loss", "decisions");
   let before = snapshot(s.dir);
-  for (const g of ["G1", "G2"]) assert.equal(s.no("gate", "answer", g, "--option", "1"), `sage: ${g} is a breakdown gate, and the owner answered it already (change): a breakdown gate answers once. For a change of mind, the sage proposes the milestone again (sage milestone propose <M>) and the owner answers the new gate. A dropped milestone does not come back: propose a new one. Nothing changed.`);
+  for (const g of ["G1", "G2"]) assert.match(s.no("gate", "answer", g, "--option", "1"), breakdownOnce(g, "change"));
   assert.deepEqual(snapshot(s.dir), before, "a refusal writes nothing");
   s.ok("gate", "answer", "G3", "--option", "2");
   assert.match(s.ok("milestone", "propose", "M1"), /^M1 proposed \(round 4\) · /, "the round counts the gates, not the lost decision rows");
@@ -5442,7 +5442,7 @@ test("R1233-1: after an accepted loss of decisions.tsv, the milestone's current 
   s.ok("gate", "answer", "G1", "--option", "1");
   writeFileSync(join(s.dir, "decisions.tsv"), "");
   s.ok("logbook", "repair", "--accept-loss", "decisions");
-  assert.match(s.no("gate", "answer", "G1", "--option", "3"), /^sage: G1 is a breakdown gate, and the owner answered it already \(approve\): a breakdown gate answers once\./);
+  assert.match(s.no("gate", "answer", "G1", "--option", "3"), breakdownOnce("G1", "approve"));
   assert.equal(rows(s.dir, "gates")[0].answer, "approve");
 });
 
@@ -5462,7 +5462,7 @@ test("R1234-1: a breakdown gate G10 or higher that a newer round replaced answer
   propose(s, "T1", "Codex support", "T2");
   s.ok("gate", "answer", "G10", "--option", "2");
   s.ok("milestone", "propose", "M1");
-  assert.match(s.no("gate", "answer", "G10", "--option", "1"), /^sage: G10 is a breakdown gate, and the owner answered it already \(change\)/);
+  assert.match(s.no("gate", "answer", "G10", "--option", "1"), breakdownOnce("G10", "change"));
 });
 
 test("R1234-1: a new proposal whose new pilot has ended names the command with the milestone's id", () => {

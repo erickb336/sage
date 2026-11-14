@@ -29,10 +29,10 @@ export const agentPath = (path) => agentPathOf(sessionMeta(path));
 
 export const childTask = (path) => agentPath(path).at(-1) ?? "";
 
-const RUN_NAME = /_t([1-9]\d*)_r([1-9]\d*)$/;
+const RUN_NAME = /_t([1-9]\d*)(?:_r([1-9]\d*))?$/;
 export function keepRunText(project, kind, name, text, env = process.env) {
-  const [, task, run] = RUN_NAME.exec(String(name)) ?? [], first = /^Run (R[1-9]\d*) · task (T[1-9]\d*)(?![\w/])/.exec(String(text ?? "").split("\n", 1)[0]);
-  const named = first ? { run: first[1], task: first[2] } : run && { run: `R${run}`, task: `T${task}` };
+  const [, task, run] = RUN_NAME.exec(String(name)) ?? [], [, said, saidTask] = /^Run (R[1-9]\d*) · task (T[1-9]\d*)(?![\w/])/.exec(String(text ?? "").split("\n", 1)[0]) ?? [];
+  const named = run ? { run: `R${run}`, task: `T${task}` } : said && (!task || saidTask === `T${task}`) && { run: said, task: saidTask };
   if (!named || typeof text !== "string" || typeof project !== "string") return;
   try { tool.keepRunText(project, { kind, ...named, text }, env); } catch {}
 }

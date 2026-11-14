@@ -92,8 +92,8 @@ test("first answer wins: a second answer to a plain or a takeover gate is refuse
   w.as("claude", "task", "add", "--title", "a", ...ADD);
   w.as("claude", "gate", "add", "T1", "--question", "Which name?", "--options", "short|long", "--recommend", "short");
   assert.equal(w.owner("codex", "gate", "answer", "G1", "--option", "2", "--via", "codex-card"), "G1 answered · long");
-  const { answered } = w.gate("G1");
-  assert.equal(answered.via, "codex-card");
+  const { answered, picked } = w.gate("G1");
+  assert.deepEqual([answered.via, picked.chief], ["codex-card", ""], "an answer from a terminal with no chief names no chief");
   const before = readFileSync(join(w.dir, "gates.tsv"), "utf8");
   for (const [provider, via] of [["claude", "claude-card"], ["codex", "chat"], ["claude", "board"]]) {
     assert.equal(w.refused(provider, "gate", "answer", "G1", "--option", "1", "--via", via), `G1 has the answer "long" already, from a Codex card at ${answered.at}: the first answer wins, so this answer is not recorded. Nothing changed.`);
@@ -108,7 +108,12 @@ test("first answer wins: a second answer to a plain or a takeover gate is refuse
   w.as("claude", "task", "add", "--title", "b", ...ADD);
   w.as("claude", "milestone", "propose", "--name", "M", "--goal", "g", "--pilot", "T1", "--tasks", "T2");
   w.owner("claude", "gate", "answer", "G3", "--option", "3");
-  assert.match(w.refused("codex", "gate", "answer", "G3", "--option", "1"), /^G3 is a breakdown gate, and the owner answered it already \(drop\): a breakdown gate answers once\./);
+  const drop = w.gate("G3").answered;
+  assert.equal(drop.via, "chat");
+  const again = w.refused("codex", "gate", "answer", "G3", "--option", "1", "--via", "codex-card");
+  assert.ok(again.startsWith(`G3 has the answer "drop" already, from the chat at ${drop.at}: the first answer wins, so this answer is not recorded.`), again);
+  assert.match(again, / G3 is a breakdown gate, and a breakdown gate answers once: for a change of mind, the chief proposes the milestone again \(sage milestone propose <M>\)/);
+  assert.equal(w.gate("G3").answer, "drop");
   assert.equal(w.refused("claude", "gate", "answer", "G1", "--option", "1", "--via", "phone"), `--via is the place of the owner's answer: board, claude-card, codex-card, chat. Nothing changed.`);
 });
 
@@ -174,9 +179,9 @@ test("Undo works only before the pickup: it clears a board answer so that a card
   assert.deepEqual([w.gate("G1").answer, w.gate("G1").answered], ["", ""]);
   assert.ok(w.decisions().includes("G1 board answer undone: no"));
   assert.equal(contextOf(HOOKS.claude.step(w)), "", "nothing to pick up after the undo");
-  assert.equal(w.owner("claude", "gate", "answer", "G1", "--option", "1", "--via", "claude-card"), "G1 answered · yes");
-  assert.deepEqual([w.gate("G1").picked.chief, w.gate("G1").answered.via], ["C1", "claude-card"], "a card answer counts as picked at once");
-  assert.match(w.refused("codex", "gate", "undo", "G1"), /^G1 has the answer "yes" from a Claude card at \S+\. An answer acts at once unless it comes from the board, so only a board answer that no chief picked up yet has an undo\. Nothing changed\.$/);
+  assert.equal(w.as("codex", "gate", "answer", "G1", "--option", "1", "--via", "codex-card"), "G1 answered · yes");
+  assert.deepEqual([w.gate("G1").picked.chief, w.gate("G1").answered.via], ["C2", "codex-card"], "a card answer counts as picked at once, by the chief that recorded and applied it, not by the owning chief C1");
+  assert.match(w.refused("codex", "gate", "undo", "G1"), /^G1 has the answer "yes" from a Codex card at \S+\. An answer acts at once unless it comes from the board, so only a board answer that no chief picked up yet has an undo\. Nothing changed\.$/);
 });
 
 test("Undo and the pickup race under the same lock: for each gate exactly one of them wins", async (t) => {
@@ -264,6 +269,14 @@ test("gate add --message keeps the checked question message as gates/G<n>.json, 
   assert.throws(() => w.as("claude", "gate", "add", "T1", "--question", "q?", "--options", "a|b", "--recommend", "a", "--message", file), /the message is not in its kind's shape, so the gate keeps no message in another shape\. Nothing written\./);
   assert.equal(claude.read(w.dir, "gates").length, 1, "a refused message opens no gate");
   assert.equal(existsSync(join(w.dir, "gates", "G2.json")), false);
+
+  writeFileSync(file, JSON.stringify({ ...message, long: { title: "Ship the new board, in short", main: "the page holds the whole question." } }));
+  assert.throws(() => w.as("claude", "gate", "add", "--question", "q?", "--options", "a|b", "--recommend", "a", "--message", file), /it needs a page, and a page lives in a task's pages folder: give the gate its task\. Nothing written\./);
+  w.as("claude", "gate", "add", "T1", "--question", "Ship it now?", "--options", "now|later", "--recommend", "now", "--message", file);
+  const { text } = JSON.parse(readFileSync(join(w.dir, "gates", "G2.json"), "utf8"));
+  const named = text.split("\n").map((line) => line.trim()).filter((line) => line.startsWith("/") && line.endsWith(".html"));
+  assert.equal(named.length, 1, text);
+  assert.match(readFileSync(named[0], "utf8"), /^<!DOCTYPE html>/i, "the page that the kept text names exists");
 });
 
 test("the Claude Stop hook asks an idle chief with open gates to start the gates wait once; it is quiet while work runs, and it hands over a board answer", (t) => {
@@ -338,6 +351,10 @@ test("the hooks keep each run's brief and report as briefs/R<n>.md and reports/R
   assert.equal(readFileSync(join(w.dir, "briefs", "R2.md"), "utf8"), brief("R2", "T2"), "Codex keeps the brief at the agent's start");
   run(REPORT_GATE, "reportGate", { hook_event_name: "SubagentStop", stop_hook_active: false, last_assistant_message: REPORT, agent_transcript_path: transcript, cwd: w.project });
   assert.equal(readFileSync(join(w.dir, "reports", "R2.md"), "utf8"), REPORT, "Codex keeps the report at the agent's end");
+  const forged = `Run R1 · task T1 (build)\n${REPORT}`;
+  run(REPORT_GATE, "reportGate", { hook_event_name: "SubagentStop", stop_hook_active: false, last_assistant_message: forged, agent_transcript_path: transcript, cwd: w.project });
+  assert.equal(readFileSync(join(w.dir, "reports", "R1.md"), "utf8"), REPORT, "a Codex agent's text cannot name another run's report");
+  assert.equal(readFileSync(join(w.dir, "reports", "R2.md"), "utf8"), forged, "the run comes from the agent's name");
 });
 
 test("old gates.tsv rows still read and answer once; a logbook with no chiefs gets no new column from a card answer; the board reads the new columns", (t) => {
@@ -357,4 +374,56 @@ test("old gates.tsv rows still read and answer once; a logbook with no chiefs ge
   const projects = readBoardSources([{ id: "claude", path: join(w.env.CLAUDE_CONFIG_DIR, "sage"), label: "claude" }]).flatMap((source) => source.projects);
   const gates = projects.find((p) => p.name === basename(dir))?.tables?.gates ?? [];
   assert.ok(gates.some((g) => g.id === "G2" && g.answer === "yes"), "the board's reader reads a gates.tsv with the new columns");
+});
+
+for (const [from, to] of [["claude", "codex"], ["codex", "claude"]]) {
+  test(`after the owner hands a ${from} task to the ${to} chief, the ${to} chief owns the task's older gates: its hook picks up their board answers, and its gates wait and the Stop note list them`, (t) => {
+    const w = shared(t);
+    const giver = w.chiefs[from], taker = w.chiefs[to];
+    const wait = (chief) => spawnSync(process.execPath, [WAIT, "--gates", chief], { cwd: w.project, env: { ...w.env, SAGE_WAIT_MS: "300" }, encoding: "utf8", timeout: 60_000 }).stdout;
+    const NONE = "No gate of yours waits for the owner, so there is nothing to wait for.\n", WAITS = "No answer yet to G1 after 0 minutes: run this command again, in the background.\n";
+    w.as(from, "task", "add", "--title", "a", ...ADD);
+    w.as(from, "gate", "add", "T1", "--question", "Ship it?", "--options", "yes|no", "--recommend", "yes");
+    assert.deepEqual([wait(giver), wait(taker)], [WAITS, NONE]);
+    w.owner(from, "gate", "give", "T1", "--to", taker);
+    w.owner(to, "gate", "answer", "G2", "--option", "1", "--via", `${to}-card`);
+    assert.equal(w.task("T1").chief, taker);
+    assert.deepEqual([wait(giver), wait(taker)], [NONE, WAITS], "G1 moved with T1");
+    const told = claudeEvent(w, { hook_event_name: "Stop", stop_hook_active: false, last_assistant_message: "ok", background_tasks: [] });
+    if (to === "claude") assert.match(told.reason, /^sage: G1 waits for the owner/);
+    else assert.equal(told?.decision, undefined, "the Claude chief gave T1 away, so G1 is not its gate");
+    assert.match(w.owner(from, "gate", "answer", "G1", "--option", "2", "--via", "board"), new RegExp(`It acts when ${taker} \\(${to}\\) picks it up`));
+    assert.equal(contextOf(HOOKS[from].step(w)), "", "the giving chief does not pick it up");
+    assert.equal(w.gate("G1").answer, "");
+    assert.match(contextOf(HOOKS[to].step(w)), /- G1 \(T1\): the owner answered "no" on the board at .*: G1 answered · no$/);
+    assert.deepEqual([w.gate("G1").answer, w.gate("G1").picked.chief], ["no", taker]);
+  });
+}
+
+test("the lint offer belongs to the chief that ran lint: its hook applies a board yes and owns the new task, and the other chief's hook leaves it", (t) => {
+  const w = shared(t);
+  writeFileSync(join(w.project, "a.js"), "export const a = 1;\n");
+  execFileSync("git", ["-C", w.project, "add", "-A"], { env: gitEnv });
+  execFileSync("git", ["-C", w.project, "commit", "-q", "-m", "code"], { env: gitEnv });
+  const sha = execFileSync("git", ["-C", w.project, "rev-parse", "HEAD"], { encoding: "utf8" }).trim();
+  execFileSync("git", ["-C", w.project, "update-ref", "refs/remotes/origin/main", sha]);
+  w.as("claude", "task", "add", "--title", "a", ...ADD);
+  assert.match(w.as("claude", "lint", "T1", "--sha", sha), /\nG1 open · Add sage's no-comments lint rules to this project/);
+  assert.match(w.owner("codex", "gate", "answer", "G1", "--option", "1", "--via", "board"), /It acts when C1 \(claude\) picks it up/);
+  assert.equal(contextOf(HOOKS.codex.step(w)), "", "the Codex chief did not run lint, so it does not pick up the offer");
+  assert.equal(w.task("T2"), undefined);
+  assert.match(contextOf(HOOKS.claude.step(w)), /- G1: the owner answered "add the rules" on the board at .*G1 answered · add the rules/);
+  assert.equal(w.task("T2").chief, "C1");
+});
+
+test("in a shared logbook, the Claude hook asks a chief to name itself on a gate answer, so that the gate records which chief applied it", (t) => {
+  const w = shared(t);
+  w.as("claude", "task", "add", "--title", "a", ...ADD);
+  w.as("claude", "gate", "add", "T1", "--question", "Ship it?", "--options", "yes|no", "--recommend", "yes");
+  const pre = (command) => claudeEvent(w, { hook_event_name: "PreToolUse", tool_name: "Bash", tool_input: { command } })?.hookSpecificOutput ?? {};
+  const answer = `node ${TOOLS.claude} gate answer G1 --option 1 --via claude-card --project ${w.project}`;
+  assert.equal(pre(answer).permissionDecision, "deny");
+  assert.match(pre(answer).permissionDecisionReason, /add --chief C1 to this command/);
+  assert.equal(pre(`${answer} --chief C1`).permissionDecision, undefined);
+  assert.equal(pre(`node ${TOOLS.claude} gate undo G1 --project ${w.project}`).permissionDecision, undefined, "an undo is the owner's act and names no chief");
 });

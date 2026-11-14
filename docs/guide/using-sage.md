@@ -125,11 +125,11 @@ Until then, you can take a board answer back. An answer in the chat or on a card
 
 | Command (the state tool) | Who and when | Result |
 | --- | --- | --- |
-| `sage gate answer <G> --option <n> --via <place>` | The chief records your answer. The place is `chat`, `claude-card`, `codex-card` or `board`; with no `--via`, it is `chat`. | A gate with an answer refuses, and names that answer, its place and its time. A board answer waits for its chief; any other answer acts at once. A breakdown gate keeps its own rule: it answers once, and a change of mind proposes the milestone again. |
+| `sage gate answer <G> --option <n> --via <place>` | The chief records your answer, with its own `--chief` in a shared logbook, so that the gate keeps which chief applied it. The place is `chat`, `claude-card`, `codex-card` or `board`; with no `--via`, it is `chat`. | A gate with an answer refuses, and names that answer, its place and its time. A board answer waits for its chief; any other answer acts at once. A breakdown gate keeps its own rule: it answers once, and a change of mind proposes the milestone again. |
 | `sage gate undo <G>` | You, or the chief when you ask. Only for a board answer that no chief has picked up yet. | The answer goes, and the question is open again. After the pickup, or for an answer from the chat or a card, it refuses and says why. |
 | `sage gate add <T> ... --message <file>` | The chief, when it parks a question. The file is the JSON of the question's message. | The gate keeps the whole message as `gates/G<n>.json` in the logbook, after the message check, so that the board can show the full question. |
 
-- **Who picks up a board answer.** The chief that opened the question, or the receiving chief of a takeover gate. Its hook reads your answer at its next step, applies it, records the pickup and tells the chief what it did.
+- **Who picks up a board answer.** The chief that owns the question's task now, also after a takeover; the chief that opened a question with no task, such as the lint offer; or the receiving chief of a takeover gate. Its hook reads your answer at its next step, applies it, records the pickup and tells the chief what it did.
 - **A Claude chief** that is idle, with open questions and nothing else running, starts a wait in the background first (`wait.mjs --gates`), so that your board answer wakes it.
 - **A Codex chief** sees a board answer at its next turn: your next message in its chat, or its next tool call. Send any message there to make it act now.
 - **An answer that cannot act** at the pickup, for example a takeover gate that a new run made out of date, goes away. The question is open again, and the chief tells you why.

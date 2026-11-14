@@ -655,11 +655,11 @@ function chiefIdProblem(input) {
   if (input.tool_name !== "Bash") return undefined;
   const { words, env } = chiefWriteWords(input) ?? {};
   if (!words?.length) return undefined;
-  const [cmd, ...args] = words, { pos, opt } = optionsOf(args);
-  if (["read", "owner"].includes(core.writerClass(cmd, pos).kind)) return undefined;
+  const [cmd, ...args] = words, { pos, opt } = optionsOf(args), kind = core.writerClass(cmd, pos).kind, answers = cmd === "gate" && pos[0] === "answer";
+  if (kind === "read" || (kind === "owner" && !answers)) return undefined;
   let id;
   try {
-    id = stateTool.chiefFor(realpathSync.native(resolve(input.cwd ?? process.cwd(), opt.project ?? env.SAGE_PROJECT ?? ".")), input.session_id, env);
+    id = stateTool.chiefFor(realpathSync.native(resolve(input.cwd ?? process.cwd(), opt.project ?? env.SAGE_PROJECT ?? ".")), input.session_id, env, answers);
   } catch {
     return undefined;
   }
