@@ -285,23 +285,20 @@ export function handle(input, state, slots) {
     } catch (e) {
       return deny(event, `the state tool cannot load (${e?.message ?? e}), so sage starts no new agent: reinstall or update the sage plugin, and tell the user.`);
     }
-    const cap = caps[`cap.${project}`] ?? caps.max_agents;
-    const r = slots.take(project, cap, caps.cap_total, input.tool_use_id ?? (main && spawned !== "sage:lead" ? String(Date.now()) : undefined), { role: spawned, caller: main ? undefined : input.agent_id, input: ti, lead: leadMark, helper: helperKey, maxLeads: caps.max_leads, brief: main && spawned !== "sage:lead" ? briefMark(ti.prompt, spawned, input.cwd) : undefined });
+    const r = slots.take(project, caps.cap_total, input.tool_use_id ?? (main && spawned !== "sage:lead" ? String(Date.now()) : undefined), { role: spawned, caller: main ? undefined : input.agent_id, input: ti, lead: leadMark, helper: helperKey, brief: main && spawned !== "sage:lead" ? briefMark(ti.prompt, spawned, input.cwd) : undefined });
     if (r.refused) {
-      slots.log(`${project} ${r.project}/${cap} total ${r.total}/${caps.cap_total}`);
+      slots.log(`${project} ${r.project} total ${r.total}/${caps.cap_total}`);
       const helperWait = `Wait for one of your helpers to stop: run ${waitStep(main ? undefined : slots.leadOf(input.agent_id)?.task)}, then start this helper again.`;
       const raise = (key, n) => main ? `${SPACE_NOTE}Wait for one to finish, or raise the cap: ${stateCommand(`config ${key}=${n + 1}`)}` : `${helperWait} If no helper of yours runs, report the cap to the sage.`;
       if (r.refused === "identity") return deny(event, "the spawn has no valid, distinct caller and tool-use identity, so its slot cannot be checked. Report to the sage.");
       if (r.refused === "ended") return deny(event, "this lead or spawn already ended, so it cannot start another agent. Report to the sage.");
-      if (r.refused === "leads") return deny(event, `${project} is at its limit of ${caps.max_leads} running leads (max_leads). Wait for one to finish. Report to the sage.`);
       if (r.refused === "children") return deny(event, `this lead already has ${LEAD_HELPERS} children. ${helperWait}`);
       if (r.refused === "helper") return deny(event, `${helperKey.run} already has its helper: one run is backed by one child (F-T284-9). Report to the sage.`);
       const stop = () => slots.unnamedLead(leadMark.task) ? "by its agent id, from its start's result: it started with no name field, so a stop by its name is refused" : `by its agent id or by its name lead-${leadMark.task}`;
       if (r.refused === "task" && r.elsewhere) return deny(event, `a lead of ${leadMark.task} holds a slot in another session, for the lead run ${r.run ?? "of its start"} (F-T273-5), and a TaskStop in this session cannot stop it. If that session ended (a restart or a crash), the slot frees by itself after an hour with no event of that lead or its helpers: start this lead again then. To start a fresh lead now, run each of these as a command of its own: ${stateCommand(`run done ${r.run ?? "<its lead run>"} --status failed`)}, then ${stateCommand(`run add ${leadMark.task} --role lead`)}, then start the lead again.`);
       if (r.refused === "task") return deny(event, `a lead named lead-${leadMark.task} already holds a slot, in this session or for this logbook (F-T273-5, F-T273-16). Wait for it to end, or stop it with TaskStop (${stop()}), before you start a fresh lead.`);
       if (r.refused === "mark") return deny(event, `the agent cap could not mark its slot (${r.error}), so it refuses this spawn. Tell the user.`);
-      if (r.refused === "total") return deny(event, `${running(r.total)} across all projects, and the total cap is ${caps.cap_total} (${project} has ${r.project}). ${raise("cap_total", caps.cap_total)}`);
-      return deny(event, `${running(r.project)} for ${project}, and its cap is ${cap} (${r.total} of ${caps.cap_total} across all projects). ${raise(`cap.${project}`, cap)}`);
+      return deny(event, `${running(r.total)} across all projects, and the total cap is ${caps.cap_total} (${project} has ${r.project}). ${raise("cap_total", caps.cap_total)}`);
     }
   }
   if (SHELL_TOOLS.test(tool)) {
@@ -1056,7 +1053,7 @@ export function slotsFor(dir, session, now = Date.now(), rawSession = session, l
     renew(candidates);
   };
   return {
-    take: transaction((project, cap, capTotal, toolUseId, { role: raw, caller, input, lead, helper, maxLeads, brief } = {}) => {
+    take: transaction((project, capTotal, toolUseId, { role: raw, caller, input, lead, helper, brief } = {}) => {
       const role = raw === undefined ? undefined : String(raw).toLowerCase();
       mkdirSync(dir, { recursive: true });
       expire();
@@ -1100,12 +1097,7 @@ export function slotsFor(dir, session, now = Date.now(), rawSession = session, l
         if (role === "sage:lead" && lead?.folder) writeFileSync(join(dir, mine, "folder"), lead.folder);
         if (brief?.tip) writeFileSync(join(dir, mine, "tip"), brief.tip);
         const others = list().filter(slot => slot !== mine);
-        const projectSlots = others.filter(slot => (mark(slot, "project-") ?? project) === project);
-        let refused;
-        if (projectSlots.length >= cap) refused = "project";
-        else if (role === "sage:lead" && projectSlots.filter(slot => !mark(slot, "role-") || mark(slot, "role-") === "sage_lead").length >= maxLeads) refused = "leads";
-        else if (caller !== undefined && others.filter(slot => (mark(slot, "scope-") ?? scope) === scope && (mark(slot, "caller-") ?? owner) === owner).length >= LEAD_HELPERS) refused = "children";
-        if (refused) { free(mine); return { refused, ...counts(project) }; }
+        if (caller !== undefined && others.filter(slot => (mark(slot, "scope-") ?? scope) === scope && (mark(slot, "caller-") ?? owner) === owner).length >= LEAD_HELPERS) { free(mine); return { refused: "children", ...counts(project) }; }
         add(mine, "ok");
         if (helper) note(`started-${helper.key}`, JSON.stringify({ folder: helper.folder, task: helper.task, role: helper.role, run: helper.run, tip: helper.tip }), helpers);
         utimesSync(join(dir, mine), new Date(now), new Date(now));

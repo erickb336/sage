@@ -81,7 +81,9 @@ function agentLimit(values, need, user) {
 function threadWarning(input, codexHome, env) {
   const cwd = input.cwd ?? process.cwd(), [user, ...project] = configFiles(codexHome, cwd);
   const layer = (file) => { try { return [...tomlValues(readFileSync(file, "utf8"))].map(([key, value]) => [key, { value, file }]); } catch { return []; } };
-  const own = layer(user), need = agentCaps(tool.config(env)).cap(tool.projectName(cwd));
+  let logbook;
+  try { logbook = tool.storeDir(cwd, env); } catch {}
+  const own = layer(user), need = agentCaps(tool.config(env, logbook)).cap(tool.projectName(cwd));
   const [all, alone] = [new Map([...own, ...project.flatMap(layer)]), new Map(own)].map((values) => agentLimit(values, need, user));
   const { allowed, from, fix, file } = alone.allowed < all.allowed ? alone : all;
   if (allowed >= need) return undefined;

@@ -10,6 +10,7 @@ import { ROOT } from "./build.mjs";
 import { sessionStatus } from "../plugins/sage-codex/hooks/session-start-hook.mjs";
 import { modeDirectory, answer } from "../plugins/sage-codex/hooks/sage-codex-hook.mjs";
 import { readMode, gate } from "../plugins/sage-codex/hooks/gate-hook.mjs";
+import { tool } from "../plugins/sage-codex/skills/sage/sage.mjs";
 
 const json = (path) => JSON.parse(readFileSync(join(ROOT, path), "utf8"));
 const inside = (root) => z.string().startsWith("./").refine((path) => !relative(root, resolve(root, path)).startsWith(".."), "path leaves its root");
@@ -54,7 +55,7 @@ test("the sage marketplace and the Codex manifest match the documented formats",
   assert.equal(marketplace.safeParse({ ...market, plugins: [{ ...market.plugins[0], policy: { installation: "AVAILABLE" } }] }).success, false);
 });
 
-function installed(t, { trust = [], cliVersion, threads = "[agents]\nmax_concurrent_threads_per_session = 10\n" } = {}) {
+function installed(t, { trust = [], cliVersion, threads = "[agents]\nmax_concurrent_threads_per_session = 10\n", more = {} } = {}) {
   const home = realpathSync(mkdtempSync(join(tmpdir(), "sage-codex-home-")));
   t.after(() => rmSync(home, { recursive: true, force: true }));
   const root = join(home, "plugins/cache/sage/sage/0.1.0");
@@ -65,7 +66,7 @@ function installed(t, { trust = [], cliVersion, threads = "[agents]\nmax_concurr
   const transcript = join(home, "rollout.jsonl");
   if (cliVersion) writeFileSync(transcript, JSON.stringify({ type: "session_meta", payload: { cli_version: cliVersion } }) + "\n");
   const { SAGE_HOME, ...inherited } = process.env;
-  const env = { ...inherited, HOME: home, CODEX_HOME: home };
+  const env = { ...inherited, HOME: home, CODEX_HOME: home, ...more };
   const install = spawnSync(process.execPath, [join(root, "skills/sage/sage.mjs"), "hooks", "install"], { encoding: "utf8", env });
   assert.equal(install.status, 0, install.stderr);
   const run = (input) => {
@@ -73,7 +74,7 @@ function installed(t, { trust = [], cliVersion, threads = "[agents]\nmax_concurr
     assert.equal(r.status, 0, r.stderr);
     return r.stdout ? JSON.parse(r.stdout) : "";
   };
-  return { run, home };
+  return { run, home, env };
 }
 const { stateKey } = await import(new URL("../plugins/sage-codex/hooks/hook-state.mjs", import.meta.url));
 
@@ -190,6 +191,20 @@ test("T952: the SessionStart hook warns when Codex's thread limit runs fewer age
     assert.match(warning(`[agents]\nmax_concurrent_threads_per_session = 20\n[features.multi_agent_v2]\n${off}max_concurrent_threads_per_session = 5\n`)[0] ?? "", /at most 4 agents .*features\.multi_agent_v2\.max_concurrent_threads_per_session = 5/, `${off}: the v2 limit still counts when it is the lower`);
   }
   for (const on of ["[features.multi_agent_v2]\nenabled = true\nmax_concurrent_threads_per_session = 11\n", "[features]\nmulti_agent_v2 = { enabled = true, max_concurrent_threads_per_session = 11 }\n"]) assert.equal(warning(on)[0], undefined, on);
+});
+
+test("T1056: the thread warning reads the agent limit of a shared project from its logbook, not from the Codex root", (t) => {
+  const { run, home, env } = installed(t, { trust: ALL, cliVersion: "0.164.0", threads: "[agents]\nmax_concurrent_threads_per_session = 6\n", more: { SAGE_TEST_PIDS: "{}" } });
+  const repo = join(home, "repo");
+  mkdirSync(repo);
+  for (const args of [["init", "-q", "-b", "main"], ["-c", "user.name=t", "-c", "user.email=t@example.com", "commit", "-q", "--allow-empty", "-m", "first"]]) spawnSync("git", args, { cwd: repo, env });
+  const sage = (...args) => tool.sage([...args, "--project", repo, ...tool.actorOptions(repo, args, { native: "test-chief" }, env)], env);
+  sage("config", "max_agents=3");
+  sage("link", "--separate");
+  const warning = () => run({ hook_event_name: "SessionStart", source: "startup", cwd: repo }).systemMessage;
+  assert.equal(warning(), undefined, "3 agents fit in 6");
+  writeFileSync(join(tool.storeDir(repo, env), "config.json"), JSON.stringify({ max_agents: 8, max_leads: 5 }));
+  assert.match(warning() ?? "", /^sage: Codex runs at most 6 agents .* this project's agent cap is 8 /);
 });
 
 test("F-T952-2: the thread warning also reads the project's .codex/config.toml, from the project root to the session's folder, and counts it only where it lowers the limit", (t) => {
