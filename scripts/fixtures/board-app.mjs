@@ -57,7 +57,7 @@ export function writeAppLogbook(root, now) {
 }
 
 const HEAD = "b".repeat(40);
-const HOSTILE = { title: `<img src=x onerror="window.hacked=1">Hostile "quotes" & 'apostrophes'`, path: "<script>window.hacked=3</script>\nsrc/evil\u202egnp\u009b.js", link: `<a href="javascript:window.hacked=5">click</a>` };
+const HOSTILE = { title: `<img src=x onerror="window.hacked=1">Hostile "quotes" & 'apostrophes'`, path: "<script>window.hacked=3</script>\nsrc/evil\u202egnp\u009b.js", invisible: "src/a\u061cb\u2060c\u00add\u180ee\u{e0001}f.js", link: `<a href="javascript:window.hacked=5">click</a>` };
 export const HOSTILE_TEXT = HOSTILE;
 
 export function writeTasksLogbook(root, worktrees, now, { hostile = false, many = 0, edge = false } = {}) {
@@ -82,14 +82,14 @@ export function writeTasksLogbook(root, worktrees, now, { hostile = false, many 
   const records = [
     { id: "O1", task: "T3", kind: "pr", source: "gh pr view", basis: "observed", observedAt: at(1), recordedAt: at(1), data: { repository: "https://github.com/sample-owner/sample-app", number: 12, state: "open", head: HEAD } },
     { id: "O2", task: "T3", kind: "files", source: "git diff", basis: "observed", observedAt: at(2), recordedAt: at(2), data: { head: HEAD, paths: ["src/limits.js", "src/shared.js"], truncated: false } },
-    { id: "O3", task: "T40", kind: "files", source: "git diff", basis: "observed", observedAt: at(2), recordedAt: at(2), data: { head: "c".repeat(40), paths: ["src/shared.js", ...(hostile ? [HOSTILE.path, "javascript:window.hacked=4"] : [])], truncated: false } },
+    { id: "O3", task: "T40", kind: "files", source: "git diff", basis: "observed", observedAt: at(2), recordedAt: at(2), data: { head: "c".repeat(40), paths: ["src/shared.js", ...(hostile ? [HOSTILE.path, HOSTILE.invisible, "javascript:window.hacked=4"] : [])], truncated: false } },
     { id: "O4", task: "T3", kind: "artifact", source: "chief", basis: "reported", observedAt: at(3), recordedAt: at(3), data: { type: "artifact", label: "Limits design note", url: "https://github.com/sample-owner/sample-app/pull/12", run: "R7" } },
   ];
   if (hostile) {
     tables.tasks.push({ ...tables.tasks[1], id: "T50", title: HOSTILE.title, state: "building", milestone: "", priority: "P0", kind: "security", chief: "C2", branch: "sage/t50-<b>bold</b>" });
     tables.decisions.push({ at: at(0.2), task: "T50", decision: `state building ${HOSTILE.link}`, why: "<i>why</i>" });
     tables.gates.push({ id: "G9", task: "T50", question: `Ship "it"? <b>now</b>`, options: "A|B", recommendation: "A", default: "", answer: `<script>window.hacked=7</script>`, at: at(0.3) });
-    records.push({ id: "O5", task: "T50", kind: "files", source: "git diff", basis: "observed", observedAt: at(1), recordedAt: at(1), data: { head: "d".repeat(40), paths: [HOSTILE.path, "javascript:window.hacked=4", "src/shared.js"], truncated: false } },
+    records.push({ id: "O5", task: "T50", kind: "files", source: "git diff", basis: "observed", observedAt: at(1), recordedAt: at(1), data: { head: "d".repeat(40), paths: [HOSTILE.path, HOSTILE.invisible, "javascript:window.hacked=4", "src/shared.js"], truncated: false } },
       { id: "O6", task: "T50", kind: "artifact", source: "chief", basis: "reported", observedAt: at(1), recordedAt: at(1), data: { type: "artifact", label: `<img src=x onerror="window.hacked=6">label`, url: "https://example.com/a?b=%22%3E%3Cscript%3E" } });
   }
   if (edge) tables.tasks.push({ ...tables.tasks[1], id: "T60", title: "Sample".repeat(500), state: "building", milestone: "", priority: "P3", kind: "", chief: "C1", branch: "" });

@@ -146,7 +146,7 @@ test("T1061 (F-T1061-1): markup, quotes, newlines and javascript: links in agent
   await panelTitle(page).filter({ hasText: HOSTILE_TEXT.title }).waitFor();
   const panel = page.locator(".panel");
   assert.match(await panel.textContent(), /sage\/t50-<b>bold<\/b>/, "the branch name is text");
-  assert.deepEqual(await panel.locator(".callout code").allTextContents(), ["<script>window.hacked=3</script>\\nsrc/evil\\u202egnp\\u009b.js", "javascript:window.hacked=4", "src/shared.js"], "a path shows its newline, its right-to-left override and its C1 control as escapes");
+  assert.deepEqual(await panel.locator(".callout code").allTextContents(), ["<script>window.hacked=3</script>\\nsrc/evil\\u202egnp\\u009b.js", "src/a\\u061cb\\u2060c\\u00add\\u180ee\\u{e0001}f.js", "javascript:window.hacked=4", "src/shared.js"], "a path shows its newline, its right-to-left override, its C1 control and every other invisible or format character, also outside the BMP, as escapes");
   assert.match(await panel.locator("#tab-panel").textContent(), /sage_x_t50_r9 <img src=x onerror=window\.hacked=9>\.json/);
   assert.match(await panel.locator("#tab-panel").textContent(), /<img src=x onerror="window\.hacked=6">label/);
   await page.getByRole("tab", { name: /Log/ }).click();
