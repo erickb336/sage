@@ -110,7 +110,7 @@ const running = (n) => `${n} sage ${n === 1 ? "agent is" : "agents are"} running
 
 export function handle(input, state, slots) {
   const out = handleEvent(input, state, slots);
-  if (input.hook_event_name === "PreToolUse" && AGENT_TOOLS.test(input.tool_name ?? "") && out?.hookSpecificOutput?.permissionDecision !== "deny") noteStart(input);
+  if (AGENT_TOOLS.test(input.tool_name ?? "") && (input.hook_event_name === "PostToolUse" || (input.hook_event_name === "PreToolUse" && out?.hookSpecificOutput?.permissionDecision !== "deny"))) noteStart(input);
   return queueNote(input, state, out, slots);
 }
 
@@ -716,14 +716,14 @@ export async function waitForSlot(runs, cwd, { ms = WAIT_MS } = {}) {
     const q = stateTool.queueOf(project), view = logbookOf(project), out = runs.filter((id) => !q.queued.some((r) => r.id === id));
     if (out.length) return out.map((id) => {
       const row = view.row(id), open = q.admitted.find((r) => r.id === id);
-      return open ? `${id} is admitted: start its agent now, by ${open.until}, or the run ends as failed.` : stateTool.queueProblem(project, id) ?? `${id} is ${row ? row.status : "not in the logbook"}, not queued.`;
+      return open ? `${id} (${open.role} on ${open.task}) is admitted: start its agent now, by ${open.until}, or the run ends as failed.` : stateTool.queueProblem(project, id) ?? `${id} is ${row ? row.status : "not in the logbook"}, not queued.`;
     }).join("\n");
     if (Date.now() - started >= ms) return `${q.queued.filter((r) => runs.includes(r.id)).map((r) => `${r.id} place ${r.place}`).join(", ")} still queued after ${Math.round(ms / 60_000)} minutes: run this command again.`;
     await new Promise((done) => {
       let watcher;
       const end = () => { watcher?.close(); clearTimeout(timer); done(); };
       const timer = setTimeout(end, Math.min(5_000, Math.max(0, ms - (Date.now() - started))));
-      try { watcher = watch(q.dir, end); } catch {}
+      try { watcher = watch(q.dir, (event, name) => /^\.lock(?:\.|$)/.test(name ?? "") || end()); } catch {}
     });
   }
 }

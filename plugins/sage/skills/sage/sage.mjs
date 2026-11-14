@@ -33,7 +33,7 @@ const tool = createStateTool({
   takeoverCycle: () => "run one cycle of its reviews and QA on this SHA, record each verdict, then merge with gh pr merge",
   queueWait: (run) => {
     const wait = join(dirname(fileURLToPath(import.meta.url)), "../../hooks/wait.mjs");
-    return `To wait, run ${/\s/.test(wait) ? `node "${wait}"` : `node ${wait}`} --slot ${run} as a Bash command of its own (a chief in the background, a lead with the timeout 600000). It ends when ${run} is admitted.`;
+    return `To wait, run ${/\s/.test(wait) ? `node "${wait}"` : `node ${wait}`} --slot ${run} in the project's folder, as a Bash command of its own (a chief in the background, a lead with the timeout 600000). It ends when ${run} is admitted.`;
   },
 });
 export const { SIZES, BLOCKS, RISKS, KINDS, STATES, DEFAULTS, PR, sageRoot, locate, chiefFor, sessionBar, branchBar, actorOptions, git, projectRoot, optionsOf, slug, worktreeRoot, pagesRoot, BRANCH, ofTask, branchOfTask, branchTip, projectName, storeDir, config, cyclesFor, modelFor, read, mergeCheck, logbookView, sage, withLock, keepReport, observePush, queueOf, chiefQueue, queueProblem, markStart, sweepQueue } = tool;

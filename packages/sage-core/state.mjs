@@ -552,8 +552,9 @@ const awaiting = (dir, run) => run.status === "running" && !!run.admitted && !st
 const leaseEnd = (run) => Date.parse(run.admitted) + ADMIT_LEASE_MS;
 const SWEEP_GRACE_MS = 60_000;
 const utc = (at) => `${at.slice(11, 16)} UTC`;
+const lapsedOf = (dir, runs, at) => runs.filter((r) => awaiting(dir, r) && leaseEnd(r) + SWEEP_GRACE_MS <= at);
 function admit(dir, project, env, runs) {
-  const stamp = now(), notes = [], lapsed = runs.filter((r) => awaiting(dir, r) && leaseEnd(r) + SWEEP_GRACE_MS <= Date.parse(stamp));
+  const stamp = now(), notes = [], lapsed = lapsedOf(dir, runs, Date.parse(stamp));
   for (const r of lapsed) {
     Object.assign(r, { status: "failed", ended: stamp });
     notes.push(`${r.id} failed: admitted at ${utc(r.admitted)}, its agent did not start within ${ADMIT_LEASE_MS / 60_000} minutes`);
@@ -581,6 +582,8 @@ function queueOf(project, env = process.env) {
 function sweepQueue(project, env = process.env) {
   const dir = storeDir(project, env);
   if (!lstatSync(join(dir, "runs.tsv"), { throwIfNoEntry: false })) return [];
+  const runs = read(dir, "runs"), sweepDue = lapsedOf(dir, runs, Date.now()).length || (queueOrder(runs).length && runningOf(runs).length < projectCap(dir, project, env));
+  if (!sweepDue) return [];
   return withLock(dir, () => {
     ready(dir, env);
     const runs = read(dir, "runs"), notes = admit(dir, project, env, runs);
@@ -599,7 +602,7 @@ function chiefQueue(project, native, env = process.env) {
 function queueProblem(project, id, env = process.env) {
   const q = queueOf(project, env), waiting = q.queued.find((r) => r.id === id), lapsed = q.lapsed.find((r) => r.id === id);
   if (waiting) return `${id} is queued, place ${waiting.place} of ${q.queued.length}: the project runs ${q.running} of its ${q.limit} agents, so its agent does not start yet. A run that ends admits the oldest queued run.`;
-  if (lapsed) return `${id} was admitted at ${utc(lapsed.admitted)}, and no agent started within ${ADMIT_LEASE_MS / 60_000} minutes, so it ${lapsed.ended ? "ended as failed and lost its place" : "lost its place and ends as failed"}. Add a new run for this agent.`;
+  if (lapsed) return `${id} (${lapsed.role} on ${lapsed.task}) was admitted at ${utc(lapsed.admitted)}, and no agent started within ${ADMIT_LEASE_MS / 60_000} minutes, so it ${lapsed.ended ? "ended as failed and lost its place" : "lost its place and ends as failed"}. Add a new run for this agent.`;
   return undefined;
 }
 function markStart(project, id, env = process.env) {

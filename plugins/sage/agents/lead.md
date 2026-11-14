@@ -81,7 +81,7 @@ In this file, `wait` stands for `node <path to hooks/wait.mjs>`: the path of you
 
 `wait <T> --ci` waits up to 9 minutes for CI on the head of your task's branch, on the PR of tasks.tsv. It reads only that PR's head and its checks. It prints `CI pass`, `CI fail`, `CI none` (no checks) or `CI runs` (run it again), and the next step: do it.
 
-`wait --slot R<n>` waits up to 9 minutes for the admission of a queued run. It prints `R<n> is admitted` with the time by which its helper must start, or that the run still waits (run it again).
+`wait --slot R<n>` waits up to 9 minutes for the admission of a queued run. It prints `R<n> (<role> on <T>) is admitted` with the time by which its helper must start, or that the run still waits (run it again). Like `run add` and `run done`, it ends as failed an admitted run whose helper did not start in 10 minutes (1 minute later), and admits the next run.
 
 When the hook blocks your stop, its line gives this command with the full path. A wait keeps your slot: the hook holds a lead's slot while its lead run runs.
 
@@ -285,7 +285,7 @@ $ sage run add T1 --role qa
 $ sage run done R3 --status done --tokens 50000
 $ sage verdict T1 --sha <sha> --kind review-clean --cycle 1 --pr 12 --run R3
 $ wait --slot R4
-→ R4 is admitted:
+→ R4 (qa on T1) is admitted:
 > R4 sage:qa
 < R4 PASS: - Q1 low src/form.js:8 the name field has no label for screen readers
 $ sage finding add T1 --source qa --severity low --summary=name-field-has-no-label --run R4 --class layout

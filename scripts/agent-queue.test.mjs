@@ -1,7 +1,7 @@
 import "./test-env.mjs";
 import assert from "node:assert/strict";
 import { execFile, execFileSync, spawnSync } from "node:child_process";
-import { cpSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, writeFileSync } from "node:fs";
+import { cpSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, watch, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { test } from "node:test";
@@ -65,7 +65,7 @@ test("T1057: a Claude chief and a Codex chief at the project's limit queue their
   assert.match(w.codex("run", "add", "T2", "--role", "qa"), /^R2 running · qa on T2/);
   assert.match(w.claude("run", "add", "T1", "--role", "qa"), /^R3 running · qa on T1/);
   assert.match(w.codex("run", "add", "T2", "--role", "qa"), /^R4 is queued, place 1 · qa on T2 · reasoning_effort medium · the project runs 3 of its 3 agents\. Start its agent only after its admission.* Codex has no wait for a place: after a run ends, call spawn_agent again with the same task name\. The gate names the run's place again, or lets it start\.$/, "the Codex line says how to wait");
-  assert.match(w.claude("run", "add", "T1", "--role", "qa"), /^R5 is queued, place 2 · qa on T1 · model sonnet · the project runs 3 of its 3 agents\..* To wait, run node \S+\/hooks\/wait\.mjs --slot R5 as a Bash command of its own \(a chief in the background, a lead with the timeout 600000\)\. It ends when R5 is admitted\.$/, "the Claude line names the wait");
+  assert.match(w.claude("run", "add", "T1", "--role", "qa"), /^R5 is queued, place 2 · qa on T1 · model sonnet · the project runs 3 of its 3 agents\..* To wait, run node \S+\/hooks\/wait\.mjs --slot R5 in the project's folder, as a Bash command of its own \(a chief in the background, a lead with the timeout 600000\)\. It ends when R5 is admitted\.$/, "the Claude line names the wait");
   assert.deepEqual(w.runs().rows.map((r) => [r.id, r.status, r.chief]), [["R1", "running", "C1"], ["R2", "running", "C2"], ["R3", "running", "C1"], ["R4", "queued", "C2"], ["R5", "queued", "C1"]]);
 
   assert.equal(denied(await w.spawnCodex("sage_qa_t2_r4")), "sage: R4 is queued, place 1 of 2: the project runs 3 of its 3 agents, so its agent does not start yet. A run that ends admits the oldest queued run. Codex has no wake for a waiting thread: after a run ends, call spawn_agent again with the same task name. The gate names the run's place again, or lets it start. A chief's hook names the admission at the chief's next turn", "Codex's deny drops the last full stop");
@@ -110,7 +110,7 @@ test("T1057: a queued Claude chief is told once at its stop to wait in the backg
   w.claude("run", "done", "R2", "--status", "failed");
   const { error, stdout } = await wait;
   assert.equal(error, null);
-  assert.match(stdout, /^R4 is admitted: start its agent now, by \d\d:\d\d UTC, or the run ends as failed\.\n$/);
+  assert.match(stdout, /^R4 \(qa on T1\) is admitted: start its agent now, by \d\d:\d\d UTC, or the run ends as failed\.\n$/);
   assert.match(w.hook({ hook_event_name: "Stop", last_assistant_message: "R4 starts." })?.reason ?? "", /^sage: R4 \(qa on T1\) is admitted from the queue: start its agent now/, "an untold admission blocks the stop, so the chief starts the agent");
 });
 
@@ -128,7 +128,7 @@ test("T1057: an admitted run whose agent does not start within 10 minutes ends a
   assert.equal(w.claude("run", "done", "R2", "--status", "failed"), `R2 failed\nR4 failed: admitted at ${old.slice(11, 16)} UTC, its agent did not start within 10 minutes\nR5 admitted · qa on T2 · chief C2: start its agent within 10 minutes, or the run ends as failed`);
   assert.deepEqual(w.runs().rows.map((r) => [r.id, r.status]), [["R1", "failed"], ["R2", "failed"], ["R3", "running"], ["R4", "failed"], ["R5", "running"]]);
   assert.match(readFileSync(join(storeDir(w.project, w.env), "decisions.tsv"), "utf8"), /\tT2\tR4 failed: no agent started within 10 minutes of its admission\t/);
-  return w.spawnCodex("sage_qa_t2_r4").then((out) => assert.equal(denied(out), `sage: R4 was admitted at ${old.slice(11, 16)} UTC, and no agent started within 10 minutes, so it ended as failed and lost its place. Add a new run for this agent`));
+  return w.spawnCodex("sage_qa_t2_r4").then((out) => assert.equal(denied(out), `sage: R4 (qa on T2) was admitted at ${old.slice(11, 16)} UTC, and no agent started within 10 minutes, so it ended as failed and lost its place. Add a new run for this agent`));
 });
 
 test("T1057: run add and run done racing in separate processes, from both providers, never hold more running runs than the limit", async (t) => {
@@ -242,10 +242,12 @@ test("T1057 F-T1057-1: with no write after a lapse, wait --slot fails the lapsed
   const old = backdate(w, "R4", 12 * 60_000);
   const { error, stdout } = await waitSlot(w, "R5");
   assert.equal(error, null);
-  assert.match(stdout, /^R5 is admitted: start its agent now, by \d\d:\d\d UTC, or the run ends as failed\.\n$/, "the wait itself sweeps the lapsed admission: no other write came");
+  assert.match(stdout, /^R5 \(qa on T1\) is admitted: start its agent now, by \d\d:\d\d UTC, or the run ends as failed\.\n$/, "the wait itself sweeps the lapsed admission: no other write came");
   assert.deepEqual([status(w, "R4"), status(w, "R5")], ["failed", "running"]);
   assert.match(readFileSync(join(storeDir(w.project, w.env), "decisions.tsv"), "utf8"), /\tT2\tR4 failed: no agent started within 10 minutes of its admission\t/);
-  assert.equal((await waitSlot(w, "R4")).stdout, `R4 was admitted at ${old.slice(11, 16)} UTC, and no agent started within 10 minutes, so it ended as failed and lost its place. Add a new run for this agent.\n`, "the same words as the hook's refusal (F-T1057-14)");
+  assert.equal((await waitSlot(w, "R4")).stdout, `R4 (qa on T2) was admitted at ${old.slice(11, 16)} UTC, and no agent started within 10 minutes, so it ended as failed and lost its place. Add a new run for this agent.\n`, "the same words as the hook's refusal (F-T1057-14)");
+  w.hook({ hook_event_name: "UserPromptSubmit", prompt: "sage mode" });
+  assert.equal(denied(w.hook(claudeSpawn("R4", "T2"))), `sage: R4 (qa on T2) was admitted at ${old.slice(11, 16)} UTC, and no agent started within 10 minutes, so it ended as failed and lost its place. Add a new run for this agent.`, "the Claude hook names the role and the task too (F-T1057-30)");
 });
 
 test("T1057 F-T1057-7: a helper started in the foreground keeps its run past the lease, because the spawn's allow marks its start; another chief's run add neither fails it nor admits past the limit", (t) => {
@@ -268,7 +270,7 @@ test("T1057 F-T1057-4: from the lease's end the hooks refuse the spawn, but the 
   const w = world(t);
   fullWithAdmission(w);
   const old = backdate(w, "R4", 10.5 * 60_000);
-  assert.equal(denied(await w.spawnCodex("sage_qa_t2_r4")), `sage: R4 was admitted at ${old.slice(11, 16)} UTC, and no agent started within 10 minutes, so it lost its place and ends as failed. Add a new run for this agent`);
+  assert.equal(denied(await w.spawnCodex("sage_qa_t2_r4")), `sage: R4 (qa on T2) was admitted at ${old.slice(11, 16)} UTC, and no agent started within 10 minutes, so it lost its place and ends as failed. Add a new run for this agent`);
   assert.match(w.claude("run", "add", "T1", "--role", "qa"), /^R6 is queued, place 2 /);
   assert.equal(status(w, "R4"), "running", "within the minute after the lease, the sweep leaves the run");
   assert.equal(markStart(w.project, "R4", w.env), true, "a hook that allowed the spawn just before the lease's end marks it now");
@@ -304,4 +306,38 @@ test("T1057 F-T1057-6: the board takes a project's limit as the state tool does,
   const roots = [{ id: "shared", path: w.env.SAGE_SHARED_HOME }, { id: "claude", path: join(w.env.CLAUDE_CONFIG_DIR, "sage"), provider: "claude" }, { id: "codex", path: join(w.env.CODEX_HOME, "sage"), provider: "codex" }];
   const [queue] = buildBoardModel(readBoardSources(roots)).agents.queues;
   assert.deepEqual([queue.limit, queue.text], [4, "1 of 4 agents"], "the board shows the same limit");
+});
+
+test("T1057 F-T1057-32: waiters with nothing to change take no lock, so they do not wake each other in a loop", async (t) => {
+  const w = world(t);
+  shared(w);
+  for (let i = 0; i < 7; i++) w.claude("run", "add", "T1", "--role", "qa");
+  assert.deepEqual(queueOf(w.project, w.env).queued.map((r) => r.id), ["R4", "R5", "R6", "R7"]);
+  const dir = storeDir(w.project, w.env), names = [];
+  const watcher = watch(dir, (event, name) => names.push(name));
+  const waits = await Promise.all(["R4", "R5", "R6", "R7"].map((run) => new Promise((done) => execFile("node", [WAIT, "--slot", run], { cwd: w.project, env: { ...w.env, SAGE_WAIT_MS: "3000" }, timeout }, (error, stdout) => done({ error, stdout })))));
+  watcher.close();
+  for (const { error, stdout } of waits) {
+    assert.equal(error, null);
+    assert.match(stdout, /^R\d place \d still queued after /);
+  }
+  assert.ok(names.length <= 12, `with no lapse and no free place, a wait writes nothing; a waiter that takes the lock on each turn wakes the others in a loop, with hundreds of folder events in 3 s. The 4 waiters made ${names.length}, such as ${[...new Set(names)].slice(0, 4).join(", ")}`);
+  assert.deepEqual(w.runs().rows.map((r) => r.status), ["running", "running", "running", "queued", "queued", "queued", "queued"], "nothing changed");
+});
+
+test("T1057 F-T1057-23: when the spawn's PreToolUse wrote no start mark (the hook threw or timed out), the Agent PostToolUse writes it, once", (t) => {
+  const w = world(t);
+  shared(w);
+  for (let i = 0; i < 4; i++) w.claude("run", "add", "T1", "--role", "qa");
+  w.hook({ hook_event_name: "UserPromptSubmit", prompt: "sage mode" });
+  assert.match(w.claude("run", "done", "R1", "--status", "failed"), /\nR4 admitted · qa on T1 · chief C1: /);
+  const { tool_input } = claudeSpawn("R4", "T1"), post = { hook_event_name: "PostToolUse", tool_name: "Agent", tool_use_id: "tu-R4", tool_input, tool_response: { status: "async_launched" } };
+  w.hook(post);
+  assert.deepEqual(queueOf(w.project, w.env).admitted, [], "the PostToolUse marked the agent's start");
+  const mark = join(storeDir(w.project, w.env), "kept", "R4.start.json"), first = readFileSync(mark, "utf8");
+  w.hook(post);
+  assert.equal(readFileSync(mark, "utf8"), first, "a second event keeps the first mark");
+  backdate(w, "R4", 12 * 60_000);
+  assert.match(w.claude("run", "done", "R2", "--status", "failed"), /^R2 failed$/, "the sweep keeps the working run");
+  assert.equal(status(w, "R4"), "running");
 });
