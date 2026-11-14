@@ -489,6 +489,7 @@ A moved folder with no Git commits, or that is no Git repository, has no first c
 | Any chief | `task add`, `claim`, `accept` or `cancel` (a decline) of an offer that names it, `gate add` with no task, `gate replace`, `init`, `standing add`, `config`, `log -`, `pages <T> record`, `observe`, `run usage`, `release add` and `milestone <M> set release=`. |
 | You | `gate answer`, in your own words, from either provider, each form of `logbook repair` (`--accept-loss`, `--accept-change-loss`, or both) and `projects rebuild`: each is your act and names no chief, so the line that sage prints works in your terminal. |
 | A stop hook | The report and the end of the run of its own slot, so no report is lost. |
+| A push hook | After a push of a task's branch, in either provider: the `files` record of each open task on that branch, as `observe <T> files` writes it (the paths that the branch changes against origin/main, at most 500). A failure never stops the push. The board model marks two open tasks of different chiefs that change one file as "may conflict": a warning, never a wait. |
 | A helper, or a command with no chief | Nothing. It only reads. |
 
 - A Claude chief adds `--chief C<n>` to each write, and a Claude lead adds `--lead R<n>`.

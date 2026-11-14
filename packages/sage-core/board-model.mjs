@@ -237,7 +237,7 @@ function card(source, project, group, task, now, graph, landing) {
   const records = (byTask(project.observations?.records ?? NONE).get(task.id) ?? NONE).filter(record => time(record.observedAt) !== null && time(record.observedAt) <= now);
   const pr = latest(records, "pr", data => String(data.number) === task.pr);
   const completion = latest(records, "completion", data => data.state === task.state);
-  const mode = latest(records, "mode");
+  const mode = latest(records, "mode"), files = latest(records, "files");
   const ledger = rows(project, "ledger", task);
   const times = [...rows(project, "runs", task).flatMap(run => [run.started, run.ended]), ...ledger.map(row => row.at), ...rows(project, "decisions", task).map(row => row.at)].map(time).filter(at => at !== null);
   const lastActivity = times.length ? new Date(Math.max(...times)).toISOString() : null;
@@ -317,7 +317,20 @@ function card(source, project, group, task, now, graph, landing) {
     ...rows(project, "findings", task).map(row => ({ ...row, movedFrom: (moves.to.get(task.id) ?? NONE).find(({ move }) => move[3] === row.key)?.row.task ?? null })),
     ...(moves.from.get(task.id) ?? NONE).map(({ row, move }) => ({ severity: "", summary: row.decision.slice(row.decision.indexOf(":") + 1).trim(), ...found(move[2], move[3]), task: task.id, key: move[1], status: "moved", reason: "", movedTo: move[2] })),
   ];
-  return { key: `${project.key}/${task.id}`, source: source.id, sourceLabel: source.label, providerStandIn: standInOf(source, project), repository: githubRepository(pr?.data.repository) ?? githubRepository(project.repository), lastActivity, headBasis, project: project.key, group: group.key, projectName: group.name, archived: group.archived, milestone: task.milestone ? { key: `${project.key}/${task.milestone}`, id: task.milestone, name: milestone?.name ?? null, pilot: milestone?.pilot === task.id } : null, waits, waitLine: waitLine(task, waits, column), priority: PRIORITIES.includes(task.priority) ? task.priority : "", kind: TASK_KINDS.includes(task.kind) ? task.kind : "", ...Object.fromEntries(["id", "title", "size", "risk", "route", "state", "branch", "pr", "round", "keys", "hold"].map(field => [field, task[field] ?? ""])), column, prEvidence: pr, currentHead: head, modeEvidence: mode, completedAt, visible: column !== "done" || completedAt !== null && completedAt <= now && completedAt >= now - 7 * 86400000, agents, inferredWork: inferred, cycles, requiredCycles: required, reasons, runs, ledger, gates, findings, decisions: rows(project, "decisions", task).slice(-10), brief, briefFields: briefFields(brief), projectCheck, mergeCheck: merge, loop: stepLine({ task, route, cycles, required: count, head, judged, reasons, merge, gates: allGates, runs, ledger, rounds: positive(source.config?.max_rounds) ?? 3, autopilot: mode?.data.autopilot === true }), runClocks: Object.fromEntries(runs.filter(run => run.status === "running").map(run => [run.id, run.clock])), goneRun: writer?.checkoutGone ? writer.id : null, artifacts: records.filter(record => record.kind === "artifact").map(record => ({ ...record, content: project.contents?.[record.id] ?? null })), diagnostics: [...project.diagnostics], ...holderOf(project, task, runs, label, gates),...(wasOf(project, task) && { was: wasOf(project, task) }) };
+  return { key: `${project.key}/${task.id}`, source: source.id, sourceLabel: source.label, providerStandIn: standInOf(source, project), repository: githubRepository(pr?.data.repository) ?? githubRepository(project.repository), lastActivity, headBasis, project: project.key, group: group.key, projectName: group.name, archived: group.archived, milestone: task.milestone ? { key: `${project.key}/${task.milestone}`, id: task.milestone, name: milestone?.name ?? null, pilot: milestone?.pilot === task.id } : null, waits, waitLine: waitLine(task, waits, column), priority: PRIORITIES.includes(task.priority) ? task.priority : "", kind: TASK_KINDS.includes(task.kind) ? task.kind : "", ...Object.fromEntries(["id", "title", "size", "risk", "route", "state", "branch", "pr", "round", "keys", "hold"].map(field => [field, task[field] ?? ""])), column, prEvidence: pr, currentHead: head, modeEvidence: mode, completedAt, visible: column !== "done" || completedAt !== null && completedAt <= now && completedAt >= now - 7 * 86400000, agents, inferredWork: inferred, cycles, requiredCycles: required, reasons, runs, ledger, gates, findings, decisions: rows(project, "decisions", task).slice(-10), brief, briefFields: briefFields(brief), projectCheck, mergeCheck: merge, loop: stepLine({ task, route, cycles, required: count, head, judged, reasons, merge, gates: allGates, runs, ledger, rounds: positive(source.config?.max_rounds) ?? 3, autopilot: mode?.data.autopilot === true }), changedFiles: files && { ...files.data, observedAt: files.observedAt }, mayConflict: [], runClocks: Object.fromEntries(runs.filter(run => run.status === "running").map(run => [run.id, run.clock])), goneRun: writer?.checkoutGone ? writer.id : null, artifacts: records.filter(record => record.kind === "artifact").map(record => ({ ...record, content: project.contents?.[record.id] ?? null })), diagnostics: [...project.diagnostics], ...holderOf(project, task, runs, label, gates),...(wasOf(project, task) && { was: wasOf(project, task) }) };
+}
+
+function markConflicts(tasks) {
+  const open = tasks.filter(task => task.owner && task.changedFiles && !ENDED.includes(task.state));
+  for (const [i, a] of open.entries()) {
+    const mine = new Set(a.changedFiles.paths);
+    for (const b of open.slice(i + 1)) {
+      const paths = a.project === b.project && a.owner.id !== b.owner.id ? b.changedFiles.paths.filter(path => mine.has(path)) : NONE;
+      if (!paths.length) continue;
+      a.mayConflict.push({ key: b.key, id: b.id, chief: b.owner.label, paths });
+      b.mayConflict.push({ key: a.key, id: a.id, chief: a.owner.label, paths });
+    }
+  }
 }
 
 function holderOf(project, task, runs, label, gates) {
@@ -676,6 +689,7 @@ export function buildBoardModel(input,{ now = new Date().toISOString(), landing 
   const tasks = sources.flatMap(source => source.projects.flatMap(project => (project.tables.tasks ?? []).filter(task => /^T[1-9]\d*$/.test(task.id)).map(task => card(source, project, groupOf.get(project.key), task, at, graphs.get(project.key), landing))));
   const byKey = new Map(tasks.map(task => [task.key, task]));
   namedWaits(tasks, byKey);
+  markConflicts(tasks);
   const milestones = sources.flatMap(source => source.projects.flatMap(project => milestonesOf(source, project, groupOf.get(project.key), graphs.get(project.key), byKey)));
   const releases = sources.flatMap(source => source.projects.map(project => releasesOfBook(project, groupOf.get(project.key), graphs.get(project.key), byKey)).filter(Boolean));
   const milestoneNeeds = [...milestones.filter(milestone => milestone.need).map(milestone => milestone.need),

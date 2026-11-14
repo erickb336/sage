@@ -17,7 +17,8 @@ import { cleanReport, fieldsOf, proofResults, readReport } from "./report-reader
 import { ROLES } from "./roles.mjs";
 import { AGENT_CAPS, BREAKS, FINDING_CLASSES, HIDDEN, LINE, NAME_MAX, PRIORITIES, PRIORITY_SCALE, START_SAGE_MODE, TABLES as PLAIN_TABLES, TASK_KINDS, breakdownLine, countOf, nameProblem, proposalOf } from "./logbook-fields.mjs";
 import { BREAKDOWN, ENDED, GATE_ID, MET, MILESTONE_ID, TASK_ID, breakdownGate, renameRows, renamedIds, byIds, dead, droppedBy, gateLines, lostClause, milestoneState, milestoneWordOf, progressOf, progressText, releaseKey, releaseNameProblem, releasesOf, shownGraph, shownMilestoneState, shownWaits, unmetWaits, waitGraph, waitWords, waitsOf, waitsWithState } from "./milestone-rules.mjs";
-import { OBSERVATIONS_MAX_BYTES, OBSERVATION_DATA_MAX_BYTES, validateObservation, validateObservations } from "./observations.mjs";
+import { FILES_MAX, FILE_PATH_MAX_BYTES, OBSERVATIONS_MAX_BYTES, OBSERVATION_DATA_MAX_BYTES, validateObservation, validateObservations } from "./observations.mjs";
+import { pushedBranches } from "./push-policy.mjs";
 import { MOVES, PLAN_MAX, checkoutGone, createSharedRoot, sharedRoot, unreadableFolder } from "./shared-root.mjs";
 import { changedText, countsOf, endText, gateQuestion, gateText, localTime, mapHtml, mismatchText, previewText, providersOf, reconciliationText, startText, stepText, stoppedText, title } from "./move-text.mjs";
 import { pagesFolder, worktreeRoot, worktrees } from "./worktrees.mjs";
@@ -590,6 +591,63 @@ function keepReport(project, { task, run, role, sha = "", text } = {}, env = pro
   try { linkSync(temporary, file); } catch (e) { if (e.code !== "EEXIST") throw e; kept = false; } finally { unlinkSync(temporary); }
   if (!kept && keptOf(dir, run)?.text !== text) refuse(`${run} already has a kept report, and a report is kept once: this other report of ${run} is not kept.`);
   return file;
+}
+
+function addObservation(dir, task, make) {
+  const file = join(dir, "observations.json"), captured = Date.now();
+  let records, record;
+  try {
+    const bytes = readRegular(file, { link: false, max: OBSERVATIONS_MAX_BYTES, encoding: null });
+    ({ records } = bytes === undefined ? { records: [] } : validateObservations(JSON.parse(new TextDecoder("utf-8", { fatal: true }).decode(bytes)), { now: captured }));
+    const fields = make(captured), at = fields.kind === "files" ? records.findIndex((r) => r.kind === "files" && r.task === task.id) : -1;
+    record = validateObservation({ id: at < 0 ? `O${records.length + 1}` : records[at].id, task: task.id, ...fields, recordedAt: new Date(captured).toISOString() }, { now: captured });
+    records = at < 0 ? [...records, record] : records.with(at, record);
+  } catch (error) {
+    if (error instanceof Refusal) throw error;
+    refuse(`the observation cannot be recorded: ${error.message}. Nothing changed.`);
+  }
+  if (record.data.run !== undefined) {
+    const run = read(dir, "runs").find(row => row.id === record.data.run) ?? missing(`run ${record.data.run}`, read(dir, "runs").map(row => row.id));
+    if (run.task !== task.id) refuse(`${run.id} belongs to ${run.task}, not ${task.id}. Nothing changed.`);
+  }
+  if (record.kind === "completion" && record.data.state !== task.state) refuse(`${task.id} is ${task.state}, not ${record.data.state}. Nothing changed.`);
+  const text = JSON.stringify({ version: 1, records }, null, 2) + "\n";
+  if (Buffer.byteLength(text) > OBSERVATIONS_MAX_BYTES) refuse("the observation file would exceed 4 MiB. Nothing changed.");
+  swap(file, text);
+  return `${record.id} observed ${record.kind} for ${task.id}`;
+}
+
+const filesBranch = (dir, task) => task.branch || read(dir, "runs").filter((r) => r.task === task.id && WRITERS.includes(r.role) && r.branch).sort((a, b) => Number(a.id.slice(1)) - Number(b.id.slice(1))).at(-1)?.branch;
+function observeFiles(dir, project, task, env) {
+  const branch = filesBranch(dir, task);
+  if (!branch || !BRANCH.test(branch)) refuse(`${task.id} has no task branch to compare with origin/main: set one with sage task ${task.id} set branch=<its branch>. Nothing changed.`);
+  const folder = branchCheckout(dir, project, branch, env), head = branchTip(project, branch, env);
+  if (!head) refuse(`sage cannot read the branch ${branch} of ${task.id}. Nothing changed.`);
+  let out;
+  try { out = readLocalGit(folder, ["diff", "--name-only", "-z", "--no-renames", "--no-ext-diff", "--no-relative", `refs/remotes/origin/main...${head}`, "--"]).toString(); }
+  catch { refuse(`sage cannot compare ${branch} with origin/main in ${visible(folder)}. Nothing changed.`); }
+  const all = out.split("\0").filter(Boolean), paths = [];
+  let size = 200;
+  for (const path of all.filter((p) => Buffer.byteLength(p) <= FILE_PATH_MAX_BYTES)) {
+    size += Buffer.byteLength(JSON.stringify(path)) + 1;
+    if (paths.length === FILES_MAX || size > OBSERVATION_DATA_MAX_BYTES) break;
+    paths.push(path);
+  }
+  return addObservation(dir, task, (captured) => ({ kind: "files", source: "git diff origin/main", basis: "observed", observedAt: new Date(captured).toISOString(), data: { head, paths, truncated: paths.length < all.length } }));
+}
+
+function observePush(command, cwd, env = process.env) {
+  const out = [];
+  for (const { dir: folder, branch } of pushedBranches(command, cwd)) {
+    try {
+      if (!BRANCH.test(branch)) continue;
+      const project = realpathSync.native(folder), place = locate(project, env);
+      if (!existsSync(join(place.dir, "tasks.tsv")) || lstatSync(join(place.dir, "moved.json"), { throwIfNoEntry: false })) continue;
+      const view = logbookView(project, env);
+      for (const id of view.branchTasks(branch)) if (view.task(id) && !ENDED.includes(view.task(id).state)) out.push(change("observe", [id, "files"], {}, place.dir, env, [], project, false));
+    } catch (error) { out.push(`${branch}: ${error.message}`); }
+  }
+  return out;
 }
 
 const usageFile = (dir, run) => join(dir, "kept", `${run}.usage.json`);
@@ -2787,32 +2845,16 @@ function act(cmd, pos, opt, dir, env, skip, project) {
       return change ? [restarted, lostChangeLine(dir, change)].filter(Boolean).join(" ") : restarted;
     }
     case "observe": {
-      if (pos.length !== 1) refuse("observe takes one task id and explicit observation options");
       const { task } = taskOf(dir, need(sub, "the task id"));
-      const file = join(dir, "observations.json"), captured = Date.now();
-      let prior, record;
-      try {
-        const bytes = readRegular(file, { link: false, max: OBSERVATIONS_MAX_BYTES, encoding: null });
-        prior = bytes === undefined ? { version: 1, records: [] } : validateObservations(JSON.parse(new TextDecoder("utf-8", { fatal: true }).decode(bytes)), { now: captured });
+      if (pos.length === 2 && pos[1] === "files") return observeFiles(dir, project, task, env);
+      if (pos.length !== 1) refuse("observe takes one task id and explicit observation options, or a task id and the word files");
+      return addObservation(dir, task, (captured) => {
         const encoded = need(opt["data-hex"], "--data-hex");
         if (encoded.length > OBSERVATION_DATA_MAX_BYTES * 2) refuse("observation data exceeds 64 KiB");
         const decoded = unhex(encoded);
         if (decoded === undefined) refuse("--data-hex must be the hex of UTF-8 JSON");
-        record = validateObservation({ id: `O${prior.records.length + 1}`, task: task.id, kind: opt.kind, source: opt.source, basis: opt.basis,
-          observedAt: opt["observed-at"], recordedAt: new Date(captured).toISOString(), data: JSON.parse(decoded) }, { now: captured });
-      } catch (error) {
-        if (error instanceof Refusal) throw error;
-        refuse(`the observation cannot be recorded: ${error.message}. Nothing changed.`);
-      }
-      if (record.data.run !== undefined) {
-        const run = read(dir, "runs").find(row => row.id === record.data.run) ?? missing(`run ${record.data.run}`, read(dir, "runs").map(row => row.id));
-        if (run.task !== task.id) refuse(`${run.id} belongs to ${run.task}, not ${task.id}. Nothing changed.`);
-      }
-      if (record.kind === "completion" && record.data.state !== task.state) refuse(`${task.id} is ${task.state}, not ${record.data.state}. Nothing changed.`);
-      const text = JSON.stringify({ version: 1, records: [...prior.records, record] }, null, 2) + "\n";
-      if (Buffer.byteLength(text) > OBSERVATIONS_MAX_BYTES) refuse("the observation file would exceed 4 MiB. Nothing changed.");
-      swap(file, text);
-      return `${record.id} observed ${record.kind} for ${task.id}`;
+        return { kind: opt.kind, source: opt.source, basis: opt.basis, observedAt: opt["observed-at"], data: JSON.parse(decoded) };
+      });
     }
     case "standing": {
       if (sub === "add") {
@@ -3494,5 +3536,5 @@ const { bindings, fillCommits, folderOf, link, locate, movePlans, notePlugin, pl
   listed: (root) => known(root, undefined, undefined, true),
   enroll });
 const { chiefs, chiefRow, rowOf } = createChiefs({ now, provider, readRegular, refuse, rowsOf, sheetText, swap });
-return { SIZES, BLOCKS, RISKS, KINDS, STATES, DEFAULTS, PR, LEAD_COMMANDS, leadProblem, leadRequest, sageRoot, locate, chiefFor, sessionBar, branchBar, actorOptions, git, projectRoot, roleReadProject, optionsOf, slug, worktreeRoot, pagesRoot, BRANCH, ofTask, branchOfTask, branchTip, projectName, storeDir, config, cyclesFor, modelFor, read, mergeCheck, boardLandingCheck, logbookView, sage, keepReport, keepUsage, compareRetainedReport, withLock, command, runCli, waitingPlugins, writeIdFloors };
+return { SIZES, BLOCKS, RISKS, KINDS, STATES, DEFAULTS, PR, LEAD_COMMANDS, leadProblem, leadRequest, sageRoot, locate, chiefFor, sessionBar, branchBar, actorOptions, git, projectRoot, roleReadProject, optionsOf, slug, worktreeRoot, pagesRoot, BRANCH, ofTask, branchOfTask, branchTip, projectName, storeDir, config, cyclesFor, modelFor, read, mergeCheck, boardLandingCheck, logbookView, sage, keepReport, keepUsage, observePush, compareRetainedReport, withLock, command, runCli, waitingPlugins, writeIdFloors };
 }

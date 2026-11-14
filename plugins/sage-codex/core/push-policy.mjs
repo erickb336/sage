@@ -151,3 +151,23 @@ export function createPushPolicy({ readGit: gitReader = readGit, readGh: ghReade
 
   return Object.freeze({ pushProblem });
 }
+
+export function pushedBranches(command, cwd) {
+  if (typeof command !== "string" || !/\bpush\b/i.test(command)) return [];
+  let programs;
+  try { ({ programs } = programsRun(command, cwd, undefined, { contextEvidence: true })); } catch { return []; }
+  const sent = [];
+  for (const { run, wrapper, uncertainDirectory } of programs) {
+    if (wrapper || uncertainDirectory || programName(run.word) !== "git" || !/^push$/i.test(gitSubcommand(run.args, 0))) continue;
+    const words = run.args, names = [];
+    let dir = run.dir ?? cwd, k = 0, remove = false;
+    for (; !/^push$/i.test(words[k]); k += GIT_VALUE.test(words[k]) ? 2 : 1) if (words[k] === "-C") dir = resolve(dir, words[k + 1]);
+    for (k++; k < words.length; k++) {
+      if (words[k] === "-o" || words[k] === "--push-option") k++;
+      else if (words[k] === "--delete" || words[k] === "-d") remove = true;
+      else if (!words[k].startsWith("-")) names.push(words[k]);
+    }
+    if (!remove && typeof dir === "string" && isAbsolute(dir)) for (const name of names.slice(1)) sent.push({ dir, branch: name.slice(name.indexOf(":") + 1).replace(/^(?:refs\/)?(?:heads\/)?/i, "") });
+  }
+  return sent;
+}
