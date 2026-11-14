@@ -1,11 +1,25 @@
 import { closeSync, constants, fstatSync, lstatSync, openSync, readSync, realpathSync, statSync } from "node:fs";
+import { homedir } from "node:os";
 import { join } from "node:path";
-import { PAGE_MAX, pageType } from "./message.mjs";
+import { BOARD_PORT, PAGE_MAX, pageType } from "./message.mjs";
 import { TASK_ID } from "./milestone-rules.mjs";
 import { LOGBOOK_FOLDER } from "./shared-root.mjs";
 import { pagesFolder, worktreeRoot } from "./worktrees.mjs";
 
 const OPEN = constants.O_RDONLY | constants.O_NONBLOCK | (process.platform === "darwin" ? 0x20000000 : constants.O_NOFOLLOW);
+
+// The board's folder holds its config (with old secrets) and board.port, a non-secret file with the
+// port of the board that last started from the default config. Core reads only board.port.
+export const boardFolder = (env = process.env) => join(env.HOME || homedir(), ".config", "sage-board");
+export const PORT_FILE = "board.port";
+export function boardPort(env = process.env) {
+  let fd;
+  try {
+    fd = openSync(join(boardFolder(env), PORT_FILE), constants.O_RDONLY | constants.O_NOFOLLOW | constants.O_NONBLOCK);
+    const bytes = Buffer.alloc(8), port = Number(/^([1-9]\d{3,4})\n?$/.exec(bytes.subarray(0, fstatSync(fd).isFile() ? readSync(fd, bytes, 0, 8, 0) : 0).toString("ascii"))?.[1]);
+    return port >= 1024 && port <= 65535 ? port : BOARD_PORT;
+  } catch { return BOARD_PORT; } finally { if (fd !== undefined) closeSync(fd); }
+}
 
 export function pageTaskFolder(logbook, task, env = process.env) {
   if (!LOGBOOK_FOLDER.test(String(logbook)) || !TASK_ID.test(String(task))) return null;

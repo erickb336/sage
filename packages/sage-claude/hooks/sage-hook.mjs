@@ -254,7 +254,7 @@ function handleEvent(input, state, slots) {
   if (why && main) return deny(event, `${why} Only sage.mjs changes the logbook: run the state tool's command for this change (node <path to skills/sage/sage.mjs> ...), as a command of its own. If no command does it, ask the user.`);
   if (why && input.agent_type === "sage:lead") return deny(event, `${why} A lead writes the logbook only with ${LEAD_FORM}. Report to the sage what else the logbook needs.`);
   if (why) return deny(event, `${why} Only the chief writes the logbook. An agent may run only ${READ_FORM}. Report what the logbook needs, and the chief records it.`);
-  const board = event === "PreToolUse" ? boardProblem(input) : undefined;
+  const board = event === "PreToolUse" ? boardProblem(input, main) : undefined;
   if (board) return deny(event, board);
   const agent =(ours || (!main && state.sage)) && !CHIEF.test(input.agent_type ?? "");
   if (event === "PreToolUse" && agent && SHELL_TOOLS.test(input.tool_name ?? "")) {
@@ -842,7 +842,7 @@ function agentCheck(input, file, slots) {
   const word = texts.map((t) => core.logbookWrite(t, cwd, roots)).find((w) => w !== undefined);
   return word === undefined ? undefined : `an agent never writes, moves or removes a logbook file from the shell: ${quotedWord(word)} is in the sage root or the shared root, or holds one.`;
 }
-function boardProblem(input) {
+function boardProblem(input, chief) {
   const tool = input.tool_name ?? "", ti = input.tool_input ?? {}, home = process.env.HOME || homedir();
   if (core.error) return /sage-board/i.test(fields(ti).join("\n")) ? `the board config rule (T229) could not load (${core.error?.message ?? core.error}), so a call that names the board config is refused.` : undefined;
   let cwd = typeof input.cwd === "string" && input.cwd ? input.cwd : process.cwd();
@@ -856,7 +856,7 @@ function boardProblem(input) {
   if (terminal) cwd = from(cwd, terminal.replace(/^~(?=\/|$)/, home));
   const uncertain = terminal !== undefined && /[$`~]/.test(terminal.replace(/^~(?=\/|$)/, ""));
   for (const text of runFields(terminal ? { ...ti, cwd: undefined } : ti)) {
-    const why = core.boardCommandProblem(text, cwd, { home, uncertain });
+    const why = core.boardCommandProblem(text, cwd, { home, uncertain, chief });
     if (why) return why;
   }
   return undefined;

@@ -2,7 +2,7 @@ import "./test-env.mjs";
 import test from "node:test";
 import assert from "node:assert/strict";
 import { spawn, spawnSync } from "node:child_process";
-import { cpSync, existsSync, linkSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, realpathSync, rmSync, statSync, utimesSync, writeFileSync } from "node:fs";
+import { chmodSync, cpSync, existsSync, linkSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, realpathSync, rmSync, statSync, utimesSync, writeFileSync } from "node:fs";
 import { createServer as createHttpServer, request } from "node:http";
 import { createServer } from "node:net";
 import { tmpdir } from "node:os";
@@ -11,6 +11,7 @@ import { finished } from "node:stream/promises";
 import { fileURLToPath } from "node:url";
 import { configId, createBoardConfig, readBoardConfig, runBoardCli } from "../packages/sage-board/cli.mjs";
 import { createBoardServer } from "../packages/sage-board/server.mjs";
+import { boardPort } from "../packages/sage-core/index.mjs";
 
 const CLI = fileURLToPath(new URL("../packages/sage-board/cli.mjs", import.meta.url));
 const PLUGIN_CLI = fileURLToPath(new URL("../plugins/sage/board/cli.mjs", import.meta.url));
@@ -133,7 +134,7 @@ test("T216: ensure sets the board up, starts one detached server, and leaves a r
     assert.equal(readFileSync(pidFile, "utf8"), pid, "no second server started");
     const settings = await board(CLI, ["--ensure", "--port", String(port)], env);
     assert.equal(settings.status, 1);
-    assert.equal(settings.stderr, `sage board: the board config ${config} exists, and setup does not change it. To change its "port" or another setting, first run node ${CLI} board --stop --config ${config} while the file still names the port of the running board, then edit that file, then ask for the board again. To set the board up again, remove the file first.\n`);
+    assert.equal(settings.stderr, `sage board: the board config ${config} exists, and setup does not change it. To move the board to another port, run node ${CLI} board --port <port> --config ${config}. To change another setting, first run node ${CLI} board --stop --config ${config}, then edit that file, then ask for the board again. To set the board up again, remove the file first.\n`);
   } finally { await stop(dir, port); }
 });
 
@@ -147,7 +148,7 @@ test("T216: ensure gives one line when another program holds the port, and start
     const busy = await board(CLI, ["--ensure"], env);
     assert.equal(busy.status, 1);
     assert.equal(busy.stdout, "");
-    assert.equal(busy.stderr, `sage board: the board server is not running: another program answers on 127.0.0.1:${port}. Stop it, or set another "port" in ${config}.\n`);
+    assert.equal(busy.stderr, `sage board: the board server is not running: another program answers on 127.0.0.1:${port}. Stop that program, or move the board to a free port: run node ${CLI} board --port ${port + 1} (any free port from 1024 to 65535 works).\n`);
     assert.equal(existsSync(join(dir, "home", ".config", "sage-board", "board.pid")), false);
     assert.equal(existsSync(join(dir, "home", ".config", "sage-board", "board.log")), false);
   } finally {
@@ -214,6 +215,112 @@ const olderBoard = () => createHttpServer((request, response) => {
   response.end("<!doctype html><title>Sage board</title>\n");
 });
 
+const portFile = (config) => join(dirname(config), "board.port");
+const snapshot = (config) => ({ text: readFileSync(config, "utf8"), mode: statSync(config).mode & 0o777 });
+
+test("T1079: another program holds the port; the error names board --port, and that one command gives a working board on the new port and keeps every other setting", async (t) => {
+  const { dir, env, config } = scratch(t);
+  const other = createHttpServer((request, response) => response.end("another program\n"));
+  const busyPort = await listen(other), newPort = await freePort();
+  try {
+    createBoardConfig(config, { sources: [{ id: "sample", path: join(dir, "logbooks") }], port: busyPort, pagesDir: join(dir, "exports") });
+    writeFileSync(config, `${JSON.stringify({ ...JSON.parse(readFileSync(config, "utf8")), secret: "old-secret-value" }, null, 2)}\n`);
+    chmodSync(config, 0o640);
+    const before = JSON.parse(readFileSync(config, "utf8"));
+    const busy = await board(CLI, ["--ensure"], env);
+    assert.equal(busy.status, 1);
+    assert.match(busy.stderr, new RegExp(`another program answers on 127\\.0\\.0\\.1:${busyPort}\\. Stop that program, or move the board to a free port: run node ${CLI.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")} board --port ${busyPort + 1} \\(any free port from 1024 to 65535 works\\)\\.\\n$`));
+    const moved = await board(CLI, ["--port", String(newPort)], env);
+    assert.equal(moved.status, 0, moved.stderr);
+    assert.equal(moved.stdout, `Board moved to port ${newPort}: ${config} names it now.\nSage board started: http://127.0.0.1:${newPort}/ · only on this Mac.\nA Page link in a message from before still names port ${busyPort}: change the port in that link.\n`);
+    assert.doesNotMatch(moved.stdout + moved.stderr + busy.stderr, /old-secret-value/, "no secret in the output");
+    assert.deepEqual(JSON.parse(readFileSync(config, "utf8")), { ...before, port: newPort }, "only the port changed; the pages folder and the old secret key stay");
+    assert.equal(statSync(config).mode & 0o777, 0o640, "the file keeps its mode");
+    const page = await get(newPort);
+    assert.equal(page.status, 200);
+    assert.match(page.board, new RegExp(`^id=${configId(config)}; pid=\\d+; started=\\d+$`), "this config's board answers on the new port");
+    assert.equal(readFileSync(portFile(config), "utf8"), `${newPort}\n`, "the board writes its port for the Page links");
+    assert.equal(boardPort(env), newPort, "core reads that port for the Page links");
+    assert.equal((await get(busyPort)).body, "another program\n", "the other program runs on");
+  } finally { await shut(other); await stop(dir); }
+});
+
+test("T1079: board --port stops this config's running board and starts it on the new port, and a second run changes nothing", async (t) => {
+  const { dir, env, config } = scratch(t);
+  const [oldPort, newPort] = [await freePort(), await freePort()];
+  try {
+    assert.equal((await board(CLI, ["--ensure", "--port", String(oldPort)], env)).status, 0);
+    assert.equal(readFileSync(portFile(config), "utf8"), `${oldPort}\n`);
+    const moved = await board(CLI, ["--port", String(newPort), "--config", config], env);
+    assert.equal(moved.status, 0, moved.stderr);
+    assert.match(moved.stdout, new RegExp(`^Board moved to port ${newPort}: .* names it now\\. The board on 127\\.0\\.0\\.1:${oldPort} stopped\\.\\nSage board started: http://127\\.0\\.0\\.1:${newPort}/`));
+    assert.equal((await get(oldPort)).error, "ECONNREFUSED", "the old board does not run on beside the new one");
+    const pid = readFileSync(join(dirname(config), "board.pid"), "utf8").trim();
+    assert.match((await get(newPort)).board, new RegExp(`^id=${configId(config)}; pid=${pid}; started=\\d+$`));
+    const kept = snapshot(config);
+    const again = await board(CLI, ["--port", String(newPort)], env);
+    assert.equal(again.stdout, `Sage board is running: http://127.0.0.1:${newPort}/ · only on this Mac.\n`, again.stderr);
+    assert.deepEqual(snapshot(config), kept);
+  } finally { await stop(dir); }
+});
+
+test("T1079: board --port refuses a bad number, a busy port, a missing config and a file or folder that it cannot write, and then changes nothing and leaves the board running", async (t) => {
+  const { dir, env, config } = scratch(t);
+  const other = createHttpServer((request, response) => response.end("another program\n"));
+  const [port, busyPort, newPort] = [await freePort(), await listen(other), await freePort()];
+  try {
+    const missing = await board(CLI, ["--port", String(newPort)], env);
+    assert.equal(missing.stderr, `sage board: there is no board config at ${config} yet. Run node ${CLI} board --ensure --port ${newPort} to set the board up on port ${newPort} and start it.\n`);
+    assert.equal(existsSync(config), false);
+    assert.equal((await board(CLI, ["--ensure", "--port", String(port)], env)).status, 0);
+    const kept = snapshot(config), pid = readFileSync(join(dirname(config), "board.pid"), "utf8");
+    const unchanged = async (label) => {
+      assert.deepEqual(snapshot(config), kept, `${label}: the config is as before`);
+      assert.equal(readFileSync(join(dirname(config), "board.pid"), "utf8"), pid, `${label}: the same board runs`);
+      assert.equal((await get(port)).status, 200, `${label}: the board still answers on its port`);
+      assert.equal((await get(newPort)).error, "ECONNREFUSED", `${label}: nothing started on the new port`);
+    };
+    for (const value of ["80", "1023", "65536", "abc", "4312a", "-5", "043124"]) {
+      const bad = await board(CLI, ["--port", value], env);
+      assert.equal(bad.status, 1, value);
+      assert.equal(bad.stderr, `sage board: board --port needs a whole number from 1024 to 65535, not ${JSON.stringify(value)}. Nothing changed.\n`);
+      await unchanged(value);
+    }
+    const busy = await board(CLI, ["--port", String(busyPort)], env);
+    assert.equal(busy.stderr, `sage board: port ${busyPort} is not free (EADDRINUSE): another program on this Mac uses it. Choose another port from 1024 to 65535. Nothing changed.\n`);
+    await unchanged("a busy port");
+    chmodSync(config, 0o400);
+    try {
+      const file = await board(CLI, ["--port", String(newPort)], env);
+      assert.equal(file.stderr, `sage board: this command cannot write ${config} (EACCES), so it cannot change the board config. Nothing changed.\n`);
+    } finally { chmodSync(config, kept.mode); }
+    await unchanged("a file that it cannot write");
+    chmodSync(dirname(config), 0o500);
+    try {
+      const folder = await board(CLI, ["--port", String(newPort)], env);
+      assert.equal(folder.stderr, `sage board: this command cannot write ${dirname(config)} (EACCES), so it cannot change the board config. Nothing changed.\n`);
+    } finally { chmodSync(dirname(config), 0o700); }
+    await unchanged("a folder that it cannot write");
+  } finally { await shut(other); await stop(dir); }
+});
+
+test("T1079: board --port leaves a board of another config on the old port running, and moves this config", async (t) => {
+  const { dir, env, config } = scratch(t);
+  const [port, newPort] = [await freePort(), await freePort()];
+  createBoardConfig(config, { sources: [{ id: "sample", path: join(dir, "logbooks") }], port });
+  const otherConfig = join(dir, "other", "board.json");
+  createBoardConfig(otherConfig, { sources: [{ id: "sample", path: join(dir, "logbooks") }], port });
+  const other = createBoardServer({ ...readBoardConfig(otherConfig), id: configId(otherConfig) });
+  try {
+    await other.start();
+    const moved = await board(CLI, ["--port", String(newPort)], env);
+    assert.equal(moved.status, 0, moved.stderr);
+    assert.doesNotMatch(moved.stdout, /stopped/);
+    assert.match((await get(port)).board, new RegExp(`^id=${configId(otherConfig)};`), "the other config's board runs on");
+    assert.match((await get(newPort)).board, new RegExp(`^id=${configId(config)};`));
+  } finally { await other.close(); await stop(dir); }
+});
+
 test("F-T229-32: after an upgrade, ensure asks for a restart of a board that started before the new code", async (t) => {
   const { dir, env, config } = scratch(t);
   const code = Math.max(...["cli.mjs", "server.mjs"].map((name) => statSync(join(dirname(CLI), name)).mtimeMs));
@@ -271,7 +378,7 @@ test("T216: a program that takes the port and never answers gives one line that 
     assert.equal((await board(CLI, ["--setup", "--port", String(port)], env)).status, 0);
     const found = await board(CLI, ["--ensure"], env);
     assert.equal(found.status, 1);
-    assert.equal(found.stderr, `sage board: the board does not answer: a program holds 127.0.0.1:${port} and gives no answer within 2 s. Stop it, or set another "port" in ${config}.\n`);
+    assert.equal(found.stderr, `sage board: the board does not answer: a program holds 127.0.0.1:${port} and gives no answer within 2 s. Stop that program, or move the board to a free port: run node ${CLI} board --port ${port + 1} (any free port from 1024 to 65535 works).\n`);
   } finally { for (const socket of sockets) socket.destroy(); await new Promise((accept) => silent.close(accept)); }
 });
 
@@ -286,7 +393,7 @@ test("T216: a board of another config on the port is not reported as this one, a
     await other.start();
     const found = await board(CLI, ["--ensure"], env);
     assert.equal(found.status, 1);
-    assert.equal(found.stderr, `sage board: another board config holds 127.0.0.1:${port}. Stop it, or set another "port" in ${config}.\n`);
+    assert.equal(found.stderr, `sage board: another board config holds 127.0.0.1:${port}. Stop that program, or move the board to a free port: run node ${CLI} board --port ${port + 1} (any free port from 1024 to 65535 works).\n`);
     writeFileSync(join(dirname(config), "board.pid"), `${process.pid}\n`);
     const signals = [];
     await assert.rejects(runBoardCli(["board", "--stop"], { env, output: () => {}, kill: (...args) => signals.push(args) }), /another board config holds/);

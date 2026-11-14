@@ -1,12 +1,13 @@
 #!/usr/bin/env node
 import { spawn } from "node:child_process";
-import { closeSync, constants, fstatSync, mkdirSync, lstatSync, statSync, openSync, readSync, realpathSync, renameSync, rmSync, writeFileSync } from "node:fs";
+import { accessSync, chmodSync, closeSync, constants, fstatSync, mkdirSync, lstatSync, statSync, openSync, readSync, realpathSync, renameSync, rmSync, writeFileSync } from "node:fs";
 import { createHash, randomBytes } from "node:crypto";
 import { request } from "node:http";
+import { createServer as createNetServer } from "node:net";
 import { homedir } from "node:os";
 import { dirname, isAbsolute, join, relative, resolve, sep } from "node:path";
 import { fileURLToPath } from "node:url";
-import { BOARD_PORT, boardView, sharedRoot } from "../core/index.mjs";
+import { BOARD_PORT, boardFolder, boardView, PORT_FILE, sharedRoot } from "../core/index.mjs";
 import { installBoard, stableNodePath, writeLoginFile } from "./install.mjs";
 import { createBoardServer } from "./server.mjs";
 import { startPairing, stateFolder } from "./access.mjs";
@@ -36,16 +37,19 @@ function outsideRoots(file, sources) {
   return true;
 }
 const within = (file, root) => { const part = relative(root, file); return part === "" || part !== ".." && !part.startsWith(`..${sep}`) && !isAbsolute(part); };
-export function readBoardConfig(path) {
-  path = boundedPath(path);
+function readConfigFile(path) {
   noLinkedParents(path);
   const fd = openSync(path, constants.O_RDONLY | constants.O_NOFOLLOW | constants.O_NONBLOCK);
   try {
     const stat = fstatSync(fd); if (!stat.isFile() || stat.size > 65536) throw new TypeError("board config must be a regular file of at most 64 KiB");
     const buffer = Buffer.alloc(65537), count = readSync(fd, buffer, 0, buffer.length, 0);
     if (count !== stat.size || count > 65536) throw new TypeError("board config changed during the read");
-    return validateBoardConfig(parseJson(new TextDecoder("utf-8", { fatal: true }).decode(buffer.subarray(0, count))), path);
+    return { raw: parseJson(new TextDecoder("utf-8", { fatal: true }).decode(buffer.subarray(0, count))), mode: stat.mode & 0o777 };
   } finally { closeSync(fd); }
+}
+export function readBoardConfig(path) {
+  path = boundedPath(path);
+  return validateBoardConfig(readConfigFile(path).raw, path);
 }
 const RETIRED_KEYS = ["allowedHosts", "secret", "password"];
 export function validateBoardConfig(config, configPath = null) {
@@ -71,7 +75,7 @@ export function createBoardConfig(path, { sources, port = BOARD_PORT, pagesDir }
   catch (error) { throw error.code === "EEXIST" ? new TypeError(existingConfig(path)) : error; }
   return config;
 }
-const existingConfig = path => `the board config ${path} exists, and setup does not change it. To change its "port" or another setting, first run ${boardCommand("--stop", path, {}, true)} while the file still names the port of the running board, then edit that file, then ask for the board again. To set the board up again, remove the file first.`;
+const existingConfig = path => `the board config ${path} exists, and setup does not change it. To move the board to another port, run ${boardCommand("--port <port>", path, {}, true)}. To change another setting, first run ${boardCommand("--stop", path, {}, true)}, then edit that file, then ask for the board again. To set the board up again, remove the file first.`;
 export const standardSources = (env = process.env) => [...(env.SAGE_HOME ? [{ id: "sage", label: "Sage", path: resolve(env.SAGE_HOME) }] : [
   { id: "claude", label: "Claude", provider: "claude", path: resolve(env.CLAUDE_CONFIG_DIR ?? join(env.HOME ?? homedir(), ".claude"), "sage") },
   { id: "codex", label: "Codex", provider: "codex", path: resolve(env.CODEX_HOME ?? join(env.HOME ?? homedir(), ".codex"), "sage") },
@@ -83,7 +87,7 @@ export const readSources = (sources, env = process.env) => {
   const at = sources.findIndex(source => resolve(source.path) === sharedRoot(env));
   return at < 0 ? [...sources, SHARED_SOURCE(env)] : sources.map((source, i) => i === at ? { ...source, id: "shared" } : source);
 };
-export const defaultConfigPath = (env = process.env) => join(env.HOME ?? homedir(), ".config", "sage-board", "board.json");
+export const defaultConfigPath = (env = process.env) => join(boardFolder(env), "board.json");
 
 export const configId = configPath => createHash("sha256").update(`sage-board-config:${realpathSync(configPath)}`).digest("hex").slice(0, 16);
 function boardCommand(option, configPath, env, explicit = false) {
@@ -106,8 +110,9 @@ const probe = ({ port }) => new Promise(done => {
 });
 
 const ESCALATE = "In Codex, run it escalated (outside the sandbox), or in Terminal on the Mac.";
+const moveHint = (configPath, config, env) => `Stop that program, or move the board to a free port: run ${boardCommand(`--port ${config.port < 65535 ? config.port + 1 : 1024}`, configPath, env)} (any free port from 1024 to 65535 works).`;
 function notOurs(found, configPath, config, env) {
-  const at = `127.0.0.1:${config.port}`, elsewhere = `Stop it, or set another "port" in ${configPath}.`;
+  const at = `127.0.0.1:${config.port}`, elsewhere = moveHint(configPath, config, env);
   if (found.kind === "none") return null;
   if (found.kind === "blocked") return `this command cannot reach ${at}: a sandbox blocks the local network here (EPERM). ${ESCALATE}`;
   if (found.kind === "board") return found.id === configId(configPath) ? null : `another board config holds ${at}. ${elsewhere}`;
@@ -143,6 +148,7 @@ async function ensureBoard(configPath, config, env) {
 }
 
 const pidPath = configPath => join(dirname(configPath), "board.pid");
+const writePid = (configPath, pid) => replaceFile(pidPath(configPath), `${pid}\n`);
 function readPid(configPath) {
   let fd;
   try { fd = openSync(pidPath(configPath), constants.O_RDONLY | constants.O_NOFOLLOW | constants.O_NONBLOCK); }
@@ -152,10 +158,40 @@ function readPid(configPath) {
     return /^[1-9]\d{0,9}\n?$/.test(text) ? Number(text) : null;
   } finally { closeSync(fd); }
 }
-function writePid(configPath, pid) {
-  const temporary = join(dirname(configPath), `.board-${randomBytes(6).toString("hex")}.pid`);
-  writeFileSync(temporary, `${pid}\n`, { flag: "wx", mode: 0o600 });
-  try { renameSync(temporary, pidPath(configPath)); } catch (error) { rmSync(temporary, { force: true }); throw error; }
+function replaceFile(path, text, mode = 0o600) {
+  const temporary = join(dirname(path), `.board-${randomBytes(6).toString("hex")}.tmp`);
+  writeFileSync(temporary, text, { flag: "wx", mode });
+  try { chmodSync(temporary, mode); renameSync(temporary, path); } catch (error) { rmSync(temporary, { force: true }); throw error; }
+}
+
+const free = port => new Promise(done => {
+  const server = createNetServer();
+  server.once("error", error => done(error.code ?? "EINVAL"));
+  server.listen(port, "127.0.0.1", () => server.close(() => done(null)));
+});
+async function movePort(configPath, value, env, kill) {
+  const port = /^[1-9]\d{3,4}$/.test(value) ? Number(value) : 0;
+  if (port < 1024 || port > 65535) throw new TypeError(`board --port needs a whole number from 1024 to 65535, not ${JSON.stringify(value.slice(0, 20))}. Nothing changed.`);
+  if (!lstatSync(configPath, { throwIfNoEntry: false })) throw new TypeError(`there is no board config at ${configPath} yet. Run ${boardCommand(`--ensure --port ${port}`, configPath, env)} to set the board up on port ${port} and start it.`);
+  const { raw, mode } = readConfigFile(configPath), old = validateBoardConfig(raw, configPath);
+  if (port === old.port) return ensureBoard(configPath, old, env);
+  const taken = await free(port);
+  if (taken === "EPERM") throw new Error(`this command cannot test port ${port}: a sandbox blocks the local network here (EPERM). ${ESCALATE} Nothing changed.`);
+  if (taken) throw new Error(`port ${port} is not free (${taken}): another program on this Mac uses it. Choose another port from 1024 to 65535. Nothing changed.`);
+  for (const path of [configPath, dirname(configPath)]) {
+    try { accessSync(path, constants.W_OK); } catch (error) { throw new Error(`this command cannot write ${path} (${error.code}), so it cannot change the board config. Nothing changed.`); }
+  }
+  const text = `${JSON.stringify({ ...raw, port }, null, 2)}\n`, config = validateBoardConfig({ ...raw, port }, configPath);
+  const found = await probe(old);
+  if (found.kind === "blocked") throw new Error(`${notOurs(found, configPath, old, env)} Nothing changed.`);
+  const stopped = found.kind === "board" && found.id === configId(configPath) ? ` The board on 127.0.0.1:${old.port} stopped.` : "";
+  if (stopped) await stopBoard(configPath, old, env, kill);
+  try { replaceFile(configPath, text, mode); }
+  catch (error) { throw new Error(`this command cannot write ${configPath} (${error.code ?? error.message}), so the board config still names port ${old.port}.${stopped} Ask for the board again to start it there.`); }
+  const moved = `Board moved to port ${port}: ${configPath} names it now.${stopped}`;
+  let ready;
+  try { ready = await ensureBoard(configPath, config, env); } catch (error) { throw new Error(`${moved} But ${error.message}`); }
+  return `${moved}\n${ready}\nA Page link in a message from before still names port ${old.port}: change the port in that link.`;
 }
 
 async function stopBoard(configPath, config, env, kill) {
@@ -173,7 +209,7 @@ async function stopBoard(configPath, config, env, kill) {
 }
 
 function parse(argv) {
-  if (argv[0] !== "board") throw new TypeError("use: sage board [this|all|project|Tn] --config <absolute path> [--serve|--pair|--html --out <absolute path>|--status]");
+  if (argv[0] !== "board") throw new TypeError("use: sage board [this|all|project|Tn] --config <absolute path> [--serve|--pair|--port <port>|--html --out <absolute path>|--status]");
   const options = {}, values = [];
   for (let i = 1; i < argv.length; i++) {
     const value = argv[i];
@@ -196,6 +232,10 @@ export async function runBoardCli(argv, { output = line => process.stdout.write(
     const configPath = boundedPath(options.config), config = readBoardConfig(configPath), code = startPairing(stateFolder(configPath));
     output(`Pairing code: ${code}\nOpen http://127.0.0.1:${config.port}/app/ in your browser. In the card "Pair this browser to act from the board", type the code in the "Pairing code" field, then choose Pair. The code works once, within 10 minutes. After that, this browser can answer questions, undo an answer, rename chiefs and give tasks to another chief.\nIf the page shows no pairing card and this browser is not paired yet, the board that runs is older than this one: run ${boardCommand("--stop", configPath, env, explicit)}, ask for the board again, and reload the page.`);
     return null;
+  }
+  if (options.port && !["serve", "html", "status", "setup", "ensure", "stop", "install"].some(key => options[key])) {
+    if (value !== "all" || options.project || options.out || options.sources || options.pages || options["install-dir"] || options["login-file"]) throw new TypeError("board --port takes only --config");
+    output(await movePort(boundedPath(options.config), options.port, env, kill)); return null;
   }
   const missing = options.ensure && !lstatSync(boundedPath(options.config), { throwIfNoEntry: false });
   if (options.setup || missing) {
@@ -233,8 +273,8 @@ export async function runBoardCli(argv, { output = line => process.stdout.write(
   if (options.serve) {
     if (value !== "all" || options.out || options.project) throw new TypeError("server uses all configured sources; no output or project option");
     const configPath = boundedPath(options.config), server = createBoardServer({ ...config, sources: readSources(config.sources, env), providerRoots: providerRoots(env), id: configId(configPath), stateDir: stateFolder(configPath) });
-    await server.start();
-    try { writePid(configPath, process.pid); } catch (error) { await server.close(); throw error; }
+    try { await server.start(); } catch (error) { throw error.code === "EADDRINUSE" ? new Error(`${error.message} ${moveHint(configPath, config, env)}`) : error; }
+    try { writePid(configPath, process.pid); replaceFile(join(dirname(configPath), PORT_FILE), `${config.port}\n`); } catch (error) { await server.close(); throw error; }
     output(`Sage board: http://127.0.0.1:${config.port}/ · only on this Mac.`);
     return { ...server, close: () => server.close().finally(() => { if (readPid(configPath) === process.pid) rmSync(pidPath(configPath), { force: true }); }) };
   }

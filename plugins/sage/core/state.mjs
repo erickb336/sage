@@ -28,7 +28,7 @@ import { NAMES_FILE, chiefNames } from "./chief-live.mjs";
 import { LEAD_COMMANDS, leadProblem as leadPolicy, leadRequest } from "./lead-policy.mjs";
 import { renderMessage } from "./message-checks.mjs";
 import { MAX_SECTIONS, PAGE_MAX, PAGE_TYPES, pageType, pageUrl } from "./message.mjs";
-import { pageFile, pageTaskFolder } from "./page-files.mjs";
+import { boardPort, pageFile, pageTaskFolder } from "./page-files.mjs";
 import { taskWord } from "./state-words.mjs";
 import { AST_GREP_VERSION, LINT_CONFIG, LINT_KINDS, astGrepBinary, lintBase, lintChange } from "./lint.mjs";
 import { adoptBrief, languageList, placeToolFiles, projectLanguages } from "./lint-offer.mjs";
@@ -2777,7 +2777,7 @@ function readMessage(file, json, project, env) {
     if (!TASK_ID.test(String(b.task)) || typeof b.file !== "string" || !pageType(b.file))
       refuse(`a page block names its page as { t: page, title, task, file }: a task id and a file in that task's pages folder that the board serves: 1 to 3 parts of letters, digits and . _ - (none that starts with a dot or holds ..), ending in .${Object.keys(PAGE_TYPES).join(", .")}; not ${JSON.stringify({ task: b.task, file: b.file })}. Nothing written.`);
     b.path = join(pagesDir(project, b.task, env), b.file);
-    b.url = pageUrl(logbook, b.task, b.file);
+    b.url = pageUrl(logbook, b.task, b.file, boardPort(env));
     let there;
     try { there = lstatSync(b.path); } catch {}
     if (!there) refuse(`the page block "${b.title}" names ${b.path}, and it does not exist. Save the page there first. Nothing written.`);
@@ -2789,7 +2789,7 @@ function readMessage(file, json, project, env) {
 }
 function writeMessage(project, taskId, { input, logbook }, shape, env) {
   const folder = taskId && pagesDir(project, taskId, env);
-  const out = renderMessage(input, folder ? { pagePath: (name) => join(folder, name), pageUrl: (name) => pageUrl(logbook, taskId, name) } : {});
+  const out = renderMessage(input, folder ? { pagePath: (name) => join(folder, name), pageUrl: (name) => pageUrl(logbook, taskId, name, boardPort(env)) } : {});
   if (out.problems) refuse(`the message is not in its kind's shape, so ${shape}. Nothing written.\n${out.problems.map((p) => `- ${p}`).join("\n")}`);
   if (!out.page) return out.text;
   if (!folder) refuse("the message has a long form, a picture or a toggle, so it needs a page, and a page lives in a task's pages folder: give the gate its task. Nothing written.");

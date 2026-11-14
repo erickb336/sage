@@ -201,7 +201,8 @@ export const pageType = (file) => {
   const parts = String(file).split("/"), type = /\.([a-z0-9]+)$/.exec(parts.at(-1))?.[1];
   return parts.length <= 3 && parts.every((part) => PAGE_PART.test(part)) && Object.hasOwn(PAGE_TYPES, type) ? PAGE_TYPES[type] : null;
 };
-export const pageUrl = (logbook, task, file) => `http://127.0.0.1:${BOARD_PORT}/pages/${logbook}/${task}/${file}`;
+export const pagePath = (logbook, task, file) => `/pages/${logbook}/${task}/${file}`;
+export const pageUrl = (logbook, task, file, port = BOARD_PORT) => `http://127.0.0.1:${port}${pagePath(logbook, task, file)}`;
 
 export const pageBlock = ({ title, url, path, file }, width = WIDTH) => [...wrap(`Page · ${plain(title)}`, width), ...(url ? [`  ${url}`] : []), `  ${path ?? file}`];
 

@@ -535,7 +535,7 @@ export async function gate(input, { mode = readMode, check = checkMerge, env = p
   const namesReference = (references, test) => references.some(({ word, dir }) => test(asWord(resolve(dir, word)), env, f.cwd));
   const logbook = logbookWord(f.command, env, f.cwd);
   if (logbook !== undefined) return deny(LOGBOOK_WRITE(logbook));
-  const board = boardCommandProblem(f.command, f.cwd, { home: env.HOME || homedir() });
+  const board = boardCommandProblem(f.command, f.cwd, { home: env.HOME || homedir(), chief: !thread.child });
   if (board) return deny(`sage: ${board}`);
   const runs = codexRuns(f.command, f.cwd, env);
   if (runs === null && /codex/i.test(f.command)
