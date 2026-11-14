@@ -1,6 +1,7 @@
 import { LINE, PRIORITIES } from "./logbook-fields.mjs";
 import { milestoneName } from "./milestone-rules.mjs";
 import { STOPPED_MS } from "./chief-live.mjs";
+import { taskWord } from "./state-words.mjs";
 
 const DAY = 86_400_000, DONE_DAYS = 7;
 const ENDED = ["merged", "concluded", "abandoned"];
@@ -9,6 +10,7 @@ const time = value => {
   const at = typeof value === "number" ? value : Date.parse(value);
   return Number.isFinite(at) ? at : null;
 };
+const iso = value => { const at = time(value); return at === null ? null : new Date(at).toISOString(); };
 const title = text => text ? `${String(text).charAt(0).toUpperCase()}${String(text).slice(1)}` : text;
 const rank = priority => priority ? PRIORITIES.indexOf(priority) : PRIORITIES.length;
 const STATE_ORDER = ["stuck", "lost", "active", "changing", "proposed", "done"];
@@ -59,6 +61,13 @@ const chiefTag = (task, chiefs) => task.owner ? { id: task.owner.id, provider: t
   : task.old ? { id: null, provider: title(task.old.provider), stopped: null } : task.shared ? null : { id: null, provider: title(task.providerStandIn), stopped: null };
 const QUIET = ["done", "wait"];
 const stepOf = task => task.loop?.steps.find(step => !QUIET.includes(step.status)) ?? null;
+const CI = { done: "pass", failed: "fail" };
+
+function cyclesOf(task) {
+  const reviews = task.cycles.some(cycle => cycle.steps.length > 0);
+  const known = !task.cycles.some(cycle => cycle.steps.some(step => step.status === "unknown"));
+  return { required: task.requiredCycles, clean: reviews && known ? task.cycles.filter(cycle => cycle.steps.every(step => step.status === "done")).length : null, reviews };
+}
 
 function taskRow(task, chiefs) {
   const step = task.route ? stepOf(task) : null;
@@ -67,8 +76,12 @@ function taskRow(task, chiefs) {
     priority: task.priority || null, kind: task.kind || null, size: task.size || null, pr: task.pr || null,
     milestone: task.milestone ? { key: task.milestone.key, id: task.milestone.id, title: milestoneName({ id: task.milestone.id, name: task.milestone.name ?? "" }) } : null,
     chief: chiefTag(task, chiefs), needsYou: task.reasons.length > 0, waits: task.waitLine?.text ?? null,
+    waitsFor: task.waits.filter(wait => wait.id).map(wait => ({ key: `${task.project}/${wait.id}`, id: wait.id, met: wait.met })),
+    why: task.reasons.length ? taskWord(task).reason : null,
     conflicts: task.mayConflict.map(other => ({ key: other.key, id: other.id, chief: other.chief })),
-    step: step ? { label: step.label, status: step.status } : null, lastActivity: task.lastActivity,
+    step: step ? { label: step.label, status: step.status } : null, lastActivity: task.lastActivity, doneAt: iso(task.completedAt),
+    prUrl: /^[1-9]\d*$/.test(task.pr) && task.repository ? `${task.repository}/pull/${task.pr}` : null, cycles: cyclesOf(task),
+    ci: CI[task.cycles[0]?.steps.find(item => item.role === "checks")?.status] ?? null,
   };
 }
 
@@ -132,7 +145,6 @@ export function boardOverview(model) {
 
 const LOG_MAX = 200;
 const firstLine = text => String(text ?? "").split(LINE)[0].trim();
-const iso = value => { const at = time(value); return at === null ? null : new Date(at).toISOString(); };
 
 function logOf(task) {
   const events = [
@@ -150,19 +162,15 @@ export function taskPanel(model, key) {
   const task = model.tasks.find(item => item.key === key);
   if (!task) return null;
   const chiefs = (model.projects ?? []).flatMap(project => (project.chiefs ?? []).map(chief => ({ ...chief, project: project.name })));
-  const reviews = task.cycles.some(cycle => cycle.steps.length > 0);
-  const known = !task.cycles.some(cycle => cycle.steps.some(step => step.status === "unknown"));
   const log = logOf(task);
   return {
     ...taskRow(task, chiefs),
     at: model.at,
     route: task.route ? task.route.split(",") : [], risk: task.risk || null, branch: task.branch || null,
-    prUrl: task.pr && task.repository ? `${task.repository}/pull/${task.pr}` : null,
     logbook: task.project.slice(task.project.indexOf("/") + 1),
     conflicts: task.mayConflict.map(other => ({ key: other.key, id: other.id, chief: other.chief, paths: other.paths })),
     steps: task.route ? task.loop.steps.map(step => ({ key: step.key, label: step.label, status: step.status, detail: step.detail, parts: (step.parts ?? []).map(([name, status]) => ({ name, status })) })) : [],
     now: task.route ? task.loop.now.text : "The logbook records no route for this task, so the board shows no steps.", next: task.route ? task.loop.next : null,
-    cycles: { required: task.requiredCycles, clean: reviews && known ? task.cycles.filter(cycle => cycle.steps.every(step => step.status === "done")).length : null, reviews },
     lastEvent: log[0] ?? null,
     log: log.slice(0, LOG_MAX), logMore: Math.max(0, log.length - LOG_MAX),
     decisions: [...(task.gateRows ?? [])].reverse().map(gate => ({ id: gate.id, question: firstLine(gate.question), answer: gate.answer || null, recommendation: gate.recommendation || null, at: iso(gate.at) })),

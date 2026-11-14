@@ -60,7 +60,35 @@ const HEAD = "b".repeat(40);
 const HOSTILE = { title: `<img src=x onerror="window.hacked=1">Hostile "quotes" & 'apostrophes'`, path: "<script>window.hacked=3</script>\nsrc/evil\u202egnp\u009b.js", invisible: "src/a\u061cb\u2060c\u00add\u180ee\u{e0001}f.js", link: `<a href="javascript:window.hacked=5">click</a>` };
 export const HOSTILE_TEXT = HOSTILE;
 
-export function writeTasksLogbook(root, worktrees, now, { hostile = false, many = 0, edge = false, chiefCases = false, stuck = false } = {}) {
+const REPOSITORY = "https://github.com/sample-owner/sample-app";
+function addPullRequests(tables, records, at, hostile) {
+  const base = tables.tasks.find(task => task.id === "T3"), sha = letter => letter.repeat(40);
+  const pr = (task, number, head, extra = {}) => records.push({ id: `O${records.length + 1}`, task, kind: "pr", source: "gh pr view", basis: "observed", observedAt: at(1), recordedAt: at(1), data: { repository: REPOSITORY, number, state: "open", head, ...extra } });
+  const verdicts = (task, number, head, kinds) => tables.ledger.push(...kinds.map(([kind, run = ""], i) => ({ task, pr: number, sha: head, kind, cycle: "1", run, at: at(3 - i * 0.1) })));
+  tables.tasks.push(
+    { ...base, id: "T5", title: "Sample retry backoff", state: "verified", milestone: "M1", priority: "P1", kind: "", chief: "C1", branch: "sage/t5-retry", pr: "14" },
+    { ...base, id: "T6", title: "Sample sync log", state: "reviewing", milestone: "M1", priority: "P2", kind: "", chief: "C1", branch: "sage/t6-log", pr: "15", waits: "T5" },
+    { ...base, id: "T7", title: "Sample offline banner", state: "repairing", milestone: "M1", priority: "P2", kind: "", chief: "C2", branch: "sage/t7-banner", pr: "16", round: "1" },
+    { ...base, id: "T8", title: "Sample search highlight", state: "reviewing", milestone: "", priority: "P1", kind: "", chief: "C1", branch: "sage/t8-search", pr: "17" },
+    { ...base, id: "T9", title: "Sample conflict rule", state: "merged", milestone: "M1", priority: "P1", kind: "", chief: "C1", branch: "sage/t9-rule", pr: "11" },
+    { ...base, id: "T12", title: "Sample old merge", state: "merged", milestone: "", priority: "P3", kind: "", chief: "C1", branch: "sage/t12-old", pr: "9" },
+    { ...base, id: "T13", title: "Sample sync export", state: "framed", milestone: "M1", priority: "P3", kind: "", chief: "C1", branch: "", pr: "", waits: "T6" },
+  );
+  tables.runs.push({ id: "R8", task: "T5", role: "code-reviewer", round: "0", status: "done", started: at(4), ended: at(3.5), chief: "C1" }, { id: "R9", task: "T5", role: "qa", round: "0", status: "done", started: at(3.4), ended: at(3.1), chief: "C1" });
+  verdicts("T5", "14", sha("e"), [["checks-pass"], ["review-clean", "R8"], ["qa-pass", "R9"]]);
+  verdicts("T8", "17", sha("f"), [["checks-fail"]]);
+  verdicts("T9", "11", sha("9"), [["checks-pass"], ["review-clean"], ["qa-pass"]]);
+  pr("T5", 14, sha("e")); pr("T6", 15, sha("6")); pr("T8", 17, sha("f")); pr("T9", 11, sha("9"), { state: "merged" });
+  records.push({ id: `O${records.length + 1}`, task: "T8", kind: "files", source: "git diff", basis: "observed", observedAt: at(2), recordedAt: at(2), data: { head: sha("f"), paths: ["src/shared.js"], truncated: false } });
+  records.push({ id: `O${records.length + 1}`, task: "T5", kind: "mode", source: "chief", basis: "reported", observedAt: at(1), recordedAt: at(1), data: { session: "sample-session", autopilot: true } });
+  tables.decisions.push({ at: at(5), task: "T9", decision: "state merged", why: "sample" }, { at: at(24 * 9), task: "T12", decision: "state merged", why: "sample" });
+  if (hostile) {
+    tables.tasks = tables.tasks.map(task => task.id === "T50" ? { ...task, pr: "51" } : task);
+    tables.gates.push({ id: "G10", task: "T50", question: `<img src=x onerror="window.hacked=11">Merge <b>now</b>?`, options: "A|B", recommendation: "A", default: "", answer: "", at: at(0.2) });
+  }
+}
+
+export function writeTasksLogbook(root, worktrees, now, { hostile = false, many = 0, edge = false, chiefCases = false, stuck = false, prs = false } = {}) {
   const at = hours => new Date(Date.parse(now) - hours * HOUR).toISOString();
   const tables = appTables(now), dir = join(root, "sample-app-abc123");
   const chiefs = { T1: "C1", T2: "C1", T3: "C2", T4: "C1", T10: "C1", T11: "C2", T20: "C1", T21: "C1", T30: "C2" };
@@ -92,6 +120,7 @@ export function writeTasksLogbook(root, worktrees, now, { hostile = false, many 
     records.push({ id: "O5", task: "T50", kind: "files", source: "git diff", basis: "observed", observedAt: at(1), recordedAt: at(1), data: { head: "d".repeat(40), paths: [HOSTILE.path, HOSTILE.invisible, "javascript:window.hacked=4", "src/shared.js"], truncated: false } },
       { id: "O6", task: "T50", kind: "artifact", source: "chief", basis: "reported", observedAt: at(1), recordedAt: at(1), data: { type: "artifact", label: `<img src=x onerror="window.hacked=6">label`, url: "https://example.com/a?b=%22%3E%3Cscript%3E" } });
   }
+  if (prs) addPullRequests(tables, records, at, hostile);
   if (chiefCases) for (const [id, title, chief] of [["T70", "Sample stopped chief", "C3"], ["T71", "Sample unlisted chief", "C9"], ["T72", "Sample task with no chief", ""]]) tables.tasks.push({ ...tables.tasks[1], id, title, state: "building", milestone: "", priority: "P3", kind: "", chief, branch: "", waits: "" });
   if (stuck) {
     tables.tasks = tables.tasks.map(task => task.id === "T20" ? { ...task, state: "abandoned" } : task);
@@ -105,6 +134,7 @@ export function writeTasksLogbook(root, worktrees, now, { hostile = false, many 
     const columns = [...TABLES[name], ...(["tasks", "runs"].includes(name) ? ["chief"] : [])];
     writeFileSync(join(dir, `${name}.tsv`), [columns.join("\t"), ...rows.map(row => columns.map(column => row[column] ?? "").join("\t"))].join("\n") + "\n");
   }
+  if (prs) writeFileSync(join(root, "projects.tsv"), `logbook\tat\thow\nsample-app-abc123\t${at(100)}\tinit\n`);
   writeFileSync(join(dir, "chiefs.tsv"), `id\tprovider\tnative\tat\nC1\tclaude\tsession-a\t${at(48)}\nC2\tcodex\tsession-b\t${at(48)}\n${chiefCases ? `C3\tclaude\tsession-c\t${at(48)}\n` : ""}`);
   writeFileSync(join(dir, "observations.json"), JSON.stringify({ version: 1, records }));
   if (edge) { mkdirSync(join(dir, "live")); writeFileSync(join(dir, "live", "C1.json"), JSON.stringify({ at: at(2) })); }
