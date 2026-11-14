@@ -130,6 +130,7 @@ function packageFiles() {
     }
   }
   for (const name of [BOARD, CORE]) walk(join(packages, name));
+  if (lstatSync(join(packages, "licenses"), { throwIfNoEntry: false })) walk(join(packages, "licenses"));
   if (!files.some(file => file.name === join(BOARD, "cli.mjs"))) refuse("source board CLI is missing");
   return { files, folders };
 }

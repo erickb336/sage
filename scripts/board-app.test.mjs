@@ -1,13 +1,13 @@
 import "./test-env.mjs";
 import assert from "node:assert/strict";
-import { mkdtempSync, readFileSync, readdirSync, rmSync, statSync, writeFileSync } from "node:fs";
+import { copyFileSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync, statSync, writeFileSync } from "node:fs";
 import { createServer } from "node:net";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import test from "node:test";
 import { fileURLToPath } from "node:url";
 import { createBoardServer, loadBoardApp } from "../packages/sage-board/server.mjs";
-import { APP_SOURCE, BUDGET, budgetProblems } from "./board-app.mjs";
+import { APP_SOURCE, BUDGET, budgetProblems, licencesOf } from "./board-app.mjs";
 import { writeAppLogbook } from "./fixtures/board-app.mjs";
 
 const ROOT = join(dirname(fileURLToPath(import.meta.url)), "..");
@@ -21,32 +21,32 @@ async function freePort() {
   return port;
 }
 
-async function board(t, { app = loadBoardApp(join(ROOT, "plugins/sage/board/app")) } = {}) {
+async function board(t, { app = loadBoardApp(join(ROOT, "plugins/sage/board/app")), now = new Date().toISOString() } = {}) {
   const dir = mkdtempSync(join(tmpdir(), "sage-board-app-")), root = join(dir, "logbooks"), port = await freePort();
-  const project = writeAppLogbook(root, new Date().toISOString());
+  const project = writeAppLogbook(root, now);
   const server = createBoardServer({ sources: [{ id: "sample", path: root, label: "Sample" }], port, app, settleReads: [] });
   t.after(async () => { await server.close(); rmSync(dir, { recursive: true, force: true }); });
   await server.start();
   return { base: `http://127.0.0.1:${port}`, project };
 }
 
-async function models(url, count, change = () => {}) {
+async function models(url, count, change = () => {}, wait = 30_000) {
   const controller = new AbortController(), seen = [];
   const response = await fetch(url, { signal: controller.signal });
   assert.equal(response.headers.get("content-type"), "text/event-stream; charset=utf-8");
   const reader = response.body.getReader(), decoder = new TextDecoder();
   let buffer = "";
-  const guard = setTimeout(() => controller.abort(), 30_000);
+  const guard = setTimeout(() => controller.abort(), wait);
   try {
     while (seen.length < count) {
-      const { value, done } = await reader.read();
+      const { value, done } = await reader.read().catch(() => ({ done: true }));
       if (done) break;
       buffer += decoder.decode(value, { stream: true });
       for (let end; (end = buffer.indexOf("\n\n")) !== -1;) {
         const frame = buffer.slice(0, end); buffer = buffer.slice(end + 2);
         assert.match(frame, /^id: \d+\nevent: model\ndata: /);
         seen.push(JSON.parse(frame.split("\n")[2].slice("data: ".length)));
-        if (seen.length === 1) change();
+        if (seen.length < count) await change(seen.length);
       }
     }
   } finally { clearTimeout(guard); controller.abort(); }
@@ -134,4 +134,57 @@ test("T1054: a copy with no built app says so at /app/, and the old board still 
   const old = await fetch(`${base}/`);
   assert.equal(old.status, 200);
   assert.match(await old.text(), /Sample crash reports/);
+});
+
+test("F-T1065-4, -12: a manifest that names a missing file leaves only /app/ off, with the way to fix it, and the old board works", async t => {
+  const dir = mkdtempSync(join(tmpdir(), "sage-board-app-copy-")), plugin = join(ROOT, "plugins/sage/board/app");
+  t.after(() => rmSync(dir, { recursive: true, force: true }));
+  const manifest = JSON.parse(readFileSync(join(plugin, "manifest.json"), "utf8"));
+  mkdirSync(join(dir, "app"));
+  for (const name of ["manifest.json", manifest.script, manifest.style, manifest.vendor]) copyFileSync(join(plugin, name), join(dir, "app", name));
+  assert.equal(loadBoardApp(join(dir, "app")), null, "the graph file is missing");
+  const { base } = await board(t, { app: loadBoardApp(join(dir, "app")) });
+  const app = await fetch(`${base}/app/`);
+  assert.equal(app.status, 503);
+  assert.match(await app.text(), /start the board from the sage plugin's board\/cli\.mjs/);
+  assert.equal((await fetch(`${base}/`)).status, 200);
+});
+
+test("F-T1065-14: the app stream sends a model only when it changed, and refuses a 17th stream as the old board does", async t => {
+  const { base, project } = await board(t);
+  const file = join(project, "tasks.tsv"), text = readFileSync(file, "utf8"), damaged = "not\ta\ttasks\ttable\n";
+  const frames = await models(`${base}/app/events`, 3, async count => {
+    writeFileSync(file, damaged);
+    if (count === 1) return;
+    await new Promise(accept => setTimeout(accept, 500));
+    writeFileSync(file, text);
+  });
+  assert.deepEqual(frames.map(frame => frame.stale), [false, true, false], "a second read of the same damaged table, with the same last good data, sent nothing");
+  const controllers = Array.from({ length: 16 }, () => new AbortController());
+  t.after(() => controllers.forEach(controller => controller.abort()));
+  for (const controller of controllers) assert.equal((await fetch(`${base}/app/events`, { signal: controller.signal })).status, 200);
+  const extra = await fetch(`${base}/app/events`);
+  assert.equal(extra.status, 503);
+  assert.match(await extra.text(), /too many open board streams/);
+});
+
+test("F-T1065-14: the server reads again when a merge leaves the 24-hour window, with no change in the logbook", async t => {
+  const { base } = await board(t, { now: new Date(Date.now() - 22 * 3_600_000 + 1_500).toISOString() });
+  const [first, second] = await models(`${base}/app/events`, 2, () => {}, 20_000);
+  assert.equal(first.counts.merged, 1, "T1 merged 24 h minus 1.5 s ago");
+  assert.equal(second?.counts.merged, 0, "1.5 s later the merge leaves the window, and the server sends the new count");
+});
+
+test("F-T1065-15, -16: a package that npm puts inside another package's folder gets its own pin check and its own licence", t => {
+  const root = mkdtempSync(join(tmpdir(), "sage-board-licences-"));
+  t.after(() => rmSync(root, { recursive: true, force: true }));
+  const add = (path, version, licence) => { mkdirSync(join(root, path), { recursive: true }); writeFileSync(join(root, path, "package.json"), JSON.stringify({ version })); writeFileSync(join(root, path, "LICENSE"), licence); };
+  writeFileSync(join(root, "package.json"), JSON.stringify({ devDependencies: { "react-dom": "1.0.0", scheduler: "2.0.0" } }));
+  add("node_modules/react-dom", "1.0.0", "react-dom licence");
+  add("node_modules/scheduler", "2.0.0", "top scheduler licence");
+  add("node_modules/react-dom/node_modules/scheduler", "1.5.0", "nested scheduler licence");
+  const inputs = ["node_modules/react-dom/index.js", "node_modules/react-dom/node_modules/scheduler/index.js"];
+  assert.throws(() => licencesOf(root, inputs, "the board app"), { message: "scheduler 1.5.0 is in the board app, so package.json must pin it at exactly that version" });
+  add("node_modules/react-dom/node_modules/scheduler", "2.0.0", "nested scheduler licence");
+  assert.deepEqual([...licencesOf(root, inputs, "the board app")], [["react-dom.txt", "react-dom 1.0.0\n\nreact-dom licence"], ["scheduler.txt", "scheduler 2.0.0\n\nnested scheduler licence"]]);
 });

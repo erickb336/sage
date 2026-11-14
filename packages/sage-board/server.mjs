@@ -65,14 +65,15 @@ function securityHeaders(response, html = null) {
 const APP_DIR = fileURLToPath(new URL("./app/", import.meta.url));
 const APP_FILE = /^(?:app|vendor|graph)-[A-Z0-9]{8}\.(?:js|css)$/;
 const APP_TYPES = { js: "text/javascript; charset=utf-8", css: "text/css; charset=utf-8" };
-const NO_APP = "The board app is not built in this copy of the board. Run the board from the sage plugin, or run npm run build.";
+const NO_APP = "The board app is not built in this copy of the board. npm run build writes it only into the plugins, so start the board from the sage plugin's board/cli.mjs.";
 
 export function loadBoardApp(dir = APP_DIR) {
   let manifest;
   try { manifest = JSON.parse(readFileSync(join(dir, "manifest.json"), "utf8")); } catch { return null; }
   const names = [manifest?.script, manifest?.style, manifest?.vendor, manifest?.graph];
   if (!names.every(name => typeof name === "string" && APP_FILE.test(name)) || !manifest.script.endsWith(".js") || !manifest.style.endsWith(".css") || !manifest.vendor.endsWith(".js") || !manifest.graph.endsWith(".js")) return null;
-  const files = new Map(names.map(name => [name, { type: APP_TYPES[name.split(".").pop()], body: readFileSync(join(dir, name)) }]));
+  let files;
+  try { files = new Map(names.map(name => [name, { type: APP_TYPES[name.split(".").pop()], body: readFileSync(join(dir, name)) }])); } catch { return null; }
   const shell = (writes = "off") => `<!doctype html><html lang="en" data-theme="dark"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><meta name="sage-writes" content="${writes}"><title>Sage board</title><link rel="stylesheet" href="/app/${manifest.style}"><link rel="modulepreload" href="/app/${manifest.vendor}"><script type="module" src="/app/${manifest.script}"></script></head><body><div id="root"></div><noscript><p>This board needs scripts. The board in the chat needs none: send a message that starts with "show board".</p></noscript></body></html>`;
   return { files, shell };
 }
@@ -142,13 +143,13 @@ export function createBoardServer({ sources, port = BOARD_PORT, id, clock = () =
       (site === undefined || ["none", "same-origin"].includes(site));
   }
 
-  const render = (state, view, paths, live = true) => view.agents ? renderAgentsHtml(state, { live, paths }) : view.releases ? renderReleasesHtml(state, { live, paths }) : view.milestones || view.milestone ? renderMilestonesHtml(state, { milestoneKey: view.milestone ?? null, live, paths })
-    : renderBoardHtml(state, { taskKey: view.task, snapshot: false, live, paths });
+  const render = (state, view, live = true) => view.agents ? renderAgentsHtml(state, { live, paths: true }) : view.releases ? renderReleasesHtml(state, { live, paths: true }) : view.milestones || view.milestone ? renderMilestonesHtml(state, { milestoneKey: view.milestone ?? null, live, paths: true })
+    : renderBoardHtml(state, { taskKey: view.task, snapshot: false, live, paths: true });
   const fits = html => Buffer.byteLength(html) <= MAX_HTML;
-  function pageFor(view, paths = false, stream = false) {
-    const html = render(model, view, paths);
+  function pageFor(view, stream = false) {
+    const html = render(model, view);
     if (fits(html)) return { html, stale: model.stale, diagnostics: model.diagnostics };
-    const other = render({ ...model, pageNote: stream ? TOO_LARGE : TOO_LARGE + NO_STREAM }, { milestones: !!view.milestone }, paths, false);
+    const other = render({ ...model, pageNote: stream ? TOO_LARGE : TOO_LARGE + NO_STREAM }, { milestones: !!view.milestone }, false);
     if (!fits(other)) throw new RangeError("board rendering exceeds the size limit");
     return { html: other, stale: model.stale, diagnostics: model.diagnostics };
   }
@@ -176,14 +177,14 @@ export function createBoardServer({ sources, port = BOARD_PORT, id, clock = () =
 
   function publish(client) {
     if (client.app) {
-      const data = JSON.stringify(overview);
-      if (client.sent === data) return;
-      client.sent = data;
+      const data = JSON.stringify(overview), sent = digest(data).toString("base64");
+      if (client.sent === sent) return;
+      client.sent = sent;
       if (Buffer.byteLength(data) > MAX_HTML) { client.response.end(); removeClient(client); return; }
       return send(client, `id: ${revision}\nevent: model\ndata: ${data}\n\n`);
     }
     try {
-      const payload = { revision: String(revision), ...pageFor(client, client.paths, true) };
+      const payload = { revision: String(revision), ...pageFor(client, true) };
       const sent = digest(JSON.stringify([payload.html, payload.stale, payload.diagnostics])).toString("base64");
       if (client.sent === sent) return;
       client.sent = sent;
@@ -312,12 +313,12 @@ export function createBoardServer({ sources, port = BOARD_PORT, id, clock = () =
       response.writeHead(200, { "Content-Type": "text/event-stream; charset=utf-8", "X-Accel-Buffering": "no" });
       if (request.method === "HEAD") return response.end();
       response.flushHeaders();
-      const client = { response, task: selected.task, agents: !!selected.agents, releases: !!selected.releases, milestones: !!selected.milestones, milestone: selected.milestone ?? null, paths: true, blocked: false, pending: null, deadline: null, sent: null };
+      const client = { response, task: selected.task, agents: !!selected.agents, releases: !!selected.releases, milestones: !!selected.milestones, milestone: selected.milestone ?? null, blocked: false, pending: null, deadline: null, sent: null };
       clients.add(client); response.once("close", () => removeClient(client)); publish(client);
       return;
     }
     try {
-      const { html } = pageFor(selected, true);
+      const { html } = pageFor(selected);
       securityHeaders(response, html);
       response.writeHead(missing ? 404 : 200, { "Content-Type": "text/html; charset=utf-8", "Content-Length": Buffer.byteLength(html) });
       response.end(request.method === "HEAD" ? undefined : html);
