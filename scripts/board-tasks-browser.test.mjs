@@ -8,6 +8,7 @@ import { dirname, join } from "node:path";
 import { after, before, test } from "node:test";
 import { fileURLToPath } from "node:url";
 import { createBoardServer, loadBoardApp } from "../packages/sage-board/server.mjs";
+import { readerUrl } from "../packages/sage-board/reader.mjs";
 import { HOSTILE_TEXT, writeTasksLogbook } from "./fixtures/board-app.mjs";
 import { measureContrast } from "./fixtures/contrast.mjs";
 
@@ -291,4 +292,30 @@ test("T1061 (F-T1061-26): a milestone problem in Needs you links to the Tasks pa
   assert.equal(await link.getAttribute("href"), `#tasks?milestone=${encodeURIComponent(KEY("M3"))}`);
   await link.click();
   await page.locator(`.group.focus[data-group="${KEY("M3")}"]`).waitFor();
+});
+
+test("T1064 (F-T1064-64, F-T1064-65, F-T1064-66): at 390 px each reader page shows one text column at nearly full width and scrolls only up and down; at 1280 px the side column stays", async t => {
+  const { page, base, problems, logbook } = await open(t, { documents: true }, readerUrl(KEY("T3"), "brief", "R7"));
+  const gate = join(logbook, "gates", "G4.json"), kept = JSON.parse(readFileSync(gate, "utf8"));
+  kept.message.blocks.push({ t: "picture", title: "Where the work is", key: "The double box is the task that runs now.", frame: { box: "milestone", name: "Offline sync", state: "active", items: [{ box: "task", name: "T10 Share sheet", state: "building", here: true }] } });
+  writeFileSync(gate, JSON.stringify(kept));
+  const pages = { brief: [readerUrl(KEY("T3"), "brief", "R7"), "details[open] .body"], report: [readerUrl(KEY("T3"), "report", "R5"), ".result"], markdown: [readerUrl(KEY("T3"), "page", "retry-design.md"), ".doc .md"],
+    compare: [readerUrl(KEY("T10"), "design", null, { view: "compare" }), ".pair .version"], question: [readerUrl(KEY("T10"), "question", "G4"), "main pre.md"] };
+  const measure = text => page.evaluate(selector => ({ scroll: document.documentElement.scrollWidth, view: innerWidth, pre: document.querySelectorAll("main pre.md").length,
+    text: [...document.querySelectorAll(selector)].map(e => { const s = getComputedStyle(e); return Math.round(e.getBoundingClientRect().width - parseFloat(s.paddingLeft) - parseFloat(s.paddingRight)); }) }), text);
+  for (const [name, [path, text]] of Object.entries(pages)) {
+    await page.setViewportSize({ width: 390, height: 900 });
+    await page.goto(`${base}${path}`);
+    const narrow = await measure(text);
+    assert.ok(narrow.scroll <= narrow.view, `${name} at 390 px scrolls sideways: ${narrow.scroll} px wide`);
+    assert.ok(narrow.text.length > 0 && narrow.text.every(width => width >= 300), `${name} at 390 px: each text column is at least 300 px wide, saw ${narrow.text}`);
+    if (name === "question") assert.ok(narrow.pre > 0, "the question shows its frame");
+    if (name === "compare") assert.ok(await page.evaluate(() => { const [a, b] = document.querySelectorAll(".pair .version"); return b.getBoundingClientRect().top >= a.getBoundingClientRect().bottom; }), "the two versions stack");
+    await page.setViewportSize({ width: 1280, height: 900 });
+    const wide = await measure(text);
+    assert.ok(wide.scroll <= wide.view, `${name} at 1280 px scrolls sideways`);
+    if (name === "brief" || name === "report") assert.equal(await page.locator(".cols > .side").evaluate(e => Math.round(e.getBoundingClientRect().width)), 260, `${name}: the side column stays at 1280 px`);
+    if (name === "compare") assert.ok(await page.evaluate(() => { const [a, b] = document.querySelectorAll(".pair .version"); return a.getBoundingClientRect().top === b.getBoundingClientRect().top; }), "the two versions stand side by side at 1280 px");
+  }
+  assert.deepEqual(problems, []);
 });
