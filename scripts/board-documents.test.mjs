@@ -51,7 +51,7 @@ test("T1064: a brief shows its ten fields in order, GOAL and ACCEPTANCE open, a 
 });
 
 test("T1064: a report shows the STATUS pill, RESULT first, each finding as a row with severity, key, summary, location and its state, then the other fields and the PR link", t => {
-  const page = read(world(t), "T3", "report", "R5");
+  const w = world(t), page = read(w, "T3", "report", "R5");
   assert.match(page.html, /<dt>Status<\/dt><dd><span class="pill done">done<\/span>/);
   const result = page.html.indexOf("RESULT</span><p class=\"lead\">FINDINGS · 1 medium, 1 low</p>"), findings = page.html.indexOf(">FINDINGS</span>");
   assert.ok(result > 0 && result < findings, "RESULT comes first, in its box");
@@ -59,7 +59,11 @@ test("T1064: a report shows the STATUS pill, RESULT first, each finding as a row
   assert.deepEqual(rows, [
     ["medium", "F1", "A revoked limit still applies for 10 minutes.", "open", "src/limits.js:42\nproof: npm test -- scripts/limits-probe.test.mjs\nsaw: the limit 5 after revoke"],
     ["low", "F2", "The limit field has no label.", "follow-up", "src/limits-view.js:88"],
-  ]);
+  ], "each finding has the state of R5's own logbook row, in report order (F-T3-1, F-T3-2), not of R4's row with the key F1");
+  const file = join(w.logbook, "findings.tsv");
+  writeFileSync(file, readFileSync(file, "utf8").split("\n").filter(line => !line.includes("\tF-T3-2\t")).join("\n"));
+  assert.deepEqual([...read(w, "T3", "report", "R5").html.matchAll(/<span class="mono">(\w+)<\/span><span>[^<]*<\/span><span>(?:<span class="pill[^"]*">([^<]+)<\/span>)?/g)].map(match => [match[1], match[2] ?? "no state"]),
+    [["F1", "open"], ["F2", "no state"]], "a finding with no logbook row of its run shows no state");
   assert.deepEqual(fieldsOpen(page.html), ["FINDINGS open", "QUESTIONS", "EVIDENCE", "NOT VERIFIED open", "BRANCH open"], "QUESTIONS none stays closed");
   assert.match(page.html, /<a href="https:\/\/github\.com\/sample-owner\/sample-app\/pull\/12">PR #12<\/a>/);
   assert.match(page.html, /head b{40}, PR 12/);

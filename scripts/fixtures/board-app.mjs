@@ -173,8 +173,10 @@ function addDocumentRows(tables, at, pagesRoot) {
   tables.runs = tables.runs.map(run => ({ ...run, model: run.id === "R5" ? "opus" : run.id === "R7" ? "sonnet" : "" }));
   tables.runs.push({ id: "R8", task: "T10", role: "designer", round: "0", status: "done", started: at(30), ended: at(29), chief: "C1", model: "opus" },
     { id: "R9", task: "T10", role: "arena-judge", round: "0", status: "done", started: at(26), ended: at(25), chief: "C1", model: "opus" });
-  tables.findings.push({ task: "T3", key: "F1", round: "0", source: "R5", severity: "medium", summary: "A revoked limit still applies for 10 minutes.", triage: "fix", reason: "", status: "open", run: "R5", class: "" },
-    { task: "T3", key: "F2", round: "0", source: "R5", severity: "low", summary: "The limit field has no label.", triage: "follow-up", reason: "", status: "follow-up", run: "R5", class: "" });
+  tables.runs.push({ id: "R4", task: "T3", role: "code-reviewer", round: "0", status: "done", started: at(3), ended: at(2.5), chief: "C2" });
+  tables.findings.push({ task: "T3", key: "F1", round: "0", source: "code-reviewer", severity: "medium", summary: "An older finding of R4 with the key F1.", triage: "fix", reason: "", status: "closed", run: "R4", class: "other" },
+    { task: "T3", key: "F-T3-1", round: "0", source: "code-reviewer", severity: "medium", summary: "revoked-limit-applies-10-min", triage: "fix", reason: "", status: "open", run: "R5", class: "state-edge" },
+    { task: "T3", key: "F-T3-2", round: "0", source: "code-reviewer", severity: "low", summary: "limit-field-no-label", triage: "follow-up", reason: "", status: "follow-up", run: "R5", class: "copy" });
   tables.decisions.push({ at: at(7), task: "T3", decision: `page ${pagesRoot}/T3/gone-plan.md sha256 ${"ab".repeat(32)}`, why: "the chief recorded a page" },
     { at: at(6.5), task: "T3", decision: `page ${pagesRoot}/T3/notes.md sha256 ${"cd".repeat(32)}`, why: "the chief recorded a page" });
   tables.gates.push({ id: "G7", task: "T10", question: "Which design for the share sheet?", options: "v2|v1", recommendation: "v2", default: "", answer: "v2", at: at(28) },
