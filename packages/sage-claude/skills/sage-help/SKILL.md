@@ -70,6 +70,8 @@ sage mode makes the session the user's chief of staff. Autopilot lets verified p
 
 The board is a short view of every project's logbook: what needs the user, the agents running now, and each active task. A message that starts with "show board" prints it for this project, "show board for all" for every project, and "show board for <project>" for one project. [Ask for the board](https://github.com/erickb336/sage-stack/blob/main/docs/guide/board.md#ask-for-the-board) gives the other forms and what each part shows. “show board T197” and “sage board T197” show that task in this project. “show status” and “sage status” show short status lines. The phrases work at the start of the user's own message, outside quoted text. The board command reads recorded facts; it does not change a task.
 
+When another program on the Mac uses the board's port, link [Change the board's port](https://github.com/erickb336/sage-stack/blob/main/docs/guide/board.md#change-the-boards-port): it gives the one command that moves the board, which the user runs in Terminal. Do not copy the command; the user can also ask the chief to run it.
+
 ## Answer the chief's questions
 
 **Read:** `docs/guide/using-sage.md`, section "When the chief asks you".

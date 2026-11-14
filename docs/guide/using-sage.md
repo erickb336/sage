@@ -164,7 +164,6 @@ In Claude Code, the sage hook reads each message of the chief when it ends. A me
 Known limits:
 
 - A page loads nothing and runs only its own switch, but a page that you open can still send its own content out, for example through a link in it. A page may link to sites outside this Mac: when you click such a link, your browser opens that site, and the site gets everything in the link's address.
-- The link always names port 43123, the board's default port. If you moved the board to another port, change the port in the link.
 - A terminal with an East Asian wide setting draws the box marks two columns wide, so a picture there can look broken.
 
 ## The lead and the models

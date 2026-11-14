@@ -27,6 +27,10 @@ A pilot ran a lead and its team with a test model. The PE, the designer and the 
 
 One dry run is recorded ([the report](../runs/dry-run-1.md)). The first design is in [docs/design/sage-mode.md](../design/sage-mode.md).
 
+**Another program uses the board's port.** The board uses port 43123. When another program on the Mac uses it, `show board` says so and gives one command, for example `node <board folder>/cli.mjs board --port 43124`.
+
+Run it in Terminal on the Mac, or ask the chief to run it. It moves the board to that port, keeps your other settings, and starts the board there. See [Change the board's port](board.md#change-the-boards-port).
+
 **How do I stop a task?** Tell the chief in your own words, for example "stop the run on T3". To stop merges, send `autopilot off` alone.
 
 See [Stop a running task](using-sage.md#stop-a-running-task).

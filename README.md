@@ -87,7 +87,7 @@ Send `show board` to see what needs you, the agents at work, and each task in it
   <img alt="The board page on a laptop screen, with SAMPLE DATA: the project picker, the filter bar, a Needs you box with two milestone items, and six columns side by side, from Backlog to Done. The first card of the Backlog column asks you to approve a milestone." src="docs/assets/board-light.png" width="100%">
 </picture>
 
-*Sample data: every task and milestone shown is made up. The screenshot shows the first screen of the board on a laptop (1280 by 800 pixels): the project picker, the filters, the Needs you box and the columns, from Backlog to Done. The [board guide](docs/guide/board.md) describes the full board.*
+*Sample data: every task and milestone shown is made up. The screenshot shows the first screen on a laptop (1280 by 800 pixels). The [board guide](docs/guide/board.md) describes the full board.*
 
 ## What to say
 
@@ -97,7 +97,7 @@ Send `show board` to see what needs you, the agents at work, and each task in it
 | `show status` | Where each task is: running, waiting for you, verified. It names each open task with no priority. |
 | Tell either chief to take over a task of another chief, with its PR | In a shared logbook, the chief opens a [takeover gate](docs/guide/using-sage.md#shared-logbooks) for you to answer in either chat: its instructions say never to answer it itself, but no code ties the answer to your message. The branch and the verdicts stay, and then only the new owning chief and its agents push to the branch; a Claude chief that takes a task from Codex runs one fresh Claude cycle first. Any chief may abandon a task with no owning chief, with a reason; in separate logbooks, the chief uses [task adoption](docs/guide/codex.md#task-adoption), and reviews and QA start fresh. |
 | Tell the chief that a checkout joins a shared logbook, or starts its own, or ask it to move this project there | The chief runs [`sage link`](docs/guide/using-sage.md#shared-logbooks) after your answer, and two linked clones are one project on the board. Each task there has one owning chief, who can offer it to another chief, and you answer a takeover gate for each change of owning chief. [`sage move`](docs/guide/using-sage.md#move-an-existing-project) shows a preview and one gate, then takes the open tasks of the Claude and Codex logbooks into one shared logbook, with an end check and the steps to restore by hand; a new project starts in a shared logbook when both plugins are updated ([`sage init`](docs/guide/using-sage.md#shared-logbooks)). |
-| `show board` | The board in the chat, and the address of the board page. |
+| `show board` | The board in the chat, and the address of the board page. When another program uses its port, [one command moves the board](docs/guide/board.md#change-the-boards-port). |
 | `autopilot on` / `autopilot off` | Verified pull requests merge by themselves, or wait for you again. Off by default. |
 | `sage mode off` | A normal session again, for the rest of the session. Autopilot goes off too. |
 | `sage help` | Every phrase, and whether sage mode and autopilot are on. |

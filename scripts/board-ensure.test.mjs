@@ -432,20 +432,26 @@ test("F-T216-12: when board.pid cannot be written, the server closes and the com
   } finally { await closeChild(child); }
 });
 
-test("F-T216-13: the server writes board.pid as a new file, so a hard link at that name does not change the file it points to", async (t) => {
+test("F-T216-13, T1079: the server writes board.pid and board.port as new files, so a hard link at those names does not change the file it points to", async (t) => {
   const { dir, env, config } = scratch(t);
   const port = await freePort();
   createBoardConfig(config, { sources: [{ id: "sample", path: join(dir, "logbooks") }], port });
   const other = join(dir, "other.txt"), pidFile = join(dirname(config), "board.pid");
   writeFileSync(other, "sample text that stays\n");
   linkSync(other, pidFile);
+  const second = join(dir, "second.txt"), portPath = portFile(config);
+  writeFileSync(second, "more sample text\n");
+  linkSync(second, portPath);
   const server = await runBoardCli(["board", "--serve"], { env, output: () => {} });
   try {
     assert.equal(readFileSync(other, "utf8"), "sample text that stays\n");
     assert.equal(readFileSync(pidFile, "utf8"), `${process.pid}\n`);
-    assert.deepEqual(readdirSync(dirname(config)).sort(), ["board.json", "board.pid"], "no temporary file is left");
+    assert.equal(readFileSync(second, "utf8"), "more sample text\n");
+    assert.equal(readFileSync(portPath, "utf8"), `${port}\n`);
+    assert.deepEqual(readdirSync(dirname(config)).sort(), ["board.json", "board.pid", "board.port"], "no temporary file is left");
   } finally { await server.close(); }
   assert.equal(existsSync(pidFile), false);
+  assert.equal(readFileSync(portPath, "utf8"), `${port}\n`, "the port stays for the Page links when the board stops");
   assert.equal(readFileSync(other, "utf8"), "sample text that stays\n");
 });
 

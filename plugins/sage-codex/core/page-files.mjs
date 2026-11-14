@@ -8,8 +8,6 @@ import { pagesFolder, worktreeRoot } from "./worktrees.mjs";
 
 const OPEN = constants.O_RDONLY | constants.O_NONBLOCK | (process.platform === "darwin" ? 0x20000000 : constants.O_NOFOLLOW);
 
-// The board's folder holds its config (with old secrets) and board.port, a non-secret file with the
-// port of the board that last started from the default config. Core reads only board.port.
 export const boardFolder = (env = process.env) => join(env.HOME || homedir(), ".config", "sage-board");
 export const PORT_FILE = "board.port";
 export function boardPort(env = process.env) {

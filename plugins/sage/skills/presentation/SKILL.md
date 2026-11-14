@@ -48,7 +48,7 @@ Draw each picture as fixed-width text first. The page draws its image from the s
 
 ## Pages
 
-A message with a picture, and a message too long for the chat, get a page: one file in the task's pages folder that holds the whole message, with each picture as an image. The message names it in a Page block: `Page · <title>`, then the board's link to the page (`http://127.0.0.1:43123/pages/<logbook>/<task>/<file>`), then its file path. The owner clicks the link: it opens the page from the board, in the Claude desktop app, in the Codex app and from a terminal. When the board does not run, the owner opens the path. Do not send a page with Claude's file tool: it sends a copy through Anthropic's servers. A long message holds only its main point and the Page block; the page holds the rest.
+A message with a picture, and a message too long for the chat, get a page: one file in the task's pages folder that holds the whole message, with each picture as an image. The message names it in a Page block: `Page · <title>`, then the board's link to the page (`http://127.0.0.1:<port>/pages/<logbook>/<task>/<file>`, with the port of the owner's board: 43123 unless the owner moved it), then its file path. The owner clicks the link: it opens the page from the board, in the Claude desktop app, in the Codex app and from a terminal. When the board does not run, the owner opens the path. Do not send a page with Claude's file tool: it sends a copy through Anthropic's servers. A long message holds only its main point and the Page block; the page holds the rest.
 
 A page loads nothing and runs only its own switch. Known limit: a page that the owner opens can still send its own content out through a link or a change of address.
 

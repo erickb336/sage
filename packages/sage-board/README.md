@@ -38,21 +38,27 @@ A config from an earlier version can still hold the keys `allowedHosts`, `passwo
 
 The sage hook, in Claude Code and in Codex, refuses the ordinary command shapes by which a session or an agent reads, copies or replaces the configuration file, or lists, searches, copies or moves its folder. An agent runs as your own user, so a script that builds the path while it runs can still pass the hook. Full protection needs the sandbox (tasks T97 to T99).
 
-The default port is 43123. Setup accepts `--port` from 1024 to 65535. A busy port causes an error; the service does not choose another port.
+The default port is 43123. Setup accepts `--port` from 1024 to 65535. A busy port causes an error that names the command below; the service does not choose another port.
 
-Setup never changes a config that exists: it stops with an error that names the file. To change the port of an existing config, do these steps in this order:
+### Change the board's port
 
-1. Stop the board with `board --stop --config <file>`. Do this first: `--stop` looks for the board on the port that the file names.
-2. Edit `"port"` in the file.
-3. Ask for the board again, or run `board --ensure --config <file>`.
+Setup never changes a config that exists. To move the board of an existing config to another port, run in Terminal:
 
-If you edit the port first, `--stop` finds no board on the new port, and the old server runs on. To set the board up again from the start, remove the file first.
+```sh
+node <path to board/cli.mjs> board --port 43124
+```
+
+Use any free port from 1024 to 65535, and add `--config <file>` for a config that is not the default one. The command checks the port (a number from 1024 to 65535, and free on 127.0.0.1) and that it can write the config and its folder. Then it stops this config's board if it runs, writes only `"port"` (in a new file that replaces the config, with the same mode, and every other key kept), and starts the board on the new port. When a check fails, it changes nothing. It never prints the config. The hooks refuse it from an agent; the chief may run it. The login service reads the port at each start, so it needs no change.
+
+Each server writes its port to `board.port`, next to `board.pid`, and keeps the file when it stops. The file holds only the port. The message command of the state tool reads `board.port` in `~/.config/sage-board/` (and never the config), so a message's Page link names the port of the board of the default config. Without the file, the link names 43123.
+
+The manual way, when your sage has no `board --port`: stop the board with `board --stop --config <file>` first (it looks for the board on the port that the file names), then edit `"port"` in the file, then ask for the board again. To set the board up again from the start, remove the file first.
 
 The stable installation copies only board and core sources. It does not depend on a provider plugin cache. Stop the foreground service with Ctrl+C.
 
 ## The new board (preview)
 
-The new board is at `/app/` on the same server: open `http://127.0.0.1:43123/app/` (or your configured port) in a desktop browser. It needs scripts. Its Overview has:
+The new board is at `/app/` on the same server: open `http://127.0.0.1:43123/app/` (or the port of your config) in a desktop browser. It needs scripts. Its Overview has:
 
 - **The chiefs:** a chip for each chief of each shared project, with live, waits for you, stopped or not known, and the autopilot state. A click shows only that chief's work, on each page.
 - **Needs you:** each open question, oldest first, with its chief, its task, its recommendation and when it was asked. A click opens the question with the message that the chief kept for it (`gates/G<n>.json`).
@@ -130,7 +136,6 @@ Limits of the pages route:
 - A page can still send its own content out through a link that you click in it. A page opened with `?scripts=1` can also move itself to another site, by its script or by a meta refresh. Any other page runs no refresh.
 - A page can also send content out with no click, also with no script: when it opens, Chromium sends the request of a prerender link (`<link rel="prerender">`, NoStatePrefetch) to any site, and the address can hold the page's content. No header that the board can send stops it: a probe in Chromium 140 tried CSP (`prefetch-src` and `navigate-to` too), Permissions-Policy, COOP, COEP, Vary and others (F-T1013-5). The request carries no referrer, but it carries the cookies of that site that `SameSite=Lax` lets through (F-T1013-10), and the page stays. Prefetch, preload, preconnect, DNS prefetch and speculation rules reached nothing in the same probe.
 - On macOS, the board opens a page with no link in any folder of its path (`O_NOFOLLOW_ANY`). Other systems have no such flag, so there a folder that flips between a link and a folder during the board's checks can pass them.
-- The Page link always names port 43123. A board on another port shows the pages there, but the link in a message does not reach them.
 - The folder of the pages comes from `SAGE_WORKTREES`, or else `~/sage-worktrees`. A board that launchd starts gets no `SAGE_WORKTREES` from your shell, so it shows the pages under `~/sage-worktrees` only.
 
 Local tests exercise the access check, file updates, task routes, the Agents page, reconnects, offline export, and stable installation. Login startup and browser appearance still need direct checks.

@@ -208,8 +208,10 @@ Every line that the owner reads names a milestone by its level: "Milestone 6: Fa
 
 Agents save each task's pages (research, designs, the pages of the chief's messages) in the task's pages folder. The board server also shows these pages, read-only, on the Mac only:
 
-- `http://127.0.0.1:43123/pages/<logbook>/<task>/` is the task's index: a list of its pages, with the size of each.
-- `http://127.0.0.1:43123/pages/<logbook>/<task>/<file>` opens one page. For example: `http://127.0.0.1:43123/pages/sage-43265b/T1000/research.html`.
+- `http://127.0.0.1:<port>/pages/<logbook>/<task>/` is the task's index: a list of its pages, with the size of each.
+- `http://127.0.0.1:<port>/pages/<logbook>/<task>/<file>` opens one page. For example: `http://127.0.0.1:43123/pages/sage-43265b/T1000/research.html`.
+
+The port is 43123, or the port that you [moved the board to](#change-the-boards-port).
 
 A task page links its index: its top line has the link **Pages** when the task has a pages folder.
 
@@ -289,9 +291,34 @@ The sage hook refuses the ordinary command shapes by which an agent reads, copie
 
 After you change a setting of the config, or update sage, the line says that a restart is needed: run the `board --stop` command that it gives, then ask for the board again.
 
-Setup never changes a board config that exists. To move the board to another port (1024 to 65535), do these steps in this order:
+### Change the board's port
 
-1. Run `board --stop --config <file>`, with the path of your board config (by default `~/.config/sage-board/board.json`). Do this first: `--stop` looks for the board on the port that the file names.
+The board uses port 43123. When another program on the Mac uses that port, `show board` says so and gives the command that moves the board. Run it in Terminal on the Mac:
+
+```sh
+node <board folder>/cli.mjs board --port 43124
+```
+
+Use the board folder that the message names, and any free port from 1024 to 65535 in place of 43124. Add `--config <file>` when your board config is not `~/.config/sage-board/board.json`.
+
+You can also ask the chief to run it. An agent cannot run it: the hooks refuse it.
+
+The command does these steps in this order. When a check fails, it stops and changes nothing:
+
+1. It checks that the port is a number from 1024 to 65535, and that no program on the Mac uses it.
+2. It checks that it can write the board config and its folder.
+3. It stops this config's board, if it runs. Another program, or the board of another config, on the old port runs on.
+4. It writes the new port in the board config. It keeps every other setting and the mode of the file.
+5. It starts the board on the new port and prints its address.
+
+After the move:
+
+- The Page link of each new message names the new port. A Page link in a message from before still names the old port: change the port in that link.
+- The login service (`dev.sage.board`, if you set it up) reads the port from the board config each time it starts, so it needs no change.
+
+**The manual way.** Use it only when your sage has no `board --port`. Do these steps in this order:
+
+1. Run `board --stop --config <file>`, with the path of your board config. Do this first: `--stop` looks for the board on the port that the file names.
 2. Edit `"port"` in that file.
 3. Ask for the board again.
 
