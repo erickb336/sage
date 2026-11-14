@@ -3445,7 +3445,7 @@ function act(cmd, pos, opt, dir, env, skip, project) {
         const question = flat(need(opt.question, "--question"));
         if (readsAsBreakdown(question)) refuse(`a question that starts with "Approve milestone" or "Approve program" is a breakdown gate, and only milestone propose opens one. Ask it in other words.`);
         if (looks(question).startsWith("move · plan")) refuse(`a question that starts with "move · plan" is a move gate, and only sage move --plan opens one. Ask it in other words.`);
-        const g = { id: nextId(dir, "G"), task: id ?? "", question: need(question, "--question"), options: flatOptions, recommendation, default: opt.default === undefined ? "" : pick(opt.default, "--default"), at: now(), ...chiefTag(opt) };
+        const g = { id: nextId(dir, "G"), task: id === undefined ? "" : taskOf(dir, id).task.id, question: need(question, "--question"), options: flatOptions, recommendation, default: opt.default === undefined ? "" : pick(opt.default, "--default"), at: now(), ...chiefTag(opt) };
         const message = opt.message === undefined ? undefined : questionMessage(opt.message, project, g.task, env);
         if (message) keepGateMessage(dir, g, message);
         write(dir, "gates", [...gates, g]);

@@ -424,6 +424,25 @@ for (const [from, to] of [["claude", "codex"], ["codex", "claude"]]) {
   });
 }
 
+test("gate add refuses a task id that is not a task of the logbook, and writes no gate, page or folder for it; a gate with no task still opens", (t) => {
+  const w = shared(t);
+  w.as("claude", "task", "add", "--title", "a", ...ADD);
+  const file = join(w.base, "question.json"), root = claude.pagesRoot(w.project, w.env);
+  writeFileSync(file, JSON.stringify({ kind: "question", title: "Ship it?", long: { title: "Ship it, in short", main: "the page holds the whole question." }, blocks: [
+    { t: "field", label: "Where this is", text: "a" }, { t: "field", label: "What you approve", text: "b" }, { t: "field", label: "The one real choice in it", text: "c" },
+    { t: "table", head: ["Answer", "What happens next", "Cost"], rows: [["yes", "d", "none"], ["no", "e", "none"]], pick: 0 },
+    { t: "field", label: "If you do not answer", text: "f" }, { t: "field", label: "Needed by", text: "g" }, { t: "field", label: "After you answer", text: "h" }] }));
+  for (const id of ["T99", "../../../escape-a", "T1/../../escape-b", "t1"]) {
+    for (const message of [[], ["--message", file]]) {
+      assert.throws(() => w.as("claude", "gate", "add", id, "--question", "Ship it?", "--options", "yes|no", "--recommend", "yes", ...message), (e) => e.message.startsWith(`no task ${id}. The latest: T1.`), `${id} ${message.length ? "with" : "without"} a message`);
+    }
+    assert.equal(existsSync(join(root, id)), false, `no folder for ${id}`);
+  }
+  assert.deepEqual([claude.read(w.dir, "gates").length, existsSync(join(w.dir, "gates"))], [0, false], "a refused gate writes nothing");
+  assert.equal(w.as("claude", "gate", "add", "--question", "Ship it?", "--options", "yes|no", "--recommend", "yes"), "G1 open · Ship it?");
+  assert.equal(w.gate("G1").task, "");
+});
+
 test("the lint offer belongs to the chief that ran lint: its hook applies a board yes and owns the new task, and the other chief's hook leaves it", (t) => {
   const w = shared(t);
   writeFileSync(join(w.project, "a.js"), "export const a = 1;\n");

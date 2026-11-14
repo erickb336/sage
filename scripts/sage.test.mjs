@@ -4302,7 +4302,7 @@ test("R1203-1, R1203-2: an id that only a milestone's pilot or gate cell, or a t
   byHand(s.dir, "decisions", 1, "T2", () => null);
   assert.deepEqual(rows(s.dir, "milestones").map((p) => [p.id, p.pilot, p.gate]), [["M1", "T2", "G1"]], "only the milestone row names T2 and G1");
   assert.match(s.ok("task", "add", "--priority", "P2", "--title", "New", "--size", "small"), /^T3 framed/, "T2 is not given again (IDS.milestones pilot)");
-  assert.equal(s.ok("gate", "add", "T2", "--question", "Approve?", "--options", "approve|change|drop", "--recommend", "approve"), "G2 open · Approve?", "G1 is not given again (IDS.milestones gate)");
+  assert.equal(s.ok("gate", "add", "T1", "--question", "Approve?", "--options", "approve|change|drop", "--recommend", "approve"), "G2 open · Approve?", "G1 is not given again (IDS.milestones gate)");
   s.ok("gate", "answer", "G2", "--option", "1");
   assert.match(s.no("run", "add", "T1", "--role", "lead"), /^sage: T1 waits for the breakdown of M1 \(its breakdown gate G1 is not in the logbook\)/, "the milestone does not turn active");
   s.ok("task", "add", "--priority", "P2", "--title", "Up", "--size", "small");
