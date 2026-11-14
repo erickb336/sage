@@ -1,7 +1,7 @@
 #!/usr/bin/env node
 import { closeSync, constants, fstatSync, openSync, readFileSync } from "node:fs";
 import { homedir } from "node:os";
-import { join } from "node:path";
+import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { balancedModels, createStateTool } from "sage-core";
 
@@ -31,7 +31,11 @@ const tool = createStateTool({
   models: ["opus", "sonnet", "haiku", "fable", "inherit"],
   modelDefaults: { arena_models: "opus,sonnet,sonnet", ...balancedModels("opus", "sonnet") },
   takeoverCycle: () => "run one cycle of its reviews and QA on this SHA, record each verdict, then merge with gh pr merge",
+  queueWait: (run) => {
+    const wait = join(dirname(fileURLToPath(import.meta.url)), "../../hooks/wait.mjs");
+    return `To wait, run ${/\s/.test(wait) ? `node "${wait}"` : `node ${wait}`} --slot ${run} in the project's folder, as a Bash command of its own (a chief in the background, a lead with the timeout 600000). It ends when ${run} is admitted.`;
+  },
 });
-export const { SIZES, BLOCKS, RISKS, KINDS, STATES, DEFAULTS, PR, sageRoot, locate, chiefFor, sessionBar, branchBar, actorOptions, git, projectRoot, optionsOf, slug, worktreeRoot, pagesRoot, BRANCH, ofTask, branchOfTask, branchTip, projectName, storeDir, config, cyclesFor, modelFor, read, mergeCheck, logbookView, sage, withLock, keepReport, observePush, keepRunText, ownGates, pickupAnswers } = tool;
+export const { SIZES, BLOCKS, RISKS, KINDS, STATES, DEFAULTS, PR, sageRoot, locate, chiefFor, sessionBar, branchBar, actorOptions, git, projectRoot, optionsOf, slug, worktreeRoot, pagesRoot, BRANCH, ofTask, branchOfTask, branchTip, projectName, storeDir, config, cyclesFor, modelFor, read, mergeCheck, logbookView, sage, withLock, keepReport, observePush, keepRunText, ownGates, pickupAnswers, queueOf, chiefQueue, queueProblem, pendingRun, markStart, sweepQueue } = tool;
 if (process.argv[1] === fileURLToPath(import.meta.url)) tool.runCli();
 export const { leadProblem, leadRequest } = tool;

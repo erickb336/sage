@@ -9,6 +9,7 @@ import { modeDirectory, privateDirectory, readState, saveState, stateKey } from 
 import { sessionMeta } from "./report-gate.mjs";
 import { saveStartMark } from "./start-mark.mjs";
 import { mergeCommand } from "../skills/sage/merge.mjs";
+import { tool } from "../skills/sage/sage.mjs";
 
 const ROOT = join(dirname(fileURLToPath(import.meta.url)), "..");
 const TOOL = join(ROOT, "skills/sage/sage.mjs");
@@ -68,6 +69,14 @@ function known(input) {
   return false;
 }
 
+function admittedNotes(input, state, env) {
+  let q;
+  try { q = tool.chiefQueue(input.cwd, input.session_id, env); } catch { return []; }
+  const told = new Set(state.admitted ?? []), fresh = q.admitted.filter((r) => !told.has(r.id));
+  if (fresh.length) state.admitted = [...told, ...fresh.map((r) => r.id)].slice(-50);
+  return fresh.map((r) => `sage: ${r.id} (${r.role} on ${r.task}) is admitted from the queue: ${r.lead ? `if the lead of ${r.task} added it, the lead spawns it; otherwise spawn` : "spawn"} its agent now, by ${r.until}, or the run ends as failed and loses its place. Codex wakes no idle chief, so this note comes at your next turn.`);
+}
+
 export function handle(input, state, env = process.env) {
   if (!known(input)) {
     state.autopilot = false;
@@ -92,6 +101,7 @@ export function handle(input, state, env = process.env) {
     state.given = true;
     notes.unshift(chiefText());
   }
+  if (state.sage) notes.push(...admittedNotes(input, state, env));
   if (was.autopilot && !state.autopilot) notes.push(OFF_IN_CODEX);
   if (was.sage !== Boolean(state.sage) || was.autopilot !== Boolean(state.autopilot)) {
     notes.push(`sage: confirm the switch to the user in one line of your reply: sage mode is ${onOff(state.sage)}, and autopilot is ${onOff(state.autopilot)}.`);
