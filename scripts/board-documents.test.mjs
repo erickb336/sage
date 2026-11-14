@@ -250,6 +250,19 @@ test("T1064 security: hostile Markdown and hostile logbook text render harmless:
   assert.equal(read(w, "T3", "page", "retry.svg"), null, "the reader opens Markdown only");
 });
 
+test("T1064 security: a link with an encoded, doubly encoded or mixed-case scheme, or a scheme split by whitespace or a control character, is refused like any outside link", t => {
+  const w = world(t), hex = n => `%${n.toString(16).toUpperCase().padStart(2, "0")}`;
+  const bad = ["https%3A//x/../../../../../../pages/sample-app-abc123/T3/proto.html?scripts=1", "https%3a//x/../../app/task/abc?any=query", "https%253A//x/../../pages/sample-app-abc123/T3/proto.html",
+    "HtTpS%3A//x/../proto.html", "hTTps%3a//x/..", "javascript%3Aalert(1)", "JaVaScRiPt%3aalert(1)", "javascript%253Aalert(1)", "javascript%25253Aalert(1)",
+    "<java\tscript:alert(1)>", "< javascript:alert(1)>", "<\thttps%3A//x/../proto.html>", "%20https%3A//x/../proto.html",
+    ...Array.from({ length: 32 }, (_, n) => [`java${hex(n)}script:alert(1)`, `${hex(n)}javascript:alert(1)`, `${hex(n)}https%3A//x/../proto.html`, `https%3A${hex(n)}//x/../proto.html`, `https:${hex(n)}//x/../proto.html`]).flat()];
+  writeFileSync(join(w.pages, "T3", "encoded.md"), ["# Encoded links", "", "- [ok-https](https://example.com/a)", "- [ok-page](notes.md)", ...bad.map((url, i) => `- [bad-${i}](${url})`), ""].join("\n"));
+  const article = /<article class="md">([\s\S]*?)<\/article>/.exec(read(w, "T3", "page", "encoded.md").html)[1];
+  assert.deepEqual([...article.matchAll(/<a href="[^"]*">([^<]*)<\/a>/g)].map(match => match[1]), ["ok-https", "ok-page"], "only the true https link and the page link open");
+  const off = new Set([...article.matchAll(/<span class="off"[^>]*>([^<]*)<\/span>/g)].map(match => match[1]));
+  assert.deepEqual(bad.map((url, i) => `bad-${i}`).filter(label => !off.has(label) && !article.includes(`[${label}](`)), [], "each encoded form shows as a refused link or as plain text");
+});
+
 async function freePort() {
   const socket = createServer();
   await new Promise((accept, reject) => { socket.once("error", reject); socket.listen(0, "127.0.0.1", accept); });

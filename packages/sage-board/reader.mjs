@@ -194,7 +194,7 @@ export function readerPage({ model, configured, url, origin, render }) {
     href: raw => {
       let url;
       try { url = decodeURIComponent(raw); } catch { return null; }
-      if (/^https:\/\//i.test(url)) return /[\s"<>\\]/.test(url) ? null : raw;
+      if (/^https:\/\//i.test(raw)) return /[\s\x00-\x1f"<>\\]/.test(url) ? null : raw;
       if (/[\\\x00-\x1f]/.test(url)) return null;
       const [pathPart, fragment] = url.split("#"), path = pathPart.split("?")[0];
       if (!path) return fragment ? `#h-${fragment.toLowerCase().replace(/[^\p{L}\p{N}]+/gu, "-")}` : null;
