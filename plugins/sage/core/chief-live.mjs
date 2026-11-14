@@ -1,11 +1,12 @@
 import { randomUUID } from "node:crypto";
-import { mkdirSync, renameSync, rmSync, writeFileSync } from "node:fs";
+import { lstatSync, mkdirSync, renameSync, rmSync, writeFileSync } from "node:fs";
 import { basename, isAbsolute, join } from "node:path";
 import { CHIEF } from "./chiefs.mjs";
 import { nameProblem } from "./logbook-fields.mjs";
 
 export const BEAT_MS = 60_000;
 export const STOPPED_MS = 30 * 60_000;
+export const SKEW_MS = 5 * 60_000;
 export const NAMES_FILE = "chief-names.json";
 export const LIVE_FOLDER = "live";
 
@@ -15,12 +16,14 @@ export function chiefBeat({ last, mode, now, project, native, provider, tool, en
   try {
     const { dir, shared, row } = tool.locate(project, env);
     if (shared) {
-      const chief = tool.chiefFor(project, native, env), file = join(dir, LIVE_FOLDER, `${chief}.json`), temp = `${file}.${randomUUID()}`;
-      mkdirSync(join(dir, LIVE_FOLDER), { recursive: true });
-      try {
-        writeFileSync(temp, `${JSON.stringify({ provider, checkout: row.root, ...mode, at: new Date(now).toISOString() })}\n`, { flag: "wx" });
-        renameSync(temp, file);
-      } finally { rmSync(temp, { force: true }); }
+      const chief = tool.chiefFor(project, native, env), live = join(dir, LIVE_FOLDER), file = join(live, `${chief}.json`), temp = `${file}.${randomUUID()}`;
+      try { mkdirSync(live); } catch (error) { if (error.code !== "EEXIST") throw error; }
+      if (lstatSync(live).isDirectory()) {
+        try {
+          writeFileSync(temp, `${JSON.stringify({ provider, checkout: row.root, ...mode, at: new Date(now).toISOString() })}\n`, { flag: "wx" });
+          renameSync(temp, file);
+        } finally { rmSync(temp, { force: true }); }
+      }
     }
   } catch {}
   return { ...mode, at: now };
@@ -35,9 +38,12 @@ export function liveRecord(data) {
 
 export function chiefNames(data) {
   if (!data || typeof data !== "object" || Array.isArray(data)) throw new Error("not a JSON object");
-  const bad = Object.entries(data).find(([id, name]) => !CHIEF.test(id) || nameProblem(name));
-  if (bad) throw new Error(`the name of ${CHIEF.test(bad[0]) ? bad[0] : "a key that is no chief id"} is not valid`);
-  return data;
+  const names = {}, bad = [];
+  for (const [id, name] of Object.entries(data)) {
+    if (CHIEF.test(id) && !nameProblem(name)) names[id] = name;
+    else bad.push(`the name of ${CHIEF.test(id) ? id : "a key that is no chief id"} is not valid`);
+  }
+  return { names, bad };
 }
 
 const title = (text) => `${text.charAt(0).toUpperCase()}${text.slice(1)}`;
@@ -48,7 +54,8 @@ export function defaultChiefName(row, live) {
 
 export function boardChiefs({ rows, live = {}, names = {}, runs = [], now }) {
   return rows.map((row) => {
-    const beat = live[row.id] ?? null, heartbeat = beat?.at ?? null, running = runs.filter((run) => run.chief === row.id && run.status === "running").length;
+    const beat = live[row.id] ?? null, heartbeat = beat?.at != null && beat.at - now <= SKEW_MS ? beat.at : null;
+    const running = runs.filter((run) => run.chief === row.id && run.status === "running" && !run.clock?.stale).length;
     return {
       id: row.id, provider: row.provider, name: names[row.id] ?? defaultChiefName(row, beat), named: Object.hasOwn(names, row.id), startedAt: utc(row.at) ? new Date(row.at).toISOString() : null,
       checkout: beat?.checkout ?? null, sageMode: beat?.sageMode ?? null, autopilot: beat?.autopilot ?? null, heartbeat: heartbeat === null ? null : new Date(heartbeat).toISOString(), running,

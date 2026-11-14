@@ -1269,10 +1269,7 @@ if (process.argv[1] && realpathSync(process.argv[1]) === fileURLToPath(import.me
       }
     }
     if (!state || typeof state !== "object" || Array.isArray(state)) state = {};
-    const before = JSON.stringify(state);
-    const output = handle(input, state, slotsFor(join(stateDir(), "slots"), session, Date.now(), input.session_id ?? null));
-    beat(input, state);
-    if (JSON.stringify(state) !== before) {
+    const keep = () => {
       mkdirSync(stateDir(), { recursive: true });
       const tmp = `${file}.${process.pid}`, save = () => writeFileSync(tmp, JSON.stringify(state), { flag: "wx" });
       try { save(); } catch (error) {
@@ -1283,8 +1280,14 @@ if (process.argv[1] && realpathSync(process.argv[1]) === fileURLToPath(import.me
         save();
       }
       renameSync(tmp, file);
-    }
+    };
+    const before = JSON.stringify(state);
+    const output = handle(input, state, slotsFor(join(stateDir(), "slots"), session, Date.now(), input.session_id ?? null));
+    const handled = JSON.stringify(state);
+    if (handled !== before) keep();
     if (output) process.stdout.write(JSON.stringify(output));
+    beat(input, state);
+    if (JSON.stringify(state) !== handled) try { keep(); } catch {}
   } catch (e) {
     let commands;
     try { commands = commandFields(input?.tool_input ?? {}); } catch {}

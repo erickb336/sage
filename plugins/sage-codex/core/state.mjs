@@ -2794,7 +2794,11 @@ function act(cmd, pos, opt, dir, env, skip, project) {
       const name = more.join(" ").normalize("NFC"), why = name && nameProblem(name), file = join(dir, NAMES_FILE);
       if (why) refuse(`the name "${visible(name)}" ${why}. Nothing changed.`);
       let names;
-      try { names = chiefNames(JSON.parse(readRegular(file, { link: false, max: 1 << 20 }) ?? "{}")); }
+      try {
+        const read = chiefNames(JSON.parse(readRegular(file, { link: false, max: 1 << 20 }) ?? "{}"));
+        if (read.bad.length) throw new Error(read.bad.join("; "));
+        names = read.names;
+      }
       catch (error) { refuse(`${file} is damaged (${error.message}), so sage cannot change a name. Nothing changed. Ask the owner to fix or remove it.`); }
       const rest = Object.fromEntries(Object.entries(names).filter(([key]) => key !== id));
       swap(file, `${JSON.stringify(name ? { ...rest, [id]: name } : rest, null, 2)}\n`);

@@ -197,8 +197,11 @@ function readLogbook(directory, project, budget, { now, bound, chiefs = true, du
         } catch (error) { project.warnings.push(`${LIVE_FOLDER}/${id}.json: ${error.code ?? error.message}`); }
       }
     } catch (error) { project.warnings.push(`${LIVE_FOLDER}: ${error.code ?? error.message}`); }
-    try { project.chiefNames = chiefNames(parseJson(regular(join(directory, NAMES_FILE), budget))); }
-    catch (error) { if (error.code !== "ENOENT") project.warnings.push(`${NAMES_FILE}: ${error.code ?? error.message}`); }
+    try {
+      const { names, bad } = chiefNames(parseJson(regular(join(directory, NAMES_FILE), budget)));
+      project.chiefNames = names;
+      project.warnings.push(...bad.map(problem => `${NAMES_FILE}: ${problem}`));
+    } catch (error) { if (error.code !== "ENOENT") project.warnings.push(`${NAMES_FILE}: ${error.code ?? error.message}`); }
   }
   try { project.observations = validateObservations(parseJson(regular(join(directory, "observations.json"), budget)), { now }); }
   catch (error) {

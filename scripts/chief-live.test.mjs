@@ -1,14 +1,14 @@
 import "./test-env.mjs";
 import assert from "node:assert/strict";
 import { execFileSync, spawnSync } from "node:child_process";
-import { chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, statSync, writeFileSync } from "node:fs";
+import { chmodSync, existsSync, lstatSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, realpathSync, rmSync, statSync, symlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { basename, join } from "node:path";
 import { test } from "node:test";
 import { fileURLToPath, pathToFileURL } from "node:url";
 import * as claude from "../plugins/sage/skills/sage/sage.mjs";
 import { tool as codex } from "../plugins/sage-codex/skills/sage/sage.mjs";
-import { chiefBeat } from "../plugins/sage/core/chief-live.mjs";
+import { boardChiefs, chiefBeat } from "../plugins/sage/core/chief-live.mjs";
 import { chiefsWhole } from "../plugins/sage/core/chiefs.mjs";
 import { readBoardSources } from "../plugins/sage/core/board-reader.mjs";
 import { buildBoardModel } from "../plugins/sage/core/board-model.mjs";
@@ -41,6 +41,16 @@ function linked(t) {
   return { ...w, dir, live: (id) => join(dir, "live", `${id}.json`), chiefs: () => readFileSync(join(dir, "chiefs.tsv"), "utf8") };
 }
 const json = (file) => JSON.parse(readFileSync(file, "utf8"));
+function table(w, name, rows) {
+  const cols = [...new Set([...readFileSync(join(w.dir, `${name}.tsv`), "utf8").split("\n")[0].split("\t"), "chief"])];
+  writeFileSync(join(w.dir, `${name}.tsv`), [cols, ...rows.map((row) => cols.map((c) => row[c] ?? ""))].map((line) => line.join("\t")).join("\n") + "\n");
+}
+const task = (id, chief) => ({ id, title: `task ${id}`, size: "small", route: "build", state: "building", round: "0", chief });
+const run = (id, taskId, chief, started) => ({ id, task: taskId, role: "implementer", round: "0", status: "running", started, chief });
+function boardOf(w, now) {
+  const model = buildBoardModel(readBoardSources([{ id: "shared", path: w.env.SAGE_SHARED_HOME, label: "shared" }], { now }), { now: new Date(now).toISOString() });
+  return { model, project: model.projects.find((p) => p.books.includes(`shared/${basename(w.dir)}`)) };
+}
 
 function claudeEvent(w, event) {
   const r = spawnSync(process.execPath, [CLAUDE_HOOK], { input: JSON.stringify({ session_id: "claude-1", cwd: w.project, ...event }), env: w.env, encoding: "utf8", timeout: 60_000 });
@@ -134,13 +144,113 @@ test("chiefBeat: a beat is due after a minute, or at once on a change, and never
   assert.deepEqual([json(w.live("C1")).at, json(w.live("C1")).autopilot], ["2026-11-13T10:01:00.001Z", true], "due at once on a change");
 });
 
-test("chiefBeat: a failed write never throws, and the hook still answers", (t) => {
+const agentCall = (w) => claudeEvent(w, { hook_event_name: "PreToolUse", tool_name: "Agent", tool_input: { subagent_type: "Explore", description: "find", prompt: "find x" } });
+function beatDue(w) {
+  const file = join(w.env.SAGE_HOOKS_STATE, "claude-1.json"), state = json(file);
+  writeFileSync(file, JSON.stringify({ ...state, live: { ...state.live, at: 0 } }));
+}
+
+test("a failed beat in a sage mode session never throws, and the hook still allows the call", (t) => {
   const w = linked(t);
-  writeFileSync(join(w.dir, "live"), "a file where the folder should be");
-  const next = chiefBeat({ last: undefined, mode: { sageMode: true, autopilot: false }, now: Date.now(), project: w.project, native: "s", provider: "claude", tool: claude, env: w.env });
-  assert.equal(next.sageMode, true, "the beat is noted, so the hook retries after a minute and not on each event");
-  const out = claudeEvent(w, { hook_event_name: "PreToolUse", tool_name: "Read", tool_input: { file_path: join(w.project, "x") } });
-  assert.notEqual(out?.hookSpecificOutput?.permissionDecision, "deny", JSON.stringify(out));
+  const writable = (mode) => chmodSync(join(w.dir, "live"), mode);
+  claudeSay(w, "sage mode");
+  const first = readFileSync(w.live("C1"), "utf8");
+  assert.equal(agentCall(w), undefined, "a chief in sage mode may start an Explore agent");
+  writable(0o500);
+  try {
+    const next = chiefBeat({ last: undefined, mode: { sageMode: true, autopilot: false }, now: Date.now(), project: w.project, native: "claude-1", provider: "claude", tool: claude, env: w.env });
+    assert.equal(next.sageMode, true, "the beat is noted, so the hook retries after a minute and not on each event");
+    beatDue(w);
+    assert.equal(agentCall(w), undefined, "the beat was due and failed, and the hook still allows the call with no second answer");
+  } finally { writable(0o700); }
+  assert.equal(readFileSync(w.live("C1"), "utf8"), first, "the failed beat changed nothing");
+  assert.ok(json(join(w.env.SAGE_HOOKS_STATE, "claude-1.json")).live.at > 0, "the hook noted the failed beat");
+});
+
+test("the Claude hook prints its answer before the beat, so a beat that never returns loses no deny", (t) => {
+  const w = linked(t);
+  claudeSay(w, "sage mode");
+  beatDue(w);
+  const preload = join(w.base, "beat-never-returns.mjs");
+  writeFileSync(preload, [
+    'import fs from "node:fs"; import { syncBuiltinESMExports } from "node:module";',
+    "const write = fs.writeFileSync;",
+    'fs.writeFileSync = function (path, ...rest) { if (String(path).includes("/live/C")) process.exit(0); return write.call(this, path, ...rest); };',
+    "syncBuiltinESMExports();",
+  ].join("\n"));
+  const out = claudeEvent({ ...w, env: { ...w.env, NODE_OPTIONS: `--import=${pathToFileURL(preload).href}` } }, { hook_event_name: "PreToolUse", tool_name: "Edit", tool_input: { file_path: join(w.project, "x"), old_string: "a", new_string: "b" } });
+  assert.equal(out?.hookSpecificOutput?.permissionDecision, "deny", "a chief in sage mode changes no files, and the deny is out before the beat");
+});
+
+test("a live folder that is a link gets no write, and the hook still allows the call", (t) => {
+  const w = linked(t);
+  const elsewhere = join(w.base, "elsewhere");
+  mkdirSync(elsewhere);
+  symlinkSync(elsewhere, join(w.dir, "live"));
+  claudeSay(w, "sage mode");
+  assert.equal(agentCall(w), undefined);
+  assert.equal(w.chiefs().trim().split("\n").length, 2, "sage mode still registers the chief");
+  assert.deepEqual(readdirSync(elsewhere), [], "the beat does not follow the link");
+  const next = chiefBeat({ last: undefined, mode: { sageMode: true, autopilot: false }, now: Date.now(), project: w.project, native: "claude-1", provider: "claude", tool: claude, env: w.env });
+  assert.equal(next.sageMode, true);
+  assert.deepEqual(readdirSync(elsewhere), []);
+  assert.ok(lstatSync(join(w.dir, "live")).isSymbolicLink(), "the link stays as it was");
+});
+
+test("boardChiefs: a chief stops when its heartbeat is over 30 minutes old: at 30 minutes exactly it has not", () => {
+  const beat = Date.parse("2026-11-13T10:00:00.000Z");
+  const stopped = (now) => boardChiefs({ rows: [{ id: "C1", provider: "claude", at: "2026-11-13T09:00:00.000Z" }], live: { C1: { checkout: null, sageMode: true, autopilot: false, at: beat } }, now })[0].stopped;
+  assert.equal(stopped(beat + 30 * MINUTE), false);
+  assert.equal(stopped(beat + 30 * MINUTE + 1), true);
+});
+
+test("the board model: a run that the board shows as stale keeps no chief from stopped, and a fresh run does", (t) => {
+  const w = linked(t);
+  for (const session of ["a", "b", "c"]) claude.chiefFor(w.project, session, w.env);
+  const now = Date.parse("2026-11-13T12:00:00.000Z"), iso = (ms) => new Date(ms).toISOString(), DAY = 24 * 60 * MINUTE;
+  mkdirSync(join(w.dir, "live"));
+  const live = (id, ago) => writeFileSync(w.live(id), JSON.stringify({ provider: "claude", checkout: w.project, sageMode: true, autopilot: false, at: iso(now - ago) }));
+  live("C1", 10 * DAY);
+  live("C2", 3 * DAY);
+  live("C3", 3 * DAY);
+  table(w, "tasks", [task("T1", "C1"), task("T2", "C2"), task("T3", "C3")]);
+  table(w, "runs", [run("R1", "T1", "C1", iso(now - 10 * DAY)), run("R2", "T2", "C2", iso(now - 3 * DAY)), run("R3", "T3", "C3", iso(now - 10 * MINUTE))]);
+  const { model, project } = boardOf(w, now);
+  assert.deepEqual(project.chiefs.map(({ id, running, stopped }) => ({ id, running, stopped })), [
+    { id: "C1", running: 0, stopped: true },
+    { id: "C2", running: 0, stopped: true },
+    { id: "C3", running: 1, stopped: false },
+  ]);
+  const card = (id) => model.tasks.find((one) => one.id === id);
+  assert.deepEqual(["T1", "T2", "T3"].map((id) => card(id).agents.map((agent) => agent.stale)), [[true], [true], [false]], "the board's own clock agrees");
+  assert.ok(card("T1").reasons.some((reason) => reason.kind === "chief-unknown"), "the card says that C1 may have stopped, and the chief line agrees");
+});
+
+test("the board model: a heartbeat more than 5 minutes in the future is unknown, never fresh", (t) => {
+  const w = linked(t);
+  for (const session of ["a", "b"]) claude.chiefFor(w.project, session, w.env);
+  const now = Date.parse("2026-11-13T12:00:00.000Z");
+  mkdirSync(join(w.dir, "live"));
+  const live = (id, at) => writeFileSync(w.live(id), JSON.stringify({ provider: "claude", checkout: w.project, sageMode: true, autopilot: false, at }));
+  live("C1", "2099-01-01T00:00:00.000Z");
+  live("C2", new Date(now + 2 * MINUTE).toISOString());
+  assert.deepEqual(boardOf(w, now).project.chiefs.map(({ id, heartbeat, stopped }) => ({ id, heartbeat, stopped })), [
+    { id: "C1", heartbeat: null, stopped: null },
+    { id: "C2", heartbeat: new Date(now + 2 * MINUTE).toISOString(), stopped: false },
+  ]);
+});
+
+test("the board model: one bad entry in chief-names.json hides only that name, with a warning for it", (t) => {
+  const w = linked(t);
+  for (const session of ["a", "b"]) claude.chiefFor(w.project, session, w.env);
+  writeFileSync(join(w.dir, "chief-names.json"), JSON.stringify({ C1: "Main desk", C2: 5 }));
+  const { model, project } = boardOf(w, Date.now());
+  assert.deepEqual(project.chiefs.map(({ id, name, named }) => ({ id, named, name: named ? name : "default" })), [
+    { id: "C1", named: true, name: "Main desk" },
+    { id: "C2", named: false, name: "default" },
+  ]);
+  assert.deepEqual(model.warnings.map((one) => one.message), ["chief-names.json: the name of C2 is not valid"]);
+  assert.throws(() => claude.sage(["chief", "name", "C1", "Front", "--project", w.project], w.env), /chief-names\.json is damaged \(the name of C2 is not valid\)/, "the command never drops the bad entry by itself");
 });
 
 test("chief name sets, changes and clears a name with no chief, and refuses a bad name, an unknown chief and a separate logbook", (t) => {
@@ -178,10 +288,9 @@ test("the board model lists each chief with provider, name, sage mode, autopilot
   live("C3", 40);
   writeFileSync(w.live("C5"), "{ damaged");
   writeFileSync(join(w.dir, "chief-names.json"), JSON.stringify({ C1: "Main" }));
-  const cols = [...new Set([...readFileSync(join(w.dir, "runs.tsv"), "utf8").split("\n")[0].split("\t"), "chief"])];
-  writeFileSync(join(w.dir, "runs.tsv"), `${cols.join("\t")}\n${cols.map((c) => ({ id: "R1", task: "T1", role: "qa", round: "0", status: "running", chief: "C3" })[c] ?? "").join("\t")}\n`);
-  const read = readBoardSources([{ id: "shared", path: w.env.SAGE_SHARED_HOME, label: "shared" }], { now });
-  const model = buildBoardModel(read, { now: iso(now) }), project = model.projects.find((p) => p.books.includes(`shared/${basename(w.dir)}`));
+  table(w, "tasks", [task("T1", "C3")]);
+  table(w, "runs", [run("R1", "T1", "C3", iso(now - 10 * MINUTE))]);
+  const { model, project } = boardOf(w, now);
   const pick = ({ id, provider, name, named, sageMode, autopilot, heartbeat, stopped }) => ({ id, provider, name, named, sageMode, autopilot, heartbeat, stopped });
   const folder = basename(realpathSync(w.project));
   assert.deepEqual(project.chiefs.map(pick), [
