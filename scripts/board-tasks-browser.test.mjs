@@ -77,7 +77,7 @@ test("T1061: J2 and J3 are within two clicks of the Overview, and a Needs you ro
 
   clicks = 0;
   await page.goto(`${base}/app/`);
-  await click(page.getByRole("link", { name: "Can a viewer copy a shared list into their own lists?" }));
+  await click(page.locator(".needs .meta").getByRole("link", { name: "T10 · Sample sync design" }));
   await panelTitle(page).filter({ hasText: "Sample sync design" }).waitFor();
   assert.equal(clicks, 1);
   await page.getByRole("tab", { name: /Decisions/ }).click();
@@ -99,7 +99,7 @@ test("T1061: the groups and filters work, and ended tasks stay collapsed until a
   assert.match(await row(page, "T40").textContent(), /may conflict · T3/);
   assert.match(await row(page, "T3").textContent(), /may conflict · T40/);
 
-  await page.getByRole("button", { name: "Chief" }).click();
+  await page.getByRole("button", { name: "Chief", exact: true }).click();
   assert.deepEqual(await groupTitles(page), ["C1 · Claude", "C2 · Codex"]);
   await page.getByRole("combobox", { name: "Provider", exact: true }).selectOption("Codex");
   assert.deepEqual(await groupTitles(page), ["C2 · Codex"]);
@@ -207,7 +207,7 @@ function insideItsCellAndLeftOfThePanel(element) {
 
 test("T1061 (F-T1061-7, F-T1061-10): the may-conflict flag and the chief tag show in full, with the panel closed and open, at 1440 and 1280 px", async t => {
   const { page, base } = await open(t, { edge: true }, "/app/#tasks");
-  const cells = [["T3", ".badge.warn", "may conflict · T40"], ["T40", ".badge.warn", "may conflict · T3"], ["T3", ".chief", "C2 · Codex"], ["T40", ".chief", "C1 · Claude (stopped)"]];
+  const cells = [["T3", ".badge.warn", "may conflict · T40"], ["T40", ".badge.warn", "may conflict · T3"], ["T3", ".chief", "C2 · Codex"], ["T40", ".chief", "C1 · Claude (waits for you)"]];
   for (const width of [1440, 1280]) {
     await page.setViewportSize({ width, height: 1000 });
     for (const panel of [false, true]) {

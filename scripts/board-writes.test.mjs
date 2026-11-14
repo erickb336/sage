@@ -174,6 +174,8 @@ test("every forged write is refused before it reaches the logbook: a plain curl,
 test("the owner answers, undoes and answers again from the board; a changed question and an earlier chat answer are refused, and each refusal names why", async t => {
   const w = await board(t), p = await pair(w);
   const open = await needs(w);
+  assert.match(open.tasks.find(task => task.id === "T1").addedAt, /^\d{4}-\d\d-\d\dT/, "task add keeps the time when the task was added");
+  assert.equal(open.counts.added, 1, "New tasks has a basis");
   const need = open.needs.find(item => item.gate === "G1");
   assert.deepEqual([need.logbook, need.options, need.owner, typeof need.digest], [w.logbook, ["yes", "no"], "C1", "string"]);
 

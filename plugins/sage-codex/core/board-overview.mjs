@@ -57,7 +57,7 @@ const milestoneNeed = need => ({
   askedAt: null,
 });
 
-const chiefTag = (task, chiefs) => task.owner ? { id: task.owner.id, provider: title(task.owner.provider) || null, stopped: chiefs.find(chief => chief.key === `${task.project}/${task.owner.id}`)?.stopped ?? null }
+const chiefTag = (task, chiefs, chief = task.owner && chiefs.find(item => item.key === `${task.project}/${task.owner.id}`)) => task.owner ? { id: task.owner.id, provider: title(task.owner.provider) || null, stopped: chief?.stopped ?? null, waits: !!chief?.waitsForOwner }
   : task.old ? { id: null, provider: title(task.old.provider), stopped: null } : task.shared ? null : { id: null, provider: title(task.providerStandIn), stopped: null };
 const QUIET = ["done", "wait"];
 const stepOf = task => task.loop?.steps.find(step => !QUIET.includes(step.status)) ?? null;

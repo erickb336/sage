@@ -349,7 +349,7 @@ export function createBoardServer({ sources, port = BOARD_PORT, id, clock = () =
     const answered = jsonCell(gate.answered), picked = jsonCell(gate.picked), need = model.needsOwner.flatMap(item => item.reasons).find(reason => reason.key === key);
     return { key, id, logbook, task: { key: task.key, id: task.id, title: task.title }, project: task.projectName, question: String(gate.question ?? ""), options: String(gate.options ?? "").split("|").map(option => option.trim()).filter(Boolean),
       recommendation: gate.recommendation || null, default: gate.default || null, at: gate.at || null, answer: gate.answer || null, answered: answered && { at: String(answered.at ?? ""), via: String(answered.via ?? ""), answer: answered.answer == null ? null : String(answered.answer) },
-      picked: picked && { at: String(picked.at ?? ""), chief: String(picked.chief ?? "") }, digest: need?.digest ?? null, owner: need?.owner ?? null, takeover: !!need?.replace, text: need?.text ?? null,
+      picked: picked && { at: String(picked.at ?? ""), chief: String(picked.chief ?? "") }, digest: need?.digest ?? null, owner: (gate.kind === "replace" && gate.chief) || task.owner?.id || gate.chief || null, takeover: gate.kind === "replace", text: need?.text ?? null,
       message: kept?.message?.kind === "question" ? kept.message : null };
   }
 

@@ -86,10 +86,10 @@ test("T1003: a milestone goes into one release, moves to another one with a deci
   assert.equal(s.ok("milestone", "M1", "set", "release=1.1"), "M1 · release 1.1 · name: Sage feel");
   assert.equal(s.ok("milestone", "M1", "set", "release=none"), "M1 · release none · name: Sage feel");
   assert.equal(s.ok("milestone", "M1", "set", "release=1.1"), "M1 · release 1.1 · name: Sage feel");
-  assert.deepEqual(rowsOf(s.dir, "decisions").filter((d) => d.why === "milestone set").map((d) => d.decision), ["M1 release none → 1.0", "M1 release 1.0 → 1.1", "M1 release 1.1 → none", "M1 release none → 1.1"]);
-  const decisions = rowsOf(s.dir, "decisions").length;
+  assert.deepEqual(rowsOf(s.dir, "decisions").filter((d) => d.decision !== "task added").filter((d) => d.why === "milestone set").map((d) => d.decision), ["M1 release none → 1.0", "M1 release 1.0 → 1.1", "M1 release 1.1 → none", "M1 release none → 1.1"]);
+  const decisions = rowsOf(s.dir, "decisions").filter((d) => d.decision !== "task added").length;
   s.ok("milestone", "M1", "set", "release=1.1");
-  assert.equal(rowsOf(s.dir, "decisions").length, decisions, "a set to the same release writes no row");
+  assert.equal(rowsOf(s.dir, "decisions").filter((d) => d.decision !== "task added").length, decisions, "a set to the same release writes no row");
 });
 
 test("T1003: a milestone that is proposed again keeps its release, with no release row: after the owner's change, with a new pilot after approval, and at the end of a stopped proposal", () => {
@@ -99,7 +99,7 @@ test("T1003: a milestone that is proposed again keeps its release, with no relea
   s.ok("milestone", "M1", "set", "release=1.0");
   const kept = (path) => {
     assert.equal(rowsOf(s.dir, "milestones")[0].release, "1.0", path);
-    assert.deepEqual(rowsOf(s.dir, "decisions").filter((d) => /release/.test(d.decision)).map((d) => d.decision), ["M1 release none → 1.0"], `${path}: no release row`);
+    assert.deepEqual(rowsOf(s.dir, "decisions").filter((d) => d.decision !== "task added").filter((d) => /release/.test(d.decision)).map((d) => d.decision), ["M1 release none → 1.0"], `${path}: no release row`);
     assert.equal(s.levels()[0], "release 1.0 · in progress · 0 of 2 tasks done · milestones M1", path);
   };
   s.ok("gate", "answer", "G1", "--option", "2");
@@ -119,7 +119,7 @@ test("T1003: a release name in the form of a finding move does not move the id f
   s.ok("release", "add", "--name", name);
   s.ok("task", "T1", "set", `release=${name}`);
   s.ok("task", "T1", "set", "release=none");
-  assert.deepEqual(rowsOf(s.dir, "decisions").filter((d) => d.task === "T1").map((d) => d.decision).slice(-2), [`release none → ${name}`, `release ${name} → none`]);
+  assert.deepEqual(rowsOf(s.dir, "decisions").filter((d) => d.decision !== "task added").filter((d) => d.task === "T1").map((d) => d.decision).slice(-2), [`release none → ${name}`, `release ${name} → none`]);
   assert.match(s.ok("task", "add", "--title", "Sample task 2", "--size", "tiny", "--priority", "P3"), /^T2 framed /);
 });
 
@@ -129,7 +129,7 @@ test("T1003: a single task goes into a release; a task of a milestone is refused
   s.ok("release", "add", "--name", "Beta");
   s.ok("milestone", "propose", "--name", "Sage feel", "--goal", "A sample goal", "--pilot", "T1", "--tasks", "T2");
   assert.match(s.ok("task", "T3", "set", "release=beta"), /^T3 framed · small · round 0 · route build,code-review,qa · P2 · release Beta$/, "the release's own name, whatever the case");
-  assert.deepEqual(rowsOf(s.dir, "decisions").filter((d) => d.task === "T3").map((d) => [d.decision, d.why]), [["release none → Beta", "task set"]]);
+  assert.deepEqual(rowsOf(s.dir, "decisions").filter((d) => d.decision !== "task added").filter((d) => d.task === "T3").map((d) => [d.decision, d.why]), [["release none → Beta", "task set"]]);
   const before = snapshot(s.dir);
   assert.match(s.no("task", "T2", "set", "release=1.0"), /^sage: T2 is in M1, and a task of a milestone is in its milestone's release\. Set the release of M1 \(sage milestone M1 set release=<name>\), or take T2 out of M1 first \(sage task T2 set milestone=none\)\. Nothing changed\.$/);
   assert.match(s.no("task", "T3", "set", "release=1.0,Beta"), /^sage: T3 is in at most one release/);
@@ -139,11 +139,11 @@ test("T1003: a single task goes into a release; a task of a milestone is refused
   s.ok("milestone", "M1", "set", "release=1.0");
   assert.match(s.ok("task", "T3", "set", "milestone=M1"), / · leaves the release Beta: a task of M1 is in the release of M1/);
   assert.equal(rowsOf(s.dir, "tasks").find((t) => t.id === "T3").release, "");
-  assert.deepEqual(rowsOf(s.dir, "decisions").filter((d) => d.task === "T3").map((d) => d.decision).slice(-2), ["milestone none → M1", "release Beta → none"]);
+  assert.deepEqual(rowsOf(s.dir, "decisions").filter((d) => d.decision !== "task added").filter((d) => d.task === "T3").map((d) => d.decision).slice(-2), ["milestone none → M1", "release Beta → none"]);
   s.ok("task", "T4", "set", "release=Beta");
   s.ok("milestone", "propose", "--name", "Next steps", "--goal", "A sample goal", "--pilot", "T4", "--tasks", "none");
   assert.equal(rowsOf(s.dir, "tasks").find((t) => t.id === "T4").release, "");
-  assert.ok(rowsOf(s.dir, "decisions").some((d) => d.task === "T4" && d.decision === "release Beta → none" && /T4 joins M2/.test(d.why)));
+  assert.ok(rowsOf(s.dir, "decisions").filter((d) => d.decision !== "task added").some((d) => d.task === "T4" && d.decision === "release Beta → none" && /T4 joins M2/.test(d.why)));
   assert.deepEqual(s.levels().filter((l) => l.startsWith("release")), ["release 1.0 · not started · 0 of 3 tasks done · milestones M1", "release Beta · not started · 0 of 0 tasks done"]);
 });
 

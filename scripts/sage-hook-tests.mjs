@@ -2995,7 +2995,7 @@ test("T216: the board note's two commands pass the hook for the chief, as the no
   }
 });
 
-test("T229: the board config rule refuses the ordinary shapes, and allows repository paths and searches (table)", async () => {
+test("T229, T1059: the board config rule refuses the ordinary shapes, the board's state folder and board --pair, and allows repository paths and searches (table)", async () => {
   const { handle } = await import("../plugins/sage/hooks/sage-hook.mjs");
   const slots = { bind() {}, release() {}, drop() {}, touch() {}, reconcile() {} };
   const BOARD = fileURLToPath(new URL("../plugins/sage/board/cli.mjs", import.meta.url));
@@ -3005,8 +3005,10 @@ test("T229: the board config rule refuses the ordinary shapes, and allows reposi
   symlinkSync(config, join(dir, "plain-name.txt"));
   symlinkSync(join(home, ".config"), join(dir, "linked-config"));
   const CONFIG = /^sage: the board config rule \(T229\): no agent reads, copies or replaces the board config \(~\/\.config\/sage-board\/board\.json\), or lists, searches, copies or moves the board's folder or a folder that holds it/;
-  const OK = null, REPO = FEATURE;
+  const OK = null, REPO = FEATURE, PAIR = /^sage: the board pairing rule \(T1059\): no agent runs board --pair\./;
   const rows = [
+    ["cat ~/.config/sage-board/state/paired.json", CONFIG], [`head -c 9 ${folder}/state/pair-code.json`, CONFIG], ["ls ~/.config/sage-board/state", CONFIG], ["cp ~/.config/sage-board/state/seen.json /tmp/x", CONFIG],
+    [`node ${BOARD} board --pair`, PAIR], [`node ${BOARD} board --pair --config ${config}`, PAIR], ["npm run board -- --pair", PAIR], ["grep -n pair packages/sage-board/cli.mjs", OK],
     [`node ${BOARD} board --ensure`, OK], [`node ${BOARD} board --stop`, OK],
     ["ls ~/.config/sage-board", CONFIG], [`ls ${folder}/`, CONFIG], ["cp -R ~/.config/sage-board /tmp/copy", CONFIG], ["rg -n hash ~/.config/sage-board", CONFIG],
     [`A=x; node ${BOARD} board $A`, OK], [`node ${BOARD} board --ensure --config $C`, OK], [`node ${BOARD} board $(printf x)`, OK],
@@ -3052,6 +3054,7 @@ test("T229: the board config rule refuses the ordinary shapes, and allows reposi
     ["cat board.json", join(dir, "other", "sage-board"), OK], ["cat README.md", "packages/sage-board", OK],
   ];
   const files = [
+    [{ file_path: join(folder, "state", "paired.json") }, CONFIG], [{ file_path: "~/.config/sage-board/state/seen.json" }, CONFIG],
     [{ file_path: config }, CONFIG], [{ file_path: "~/.config/sage-board/board.json" }, CONFIG], [{ file_path: join(dir, "plain-name.txt") }, OK],
     [{ file_path: "board.json" }, CONFIG, folder], [{ file_path: "./x/../board.json" }, CONFIG, folder], [{ file_path: join(folder, ".board-0123456789ab.json") }, CONFIG],
     [{ file_path: join(dir, "linked-config", "sage-board", "board.json") }, OK], [{ file_path: "packages/sage-board/board.json" }, OK], [{ file_path: `${REPO}/README.md` }, OK],
