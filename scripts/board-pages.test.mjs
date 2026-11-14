@@ -9,7 +9,7 @@ import { connect, createServer } from "node:net";
 import { tmpdir } from "node:os";
 import { basename, dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
-import { createBoardServer, hashPassword } from "../packages/sage-board/server.mjs";
+import { createBoardServer } from "../packages/sage-board/server.mjs";
 import { SWITCH_SCRIPT } from "../packages/sage-core/message-page.mjs";
 import { renderMessage } from "../packages/sage-core/message-checks.mjs";
 import { pageUrl } from "../packages/sage-core/message.mjs";
@@ -19,7 +19,6 @@ const TOOL = join(HERE, "..", "plugins", "sage", "skills", "sage", "sage.mjs");
 const HEADERS = ["id title size risk route state branch pr round keys", "id task role round candidate branch status tokens report started ended", "task key round source severity summary triage reason status", "task pr sha kind cycle run at", "id task question options recommendation default answer at", "at task decision why"];
 const NAMES = ["tasks", "runs", "findings", "ledger", "gates", "decisions"];
 const LOGBOOK = "project-abcdef";
-const PASSWORD = "sample board pass 01", RECORD = await hashPassword(PASSWORD);
 const SWITCH = `<script>${SWITCH_SCRIPT}</script>`;
 
 async function freePort() {
@@ -76,7 +75,7 @@ async function fixture(t) {
   logbook(source, LOGBOOK);
   const root = sampleRoot(base), before = process.env.SAGE_WORKTREES;
   process.env.SAGE_WORKTREES = root;
-  const server = createBoardServer({ sources: [{ id: "sample", path: source, label: "Sample" }], password: RECORD, port, allowedHosts: ["board.example.test"] });
+  const server = createBoardServer({ sources: [{ id: "sample", path: source, label: "Sample" }], port });
   t.after(async () => { await server.close(); if (before === undefined) delete process.env.SAGE_WORKTREES; else process.env.SAGE_WORKTREES = before; rmSync(base, { recursive: true, force: true }); });
   await server.start();
   return { base, root, port, t1: join(root, LOGBOOK, "pages", "T1") };
@@ -290,22 +289,20 @@ test("a page whose folder flips between a link and a folder while the board chec
   assert.equal((await get(f, `/pages/${LOGBOOK}/T1/flip/notes.md`)).body, "decoy", "a real folder in the path");
 });
 
-test("T1010: a task page links the task's pages index with core's URL, on the Mac only, and only when the route serves the task's folder", async (t) => {
+test("T1010: a task page links the task's pages index with core's URL, and only when the route serves the task's folder", async (t) => {
   const f = await fixture(t);
   const taskPage = (id, options) => get(f, `/task/${Buffer.from(`sample/${LOGBOOK}/${id}`).toString("base64url")}`, options);
   const pagesHref = (body) => [...body.matchAll(/<a href="([^"]+)"[^>]*>Pages<\/a>/g)].map((m) => m[1]);
-  const authorization = `Basic ${Buffer.from(`sage:${PASSWORD}`).toString("base64")}`;
   const mac = await taskPage("T1");
   assert.equal(mac.status, 200);
   assert.deepEqual(pagesHref(mac.body), [pageUrl(LOGBOOK, "T1", "")]);
   const index = await get(f, new URL(pageUrl(LOGBOOK, "T1", "")).pathname);
   assert.equal(index.status, 200);
   assert.match(index.body, /<h1>Pages of T1<\/h1>/);
-  for (const options of [{ headers: { "X-Forwarded-For": "203.0.113.9", Authorization: authorization } }, { raw: { Host: "board.example.test", Authorization: authorization } }]) {
+  for (const options of [{ headers: { "X-Forwarded-For": "203.0.113.9" } }, { raw: { Host: "board.example.test" } }]) {
     const off = await taskPage("T1", options);
-    assert.equal(off.status, 200, JSON.stringify(options));
-    assert.match(off.body, /Sample task/);
-    assert.deepEqual(pagesHref(off.body), [], JSON.stringify(options));
+    assert.equal(off.status, 403, JSON.stringify(options));
+    assert.doesNotMatch(off.body, /Sample task/);
   }
   for (const id of ["T4", "T7"]) {
     const r = await taskPage(id);
@@ -317,13 +314,13 @@ test("T1010: a task page links the task's pages index with core's URL, on the Ma
 
 test("the pages route answers only on the Mac, only GET and HEAD, and only to the board's own pages or a person's click", async (t) => {
   const f = await fixture(t);
-  const page = `/pages/${LOGBOOK}/T1/research.html`, authorization = `Basic ${Buffer.from(`sage:${PASSWORD}`).toString("base64")}`;
+  const page = `/pages/${LOGBOOK}/T1/research.html`, authorization = `Basic ${Buffer.from("sage:sample board pass 01").toString("base64")}`;
   for (const headers of [{ "X-Forwarded-For": "203.0.113.9" }, { Forwarded: "for=203.0.113.9" }, { "X-Forwarded-For": "203.0.113.9", Authorization: authorization }]) {
     const r = await get(f, page, { headers });
     assert.equal(r.status, 404, JSON.stringify(headers));
     pageHeaders(r);
   }
-  assert.equal((await get(f, page, { raw: { Host: "board.example.test", Authorization: authorization } })).status, 404, "the tunnel's own host");
+  assert.equal((await get(f, page, { raw: { Host: "board.example.test", Authorization: authorization } })).status, 404, "another host, also with a sign-in header");
   assert.equal((await get(f, page, { raw: { Host: "evil.example" } })).status, 404, "a rebound name");
   for (const head of ["HTTP/1.0\r\n", `HTTP/1.1\r\nHost: 127.0.0.1:${f.port}\r\nHost: 127.0.0.1:${f.port}\r\n`]) assert.match(await raw(f, `GET ${page} ${head}\r\n`), /^HTTP\/1\.[01] 4\d\d /, head);
   assert.equal((await get(f, page)).status, 200);

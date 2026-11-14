@@ -15,7 +15,7 @@ test("HTML renders escaped initial cards and complete offline task sections befo
   for (const title of ["Where in the loop", "Brief", "Agent runs", "Evidence", "Findings", "Artifacts", "Latest decisions"]) assert.ok(initial.includes(`<h3>${title}`), title);
   assert.ok(!/src=|@import|url\(/.test(html));
   assert.ok(html.includes("prefers-reduced-motion"));
-  assert.ok(html.includes("max-width:700px"));
+  assert.ok(!/max-width:700px|pointer:coarse/.test(html), "T1053: no phone layout");
   const page = renderBoardHtml(data, { snapshot: false, taskKey: data.tasks[0].key });
   assert.ok(page.includes('<main class="page open"'));
   assert.throws(() => renderBoardHtml(data, { taskKey: "missing" }), RangeError);
@@ -125,10 +125,10 @@ test("T218: a task page opens by its anchor offline and at its route on the serv
   assert.ok(!page.includes('class="board"'));
 });
 
-test("T218: the phone layout puts needs-you columns first and hides empty ones", () => {
+test("T218, T1053: the columns keep their order, with no needs-you order of the old phone layout, and an empty column is marked", () => {
   const data = twoProjectModel(), html = renderBoardHtml(data, { snapshot: false });
-  assert.match(html, /@media \(max-width:700px\)\{[^}]*\{[^}]*\}[\s\S]*?\.col\.needs-col\{order:-1\}\.col\.empty-col\{display:none\}/);
-  assert.ok(html.includes('<section class="col needs-col" aria-label="In review" data-col="review" data-scroll="col-review">'));
+  assert.ok(!html.includes("needs-col"));
+  assert.ok(html.includes('<section class="col" aria-label="In review" data-col="review" data-scroll="col-review">'));
   assert.ok(html.includes('<section class="col empty-col" aria-label="Design" data-col="design" data-scroll="col-design">'));
   assert.ok(html.includes('<section class="col" aria-label="Backlog" data-col="backlog" data-scroll="col-backlog">'));
 });
@@ -418,11 +418,10 @@ test("T305 F-T305-6 and F-T305-12: a long project name ends in an ellipsis with 
     ["P0, highest priority|P0, highest priority", "P1, second priority|P1, second priority", "P2, third priority|P2, third priority", "P3, lowest priority|P3, lowest priority"]);
 });
 
-test("T305 F-T305-8: the list has a Close button that works by touch; on a phone or a touch screen it says Close", () => {
+test("T305 F-T305-8: the list has a Close button with its key", () => {
   const html = renderBoardHtml(providers(), { snapshot: false });
-  assert.ok(html.includes('<button type="button" class="closebtn" data-close aria-label="Close the project list"><span class="kbd">Esc</span><span class="tap">Close</span></button>'));
-  assert.ok(html.includes(" .closebtn{min-height:44px;min-width:44px;padding:0 10px;font-weight:600}.closebtn .kbd{display:none}.closebtn .tap{display:inline}"));
-  assert.ok(BOARD_ENHANCEMENT.includes("if(t.closest('[data-close]')){closeList(true);return}"), "a click (a tap) closes the list and gives the focus back");
+  assert.ok(html.includes('<button type="button" class="closebtn" data-close aria-label="Close the project list"><span class="kbd">Esc</span></button>'));
+  assert.ok(BOARD_ENHANCEMENT.includes("if(t.closest('[data-close]')){closeList(true);return}"), "a click closes the list and gives the focus back");
 });
 
 test("T305 F-T305-9: under a filter, the Needs you chip and each project's chip count the same tasks (the page carries this function)", () => {
@@ -702,7 +701,7 @@ test("T368: a milestone's page: goal and progress, what moves next, the tasks in
 test("T368: the task page shows its milestone with the progress, each wait with its state, and the tasks that wait for it", () => {
   const model = milestonesModel(), page = id => renderBoardHtml(model, { snapshot: false, taskKey: KEY(id) });
   const t13 = page("T13");
-  assert.ok(t13.includes(`<a class="back plink" href="/milestone/${B64(KEY("M1"))}" title="Codex support">◫ <span class="cn">Codex support</span><span class="pid">M1</span></a>`));
+  assert.ok(t13.includes(`<a class="back plink" href="/milestone/${B64(KEY("M1"))}" title="Codex support">◫ <span class="cn">Codex support</span></a>`));
   assert.ok(t13.includes(`<section><h3>Milestone</h3><p><a href="/milestone/${B64(KEY("M1"))}"><span aria-hidden="true">◫</span> Milestone 1: Codex support</a> · <span class="pstate stw-run"><span aria-hidden="true">▶</span> in progress</span></p>`), t13);
   assert.ok(t13.includes(`<h3>Waits for <span class="n">2</span></h3><ul class="vlist"><li class="v-wait"><span class="g" aria-hidden="true">⧗</span><a href="/task/${B64(KEY("T12"))}">T12</a> Sample T12 · <span class="faint">in progress: not met</span></li><li class="v-done"><span class="g" aria-hidden="true">✓</span><a href="/task/${B64(KEY("T1"))}">T1</a> Sample T1 · pilot · <span class="stw-done">done: met</span>`), t13);
   assert.ok(t13.includes('<b>Now:</b> Waits for T12 (in progress).</span></div><div class="nextline"><b>Next:</b> Starts when T12 merges.</div>'), t13);

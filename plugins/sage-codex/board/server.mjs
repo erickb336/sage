@@ -1,4 +1,4 @@
-import { createHash, randomBytes, scrypt, timingSafeEqual } from "node:crypto";
+import { createHash } from "node:crypto";
 import { lstatSync, readFileSync, readdirSync, watch } from "node:fs";
 import { createServer } from "node:http";
 import { dirname, isAbsolute, join, resolve, sep } from "node:path";
@@ -14,15 +14,6 @@ const TOO_LARGE = "The page that you opened is too large to show (over 8 MB), so
 const NO_STREAM = " This page does not update: reload the address to try again.";
 const own = (object, name) => Object.hasOwn(object, name);
 const SETTLE_READS = [250, 1000, 3000, 7000, 15000];
-
-function authority(value) {
-  if (typeof value !== "string" || value.length > 255 || !/^[a-zA-Z0-9.-]+(?::[1-9]\d{0,4})?$/.test(value)) throw new TypeError("invalid allowed board host");
-  const url = new URL(`https://${value}`);
-  const host = value.toLowerCase();
-  const declared = host.split(":")[0];
-  if (url.hostname !== declared || declared.split(".").some(label => !/^[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?$/.test(label)) || Number(url.port || 443) > 65535) throw new TypeError("invalid allowed board host");
-  return host;
-}
 
 function oneHeader(request, name) {
   const values = [];
@@ -84,30 +75,11 @@ function appPolicy(origin) {
   return `default-src 'none'; script-src ${origin}/app/; style-src ${origin}/app/; connect-src 'self'; img-src 'self'; base-uri 'none'; object-src 'none'; frame-ancestors 'none'; form-action 'none'`;
 }
 
-const b64 = /^[A-Za-z0-9_-]+$/;
-const derive = (password, { N, r, p, salt }) => new Promise((done, fail) => scrypt(password.normalize("NFC"), Buffer.from(salt, "base64url"), 32, { N, r, p, maxmem: 256 * N * r }, (error, key) => error ? fail(error) : done(key)));
-export function validPasswordRecord(record) {
-  const { scheme, N, r, p, salt, hash } = record ?? {};
-  return Boolean(record) && Object.keys(record).length === 6 && scheme === "scrypt" && Number.isSafeInteger(N) && N >= 16384 && N <= 1048576 && (N & (N - 1)) === 0 &&
-    Number.isSafeInteger(r) && r >= 8 && r <= 32 && Number.isSafeInteger(p) && p >= 1 && p <= 4 && typeof salt === "string" && b64.test(salt) && Buffer.from(salt, "base64url").length >= 16 &&
-    typeof hash === "string" && b64.test(hash) && Buffer.from(hash, "base64url").length === 32;
-}
-export async function hashPassword(password) {
-  const record = { scheme: "scrypt", N: 32768, r: 8, p: 1, salt: randomBytes(16).toString("base64url") };
-  return { ...record, hash: (await derive(password, record)).toString("base64url") };
-}
-export async function checkPassword(password, record) {
-  return validPasswordRecord(record) && timingSafeEqual(await derive(password, record), Buffer.from(record.hash, "base64url"));
-}
-
-const WRONG_PASSWORD_DELAY = 1000;
 const forwarded = name => name === "forwarded" || name.startsWith("x-forwarded-");
 
-const OFF = "Access from outside this Mac is off until the owner sets a board password on the Mac.";
-export function createBoardServer({ sources, password, port = BOARD_PORT, allowedHosts = [], id, clock = () => new Date().toISOString(), settleReads = SETTLE_READS, duringRead = null, providerRoots = [], app = loadBoardApp() } = {}) {
+export function createBoardServer({ sources, port = BOARD_PORT, id, clock = () => new Date().toISOString(), settleReads = SETTLE_READS, duringRead = null, providerRoots = [], app = loadBoardApp() } = {}) {
   if (!Number.isSafeInteger(port) || port < 1024 || port > 65535) throw new TypeError("board port must be an integer from 1024 through 65535");
   if (typeof clock !== "function") throw new TypeError("the board clock must be a function that gives an ISO time");
-  if (password !== undefined && !validPasswordRecord(password)) throw new TypeError("the board password must be a record from hashPassword");
   if (!Array.isArray(sources) || !sources.length || sources.length > 32) throw new TypeError("board needs 1 to 32 explicit sources");
   const ids = new Set();
   const configured = Array.from(sources, source => {
@@ -117,36 +89,12 @@ export function createBoardServer({ sources, password, port = BOARD_PORT, allowe
     return Object.freeze({ id: source.id, path: source.path, ...(own(source, "label") ? { label: source.label } : {}), ...(own(source, "provider") ? { provider: source.provider } : {}) });
   });
   const landing = landingRule(configured);
-  if (!Array.isArray(allowedHosts) || allowedHosts.length > 32) throw new TypeError("invalid allowed board hosts");
   if (id !== undefined && (typeof id !== "string" || !/^[a-f0-9]{16,64}$/.test(id))) throw new TypeError("the board id must be 16 to 64 lowercase hex characters");
   const local = new Set([`127.0.0.1:${port}`, `localhost:${port}`, `[::1]:${port}`]);
-  const hosts = new Set([...local, ...Array.from(allowedHosts, authority)]);
-  const origins = new Map([...hosts].map(host => [host, new URL(`${local.has(host) ? "http" : "https"}://${host}`).origin]));
-  let remembered = null;
-  let checking = false;
+  const origins = new Map([...local].map(host => [host, `http://${host}`]));
   let boardHeader = null;
   const watchers = new Map(), watchErrors = new Map(), clients = new Set();
   let model, overview, lastGood, revision = 0, refreshTimer, boundaryTimer, settleTimer, startTimer, startPromise, closePromise, closed = false;
-
-  async function authenticated(request) {
-    const value = oneHeader(request, "authorization");
-    if (typeof value !== "string" || value.length > 2048) return false;
-    const match = /^Basic ([A-Za-z0-9+/]+={0,2})$/.exec(value);
-    if (!match) return false;
-    const decoded = Buffer.from(match[1], "base64");
-    if (decoded.toString("base64") !== match[1]) return false;
-    const seen = digest(decoded);
-    if (remembered && timingSafeEqual(seen, remembered)) return true;
-    const text = decoded.toString("utf8"), colon = text.indexOf(":");
-    if (colon === -1 || text.slice(0, colon) !== "sage") return false;
-    if (checking) return "busy";
-    checking = true;
-    try {
-      if (await checkPassword(text.slice(colon + 1), password).catch(() => false)) { remembered = seen; return true; }
-      await new Promise(wake => setTimeout(wake, WRONG_PASSWORD_DELAY));
-      return false;
-    } finally { checking = false; }
-  }
 
   function onMac(request) {
     if (!["127.0.0.1", "::1", "::ffff:127.0.0.1"].includes(request.socket.remoteAddress) || !local.has(oneHeader(request, "host").toLowerCase())) return false;
@@ -156,7 +104,7 @@ export function createBoardServer({ sources, password, port = BOARD_PORT, allowe
 
   function browserBoundary(request) {
     const host = oneHeader(request, "host"), origin = oneHeader(request, "origin"), site = oneHeader(request, "sec-fetch-site");
-    return typeof host === "string" && hosts.has(host.toLowerCase()) &&
+    return typeof host === "string" && local.has(host.toLowerCase()) &&
       (origin === undefined || typeof origin === "string" && origin === origins.get(host.toLowerCase())) &&
       (site === undefined || ["none", "same-origin"].includes(site));
   }
@@ -304,19 +252,12 @@ export function createBoardServer({ sources, password, port = BOARD_PORT, allowe
     if (Number.isFinite(boundary)) { boundaryTimer = setTimeout(schedule, Math.min(boundary - now, 2_147_483_647)); boundaryTimer.unref(); }
   }
 
-  const server = createServer({ maxHeaderSize: 8192 }, async (request, response) => {
+  const server = createServer({ maxHeaderSize: 8192 }, (request, response) => {
     securityHeaders(response);
     if (pagesRequest(request.url)) return servePages(request, response, { onMac, model });
     const fail = (status, text) => { response.writeHead(status, { "Content-Type": "text/plain; charset=utf-8" }); response.end(request.method === "HEAD" ? undefined : `${text}\n`); };
-    if (!browserBoundary(request)) return fail(403, "This request is not permitted.");
-    const mac = onMac(request);
-    if (mac) { if (boardHeader) response.setHeader("X-Sage-Board", boardHeader); }
-    else if (!password) return fail(403, OFF);
-    else {
-      const signedIn = await authenticated(request);
-      if (signedIn === "busy") { response.setHeader("Retry-After", "1"); return fail(429, "Another sign-in is being checked. Try again in a second."); }
-      if (!signedIn) { response.setHeader("WWW-Authenticate", 'Basic realm="Sage board", charset="UTF-8"'); return fail(401, "Sign in to the Sage board."); }
-    }
+    if (!browserBoundary(request) || !onMac(request)) return fail(403, "This request is not permitted.");
+    if (boardHeader) response.setHeader("X-Sage-Board", boardHeader);
     if (!["GET", "HEAD"].includes(request.method)) { response.setHeader("Allow", "GET, HEAD"); return fail(405, "This method is not permitted."); }
     if (request.url === "/app" || request.url.startsWith("/app/")) return serveApp(request, response, fail);
     let selected = route(request.url);
@@ -336,12 +277,12 @@ export function createBoardServer({ sources, password, port = BOARD_PORT, allowe
       response.writeHead(200, { "Content-Type": "text/event-stream; charset=utf-8", "X-Accel-Buffering": "no" });
       if (request.method === "HEAD") return response.end();
       response.flushHeaders();
-      const client = { response, task: selected.task, agents: !!selected.agents, releases: !!selected.releases, milestones: !!selected.milestones, milestone: selected.milestone ?? null, paths: mac, blocked: false, pending: null, deadline: null, sent: null };
+      const client = { response, task: selected.task, agents: !!selected.agents, releases: !!selected.releases, milestones: !!selected.milestones, milestone: selected.milestone ?? null, paths: true, blocked: false, pending: null, deadline: null, sent: null };
       clients.add(client); response.once("close", () => removeClient(client)); publish(client);
       return;
     }
     try {
-      const { html } = pageFor(selected, mac);
+      const { html } = pageFor(selected, true);
       securityHeaders(response, html);
       response.writeHead(missing ? 404 : 200, { "Content-Type": "text/html; charset=utf-8", "Content-Length": Buffer.byteLength(html) });
       response.end(request.method === "HEAD" ? undefined : html);

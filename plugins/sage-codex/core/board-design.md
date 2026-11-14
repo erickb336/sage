@@ -68,7 +68,7 @@ This is the approved design for issue #74. The implementation is under review. A
 
 ## Experience
 
-The board shows six state columns, dark by default. Each card opens a task page. On a phone, columns with a task that needs the owner come first. The text board and task detail remain available without a server. A single-file HTML export keeps all task details in that file.
+The board shows six state columns, dark by default. Each card opens a task page. The text board and task detail remain available without a server. A single-file HTML export keeps all task details in that file.
 
 A task page shows the loop, brief, runs, evidence, findings, artifacts and decisions. Missing evidence says unknown. A recorded run and work inferred from a PR have separate counts. Two roots may contain the same task ID; each task keeps its source identity.
 
@@ -80,10 +80,10 @@ Abandoned tasks remain available through task lookup, outside the active columns
 - A separate provider-neutral board package owns the command, server, file watchers and optional login setup. It imports only the public core API.
 - The server listens only on 127.0.0.1. The default configurable port is 43123. A busy port causes a clear failure; the server never stops another process or changes ports silently.
 - A stable installed command supports optional per-user launchd startup. Provider cache changes must not replace the service.
-- A private HTTPS tunnel that adds X-Forwarded-For supplies phone access; Tailscale Serve is one example, and the code names no tunnel vendor. No public tunnel or LAN listener is used. On the Mac, a request needs no sign-in. Every other board, task and event request signs in with the owner's password, which the owner sets once in a terminal (T229); until then such a request gets 403. There is no random secret. Exact allowed hosts protect the browser boundary.
+- The board is for a desktop browser on this Mac only (T1053). It answers a request only when the request comes from loopback, names a loopback host at the board's port (`127.0.0.1`, `localhost` or `[::1]`), and has no forwarded header; every other request gets 403. The exact Host check also stops DNS rebinding. The read routes take only GET and HEAD. The board has no sign-in, no secret, and no phone or remote access.
 - The initial page contains its content without scripts. File events update an open page. Watch errors show stale data, not an empty board.
 
-Read-only access can still expose private briefs and reports. A private tailnet can include other readers. The owner's PE instruction permits authentication when the review finds a risk. The browser sign-in prompt still needs phone and event-stream verification.
+Read-only access can still expose private briefs and reports to any account or program on the Mac.
 
 ## Approved recorded-data choice
 
@@ -100,16 +100,16 @@ Alternative: keep existing fields and show unknown or inferred values. This pres
 | 1–2 | Provider-neutral multi-root data; no logbook writes, locks or provider calls; escaped agent text. |
 | 3–4 | One self-contained script-free export; exact six-column mapping; backlog PRs visible; seven-day Done window. |
 | 5–6 | Complete cards and evidence-backed cycles, agents and owner reasons; matching project filters and counts. |
-| 7–9 | Dark and light themes, AA contrast, reduced motion, phone order, numbered text board from the same data. |
+| 7–9 | Dark and light themes, AA contrast, reduced motion, numbered text board from the same data. |
 | 10–11 | Task detail in HTML and text; all views use one shared model with source-qualified task identities. |
 | 12–13 | Board/task-only service, no file browsing; event-driven updates, reconnects and explicit stale state. |
-| 14–15 | Configurable loopback port, one start command, optional login setup, private HTTPS phone access and stop instructions. |
+| 14–15 | Desktop only: a configurable loopback port, one start command, optional startup at login and stop instructions. No sign-in, and no phone or remote access. |
 | 16–17 | Server-independent chat views; every requested board, task and status phrase; owner-text-only parsing and provider capability disclosure. |
 
 Current board history writes, project-list initialization and Git-derived head checks cannot be reused in the new pure reader. Snapshot export is an explicit artifact write, separate from model reads and server operation.
 
 ## Verification limits
 
-The design reviews inspected source and official Node, Apple and Tailscale documentation. They did not install a service, change a tailnet, read private logbooks or verify live phone access. The sample pages use invented data. Static checks confirm no scripts or external assets in the new samples. The earlier sample file was not rendered because the browser tool refused local-file URLs. Separate browser tests now exercise the implemented renderer with invented data and blocked network access.
+The design reviews inspected source and official Node and Apple documentation. They did not install a service or read private logbooks. The sample pages use invented data. Static checks confirm no scripts or external assets in the new samples. The earlier sample file was not rendered because the browser tool refused local-file URLs. Separate browser tests now exercise the implemented renderer with invented data and blocked network access.
 
-Backend acceptance needs multi-root fixtures, exact-head changes, missing evidence, read-only spies, hostile text, server access checks, watcher replacement, script-free views and a real phone check. Local tests cover these behaviors; phone access and login startup remain unverified.
+Backend acceptance needs multi-root fixtures, exact-head changes, missing evidence, read-only spies, hostile text, server access checks, watcher replacement, and script-free views. Local tests cover these behaviors; login startup remains unverified.
