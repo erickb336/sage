@@ -1055,7 +1055,7 @@ for (const bad of ["{bad", "[]"]) test(`T1056: a damaged logbook config.json (${
   assert.notEqual(existsSync(join(w.shared, "config.json")) ? counts(w.shared)["cycles.small"] : undefined, 3, "the refused config write sets no other key either");
 });
 
-test("T1056: a Claude chief and a Codex chief of one project fill one agent limit and one lead limit, and the next run of either is refused", (t) => {
+test("T1056, T1057: a Claude chief and a Codex chief of one project fill one agent limit and one lead limit; the next lead is refused, and the next run of either waits in the queue", (t) => {
   const w = world(t);
   w.claude("link", "--separate");
   w.claude("config", "max_agents=3", "max_leads=1");
@@ -1065,11 +1065,10 @@ test("T1056: a Claude chief and a Codex chief of one project fill one agent limi
   assert.match(refusalOf(() => w.codex("run", "add", "T2", "--role", "lead")), /^the project has 1 running lead runs, the most it holds: R1 on T1\./, "the Claude lead fills the lead limit for the Codex chief");
   assert.match(w.codex("run", "add", "T2", "--role", "qa"), /^R2 /);
   assert.match(w.claude("run", "add", "T1", "--role", "qa"), /^R3 /);
-  const full = /^the project has 3 running runs, its agent cap \(max_agents, or cap\.<project>\): R1 lead on T1, R2 qa on T2, R3 qa on T1\./;
-  assert.match(refusalOf(() => w.codex("run", "add", "T2", "--role", "qa")), full);
-  assert.match(refusalOf(() => w.claude("run", "add", "T1", "--role", "qa")), full);
-  w.codex("run", "done", "R2", "--status", "failed");
-  assert.match(w.claude("run", "add", "T1", "--role", "qa"), /^R4 /, "a run that ended frees a place for the other chief");
+  assert.match(w.codex("run", "add", "T2", "--role", "qa"), /^R4 is queued, place 1 · qa on T2 · .* the project runs 3 of its 3 agents\./);
+  assert.match(w.claude("run", "add", "T1", "--role", "qa"), /^R5 is queued, place 2 · qa on T1 · /);
+  assert.match(w.codex("run", "done", "R2", "--status", "failed"), /^R2 failed\nR4 admitted · qa on T2 · chief C2: /, "a run that ended admits the oldest queued run");
+  assert.match(w.claude("run", "done", "R3", "--status", "failed"), /^R3 failed\nR5 admitted · qa on T1 · chief C1: /, "the next end admits the other chief's run");
 });
 
 test("the merge check of a shared project reads its verdicts from the shared root, its list and its counts", (t) => {

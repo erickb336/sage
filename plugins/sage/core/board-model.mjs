@@ -1,7 +1,7 @@
 import { createHash } from "node:crypto";
 import { basename } from "node:path";
 import { githubRepository, hookProvider } from "./board-reader.mjs";
-import { LINE, PRIORITIES, TASK_KINDS, agentCaps, proposalOf } from "./logbook-fields.mjs";
+import { LINE, PRIORITIES, TASK_KINDS, agentCaps, agentLimit, proposalOf, queueOrder } from "./logbook-fields.mjs";
 import { ENDED, MET, breakdownGate, dead, gateLines, lostWhy, milestoneName, milestoneWordOf, namedText, progressOf, progressText, releasesOf, shownGraph, shownMilestoneState, shownWaits, waitGraph, waitsOf } from "./milestone-rules.mjs";
 import { taskWord } from "./state-words.mjs";
 import { offerOf, replaceOf } from "./chiefs.mjs";
@@ -540,10 +540,22 @@ function agentsOf(sources, groups, groupOf, cards, at) {
     return { key, name, sub: group?.sub ?? "", pathSub: group?.pathSub ?? null, agents: sort(list.filter(agent => !agent.lead)), count: list.length, look: list.filter(agent => LOOK.includes(agent.state)).length, worst: Math.min(...list.map(order)), cap };
   }).sort((a, b) => a.worst - b.worst || b.count - a.count || a.name.localeCompare(b.name));
   const providers = [...new Set(rows.map(agent => title(agent.provider.toLowerCase())))].map(name => ({ name, count: rows.filter(agent => title(agent.provider.toLowerCase()) === name).length }));
-  return { count: rows.length, look: rows.filter(agent => LOOK.includes(agent.state)).length, providers, projects,
+  return { count: rows.length, queues: queuesOf(sources, groups), look: rows.filter(agent => LOOK.includes(agent.state)).length, providers, projects,
     caps: caps.map(entry => ({ label: entry.label, total: entry.total, projects: projects.filter(project => project.cap?.label === entry.label).map(project => ({ name: project.name, used: project.cap.used, cap: project.cap.cap })) })),
     problems, unmatched: rows.filter(agent => agent.how === "noslot").map(agent => ({ run: agent.runId, project: agent.groupName })), next: Number.isFinite(next) ? next : null,
     rules: { quiet: AGENT_QUIET_MS / 60_000, factor: LONG_FACTOR, basis: LONG_BASIS } };
+}
+
+function queuesOf(sources, groups) {
+  const roots = sources.filter(source => !source.shared).map(source => source.config);
+  return groups.flatMap(group => group.books.filter(({ project }) => !project.old).map(({ source, project }) => {
+    const runs = project.tables.runs ?? [], running = runs.filter(run => run.status === "running").length;
+    const chiefOf = run => (project.chiefs ?? NONE).find(chief => chief.id === run.chief);
+    const queued = queueOrder(runs.filter(run => /^R[1-9]\d*$/.test(run.id))).map((run, i) => ({ run: run.id, task: run.task, role: run.role, chief: run.chief || null, chiefProvider: chiefOf(run)?.provider ?? null, place: i + 1, since: run.started || null }));
+    const names = [project.name.replace(/-[0-9a-f]{6}$/, "")];
+    const limit = project.shared ? agentLimit({ max_agents: project.limit }, roots, names) : agentLimit({}, [source.config], names);
+    return { key: project.key, group: group.key, running, limit, queued, text: `${running} of ${limit} agents${queued.length ? ` · ${queued.length} queued` : ""}` };
+  })).filter(queue => queue.running || queue.queued.length);
 }
 
 function milestoneOrder(milestone, own) {
