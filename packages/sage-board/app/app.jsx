@@ -1,18 +1,22 @@
 import { useEffect, useState } from "react";
 import { AgentsIcon, AlertIcon, LeafIcon, MoonIcon, OverviewIcon, PullsIcon, SunIcon, TasksIcon } from "./icons.jsx";
 import { Overview } from "./overview.jsx";
+import { Tasks } from "./tasks.jsx";
 import { useModel } from "./use-model.js";
 
 const THEME_KEY = "board-theme";
 const PAGES = [
   { hash: "", name: "Overview", Icon: OverviewIcon },
-  { hash: "tasks", name: "Tasks", Icon: TasksIcon, classic: "/", what: "every task by its step, with its dev cycle and what its agents made" },
+  { hash: "tasks", name: "Tasks", Icon: TasksIcon },
   { hash: "agents", name: "Agents", Icon: AgentsIcon, classic: "/agents", what: "each running agent, for each chief, against the limit" },
   { hash: "pull-requests", name: "Pull requests", Icon: PullsIcon, classic: "/", what: "each open, merged or waiting pull request, and what depends on what" },
 ];
 
 const clock = at => new Date(at).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit", hourCycle: "h23" });
-const pageOf = hash => PAGES.find(page => page.hash === hash.replace(/^#\/?/, "")) ?? PAGES[0];
+function pageOf(hash) {
+  const [path, query = ""] = hash.replace(/^#\/?/, "").split("?");
+  return { ...(PAGES.find(page => page.hash === path) ?? PAGES[0]), params: new URLSearchParams(query) };
+}
 
 function useHashPage() {
   const [page, setPage] = useState(() => pageOf(location.hash));
@@ -85,6 +89,8 @@ export function App() {
   const [theme, flip] = useTheme();
   const crumb = model?.projects.length === 1 ? model.projects[0] : "All projects";
   const next = theme === "dark" ? "light" : "dark";
+  const open = model ? model.tasks.filter(task => !task.ended).length : 0;
+  const body = page.hash === "" ? <Overview model={model} /> : page.hash === "tasks" ? <Tasks model={model} params={page.params} /> : null;
   return (
     <div className="app">
       <aside className="side">
@@ -93,9 +99,10 @@ export function App() {
           <ul className="nav">
             {PAGES.map(item => (
               <li key={item.hash}>
-                <a href={`#${item.hash}`} aria-current={item === page ? "page" : undefined}>
+                <a href={`#${item.hash}`} aria-current={item.hash === page.hash ? "page" : undefined}>
                   <item.Icon />{item.name}
                   {!item.hash && model && model.needs.length > 0 && <span className="count need" aria-label={`${model.needs.length} need you`}>{model.needs.length}</span>}
+                  {item.hash === "tasks" && model && <span className="count" aria-label={`${open} open`}>{open}</span>}
                 </a>
               </li>
             ))}
@@ -113,8 +120,8 @@ export function App() {
           </button>
         </header>
         <main className="main">
-          {page.hash ? <ComesNext page={page} /> : model
-            ? <><Banner model={model} link={link} receivedAt={receivedAt} /><Overview model={model} /></>
+          {!body ? <ComesNext page={page} /> : model
+            ? <><Banner model={model} link={link} receivedAt={receivedAt} />{body}</>
             : <NoData link={link} />}
         </main>
       </div>

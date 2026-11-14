@@ -26,6 +26,7 @@ test("T1054: a milestone problem that is not a gate is in Needs you too, with no
   const stuck = overview(tables).needs.find(need => need.kind === "stuck");
   assert.equal(stuck.question, "Milestone 3: Sign-in rework is stuck");
   assert.equal(stuck.askedAt, null);
+  assert.equal(stuck.milestone, "claude/sample-app-abc123/M3", "F-T1061-26: the need names its milestone, so it can link to it");
 });
 
 test("T1054: milestones come by the top priority of their open tasks, with progress; a done milestone shows for 7 days", () => {
