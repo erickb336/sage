@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState } from "react";
 
-export const taskLink = key => `#tasks?task=${encodeURIComponent(key)}`;
+export const taskLink = (key, page = "tasks") => `#${page}?task=${encodeURIComponent(key)}`;
 export const milestoneLink = key => `#tasks?milestone=${encodeURIComponent(key)}`;
 export const chiefName = chief => chief ? [chief.id, chief.provider].filter(Boolean).join(" · ") || "Chief not known" : "No chief";
 const MONTHS = "Jan Feb Mar Apr May Jun Jul Aug Sep Oct Nov Dec".split(" ");
@@ -120,12 +120,12 @@ function Decisions({ task }) {
   );
 }
 
-export function Panel({ taskKey, at }) {
+export function Panel({ taskKey, at, back = "tasks" }) {
   const { data: task, problem } = usePanel(taskKey, at);
   const [tab, setTab] = useState(TABS[0]);
   const heading = useRef(null), tabs = useRef([]);
   const close = () => {
-    location.hash = "tasks";
+    location.hash = back;
     requestAnimationFrame(() => document.querySelector(`[data-task="${CSS.escape(taskKey)}"]`)?.focus());
   };
   useEffect(() => { heading.current?.focus(); }, [taskKey, !task]);

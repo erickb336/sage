@@ -110,7 +110,7 @@ test("T1054: the keyboard reaches each page link and the theme switch in order, 
       return { name: element.getAttribute("aria-label") ?? element.textContent.trim(), ring: `${style.outlineStyle} ${style.outlineWidth}` };
     }));
   }
-  assert.deepEqual(reached.map(item => item.name), ["Overview2", "Tasks6", "Agents", "Pull requests", "Switch to the light theme"]);
+  assert.deepEqual(reached.map(item => item.name), ["Overview2", "Tasks6", "Agents", "Pull requests1", "Switch to the light theme"]);
   for (const item of reached) assert.equal(item.ring, "solid 2px", item.name);
   await page.keyboard.press("Enter");
   assert.equal(await page.evaluate(() => document.documentElement.dataset.theme), "light", "Enter on the theme switch flips it");
