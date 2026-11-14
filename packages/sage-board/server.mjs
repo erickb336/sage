@@ -3,8 +3,8 @@ import { lstatSync, readFileSync, readdirSync, watch } from "node:fs";
 import { createServer } from "node:http";
 import { dirname, isAbsolute, join, resolve, sep } from "node:path";
 import { fileURLToPath } from "node:url";
-import { readBoardSources, buildBoardModel, boardOverview, landingRule, renderBoardHtml, renderAgentsHtml, renderMilestonesHtml, renderReleasesHtml, BOARD_PORT } from "../sage-core/index.mjs";
-import { pagesRequest, servePages } from "./pages.mjs";
+import { readBoardSources, buildBoardModel, boardOverview, taskPanel, landingRule, renderBoardHtml, renderAgentsHtml, renderMilestonesHtml, renderReleasesHtml, BOARD_PORT } from "../sage-core/index.mjs";
+import { pagesRequest, servePages, taskFiles } from "./pages.mjs";
 
 const MAX_HTML = 8 * 1024 * 1024;
 const MAX_CLIENTS = 16;
@@ -300,6 +300,15 @@ export function createBoardServer({ sources, port = BOARD_PORT, id, clock = () =
       const client = { response, app: true, blocked: false, pending: null, deadline: null, sent: null };
       clients.add(client); response.once("close", () => removeClient(client)); publish(client);
       return;
+    }
+    if (name.startsWith("task/")) {
+      const key = taskKey(name.slice("task/".length)), panel = key && model && taskPanel(model, key);
+      if (!panel) return fail(404, "This task is not on the board.");
+      const task = model.tasks.find(item => item.key === key), source = configured.find(item => item.id === task.source);
+      const dir = source && !task.old && task.project.startsWith(`${source.id}/`) ? join(source.path, panel.logbook) : null;
+      const body = Buffer.from(JSON.stringify({ ...panel, files: taskFiles({ dir, logbook: panel.logbook, task: task.id, runs: panel.runs }) }));
+      response.writeHead(200, { "Content-Type": "application/json; charset=utf-8", "Content-Length": body.length });
+      return response.end(request.method === "HEAD" ? undefined : body);
     }
     const body = name === "" ? Buffer.from(app.shell) : app.files.get(name)?.body;
     if (!body) return fail(404, "This board page does not exist.");

@@ -33,7 +33,7 @@ function gateNeeds(task) {
       more,
       recommendation: reason.recommendation ?? null,
       gate: reason.gateId ?? null,
-      task: { id: task.id, title: task.title },
+      task: { key: task.key, id: task.id, title: task.title },
       chief: task.holder ?? title(task.sourceLabel) ?? null,
       project: task.projectName,
       askedAt: gate && time(gate.at) !== null ? new Date(time(gate.at)).toISOString() : null,
@@ -53,6 +53,23 @@ const milestoneNeed = need => ({
   project: need.projectName ?? null,
   askedAt: null,
 });
+
+const chiefTag = (task, chiefs) => task.owner ? { id: task.owner.id, provider: title(task.owner.provider) || null, stopped: chiefs.find(chief => chief.key === `${task.project}/${task.owner.id}`)?.stopped ?? null }
+  : task.old ? { id: null, provider: title(task.old.provider), stopped: null } : task.shared ? null : { id: null, provider: title(task.providerStandIn), stopped: null };
+const QUIET = ["done", "wait"];
+const stepOf = task => task.loop?.steps.find(step => !QUIET.includes(step.status)) ?? null;
+
+function taskRow(task, chiefs) {
+  const step = stepOf(task);
+  return {
+    key: task.key, id: task.id, title: task.title, project: task.projectName, state: task.state, word: task.word ?? null, ended: ENDED.includes(task.state),
+    priority: task.priority || null, kind: task.kind || null, size: task.size || null, pr: task.pr || null,
+    milestone: task.milestone ? { key: task.milestone.key, id: task.milestone.id, title: milestoneName({ id: task.milestone.id, name: task.milestone.name ?? "" }) } : null,
+    chief: chiefTag(task, chiefs), needsYou: task.reasons.length > 0, waits: task.waitLine?.text ?? null,
+    conflicts: task.mayConflict.map(other => ({ key: other.key, id: other.id, chief: other.chief })),
+    step: step ? { label: step.label, status: step.status } : null, lastActivity: task.lastActivity,
+  };
+}
 
 export function boardOverview(model) {
   const at = time(model.at);
@@ -104,9 +121,52 @@ export function boardOverview(model) {
     projects: (model.projects ?? []).filter(project => !project.archived).map(project => project.name),
     chiefs,
     needs,
+    tasks: tasks.map(task => taskRow(task, chiefs)),
     milestones,
     hiddenDone,
     counts: { merged: merged.length, stuck: failed.length + stuckAgents(model.agents), added: null },
     next: leaving.length ? Math.min(...leaving) : null,
+  };
+}
+
+const LOG_MAX = 200;
+const firstLine = text => String(text ?? "").split(LINE)[0].trim();
+const iso = value => { const at = time(value); return at === null ? null : new Date(at).toISOString(); };
+
+function logOf(task) {
+  const events = [
+    ...(task.decisionRows ?? []).map(row => ({ at: row.at, who: "chief", text: `${row.decision}${row.why ? ` · ${row.why}` : ""}` })),
+    ...task.runs.flatMap(run => [
+      { at: run.started, who: run.id, text: `${run.role} started` },
+      ...(run.status === "running" ? [] : [{ at: run.ended, who: run.id, text: `${run.role} ended: ${run.status}` }]),
+    ]),
+    ...task.ledger.map(row => ({ at: row.at, who: row.run || "CI", text: `${row.kind}${row.cycle ? ` · cycle ${row.cycle}` : ""}${row.sha ? ` on ${String(row.sha).slice(0, 7)}` : ""}` })),
+  ].map(event => ({ ...event, at: iso(event.at) }));
+  return events.sort((a, b) => (time(b.at) ?? -Infinity) - (time(a.at) ?? -Infinity));
+}
+
+export function taskPanel(model, key) {
+  const task = model.tasks.find(item => item.key === key);
+  if (!task) return null;
+  const chiefs = (model.projects ?? []).flatMap(project => (project.chiefs ?? []).map(chief => ({ ...chief, project: project.name })));
+  const reviews = task.cycles.some(cycle => cycle.steps.length > 0);
+  const known = !task.cycles.some(cycle => cycle.steps.some(step => step.status === "unknown"));
+  const log = logOf(task);
+  return {
+    ...taskRow(task, chiefs),
+    at: model.at,
+    route: task.route ? task.route.split(",") : [], risk: task.risk || null, branch: task.branch || null,
+    prUrl: task.pr && task.repository ? `${task.repository}/pull/${task.pr}` : null,
+    logbook: task.project.slice(task.project.indexOf("/") + 1),
+    conflicts: task.mayConflict.map(other => ({ key: other.key, id: other.id, chief: other.chief, paths: other.paths })),
+    steps: task.loop.steps.map(step => ({ key: step.key, label: step.label, status: step.status, detail: step.detail, parts: (step.parts ?? []).map(([name, status]) => ({ name, status })) })),
+    now: task.loop.now.text, next: task.loop.next,
+    cycles: { required: task.requiredCycles, clean: reviews && known ? task.cycles.filter(cycle => cycle.steps.every(step => step.status === "done")).length : null, reviews },
+    lastEvent: log[0] ?? null,
+    log: log.slice(0, LOG_MAX), logMore: Math.max(0, log.length - LOG_MAX),
+    decisions: [...(task.gateRows ?? [])].reverse().map(gate => ({ id: gate.id, question: firstLine(gate.question), answer: gate.answer || null, recommendation: gate.recommendation || null, at: iso(gate.at) })),
+    artifacts: task.artifacts.map(record => ({ id: record.id, type: record.data.type, label: record.data.label, run: record.data.run ?? null, at: iso(record.observedAt),
+      url: /^https:\/\//.test(record.data.url ?? "") ? record.data.url : null, path: record.data.path ?? null, verified: !!record.content?.verified })),
+    runs: task.runs.map(run => ({ id: run.id, role: run.role })),
   };
 }
