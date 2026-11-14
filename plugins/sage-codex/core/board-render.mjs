@@ -22,7 +22,7 @@ function safeUrl(value) {
 const prUrl = task => task.repository && /^[1-9]\d*$/.test(task.pr) ? `${task.repository}/pull/${task.pr}` : null;
 const mdUrl = url => url.replace(/[()<>\[\]\\\s]/g, c => `%${c.charCodeAt(0).toString(16).toUpperCase().padStart(2, "0")}`);
 const known = (values, value) => values.includes(value) ? value : "other";
-const SEVERITIES = ["high", "medium", "low"], RUN_STATUSES = ["running", "done", "failed", "blocked", "question"];
+const SEVERITIES = ["high", "medium", "low"], RUN_STATUSES = ["running", "queued", "done", "failed", "blocked", "question"];
 function link(label, value) { const url = safeUrl(value); return url ? `<a href="${esc(url)}" rel="noopener noreferrer">${esc(label)}</a>` : esc(label); }
 
 const ICON = '<svg width="13" height="13" viewBox="0 0 16 16" aria-hidden="true"><circle cx="8" cy="8" r="7" fill="currentColor" opacity=".18"/><rect x="7.2" y="3.6" width="1.6" height="5.6" rx=".8" fill="currentColor"/><circle cx="8" cy="11.6" r="1" fill="currentColor"/></svg>';

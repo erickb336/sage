@@ -99,6 +99,7 @@ export function logbookIdentity(directory, budget = null, into = { diagnostics: 
     const settings = logbookSettings(parseJson(regular(join(directory, "config.json"), budget)));
     if (settings.name !== null) found.displayName = settings.name;
     found.archived = settings.archived;
+    if (settings.limit !== null) found.limit = settings.limit;
     into.warnings.push(...settings.warnings);
   } catch (error) { if (error.code !== "ENOENT") into.warnings.push(`config: ${error.code ?? error.message}`); }
   if (found.checkout === undefined) delete found.checkout;

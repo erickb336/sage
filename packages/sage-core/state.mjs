@@ -9,12 +9,13 @@ import { homedir, hostname, platform, tmpdir, uptime } from "node:os";
 import { basename, dirname, isAbsolute, join, resolve, sep } from "node:path";
 import { boardView, sessionRoots, sessionSources } from "./board-view.mjs";
 import { projectName as shownName } from "./board-model.mjs";
-import { agentCaps } from "./logbook-fields.mjs";
+import { ADMIT_LEASE_MS, agentCaps, agentLimit, queueOrder } from "./logbook-fields.mjs";
 import { logbookIdentity } from "./board-reader.mjs";
 import { PR, pullRequestHead } from "./pull-request.mjs";
 import { REPORT_FIELDS } from "./report.mjs";
 import { cleanReport, fieldsOf, proofResults, readReport } from "./report-reader.mjs";
 import { ROLES } from "./roles.mjs";
+import { TEAM } from "./role-policy.mjs";
 import { AGENT_CAPS, BREAKS, FINDING_CLASSES, HIDDEN, LINE, NAME_MAX, PRIORITIES, PRIORITY_SCALE, START_SAGE_MODE, TABLES as PLAIN_TABLES, TASK_KINDS, breakdownLine, countOf, nameProblem, proposalOf } from "./logbook-fields.mjs";
 import { BREAKDOWN, ENDED, GATE_ID, MET, MILESTONE_ID, TASK_ID, breakdownGate, renameRows, renamedIds, byIds, dead, droppedBy, gateLines, lostClause, milestoneState, milestoneWordOf, progressOf, progressText, releaseKey, releaseNameProblem, releasesOf, shownGraph, shownMilestoneState, shownWaits, unmetWaits, waitGraph, waitWords, waitsOf, waitsWithState } from "./milestone-rules.mjs";
 import { FILES_MAX, FILE_PATH_MAX_BYTES, OBSERVATIONS_MAX_BYTES, OBSERVATION_DATA_MAX_BYTES, validateObservation, validateObservations } from "./observations.mjs";
@@ -41,7 +42,7 @@ export const balancedModels = (strong, light) => ({
   "model.implementer.tiny": light, "model.code-reviewer.tiny": light, "model.qa.tiny": light, "model.qa.small": light,
 });
 
-export function createStateTool({ defaultRoot, legacyRoots: namedRoots = () => [], provider, models = ["inherit"], modelDefaults = {}, spawnFields = (model) => (model ? { model } : {}), usageInterfaces = [], claimStep = (task, version, chief) => `run sage claim ${task} --version ${version} --chief ${chief}`, replaceStep = (task, chief) => `run sage gate replace ${task} --to ${chief} --chief ${chief}`, takeoverCycle, autopilot = () => false }) {
+export function createStateTool({ defaultRoot, legacyRoots: namedRoots = () => [], provider, models = ["inherit"], modelDefaults = {}, spawnFields = (model) => (model ? { model } : {}), usageInterfaces = [], claimStep = (task, version, chief) => `run sage claim ${task} --version ${version} --chief ${chief}`, replaceStep = (task, chief) => `run sage gate replace ${task} --to ${chief} --chief ${chief}`, takeoverCycle, queueWait = () => "", autopilot = () => false }) {
 if (typeof defaultRoot !== "function") throw new TypeError("defaultRoot must be a function");
 if (typeof namedRoots !== "function") throw new TypeError("legacyRoots must be a function");
 const rootsOf = (env) => namedRoots(env).map((root) => {
@@ -101,8 +102,9 @@ const KEYS = "max_agents, max_leads, cycles.small, cycles.large, cycles.risk, ma
 const FILLED = { runs: ["model", ...USAGE_FIELDS], tasks: ["hold", "extra", "priority", "kind", "waits", "milestone", "adoption", "approvals"], findings: ["run", "class"] };
 const CHIEF_COLUMN = "chief";
 const CHECKOUT_COLUMN = "checkout";
+const ADMITTED_COLUMN = "admitted";
 const RELEASE_COLUMN = "release";
-const SPARSE = { tasks: [CHIEF_COLUMN, "offer", RELEASE_COLUMN], runs: [CHIEF_COLUMN, CHECKOUT_COLUMN], gates: ["kind", CHIEF_COLUMN, "answered", "picked"], milestones: [RELEASE_COLUMN] };
+const SPARSE = { tasks: [CHIEF_COLUMN, "offer", RELEASE_COLUMN], runs: [CHIEF_COLUMN, CHECKOUT_COLUMN, ADMITTED_COLUMN], gates: ["kind", CHIEF_COLUMN, "answered", "picked"], milestones: [RELEASE_COLUMN] };
 const TABLES = { ...PLAIN_TABLES, ...Object.fromEntries(Object.entries(SPARSE).map(([t, cols]) => [t, [...PLAIN_TABLES[t], ...cols]])) };
 const ADDED = { ...FILLED, ...Object.fromEntries(Object.entries(SPARSE).map(([t, cols]) => [t, [...(FILLED[t] ?? []), ...cols]])) };
 const RUN_ENDS = ["done", "blocked", "question", "failed"];
@@ -314,8 +316,7 @@ function limitsOf(dir, env) {
     const set = roots.flatMap(of).filter((v) => v !== undefined);
     return set.length ? Math.max(...set) : DEFAULTS[key];
   };
-  const agents = (s) => [...names].map((n) => own(s, `cap.${n}`) ?? own(s, "max_agents"));
-  return { values: { max_agents: largest("max_agents", agents), max_leads: largest("max_leads", (s) => [own(s, "max_leads")]), ...held }, moved: false };
+  return { values: { max_agents: agentLimit({}, roots, [...names]), max_leads: largest("max_leads", (s) => [own(s, "max_leads")]), ...held }, moved: false };
 }
 
 function moveLimits(dir, env, fresh = false) {
@@ -520,10 +521,10 @@ function runFrame(dir, project, task, role, branch, candidate, env) {
   if (role === "lead") {
     if (["merged", "abandoned", "concluded"].includes(task.state)) refuse(`${task.id} is ${task.state}, so it takes no lead run: the task has ended.`);
     if (!builds(task)) refuse(`${task.id} is an investigation: it has no build and no pull request, so it takes no lead run. The chief runs its steps.`);
-    const leads = read(dir, "runs").filter((r) => r.role === "lead" && r.status === "running");
+    const leads = read(dir, "runs").filter((r) => r.role === "lead" && LIVE.includes(r.status));
     const same = leads.find((r) => r.task === task.id);
-    if (same) refuse(`${same.id} is the running lead run of ${task.id}, and a task has one running lead. Finish ${same.id} first (sage run done ${same.id} --status done, blocked, question or failed).`);
-    if (leads.length >= config(env, dir).max_leads) refuse(`the project has ${leads.length} running lead runs, the most it holds: ${leads.map((r) => `${r.id} on ${r.task}`).join(", ")}. Finish one of them first (sage run done <R> --status done, blocked, question or failed).`);
+    if (same) refuse(`${same.id} is the ${same.status} lead run of ${task.id}, and a task has one running lead. Finish ${same.id} first (sage run done ${same.id} --status done, blocked, question or failed).`);
+    if (leads.length >= config(env, dir).max_leads) refuse(`the project has ${leads.length} running${leads.some((r) => r.status === "queued") ? " or queued" : ""} lead runs, the most it holds: ${leads.map((r) => `${r.id} on ${r.task}`).join(", ")}. Finish one of them first (sage run done <R> --status done, blocked, question or failed).`);
   }
   if (WRITERS.includes(role)) {
     if (!branch) refuse(`the ${role} run needs --branch`);
@@ -536,14 +537,85 @@ function runFrame(dir, project, task, role, branch, candidate, env) {
     if (CANDIDATES.includes(role) && !candidate && arenaOpen(task, runs)) refuse(`${task.id}'s arena step is open: ${ARENA_STEP}. So this ${role} run needs --candidate <k>, on its own branch. ${arenaExits(task.id)} Nothing changed.`);
     if (role === "implementer" && candidate && task.size === "large" && ["framed", "designing", "awaiting-you"].includes(task.state)) refuse(`${task.id} is large and ${task.state}, so its arena is a design arena, and an implementer is no candidate of it: use --role designer. A build arena runs on a tiny or small task, or on a briefed task whose design may go ahead. Nothing changed.`);
     if (CANDIDATES.includes(role) && candidate && builds(task) && !list(task.route).includes("code-review")) refuse(`${task.id}'s route has no code review, so it takes no arena candidate: a judge's graft is new code that nobody read. Abandon ${task.id}: sage task ${task.id} set state=abandoned. Then frame it again on a new branch with sage task add --add arena, which adds the code review. Nothing changed.`);
-    const other = there.find(row => row.status === "running" && WRITERS.includes(row.role));
+    const other = there.find(row => LIVE.includes(row.status) && WRITERS.includes(row.role));
     if (other) refuse(`${other.id} (${other.role}) still writes ${branch}, and a branch has one writer. Finish that run first (sage run done ${other.id} --status done, blocked, question or failed), or give this run another branch.`);
   }
-  const cap = agentCaps(config(env, dir)).cap(projectName(project));
-  const running = read(dir, "runs").filter((r) => r.status === "running");
-  if (running.length >= cap) refuse(`the project has ${running.length} running runs, its agent cap (max_agents, or cap.<project>): ${running.map((r) => `${r.id} ${r.role} on ${r.task}`).join(", ")}. Wait for one of them to end, or end a run whose agent has stopped (sage run done <R> --status done, blocked, question or failed). Nothing changed.`);
   return { id: nextId(dir, "R"), task: task.id, role, round: task.round, candidate, branch,
     status: "running", started: now(), model: modelFor(role, task.size, candidate, config(env), task.risk) };
+}
+
+const LIVE = ["running", "queued"];
+const runningOf = (runs) => runs.filter((r) => r.status === "running");
+const projectCap = (dir, project, env) => agentCaps(config(env, dir)).cap(projectName(project));
+const startMark = (dir, id) => join(dir, "kept", `${id}.start.json`);
+const started = (dir, run) => !!lstatSync(startMark(dir, run.id), { throwIfNoEntry: false });
+const awaiting = (dir, run) => run.status === "running" && !!run.admitted && !started(dir, run);
+const leaseEnd = (run) => Date.parse(run.admitted) + ADMIT_LEASE_MS;
+const SWEEP_GRACE_MS = 60_000;
+const utc = (at) => `${at.slice(11, 16)} UTC`;
+const lapsedOf = (dir, runs, at) => runs.filter((r) => awaiting(dir, r) && leaseEnd(r) + SWEEP_GRACE_MS <= at);
+function admit(dir, project, env, runs) {
+  const stamp = now(), notes = [], lapsed = lapsedOf(dir, runs, Date.parse(stamp));
+  for (const r of lapsed) {
+    Object.assign(r, { status: "failed", ended: stamp });
+    notes.push(`${r.id} failed: admitted at ${utc(r.admitted)}, its agent did not start within ${ADMIT_LEASE_MS / 60_000} minutes`);
+  }
+  if (lapsed.length) write(dir, "decisions", [...read(dir, "decisions"), ...lapsed.map((r) => ({ at: stamp, task: r.task, decision: `${r.id} failed: no agent started within ${ADMIT_LEASE_MS / 60_000} minutes of its admission`, why: "an admitted run keeps its place for 10 minutes; the next queued run takes it" }))]);
+  let count = runningOf(runs).length;
+  const cap = projectCap(dir, project, env);
+  for (const r of queueOrder(runs)) {
+    if (count++ >= cap) break;
+    Object.assign(r, { status: "running", admitted: stamp });
+    notes.push(`${r.id} admitted · ${r.role} on ${r.task}${r.chief ? ` · chief ${r.chief}` : ""}: start its agent within ${ADMIT_LEASE_MS / 60_000} minutes, or the run ends as failed`);
+  }
+  return notes;
+}
+function queueOf(project, env = process.env) {
+  const dir = storeDir(project, env), at = Date.now();
+  const runs = ["tasks", "runs"].some((t) => lstatSync(join(dir, `${t}.tsv`), { throwIfNoEntry: false })) ? read(dir, "runs") : [];
+  const lead = (r) => (TEAM.has(r.role) && runs.find((l) => l.task === r.task && l.role === "lead" && l.status === "running")?.id) || "";
+  const brief = (r) => ({ id: r.id, task: r.task, role: r.role, chief: r.chief ?? "", lead: lead(r) });
+  return { dir, running: runningOf(runs).length, limit: projectCap(dir, project, env),
+    queued: queueOrder(runs).map((r, i) => ({ ...brief(r), place: i + 1 })),
+    admitted: runs.filter((r) => awaiting(dir, r) && leaseEnd(r) > at).map((r) => ({ ...brief(r), admitted: r.admitted, until: utc(new Date(leaseEnd(r)).toISOString()) })),
+    lapsed: runs.filter((r) => r.admitted && !started(dir, r) && (r.status === "failed" || (r.status === "running" && leaseEnd(r) <= at))).map((r) => ({ ...brief(r), admitted: r.admitted, ended: r.status === "failed" })) };
+}
+function sweepQueue(project, env = process.env) {
+  const dir = storeDir(project, env);
+  if (!lstatSync(join(dir, "runs.tsv"), { throwIfNoEntry: false })) return [];
+  const runs = read(dir, "runs"), sweepDue = lapsedOf(dir, runs, Date.now()).length || (queueOrder(runs).length && runningOf(runs).length < projectCap(dir, project, env));
+  if (!sweepDue) return [];
+  return withLock(dir, () => {
+    ready(dir, env);
+    const runs = read(dir, "runs"), notes = admit(dir, project, env, runs);
+    if (notes.length) {
+      write(dir, "runs", runs);
+      status(dir, true);
+    }
+    return notes;
+  });
+}
+function chiefQueue(project, native, env = process.env) {
+  const q = queueOf(project, env), id = isShared(q.dir, env) ? rowOf(q.dir, native)?.id : "";
+  const mine = (r) => id !== undefined && (!id || r.chief === id);
+  return { ...q, queued: q.queued.filter(mine), admitted: q.admitted.filter(mine) };
+}
+function queueProblem(project, id, env = process.env) {
+  const q = queueOf(project, env), waiting = q.queued.find((r) => r.id === id), lapsed = q.lapsed.find((r) => r.id === id);
+  if (waiting) return `${id} is queued, place ${waiting.place} of ${q.queued.length}: the project runs ${q.running} of its ${q.limit} agents, so its agent does not start yet. A run that ends admits the oldest queued run.`;
+  if (lapsed) return `${id} (${lapsed.role} on ${lapsed.task}) was admitted at ${utc(lapsed.admitted)}, and no agent started within ${ADMIT_LEASE_MS / 60_000} minutes, so it ${lapsed.ended ? "ended as failed and lost its place" : "lost its place and ends as failed"}. Add a new run for this agent.`;
+  return undefined;
+}
+function pendingRun(project, task, role, env = process.env) {
+  const dir = storeDir(project, env), live = read(dir, "runs").filter((r) => r.task === task && r.role === role && LIVE.includes(r.status));
+  return live.length === 1 && (live[0].status === "queued" || awaiting(dir, live[0])) ? live[0].id : undefined;
+}
+function markStart(project, id, env = process.env) {
+  const dir = storeDir(project, env), run = read(dir, "runs").find((r) => r.id === id);
+  if (!run || !awaiting(dir, run)) return false;
+  mkdirSync(join(dir, "kept"), { recursive: true, mode: 0o700 });
+  try { writeFileSync(startMark(dir, id), JSON.stringify({ run: id, at: now() }), { flag: "wx", mode: 0o600 }); } catch (e) { if (e.code !== "EEXIST") throw e; }
+  return true;
 }
 
 const usageReference = (run, opt) => ({ run, tokens: opt.tokens, source: opt["usage-source"], evidence: opt["usage-evidence"] });
@@ -1625,8 +1697,8 @@ const waitsDecision = (task, was, at, why) => {
   return [{ at, task: task.id, decision: `waits ${[...ids, ...(odd ? ["(text that is not a task id)"] : [])].join(",") || "none"} → ${task.waits || "none"}`, why }];
 };
 const notStarted = (task, pid, runs, when = "the owner approves its breakdown") => {
-  const run = runs.find((r) => r.task === task.id && r.status === "running" && WAIT_ROLES.includes(r.role));
-  if (run || !["framed", "briefed"].includes(task.state)) refuse(`${task.id} ${run ? `has ${run.id} (${run.role}) running` : `is ${task.state}`}, so it joins ${pid} only after ${when}: before that, a task joins only while it is framed or briefed, with no lead, implementer, investigate or arena-judge run that runs. Nothing changed.`);
+  const run = runs.find((r) => r.task === task.id && LIVE.includes(r.status) && WAIT_ROLES.includes(r.role));
+  if (run || !["framed", "briefed"].includes(task.state)) refuse(`${task.id} ${run ? `has ${run.id} (${run.role}) ${run.status}` : `is ${task.state}`}, so it joins ${pid} only after ${when}: before that, a task joins only while it is framed or briefed, with no lead, implementer, investigate or arena-judge run that runs. Nothing changed.`);
 };
 function milestoneValue(task, value, { milestones, byId, renamed }, runs = []) {
   const id = value === "none" ? "" : (renamed.get(value) ?? value);
@@ -1733,7 +1805,7 @@ function planTaskChanges(before, id, changes, at, facts) {
       if (was === "replan") task.keys = "";
       if (v === "briefed" && ["held", "replan"].includes(was)) {
 
-        for (const r of runs.filter((r) => r.task === task.id && r.role === "lead" && r.status === "running")) {
+        for (const r of runs.filter((r) => r.task === task.id && r.role === "lead" && LIVE.includes(r.status))) {
           Object.assign(r, { status: "blocked", ended: at });
           decided.push({ at: at, task: task.id, decision: `${r.id} blocked: ${task.id} went back to briefed`, why: "a re-plan: a new lead starts with the new brief" });
         }
@@ -2142,7 +2214,7 @@ function judgeMerge(sha, env, { cycles, pr, readOnly, head, project, locked, ses
         const judged = judge(dir, task, findingsOf.get(id) ?? [], decisionsOf.get(id) ?? [], id, own, task ? Math.max(cycles ?? 0, cyclesFor(task, cfg)) : cycles, repaired, cfg, pr, carry.from, lint);
         const note = carry.from ? `cycles from ${carry.from} carried to ${sha}: clean merge of main, same patch-id` : carry.why;
         const verdict = !note ? judged : judged.ok ? (carry.from ? { ...judged, reason: judged.reason.replace(/ on this SHA$/, `, ${note}`) } : judged) : { ...judged, reason: `${judged.reason} ${carry.from ? `(${note})` : note}` };
-        const live = (runsOf.get(id) ?? []).filter((r) => r.status === "running" && CHECKERS.includes(r.role)).map((r) => `${r.id} (${r.role})`);
+        const live = (runsOf.get(id) ?? []).filter((r) => LIVE.includes(r.status) && CHECKERS.includes(r.role)).map((r) => `${r.id} (${r.role}${r.status === "queued" ? ", queued" : ""})`);
         const busy = verdict.ok && live.length > 0 && { ok: false, reason: `${id} has a review or QA run that still runs: ${live.join(", ")}. End it with its report's findings recorded, then check again.` };
         const bar = candidateBar(task ?? { id }, head ?? task?.branch, candidates, runsOf.get(id) ?? []), arena = bar && { ok: false, reason: bar };
         const since = verdict.ok && task && takenAt(decisionsOf.get(id) ?? []), older = since && olderThan(since, runsOf.get(id) ?? []);
@@ -2253,7 +2325,7 @@ function status(dir, save) {
     `sage · ${shownName({ name: basename(dir), ...logbookIdentity(dir) })} · ${now().slice(11, 16)} UTC`,
     `tasks   ${tasks.length}${Object.entries(count).map(([s, n]) => ` · ${s} ${n}`).join("")}`,
     `gates   ${gates.length} open${gates.map((g) => ` · ${g.id} ${gateShort(g, graph)} (${pendingOf(g) ? `board answer: ${visible(pendingOf(g).answer)}, not picked up yet` : `default: ${g.default || "none"}`})`).join("")}`,
-    `agents  ${runs.length} runs · ${runs.filter((r) => r.status === "running").length} running · about ${Math.round(tokens / 1000)}k tokens · ${usageSummary(runs)}`,
+    `agents  ${runs.length} runs · ${runs.filter((r) => r.status === "running").length} running${queueOrder(runs).length ? ` · ${queueOrder(runs).length} queued` : ""} · about ${Math.round(tokens / 1000)}k tokens · ${usageSummary(runs)}`,
   ];
   const waiting = tasks.filter((t) => !ENDED.includes(t.state)).map((t) => [t, shownOpen(t, graph)]).filter(([, open]) => open.length);
   if (waiting.length) lines.push(`waits   ${waiting.length} waiting${waiting.map(([t, open]) => ` · ${t.id} for ${waitList(open)}`).join("")}`);
@@ -2340,7 +2412,7 @@ function logbookView(project, env = process.env, { max = Infinity } = {}) {
       const task = one(rows("tasks").filter((t) => t.id === id)), on = rows("ledger").filter((r) => r.task === id && String(r.sha).toLowerCase() === String(sha).toLowerCase());
       return !task ? 0 : cleanKinds(task).length ? cleanCycles(task, on) : null;
     },
-    endedLeadRuns: () => rows("runs").filter((r) => r.role === "lead" && r.status !== "running"),
+    endedLeadRuns: () => rows("runs").filter((r) => r.role === "lead" && RUN_ENDS.includes(r.status)),
     prTasks: (pr) => prHistory(prNumber(pr), rows("tasks"), rows("decisions"), rows("ledger")),
     branchTasks: (name) => new Set([...rows("tasks").filter((t) => sameBranch(t.branch, name)).map((t) => t.id), ...rows("runs").filter((r) => sameBranch(r.branch, name)).map((r) => r.task)]),
   };
@@ -3238,12 +3310,17 @@ function act(cmd, pos, opt, dir, env, skip, project) {
           if (!entry) refuse("Unknown usage interface. Nothing changed.");
           Object.assign(run, usageSnapshot(entry));
         }
+        const admitted = admit(dir, project, env, runs);
+        if (runningOf(runs).length >= projectCap(dir, project, env) || queueOrder(runs).length) Object.assign(run, { status: "queued", admitted: "" });
         write(dir, "runs", [...runs, run]);
         const upstream = role !== "lead" ? [] : waitsWithState(task, graphOf(dir)).filter((w) => w.id).map(({ id: up }) => {
           const last = runs.filter((r) => r.task === up && ["lead", "investigate"].includes(r.role)).at(-1);
           return `${up} ${last?.report ? `${last.id} ${resolve(dir, last.report)}` : "no report recorded"}`;
         });
-        return `${run.id} running · ${role} on ${task.id}${branch ? ` · ${branch}` : ""}${candidate ? ` · candidate ${candidate}` : ""}${Object.entries(fields).map(([k, v]) => ` · ${k} ${v}`).join("")}${upstream.length ? ` · upstream reports: ${upstream.join(", ")}` : ""}`;
+        const line = `${role} on ${task.id}${branch ? ` · ${branch}` : ""}${candidate ? ` · candidate ${candidate}` : ""}${Object.entries(fields).map(([k, v]) => ` · ${k} ${v}`).join("")}${upstream.length ? ` · upstream reports: ${upstream.join(", ")}` : ""}`;
+        if (run.status === "running") return [`${run.id} running · ${line}`, ...admitted].join("\n");
+        const q = queueOf(project, env);
+        return [`${run.id} is queued, place ${q.queued.length} · ${line} · the project runs ${q.running} of its ${q.limit} agents. Start its agent only after its admission: a run that ends admits the oldest queued run, and its agent must then start within ${ADMIT_LEASE_MS / 60_000} minutes.${queueWait(run.id) ? ` ${queueWait(run.id)}` : ""}`, ...admitted].join("\n");
       }
       if (sub === "usage") return enrichUsage(dir, id, opt);
       if (sub === "done") {
@@ -3262,7 +3339,7 @@ function act(cmd, pos, opt, dir, env, skip, project) {
         } else if (opt["usage-source"] !== undefined || opt["usage-evidence"] !== undefined) {
           if (!tokenCount(opt.tokens) || !usageText(opt["usage-source"]) || !usageText(opt["usage-evidence"])) refuse("Measured usage needs tokens, source and evidence. Nothing changed.");
         }
-        if (run.status !== "running") {
+        if (RUN_ENDS.includes(run.status)) {
           if ((run.usage_status === "unavailable" && opt.tokens !== undefined) || opt["usage-source"] !== undefined || opt["usage-evidence"] !== undefined) refuse("Use run usage to audit a later measured count. Nothing changed.");
           const flag = (col) => `--${col}`, lacks = ["tokens", "report"].filter((col) => !run[col]);
           const kept = ["tokens", "report"].find((col) => opt[col] !== undefined && run[col]);
@@ -3281,8 +3358,9 @@ function act(cmd, pos, opt, dir, env, skip, project) {
         else if (unavailable) Object.assign(run, { usage_status: "unavailable", usage_source: opt["usage-source"], usage_evidence: opt["usage-evidence"] });
         else if (opt.tokens !== undefined) Object.assign(run, { usage_status: "measured", usage_source: opt["usage-source"] ?? "", usage_evidence: opt["usage-evidence"] ?? "" });
         Object.assign(run, { status: st, tokens: opt.tokens ?? run.tokens, report: opt.report ?? run.report, ended: now() });
+        const admitted = admit(dir, project, env, runs);
         write(dir, "runs", runs);
-        return `${run.id} ${st}`;
+        return [`${run.id} ${st}`, ...admitted].join("\n");
       }
       refuse("run add or run done");
     }
@@ -3709,5 +3787,5 @@ const { bindings, fillCommits, folderOf, link, locate, movePlans, notePlugin, pl
   listed: (root) => known(root, undefined, undefined, true),
   enroll });
 const { chiefs, chiefRow, rowOf } = createChiefs({ now, provider, readRegular, refuse, rowsOf, sheetText, swap });
-return { SIZES, BLOCKS, RISKS, KINDS, STATES, DEFAULTS, PR, LEAD_COMMANDS, leadProblem, leadRequest, sageRoot, locate, chiefFor, sessionBar, branchBar, actorOptions, git, projectRoot, roleReadProject, optionsOf, slug, worktreeRoot, pagesRoot, BRANCH, ofTask, branchOfTask, branchTip, projectName, storeDir, config, cyclesFor, modelFor, read, mergeCheck, boardLandingCheck, logbookView, sage, keepReport, keepRunText, keepUsage, observePush, compareRetainedReport, ownGates, pickupAnswers, withLock, command, runCli, waitingPlugins, writeIdFloors };
+return { SIZES, BLOCKS, RISKS, KINDS, STATES, DEFAULTS, PR, LEAD_COMMANDS, leadProblem, leadRequest, sageRoot, locate, chiefFor, sessionBar, branchBar, actorOptions, git, projectRoot, roleReadProject, optionsOf, slug, worktreeRoot, pagesRoot, BRANCH, ofTask, branchOfTask, branchTip, projectName, storeDir, config, cyclesFor, modelFor, read, mergeCheck, boardLandingCheck, logbookView, sage, keepReport, keepRunText, keepUsage, observePush, compareRetainedReport, ownGates, pickupAnswers, queueOf, chiefQueue, queueProblem, pendingRun, markStart, sweepQueue, withLock, command, runCli, waitingPlugins, writeIdFloors };
 }

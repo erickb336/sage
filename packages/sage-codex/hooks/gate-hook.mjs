@@ -168,12 +168,21 @@ function childSpawn(t, name, cwd, session, env) {
   if (!isLead(self) || notLeadAbove(t.parts)) return CHILD_SPAWN;
   const fits = typeof name === "string" && TEAM.has(taskRole(name)) && taskNumber(name) === taskNumber(self);
   if (!fits) return LEAD_SPAWN(taskNumber(self), name);
-  try { return leadStopped(leadOf(self), tool.logbookView(cwd, env)) ?? unbriefed(name, briefProject(cwd, session, name, env), env); } catch (error) { return UNREAD_LOGBOOK(error); }
+  try { return leadStopped(leadOf(self), tool.logbookView(cwd, env)) ?? queuedSpawn(name, cwd, env) ?? unbriefed(name, briefProject(cwd, session, name, env), env); } catch (error) { return UNREAD_LOGBOOK(error); }
+}
+const QUEUE_WAIT = "Codex has no wake for a waiting thread: after a run ends, call spawn_agent again with the same task name. The gate names the run's place again, or lets it start. A chief's hook names the admission at the chief's next turn.";
+function queuedSpawn(name, project, env) {
+  const run = /_r([1-9]\d*)$/.exec(name)?.[1], why = run && tool.queueProblem(project, `R${run}`, env);
+  return why ? `sage: ${why}${/ is queued, /.test(why) ? ` ${QUEUE_WAIT}` : ""}` : undefined;
 }
 const unbriefed = (name, project, env) => (!TASK_NAME.test(name) ? MALFORMED(name) : briefChecked(project, name, env) ? undefined : NO_BRIEF(name));
 function chiefSpawn(name, cwd, session, env) {
   if (typeof name !== "string" || !sageName(name)) return undefined;
   const project = briefProject(cwd, session, name, env);
+  try {
+    const queued = queuedSpawn(name, project, env);
+    if (queued) return queued;
+  } catch (error) { return `sage: the gate could not read the logbook (${error?.message ?? error}), so no agent starts. Tell the user.`; }
   if (isLead(name)) {
     let why;
     try { why = leadStopped(leadOf(name), tool.logbookView(project, env), true); } catch (error) { return `sage: the gate could not read the logbook (${error?.message ?? error}), so no lead starts. Tell the user.`; }

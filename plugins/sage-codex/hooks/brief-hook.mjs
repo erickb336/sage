@@ -72,6 +72,8 @@ function startNote(input, env) {
 function spawnWarning(input, env) {
   const task = typeof input.tool_input?.task_name === "string" ? input.tool_input.task_name.split("/").at(-1) : "";
   if (!/spawn_agent$/.test(String(input.tool_name)) || !sageName(task) || typeof input.cwd !== "string") return {};
+  const run = /_r([1-9]\d*)$/.exec(task)?.[1];
+  if (run) try { tool.markStart(briefProject(input.cwd, input.session_id, task, env), `R${run}`, env); } catch {}
   const brief = readBrief(briefProject(input.cwd, input.session_id, task, env), task, env);
   if (brief && !brief.missing.length) return {};
   const missing = brief ? `the recorded brief has no ${brief.missing.join(", ")}` : `no brief is on record, so ${BRIEF_FIELDS.join(", ")} are not checked`;
