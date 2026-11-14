@@ -6,6 +6,7 @@ import { logbookSettings } from "./logbook-fields.mjs";
 import { MILESTONE_ID, TASK_ID, checkMilestones, renameRows } from "./milestone-rules.mjs";
 import { BINDING_COLUMNS, bindingRow, checkoutGone, githubRemote, linkedRows, ownerOf, plainName } from "./shared-root.mjs";
 import { chiefsWhole } from "./chiefs.mjs";
+import { LIVE_FOLDER, NAMES_FILE, chiefNames, liveRecord } from "./chief-live.mjs";
 import { MOVES } from "./shared-root.mjs";
 
 const parseJson = text => { try { return JSON.parse(text); } catch { throw new Error("invalid JSON"); } };
@@ -184,6 +185,21 @@ function readLogbook(directory, project, budget, { now, bound, chiefs = true, du
     if (!chiefsWhole(found.cols, found.lines, found.rows)) throw damaged();
     project.chiefs = found.rows;
   } catch (error) { if (error.code !== "ENOENT") { project.chiefs = null; project.diagnostics.push(`chiefs: ${error.code ?? error.message}`); } }
+  project.chiefLive = {}, project.chiefNames = {};
+  if (project.chiefs?.length) {
+    try {
+      const files = new Set(folder(join(directory, LIVE_FOLDER)) ?? []);
+      for (const { id } of project.chiefs.filter(row => files.has(`${row.id}.json`))) {
+        try {
+          const record = liveRecord(parseJson(regular(join(directory, LIVE_FOLDER, `${id}.json`), budget)));
+          if (!record) throw new Error("not a JSON object");
+          project.chiefLive[id] = record;
+        } catch (error) { project.warnings.push(`${LIVE_FOLDER}/${id}.json: ${error.code ?? error.message}`); }
+      }
+    } catch (error) { project.warnings.push(`${LIVE_FOLDER}: ${error.code ?? error.message}`); }
+    try { project.chiefNames = chiefNames(parseJson(regular(join(directory, NAMES_FILE), budget))); }
+    catch (error) { if (error.code !== "ENOENT") project.warnings.push(`${NAMES_FILE}: ${error.code ?? error.message}`); }
+  }
   try { project.observations = validateObservations(parseJson(regular(join(directory, "observations.json"), budget)), { now }); }
   catch (error) {
     project.observations = { version: 1, records: [] };
