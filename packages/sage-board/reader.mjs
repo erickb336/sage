@@ -254,14 +254,19 @@ export function readerPage({ model, configured, url, origin, render }) {
         ? { crumb: run.id, title: `Report of ${run.id}`, head, body: note(`<b>Not written yet.</b> ${esc(run.role)} ${esc(run.id)} runs (${minutes(run.started, model.at)} min). The board shows the report when the run ends; reload this page then.`, "need") }
         : { crumb: run.id, title: `Report of ${run.id}`, head, body: note(`<b>Not kept.</b> The logbook keeps no report of ${esc(run.id)}. sage keeps reports only for newer runs and for reviews; this run is older, or its report was not kept.`) };
       const result = of("RESULT"), findings = readReport(text).findings;
-      const rowsInReportOrder = (task.findings ?? []).filter(entry => entry.run === run.id || String(entry.key).startsWith(`${run.id}-`));
+      const runRows = (task.findings ?? []).filter(entry => entry.run === run.id || String(entry.key).startsWith(`${run.id}-`));
+      const stateOf = row => row.movedTo ? `moved to ${row.movedTo}` : row.status || row.triage || "";
+      const certainState = severity => { const states = new Set(runRows.filter(row => row.severity === severity).map(stateOf)), [only] = states;
+        return states.size === 1 && runRows.filter(row => row.severity === severity).length === findings.filter(item => item.severity === severity).length ? only : ""; };
       const lead = firstLine(result);
-      const findingRows = findings.length ? findings.map((item, i) => {
-        const row = rowsInReportOrder[i]?.severity === item.severity ? rowsInReportOrder[i] : null, stateWord = row?.status || row?.triage || null;
+      const findingRows = findings.length ? findings.map(item => {
+        const stateWord = certainState(item.severity);
         return `<div class="finding"><span><span class="pill ${item.severity}">${item.severity}</span></span><span class="mono">${esc(item.key)}</span><span>${esc(item.summary)}</span><span>${stateWord ? `<span class="pill ${stateWord === "open" ? "open" : ""}">${esc(stateWord)}</span>` : ""}</span>${item.details.length ? `<span class="det">${esc(item.details.join("\n"))}</span>` : ""}</div>`;
       }).join("") : "";
       const body = `<section class="result" aria-label="RESULT"><span class="fname">RESULT</span><p class="lead">${esc(lead || "No RESULT")}</p><div class="md">${markdown(result.split(/\r?\n/).slice(1).join("\n")).html}</div></section>${openBar}${
-        findings.length ? `<details${view.open !== "none" ? " open" : ""}><summary><span class="fname">FINDINGS</span><span class="first">${findings.length} ${findings.length === 1 ? "finding" : "findings"}</span></summary><div class="body">${findingRows}</div></details>` : field("FINDINGS", of("FINDINGS"), view.open !== "none")}${
+        findings.length ? `<details${view.open !== "none" ? " open" : ""}><summary><span class="fname">FINDINGS</span><span class="first">${findings.length} ${findings.length === 1 ? "finding" : "findings"}</span></summary><div class="body">${findingRows}</div></details>` : field("FINDINGS", of("FINDINGS"), view.open !== "none")}<h2 class="sec">In the logbook</h2>${runRows.length
+          ? `<table class="scores"><thead><tr><th scope="col">Finding</th><th scope="col">Severity</th><th scope="col">Summary</th><th scope="col">State</th></tr></thead><tbody>${runRows.map(row => `<tr><td class="mono">${esc(row.key)}</td><td>${esc(row.severity || "not recorded")}</td><td>${esc(row.summary || "not recorded")}</td><td>${esc(stateOf(row) || "not recorded")}</td></tr>`).join("")}</tbody></table>`
+          : `<p class="muted">The logbook has no finding of ${esc(run.id)}.</p>`}${
         ["QUESTIONS", "EVIDENCE", "NOT VERIFIED", "BRANCH"].map(name => field(name, of(name), isOpen(name, /^none\.?$/i.test(of("QUESTIONS")) ? ["NOT VERIFIED", "BRANCH"] : ["QUESTIONS", "NOT VERIFIED", "BRANCH"]))).join("")}`;
       return { crumb: run.id, title: `Report of ${run.id} · ${run.role}`, head, body, side, file: from.startsWith("<a") ? from.replace(">Open", ' class="btn">Open') : `<span class="faint mono">${esc(from)}</span>` };
     },

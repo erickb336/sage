@@ -69,6 +69,43 @@ test("T1064: a report shows the STATUS pill, RESULT first, each finding as a row
   assert.match(page.html, /head b{40}, PR 12/);
 });
 
+function reviewOf(w, lines, rows, decisions = []) {
+  const add = (table, row) => { const file = join(w.logbook, `${table}.tsv`), head = readFileSync(file, "utf8").split("\n")[0].split("\t"); writeFileSync(file, `${readFileSync(file, "utf8").replace(/\n?$/, "\n")}${head.map(name => row[name] ?? "").join("\t")}\n`); };
+  add("runs", { id: "R31", task: "T3", role: "code-reviewer", round: "0", status: "done", started: "2026-11-13T10:00:00.000Z", ended: "2026-11-13T11:00:00.000Z", chief: "C2" });
+  for (const [key, severity, status, task = "T3", run = task === "T3" ? "R31" : ""] of rows) add("findings", { task, key, round: "0", source: "code-reviewer", severity, summary: `${key}-summary`, triage: status === "dismissed" ? "dismiss" : "fix", reason: "", status, run, class: "" });
+  for (const row of decisions) add("decisions", { at: "2026-11-13T11:30:00.000Z", task: "T3", ...row });
+  writeFileSync(join(w.logbook, "reports", "R31.md"), ["STATUS        done", "RESULT        FINDINGS · see below", "EVIDENCE      npm test: pass", "FINDINGS", ...lines, "QUESTIONS     none", "NOT VERIFIED  none", `BRANCH        b, head ${"d".repeat(40)}`].join("\n"));
+  const page = read(w, "T3", "report", "R31");
+  return {
+    shown: [...page.html.matchAll(/<span class="mono">(F\d+)<\/span><span>[^<]*<\/span><span>(?:<span class="pill[^"]*">([^<]+)<\/span>)?/g)].map(match => `${match[1]} ${match[2] ?? "no state"}`),
+    logbook: [...(/<h2 class="sec">In the logbook<\/h2>([\s\S]*?)(?:<details|<\/div><aside)/.exec(page.html)?.[1] ?? "").matchAll(/<tr><td class="mono">([^<]+)<\/td><td>([^<]+)<\/td><td>([^<]+)<\/td><td>([^<]+)<\/td><\/tr>/g)].map(match => match.slice(1).join(" ")),
+  };
+}
+const MEDIUM = ["    a.js:1", "    proof: npm test", "    saw: `x`"];
+
+test("T1064: a finding that the lead moved to a follow-up task (its row loses its run) gives no later finding a wrong state, and In the logbook lists each row of the run with its true state", t => {
+  const w = world(t);
+  const { shown, logbook } = reviewOf(w, ["- F1 medium a.js:1 closed", ...MEDIUM.slice(1), "- F2 low b.js:2 moved to T9", "- F3 low c.js:3 open", "- F4 low d.js:4 dismissed"],
+    [["F-T3-13", "medium", "closed"], ["F-T9-1", "low", "open", "T9"], ["F-T3-15", "low", "open"], ["F-T3-16", "low", "dismissed"]],
+    [{ decision: "F-T3-14 moved to T9 as F-T9-1: F-T3-14-summary", why: "the follow-up task (from R31, low): Later polish" }]);
+  assert.deepEqual(shown, ["F1 closed", "F2 no state", "F3 no state", "F4 no state"], "the three low rows have three states, so no low finding shows one; the one medium row is F1's");
+  assert.deepEqual(logbook, ["F-T3-13 medium F-T3-13-summary closed", "F-T3-15 low F-T3-15-summary open", "F-T3-16 low F-T3-16-summary dismissed", "F-T3-14 low F-T9-1-summary moved to T9"]);
+});
+
+test("T1064: a low finding with no logbook row (allowed) gives no other finding a wrong state", t => {
+  const w = world(t);
+  const { shown, logbook } = reviewOf(w, ["- F1 low a.js:1 not recorded", "- F2 medium b.js:2 open", ...MEDIUM.slice(1)], [["F-T3-17", "medium", "open"]]);
+  assert.deepEqual(shown, ["F1 no state", "F2 open"]);
+  assert.deepEqual(logbook, ["F-T3-17 medium F-T3-17-summary open"]);
+});
+
+test("T1064: two findings of one severity that the lead records in the other order show a state only when both rows have the same state", t => {
+  const w = world(t), lines = ["- F1 low a.js:1 first", "- F2 low b.js:2 second"];
+  assert.deepEqual(reviewOf(w, lines, [["F-T3-17", "low", "dismissed"], ["F-T3-18", "low", "open"]]).shown, ["F1 no state", "F2 no state"], "two states, and no key joins a row to its finding");
+  const v = world(t);
+  assert.deepEqual(reviewOf(v, lines, [["F-T3-17", "low", "closed"], ["F-T3-18", "low", "closed"]]).shown, ["F1 closed", "F2 closed"], "one state for both rows is certain for both findings");
+});
+
 test("T1064: a report shows each finding that the hook reads, with the hook's severity: the dash, numbered, long-dash and indented forms", t => {
   const w = world(t), file = join(w.logbook, "reports", "R5.md"), text = readFileSync(file, "utf8");
   writeFileSync(file, text.replace(/^FINDINGS\n[\s\S]*?(?=^QUESTIONS)/m, ["FINDINGS", "- F1 - high - the dash form: a save loses data", "    src/save.js:3", "    proof: npm test", "    saw: `lost`",
