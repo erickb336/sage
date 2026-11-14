@@ -12,12 +12,13 @@ import { modeDirectory, privateDirectory, readState, saveState, stateKey } from 
 const mode = (input) => answer(input, process.env);
 const stop = (input) => reportGate(input, process.env);
 const check = (input) => messageCheck(input, process.env);
+const pushed = (input) => { try { tool.observePush(input.tool_input?.command, input.cwd, process.env); } catch {} };
 export const ROUTES = {
   SessionStart: [["source", /^(?:startup|resume|clear)$/, startStatus], ["source", /^(?:compact|fork)$/, mode]],
   UserPromptSubmit: [[null, null, mode]],
   PreToolUse: [["tool_name", /^(?:Bash|apply_patch|mcp__sage__.+)$|(?:spawn|resume)_agent$|^(?:multi_agent_v1)?send_input$|(?:send_message|followup_task)$/, gateAnswer]],
   PermissionRequest: [["tool_name", /^Bash$/, gateAnswer]],
-  PostToolUse: [["tool_name", /spawn_agent$/, briefAnswer]],
+  PostToolUse: [["tool_name", /spawn_agent$/, briefAnswer], ["tool_name", /^Bash$/, pushed]],
   SubagentStart: [[null, null, briefAnswer]],
   SubagentStop: [[null, null, stop]],
   Stop: [[null, null, check]],
