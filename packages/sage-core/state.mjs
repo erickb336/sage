@@ -23,6 +23,7 @@ import { MOVES, PLAN_MAX, checkoutGone, createSharedRoot, sharedRoot, unreadable
 import { changedText, countsOf, endText, gateQuestion, gateText, localTime, mapHtml, mismatchText, previewText, providersOf, reconciliationText, startText, stepText, stoppedText, title } from "./move-text.mjs";
 import { pagesFolder, worktreeRoot, worktrees } from "./worktrees.mjs";
 import { CHIEF, TAKEOVER_OPTIONS, chiefOnly, createChiefs, crossed, offerOf, replaceOf, replaceQuestion, writerClass } from "./chiefs.mjs";
+import { NAMES_FILE, chiefNames } from "./chief-live.mjs";
 import { LEAD_COMMANDS, leadProblem as leadPolicy, leadRequest } from "./lead-policy.mjs";
 import { renderMessage } from "./message-checks.mjs";
 import { MAX_SECTIONS, PAGE_MAX, PAGE_TYPES, pageType, pageUrl } from "./message.mjs";
@@ -105,7 +106,7 @@ const SPARSE = { tasks: [CHIEF_COLUMN, "offer", RELEASE_COLUMN], runs: [CHIEF_CO
 const TABLES = { ...PLAIN_TABLES, ...Object.fromEntries(Object.entries(SPARSE).map(([t, cols]) => [t, [...PLAIN_TABLES[t], ...cols]])) };
 const ADDED = { ...FILLED, ...Object.fromEntries(Object.entries(SPARSE).map(([t, cols]) => [t, [...(FILLED[t] ?? []), ...cols]])) };
 const RUN_ENDS = ["done", "blocked", "question", "failed"];
-const COMMANDS = ["init", "logbook", "standing", "pages", "message", "task", "task-adopt", "milestone", "release", "round", "run", "finding", "verdict", "lint", "gate", "log", "status", "stats", "merge-check", "config", "projects", "board", "observe", "link", "claim", "offer", "cancel", "accept", "unclaim", "move", "worktrees"];
+const COMMANDS = ["init", "logbook", "standing", "pages", "message", "task", "task-adopt", "milestone", "release", "round", "run", "finding", "verdict", "lint", "gate", "log", "status", "stats", "merge-check", "config", "projects", "board", "observe", "link", "claim", "offer", "cancel", "accept", "unclaim", "move", "worktrees", "chief"];
 const OPTIONS = {
   "logbook repair": ["accept-loss", "accept-change-loss"],
   link: ["to", "separate"],
@@ -2874,6 +2875,23 @@ function act(cmd, pos, opt, dir, env, skip, project) {
       const old = kept.length === 1 ? (tables.length === 1 ? `; its old file is ${kept[0].aside}` : `; the old file of ${kept[0].table}.tsv is ${kept[0].aside}`) : kept.length ? `; the old files are ${kept.map((t) => t.aside).join(" and ")}` : "";
       const restarted = tables.length ? `${tables.map((t) => `${t.table}.tsv`).join(" and ")} started again without rows${old}. The decision${tables.length === 1 ? " is" : "s are"} in decisions.tsv.${floors.length ? " The move's id floors are in it again, from the old logbooks." : ""}` : "";
       return change ? [restarted, lostChangeLine(dir, change)].filter(Boolean).join(" ") : restarted;
+    }
+    case "chief": {
+      if (sub !== "name" || !CHIEF.test(id ?? "")) refuse(`chief takes: chief name C<n> <name>. With no name, it clears the name, and the board shows the default name. Nothing changed.`);
+      if (!isShared(dir, env)) refuse(`${visible(project)} has no shared logbook, and only a shared logbook has chiefs. Nothing changed.`);
+      if (!chiefs(dir).some((r) => r.id === id)) refuse(`${id} is not a chief of this logbook (${join(dir, "chiefs.tsv")}). Nothing changed.`);
+      const name = more.join(" ").normalize("NFC"), why = name && nameProblem(name), file = join(dir, NAMES_FILE);
+      if (why) refuse(`the name "${visible(name)}" ${why}. Nothing changed.`);
+      let names;
+      try {
+        const read = chiefNames(JSON.parse(readRegular(file, { link: false, max: 1 << 20 }) ?? "{}"));
+        if (read.bad.length) throw new Error(read.bad.join("; "));
+        names = read.names;
+      }
+      catch (error) { refuse(`${file} is damaged (${error.message}), so sage cannot change a name. Nothing changed. Ask the owner to fix or remove it.`); }
+      const rest = Object.fromEntries(Object.entries(names).filter(([key]) => key !== id));
+      swap(file, `${JSON.stringify(name ? { ...rest, [id]: name } : rest, null, 2)}\n`);
+      return name ? `${id} is named "${name}" now.` : `${id} has no name now, so the board shows its default name.`;
     }
     case "observe": {
       const { task } = taskOf(dir, need(sub, "the task id"));
