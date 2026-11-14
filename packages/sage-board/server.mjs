@@ -7,6 +7,9 @@ import { readBoardSources, buildBoardModel, boardOverview, taskPanel, landingRul
 import { pagesRequest, servePages, taskFiles } from "./pages.mjs";
 import { designSummary, logbookDir, readerPage, recordedPages } from "./reader.mjs";
 
+const MARKDOWN = await import("./markdown.mjs").then(module => module.renderMarkdown, () => null);
+const NO_READER = "The reader's Markdown renderer is not in this copy of the board. Run the board from the sage plugin, or run npm ci and npm run build.";
+
 const MAX_HTML = 8 * 1024 * 1024;
 const MAX_CLIENTS = 16;
 const digest = text => createHash("sha256").update(text).digest();
@@ -78,7 +81,7 @@ function appPolicy(origin) {
 
 const forwarded = name => name === "forwarded" || name.startsWith("x-forwarded-");
 
-export function createBoardServer({ sources, port = BOARD_PORT, id, clock = () => new Date().toISOString(), settleReads = SETTLE_READS, duringRead = null, providerRoots = [], app = loadBoardApp() } = {}) {
+export function createBoardServer({ sources, port = BOARD_PORT, id, clock = () => new Date().toISOString(), settleReads = SETTLE_READS, duringRead = null, providerRoots = [], app = loadBoardApp(), markdown = MARKDOWN } = {}) {
   if (!Number.isSafeInteger(port) || port < 1024 || port > 65535) throw new TypeError("board port must be an integer from 1024 through 65535");
   if (typeof clock !== "function") throw new TypeError("the board clock must be a function that gives an ISO time");
   if (!Array.isArray(sources) || !sources.length || sources.length > 32) throw new TypeError("board needs 1 to 32 explicit sources");
@@ -322,8 +325,9 @@ export function createBoardServer({ sources, port = BOARD_PORT, id, clock = () =
   }
 
   function serveReader(request, response, fail) {
+    if (!markdown) return fail(503, NO_READER);
     let page;
-    try { page = readerPage({ model, configured, url: request.url, origin: origins.get(oneHeader(request, "host").toLowerCase()) }); } catch { return fail(503, "The board cannot read this document now. Reload the page to try again."); }
+    try { page = readerPage({ model, configured, url: request.url, origin: origins.get(oneHeader(request, "host").toLowerCase()), render: markdown }); } catch { return fail(503, "The board cannot read this document now. Reload the page to try again."); }
     if (!page) return fail(404, "This document is not on the board.");
     response.setHeader("Content-Security-Policy", page.policy);
     response.writeHead(200, { "Content-Type": "text/html; charset=utf-8" });

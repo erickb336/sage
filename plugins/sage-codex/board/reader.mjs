@@ -2,8 +2,9 @@ import { createHash } from "node:crypto";
 import { lstatSync, readFileSync, readdirSync } from "node:fs";
 import { dirname, join, posix } from "node:path";
 import { BRIEF_FIELDS, REPORT_FIELDS, briefSections, fieldsOf, pageFile, pageTaskFolder, pageType, taskPanel } from "../core/index.mjs";
-import { bidiShown, renderMarkdown } from "./markdown.mjs";
 
+const BIDI = /[\u202a-\u202e\u2066-\u2069]/g;
+const bidiShown = text => String(text ?? "").replace(BIDI, c => `[U+${c.codePointAt(0).toString(16).toUpperCase()}]`);
 const TEXT_MAX = 1 << 20, MD_MAX = 2 << 20, VERSIONS_MAX = 30, SHOTS_MAX = 8;
 const RUN = /^R[1-9]\d*$/, GATE = /^G[1-9]\d*$/, NAME = /^[A-Za-z0-9][A-Za-z0-9._-]{0,79}$/;
 const PICTURE = /\.(?:png|jpe?g|gif|webp|svg)$/i;
@@ -172,7 +173,7 @@ const END = "</main></body></html>\n";
 const facts = items => `<dl class="facts">${items.filter(Boolean).map(([name, value]) => `<div><dt>${esc(name)}</dt><dd>${value}</dd></div>`).join("")}</dl>`;
 const note = (text, kind = "") => `<div class="note ${kind}" role="${kind === "fail" ? "alert" : "note"}">${text}</div>`;
 
-export function readerPage({ model, configured, url, origin }) {
+export function readerPage({ model, configured, url, origin, render }) {
   const view = parseReaderUrl(url);
   if (!view) return null;
   const task = model?.tasks.find(item => item.key === view.key), panel = task && taskPanel(model, view.key);
@@ -191,7 +192,7 @@ export function readerPage({ model, configured, url, origin }) {
   const taskHref = `/app/${BACK[view.back] ?? BACK.tasks}${encodeURIComponent(view.key)}`, taskA = (label = task.id) => `<a href="${esc(taskHref)}">${esc(label)}</a>`, taskLink = taskA();
   const picture = (file, alt, n) => `<span class="zoom" id="p${n}"><a href="#p${n}" aria-label="Enlarge the picture ${esc(alt || file)}"><img src="${esc(pagesBase + file)}" alt="${esc(alt)}" loading="lazy"></a><a class="x" href="#_">Close the picture</a></span>`;
   let pictures = 0;
-  const markdown = (text, base = "") => renderMarkdown(text, {
+  const markdown = (text, base = "") => render(bidiShown(text), {
     href: raw => {
       let url;
       try { url = decodeURIComponent(raw); } catch { return null; }

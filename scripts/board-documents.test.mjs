@@ -9,6 +9,7 @@ import test from "node:test";
 import { fileURLToPath } from "node:url";
 import { buildBoardModel } from "../packages/sage-core/board-model.mjs";
 import { readBoardSources } from "../packages/sage-core/board-reader.mjs";
+import { renderMarkdown } from "../packages/sage-board/markdown.mjs";
 import { readerPage, readerUrl } from "../packages/sage-board/reader.mjs";
 import { createBoardServer, loadBoardApp } from "../packages/sage-board/server.mjs";
 import { writeTasksLogbook } from "./fixtures/board-app.mjs";
@@ -29,7 +30,7 @@ function world(t, options = {}) {
   return { dir, logbook, pages: join(dir, "worktrees", "sample-app-abc123", "pages"), sources, model };
 }
 function read(w, task, kind, arg = null, view = {}, model = w.model()) {
-  const page = readerPage({ model, configured: w.sources, url: readerUrl(KEY(task), kind, arg, view), origin: ORIGIN });
+  const page = readerPage({ model, configured: w.sources, url: readerUrl(KEY(task), kind, arg, view), origin: ORIGIN, render: renderMarkdown });
   return page && { ...page, html: page.top + page.rest, text: (page.top + page.rest).replace(/<style>[\s\S]*?<\/style>/, "").replace(/<[^>]+>/g, " ").replace(/&#(\d+);/g, (_, n) => String.fromCharCode(n)).replace(/&quot;/g, "\"").replace(/&lt;/g, "<").replace(/&gt;/g, ">").replace(/&amp;/g, "&").replace(/\s+/g, " ") };
 }
 const fieldsOpen = html => [...html.matchAll(/<details( open)?><summary><span class="fname">([A-Z ]+)<\/span>/g)].map(match => `${match[2]}${match[1] ? " open" : ""}`);
@@ -177,4 +178,8 @@ test("T1064: the server serves the reader script-free under the sandbox policy, 
   assert.deepEqual(panel.files.designs, { versions: 2, arena: true });
   const limits = JSON.parse((await get(base, `/app/task/${Buffer.from(KEY("T3")).toString("base64url")}`)).body);
   assert.deepEqual(limits.files.recorded.map(item => [item.file, item.state]), [["gone-plan.md", "gone"], ["notes.md", "changed"]]);
+  const bare = createBoardServer({ sources: w.sources, port: await freePort(), app: null, markdown: null, settleReads: [] });
+  t.after(() => bare.close());
+  const { port: barePort } = await bare.start(), missing = await get(`http://127.0.0.1:${barePort}`, readerUrl(KEY("T3"), "brief", "R7"));
+  assert.deepEqual([missing.status, missing.body], [503, "The reader's Markdown renderer is not in this copy of the board. Run the board from the sage plugin, or run npm ci and npm run build.\n"], "a copy of the board without its built renderer still starts, and says why it has no reader");
 });

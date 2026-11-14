@@ -1,8 +1,5 @@
 import MarkdownIt from "markdown-it";
 
-export const BIDI = /[‪-‮⁦-⁩]/g;
-export const bidiShown = text => String(text ?? "").replace(BIDI, c => `[U+${c.codePointAt(0).toString(16).toUpperCase()}]`);
-
 const md = new MarkdownIt({ html: false, linkify: false, typographer: false });
 md.validateLink = url => !/^\s*(?:[a-z][a-z0-9+.-]*:|\/\/|\\)/i.test(url) || /^https:\/\//i.test(url.trim());
 
@@ -12,7 +9,7 @@ const off = (token, text) => Object.assign(token, { type: "html_inline", tag: ""
 
 export function renderMarkdown(text, { href, picture }) {
   const headings = [], ids = new Set(), env = {};
-  const tokens = md.parse(bidiShown(text), env);
+  const tokens = md.parse(String(text), env);
   const title = tokens[0]?.type === "heading_open" && tokens[0].tag === "h1" ? plain([tokens[1]]) : null;
   if (title !== null) tokens.splice(0, 3);
   for (const [index, token] of tokens.entries()) {
