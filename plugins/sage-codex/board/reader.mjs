@@ -1,7 +1,7 @@
 import { createHash } from "node:crypto";
 import { lstatSync, readFileSync, readdirSync, realpathSync } from "node:fs";
 import { dirname, join, posix } from "node:path";
-import { BRIEF_FIELDS, PAGE_MAX, REPORT_FIELDS, briefSections, fieldsOf, pageFile, pageTaskFolder, pageType, readReport, taskPanel } from "../core/index.mjs";
+import { BRIEF_FIELDS, LONG_WIDTH, PAGE_MAX, REPORT_FIELDS, WIDTH, briefSections, fieldsOf, frameLines, pageFile, pageTaskFolder, pageType, readReport, taskPanel } from "../core/index.mjs";
 
 const marksShown = text => String(text ?? "").replace(/\p{Cf}/gu, c => `[U+${c.codePointAt(0).toString(16).toUpperCase().padStart(4, "0")}]`);
 const TEXT_MAX = 1 << 20, MD_MAX = 2 << 20, VERSIONS_MAX = 30, SHOTS_MAX = 8;
@@ -342,18 +342,26 @@ ${decisions.length ? decisions.map(gate => `<div class="decision"><p><b>${esc(ga
       });
       walk(message?.blocks);
       const text = value => esc(typeof value === "string" ? value : "");
-      const render = block => block.t === "field" ? `<h2 class="sec">${text(block.label)}</h2><p>${text(block.text)}</p>` : block.t === "heading" ? `<h2 class="sec">${text(block.text)}</h2>` : block.t === "p" ? `<p>${text(block.text)}</p>`
+      const width = message?.long !== undefined ? LONG_WIDTH : WIDTH, muted = value => text(value) && `<p class="muted">${text(value)}</p>`;
+      const pre = (title, lines) => `${title ? `<p><b>${text(title)}</b></p>` : ""}<pre class="md">${esc(lines.join("\n"))}</pre>`;
+      const grid = (head, rows, caption) => `<table class="scores">${caption ? `<caption>${text(caption)}</caption>` : ""}<thead><tr>${head.map(cell => `<th scope="col">${text(cell)}</th>`).join("")}</tr></thead><tbody>${rows.map(row => `<tr>${(Array.isArray(row) ? row : []).map(cell => `<td>${text(cell)}</td>`).join("")}</tr>`).join("")}</tbody></table>`;
+      const linesOf = block => { if (block.frame === undefined) return block.lines; const drawn = frameLines(block.frame, width); return drawn.problems.length ? null : drawn.lines; };
+      const messagePage = /\b(question-[0-9a-f]{8}\.html)\b/.exec(typeof kept?.text === "string" ? kept.text : "")?.[1], shownPage = messagePage && folder && pageFile(folder, messagePage) ? pagesBase + messagePage : null;
+      const render = block => (block.t === "field" ? `<h2 class="sec">${text(block.label)}</h2><p>${text(block.text)}</p>` : block.t === "heading" ? `<h2 class="sec">${text(block.text)}</h2>` : block.t === "p" ? `<p>${text(block.text)}</p>`
         : block.t === "list" && Array.isArray(block.items) ? `<${block.ordered ? "ol" : "ul"}>${block.items.map(item => `<li>${text(item)}</li>`).join("")}</${block.ordered ? "ol" : "ul"}>`
-        : block.t === "steps" && Array.isArray(block.items) ? `<ol>${block.items.map(item => `<li>${text(item?.text)}</li>`).join("")}</ol>`
-        : ["code", "picture"].includes(block.t) && Array.isArray(block.lines) ? `${block.title ? `<p><b>${text(block.title)}</b></p>` : ""}<pre class="md">${esc(block.lines.join("\n"))}</pre>`
-        : block.t === "table" && Array.isArray(block.head) && Array.isArray(block.rows) ? `<table class="scores"><thead><tr>${block.head.map(cell => `<th scope="col">${text(cell)}</th>`).join("")}</tr></thead><tbody>${block.rows.map(row => `<tr>${(Array.isArray(row) ? row : []).map(cell => `<td>${text(cell)}</td>`).join("")}</tr>`).join("")}</tbody></table>` : "";
+        : block.t === "steps" && Array.isArray(block.items) ? `<ol>${block.items.map(item => `<li>${text(item?.text)}${Array.isArray(item?.cmd) ? `<pre class="md">${esc(item.cmd.join("\n"))}</pre>` : ""}${muted(item?.see)}</li>`).join("")}</ol>`
+        : ["code", "picture"].includes(block.t) ? (lines => Array.isArray(lines) ? `${pre(block.title, lines)}${muted(block.key)}` : "")(linesOf(block))
+        : block.t === "toggle" && Array.isArray(block.after) && Array.isArray(block.today) ? [["After this change", block.after], ["Today", block.today]].map(([label, side]) => `<h3 class="sub">${label}</h3>${side.map(item => pre(item?.title, Array.isArray(item?.lines) ? item.lines : [])).join("")}`).join("")
+        : block.t === "changes" && Array.isArray(block.rows) ? grid(["Where you see it", "Today", "After this change", "Why"], block.rows.map(row => [row?.where, row?.today, row?.after, row?.why]))
+        : block.t === "table" && Array.isArray(block.head) && Array.isArray(block.rows) ? grid(block.head, block.rows, block.caption) : "")
+        || note(`<b>Not shown here.</b> This page cannot show one part of the question (${text(block.t)}). ${shownPage ? `<a href="${esc(shownPage)}">Open the question's message page</a>` : "Read it in the chief's chat."}`, "need");
       const same = (a, b) => String(a).trim().toLowerCase() === String(b).trim().toLowerCase() || String(a).trim().toLowerCase().replace(/^[a-z0-9]\s*[·:.)-]\s*/, "") === String(b).trim().toLowerCase();
       const groups = answers.length ? answers : [{ table: null, label: null }];
       const answerCards = groups.map(({ table, label }) => {
         const rows = table ? table.rows.filter(Array.isArray) : options.map(option => [option]);
         const pickIndex = table && Number.isInteger(table.pick) && rows[table.pick] ? table.pick : rows.findIndex(row => gate.recommendation && same(row[0], gate.recommendation));
         const ordered = pickIndex >= 0 ? [rows[pickIndex], ...rows.filter((_, i) => i !== pickIndex)] : rows;
-        return `${groups.length > 1 && label ? `<h3 class="sub">${text(label)}</h3>` : ""}${ordered.map((row, i) => `<section class="answer${i === 0 && pickIndex >= 0 ? " pick" : ""}"><h3>${text(String(row[0]))}${i === 0 && pickIndex >= 0 ? ` <span class="pill grafted">${esc(ownerId)}'s pick</span>` : ""}${gate.answer && same(row[0], gate.answer) ? ` <span class="pill done">Your answer</span>` : ""}</h3>${row.length > 1 ? `<dl>${row.slice(1).map((cell, k) => `<dt>${text(table.head[k + 1])}</dt><dd>${text(cell)}</dd>`).join("")}</dl>` : ""}</section>`).join("")}`;
+        return `${groups.length > 1 && label ? `<h3 class="sub">${text(label)}</h3>` : ""}${muted(table?.caption)}${ordered.map((row, i) => `<section class="answer${i === 0 && pickIndex >= 0 ? " pick" : ""}"><h3>${text(String(row[0]))}${i === 0 && pickIndex >= 0 ? ` <span class="pill grafted">${esc(ownerId)}'s pick</span>` : ""}${gate.answer && same(row[0], gate.answer) ? ` <span class="pill done">Your answer</span>` : ""}</h3>${row.length > 1 ? `<dl>${row.slice(1).map((cell, k) => `<dt>${text(table.head[k + 1])}</dt><dd>${text(cell)}</dd>`).join("")}</dl>` : ""}</section>`).join("")}`;
       }).join("");
       const readMore = [`<li>${taskA(`Task ${task.id}`)} · ${esc(task.title)}</li>`, ...pagesOf.filter(block => typeof block.file === "string").map(block => {
         const where = block.task === task.id && pageType(block.file) ? (block.file.endsWith(".md") ? link("page", block.file, { back: `q-${gate.id}` }) : pagesBase + block.file) : null;

@@ -219,6 +219,36 @@ test("T1064: a batch question shows the answers of each question under its own h
   assert.doesNotMatch(page.html, /<h2 class="sec">Question 1: Colour<\/h2>/, "a section with only its answers has no empty heading");
 });
 
+test("T1064: the question view shows every part of the kept message: a frame and a picture with their keys, steps with commands and what you see, a toggle, a changes table, table captions; a part it cannot show gets a note", t => {
+  const w = world(t), file = join(w.logbook, "gates", "G4.json"), kept = JSON.parse(readFileSync(file, "utf8"));
+  const answers = kept.message.blocks.find(block => block.t === "table");
+  kept.message.blocks = [...kept.message.blocks.filter(block => block !== answers),
+    { t: "picture", title: "Where the work is", key: "The double box is the task that runs now.", frame: { box: "milestone", name: "Offline sync", state: "active", items: [{ box: "task", name: "T10 Share sheet", state: "building", here: true }] } },
+    { t: "picture", title: "The share sheet", key: "[new] marks a new control.", lines: ["+--------------+", "| Copy [new]   |", "+--------------+"] },
+    { t: "steps", items: [{ text: "Open the board.", cmd: ["sage board --open"], see: "The Overview opens." }, { text: "Pick the list." }] },
+    { t: "toggle", after: [{ title: "Sheet after", lines: ["[Copy to my lists]"] }], today: [{ title: "Sheet today", lines: ["[View only]"] }] },
+    { t: "changes", rows: [{ where: "Share sheet", today: "View only", after: "A Copy button", why: "Viewers ask for it" }] },
+    { t: "table", head: ["Role", "Can copy"], rows: [["Viewer", "Yes"]], caption: "Who can copy" },
+    { ...answers, caption: "Pick one answer" },
+    { t: "video", title: "A part from a newer sage" }];
+  kept.text = "QUESTION\n\nPage · Can a viewer copy?\n  http://127.0.0.1:43123/pages/sample-app-abc123/T10/question-0a1b2c3d.html\n  question-0a1b2c3d.html";
+  writeFileSync(file, JSON.stringify(kept));
+  writeFileSync(join(w.pages, "T10", "question-0a1b2c3d.html"), "<!doctype html><title>q</title>\n");
+  const html = read(w, "T10", "question", "G4").html;
+  const parts = {
+    "the frame as its boxes": /<p><b>Where the work is<\/b><\/p><pre class="md">╭─ Milestone Offline sync ─+╮\n│ In progress +│\n│ ╔═ Task: T10 Share sheet ═+╗ │/,
+    "the frame's key": /<\/pre><p class="muted">The double box is the task that runs now\.<\/p>/,
+    "the picture and its key": /<pre class="md">\+-+\+\n\| Copy \[new\] +\|\n\+-+\+<\/pre><p class="muted">\[new\] marks a new control\.<\/p>/,
+    "each step with its command and what you see": /<ol><li>Open the board\.<pre class="md">sage board --open<\/pre><p class="muted">The Overview opens\.<\/p><\/li><li>Pick the list\.<\/li><\/ol>/,
+    "both sides of the toggle": /<h3 class="sub">After this change<\/h3><p><b>Sheet after<\/b><\/p><pre class="md">\[Copy to my lists\]<\/pre><h3 class="sub">Today<\/h3><p><b>Sheet today<\/b><\/p><pre class="md">\[View only\]<\/pre>/,
+    "the changes table": /<thead><tr><th scope="col">Where you see it<\/th><th scope="col">Today<\/th><th scope="col">After this change<\/th><th scope="col">Why<\/th><\/tr><\/thead><tbody><tr><td>Share sheet<\/td><td>View only<\/td><td>A Copy button<\/td><td>Viewers ask for it<\/td><\/tr>/,
+    "a table's caption": /<table class="scores"><caption>Who can copy<\/caption>/,
+    "the answers table's caption": /<h2 class="sec">The answers<\/h2><p class="muted">Pick one answer<\/p><section class="answer pick">/,
+    "a note for a part that the view cannot show, with a link to the message page": /<b>Not shown here\.<\/b> This page cannot show one part of the question \(video\)\. <a href="\/pages\/sample-app-abc123\/T10\/question-0a1b2c3d\.html">Open the question's message page<\/a>/,
+  };
+  assert.deepEqual(Object.keys(parts).filter(name => !parts[name].test(html)), [], "each part of the kept message shows");
+});
+
 test("T1064 security: hostile Markdown and hostile logbook text render harmless: no raw HTML, no script or javascript: link, no outside or traversal picture, no bidi override", t => {
   const w = world(t, { hostile: true });
   const pages = [["T3", "page", "hostile.md"], ["T3", "brief", "R7"], ["T3", "report", "R5"], ["T10", "question", "G4"], ["T50", "question", "G9"], ["T10", "design"], ["T10", "arena"]].map(([task, kind, arg]) => read(w, task, kind, arg ?? null));
