@@ -2602,10 +2602,10 @@ const jsonCell = (text) => {
 const answeredOf = (g) => ((a) => (a && typeof a.at === "string" && Object.hasOwn(VIA, a.via) ? a : undefined))(jsonCell(g.answered));
 const pickedOf = (g) => ((p) => (p && typeof p.at === "string" ? p : undefined))(jsonCell(g.picked));
 const pendingOf = (g) => ((a) => (!g.answer && a?.via === "board" && typeof a.answer === "string" && a.answer ? a : undefined))(answeredOf(g));
-const gateChief = (g, tasks) => (g.kind === "replace" && (g.chief || replaceOf(g)?.to)) || tasks.find((t) => t.id === g.task)?.chief || g.chief || "";
+const gateChief = (dir, g, tasks, task = tasks.find((t) => t.id === g.task)) => (g.kind === "replace" && (g.chief || replaceOf(g)?.to)) || task?.chief || (task && heldLast(dir, task).released) || g.chief || "";
 const placeOf = (a) => (a ? `from ${VIA[a.via]} at ${a.at}` : "from a place and at a time that sage did not record");
 function pickerText(dir, g) {
-  const chief = gateChief(g, read(dir, "tasks")), row = chief && chiefs(dir).find((r) => r.id === chief);
+  const chief = gateChief(dir, g, read(dir, "tasks")), row = chief && chiefs(dir).find((r) => r.id === chief);
   if (!chief) return "the next chief of this logbook picks it up";
   return row?.provider === "codex" ? `${chief} (codex) picks it up at its next turn: a message in its chat, or its next tool call` : `${chief}${row ? ` (${row.provider})` : ""} picks it up at its next step`;
 }
@@ -2644,7 +2644,7 @@ function undoAnswer(dir, gates, g) {
 }
 function openOf(dir, me) {
   const gates = read(dir, "gates"), tasks = gates.some((g) => !g.answer) ? read(dir, "tasks") : [];
-  return gates.filter((g) => !g.answer && [me, ""].includes(gateChief(g, tasks)));
+  return gates.filter((g) => !g.answer && [me, ""].includes(gateChief(dir, g, tasks)));
 }
 function ownGates(project, { native, chief } = {}, env = process.env) {
   const place = locate(project, env), { dir } = place;

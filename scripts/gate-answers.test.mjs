@@ -400,6 +400,30 @@ for (const [from, to] of [["claude", "codex"], ["codex", "claude"]]) {
   });
 }
 
+for (const [from, to] of [["claude", "codex"], ["codex", "claude"]]) {
+  test(`after the owner hands a ${from} task to the ${to} chief and the ${to} chief unclaims it, the task's older gates stay with the ${to} chief, the one chief that may claim it back`, (t) => {
+    const w = shared(t);
+    const giver = w.chiefs[from], taker = w.chiefs[to];
+    const wait = (chief) => spawnSync(process.execPath, [WAIT, "--gates", chief], { cwd: w.project, env: { ...w.env, SAGE_WAIT_MS: "300" }, encoding: "utf8", timeout: 60_000 }).stdout;
+    const NONE = "No gate of yours waits for the owner, so there is nothing to wait for.\n", WAITS = "No answer yet to G1 after 0 minutes: run this command again, in the background.\n";
+    w.as(from, "task", "add", "--title", "a", ...ADD);
+    w.as(from, "gate", "add", "T1", "--question", "Ship it?", "--options", "yes|no", "--recommend", "yes");
+    w.owner(from, "gate", "give", "T1", "--to", taker);
+    w.owner(to, "gate", "answer", "G2", "--option", "1", "--via", `${to}-card`);
+    assert.match(w.as(to, "unclaim", "T1"), new RegExp(`^T1 unclaimed · no owning chief\\. Only ${taker} claims it back`));
+    assert.equal(w.task("T1").chief, "");
+    assert.deepEqual([wait(giver), wait(taker)], [NONE, WAITS], "G1 stays with the chief that unclaimed T1");
+    const told = claudeEvent(w, { hook_event_name: "Stop", stop_hook_active: false, last_assistant_message: "ok", background_tasks: [] });
+    if (to === "claude") assert.match(told.reason, /^sage: G1 waits for the owner/);
+    else assert.equal(told?.decision, undefined, "the Claude chief gave T1 away, so G1 is not its gate");
+    assert.match(w.owner(from, "gate", "answer", "G1", "--option", "2", "--via", "board"), new RegExp(`It acts when ${taker} \\(${to}\\) picks it up`));
+    assert.equal(contextOf(HOOKS[from].step(w)), "", "the giving chief does not pick it up");
+    assert.equal(w.gate("G1").answer, "");
+    assert.match(contextOf(HOOKS[to].step(w)), /- G1 \(T1\): the owner answered "no" on the board at .*: G1 answered · no$/);
+    assert.deepEqual([w.gate("G1").answer, w.gate("G1").picked.chief], ["no", taker]);
+  });
+}
+
 test("the lint offer belongs to the chief that ran lint: its hook applies a board yes and owns the new task, and the other chief's hook leaves it", (t) => {
   const w = shared(t);
   writeFileSync(join(w.project, "a.js"), "export const a = 1;\n");
