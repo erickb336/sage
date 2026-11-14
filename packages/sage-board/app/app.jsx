@@ -107,7 +107,7 @@ export function App() {
   const prs = model ? model.tasks.filter(task => task.pr && !task.ended).length : 0;
   const body = page.hash === "" ? <Overview model={model} shown={shown} /> : page.hash === "tasks" ? <Tasks model={model} params={page.params} chief={picked} />
     : page.hash === "pull-requests" ? <Pulls model={model} params={page.params} chief={picked} />
-    : page.hash === "question" ? <QuestionView needKey={page.params.get("key") ?? ""} model={model} /> : null;
+    : page.hash === "question" ? <QuestionView needKey={page.params.get("key") ?? ""} model={model} theme={theme} /> : null;
   return (
     <div className="app">
       <aside className="side">

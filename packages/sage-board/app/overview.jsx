@@ -96,13 +96,18 @@ function Stopped({ model, shown }) {
             <div>
               <p className="q">{chief.id} · {chief.provider} · {chief.name}</p>
               <p className="meta"><span>stopped: no event since {chief.heartbeat ? new Date(chief.heartbeat).toLocaleString([], { hour: "2-digit", minute: "2-digit", day: "numeric", month: "short", hourCycle: "h23" }) : "a time not recorded"} and no running agent</span><span>nothing moves on its own</span></p>
-              {tasks.length ? <ul className="owned">{tasks.map(task => (
-                <li key={task.key}>
-                  <a href={taskLink(task.key)}>{task.id} · {task.title}</a>
-                  {giving === task.key ? <GiveBox task={task} logbook={chief.logbook} from={chief.id} chiefs={model.chiefs} close={() => setGiving(null)} />
-                    : <button type="button" className="btn" onClick={() => setGiving(task.key)}>Give to another chief</button>}
-                </li>
-              ))}</ul> : <p className="hint">It owns no open task.</p>}
+              {tasks.length ? <ul className="owned">{tasks.map(task => {
+                const need = model.needs.find(item => item.takeover && item.task?.key === task.key), answered = model.answered.find(item => item.takeover && item.task.key === task.key);
+                return (
+                  <li key={task.key}>
+                    <a href={taskLink(task.key)}>{task.id} · {task.title}</a>
+                    {giving === task.key ? <GiveBox task={task} logbook={chief.logbook} from={chief.id} chiefs={model.chiefs} close={() => setGiving(null)} />
+                      : need ? <a href={questionLink(need.key)} className="btn">{need.gate} open</a>
+                      : answered ? <a href={questionLink(answered.key)} className="btn">{answered.gateId} answered</a>
+                      : <button type="button" className="btn" onClick={() => setGiving(task.key)}>Give to another chief</button>}
+                  </li>
+                );
+              })}</ul> : <p className="hint">It owns no open task.</p>}
             </div>
           </li>
         );

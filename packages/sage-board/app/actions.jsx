@@ -3,10 +3,11 @@ import { when } from "./use-model.js";
 
 const TOKEN_KEY = "board-token";
 const stored = { get: () => { try { return localStorage.getItem(TOKEN_KEY) ?? ""; } catch { return ""; } }, set: value => { try { value ? localStorage.setItem(TOKEN_KEY, value) : localStorage.removeItem(TOKEN_KEY); } catch {} } };
-const token = stored.get(), on = document.querySelector('meta[name="sage-writes"]')?.content === "on";
-const access = { writes: !on ? "off" : token ? "paired" : "unpaired", token };
+const on = document.querySelector('meta[name="sage-writes"]')?.content === "on";
+const access = { writes: !on ? "off" : stored.get() ? "paired" : "unpaired" };
 const listeners = new Set();
-const setAccess = (writes, value) => { access.writes = writes; access.token = value; stored.set(value); listeners.forEach(fn => fn()); };
+const setAccess = writes => { access.writes = writes; listeners.forEach(fn => fn()); };
+addEventListener("storage", event => { if (on && (event.key === TOKEN_KEY || event.key === null)) setAccess(stored.get() ? "paired" : "unpaired"); });
 const VIA = { board: "on the board", chat: "in the chat", "claude-card": "on a Claude card", "codex-card": "on a Codex card" };
 const encodeKey = key => btoa(String.fromCharCode(...new TextEncoder().encode(key))).replace(/\+/g, "-").replace(/\//g, "_").replace(/=+$/, "");
 const clock = at => Number.isFinite(Date.parse(at)) ? new Date(at).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit", hourCycle: "h23" }) : "an unknown time";
@@ -23,9 +24,12 @@ export function useAccess() {
 
 export async function post(path, body) {
   try {
-    const response = await fetch(`/api/${path}`, { method: "POST", headers: { "Content-Type": "application/json", "X-Sage-Token": access.token }, body: JSON.stringify(body) });
+    const token = stored.get(), response = await fetch(`/api/${path}`, { method: "POST", headers: { "Content-Type": "application/json", "X-Sage-Token": token }, body: JSON.stringify(body) });
     const json = await response.json().catch(() => ({}));
-    if (path !== "pair" && (response.status === 401 || response.status === 403 && json.problem)) setAccess("unpaired", "");
+    if (path !== "pair" && (response.status === 401 || response.status === 403 && json.problem)) {
+      if (response.status === 403 && stored.get() === token) stored.set("");
+      setAccess(response.status === 403 && stored.get() ? "paired" : "unpaired");
+    }
     return { ok: response.ok && json.ok !== false, text: clocks(json.text ?? json.problem ?? (response.ok ? "" : `The board refused the write (${response.status}).`)), json };
   } catch { return { ok: false, text: "The board cannot reach its server on this Mac. Nothing was written." }; }
 }
@@ -37,7 +41,7 @@ export function PairBox() {
   const pair = async event => {
     event.preventDefault();
     const result = await post("pair", { code });
-    if (result.json.token) setAccess("paired", result.json.token);
+    if (result.json.token) { stored.set(result.json.token); setAccess("paired"); }
     else setProblem(result.text);
   };
   return (
@@ -70,7 +74,7 @@ const dot = chief => chief.stopped ? "stopped" : chief.waitsForOwner ? "waits" :
 const STATE = { live: "live", stopped: "stopped", waits: "waits for you", unknown: "liveness not known" };
 
 function ChiefMenu({ chief, onFilter, close }) {
-  const [name, setName] = useState(chief.named ? chief.name : ""), [said, setSaid] = useState(null);
+  const [name, setName] = useState(chief.named ? chief.name.replace(new RegExp(` · ${chief.id}$`), "") : ""), [said, setSaid] = useState(null);
   const writes = useAccess();
   const save = async event => {
     event.preventDefault();
@@ -201,7 +205,7 @@ export function UndoButton({ logbook, gate, onDone }) {
   );
 }
 
-export function QuestionView({ needKey, model }) {
+export function QuestionView({ needKey, model, theme }) {
   const { gate, problem } = useGate(needKey, model.at), writes = useAccess();
   const [pick, setPick] = useState(null), [said, setSaid] = useState(null), [busy, setBusy] = useState(false), sending = useRef(false);
   useEffect(() => { document.getElementById("question-h")?.focus(); }, [needKey, !gate]);
@@ -216,7 +220,7 @@ export function QuestionView({ needKey, model }) {
   return (
     <article className="question" aria-labelledby="question-h">
       <a href="#" className="back">Back to Needs you</a>
-      <p className="facts-line">{owner} · <span className="mono">{gate.id}</span> · asked {gate.at ? clock(gate.at) : "at a time not recorded"} · <a href={`#tasks?task=${encodeURIComponent(gate.task.key)}`}>{gate.task.id} · {gate.task.title}</a> · <a href={`/read/${encodeKey(gate.task.key)}/question/${gate.id}${document.documentElement.dataset.theme === "light" ? "?theme=light" : ""}`}>Read the full question</a></p>
+      <p className="facts-line">{owner} · <span className="mono">{gate.id}</span> · asked {gate.at ? clock(gate.at) : "at a time not recorded"} · <a href={`#tasks?task=${encodeURIComponent(gate.task.key)}`}>{gate.task.id} · {gate.task.title}</a> · <a href={`/read/${encodeKey(gate.task.key)}/question/${gate.id}${theme === "light" ? "?theme=light" : ""}`}>Read the full question</a></p>
       <h1 id="question-h" tabIndex={-1}>{gate.message?.title ?? gate.text ?? gate.question}</h1>
       {gate.message ? <div className="context"><Blocks blocks={gate.message.blocks.filter(block => !(block.t === "table" && same(block.head[0], "Answer")))} /></div>
         : <p className="hint">This question has no kept message, so the board shows its question and its options only.{gate.default && ` If you do not answer: ${gate.default}.`}</p>}
@@ -241,7 +245,7 @@ export function QuestionView({ needKey, model }) {
           : <p>{pick === null ? "Pick one answer above." : <>Your answer: <b>{gate.options[pick]}</b></>} <span className="grow" />
               <button type="button" className="btn" onClick={() => setPick(null)}>Clear</button>
               <button type="button" className="btn primary" disabled={pick === null || busy} onClick={send}>Send answer</button></p>}
-        {said && !said.ok && <p className="refused" role="alert">Not recorded. {said.text}</p>}
+        {said && !said.ok && <p className={said.json?.pending ? "note" : "refused"} role="alert">{said.json?.pending ? "" : "Not recorded. "}{said.text}</p>}
         <p className="hint">The first answer wins: from the board or from the chief's chat. A later answer is refused and names the first one.</p>
       </div>
     </article>

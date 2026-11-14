@@ -10,6 +10,7 @@ import { after, before, test } from "node:test";
 import * as claude from "../plugins/sage/skills/sage/sage.mjs";
 import { runBoardCli } from "../plugins/sage/board/cli.mjs";
 import { createBoardServer, loadBoardApp } from "../plugins/sage/board/server.mjs";
+import { writeInWorker } from "../plugins/sage/board/writes.mjs";
 
 const require = createRequire(import.meta.url);
 const { chromium } = require("playwright");
@@ -35,7 +36,7 @@ const MESSAGE = { kind: "question", title: "Can a viewer copy a shared list into
   { t: "table", head: ["Answer", "What happens next", "Cost"], rows: [["yes", "The chief adds the copy action.", "About 1 to 2 h of agent time."], ["no", "The chief builds view only.", "No extra cost now."]], pick: 0 },
   { t: "field", label: "If you do not answer", text: "The task waits." }, { t: "field", label: "Needed by", text: "Sample: 20:00 today." }, { t: "field", label: "After you answer", text: "The chief builds the task." }] };
 
-async function openBoard(t) {
+async function openBoard(t, { write } = {}) {
   const base = realpathSync(mkdtempSync(join(tmpdir(), "sage-board-writes-browser-")));
   const saved = { ...process.env };
   const fakes = join(base, "fakes");
@@ -62,7 +63,8 @@ async function openBoard(t) {
   as("C3", "task", "add", "--title", "Sample export a list as CSV", "--size", "small", "--priority", "P2");
   const config = join(base, "home", ".config", "sage-board", "board.json"), port = await freePort();
   await runBoardCli(["board", "--setup", "--config", config, "--port", String(port), "--sources", JSON.stringify([{ id: "shared", path: env.SAGE_SHARED_HOME }])], { output: () => {}, env });
-  const server = createBoardServer({ sources: [{ id: "shared", label: "Shared", path: env.SAGE_SHARED_HOME }], port, app: APP, settleReads: [], stateDir: join(base, "home", ".config", "sage-board", "state") });
+  const stateDir = join(base, "home", ".config", "sage-board", "state");
+  const server = createBoardServer({ sources: [{ id: "shared", label: "Shared", path: env.SAGE_SHARED_HOME }], port, app: APP, settleReads: [], stateDir, ...(write && { write }) });
   await server.start();
   const context = await browser.newContext({ viewport: { width: 1440, height: 1000 }, colorScheme: "dark", timezoneId: "America/New_York" });
   t.after(async () => {
@@ -92,7 +94,7 @@ async function openBoard(t) {
   const shot = async name => { if (SHOTS) await page.screenshot({ path: join(SHOTS, `${name}.png`), fullPage: true }); };
   const posts = path => requests.filter(line => line === `POST ${origin}/api/${path}`).length;
   const settled = () => page.evaluate(() => new Promise(done => requestAnimationFrame(() => setTimeout(done, 0))));
-  return { page, origin, dir, project, env, as, pairText, pair, shot, requests, posts, settled, problems, gate: id => claude.read(dir, "gates").find(row => row.id === id) };
+  return { page, context, origin, dir, project, env, stateDir, as, pairText, pair, shot, requests, posts, settled, problems, gate: id => claude.read(dir, "gates").find(row => row.id === id) };
 }
 
 test("T1059: the owner pairs once, then answers with full context, undoes, renames a chief, filters by chief, gives a task to another chief and sees what changed, each within two clicks of the Overview", async t => {
@@ -257,4 +259,93 @@ test("F-T1059-11: the board records a visit once for each page load, not for eac
   await w.settled();
   assert.equal(w.posts("seen"), looks + 1, "a new page load is a new visit");
   await w.shot("t1059-since-you-looked");
+});
+
+test("F-T1059-47: after a give, the stopped chief's card shows the open takeover question in place of Give, also after a reload", async t => {
+  const w = await openBoard(t), { page } = w;
+  await w.pair();
+  let stopped = page.locator(`[data-stopped$="/C3"]`);
+  await stopped.getByRole("button", { name: "Give to another chief" }).click();
+  await stopped.getByRole("button", { name: "Open the takeover question" }).click();
+  await stopped.getByText(/^G3 open · Hand T3 from C3/).waitFor();
+  await page.reload();
+  stopped = page.locator(`[data-stopped$="/C3"]`);
+  const open = stopped.getByRole("link", { name: "G3 open" });
+  await open.waitFor();
+  assert.equal(await stopped.getByRole("button", { name: "Give to another chief" }).count(), 0, "no second Give while G3 is open");
+  await w.shot("t1059-give-open");
+  await open.click();
+  await page.getByRole("heading", { name: /^Hand T3 from Claude · C3 to Claude · C1\?/, level: 1 }).waitFor();
+  assert.deepEqual(w.problems, []);
+});
+
+test("F-T1059-26: a tab opened before the pairing picks up a pairing made in another tab, and its write keeps that tab's token", async t => {
+  const w = await openBoard(t), { page } = w;
+  await page.getByRole("heading", { name: "Pair this browser to act from the board" }).waitFor();
+  const other = await w.context.newPage();
+  await other.goto(`${w.origin}/app/`);
+  await other.getByPlaceholder("ABCD-EFGH").fill(/Pairing code: (\S+)/.exec(await w.pairText())[1]);
+  await other.getByRole("button", { name: "Pair", exact: true }).click();
+  await page.getByRole("heading", { name: "Pair this browser to act from the board" }).waitFor({ state: "detached" });
+  const token = await other.evaluate(() => localStorage.getItem("board-token"));
+  await page.getByRole("button", { name: "More about C2" }).click();
+  await page.getByLabel("Name").fill("Codex desk");
+  await page.getByRole("button", { name: "Rename" }).click();
+  await page.getByText("C2 is named \"Codex desk\" now.").waitFor();
+  assert.equal(await page.evaluate(() => localStorage.getItem("board-token")), token, "the pairing of the other tab stays");
+});
+
+test("F-T1059-46: a shadow cookie on /api does not refuse the paired browser, and a 401 does not erase the stored token", async t => {
+  const w = await openBoard(t), { page } = w;
+  await w.pair();
+  const token = await page.evaluate(() => localStorage.getItem("board-token"));
+  await w.context.addCookies([{ name: "sage_board", value: "B".repeat(43), domain: "127.0.0.1", path: "/api" }]);
+  const rename = async name => {
+    await page.getByRole("button", { name: "More about C2" }).click();
+    await page.getByLabel("Name").fill(name);
+    await page.getByRole("button", { name: "Rename" }).click();
+  };
+  await rename("Codex desk");
+  await page.getByText("C2 is named \"Codex desk\" now.").waitFor();
+  await page.keyboard.press("Escape");
+  writeFileSync(join(w.stateDir, "paired.json"), JSON.stringify({ browsers: [] }));
+  await rename("Codex desk two");
+  await page.getByRole("heading", { name: "Pair this browser to act from the board" }).waitFor();
+  assert.equal(await page.evaluate(() => localStorage.getItem("board-token")), token, "a 401 asks to pair again, and keeps the stored token");
+});
+
+test("F-T1059-36: the Read the full question link follows a theme switch on an open question", async t => {
+  const w = await openBoard(t), { page } = w;
+  await page.getByRole("link", { name: MESSAGE.title }).click();
+  const link = page.getByRole("link", { name: "Read the full question" });
+  await link.waitFor();
+  assert.doesNotMatch(await link.getAttribute("href"), /theme=/);
+  await page.getByRole("button", { name: "Switch to the light theme" }).click();
+  assert.match(await link.getAttribute("href"), /\?theme=light$/);
+  await page.getByRole("button", { name: "Switch to the dark theme" }).click();
+  assert.doesNotMatch(await link.getAttribute("href"), /theme=/);
+});
+
+test("F-T1059-44: the rename field of a chief whose name is shown with its id starts with the stored name, so a plain Rename keeps it", async t => {
+  const w = await openBoard(t), { page } = w;
+  for (const id of ["C1", "C2"]) claude.sage(["chief", "name", id, "Desk", "--project", w.project], w.env);
+  await w.pair();
+  await page.locator(`.chip[data-chief$="/C2"]`).filter({ hasText: "Desk · C2" }).waitFor();
+  await page.getByRole("button", { name: "More about C2" }).click();
+  assert.equal(await page.getByLabel("Name").inputValue(), "Desk");
+  await page.getByRole("button", { name: "Rename" }).click();
+  await page.getByText("C2 is named \"Desk\" now.").waitFor();
+  assert.equal(JSON.parse(readFileSync(join(w.dir, "chief-names.json"), "utf8")).C2, "Desk");
+});
+
+test("F-T1059-43: a write that the board stops waiting for says one thing: not confirmed yet, and it may still finish", async t => {
+  const w = await openBoard(t, { write: job => writeInWorker(job, { timeout: 0 }) }), { page } = w;
+  await w.pair();
+  await page.getByRole("link", { name: MESSAGE.title }).click();
+  await page.getByRole("radio", { name: /^no/ }).check();
+  await page.getByRole("button", { name: "Send answer" }).click();
+  const said = page.getByRole("alert").filter({ hasText: /^Not confirmed yet: the logbook was busy\. The write may still finish: reload the board to see it before you try again\.$/ });
+  await said.waitFor();
+  assert.equal(await page.getByText(/Not recorded/).count(), 0, "no \"Not recorded\" before a write that may still finish");
+  await w.shot("t1059-write-timeout");
 });
