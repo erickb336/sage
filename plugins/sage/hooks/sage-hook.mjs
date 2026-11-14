@@ -1229,6 +1229,16 @@ function liveLeadRun(folder, task, run) {
   try { return logbookOf(folder).leadRun(task)?.id === run; } catch { return false; }
 }
 
+const BEATS = ["PreToolUse", "PostToolUse", "UserPromptSubmit", "Stop"];
+function beat(input, state) {
+  if (!BEATS.includes(input.hook_event_name) || agentEvent(input) || stateTool.error || core.error || typeof input.session_id !== "string" || typeof input.cwd !== "string") return;
+  const sageMode = state.sage === true;
+  try {
+    const last = core.chiefBeat({ last: state.live, mode: { sageMode, autopilot: sageMode && state.autopilot === true }, now: Date.now(), project: input.cwd, native: input.session_id, provider: "claude", tool: stateTool, env: process.env });
+    if (last) state.live = last;
+  } catch {}
+}
+
 const stateDir = () => process.env.SAGE_HOOKS_STATE ?? join(process.env.SAGE_HOME ?? join(process.env.CLAUDE_CONFIG_DIR ?? join(homedir(), ".claude"), "sage"), ".hooks");
 
 if (process.argv[1] && realpathSync(process.argv[1]) === fileURLToPath(import.meta.url) && process.env.SAGE_HOOKS !== "off") {
@@ -1251,9 +1261,7 @@ if (process.argv[1] && realpathSync(process.argv[1]) === fileURLToPath(import.me
       }
     }
     if (!state || typeof state !== "object" || Array.isArray(state)) state = {};
-    const before = JSON.stringify(state);
-    const output = handle(input, state, slotsFor(join(stateDir(), "slots"), session, Date.now(), input.session_id ?? null));
-    if (JSON.stringify(state) !== before) {
+    const keep = () => {
       mkdirSync(stateDir(), { recursive: true });
       const tmp = `${file}.${process.pid}`, save = () => writeFileSync(tmp, JSON.stringify(state), { flag: "wx" });
       try { save(); } catch (error) {
@@ -1264,8 +1272,14 @@ if (process.argv[1] && realpathSync(process.argv[1]) === fileURLToPath(import.me
         save();
       }
       renameSync(tmp, file);
-    }
+    };
+    const before = JSON.stringify(state);
+    const output = handle(input, state, slotsFor(join(stateDir(), "slots"), session, Date.now(), input.session_id ?? null));
+    const handled = JSON.stringify(state);
+    if (handled !== before) keep();
     if (output) process.stdout.write(JSON.stringify(output));
+    beat(input, state);
+    if (JSON.stringify(state) !== handled) try { keep(); } catch {}
   } catch (e) {
     let commands;
     try { commands = commandFields(input?.tool_input ?? {}); } catch {}

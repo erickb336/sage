@@ -1,5 +1,6 @@
 import { LINE, PRIORITIES } from "./logbook-fields.mjs";
 import { milestoneName } from "./milestone-rules.mjs";
+import { STOPPED_MS } from "./chief-live.mjs";
 
 const DAY = 86_400_000, DONE_DAYS = 7;
 const ENDED = ["merged", "concluded", "abandoned"];
@@ -92,13 +93,16 @@ export function boardOverview(model) {
 
   const merged = tasks.filter(task => task.state === "merged" && recent(task.completedAt));
   const failed = tasks.flatMap(task => task.runs).filter(run => run.status === "failed" && recent(run.ended));
-  const leaving = [...merged.map(task => time(task.completedAt)), ...failed.map(run => time(run.ended))].map(when => when + DAY + 1);
+  const chiefs = (model.projects ?? []).filter(project => !project.archived).flatMap(project => (project.chiefs ?? []).map(chief => ({ ...chief, project: project.name })));
+  const leaving = [...merged.map(task => time(task.completedAt)), ...failed.map(run => time(run.ended))].map(when => when + DAY + 1)
+    .concat(chiefs.filter(chief => chief.stopped === false && !chief.running).map(chief => time(chief.heartbeat) + STOPPED_MS + 1));
 
   return {
     at: model.at,
     stale: !!model.stale,
     problems: (model.diagnostics ?? []).map(item => item.message),
     projects: (model.projects ?? []).filter(project => !project.archived).map(project => project.name),
+    chiefs,
     needs,
     milestones,
     hiddenDone,

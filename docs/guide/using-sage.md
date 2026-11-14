@@ -481,7 +481,11 @@ A moved folder with no Git commits, or that is no Git repository, has no first c
 
 **One chief owns each task.** A task's `chief` column names its owning chief, and `task add` gives the task to the chief that adds it. An existing project shows no change: only a shared logbook has this column and `chiefs.tsv`.
 
-- Each chief has a row in `chiefs.tsv`, with its provider and its session.
+- Each chief has a row in `chiefs.tsv`, with its provider and its session. Sage mode adds the row when it turns on, also for a chief that only reads.
+- Each chief's own hook keeps `live/C<n>.json` in the logbook: its checkout, sage mode, autopilot and the time. It writes the file at most once a minute, and at once when sage mode or autopilot changes. The board shows a chief as stopped when that time is over 30 minutes old and the chief has no running run, other than a run that the board shows with no news for over 24 hours.
+- A chief with no live file, or with a time more than 5 minutes in the future, shows unknown values: the board does not know its sage mode, its autopilot or whether it stopped.
+- The board shows each chief by its default name, "provider · folder · start time". To give a chief your own name, ask the chief in the chat, for example "name C2 Night shift". It runs the state tool's `chief name C<n> <name>`, and the same command with no name clears your name.
+- A name has 1 to 60 characters, with no space at its start or end and no two spaces together. It has no tab, line break or other control, format or hidden character, and at least one visible character. A bad entry in `chief-names.json` hides only that chief's name: the board shows its default name and a warning.
 - A resume keeps the session, so it is the same chief.
 - Claude's `/clear` starts a new session, so it is a new chief. To go on with its tasks, the new chief opens a takeover gate, and you answer it.
 
@@ -490,7 +494,7 @@ A moved folder with no Git commits, or that is no Git repository, has no first c
 | The owning chief | Its own task: `task <T> set`, `round`, `run add`, `run done`, `finding add`, `triage`, `close`, `move`, `verdict`, `gate add <T>`, `milestone propose` for its pilot and each of its tasks, `log <T>`, `offer`, `cancel` and `unclaim`. |
 | A lead | What the chief of its lead run may write, on the task of that run only, while that run runs. |
 | Any chief | `task add`, `claim`, `accept` or `cancel` (a decline) of an offer that names it, `gate add` with no task, `gate replace`, `init`, `standing add`, `config`, `log -`, `pages <T> record`, `observe`, `run usage`, `release add` and `milestone <M> set release=`. |
-| You | `gate answer`, in your own words, from either provider, each form of `logbook repair` (`--accept-loss`, `--accept-change-loss`, or both) and `projects rebuild`: each is your act and names no chief, so the line that sage prints works in your terminal. |
+| You | `gate answer`, in your own words, from either provider, each form of `logbook repair` (`--accept-loss`, `--accept-change-loss`, or both), `projects rebuild` and `chief name`: each is your act and names no chief, so the line that sage prints works in your terminal. |
 | A stop hook | The report and the end of the run of its own slot, so no report is lost. |
 | A helper, or a command with no chief | Nothing. It only reads. |
 
