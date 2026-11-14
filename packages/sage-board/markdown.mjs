@@ -8,7 +8,7 @@ const plain = tokens => tokens.map(token => token.children ? plain(token.childre
 const off = (token, text) => Object.assign(token, { type: "html_inline", tag: "", nesting: 0, content: text });
 
 export function renderMarkdown(text, { href, picture }) {
-  const headings = [], ids = new Set(), env = {};
+  const headings = [], ids = new Set(), next = new Map(), env = {};
   const tokens = md.parse(String(text), env);
   const title = tokens[0]?.type === "heading_open" && tokens[0].tag === "h1" ? plain([tokens[1]]) : null;
   if (title !== null) tokens.splice(0, 3);
@@ -16,9 +16,10 @@ export function renderMarkdown(text, { href, picture }) {
     if (token.type === "heading_open" || token.type === "heading_close") token.tag = `h${Math.min(6, Number(token.tag[1]) + 1)}`;
     if (token.type === "heading_open") {
       const words = plain([tokens[index + 1]]);
-      let id = `h-${slug(words)}`;
-      for (let n = 2; ids.has(id); n++) id = `h-${slug(words)}-${n}`;
-      ids.add(id); token.attrSet("id", id);
+      const base = `h-${slug(words)}`;
+      let id = base, n = next.get(base) ?? 2;
+      while (ids.has(id)) id = `${base}-${n++}`;
+      next.set(base, n); ids.add(id); token.attrSet("id", id);
       if (["h2", "h3", "h4"].includes(token.tag)) headings.push({ level: Number(token.tag[1]), id, text: words });
     }
     const opened = [];

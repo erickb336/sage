@@ -263,6 +263,17 @@ test("T1064 security: a link with an encoded, doubly encoded or mixed-case schem
   assert.deepEqual(bad.map((url, i) => `bad-${i}`).filter(label => !off.has(label) && !article.includes(`[${label}](`)), [], "each encoded form shows as a refused link or as plain text");
 });
 
+test("T1064: heading ids keep their form for repeated headings, and a page of 40,000 equal headings renders in linear time", () => {
+  const ids = text => [...renderMarkdown(text, { href: () => null, picture: () => null }).html.matchAll(/<h\d id="([^"]+)"/g)].map(match => match[1]);
+  assert.deepEqual(ids(["## A", "## A", "## A 2", "## A", "## A-1", "## A-3", "## A", "### Ä b", "#### ä-b", "## !!!", "## ???", `## ${"x".repeat(70)}`, `## ${"x".repeat(65)} y`].join("\n\n")),
+    ["h-a", "h-a-2", "h-a-2-2", "h-a-3", "h-a-1", "h-a-3-2", "h-a-4", "h-ä-b", "h-ä-b-2", "h-part", "h-part-2", `h-${"x".repeat(60)}`, `h-${"x".repeat(60)}-2`]);
+  const started = performance.now();
+  const out = renderMarkdown("## a\n".repeat(40_000), { href: () => null, picture: () => null });
+  const took = performance.now() - started;
+  assert.equal(out.headings.at(-1).id, "h-a-40000");
+  assert.ok(took < 5_000, `40,000 headings took ${Math.round(took)} ms (timing-ok: the bound is wide on purpose; a linear id loop takes well under 1 s on a busy machine, and the quadratic loop that this test guards against took about 85 s)`);
+});
+
 async function freePort() {
   const socket = createServer();
   await new Promise((accept, reject) => { socket.once("error", reject); socket.listen(0, "127.0.0.1", accept); });
