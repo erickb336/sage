@@ -143,6 +143,20 @@ test("T1064: the full question view shows the kept message: Needed by and If you
   assert.deepEqual([...old.html.matchAll(/<section class="answer[^"]*"><h3>([^<]+)/g)].map(match => match[1].trim()), ["A: ask each time", "B: send them"], "the gate's options, the recommendation first");
 });
 
+test("T1064: a batch question shows the answers of each question under its own heading, the chief's pick first in each", t => {
+  const w = world(t), file = join(w.logbook, "gates", "G4.json"), kept = JSON.parse(readFileSync(file, "utf8"));
+  const table = (rows, pick) => ({ t: "table", head: ["Answer", "What happens next", "Cost"], rows, pick });
+  kept.message.blocks = [...kept.message.blocks.filter(block => block.t !== "table"),
+    { t: "section", label: "Question 1: Colour", body: [table([["1A: blue", "Blue buttons.", "None"], ["1B: red", "Red buttons.", "None"]], 0)] },
+    { t: "section", label: "Question 2: Size", body: [{ t: "p", text: "The size of the share sheet." }, table([["2A: small", "A small sheet.", "None"], ["2B: large", "A large sheet.", "About 1 h"]], 1)] }];
+  writeFileSync(file, JSON.stringify(kept));
+  const page = read(w, "T10", "question", "G4"), answers = page.html.slice(page.html.indexOf(`<h2 class="sec">The answers</h2>`));
+  assert.deepEqual([...answers.matchAll(/<h3 class="sub">([^<]+)<\/h3>|<section class="answer( pick)?"><h3>([^<]+)/g)].map(match => match[1] ?? `${match[3].trim()}${match[2] ? " (pick)" : ""}`),
+    ["Question 1: Colour", "1A: blue (pick)", "1B: red", "Question 2: Size", "2B: large (pick)", "2A: small"]);
+  assert.match(page.html, /<h2 class="sec">Question 2: Size<\/h2><p>The size of the share sheet\.<\/p>/, "a section with other parts keeps its heading above them");
+  assert.doesNotMatch(page.html, /<h2 class="sec">Question 1: Colour<\/h2>/, "a section with only its answers has no empty heading");
+});
+
 test("T1064 security: hostile Markdown and hostile logbook text render harmless: no raw HTML, no script or javascript: link, no outside or traversal picture, no bidi override", t => {
   const w = world(t, { hostile: true });
   const pages = [["T3", "page", "hostile.md"], ["T3", "brief", "R7"], ["T3", "report", "R5"], ["T10", "question", "G4"], ["T50", "question", "G9"], ["T10", "design"], ["T10", "arena"]].map(([task, kind, arg]) => read(w, task, kind, arg ?? null));

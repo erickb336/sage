@@ -138,7 +138,7 @@ details{border:1px solid var(--line);border-radius:12px;background:var(--card);m
 .decision{border-top:1px solid var(--line);padding:10px 0 0;margin-top:10px}.faint{color:var(--faint)}.muted{color:var(--muted)}.mono{font-family:var(--mono);font-size:12.5px}
 .cards{display:grid;grid-template-columns:repeat(auto-fill,minmax(260px,1fr));gap:16px;margin:0 0 24px}.card{border:1px solid var(--line);border-radius:12px;background:var(--card);padding:16px}.card.base{border-color:var(--done)}.card h3{display:flex;justify-content:space-between;align-items:center;margin:0 0 10px}.score{font-size:20px;font-weight:600}
 table.scores{border-collapse:collapse;width:100%;margin:0 0 24px}.scores th,.scores td{border-bottom:1px solid var(--line);padding:8px 10px;text-align:left}.scores svg{width:60px;height:6px;margin-right:8px;vertical-align:middle}.scores .t{fill:var(--line-2)}.scores .v{fill:var(--accent)}
-h2.sec{font-size:12px;letter-spacing:.08em;text-transform:uppercase;color:var(--muted);margin:22px 0 10px}.two{display:grid;grid-template-columns:1fr 1fr;gap:14px;margin:0 0 18px}.answer{border:1px solid var(--line);border-radius:12px;background:var(--card);padding:14px 18px;margin:0 0 12px}.answer.pick{border-color:var(--accent)}.answer dl{display:grid;grid-template-columns:170px minmax(0,1fr);gap:4px 16px;margin:8px 0 0}.answer dt{color:var(--muted)}.answer dd{margin:0}
+h2.sec{font-size:12px;letter-spacing:.08em;text-transform:uppercase;color:var(--muted);margin:22px 0 10px}.two{display:grid;grid-template-columns:1fr 1fr;gap:14px;margin:0 0 18px}.answer{border:1px solid var(--line);border-radius:12px;background:var(--card);padding:14px 18px;margin:0 0 12px}.answer.pick{border-color:var(--accent)}.answer dl{display:grid;grid-template-columns:170px minmax(0,1fr);gap:4px 16px;margin:8px 0 0}.answer dt{color:var(--muted)}.answer dd{margin:0}h3.sub{font-size:15px;font-weight:600;margin:18px 0 10px}
 .skel{border:1px solid var(--line);border-radius:12px;padding:24px;display:grid;gap:18px}.skel i{display:block;height:28px;border-radius:8px;background:var(--line)}.skel i:nth-child(3n){height:120px}.skel:has(~ .ready){display:none}
 .sr{position:absolute;width:1px;height:1px;overflow:hidden;clip:rect(0 0 0 0)}@media (prefers-reduced-motion:reduce){*{transition:none!important}}`;
 const STYLE_HASH = `'sha256-${createHash("sha256").update(CSS).digest("base64")}'`;
@@ -318,9 +318,9 @@ ${decisions.length ? decisions.map(gate => `<div class="decision"><p><b>${esc(ga
       const options = String(gate.options ?? "").split("|").map(option => option.trim()).filter(Boolean), owner = panel.chief ? [panel.chief.id, panel.chief.provider].filter(Boolean).join(" · ") : "The chief";
       const ownerId = panel.chief?.id ?? "The chief";
       const blocks = [], labelled = {}, pagesOf = [], answers = [];
-      const walk = list => (list ?? []).forEach(block => {
-        if (block?.t === "section" && Array.isArray(block.body)) { blocks.push({ t: "heading", text: block.label }); walk(block.body); }
-        else if (block?.t === "table" && Array.isArray(block.head) && /^answer$/i.test(String(block.head[0]).trim())) answers.push(block);
+      const walk = (list, label = null) => (list ?? []).forEach(block => {
+        if (block?.t === "section" && Array.isArray(block.body)) { const at = blocks.push({ t: "heading", text: block.label }); walk(block.body, block.label); if (blocks.length === at) blocks.pop(); }
+        else if (block?.t === "table" && Array.isArray(block.head) && /^answer$/i.test(String(block.head[0]).trim())) answers.push({ table: block, label });
         else if (block?.t === "page") pagesOf.push(block);
         else if (block?.t === "field" && ["Needed by", "If you do not answer"].includes(block.label)) labelled[block.label] = block.text;
         else if (block) blocks.push(block);
@@ -333,10 +333,13 @@ ${decisions.length ? decisions.map(gate => `<div class="decision"><p><b>${esc(ga
         : ["code", "picture"].includes(block.t) && Array.isArray(block.lines) ? `${block.title ? `<p><b>${text(block.title)}</b></p>` : ""}<pre class="md">${esc(block.lines.join("\n"))}</pre>`
         : block.t === "table" && Array.isArray(block.head) && Array.isArray(block.rows) ? `<table class="scores"><thead><tr>${block.head.map(cell => `<th scope="col">${text(cell)}</th>`).join("")}</tr></thead><tbody>${block.rows.map(row => `<tr>${(Array.isArray(row) ? row : []).map(cell => `<td>${text(cell)}</td>`).join("")}</tr>`).join("")}</tbody></table>` : "";
       const same = (a, b) => String(a).trim().toLowerCase() === String(b).trim().toLowerCase() || String(a).trim().toLowerCase().replace(/^[a-z0-9]\s*[·:.)-]\s*/, "") === String(b).trim().toLowerCase();
-      const table = answers[0], rows = table ? table.rows.filter(Array.isArray) : options.map(option => [option]);
-      const pickIndex = table && Number.isInteger(table.pick) ? table.pick : rows.findIndex(row => gate.recommendation && same(row[0], gate.recommendation));
-      const ordered = pickIndex >= 0 ? [rows[pickIndex], ...rows.filter((_, i) => i !== pickIndex)] : rows;
-      const answerCards = ordered.map((row, i) => `<section class="answer${i === 0 && pickIndex >= 0 ? " pick" : ""}"><h3>${text(String(row[0]))}${i === 0 && pickIndex >= 0 ? ` <span class="pill grafted">${esc(ownerId)}'s pick</span>` : ""}${gate.answer && same(row[0], gate.answer) ? ` <span class="pill done">Your answer</span>` : ""}</h3>${row.length > 1 ? `<dl>${row.slice(1).map((cell, k) => `<dt>${text(table.head[k + 1])}</dt><dd>${text(cell)}</dd>`).join("")}</dl>` : ""}</section>`).join("");
+      const groups = answers.length ? answers : [{ table: null, label: null }];
+      const answerCards = groups.map(({ table, label }) => {
+        const rows = table ? table.rows.filter(Array.isArray) : options.map(option => [option]);
+        const pickIndex = table && Number.isInteger(table.pick) && rows[table.pick] ? table.pick : rows.findIndex(row => gate.recommendation && same(row[0], gate.recommendation));
+        const ordered = pickIndex >= 0 ? [rows[pickIndex], ...rows.filter((_, i) => i !== pickIndex)] : rows;
+        return `${groups.length > 1 && label ? `<h3 class="sub">${text(label)}</h3>` : ""}${ordered.map((row, i) => `<section class="answer${i === 0 && pickIndex >= 0 ? " pick" : ""}"><h3>${text(String(row[0]))}${i === 0 && pickIndex >= 0 ? ` <span class="pill grafted">${esc(ownerId)}'s pick</span>` : ""}${gate.answer && same(row[0], gate.answer) ? ` <span class="pill done">Your answer</span>` : ""}</h3>${row.length > 1 ? `<dl>${row.slice(1).map((cell, k) => `<dt>${text(table.head[k + 1])}</dt><dd>${text(cell)}</dd>`).join("")}</dl>` : ""}</section>`).join("")}`;
+      }).join("");
       const readMore = [`<li>${taskA(`Task ${task.id}`)} · ${esc(task.title)}</li>`, ...pagesOf.filter(block => typeof block.file === "string").map(block => {
         const where = block.task === task.id && pageType(block.file) ? (block.file.endsWith(".md") ? link("page", block.file, { back: `q-${gate.id}` }) : pagesBase + block.file) : null;
         return `<li>${where ? `<a href="${esc(where)}">${text(block.title)}</a>` : `${text(block.title)} <span class="faint">(in ${text(block.task)}'s pages folder)</span>`}</li>`;
