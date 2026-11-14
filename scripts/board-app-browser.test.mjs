@@ -27,19 +27,20 @@ async function freePort() {
   return port;
 }
 
-async function open(t) {
+async function open(t, { viewport = { width: 1440, height: 1000 }, clock = false } = {}) {
   const dir = mkdtempSync(join(tmpdir(), "sage-board-app-browser-")), root = join(dir, "logbooks"), port = await freePort();
   const project = writeAppLogbook(root, new Date().toISOString());
   const server = createBoardServer({ sources: [{ id: "sample", path: root, label: "Sample" }], port, app: APP, settleReads: [] });
   await server.start();
   const base = `http://127.0.0.1:${port}`;
-  const context = await browser.newContext({ viewport: { width: 1440, height: 1000 }, colorScheme: "dark" });
+  const context = await browser.newContext({ viewport, colorScheme: "dark" });
   t.after(async () => { await context.close(); await server.close(); rmSync(dir, { recursive: true, force: true }); });
   const requests = [], problems = [];
   await context.route("**/*", route => { requests.push(route.request().url()); return route.request().url().startsWith(`${base}/`) ? route.continue() : route.abort(); });
   const page = await context.newPage();
   page.on("pageerror", error => problems.push(String(error)));
   page.on("console", message => { if (message.type() === "error" || /Content Security Policy|Refused to/.test(message.text())) problems.push(message.text()); });
+  if (clock) await page.clock.install();
   await page.goto(`${base}/app/`);
   await page.getByRole("heading", { name: "Needs you" }).waitFor();
   return { page, base, project, server, requests, problems };
@@ -74,7 +75,7 @@ test("T1054: the Overview updates live, keeps its data when the link breaks, and
   assert.match(await page.getByRole("status").textContent(), /^Live · read \d\d:\d\d/);
   await server.close();
   await page.getByText("The board lost its link to the server on this Mac.").waitFor();
-  assert.match(await page.getByRole("status").textContent(), /^Not updated since \d\d:\d\d · trying again$/);
+  assert.match(await page.getByRole("status").textContent(), /^Not updated since .*\d\d:\d\d, just now · trying again$/);
   assert.equal(await page.locator(".needs li").count(), 2, "the last data stays");
   assert.ok(problems.every(text => /Failed to load resource|ERR_CONNECTION_REFUSED|EventSource/.test(text)), problems.join("\n"));
 });
@@ -114,4 +115,56 @@ test("T1054: the keyboard reaches each page link and the theme switch in order, 
   for (const item of reached) assert.equal(item.ring, "solid 2px", item.name);
   await page.keyboard.press("Enter");
   assert.equal(await page.evaluate(() => document.documentElement.dataset.theme), "light", "Enter on the theme switch flips it");
+});
+
+test("F-T1065-5, -8, -11: ages count from the time now, not from the last logbook read, and a lost link says how old its data is", async t => {
+  const { page, server } = await open(t, { clock: true });
+  const first = page.locator(".needs li").first();
+  assert.match(await first.textContent(), /asked 3 h ago/);
+  await page.clock.fastForward("02:00:00");
+  await page.getByText("asked 5 h ago").waitFor();
+  await server.close();
+  await page.getByText("The board lost its link to the server on this Mac.").waitFor();
+  await page.clock.fastForward("10:00");
+  await page.getByText(/^Not updated since .*\d\d:\d\d, 10 min ago · trying again$/).waitFor();
+  assert.match(await page.locator(".banner").textContent(), /The data below is from .*\d\d:\d\d, 10 min ago\./);
+});
+
+test("F-T1065-6, -7, -1, -9: Needs you comes first and names each chief; a milestone names its abandoned tasks and keeps its badges on its name line", async t => {
+  const { page, project } = await open(t);
+  const top = async id => (await page.locator(`#${id}`).boundingBox()).y;
+  assert.ok(await top("needs-h") < await top("counts-h"), "Needs you is above the counts");
+  assert.match(await page.locator(".needs li").first().locator(".meta").textContent(), /^chief Sample/);
+  for (const name of await page.locator(".ms .name").all()) {
+    const [link, badge] = [await name.locator("a").boundingBox(), await name.locator(".badge").last().boundingBox()];
+    assert.ok(Math.abs(link.y - badge.y) < 6, "the badges sit on the first line of the name");
+  }
+  const tasks = join(project, "tasks.tsv");
+  writeFileSync(tasks, readFileSync(tasks, "utf8").replace(/^(T3\t.*?\t)reviewing\t/m, "$1abandoned\t"));
+  await page.getByText("T3 abandoned", { exact: true }).waitFor();
+});
+
+test("F-T1065-10, -18: a long word wraps inside its card, and the Milestones card shows 6 milestones until the owner asks for all", async t => {
+  const { page, project } = await open(t);
+  const gates = join(project, "gates.tsv"), milestones = join(project, "milestones.tsv");
+  writeFileSync(gates, readFileSync(gates, "utf8").replace("Crash reports: send them on their own, or ask each time?", `https://example.test/${"x".repeat(400)}`));
+  const extra = Array.from({ length: 7 }, (_, i) => [`M${i + 4}`, `Sample extra ${i + 4}`, "Sample goal", `T${i + 90}`, `G${i + 90}`, new Date().toISOString()].join("\t"));
+  writeFileSync(milestones, `${readFileSync(milestones, "utf8")}${extra.join("\n")}\n`);
+  await page.getByRole("button", { name: "Show 4 more milestones" }).waitFor();
+  assert.equal(await page.locator(".ms > li").count(), 6);
+  assert.equal(await page.evaluate(() => document.documentElement.scrollWidth), 1440, "the page does not get wider");
+  assert.ok(await page.locator(".needs").evaluate(list => list.scrollWidth <= list.clientWidth), "the long word stays in the Needs you card");
+  await page.getByRole("button", { name: "Show 4 more milestones" }).click();
+  assert.equal(await page.locator(".ms > li").count(), 10);
+  await page.getByRole("button", { name: "Show the first 6 only" }).click();
+  assert.equal(await page.locator(".ms > li").count(), 6);
+});
+
+test("F-T1065-19: at 200% zoom of a 1280 px window, the pages bar goes above the content, which gets the whole width", async t => {
+  const { page } = await open(t, { viewport: { width: 640, height: 900 } });
+  assert.equal(await page.evaluate(() => document.documentElement.scrollWidth), 640);
+  const [side, main] = [await page.locator(".side").boundingBox(), await page.locator(".main").boundingBox()];
+  assert.equal(side.width, 640);
+  assert.ok(main.y >= side.y + side.height && main.width === 640, JSON.stringify({ side, main }));
+  assert.equal(await page.getByRole("link", { name: /^Tasks/ }).isVisible(), true, "the page links keep their names");
 });

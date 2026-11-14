@@ -1,6 +1,6 @@
 import { useState } from "react";
 import { GiveBox, PairBox, UndoButton, chiefLabel, questionLink, useAccess, useSeen } from "./actions.jsx";
-import { when } from "./use-model.js";
+import { useNow, when } from "./use-model.js";
 import { StateIcon } from "./icons.jsx";
 import { milestoneLink, taskLink } from "./panel.jsx";
 
@@ -17,7 +17,7 @@ export function ago(from, to) {
 
 const DAY = 86_400_000;
 const after = (list, since) => list.filter(at => at && Date.parse(at) > since).length;
-function Counts({ model, previous }) {
+function Counts({ model, previous, now }) {
   const since = previous ? Date.parse(previous) : Date.parse(model.at) - DAY;
   const known = model.tasks.some(task => task.addedAt), unknown = model.tasks.some(task => !task.addedAt);
   const items = [
@@ -27,7 +27,7 @@ function Counts({ model, previous }) {
   ];
   return (
     <section className="counts" aria-labelledby="counts-h">
-      <h2 id="counts-h">{previous ? <>Since you looked <span className="hint">· you last opened the board at {when(previous)}, {ago(previous, model.at)}</span></> : "In the last 24 hours"}</h2>
+      <h2 id="counts-h">{previous ? <>Since you looked <span className="hint">· you last opened the board at {when(previous)}, {ago(previous, now)}</span></> : "In the last 24 hours"}</h2>
       <div className="kpis">
         {items.map(([kind, count, label, hint]) => (
           <div className={`kpi ${kind}`} key={kind} data-count={kind}>
@@ -41,8 +41,8 @@ function Counts({ model, previous }) {
   );
 }
 
-function NeedRow({ need, at, many }) {
-  const asked = need.askedAt ? ago(need.askedAt, at) : null;
+function NeedRow({ need, now, many }) {
+  const asked = need.askedAt ? ago(need.askedAt, now) : null;
   return (
     <li data-need={need.key}>
       <span className="bullet" aria-hidden="true" />
@@ -51,7 +51,7 @@ function NeedRow({ need, at, many }) {
         {need.more.length > 0 && <p className="more">{need.more.join(" ")}</p>}
         {need.recommendation && <p className="pick">Recommended: <b>{need.recommendation}</b></p>}
         <p className="meta">
-          {need.chief && <span>{need.chief}</span>}
+          {need.chief && <span>chief {need.chief}</span>}
           {need.gate && <span className="mono">{need.gate}</span>}
           {need.task && <a href={taskLink(need.task.key)}>{need.task.id} · {need.task.title}</a>}
           {many && need.project && <span>{need.project}</span>}
@@ -62,7 +62,7 @@ function NeedRow({ need, at, many }) {
   );
 }
 
-function Waits({ answered, chiefs, at }) {
+function Waits({ answered, chiefs, now }) {
   if (!answered.length) return null;
   return (
     <div className="sub-list" aria-labelledby="waits-h">
@@ -72,7 +72,7 @@ function Waits({ answered, chiefs, at }) {
           <span className="bullet done" aria-hidden="true" />
           <div>
             <p className="q"><a href={questionLink(item.key)}>{item.question}</a></p>
-            <p className="meta"><span>You answered <b>{item.answer}</b> {ago(item.at, at)}</span><span>waits for {chiefLabel(chiefs, item.logbook, item.owner)} to pick it up</span></p>
+            <p className="meta"><span>You answered <b>{item.answer}</b> {ago(item.at, now)}</span><span>waits for {chiefLabel(chiefs, item.logbook, item.owner)} to pick it up</span></p>
           </div>
           <UndoButton logbook={item.logbook} gate={item.gateId} />
         </li>
@@ -116,7 +116,7 @@ function Stopped({ model, shown }) {
   );
 }
 
-function NeedsYou({ model, shown, many }) {
+function NeedsYou({ model, shown, many, now }) {
   const writes = useAccess();
   const needs = model.needs.filter(need => shown(need.logbook, need.owner));
   const answered = model.answered.filter(item => shown(item.logbook, item.owner));
@@ -129,9 +129,9 @@ function NeedsYou({ model, shown, many }) {
         <span className="hint">Oldest first · {writes === "paired" ? "open a question to answer it here" : "answer in the chief's chat, or pair this browser"}</span>
       </div>
       {needs.length
-        ? <ul className="needs">{needs.map(need => <NeedRow key={need.key} need={need} at={model.at} many={many} />)}</ul>
+        ? <ul className="needs">{needs.map(need => <NeedRow key={need.key} need={need} now={now} many={many} />)}</ul>
         : <p className="empty">Nothing needs you now.</p>}
-      <Waits answered={answered} chiefs={model.chiefs} at={model.at} />
+      <Waits answered={answered} chiefs={model.chiefs} now={now} />
       <Stopped model={model} shown={shown} />
     </section>
   );
@@ -153,6 +153,7 @@ function MilestoneRow({ milestone, many }) {
     milestone.needsYou > 0 && <span className="need" key="need">{milestone.needsYou} {milestone.needsYou === 1 ? "needs" : "need"} you</span>,
     milestone.moving > 0 && <span key="moving">{milestone.moving} in progress</span>,
     milestone.waiting > 0 && <span key="waiting">{milestone.waiting} waiting</span>,
+    milestone.abandoned.length > 0 && <span key="abandoned">{milestone.abandoned.join(", ")} abandoned</span>,
     <span key="pilot">Pilot {milestone.pilot}</span>,
     many && <span key="project">{milestone.project}</span>,
   ].filter(Boolean);
@@ -174,7 +175,10 @@ function MilestoneRow({ milestone, many }) {
   );
 }
 
+const MILESTONES_SHOWN = 6;
 function Milestones({ milestones, hiddenDone, many }) {
+  const [all, setAll] = useState(false);
+  const shown = all ? milestones : milestones.slice(0, MILESTONES_SHOWN), more = milestones.length - MILESTONES_SHOWN;
   return (
     <section className="card" aria-labelledby="milestones-h">
       <div className="card-h">
@@ -183,15 +187,16 @@ function Milestones({ milestones, hiddenDone, many }) {
         <span className="hint">By priority · {plural(milestones.length, "milestone")}</span>
       </div>
       {milestones.length
-        ? <ul className="ms">{milestones.map(milestone => <MilestoneRow key={milestone.key} milestone={milestone} many={many} />)}</ul>
+        ? <ul className="ms">{shown.map(milestone => <MilestoneRow key={milestone.key} milestone={milestone} many={many} />)}</ul>
         : <p className="empty">No milestones yet. A milestone starts when you ask for work that needs two or more tasks.</p>}
+      {more > 0 && <button type="button" className="more-ended" aria-expanded={all} onClick={() => setAll(!all)}>{all ? `Show the first ${MILESTONES_SHOWN} only` : `Show ${plural(more, "more milestone")}`}</button>}
       {hiddenDone > 0 && <p className="more-done">{plural(hiddenDone, "milestone")} done more than 7 days ago {hiddenDone === 1 ? "is" : "are"} not shown.</p>}
     </section>
   );
 }
 
 export function Overview({ model, shown }) {
-  const many = model.projects.length > 1, writes = useAccess(), previous = useSeen(writes);
+  const many = model.projects.length > 1, writes = useAccess(), previous = useSeen(writes), now = useNow();
   return (
     <>
       <div className="page-h">
@@ -199,11 +204,11 @@ export function Overview({ model, shown }) {
         <p>What changed, what needs you, and where each milestone stands.</p>
       </div>
       <PairBox />
-      <Counts model={model} previous={previous} />
       <div className="grid">
-        <NeedsYou model={model} shown={shown} many={many} />
+        <NeedsYou model={model} shown={shown} many={many} now={now} />
         <Milestones milestones={model.milestones} hiddenDone={model.hiddenDone} many={many} />
       </div>
+      <Counts model={model} previous={previous} now={now} />
     </>
   );
 }

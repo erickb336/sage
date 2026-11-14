@@ -100,7 +100,9 @@ header.top { position: sticky; top: 0; z-index: 20; height: 52px; display: flex;
 
 .ms { list-style: none; margin: 0; padding: 6px 0; }
 .ms > li { display: grid; grid-template-columns: 18px minmax(0, 1fr) minmax(80px, 150px) auto; gap: 14px; align-items: center; padding: 12px 18px; }
-.ms .name { font-weight: 500; display: flex; flex-wrap: wrap; align-items: center; gap: 8px; }
+.ms .name { font-weight: 500; display: flex; align-items: baseline; gap: 8px; }
+.ms .name a { min-width: 0; }
+.needs, .ms, .banner { overflow-wrap: anywhere; }
 .ms .goal { font-size: 12.5px; color: var(--muted); margin-top: 1px; }
 .ms .sub { font-size: 12px; color: var(--faint); margin-top: 4px; display: flex; gap: 10px; flex-wrap: wrap; }
 .ms .sub .need { color: var(--need); }
@@ -117,6 +119,14 @@ header.top { position: sticky; top: 0; z-index: 20; height: 52px; display: flex;
 .more-done { padding: 4px 18px 14px; font-size: 12.5px; color: var(--faint); }
 
 @media (max-width: 1199px) { .grid { grid-template-columns: minmax(0, 1fr); } }
+@media (max-width: 899px) {
+  .app { grid-template-columns: minmax(0, 1fr); }
+  .side { position: static; height: auto; flex-direction: row; flex-wrap: wrap; align-items: center; border-right: 0; border-bottom: 1px solid var(--line); }
+  .brand { padding: 6px 8px; }
+  .nav { flex-direction: row; flex-wrap: wrap; }
+  .side .foot { display: none; }
+  .main { padding: 20px 16px 40px; }
+}
 .next { padding: 22px 0; }
 .next p { color: var(--muted); max-width: 60ch; margin-top: 8px; }
 .next a { color: var(--text); }

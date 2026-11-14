@@ -1,10 +1,10 @@
 import { useEffect, useState } from "react";
 import { ChiefChips, QuestionView } from "./actions.jsx";
 import { AgentsIcon, AlertIcon, LeafIcon, MoonIcon, OverviewIcon, PullsIcon, SunIcon, TasksIcon } from "./icons.jsx";
-import { Overview } from "./overview.jsx";
+import { Overview, ago } from "./overview.jsx";
 import { Pulls } from "./pulls.jsx";
 import { Tasks } from "./tasks.jsx";
-import { useModel } from "./use-model.js";
+import { useModel, useNow, when } from "./use-model.js";
 
 const THEME_KEY = "board-theme";
 const PAGES = [
@@ -45,23 +45,26 @@ function useTheme() {
   return [theme, flip];
 }
 
-function Status({ model, link, receivedAt }) {
+const dataAt = (model, link, lostAt) => link === "lost" && !model.stale ? lostAt : model.at;
+const age = (at, now) => `${when(at)}, ${ago(at, now)}`;
+
+function Status({ model, link, lostAt, now }) {
   if (link === "connecting" && !model) return <span className="live" role="status"><span className="dot" />Connecting</span>;
   if (!model) return <span className="live bad" role="status"><span className="dot" />Cannot reach the board</span>;
-  if (link === "lost") return <span className="live bad" role="status"><span className="dot" />Not updated since {clock(receivedAt)} · trying again</span>;
-  if (model.stale) return <span className="live bad" role="status"><span className="dot" />Not updated since {clock(model.at)}</span>;
+  if (link === "lost") return <span className="live bad" role="status"><span className="dot" />Not updated since {age(dataAt(model, link, lostAt), now)} · trying again</span>;
+  if (model.stale) return <span className="live bad" role="status"><span className="dot" />Not updated since {age(model.at, now)}</span>;
   return <span className="live ok" role="status"><span className="dot" />Live · read {clock(model.at)}</span>;
 }
 
-function Banner({ model, link, receivedAt }) {
+function Banner({ model, link, lostAt, now }) {
   if (link === "lost" && model) return (
     <div className="banner fail" role="alert"><AlertIcon />
-      <div><b>The board lost its link to the server on this Mac.</b> The data below is from {clock(receivedAt)}. It tries again on its own.</div>
+      <div><b>The board lost its link to the server on this Mac.</b> The data below is from {age(dataAt(model, link, lostAt), now)}. It tries again on its own.</div>
     </div>
   );
   if (model?.stale) return (
     <div className="banner fail" role="alert"><AlertIcon />
-      <div><b>The board cannot read the logbook.</b> The data below is from {clock(model.at)}. It reads again when the logbook changes.
+      <div><b>The board cannot read the logbook.</b> The data below is from {age(model.at, now)}. It reads again when the logbook changes.
         {model.problems.length > 0 && <ul>{model.problems.slice(0, 3).map(problem => <li key={problem}>{problem}</li>)}</ul>}
       </div>
     </div>
@@ -94,7 +97,7 @@ function useChiefFilter() {
 }
 
 export function App() {
-  const { model, link, receivedAt } = useModel("/app/events");
+  const { model, link, lostAt } = useModel("/app/events"), now = useNow();
   const page = useHashPage();
   const [theme, flip] = useTheme();
   const [chosen, setFilter] = useChiefFilter();
@@ -132,7 +135,7 @@ export function App() {
         <header className="top">
           <span className="crumb">{crumb}<span aria-hidden="true">/</span><b>{page.name}</b></span>
           <span className="grow" />
-          <Status model={model} link={link} receivedAt={receivedAt} />
+          <Status model={model} link={link} lostAt={lostAt} now={now} />
           <button type="button" className="theme" onClick={flip} aria-label={`Switch to the ${next} theme`} title={`Switch to the ${next} theme`}>
             {theme === "dark" ? <SunIcon /> : <MoonIcon />}
           </button>
@@ -140,7 +143,7 @@ export function App() {
         {model && <ChiefChips chiefs={model.chiefs} filter={filter} setFilter={setFilter} many={model.projects.length > 1} />}
         <main className="main">
           {!body ? <ComesNext page={page} /> : model
-            ? <><Banner model={model} link={link} receivedAt={receivedAt} />{body}</>
+            ? <><Banner model={model} link={link} lostAt={lostAt} now={now} />{body}</>
             : <NoData link={link} />}
         </main>
       </div>
