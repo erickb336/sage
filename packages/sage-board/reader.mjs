@@ -113,8 +113,9 @@ export function designSummary(logbook, taskId) {
 export function recordedPages(task, folder) {
   return (task.decisionRows ?? []).flatMap(row => {
     const match = /^page (.+) sha256 ([0-9a-f]{64})$/.exec(String(row.decision ?? "")), at = match ? match[1].lastIndexOf(`/${task.id}/`) : -1;
-    if (at < 0) return [];
-    const file = match[1].slice(at + task.id.length + 2), bytes = folder && pageType(file) ? pageFile(folder, file, true)?.bytes : null;
+    const file = at < 0 ? "" : match[1].slice(at + task.id.length + 2);
+    if (!pageType(file)) return [];
+    const bytes = folder ? pageFile(folder, file, true)?.bytes : null;
     return [{ file, sha: match[2], at: row.at, state: !bytes ? "gone" : createHash("sha256").update(bytes).digest("hex") === match[2] ? "same" : "changed" }];
   });
 }

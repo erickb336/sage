@@ -84,7 +84,7 @@ function Artifacts({ task, back }) {
       </>}
       {files.recorded.length > 0 && <>
         <h4>Recorded pages</h4>
-        <ul className="files">{files.recorded.map((page, i) => <li key={i}>{page.state === "gone" ? <a href={read("page", page.file)}>{page.file}</a> : fileLink(page.file)}<span className={page.state === "same" ? "faint" : "need"}>{{ same: "the same as recorded", changed: "changed since it was recorded", gone: "gone from the pages folder" }[page.state]} · {when(page.at, task.at)}</span></li>)}</ul>
+        <ul className="files">{files.recorded.map((page, i) => <li key={i}>{page.state !== "gone" ? fileLink(page.file) : /\.md$/.test(page.file) ? <a href={read("page", page.file)}>{page.file}</a> : <span>{page.file}</span>}<span className={page.state === "same" ? "faint" : "need"}>{{ same: "the same as recorded", changed: "changed since it was recorded", gone: "gone from the pages folder" }[page.state]} · {when(page.at, task.at)}</span></li>)}</ul>
       </>}
       {task.artifacts.length > 0 && <>
         <h4>Recorded artifacts</h4>
