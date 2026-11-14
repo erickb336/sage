@@ -18,6 +18,12 @@ export function agentCaps(config) {
   const max = countOf(c.max_agents) ?? AGENT_CAPS.max_agents;
   return { total: countOf(c.cap_total) ?? AGENT_CAPS.cap_total, cap: project => countOf(c[`cap.${project}`]) ?? max };
 }
+export function agentLimit(logbook, roots, names) {
+  const held = countOf(logbook?.max_agents);
+  if (held !== undefined) return held;
+  const set = roots.flatMap(c => names.map(n => countOf(c?.[`cap.${n}`]) ?? countOf(c?.max_agents))).filter(v => v !== undefined);
+  return set.length ? Math.max(...set) : AGENT_CAPS.max_agents;
+}
 export const ADMIT_LEASE_MS = 10 * 60_000;
 export const queueOrder = runs => runs.filter(run => run.status === "queued").sort((a, b) => Number(a.id.slice(1)) - Number(b.id.slice(1)));
 

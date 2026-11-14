@@ -737,8 +737,8 @@ test("T952-AGENT-CAP, T1057: run add holds max_agents running runs of every role
   s.ok("run", "done", "R10", "--status", "failed");
   s.ok("run", "add", "T6", "--role", "pe");
   assert.equal(rows(s.dir, "runs").filter((r) => r.status === "running").length, 10);
-  assert.equal(s.ok("run", "add", "T2", "--role", "qa"), "R12 is queued, place 1 · qa on T2 · model sonnet · the project runs 10 of its 10 agents. Start its agent only after its admission: a run that ends admits the oldest queued run, and its agent must then start within 10 minutes.");
-  assert.deepEqual(rows(s.dir, "runs").filter((r) => r.status !== "running" && r.status !== "failed").map((r) => [r.id, r.status, r.admitted]), [["R12", "queued", undefined]], "the run is recorded as queued, and admitted stays out of the file");
+  assert.match(s.ok("run", "add", "T2", "--role", "qa"), /^R12 is queued, place 1 · qa on T2 · model sonnet · the project runs 10 of its 10 agents\. Start its agent only after its admission: a run that ends admits the oldest queued run, and its agent must then start within 10 minutes\. To wait, run node \S+\/hooks\/wait\.mjs --slot R12 as a Bash command of its own \(a chief in the background, a lead with the timeout 600000\)\. It ends when R12 is admitted\.$/);
+  assert.deepEqual(rows(s.dir, "runs").filter((r) => r.status !== "running" && r.status !== "failed").map((r) => [r.id, r.status, r.admitted]), [["R12", "queued", ""]], "the run is recorded as queued, and the column admitted is in the file, empty, so that an older sage stops writing");
   assert.match(s.ok("status"), /^agents  12 runs · 10 running · 1 queued · /m);
   assert.match(s.ok("run", "done", "R9", "--status", "failed"), /^R9 failed\nR12 admitted · qa on T2: start its agent within 10 minutes, or the run ends as failed$/);
   assert.match(rows(s.dir, "runs").find((r) => r.id === "R12").admitted, /^\d{4}-\d\d-\d\dT\d\d:\d\d:\d\dZ$/);

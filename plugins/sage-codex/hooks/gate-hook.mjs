@@ -170,7 +170,7 @@ function childSpawn(t, name, cwd, session, env) {
   if (!fits) return LEAD_SPAWN(taskNumber(self), name);
   try { return leadStopped(leadOf(self), tool.logbookView(cwd, env)) ?? queuedSpawn(name, cwd, env) ?? unbriefed(name, briefProject(cwd, session, name, env), env); } catch (error) { return UNREAD_LOGBOOK(error); }
 }
-const QUEUE_WAIT = "Codex has no wake for a waiting thread: check with the sage tool status, and spawn it after its admission. A chief's hook names the admission at the chief's next turn.";
+const QUEUE_WAIT = "Codex has no wake for a waiting thread: after a run ends, call spawn_agent again with the same task name. The gate names the run's place again, or lets it start. A chief's hook names the admission at the chief's next turn.";
 function queuedSpawn(name, project, env) {
   const run = /_r([1-9]\d*)$/.exec(name)?.[1], why = run && tool.queueProblem(project, `R${run}`, env);
   return why ? `sage: ${why}${/ is queued, /.test(why) ? ` ${QUEUE_WAIT}` : ""}` : undefined;

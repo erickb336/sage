@@ -647,10 +647,13 @@ test("T301: the lead file's helper cap is the hook's, and with the default agent
   assert.match(spawn() ?? "", new RegExp(`^sage: ${id} is queued, place 1 of 1: the project runs ${DEFAULT_CAP} of its ${DEFAULT_CAP} agents, .* Run node \\S+wait\\.mjs --slot ${id} .*Then start this helper again\\.$`));
   p.chief("task", "add", "--priority", "P2", "--title", "second", "--size", "small");
   p.chief("task", "T2", "set", "state=briefed");
-  assert.match(p.chief("run", "add", "T2", "--role", "lead"), new RegExp(`^R${DEFAULT_CAP + 3} is queued, place 2 · lead on T2`), "a second lead waits behind it");
+  const second = p.chief("run", "add", "T2", "--role", "lead");
+  assert.match(second, new RegExp(`^R${DEFAULT_CAP + 3} is queued, place 2 · lead on T2`), "a second lead waits behind it");
+  p.send({ hook_event_name: "PostToolUse", tool_name: "Bash", tool_input: { command: `node ${TOOL} run add T2 --role lead` }, tool_response: { stdout: second, stderr: "", interrupted: false } });
   const done = `node ${TOOL} run done R3 --status failed`, ended = p.run("sage", ["run", "done", "R3", "--status", "failed"]);
   assert.match(ended.stdout.toString(), new RegExp(`^R3 failed\\n${id} admitted · qa on T1: `), "the chief's end of a helper run admits the lead's queued run");
-  p.send({ hook_event_name: "PostToolUse", tool_name: "Bash", tool_input: { command: done }, tool_response: { stdout: ended.stdout.toString(), stderr: "", interrupted: false } });
+  const told = p.send({ hook_event_name: "PostToolUse", tool_name: "Bash", tool_input: { command: done }, tool_response: { stdout: ended.stdout.toString(), stderr: "", interrupted: false } })?.hookSpecificOutput?.additionalContext ?? "";
+  assert.ok(told.includes(`sage: ${id} (qa on T1) is admitted from the queue. lead-T1 added it, so the lead starts its agent: you do nothing.`), `the chief hears that its lead added ${id}, so it starts no second agent (F-T1057-16): ${told}`);
   assert.match(spawn() ?? "", /^sage: this lead already has 9 children\./, "the queue no longer holds the admitted run, which the lead owns from its queued line: only the lead's own helper cap does, until R3's child stops");
 });
 
