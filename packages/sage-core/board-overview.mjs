@@ -153,8 +153,8 @@ const firstLine = text => String(text ?? "").split(LINE)[0].trim();
 function logOf(task) {
   const events = [
     ...(task.decisionRows ?? []).map(row => ({ at: row.at, who: "chief", text: `${row.decision}${row.why ? ` · ${row.why}` : ""}` })),
-    ...task.runs.flatMap(run => [
-      { at: run.started, who: run.id, text: `${run.role} started` },
+    ...task.runs.flatMap(run => run.status === "queued" ? [{ at: run.started, who: run.id, text: `${run.role} queued for an agent slot${run.place ? `, place ${run.place}` : ""}` }] : [
+      { at: run.started, who: run.id, text: `${run.role} started${run.admitted ? " after its place in the queue" : ""}` },
       ...(run.status === "running" ? [] : [{ at: run.ended, who: run.id, text: `${run.role} ended: ${run.status}` }]),
     ]),
     ...task.ledger.map(row => ({ at: row.at, who: row.run || "CI", text: `${row.kind}${row.cycle ? ` · cycle ${row.cycle}` : ""}${row.sha ? ` on ${String(row.sha).slice(0, 7)}` : ""}` })),

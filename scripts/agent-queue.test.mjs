@@ -217,7 +217,7 @@ test("T1057: the board model shows each project's running count against its limi
   const { queues } = buildBoardModel(readBoardSources(roots)).agents;
   assert.equal(queues.length, 1);
   assert.deepEqual({ ...queues[0], key: undefined, group: undefined, queued: queues[0].queued.map(({ since, ...q }) => q) }, {
-    key: undefined, group: undefined, running: 3, limit: 3, text: "3 of 3 agents · 2 queued",
+    key: undefined, group: undefined, shared: true, running: 3, limit: 3, leads: 0, leadLimit: 5, text: "3 of 3 agents · 2 queued",
     queued: [{ run: "R4", task: "T2", role: "qa", chief: "C2", chiefProvider: "codex", place: 1 }, { run: "R5", task: "T1", role: "qa", chief: "C1", chiefProvider: "claude", place: 2 }],
   });
 });
@@ -407,4 +407,43 @@ test("T1057 F-T1057-47: a task with a queued lead run joins no milestone before 
   assert.throws(() => w.claude("milestone", "propose", "--name", "Queue", "--goal", "g", "--pilot", "T4", "--tasks", "T3"), /T3 has R4 \(lead\) queued, so it joins M1 only after the owner approves its breakdown/);
   w.claude("run", "done", "R4", "--status", "failed");
   assert.match(w.claude("milestone", "propose", "--name", "Queue", "--goal", "g", "--pilot", "T4", "--tasks", "T3"), /M1/);
+});
+
+const setColumn = (w, id, column, at) => {
+  const file = join(storeDir(w.project, w.env), "runs.tsv"), col = w.runs().cols.indexOf(column);
+  writeFileSync(file, readFileSync(file, "utf8").split("\n").map((line) => line.startsWith(`${id}\t`) ? line.split("\t").map((cell, i) => (i === col ? at : cell)).join("\t") : line).join("\n"));
+};
+const boardRoots = (w) => [{ id: "shared", path: w.env.SAGE_SHARED_HOME }, { id: "claude", path: join(w.env.CLAUDE_CONFIG_DIR, "sage"), provider: "claude" }, { id: "codex", path: join(w.env.CODEX_HOME, "sage"), provider: "codex" }];
+
+test("T1062 F-T1062-4, F-T1062-7: an admitted run's clock starts at its admission, not when it was queued", (t) => {
+  const w = world(t);
+  shared(w);
+  for (const task of ["T1", "T1", "T1", "T1"]) w.claude("run", "add", task, "--role", "qa");
+  const queuedAt = new Date(Date.now() - 40 * 60_000).toISOString().slice(0, 19) + "Z";
+  setColumn(w, "R4", "started", queuedAt);
+  assert.equal(status(w, "R4"), "queued");
+  w.claude("run", "done", "R1", "--status", "failed");
+  const r4 = w.runs().rows.find((r) => r.id === "R4");
+  assert.equal(r4.status, "running");
+  assert.notEqual(r4.started, queuedAt, "the 40 minutes in the queue are not agent time");
+  assert.equal(r4.started, r4.admitted, "the run starts when it is admitted");
+  const card = buildBoardModel(readBoardSources(boardRoots(w))).tasks.find((task) => task.id === "T1");
+  assert.equal(card.runClocks.R4.text, "0 min", "the board's clock counts from the admission");
+});
+
+test("T1062 F-T1062-3: the board takes cap.<name> from every checkout bound to the logbook, as the state tool does", (t) => {
+  const w = world(t);
+  shared(w);
+  w.claude("run", "add", "T1", "--role", "qa");
+  const folder = storeDir(w.project, w.env).split("/").at(-1), clone = join(w.base, "Other Name");
+  execFileSync("git", ["clone", "-q", w.project, clone], { stdio: "ignore" });
+  claudeRun(["link", "--to", folder, "--project", clone], w.env);
+  const config = join(storeDir(w.project, w.env), "config.json"), { max_agents, max_leads, ...rest } = JSON.parse(readFileSync(config, "utf8"));
+  writeFileSync(config, JSON.stringify(rest));
+  mkdirSync(join(w.env.CLAUDE_CONFIG_DIR, "sage"), { recursive: true });
+  writeFileSync(join(w.env.CLAUDE_CONFIG_DIR, "sage", "config.json"), JSON.stringify({ max_agents: 2, "cap.other-name": 7, max_leads: 4 }));
+  assert.equal(queueOf(w.project, w.env).limit, 7, "the state tool: the bound checkout's cap.other-name");
+  const [queue] = buildBoardModel(readBoardSources(boardRoots(w))).agents.queues;
+  assert.equal(queue.limit, 7, "the board shows the same agent limit");
+  assert.equal(queue.leadLimit, 4, "and the lead limit of the provider roots");
 });

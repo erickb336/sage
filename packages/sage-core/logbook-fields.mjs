@@ -1,6 +1,6 @@
 import { createHash } from "node:crypto";
 import { closeSync, constants, fstatSync, openSync, readSync } from "node:fs";
-import { join } from "node:path";
+import { basename, join } from "node:path";
 
 export const PRIORITIES = ["P0", "P1", "P2", "P3"];
 export const PRIORITY_SCALE = "A task needs a priority: P0 the owner's current focus and what blocks it; P1 next: function or safety bugs, work in flight, pre-pilot items; P2 later: polish, hardening lows, follow-ups; P3 parked but kept.";
@@ -28,11 +28,19 @@ export function agentCaps(config) {
   const max = countOf(c.max_agents) ?? AGENT_CAPS.max_agents;
   return { total: countOf(c.cap_total) ?? AGENT_CAPS.cap_total, cap: project => countOf(c[`cap.${project}`]) ?? max };
 }
-export function agentLimit(logbook, roots, names) {
-  const held = countOf(logbook?.max_agents);
-  if (held !== undefined) return held;
-  const set = roots.flatMap(c => names.map(n => countOf(c?.[`cap.${n}`]) ?? countOf(c?.max_agents))).filter(v => v !== undefined);
-  return set.length ? Math.max(...set) : AGENT_CAPS.max_agents;
+export const slug = name => String(name).toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/^-+|-+$/g, "") || "project";
+export const capNames = (folder, bindings) => [...new Set([folder.replace(/-[0-9a-f]{6}$/, ""), ...bindings.filter(row => row.folder === folder).map(row => slug(basename(row.root)))])];
+export function projectLimits(logbook, roots, names) {
+  const held = logbook && typeof logbook === "object" && !Array.isArray(logbook) ? logbook : {};
+  const of = (key, values) => {
+    if (Object.hasOwn(held, key)) return countOf(held[key]) ?? AGENT_CAPS[key];
+    const set = values.filter(v => v !== undefined);
+    return set.length ? Math.max(...set) : AGENT_CAPS[key];
+  };
+  return {
+    max_agents: of("max_agents", roots.flatMap(c => names.map(n => countOf(c?.[`cap.${n}`]) ?? countOf(c?.max_agents)))),
+    max_leads: of("max_leads", roots.map(c => countOf(c?.max_leads))),
+  };
 }
 export const ADMIT_LEASE_MS = 10 * 60_000;
 export const queueOrder = runs => runs.filter(run => run.status === "queued").sort((a, b) => Number(a.id.slice(1)) - Number(b.id.slice(1)));
@@ -75,14 +83,14 @@ export const TABLES = {
 export const START_SAGE_MODE = "sage-mode";
 
 export function logbookSettings(config) {
-  if (!config || typeof config !== "object" || Array.isArray(config)) return { name: null, archived: false, sageModeStart: false, limit: null, warnings: ["config: config is not an object"] };
+  if (!config || typeof config !== "object" || Array.isArray(config)) return { name: null, archived: false, sageModeStart: false, limits: {}, warnings: ["config: config is not an object"] };
   const why = config.name === undefined ? null : nameProblem(config.name);
   const warnings = [
     ...(why ? [`config: the name ${why}`] : []),
     ...(config.archived !== undefined && typeof config.archived !== "boolean" ? ["config: archived is not true or false"] : []),
     ...(config.start !== undefined && config.start !== START_SAGE_MODE ? [`config: start is not "${START_SAGE_MODE}"`] : []),
   ];
-  return { name: config.name === undefined || why ? null : config.name, archived: config.archived === true, sageModeStart: config.start === START_SAGE_MODE, limit: countOf(config.max_agents) ?? null, warnings };
+  return { name: config.name === undefined || why ? null : config.name, archived: config.archived === true, sageModeStart: config.start === START_SAGE_MODE, limits: Object.fromEntries(["max_agents", "max_leads"].filter(key => Object.hasOwn(config, key)).map(key => [key, config[key]])), warnings };
 }
 
 export function startsInSageMode(logbook) {

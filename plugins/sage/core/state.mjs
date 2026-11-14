@@ -9,7 +9,7 @@ import { homedir, hostname, platform, tmpdir, uptime } from "node:os";
 import { basename, dirname, isAbsolute, join, resolve, sep } from "node:path";
 import { boardView, sessionRoots, sessionSources } from "./board-view.mjs";
 import { projectName as shownName } from "./board-model.mjs";
-import { ADMIT_LEASE_MS, agentCaps, agentLimit, queueOrder } from "./logbook-fields.mjs";
+import { ADMIT_LEASE_MS, agentCaps, capNames, projectLimits, queueOrder, slug } from "./logbook-fields.mjs";
 import { logbookIdentity } from "./board-reader.mjs";
 import { PR, pullRequestHead } from "./pull-request.mjs";
 import { REPORT_FIELDS } from "./report.mjs";
@@ -193,7 +193,6 @@ const checkout = (dir, project, env) => {
   if (!isShared(dir, env)) put(join(dir, "checkout.txt"), `${projectRoot(resolve(project))}\n`);
 };
 
-const slug = (name) => String(name).toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/^-+|-+$/g, "") || "project";
 
 const pagesRoot = (project, env = process.env) => pagesFolder(basename(storeDir(project, env)), env);
 const pagesDir = (project, task, env) => join(pagesRoot(project, env), task);
@@ -310,13 +309,8 @@ function saved(env, dir) {
 function limitsOf(dir, env) {
   const held = pick(savedIn(dir), LIMIT_KEYS);
   if (LIMIT_KEYS.every((k) => Object.hasOwn(held, k))) return { values: held, moved: true };
-  const folder = basename(dir), names = new Set([folder.replace(/-[0-9a-f]{6}$/, ""), ...bindings(dirname(dir)).filter((r) => r.folder === folder).map((r) => slug(basename(r.root)))]);
-  const roots = [...new Set([sageRoot(env), ...legacyRoots(env)])].map(savedIn), own = (s, k) => valid(k, s[k]);
-  const largest = (key, of) => {
-    const set = roots.flatMap(of).filter((v) => v !== undefined);
-    return set.length ? Math.max(...set) : DEFAULTS[key];
-  };
-  return { values: { max_agents: agentLimit({}, roots, [...names]), max_leads: largest("max_leads", (s) => [own(s, "max_leads")]), ...held }, moved: false };
+  const roots = [...new Set([sageRoot(env), ...legacyRoots(env)])].map(savedIn);
+  return { values: { ...projectLimits({}, roots, capNames(basename(dir), bindings(dirname(dir)))), ...held }, moved: false };
 }
 
 function moveLimits(dir, env, fresh = false) {
@@ -565,7 +559,7 @@ function admit(dir, project, env, runs) {
   const cap = projectCap(dir, project, env);
   for (const r of queueOrder(runs)) {
     if (count++ >= cap) break;
-    Object.assign(r, { status: "running", admitted: stamp });
+    Object.assign(r, { status: "running", admitted: stamp, started: stamp });
     notes.push(`${r.id} admitted · ${r.role} on ${r.task}${r.chief ? ` · chief ${r.chief}` : ""}: start its agent within ${ADMIT_LEASE_MS / 60_000} minutes, or the run ends as failed`);
   }
   return notes;

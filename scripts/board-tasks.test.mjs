@@ -157,3 +157,14 @@ test("T1061 (F-T1061-29): a throw while the task route builds its answer is a 50
   assert.equal(next.status, 200);
   assert.equal((await next.json()).id, "T3");
 });
+
+test("T1062 F-T1062-5, F-T1062-6: a queued run shows once in the task's log, as queued with its place, and the task's step names it", t => {
+  const { sources } = world(t, { agents: true });
+  const model = modelOf(sources), panel = taskPanel(model, KEY("T41"));
+  assert.deepEqual(panel.log.filter(event => event.who === "R33").map(event => [event.at, event.text]), [[new Date(Date.parse(NOW) - 2 * 60_000).toISOString(), "implementer queued for an agent slot, place 3"]],
+    "one line, when it was queued: no 'started' and no 'ended' for a run that has not started");
+  assert.equal(panel.now, "The implementer (run R33) waits for an agent slot: place 3 in the project's queue. It starts when a running agent ends.");
+  assert.equal(panel.steps.find(step => step.key === "build").detail, panel.now, "the build step says the same");
+  assert.deepEqual(taskPanel(model, KEY("T2")).log.filter(event => event.who === "R24").map(event => event.text), ["qa queued for an agent slot, place 1"]);
+  assert.match(taskPanel(model, KEY("T2")).now, /at work/, "a running agent of the task still comes first");
+});

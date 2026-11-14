@@ -172,3 +172,14 @@ test("T308: two clones of one name show the end of their paths only on the Mac's
   assert.match(mac, /…\/one\/trip · sample\/trip/);
   assert.ok(!remote.includes("/one/trip") && remote.includes("clone 1"), "a tunnel viewer sees clone 1 and clone 2");
 });
+
+test("T1062 F-T1062-1, F-T1062-2: a shared project shows its logbook's limit and its running runs, not a provider root's cap", () => {
+  const sharedBook = { ...book("sample-abcdef", [run("R1", "qa", 5, { chief: "C1" }), run("R2", "qa", 5, { chief: "C2" })]), key: "shared/sample-abcdef", source: "shared", shared: true, limits: { max_agents: 4, max_leads: 2 }, chiefs: [] };
+  const shared = { id: "shared", label: "Shared", shared: true, config: {}, diagnostics: [], projects: [sharedBook], hooks: { present: false, slots: [], helpers: [], problem: null } };
+  const model = buildBoardModel([shared, claude([], [slot("slot-1", ["project-sample", "role-sage_qa", "run-R1"], 1)], { config: { "cap.sample": 9, max_agents: 9 } })], { now: NOW });
+  assert.deepEqual(model.agents.projects.map(project => [project.name, project.cap]), [["sample", { label: "Project", used: 2, cap: 4 }]], "both chiefs' runs against the logbook's max_agents");
+  assert.deepEqual(model.agents.caps, [{ label: "Claude", total: { used: 1, cap: 20 }, projects: [] }], "the root's cap.sample is not the shared project's limit");
+  const html = renderAgentsHtml(model, { live: true });
+  assert.match(html, /Project cap 2 of 4/);
+  assert.ok(!html.includes("of 9"), "no provider root value shows");
+});
