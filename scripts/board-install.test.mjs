@@ -38,6 +38,24 @@ test("board install: stable copy runs after its source is gone and excludes othe
   assert.equal(existsSync(join(f.temp, "Library")), false, "installation does not create a login artifact");
 });
 
+test("F-T1065-13: a stable copy of the plugin's board carries the licences of the packages that its bundles hold", async () => {
+  const temp = realpathSync(mkdtempSync(join(tmpdir(), "sage-board-install-plugin-")));
+  const plugin = join(temp, "plugin"), board = join(plugin, "board");
+  for (const folder of ["board", "core", "licenses", "skills"]) mkdirSync(join(plugin, folder), { recursive: true });
+  writeFileSync(join(board, "install.mjs"), readFileSync(INSTALLER));
+  writeFileSync(join(board, "package.json"), '{"type":"module"}');
+  writeFileSync(join(board, "cli.mjs"), "");
+  writeFileSync(join(plugin, "core", "index.mjs"), "");
+  writeFileSync(join(plugin, "licenses", "react.txt"), "react 19.3.1\n\nMIT License");
+  writeFileSync(join(plugin, "skills", "private.txt"), "not board input");
+  const configPath = join(temp, "config.json"), installDir = join(temp, "stable");
+  writeFileSync(configPath, "{}");
+  const api = await import(pathToFileURL(join(board, "install.mjs")).href);
+  api.installBoard({ configPath, installDir, nodePath: realpathSync(process.execPath) });
+  assert.deepEqual(readdirSync(join(installDir, "packages")).sort(), ["board", "core", "licenses"]);
+  assert.equal(readFileSync(join(installDir, "packages", "licenses", "react.txt"), "utf8"), "react 19.3.1\n\nMIT License");
+});
+
 test("board install: plist arguments are exact, XML-escaped and contain no configuration secret", async () => {
   const f = await fixture(), special = "<&\"'>";
   const configPath = join(f.temp, `config${special}.json`), installDir = join(f.temp, `stable${special}`);

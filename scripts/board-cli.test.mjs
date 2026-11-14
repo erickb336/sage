@@ -151,9 +151,11 @@ test("T229, T1053: a config with the keys of the old phone access still loads an
   assert.equal((await get(port, "sample.tailnet.ts.net")).status, 403, "the old allowed host gets nothing");
 });
 
-test("T1053: board --set-password and --allowed-hosts are gone", async t => {
+test("T1053, F-T1065-24: board --set-password and --allowed-hosts are gone, and the answer says so", async t => {
   const { dir, config } = fixture(t);
-  await assert.rejects(runBoardCli(["board", "--set-password", "--config", config], { output: () => {} }), { message: "unknown or repeated board option" });
-  await assert.rejects(runBoardCli(["board", "--setup", "--config", join(dir, "new.json"), "--allowed-hosts", "[]"], { output: () => {} }), { message: "unknown or repeated board option" });
+  await assert.rejects(runBoardCli(["board", "--set-password", "--config", config], { output: () => {} }), { message: "--set-password is gone: the board is for a browser on this Mac only, with no password and no other host." });
+  await assert.rejects(runBoardCli(["board", "--setup", "--config", join(dir, "new.json"), "--allowed-hosts", "[]"], { output: () => {} }), { message: "--allowed-hosts is gone: the board is for a browser on this Mac only, with no password and no other host." });
+  await assert.rejects(runBoardCli(["board", "--config", config, "--tunnel"], { output: () => {} }), { message: "unknown or repeated board option" });
+  await assert.rejects(runBoardCli(["boards"], { output: () => {} }), { message: /--ensure\|--stop\|--setup\|--serve\|--pair\|--install/ });
   assert.equal(existsSync(join(dir, "new.json")), false);
 });

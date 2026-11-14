@@ -34,7 +34,7 @@ The last line runs the installed copy: use the path that the install step prints
 
 Open the printed localhost URL in a desktop browser on the Mac. The board answers a request only when it comes from loopback, names a loopback host (`127.0.0.1`, `localhost` or `[::1]` at the board's port), and has no header that a proxy adds (`X-Forwarded-*` or `Forwarded`). Every other request is refused: status 403, or 404 on the pages route. The read routes take only GET and HEAD.
 
-A config from an earlier version can still hold the keys `allowedHosts`, `password` or `secret`. It still loads, and the board ignores those keys. To remove them, edit the file, then restart the board.
+A config from an earlier version can still hold the keys `allowedHosts`, `password` or `secret`. It still loads, and this version of the board ignores those keys. An installed copy of an earlier version does not ignore them: the login service runs that copy, and the copy does not change when sage updates. So after an update, remove the keys from the file, then restart the board. To run this version at login, stop the login service with `launchctl bootout` (below), remove the old install folder and the login file, then run the install step again.
 
 The sage hook, in Claude Code and in Codex, refuses the ordinary command shapes by which a session or an agent reads, copies or replaces the configuration file, or lists, searches, copies or moves its folder. An agent runs as your own user, so a script that builds the path while it runs can still pass the hook. Full protection needs the sandbox (tasks T97 to T99).
 
@@ -48,7 +48,7 @@ Setup never changes a config that exists: it stops with an error that names the 
 
 If you edit the port first, `--stop` finds no board on the new port, and the old server runs on. To set the board up again from the start, remove the file first.
 
-The stable installation copies only board and core sources. It does not depend on a provider plugin cache. Stop the foreground service with Ctrl+C.
+The stable installation copies only board and core sources, and the licence files of the packages in the board's bundles. It does not depend on a provider plugin cache. Stop the foreground service with Ctrl+C.
 
 ## The new board (preview)
 

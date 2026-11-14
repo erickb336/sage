@@ -173,12 +173,13 @@ async function stopBoard(configPath, config, env, kill) {
 }
 
 function parse(argv) {
-  if (argv[0] !== "board") throw new TypeError("use: sage board [this|all|project|Tn] --config <absolute path> [--serve|--pair|--html --out <absolute path>|--status]");
+  if (argv[0] !== "board") throw new TypeError("use: sage board [this|all|project|Tn] --config <absolute path> [--ensure|--stop|--setup|--serve|--pair|--install|--html --out <absolute path>|--status]");
   const options = {}, values = [];
   for (let i = 1; i < argv.length; i++) {
     const value = argv[i];
     if (!value.startsWith("--")) { values.push(value); continue; }
     const key = value.slice(2);
+    if (["set-password", "allowed-hosts"].includes(key)) throw new TypeError(`--${key} is gone: the board is for a browser on this Mac only, with no password and no other host.`);
     if (!["config", "out", "project", "scope", "serve", "html", "status", "setup", "ensure", "stop", "pair", "sources", "pages", "port", "install", "install-dir", "login-file"].includes(key) || Object.hasOwn(options, key)) throw new TypeError("unknown or repeated board option");
     if (["serve", "html", "status", "setup", "ensure", "stop", "pair", "install"].includes(key)) options[key] = true;
     else { if (!argv[i + 1] || argv[i + 1].startsWith("--")) throw new TypeError(`--${key} needs a value`); options[key] = argv[++i]; }

@@ -14,7 +14,8 @@ export function budgetProblems(sizes, budget = BUDGET) {
     .map(([part, bytes]) => `the board app's ${part} file is ${bytes} bytes, over its budget of ${budget[part]} bytes (scripts/board-app.mjs): make it smaller, or raise the budget in the same change and say why`);
 }
 
-const packageOf = input => /(?:^|\/)node_modules\/((?:@[^/]+\/)?[^/]+)\//.exec(input)?.[1] ?? null;
+const packageOf = input => /^(?:.*\/)?node_modules\/((?:@[^/]+\/)?[^/]+)\//.exec(input)?.[1] ?? null;
+const packageDir = input => /^(.*node_modules\/(?:@[^/]+\/)?[^/]+)\//.exec(input)?.[1] ?? null;
 
 export function buildBoardApp(root) {
   const result = buildSync({
@@ -58,11 +59,11 @@ export function buildBoardMarkdown(root) {
   return { text, licences: licencesOf(root, Object.keys(output.inputs), "the board's Markdown renderer") };
 }
 
-function licencesOf(root, inputs, what) {
+export function licencesOf(root, inputs, what) {
   const pins = JSON.parse(readFileSync(join(root, "package.json"), "utf8")).devDependencies;
-  const names = [...new Set(inputs.map(packageOf).filter(Boolean))].sort();
-  return new Map(names.map(name => {
-    const dir = join(root, "node_modules", name), installed = JSON.parse(readFileSync(join(dir, "package.json"), "utf8")).version;
+  const dirs = [...new Set(inputs.map(packageDir).filter(Boolean))].sort();
+  return new Map(dirs.map(path => {
+    const name = packageOf(`${path}/`), dir = join(root, path), installed = JSON.parse(readFileSync(join(dir, "package.json"), "utf8")).version;
     if (pins[name] !== installed) throw new Error(`${name} ${installed} is in ${what}, so package.json must pin it at exactly that version`);
     const file = LICENCE_FILES.map(entry => join(dir, entry)).find(existsSync);
     if (!file) throw new Error(`${name} has no licence file to ship with ${what}`);

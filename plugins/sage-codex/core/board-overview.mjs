@@ -1,6 +1,7 @@
 import { LINE, PRIORITIES, boardAnswer } from "./logbook-fields.mjs";
 import { milestoneName } from "./milestone-rules.mjs";
 import { STOPPED_MS } from "./chief-live.mjs";
+import { AGENT_QUIET_MS } from "./board-model.mjs";
 import { taskWord } from "./state-words.mjs";
 
 const DAY = 86_400_000, DONE_DAYS = 7, EVENT_DAYS = 30;
@@ -17,11 +18,10 @@ const STATE_ORDER = ["stuck", "lost", "active", "changing", "proposed", "done"];
 const stateRank = state => STATE_ORDER.includes(state) ? STATE_ORDER.indexOf(state) : STATE_ORDER.length;
 const number = id => Number(String(id).replace(/^\D+/, "")) || 0;
 
-function stuckAgents(agents) {
-  let count = 0;
-  const walk = agent => { if (agent.state === "stuck") count++; for (const child of agent.children ?? []) walk(child); };
+function everyAgent(agents) {
+  const all = [], walk = agent => { all.push(agent); for (const child of agent.children ?? []) walk(child); };
   for (const project of agents?.projects ?? []) for (const agent of project.agents) walk(agent);
-  return count;
+  return all;
 }
 
 function gateNeeds(task) {
@@ -114,11 +114,10 @@ export function boardOverview(model) {
       priority: PRIORITIES.find(priority => open.some(task => task.priority === priority)) ?? null,
       merged: milestone.progress.merged,
       total: milestone.progress.total,
-      abandoned: milestone.progress.abandoned.length,
+      abandoned: milestone.progress.abandoned,
       moving: open.filter(task => MOVING.includes(task.column)).length,
       waiting: milestone.waiting,
       needsYou: open.filter(task => task.reasons.length).length + (milestone.need ? 1 : 0),
-      progressText: milestone.progressText,
       pilot: milestone.pilot,
       doneAt: milestone.state === "done" && Number.isFinite(lastDone) ? new Date(lastDone).toISOString() : null,
     }];
@@ -127,8 +126,12 @@ export function boardOverview(model) {
   const merged = tasks.filter(task => task.state === "merged" && recent(task.completedAt));
   const failed = tasks.flatMap(task => task.runs).filter(run => run.status === "failed" && recent(run.ended));
   const chiefs = (model.projects ?? []).filter(project => !project.archived).flatMap(project => (project.chiefs ?? []).map(chief => ({ ...chief, project: project.name, logbook: chief.key.slice(0, chief.key.lastIndexOf("/")) })));
+  const agents = everyAgent(model.agents);
+  const lastWrites = agents.filter(agent => agent.how === "logbook").map(agent => time(byKey.get(agent.task?.key)?.lastActivity) ?? time(agent.run?.started)).filter(when => when !== null);
+  const stuckNow = agents.filter(agent => agent.state === "stuck").length + lastWrites.filter(when => at - when >= AGENT_QUIET_MS).length;
   const leaving = [...merged.map(task => time(task.completedAt)), ...failed.map(run => time(run.ended))].map(when => when + DAY + 1)
-    .concat(chiefs.filter(chief => chief.stopped === false && !chief.agents && !chief.waitsForOwner).map(chief => time(chief.heartbeat) + STOPPED_MS + 1));
+    .concat(chiefs.filter(chief => chief.stopped === false && !chief.agents && !chief.waitsForOwner).map(chief => time(chief.heartbeat) + STOPPED_MS + 1))
+    .concat(lastWrites.filter(when => at - when < AGENT_QUIET_MS).map(when => when + AGENT_QUIET_MS));
 
   return {
     at: model.at,
@@ -142,7 +145,7 @@ export function boardOverview(model) {
     failedAt: tasks.flatMap(task => task.runs).filter(run => run.status === "failed" && time(run.ended) > at - EVENT_DAYS * DAY).map(run => iso(run.ended)),
     milestones,
     hiddenDone,
-    counts: { merged: merged.length, stuck: failed.length + stuckAgents(model.agents), stuckNow: stuckAgents(model.agents), added: tasks.some(task => task.addedAt) ? tasks.filter(task => recent(task.addedAt)).length : null },
+    counts: { merged: merged.length, stuck: failed.length + stuckNow, stuckNow, added: tasks.some(task => task.addedAt) ? tasks.filter(task => recent(task.addedAt)).length : null },
     next: leaving.length ? Math.min(...leaving) : null,
   };
 }

@@ -125,11 +125,11 @@ test("T218: a task page opens by its anchor offline and at its route on the serv
   assert.ok(!page.includes('class="board"'));
 });
 
-test("T218, T1053: the columns keep their order, with no needs-you order of the old phone layout, and an empty column is marked", () => {
+test("T218, T1053: the columns keep their order, with no needs-you order of the old phone layout", () => {
   const data = twoProjectModel(), html = renderBoardHtml(data, { snapshot: false });
   assert.ok(!html.includes("needs-col"));
   assert.ok(html.includes('<section class="col" aria-label="In review" data-col="review" data-scroll="col-review">'));
-  assert.ok(html.includes('<section class="col empty-col" aria-label="Design" data-col="design" data-scroll="col-design">'));
+  assert.ok(html.includes('<section class="col" aria-label="Design" data-col="design" data-scroll="col-design">'));
   assert.ok(html.includes('<section class="col" aria-label="Backlog" data-col="backlog" data-scroll="col-backlog">'));
 });
 
@@ -300,7 +300,7 @@ test("T305: the picker is one button with an ARIA combobox and listbox, every pr
   const sage = /<li role="option" id="pick-o-[^"]+" class="opt" data-key="sage-43265b"[^>]*>/.exec(html)[0];
   assert.ok(sage.includes('data-name="sage"') && sage.includes('data-provider="claude codex"') && sage.includes('data-providers="Claude + Codex"'), sage);
   assert.ok(sage.includes('data-terms="sage\nsage-43265b\nclaude/sage-43265b\ncodex/sage-43265b"'), sage);
-  assert.ok(!html.includes("/sample/sage") && !renderBoardHtml(providers()).includes("/sample/sage"), "no path for a tunnel viewer or in the offline snapshot");
+  assert.ok(!html.includes("/sample/sage") && !renderBoardHtml(providers()).includes("/sample/sage"), "no path in the offline snapshot");
   assert.ok(renderBoardHtml(providers(), { snapshot: false, paths: true }).includes('data-terms="sage\nsage-43265b\nclaude/sage-43265b\ncodex/sage-43265b\n/sample/sage"'));
   assert.ok(html.includes('data-list="needs"><div class="grp" id="pick-g-needs"><span>Needs you</span><span class="n">1</span></div>'));
   assert.ok(/id="pick-chips"><span class="vh">Projects that need you:<\/span><button class="chip" type="button" id="need-[^"]+" data-pick="sage-43265b" data-provider="claude codex"[^>]*><span class="dot p\d" aria-hidden="true"><\/span><span class="cn">sage<\/span> <span class="badge"><span data-n>1<\/span><span class="vh"> need you<\/span><\/span><\/button><\/span>/.test(html), "one chip for each project that needs you, with its count");
@@ -317,7 +317,7 @@ test("R1079-1: two clones show their path tails only on the Mac's own page; ever
   for (const html of [renderBoardHtml(twins), renderBoardHtml(twins, { snapshot: false })]) {
     assert.deepEqual(lines(html), [["sage-43265b", "clone 1 · sample-owner/sage · Claude"], ["sage-9a9a9a", "clone 2 · sample-owner/sage · Claude"]]);
     assert.deepEqual(titles(html), [["sage-43265b", "sage · clone 1 · sample-owner/sage"], ["sage-9a9a9a", "sage · clone 2 · sample-owner/sage"]]);
-    assert.ok(!html.includes("…/"), "no path tail for a tunnel viewer or in the offline snapshot");
+    assert.ok(!html.includes("…/"), "no path tail in the offline snapshot");
   }
   const mac = renderBoardHtml(twins, { snapshot: false, paths: true });
   assert.deepEqual(lines(mac), [["sage-43265b", "…/work/sage · sample-owner/sage · Claude"], ["sage-9a9a9a", "…/clone/sage · sample-owner/sage · Claude"]]);

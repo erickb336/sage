@@ -342,14 +342,14 @@ test("F-T216-13: the server writes board.pid as a new file, so a hard link at th
   assert.equal(readFileSync(other, "utf8"), "sample text that stays\n");
 });
 
-test("T216, T1053: the board guide says that the board is for this Mac only, and gives ensure and the restart (F-T216-9)", () => {
+test("T216, T1053, F-T1065-22: the board guide says that the board is for this Mac only, and gives ensure and the restart (F-T216-9)", () => {
   const guide = readFileSync(fileURLToPath(new URL("../packages/sage-board/README.md", import.meta.url)), "utf8");
   assert.match(guide, /It is for a desktop browser on this Mac only: it listens on 127\.0\.0\.1, needs no sign-in, and refuses every request that does not come from the Mac itself\./);
   assert.match(guide, /`board --ensure` does the first and the last step for you/);
   assert.match(guide, /node <path to board\/cli\.mjs> board --stop/);
   assert.match(guide, /The login service runs the same `--serve` command, so its board writes `board\.pid` too/);
   assert.match(guide, /A raw TCP forward connects from loopback and adds no proxy header, so it passes the access check\./);
-  assert.match(guide, /A config from an earlier version can still hold the keys `allowedHosts`, `password` or `secret`\. It still loads, and the board ignores those keys\./);
+  assert.match(guide, /A config from an earlier version can still hold the keys `allowedHosts`, `password` or `secret`\. It still loads, and this version of the board ignores those keys\. An installed copy of an earlier version does not ignore them/, "F-T1065-22: the guide says what to do about an old installed copy");
   assert.doesNotMatch(guide, /--set-password|Tailscale|tunnel|on the phone/i);
   assert.match(guide, /`--stop` sends it no signal, whatever `board\.pid` holds/);
 });

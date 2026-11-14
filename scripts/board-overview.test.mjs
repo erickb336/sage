@@ -7,9 +7,9 @@ import { boardChiefs } from "../packages/sage-core/chief-live.mjs";
 import { appTables } from "./fixtures/board-app.mjs";
 
 const NOW = "2026-11-13T12:00:00.000Z";
-const source = (tables = appTables(NOW)) => ({ id: "claude", label: "claude", provider: null, config: {}, diagnostics: [], hooks: { present: false, slots: [], helpers: [], problem: null },
-  projects: [{ key: "claude/sample-app-abc123", source: "claude", name: "sample-app-abc123", checkout: "/sample/app", displayName: "sample app", diagnostics: [], warnings: [], tables, observations: { version: 1, records: [] } }] });
-const overview = (tables, now = NOW) => boardOverview(buildBoardModel([source(tables)], { now }));
+const source = (tables = appTables(NOW), label = "claude") => ({ id: label, label, provider: null, config: {}, diagnostics: [], hooks: { present: false, slots: [], helpers: [], problem: null },
+  projects: [{ key: `${label}/sample-app-abc123`, source: label, name: "sample-app-abc123", checkout: "/sample/app", displayName: "sample app", diagnostics: [], warnings: [], tables, observations: { version: 1, records: [] } }] });
+const overview = (tables, now = NOW, label) => boardOverview(buildBoardModel([source(tables, label)], { now }));
 
 test("T1054: Needs you lists each open question oldest first, with its recommendation, gate, task and the time it was asked", () => {
   const { needs } = overview();
@@ -47,6 +47,32 @@ test("T1054: the counts cover the last 24 hours: a merge 2 h ago counts and one 
   assert.deepEqual(counts, { merged: 1, stuck: 1, stuckNow: 0, added: null });
   assert.equal(next, Date.parse("2026-11-14T10:00:00.000Z") + 1, "T1's merge leaves the window first");
   assert.deepEqual(overview(undefined, "2026-11-14T13:00:00.000Z").counts, { merged: 0, stuck: 0, stuckNow: 0, added: null });
+});
+
+test("F-T1065-2: a Codex run that writes nothing to the logbook for 30 minutes counts as stuck, and the board wakes when one goes silent", () => {
+  const minutesAgo = minutes => new Date(Date.parse(NOW) - minutes * 60_000).toISOString();
+  const codex = (started, decisions = []) => {
+    const tables = appTables(NOW);
+    tables.runs = tables.runs.map(run => run.id === "R2" ? { ...run, started: minutesAgo(started) } : run);
+    tables.decisions.push(...decisions);
+    return overview(tables, NOW, "codex");
+  };
+  assert.deepEqual(codex(40).counts, { merged: 1, stuck: 2, stuckNow: 1, added: null }, "R2 started 40 min ago, and T3 has no later write");
+  assert.deepEqual(codex(40, [{ at: minutesAgo(5), task: "T3", decision: "round 1", why: "sample" }]).counts, { merged: 1, stuck: 1, stuckNow: 0, added: null }, "a write on T3 5 min ago shows that the run is alive");
+  const quiet = codex(10);
+  assert.deepEqual(quiet.counts, { merged: 1, stuck: 1, stuckNow: 0, added: null });
+  assert.equal(quiet.next, Date.parse(NOW) + 20 * 60_000, "the board reads again when R2 reaches 30 silent minutes");
+  assert.equal(overview(undefined, NOW, "claude").counts.stuckNow, 0, "a Claude run with no hook notes is not known, so it is not counted");
+  const slots = { projects: [{ agents: [{ state: "stuck", children: [] }, { state: "wait", children: [{ state: "stuck", children: [] }, { state: "work", children: [] }] }] }] };
+  assert.equal(boardOverview({ at: NOW, tasks: [], needsOwner: [], milestones: [], projects: [], agents: slots }).counts.stuckNow, 2, "F-T1065-3: a lead and a helper whose hook notes are silent for 30 min count");
+});
+
+test("F-T1065-1: a milestone names its abandoned tasks", () => {
+  const tables = appTables(NOW);
+  tables.tasks = tables.tasks.map(task => ["T3", "T4"].includes(task.id) ? { ...task, state: "abandoned" } : task);
+  const m1 = overview(tables).milestones.find(milestone => milestone.id === "M1");
+  assert.deepEqual([m1.merged, m1.total, m1.abandoned], [1, 4, ["T3", "T4"]]);
+  assert.deepEqual(overview().milestones.find(milestone => milestone.id === "M1").abandoned, []);
 });
 
 test("T1054: a stale model says so, with its problems", () => {
