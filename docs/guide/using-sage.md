@@ -159,7 +159,7 @@ The lead and each helper take a place of the project's agent cap (`max_agents`, 
 - The project's agent cap and lead limit (`max_agents` and `max_leads`) are one pair for each project, in its logbook's `config.json`. Every chief of the project, in Claude Code and in Codex, reads the same pair, and a chief does not count toward it.
 - When the project has as many running runs as its cap, `run add` records the next run as `queued` and prints its place: `R12 is queued, place 2`. The hook refuses the agent of a queued run, with its place.
 - A run that ends admits the oldest queued run, under the logbook's lock, so two chiefs at the limit never pass it. The chief that owns the run gets a notice: in Claude Code at the hook's next event, and in Codex at the chief's next turn. In Claude Code, a chief that stops while its run waits is told once to start `wait.mjs --slot <R>` in the background; its end wakes the chief.
-- An admitted run keeps its place for 10 minutes. When its agent does not start in that time, the next `run add` or `run done` ends it as failed, and the next queued run takes the place.
+- An admitted run keeps its place for 10 minutes. When its agent does not start in that time, the next `run add`, `run done` or `wait.mjs --slot` ends it as failed, from 1 minute after those 10 minutes, and the next queued run takes the place.
 - To free a place, the chief ends a run that is stuck.
 - In Codex, set Codex's thread limit to the cap too ([What you need](codex.md#what-you-need)).
 
