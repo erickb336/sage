@@ -5,7 +5,7 @@ import { chmodSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, 
 import { createRequire } from "node:module";
 import { createServer } from "node:net";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { basename, join } from "node:path";
 import { after, before, test } from "node:test";
 import * as claude from "../plugins/sage/skills/sage/sage.mjs";
 import { runBoardCli } from "../plugins/sage/board/cli.mjs";
@@ -112,6 +112,8 @@ test("T1059: the owner pairs once, then answers with full context, undoes, renam
   assert.equal(clicks, 1, "J1: one click opens the question with its full context");
   const view = await page.locator(".question").textContent();
   for (const part of ["Where this is", "The rule for viewers.", "If you do not answer", "The chief adds the copy action.", "About 1 to 2 h of agent time.", "C1's pick"]) assert.ok(view.includes(part), `the view shows ${part}`);
+  const taskKey = `shared/${basename(w.dir)}/T1`;
+  assert.equal(await page.getByRole("link", { name: "Read the full question" }).getAttribute("href"), `/read/${Buffer.from(taskKey).toString("base64url")}/question/G1`, "the link opens the reader's question page of the same gate");
   await w.shot("t1059-question");
   await page.getByRole("radio", { name: /^no/ }).check();
   await page.getByRole("button", { name: "Send answer" }).click();

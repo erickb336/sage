@@ -216,7 +216,7 @@ export function QuestionView({ needKey, model }) {
   return (
     <article className="question" aria-labelledby="question-h">
       <a href="#" className="back">Back to Needs you</a>
-      <p className="facts-line">{owner} · <span className="mono">{gate.id}</span> · asked {gate.at ? clock(gate.at) : "at a time not recorded"} · <a href={`#tasks?task=${encodeURIComponent(gate.task.key)}`}>{gate.task.id} · {gate.task.title}</a></p>
+      <p className="facts-line">{owner} · <span className="mono">{gate.id}</span> · asked {gate.at ? clock(gate.at) : "at a time not recorded"} · <a href={`#tasks?task=${encodeURIComponent(gate.task.key)}`}>{gate.task.id} · {gate.task.title}</a> · <a href={`/read/${encodeKey(gate.task.key)}/question/${gate.id}${document.documentElement.dataset.theme === "light" ? "?theme=light" : ""}`}>Read the full question</a></p>
       <h1 id="question-h" tabIndex={-1}>{gate.message?.title ?? gate.text ?? gate.question}</h1>
       {gate.message ? <div className="context"><Blocks blocks={gate.message.blocks.filter(block => !(block.t === "table" && same(block.head[0], "Answer")))} /></div>
         : <p className="hint">This question has no kept message, so the board shows its question and its options only.{gate.default && ` If you do not answer: ${gate.default}.`}</p>}
