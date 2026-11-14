@@ -194,7 +194,7 @@ export async function runBoardCli(argv, { output = line => process.stdout.write(
     if (value !== "all" || options.project || options.out || options.sources || options.pages || options.port || options["install-dir"] || options["login-file"]) throw new TypeError("pair takes only --config");
     if (!input?.isTTY) throw new TypeError("board --pair runs only in Terminal, with your keyboard as its input, because it prints a one-time code for your eyes only. Open Terminal on this Mac and run it there.");
     const configPath = boundedPath(options.config), config = readBoardConfig(configPath), code = startPairing(stateFolder(configPath));
-    output(`Pairing code: ${code}\nOpen http://127.0.0.1:${config.port}/app/ in your browser, choose "Pair this browser", and type the code. It works once, within 10 minutes. After that, this browser can answer questions, undo an answer, rename chiefs and give tasks to another chief.`);
+    output(`Pairing code: ${code}\nOpen http://127.0.0.1:${config.port}/app/ in your browser. In the card "Pair this browser to act from the board", type the code in the "Pairing code" field, then choose Pair. The code works once, within 10 minutes. After that, this browser can answer questions, undo an answer, rename chiefs and give tasks to another chief.\nIf the page shows no pairing card and this browser is not paired yet, the board that runs is older than this one: run ${boardCommand("--stop", configPath, env, explicit)}, ask for the board again, and reload the page.`);
     return null;
   }
   const missing = options.ensure && !lstatSync(boundedPath(options.config), { throwIfNoEntry: false });

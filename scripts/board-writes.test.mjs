@@ -130,14 +130,30 @@ test("board --pair refuses input that is not a terminal, prints a one-time code 
   assert.ok(!kept().includes(value), "only the cookie's hash is kept");
   assert.equal((await call(w.port, "/api/pair", { headers: w.own, body: { code } })).status, 403, "a code works once");
 
+  assert.match(right.json.token, /^[A-Za-z0-9_-]{43}$/);
+  assert.ok(!kept().includes(right.json.token), "only the token's hash is kept");
   const shell = await call(w.port, "/app/", { method: "GET", headers: { Cookie: `sage_board=${value}` } });
-  assert.match(shell.text, new RegExp(`<meta name="sage-writes" content="paired"><meta name="sage-token" content="${right.json.token}">`));
-  const stranger = await call(w.port, "/app/", { method: "GET" });
-  assert.match(stranger.text, /<meta name="sage-writes" content="unpaired"><meta name="sage-token" content="">/, "a page with no cookie carries no token");
+  assert.equal(shell.status, 200);
+  assert.ok(!shell.text.includes(right.json.token), "F-T1059-13: the page that the cookie opens does not carry the token");
 
   await runBoardCli(["board", "--pair", "--config", w.config], { output: () => {}, env: w.env, input: { isTTY: true } });
   for (let i = 0; i < 5; i++) await call(w.port, "/api/pair", { headers: w.own, body: { code: "AAAA-AAAA" } });
   assert.equal(existsSync(join(w.stateDir, "pair-code.json")) ? JSON.parse(readFileSync(join(w.stateDir, "pair-code.json"), "utf8")).tries : 5, 5, "five wrong tries spend a code");
+});
+
+test("F-T1059-13: the pairing cookie alone writes nothing: a server on another port that got it reads /app/ and forges the headers from node http", async t => {
+  const w = await board(t), p = await pair(w), before = w.gates();
+  const open = await needs(w), need = open.needs.find(item => item.gate === "G1");
+  const page = await call(w.port, "/app/", { method: "GET", headers: { Cookie: p.cookie } });
+  const token = /name="sage-token" content="([^"]*)"/.exec(page.text)?.[1] ?? "";
+  const forged = await call(w.port, "/api/answer", { headers: { ...w.own, Cookie: p.cookie, "X-Sage-Token": token }, body: { logbook: w.logbook, gate: "G1", option: 1, digest: need.digest } });
+  assert.equal(forged.status, 403, forged.text);
+  assert.match(forged.json.problem, /pair/i, "the refusal says to pair again");
+  assert.equal(w.gates(), before, "the forged write changed nothing");
+  const own = await call(w.port, "/api/answer", { headers: p.headers, body: { logbook: w.logbook, gate: "G1", option: 1, digest: need.digest } });
+  assert.equal(own.status, 200, `the paired browser, with its token, still writes: ${own.text}`);
+  const other = await pair(w);
+  assert.equal((await call(w.port, "/api/seen", { headers: { ...other.headers, "X-Sage-Token": p.token }, body: {} })).status, 403, "a token works only with the cookie of the same browser");
 });
 
 test("every forged write is refused before it reaches the logbook: a plain curl, another port, a sandboxed /pages page, a cross-site form, no cookie, no token", async t => {
@@ -214,8 +230,12 @@ test("the owner renames a chief, gives a task to another chief, and the last vis
   const named = await call(w.port, "/api/name", { headers: p.headers, body: { logbook: w.logbook, chief: "C2", name: "Codex desk" } });
   assert.equal(named.status, 200, named.text);
   assert.deepEqual(JSON.parse(readFileSync(join(w.dir, "chief-names.json"), "utf8")), { C2: "Codex desk" });
-  const bad = await call(w.port, "/api/name", { headers: p.headers, body: { logbook: w.logbook, chief: "C2", name: "--via board" } });
-  assert.equal(bad.status, 400, "a name that reads as an option is refused before the state tool");
+  for (const name of ["--via board", "-dash", " -x"]) {
+    const bad = await call(w.port, "/api/name", { headers: p.headers, body: { logbook: w.logbook, chief: "C2", name } });
+    assert.equal(bad.status, 400, `a name that reads as an option is refused before the state tool: ${name}`);
+    assert.match(bad.json.problem, /cannot start with "-"/, "F-T1059-24: the refusal names the real reason");
+  }
+  assert.deepEqual(JSON.parse(readFileSync(join(w.dir, "chief-names.json"), "utf8")), { C2: "Codex desk" });
 
   const given = await call(w.port, "/api/give", { headers: p.headers, body: { logbook: w.logbook, task: "T1", to: "C2" } });
   assert.equal(given.status, 200, given.text);
@@ -230,6 +250,14 @@ test("the owner renames a chief, gives a task to another chief, and the last vis
 
   const elsewhere = await call(w.port, "/api/give", { headers: p.headers, body: { logbook: "shared/other-abcdef", task: "T1", to: "C2" } });
   assert.equal(elsewhere.status, 409, "a logbook with no checkout on this Mac is refused");
+});
+
+test("F-T1059-25: a last visit in the future (a clock set back, a hand-edited file) counts as no earlier visit", async t => {
+  const w = await board(t), p = await pair(w);
+  mkdirSync(w.stateDir, { recursive: true });
+  writeFileSync(join(w.stateDir, "seen.json"), JSON.stringify({ at: new Date(Date.now() + 86_400_000).toISOString() }));
+  assert.deepEqual((await call(w.port, "/api/seen", { headers: p.headers, body: {} })).json, { previous: null });
+  assert.match((await call(w.port, "/api/seen", { headers: p.headers, body: {} })).json.previous, /^\d{4}-\d\d-\d\dT/, "the visit is recorded, so the next look has an earlier visit");
 });
 
 test("the state tool's lock never runs on the server's event thread: a read answers while a write waits for the lock", async t => {

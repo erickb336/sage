@@ -50,7 +50,7 @@ async function openBoard(t) {
   execFileSync("git", ["-C", project, "commit", "-q", "--allow-empty", "-m", "first"], { env: gitEnv });
   claude.sage(["link", "--separate", "--project", project], env);
   const dir = claude.storeDir(project, env), now = Date.now(), iso = ms => new Date(ms).toISOString();
-  writeFileSync(join(dir, "chiefs.tsv"), `id\tprovider\tnative\tat\nC1\tclaude\tclaude-1\t${iso(now - 3 * 3600_000)}\nC2\tcodex\tcodex-1\t${iso(now - 2 * 3600_000)}\nC3\tclaude\tclaude-3\t${iso(now - 5 * 3600_000)}\n`);
+  writeFileSync(join(dir, "chiefs.tsv"), `id\tprovider\tnative\tat\nC1\tclaude\tclaude-1\t${iso(now - 3 * 3600_000)}\nC2\tcodex\tcodex-1\t${iso(now - 2 * 3600_000)}\nC3\tclaude\tclaude-3\t${iso(now - 5 * 3600_000)}\nC4\tcodex\tcodex-4\t${iso(now - 4 * 3600_000)}\n`);
   mkdirSync(join(dir, "live"));
   for (const [id, ago, autopilot] of [["C1", 0, true], ["C2", 0, false], ["C3", 2 * 3600_000, false]]) writeFileSync(join(dir, "live", `${id}.json`), JSON.stringify({ provider: id === "C2" ? "codex" : "claude", checkout: project, sageMode: true, autopilot, at: iso(now - ago) }));
   const as = (chief, ...args) => claude.sage([...args, "--project", project, "--chief", chief], env);
@@ -64,7 +64,7 @@ async function openBoard(t) {
   await runBoardCli(["board", "--setup", "--config", config, "--port", String(port), "--sources", JSON.stringify([{ id: "shared", path: env.SAGE_SHARED_HOME }])], { output: () => {}, env });
   const server = createBoardServer({ sources: [{ id: "shared", label: "Shared", path: env.SAGE_SHARED_HOME }], port, app: APP, settleReads: [], stateDir: join(base, "home", ".config", "sage-board", "state") });
   await server.start();
-  const context = await browser.newContext({ viewport: { width: 1440, height: 1000 }, colorScheme: "dark" });
+  const context = await browser.newContext({ viewport: { width: 1440, height: 1000 }, colorScheme: "dark", timezoneId: "America/New_York" });
   t.after(async () => {
     await context.close(); await server.close();
     for (const key of Object.keys(process.env)) if (!(key in saved)) delete process.env[key];
@@ -72,19 +72,27 @@ async function openBoard(t) {
     rmSync(base, { recursive: true, force: true });
   });
   const origin = `http://127.0.0.1:${port}`, requests = [], problems = [];
-  await context.route("**/*", route => { requests.push(route.request().url()); return route.request().url().startsWith(`${origin}/`) ? route.continue() : route.abort(); });
+  await context.route("**/*", route => { requests.push(`${route.request().method()} ${route.request().url()}`); return route.request().url().startsWith(`${origin}/`) ? route.continue() : route.abort(); });
   const page = await context.newPage();
   page.on("pageerror", error => problems.push(String(error)));
   page.on("console", message => { if (message.type() === "error" || /Content Security Policy|Refused to/.test(message.text())) problems.push(message.text()); });
   await page.goto(`${origin}/app/`);
   await page.locator("main h1").waitFor();
-  const pairCode = async () => {
+  const pairText = async () => {
     const lines = [];
     await runBoardCli(["board", "--pair", "--config", config], { output: line => lines.push(line), env, input: { isTTY: true } });
-    return /Pairing code: (\S+)/.exec(lines.join("\n"))[1];
+    return lines.join("\n");
+  };
+  const pairCode = async () => /Pairing code: (\S+)/.exec(await pairText())[1];
+  const pair = async () => {
+    await page.getByPlaceholder("ABCD-EFGH").fill(await pairCode());
+    await page.getByRole("button", { name: "Pair", exact: true }).click();
+    await page.getByRole("heading", { name: "Pair this browser to act from the board" }).waitFor({ state: "detached" });
   };
   const shot = async name => { if (SHOTS) await page.screenshot({ path: join(SHOTS, `${name}.png`), fullPage: true }); };
-  return { page, origin, dir, project, env, as, pairCode, shot, requests, problems, gate: id => claude.read(dir, "gates").find(row => row.id === id) };
+  const posts = path => requests.filter(line => line === `POST ${origin}/api/${path}`).length;
+  const settled = () => page.evaluate(() => new Promise(done => requestAnimationFrame(() => setTimeout(done, 0))));
+  return { page, origin, dir, project, env, as, pairText, pair, shot, requests, posts, settled, problems, gate: id => claude.read(dir, "gates").find(row => row.id === id) };
 }
 
 test("T1059: the owner pairs once, then answers with full context, undoes, renames a chief, filters by chief, gives a task to another chief and sees what changed, each within two clicks of the Overview", async t => {
@@ -94,9 +102,7 @@ test("T1059: the owner pairs once, then answers with full context, undoes, renam
 
   assert.equal(await page.getByRole("button", { name: "Send answer" }).count(), 0);
   await w.shot("t1059-unpaired");
-  await page.getByPlaceholder("ABCD-EFGH").fill(await w.pairCode());
-  await page.getByRole("button", { name: "Pair", exact: true }).click();
-  await page.getByRole("heading", { name: "Pair this browser to act from the board" }).waitFor({ state: "detached" });
+  await w.pair();
   await page.reload();
   await page.getByRole("heading", { name: /^Since you looked|^In the last 24 hours/ }).waitFor();
 
@@ -164,14 +170,12 @@ test("T1059: the owner pairs once, then answers with full context, undoes, renam
   await w.shot("t1059-overview");
 
   assert.deepEqual(w.problems, [], "no page error and no CSP refusal");
-  assert.deepEqual(w.requests.filter(url => !url.startsWith(`${w.origin}/`)), [], "no outside request");
+  assert.deepEqual(w.requests.filter(line => !line.split(" ")[1].startsWith(`${w.origin}/`)), [], "no outside request");
 });
 
 test("T1059: a question answered first in the chief's chat shows who answered first, and a later board answer is refused with the first answer", async t => {
   const w = await openBoard(t), { page } = w;
-  await page.getByPlaceholder("ABCD-EFGH").fill(await w.pairCode());
-  await page.getByRole("button", { name: "Pair", exact: true }).click();
-  await page.getByRole("heading", { name: "Pair this browser to act from the board" }).waitFor({ state: "detached" });
+  await w.pair();
   await page.getByRole("link", { name: "Crash reports: send them on their own, or ask each time?" }).click();
   await page.getByRole("radio", { name: /^ask each time/ }).check();
   let holdGateReads = true;
@@ -179,10 +183,76 @@ test("T1059: a question answered first in the chief's chat shows who answered fi
   await page.route("**/app/gate/**", route => holdGateReads ? held.push(route) : route.fallback().catch(() => {}));
   claude.sage(["gate", "answer", "G2", "--option", "2", "--via", "chat", "--project", w.project], w.env);
   await page.getByRole("button", { name: "Send answer" }).click();
-  await page.getByText(/^Not recorded\. G2 has the answer "send them" already, from the chat at /).waitFor();
+  await page.getByText(/^Not recorded\. G2 has the answer "send them" already, from the chat at \d\d:\d\d: the first answer wins/).waitFor();
   holdGateReads = false;
   for (const route of held) await route.fallback().catch(() => {});
   await page.getByText(/^Answered first in C2's chat at \d\d:\d\d: send them\./).waitFor();
   await w.shot("t1059-answered-elsewhere");
   assert.equal(w.gate("G2").answer, "send them");
+});
+
+test("F-T1059-17: board --pair names the card, the field and the button that the page shows, and says how to restart an older board", async t => {
+  const w = await openBoard(t), { page } = w;
+  const told = await w.pairText(), [, card, field, button] = /In the card "([^"]+)", type the code in the "([^"]+)" field, then choose (\w+)\./.exec(told) ?? [];
+  assert.ok(card, `the output names the controls: ${told}`);
+  assert.match(told, /If the page shows no pairing card and this browser is not paired yet, the board that runs is older than this one: run node .* board --stop --config .*, ask for the board again, and reload the page\./);
+  await page.getByLabel(field).fill(/Pairing code: (\S+)/.exec(told)[1]);
+  await page.getByRole("button", { name: button, exact: true }).click();
+  await page.getByRole("heading", { name: card }).waitFor({ state: "detached" });
+  assert.deepEqual(w.problems, []);
+});
+
+test("F-T1059-19: each chief's chip says its state in words: live, waits for you, stopped or liveness not known", async t => {
+  const w = await openBoard(t), { page } = w;
+  const chip = id => page.locator(`.chip[data-chief$="/${id}"] .state`);
+  await chip("C4").waitFor();
+  assert.deepEqual(await Promise.all(["C1", "C2", "C3", "C4"].map(id => chip(id).textContent())), ["live · autopilot on", "live · autopilot off", "stopped", "liveness not known"]);
+  await w.shot("t1059-chips");
+});
+
+test("F-T1059-21: a chief's default name and its menu's Started row show the same local time", async t => {
+  const w = await openBoard(t), { page } = w;
+  const name = await page.locator('.chip[data-chief$="/C1"] .faint').first().textContent();
+  await page.getByRole("button", { name: "More about C1" }).click();
+  const started = await page.locator(".menu .facts dt", { hasText: "Started" }).locator("xpath=following-sibling::dd[1]").textContent();
+  assert.ok(!name.includes("UTC") && name.endsWith(` · ${started}`), `"${name}" ends with "${started}"`);
+  await w.shot("t1059-chief-started");
+});
+
+test("F-T1059-23: a double click on Send answer sends one answer and shows no refusal", async t => {
+  const w = await openBoard(t), { page } = w;
+  await w.pair();
+  await page.getByRole("link", { name: MESSAGE.title }).click();
+  await page.getByRole("radio", { name: /^no/ }).check();
+  await page.getByRole("button", { name: "Send answer" }).dblclick();
+  await page.getByText(/^You answered G1: no\. Recorded in the logbook\./).waitFor();
+  assert.equal(w.posts("answer"), 1, "one answer was sent");
+  await w.settled();
+  assert.equal(await page.getByText(/^Not recorded/).count(), 0, "no refusal under the recorded answer");
+  assert.equal(JSON.parse(w.gate("G1").answered).answer, "no");
+  await w.shot("t1059-double-send");
+});
+
+test("F-T1059-11: the board records a visit once for each page load, not for each move inside the app", async t => {
+  const w = await openBoard(t), { page } = w;
+  await w.pair();
+  await page.reload();
+  await page.getByRole("heading", { name: /^Since you looked|^In the last 24 hours/ }).waitFor();
+  await w.settled();
+  const looks = w.posts("seen");
+  assert.ok(looks >= 1, "the page load records a visit");
+  await page.getByRole("link", { name: MESSAGE.title }).click();
+  await page.getByRole("heading", { name: MESSAGE.title, level: 1 }).waitFor();
+  await page.getByRole("link", { name: "Back to Needs you" }).click();
+  await page.getByRole("link", { name: /^Tasks/ }).click();
+  await page.locator("a.row").first().waitFor();
+  await page.getByRole("link", { name: /^Overview/ }).click();
+  await page.getByRole("heading", { name: /^Since you looked/ }).waitFor();
+  await w.settled();
+  assert.equal(w.posts("seen"), looks, "a move to a question or the Tasks page and back is not a new visit");
+  await page.reload();
+  await page.getByRole("heading", { name: /^Since you looked/ }).waitFor();
+  await w.settled();
+  assert.equal(w.posts("seen"), looks + 1, "a new page load is a new visit");
+  await w.shot("t1059-since-you-looked");
 });

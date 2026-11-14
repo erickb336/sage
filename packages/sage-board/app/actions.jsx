@@ -1,11 +1,16 @@
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
+import { when } from "./use-model.js";
 
-const meta = name => document.querySelector(`meta[name="${name}"]`)?.content ?? "";
-const access = { writes: meta("sage-writes") || "off", token: meta("sage-token") };
+const TOKEN_KEY = "board-token";
+const stored = { get: () => { try { return localStorage.getItem(TOKEN_KEY) ?? ""; } catch { return ""; } }, set: value => { try { value ? localStorage.setItem(TOKEN_KEY, value) : localStorage.removeItem(TOKEN_KEY); } catch {} } };
+const token = stored.get(), on = document.querySelector('meta[name="sage-writes"]')?.content === "on";
+const access = { writes: !on ? "off" : token ? "paired" : "unpaired", token };
 const listeners = new Set();
+const setAccess = (writes, value) => { access.writes = writes; access.token = value; stored.set(value); listeners.forEach(fn => fn()); };
 const VIA = { board: "on the board", chat: "in the chat", "claude-card": "on a Claude card", "codex-card": "on a Codex card" };
 const encodeKey = key => btoa(String.fromCharCode(...new TextEncoder().encode(key))).replace(/\+/g, "-").replace(/\//g, "_").replace(/=+$/, "");
 const clock = at => Number.isFinite(Date.parse(at)) ? new Date(at).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit", hourCycle: "h23" }) : "an unknown time";
+const clocks = text => String(text).replace(/\b\d{4}-\d\d-\d\dT\d\d:\d\d(?::\d\d(?:\.\d+)?)?Z\b/g, clock);
 export const questionLink = key => `#question?key=${encodeURIComponent(key)}`;
 export const chiefOf = (chiefs, logbook, id) => chiefs.find(chief => chief.logbook === logbook && chief.id === id) ?? null;
 export const chiefLabel = (chiefs, logbook, id) => { const chief = chiefOf(chiefs, logbook, id); return chief ? `${chief.id} · ${chief.name}` : id ?? "the chief"; };
@@ -20,8 +25,8 @@ export async function post(path, body) {
   try {
     const response = await fetch(`/api/${path}`, { method: "POST", headers: { "Content-Type": "application/json", "X-Sage-Token": access.token }, body: JSON.stringify(body) });
     const json = await response.json().catch(() => ({}));
-    if (response.status === 401) { access.writes = "unpaired"; listeners.forEach(fn => fn()); }
-    return { ok: response.ok && json.ok !== false, text: json.text ?? json.problem ?? (response.ok ? "" : `The board refused the write (${response.status}).`), json };
+    if (path !== "pair" && (response.status === 401 || response.status === 403 && json.problem)) setAccess("unpaired", "");
+    return { ok: response.ok && json.ok !== false, text: clocks(json.text ?? json.problem ?? (response.ok ? "" : `The board refused the write (${response.status}).`)), json };
   } catch { return { ok: false, text: "The board cannot reach its server on this Mac. Nothing was written." }; }
 }
 
@@ -32,7 +37,7 @@ export function PairBox() {
   const pair = async event => {
     event.preventDefault();
     const result = await post("pair", { code });
-    if (result.json.token) { access.token = result.json.token; access.writes = "paired"; listeners.forEach(fn => fn()); }
+    if (result.json.token) setAccess("paired", result.json.token);
     else setProblem(result.text);
   };
   return (
@@ -46,16 +51,17 @@ export function PairBox() {
   );
 }
 
+const seen = { previous: undefined, started: false, listeners: new Set() };
+const look = () => post("seen", {}).then(result => { if (result.ok) { seen.previous = result.json.previous ?? null; seen.listeners.forEach(fn => fn()); } });
 export function useSeen(writes) {
-  const [previous, setPrevious] = useState(undefined);
+  const [previous, setPrevious] = useState(seen.previous);
+  useEffect(() => { const changed = () => setPrevious(seen.previous); seen.listeners.add(changed); return () => seen.listeners.delete(changed); }, []);
   useEffect(() => {
-    if (writes !== "paired") return;
+    if (writes !== "paired" || seen.started) return;
+    seen.started = true;
     let hidden = false;
-    const look = () => post("seen", {}).then(result => { if (result.ok) setPrevious(result.json.previous ?? null); });
-    const changed = () => { if (document.visibilityState === "hidden") hidden = true; else if (hidden) { hidden = false; look(); } };
+    document.addEventListener("visibilitychange", () => { if (document.visibilityState === "hidden") hidden = true; else if (hidden) { hidden = false; look(); } });
     look();
-    document.addEventListener("visibilitychange", changed);
-    return () => document.removeEventListener("visibilitychange", changed);
   }, [writes]);
   return previous;
 }
@@ -75,7 +81,7 @@ function ChiefMenu({ chief, onFilter, close }) {
     <div className="menu" role="dialog" aria-label={`${chief.id} · ${chief.provider}`}>
       <p className="menu-h"><span className={`dot ${dot(chief)}`} aria-hidden="true" />{chief.id} · {chief.provider}<span className="grow" />{STATE[dot(chief)]}</p>
       <dl className="facts">
-        <dt>Started</dt><dd>{chief.startedAt ? clock(chief.startedAt) : "not known"}</dd>
+        <dt>Started</dt><dd>{chief.startedAt ? when(chief.startedAt) : "not known"}</dd>
         <dt>Last event</dt><dd>{chief.heartbeat ? clock(chief.heartbeat) : "not known"}</dd>
         <dt>Agents</dt><dd>{chief.agents} running</dd>
         <dt>Autopilot</dt><dd>{chief.autopilot === null ? "not known" : chief.autopilot ? "on" : "off"} · you switch it in the chief's chat</dd>
@@ -110,7 +116,7 @@ export function ChiefChips({ chiefs, filter, setFilter, many }) {
             title={`${STATE[dot(chief)]} · show only this chief's work`}>
             <span className={`dot ${dot(chief)}`} aria-hidden="true" /><b>{chief.id}</b> {chief.named && `${chief.provider} `}<span className="faint">{chief.name}</span>
             {many && <span className="faint"> · {chief.project}</span>}
-            <span className="state">{chief.stopped ? "stopped" : chief.waitsForOwner ? "waits for you" : chief.autopilot === null ? "" : `autopilot ${chief.autopilot ? "on" : "off"}`}</span>
+            <span className="state">{STATE[dot(chief)]}{dot(chief) === "live" && chief.autopilot !== null && ` · autopilot ${chief.autopilot ? "on" : "off"}`}</span>
           </button>
           <button type="button" className="chip caret" aria-expanded={open === chief.key} aria-label={`More about ${chief.id}`} onClick={() => setOpen(open === chief.key ? null : chief.key)}>▾</button>
           {open === chief.key && <ChiefMenu chief={chief} onFilter={setFilter} close={() => setOpen(null)} />}
@@ -197,11 +203,16 @@ export function UndoButton({ logbook, gate, onDone }) {
 
 export function QuestionView({ needKey, model }) {
   const { gate, problem } = useGate(needKey, model.at), writes = useAccess();
-  const [pick, setPick] = useState(null), [said, setSaid] = useState(null);
+  const [pick, setPick] = useState(null), [said, setSaid] = useState(null), [busy, setBusy] = useState(false), sending = useRef(false);
   useEffect(() => { document.getElementById("question-h")?.focus(); }, [needKey, !gate]);
   if (!gate) return <div className="page-h"><a href="#" className="back">Back to Needs you</a><h1 id="question-h" tabIndex={-1}>{problem === "gone" ? "This question is not on the board" : problem ? "The board cannot read this question now" : "Reading the question"}</h1></div>;
   const rows = answerRows(gate.message), open = !gate.answer && !gate.answered, owner = chiefLabel(model.chiefs, gate.logbook, gate.owner);
-  const send = async () => setSaid(await post("answer", { logbook: gate.logbook, gate: gate.id, option: pick + 1, digest: gate.digest }));
+  const send = async () => {
+    if (sending.current) return;
+    sending.current = true; setBusy(true);
+    setSaid(await post("answer", { logbook: gate.logbook, gate: gate.id, option: pick + 1, digest: gate.digest }));
+    sending.current = false; setBusy(false);
+  };
   return (
     <article className="question" aria-labelledby="question-h">
       <a href="#" className="back">Back to Needs you</a>
@@ -225,11 +236,11 @@ export function QuestionView({ needKey, model }) {
       </div>
       <div className="send" role="status">
         {said?.ok ? <p className="done">{said.text.startsWith(gate.id) ? `You answered ${gate.id}: ${gate.options[pick]}. Recorded in the logbook. It waits for ${owner} to pick it up, at its next step.` : said.text} <UndoButton logbook={gate.logbook} gate={gate.id} onDone={result => result.ok && setSaid(null)} /></p>
-          : !open ? <p><Answered gate={gate} chiefs={model.chiefs} /> {gate.answered?.via === "board" && !gate.answer && <UndoButton logbook={gate.logbook} gate={gate.id} />}</p>
+          : !open ? <p><span><Answered gate={gate} chiefs={model.chiefs} /></span>{gate.answered?.via === "board" && !gate.answer && <UndoButton logbook={gate.logbook} gate={gate.id} />}</p>
           : writes !== "paired" ? <PairBox />
           : <p>{pick === null ? "Pick one answer above." : <>Your answer: <b>{gate.options[pick]}</b></>} <span className="grow" />
               <button type="button" className="btn" onClick={() => setPick(null)}>Clear</button>
-              <button type="button" className="btn primary" disabled={pick === null} onClick={send}>Send answer</button></p>}
+              <button type="button" className="btn primary" disabled={pick === null || busy} onClick={send}>Send answer</button></p>}
         {said && !said.ok && <p className="refused" role="alert">Not recorded. {said.text}</p>}
         <p className="hint">The first answer wins: from the board or from the chief's chat. A later answer is refused and names the first one.</p>
       </div>

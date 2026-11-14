@@ -1,5 +1,6 @@
 import { useState } from "react";
 import { GiveBox, PairBox, UndoButton, chiefLabel, questionLink, useAccess, useSeen } from "./actions.jsx";
+import { when } from "./use-model.js";
 import { StateIcon } from "./icons.jsx";
 import { milestoneLink, taskLink } from "./panel.jsx";
 
@@ -26,7 +27,7 @@ function Counts({ model, previous }) {
   ];
   return (
     <section className="counts" aria-labelledby="counts-h">
-      <h2 id="counts-h">{previous ? <>Since you looked <span className="hint">· you last opened the board at {new Date(previous).toLocaleString([], { hour: "2-digit", minute: "2-digit", day: "numeric", month: "short", hourCycle: "h23" })}, {ago(previous, model.at)}</span></> : "In the last 24 hours"}</h2>
+      <h2 id="counts-h">{previous ? <>Since you looked <span className="hint">· you last opened the board at {when(previous)}, {ago(previous, model.at)}</span></> : "In the last 24 hours"}</h2>
       <div className="kpis">
         {items.map(([kind, count, label, hint]) => (
           <div className={`kpi ${kind}`} key={kind} data-count={kind}>

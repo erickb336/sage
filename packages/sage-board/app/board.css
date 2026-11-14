@@ -238,7 +238,8 @@ input:not([type]), input[type="text"] { font: inherit; color: inherit; backgroun
 .owned > li { display: flex; flex-wrap: wrap; align-items: center; gap: 10px; font-size: 13px; }
 .give { width: 100%; display: grid; gap: 8px; padding: 10px; border: 1px solid var(--line-2); border-radius: var(--r-s); background: var(--card-2); }
 .pickable { display: flex; gap: 8px; align-items: center; font-size: 13px; }
-.badge.pick { color: var(--accent); border-color: var(--accent); margin-left: 6px; }
+.badge.pick { color: var(--accent); border-color: var(--accent); }
+.badge.pick, .what .badge { margin-left: 6px; }
 .row-btns { display: flex; gap: 8px; justify-content: end; }
 .question { max-width: 860px; display: grid; gap: 8px; }
 .question h1 { font-size: 24px; margin: 6px 0; }

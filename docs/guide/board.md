@@ -257,7 +257,9 @@ The first answer wins. When you answer in a chat or on a card first, the board s
 **Pair a browser once.** Until you pair, the board only reads. Do these steps:
 
 1. In Terminal on the Mac, run `node <board folder>/cli.mjs board --pair` (the board folder of the installed plugin, or the installed copy). It prints a one-time code that works for 10 minutes.
-2. Open the board, type the code under "Pair this browser", and choose Pair.
+2. Open the board. In the card "Pair this browser to act from the board", type the code in the "Pairing code" field, and choose Pair.
+
+If the page shows no pairing card, the board that runs is older than your sage: run the `board --stop` command that `board --pair` prints, ask for the board again, and reload the page. When a browser loses its site data, it pairs again.
 
 The command refuses to run when its input is not a terminal, and the hooks refuse it from an agent.
 
@@ -265,9 +267,11 @@ The command refuses to run when its input is not a terminal, and the hooks refus
 
 1. The `Origin` is the board's own address, `Sec-Fetch-Site` is `same-origin`, and the body is JSON. The server answers no CORS preflight, so a page on another site or port cannot send one. A `/pages` page with scripts has the origin `null`, and the server refuses it.
 2. The browser has the pairing cookie (`HttpOnly; SameSite=Strict`). The board keeps only its hash, in the board's state folder (`~/.config/sage-board/state`).
-3. The request carries a token made from the cookie (an HMAC), which only the board's own page has.
+3. The request carries the pairing token of the same browser. The server gives it to the page once, when you pair, and keeps only its hash. The page keeps it in `localStorage`, which belongs to the board's own address and port, and a `/pages` page runs in a sandbox without it.
 4. An answer names the digest of the question and the options that you saw. When the question changed, the state tool refuses the answer.
 5. The board runs only your commands: `gate answer --via board`, `gate undo`, `gate give` and `chief name`, through the state tool, in its own thread. It never claims, accepts or writes a task.
+
+A browser sends the cookie to every server on `127.0.0.1`, also on another port. That server never gets the token, so the cookie alone writes nothing.
 
 The board writes only a shared logbook. A logbook with no checkout on this Mac refuses, and you answer in the chief's chat.
 

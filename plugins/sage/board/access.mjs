@@ -1,4 +1,4 @@
-import { createHash, createHmac, randomBytes, randomInt, timingSafeEqual } from "node:crypto";
+import { createHash, randomBytes, randomInt, timingSafeEqual } from "node:crypto";
 import { closeSync, constants, fstatSync, lstatSync, mkdirSync, openSync, readSync, renameSync, rmSync, writeFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 
@@ -40,17 +40,15 @@ export function startPairing(dir, now = Date.now()) {
 }
 
 export function boardAccess(dir) {
-  const cookieOf = header => {
+  const browserOf = header => {
     const value = String(header ?? "").split(";").map(part => part.trim()).find(part => part.startsWith(`${COOKIE}=`))?.slice(COOKIE.length + 1);
     if (!value || !/^[A-Za-z0-9_-]{43}$/.test(value)) return null;
     const paired = readJson(dir, "paired.json");
-    return Array.isArray(paired?.browsers) && paired.browsers.some(item => same(item?.hash, sha(value))) && typeof paired.key === "string" ? { value, key: paired.key } : null;
+    return (Array.isArray(paired?.browsers) ? paired.browsers : []).find(item => same(item?.hash, sha(value))) ?? null;
   };
-  const token = cookie => createHmac("sha256", Buffer.from(cookie.key, "hex")).update(cookie.value).digest("base64url");
   return {
-    cookieOf,
-    token,
-    tokenFits: (cookie, given) => same(given, token(cookie)),
+    browserOf,
+    tokenFits: (browser, given) => typeof given === "string" && same(browser.token, sha(given)),
     pair(code, now = Date.now()) {
       const wanted = readJson(dir, "pair-code.json");
       if (!wanted || typeof wanted.hash !== "string" || !(wanted.expires > now) || !(wanted.tries < TRIES)) {
@@ -63,16 +61,15 @@ export function boardAccess(dir) {
         return { problem: wanted.tries + 1 < TRIES ? "This code is not the one that board --pair printed. Type it again." : "Five wrong codes: this code no longer works. Run board --pair in Terminal for a new code." };
       }
       rmSync(join(dir, "pair-code.json"), { force: true });
-      const old = readJson(dir, "paired.json"), value = randomBytes(32).toString("base64url");
-      const key = typeof old?.key === "string" && /^[0-9a-f]{64}$/.test(old.key) ? old.key : randomBytes(32).toString("hex");
-      const browsers = [...(Array.isArray(old?.browsers) ? old.browsers : []), { hash: sha(value), at: new Date(now).toISOString() }].slice(-BROWSERS);
-      writeJson(dir, "paired.json", { key, browsers });
-      return { cookie: { value, key } };
+      const old = readJson(dir, "paired.json"), cookie = randomBytes(32).toString("base64url"), token = randomBytes(32).toString("base64url");
+      const browsers = [...(Array.isArray(old?.browsers) ? old.browsers : []), { hash: sha(cookie), token: sha(token), at: new Date(now).toISOString() }].slice(-BROWSERS);
+      writeJson(dir, "paired.json", { browsers });
+      return { cookie, token };
     },
     seen(now = Date.now()) {
-      const previous = readJson(dir, "seen.json")?.at;
+      const previous = readJson(dir, "seen.json")?.at, at = typeof previous === "string" ? Date.parse(previous) : NaN;
       writeJson(dir, "seen.json", { at: new Date(now).toISOString() });
-      return typeof previous === "string" && Number.isFinite(Date.parse(previous)) ? previous : null;
+      return at <= now ? previous : null;
     },
   };
 }

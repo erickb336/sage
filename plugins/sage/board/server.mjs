@@ -69,7 +69,7 @@ export function loadBoardApp(dir = APP_DIR) {
   const names = [manifest?.script, manifest?.style, manifest?.vendor, manifest?.graph];
   if (!names.every(name => typeof name === "string" && APP_FILE.test(name)) || !manifest.script.endsWith(".js") || !manifest.style.endsWith(".css") || !manifest.vendor.endsWith(".js") || !manifest.graph.endsWith(".js")) return null;
   const files = new Map(names.map(name => [name, { type: APP_TYPES[name.split(".").pop()], body: readFileSync(join(dir, name)) }]));
-  const shell = (writes = "off", token = "") => `<!doctype html><html lang="en" data-theme="dark"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><meta name="sage-writes" content="${writes}"><meta name="sage-token" content="${token}"><title>Sage board</title><link rel="stylesheet" href="/app/${manifest.style}"><link rel="modulepreload" href="/app/${manifest.vendor}"><script type="module" src="/app/${manifest.script}"></script></head><body><div id="root"></div><noscript><p>This board needs scripts. The board in the chat needs none: send a message that starts with "show board".</p></noscript></body></html>`;
+  const shell = (writes = "off") => `<!doctype html><html lang="en" data-theme="dark"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><meta name="sage-writes" content="${writes}"><title>Sage board</title><link rel="stylesheet" href="/app/${manifest.style}"><link rel="modulepreload" href="/app/${manifest.vendor}"><script type="module" src="/app/${manifest.script}"></script></head><body><div id="root"></div><noscript><p>This board needs scripts. The board in the chat needs none: send a message that starts with "show board".</p></noscript></body></html>`;
   return { files, shell };
 }
 
@@ -85,7 +85,7 @@ const JOBS = {
   answer: body => GATE.test(body.gate) && Number.isInteger(body.option) && body.option >= 1 && body.option <= 99 && /^[0-9a-f]{16}$/.test(body.digest ?? "") && ["gate", "answer", body.gate, "--via", "board", "--option", String(body.option), "--seen", body.digest],
   undo: body => GATE.test(body.gate) && ["gate", "undo", body.gate],
   give: body => TASK.test(body.task) && CHIEF.test(body.to) && ["gate", "give", body.task, "--to", body.to],
-  name: body => CHIEF.test(body.chief) && typeof body.name === "string" && body.name.length <= 240 && !body.name.trim().startsWith("-") && ["chief", "name", body.chief, ...(body.name.trim() ? [body.name.trim()] : [])],
+  name: body => CHIEF.test(body.chief) && typeof body.name === "string" && body.name.length <= 240 && ["chief", "name", body.chief, ...(body.name.trim() ? [body.name.trim()] : [])],
 };
 const jsonCell = text => { try { const value = JSON.parse(text || "null"); return value && typeof value === "object" && !Array.isArray(value) ? value : null; } catch { return null; } };
 
@@ -327,12 +327,13 @@ export function createBoardServer({ sources, port = BOARD_PORT, id, clock = () =
     const name = request.url.slice("/api/".length);
     if (name === "pair") {
       const paired = access.pair(body.code);
-      return paired.problem ? reply(403, { problem: paired.problem }) : reply(200, { token: access.token(paired.cookie) }, { "Set-Cookie": `${COOKIE}=${paired.cookie.value}; HttpOnly; SameSite=Strict; Path=/; Max-Age=31536000` });
+      return paired.problem ? reply(403, { problem: paired.problem }) : reply(200, { token: paired.token }, { "Set-Cookie": `${COOKIE}=${paired.cookie}; HttpOnly; SameSite=Strict; Path=/; Max-Age=31536000` });
     }
-    const cookie = access.cookieOf(oneHeader(request, "cookie"));
-    if (!cookie) return reply(401, { problem: "This browser is not paired with the board. Run board --pair in Terminal, then type its code on the board." });
-    if (!access.tokenFits(cookie, oneHeader(request, "x-sage-token"))) return reply(403, { problem: "This write has no valid token. Reload the board, then try again." });
+    const browser = access.browserOf(oneHeader(request, "cookie"));
+    if (!browser) return reply(401, { problem: "This browser is not paired with the board. Run board --pair in Terminal, then type its code on the board." });
+    if (!access.tokenFits(browser, oneHeader(request, "x-sage-token"))) return reply(403, { problem: "This page does not have this browser's pairing token. Pair again: run board --pair in Terminal, then type its code on the board." });
     if (name === "seen") return reply(200, { previous: access.seen() });
+    if (name === "name" && /^\s*-/.test(body.name ?? "")) return reply(400, { problem: "A chief's name cannot start with \"-\", because the state tool would read it as an option. Start it with a letter or a digit. Nothing changed." });
     const book = LOGBOOK.exec(body.logbook ?? ""), source = book && configured.find(item => item.id === book[1]);
     const argv = Object.hasOwn(JOBS, name) && JOBS[name](body);
     if (!argv || !source || !model?.sources.some(item => item.id === source.id && item.shared)) return reply(400, { problem: "The board cannot send this write: it names no question, task or chief of a shared logbook." });
@@ -384,8 +385,7 @@ export function createBoardServer({ sources, port = BOARD_PORT, id, clock = () =
       response.writeHead(200, { "Content-Type": "application/json; charset=utf-8", "Content-Length": body.length });
       return response.end(request.method === "HEAD" ? undefined : body);
     }
-    const cookie = name === "" && access ? access.cookieOf(oneHeader(request, "cookie")) : null;
-    const body = name === "" ? Buffer.from(app.shell(access ? cookie ? "paired" : "unpaired" : "off", cookie ? access.token(cookie) : "")) : app.files.get(name)?.body;
+    const body = name === "" ? Buffer.from(app.shell(access ? "on" : "off")) : app.files.get(name)?.body;
     if (!body) return fail(404, "This board page does not exist.");
     if (name === "") response.setHeader("Content-Security-Policy", appPolicy(origins.get(oneHeader(request, "host").toLowerCase())));
     response.writeHead(200, { "Content-Type": name === "" ? "text/html; charset=utf-8" : app.files.get(name).type, "Content-Length": body.length });
