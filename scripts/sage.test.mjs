@@ -727,7 +727,7 @@ test("T609-LEAD-KEY: max_leads sets the limit, a bad value refuses, and a lower 
   assert.match(s.no("run", "add", "T4", "--role", "lead"), /^sage: the project has 3 running lead runs, the most it holds: /, "it only refuses the next one");
 });
 
-test("T952-AGENT-CAP: run add holds max_agents running runs of every role in a project; the 11th is refused with the running runs named, and an ended run frees a place", () => {
+test("T952-AGENT-CAP, T1057: run add holds max_agents running runs of every role in a project; the 11th waits in the queue with its place, and an ended run admits it", () => {
   const s = store();
   for (let i = 0; i < 6; i++) s.ok("task", "add", "--priority", "P2", "--title", `t${i + 1}`, "--size", "small");
   for (const t of ["T1", "T2", "T3", "T4", "T5"]) s.ok("run", "add", t, "--role", "lead");
@@ -737,11 +737,12 @@ test("T952-AGENT-CAP: run add holds max_agents running runs of every role in a p
   s.ok("run", "done", "R10", "--status", "failed");
   s.ok("run", "add", "T6", "--role", "pe");
   assert.equal(rows(s.dir, "runs").filter((r) => r.status === "running").length, 10);
-  assert.equal(s.no("run", "add", "T2", "--role", "qa"), "sage: the project has 10 running runs, its agent cap (max_agents, or cap.<project>): R1 lead on T1, R2 lead on T2, R3 lead on T3, R4 lead on T4, R5 lead on T5, R6 implementer on T1, R7 implementer on T2, R8 implementer on T3, R9 code-reviewer on T1, R11 pe on T6. Wait for one of them to end, or end a run whose agent has stopped (sage run done <R> --status done, blocked, question or failed). Nothing changed.");
-  assert.equal(rows(s.dir, "runs").length, 11, "the refused run is not recorded");
-  s.ok("run", "done", "R9", "--status", "failed");
-  assert.match(s.ok("run", "add", "T2", "--role", "qa"), /^R12 running · qa on T2/);
-  assert.match(s.no("run", "add", "T3", "--role", "qa"), /^sage: the project has 10 running runs, its agent cap/);
+  assert.equal(s.ok("run", "add", "T2", "--role", "qa"), "R12 is queued, place 1 · qa on T2 · model sonnet · the project runs 10 of its 10 agents. Start its agent only after its admission: a run that ends admits the oldest queued run, and its agent must then start within 10 minutes.");
+  assert.deepEqual(rows(s.dir, "runs").filter((r) => r.status !== "running" && r.status !== "failed").map((r) => [r.id, r.status, r.admitted]), [["R12", "queued", undefined]], "the run is recorded as queued, and admitted stays out of the file");
+  assert.match(s.ok("status"), /^agents  12 runs · 10 running · 1 queued · /m);
+  assert.match(s.ok("run", "done", "R9", "--status", "failed"), /^R9 failed\nR12 admitted · qa on T2: start its agent within 10 minutes, or the run ends as failed$/);
+  assert.match(rows(s.dir, "runs").find((r) => r.id === "R12").admitted, /^\d{4}-\d\d-\d\dT\d\d:\d\d:\d\dZ$/);
+  assert.match(s.ok("run", "add", "T3", "--role", "qa"), /^R13 is queued, place 1 · qa on T3/);
   const other = store(s.home);
   other.ok("task", "add", "--priority", "P2", "--title", "t", "--size", "small");
   assert.match(other.ok("run", "add", "T1", "--role", "lead"), /^R1 running · lead on T1/);
@@ -753,11 +754,14 @@ test("T952-AGENT-CAP-KEY: a lower max_agents, or the project's own cap.<project>
   s.ok("config", "max_agents=2");
   s.ok("run", "add", "T1", "--role", "lead");
   s.ok("run", "add", "T2", "--role", "lead");
-  assert.match(s.no("run", "add", "T1", "--role", "qa"), /^sage: the project has 2 running runs, its agent cap \(max_agents, or cap\.<project>\): R1 lead on T1, R2 lead on T2\./);
+  assert.match(s.ok("run", "add", "T1", "--role", "qa"), /^R3 is queued, place 1 · qa on T1 · model sonnet · the project runs 2 of its 2 agents\./);
   const name = basename(s.project).toLowerCase().replace(/[^a-z0-9]+/g, "-");
   s.ok("config", `cap.${name}=3`);
-  assert.match(s.ok("run", "add", "T1", "--role", "qa"), /^R3 running · qa on T1/);
-  assert.match(s.no("run", "add", "T2", "--role", "qa"), /^sage: the project has 3 running runs/);
+  const raised = s.ok("run", "add", "T1", "--role", "qa");
+  assert.match(raised, /^R4 is queued, place 1 · qa on T1 · model sonnet · the project runs 3 of its 3 agents\./, "and the new run waits behind it");
+  assert.match(raised, /^R3 admitted · qa on T1: start its agent within 10 minutes/m, "a raised cap admits nobody by itself: the next run add admits R3 first");
+  assert.equal(rows(s.dir, "runs").find((r) => r.id === "R3").status, "running");
+  assert.match(s.ok("run", "add", "T2", "--role", "qa"), /^R5 is queued, place 2 · .* the project runs 3 of its 3 agents\./);
   s.ok("config", `cap.${name}=1`);
   assert.equal(rows(s.dir, "runs").filter((r) => r.status === "running").length, 3, "a lower value ends no run");
 });

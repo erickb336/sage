@@ -1027,7 +1027,7 @@ test("F-T604-19: an older sage, whose tables have no chief column, refuses to wr
   const plugin = join(w.base, "older");
   cpSync(at("../plugins/sage-codex"), plugin, { recursive: true });
   const state = join(plugin, "core/state.mjs"), source = readFileSync(state, "utf8");
-  const older = source.replace("const SPARSE = { tasks: [CHIEF_COLUMN, \"offer\", RELEASE_COLUMN], runs: [CHIEF_COLUMN, CHECKOUT_COLUMN],", "const SPARSE = { tasks: [\"offer\", RELEASE_COLUMN],");
+  const older = source.replace("const SPARSE = { tasks: [CHIEF_COLUMN, \"offer\", RELEASE_COLUMN], runs: [CHIEF_COLUMN, CHECKOUT_COLUMN, ADMITTED_COLUMN],", "const SPARSE = { tasks: [\"offer\", RELEASE_COLUMN],");
   assert.notEqual(older, source, "the fixture removes the column");
   writeFileSync(state, older);
   const { tool } = await import(pathToFileURL(join(plugin, "skills/sage/sage.mjs")).href);
@@ -1298,7 +1298,7 @@ test("T625: after the first run add with a checkout, a sage of PR 5a refuses to 
   const plugin = join(w.base, "older");
   cpSync(at("../plugins/sage-codex"), plugin, { recursive: true });
   const state = join(plugin, "core/state.mjs"), source = readFileSync(state, "utf8");
-  const older = source.replace("runs: [CHIEF_COLUMN, CHECKOUT_COLUMN], gates", "runs: [CHIEF_COLUMN], gates");
+  const older = source.replace("runs: [CHIEF_COLUMN, CHECKOUT_COLUMN, ADMITTED_COLUMN], gates", "runs: [CHIEF_COLUMN], gates");
   assert.notEqual(older, source, "the fixture removes the column");
   writeFileSync(state, older);
   const { tool } = await import(pathToFileURL(join(plugin, "skills/sage/sage.mjs")).href);

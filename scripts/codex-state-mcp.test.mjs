@@ -1113,21 +1113,20 @@ test("F-T950-1: after the brief tool's check, the gate starts the chief's sage s
   assert.match(await spawn("019a0000-0000-7000-8000-0000000000cc") ?? "", /^sage: sage_qa_t1_r2 does not start/, "another session");
 });
 
-test("T952: run_add holds the project's agent cap in Codex as in Claude: the 11th running run is refused with the same line, and an ended run frees a place", async (t) => {
+test("T952, T1057: run_add holds the project's agent cap in Codex as in Claude: the 11th run waits in the queue with the same line, and an ended run admits it", async (t) => {
   const s = await milestoneWorld(t), { both } = s;
   for (let n = 1; n <= 10; n++) {
     const task = `T${(n % 3) + 1}`;
     assert.match(await s.call("run_add", { task, role: "qa" }), new RegExp(`^R${n} running · qa on ${task}`));
     assert.match(s.claude("run", "add", task, "--role", "qa"), new RegExp(`^R${n} running · qa on ${task}`));
   }
-  const refused = await both("run_add", { task: "T1", role: "code-reviewer" }, ["run", "add", "T1", "--role", "code-reviewer"]);
-  assert.equal(refused.error, "sage: the project has 10 running runs, its agent cap (max_agents, or cap.<project>): R1 qa on T2, R2 qa on T3, R3 qa on T1, R4 qa on T2, R5 qa on T3, R6 qa on T1, R7 qa on T2, R8 qa on T3, R9 qa on T1, R10 qa on T2. Wait for one of them to end, or end a run whose agent has stopped (sage run done <R> --status done, blocked, question or failed). Nothing changed.");
+  const queued = await s.call("run_add", { task: "T1", role: "code-reviewer" });
+  assert.match(queued, /^R11 is queued, place 1 · code-reviewer on T1 · reasoning_effort high · the project runs 10 of its 10 agents\. Start its agent only after its admission/);
+  assert.match(s.claude("run", "add", "T1", "--role", "code-reviewer"), /^R11 is queued, place 1 · code-reviewer on T1 · model opus · the project runs 10 of its 10 agents\./);
   const steps = readFileSync(new URL("../plugins/sage-codex/skills/sage/references/lead-steps.md", import.meta.url), "utf8");
-  assert.ok(steps.includes(/its (agent cap)/.exec(refused.error)[1]), "the lead's steps name the refusal");
-  assert.equal(await both("run_done", { run: "R4", status: "failed" }, ["run", "done", "R4", "--status", "failed"]), "R4 failed");
-  assert.match(await s.call("run_add", { task: "T1", role: "code-reviewer" }), /^R11 running · code-reviewer on T1/);
-  assert.match(s.claude("run", "add", "T1", "--role", "code-reviewer"), /^R11 running · code-reviewer on T1/);
-  assert.match((await both("run_add", { task: "T1", role: "qa" }, ["run", "add", "T1", "--role", "qa"])).error, /^sage: the project has 10 running runs, its agent cap/);
+  assert.ok(steps.includes("is queued, place"), "the lead's steps name the queue line");
+  assert.equal(await both("run_done", { run: "R4", status: "failed" }, ["run", "done", "R4", "--status", "failed"]), "R4 failed\nR11 admitted · code-reviewer on T1: start its agent within 10 minutes, or the run ends as failed");
+  assert.match(await s.call("run_add", { task: "T1", role: "qa" }), /^R12 is queued, place 1 · qa on T1/);
 });
 
 test("T930: only the chief calls milestone_propose and config, and a lead sets no milestone=, at the gate and at the server", async (t) => {

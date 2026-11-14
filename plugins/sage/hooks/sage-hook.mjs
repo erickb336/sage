@@ -32,6 +32,7 @@ const LEAD_HELPERS = 9;
 const WAIT = join(ROOT, "hooks/wait.mjs");
 const WAIT_MS = 9 * 60_000;
 const waitStep = (task) => `${nodeCommand(WAIT, task ?? "<T>")} in the project's folder, as a Bash command of its own with the timeout 600000`;
+const slotStep = (runs) => `${nodeCommand(WAIT, ["--slot", ...runs].join(" "))} in the project's folder, as a Bash command of its own with the timeout 600000`;
 const SHELL_TOOLS = /^(?:Bash|Monitor|PowerShell|mcp__terminal__.+)$/;
 const CHIEF = /(^|:)chief-of-staff$/;
 const OURS = /^sage:/i;
@@ -108,6 +109,34 @@ function boardText(intent, cwd) {
 const running = (n) => `${n} sage ${n === 1 ? "agent is" : "agents are"} running`;
 
 export function handle(input, state, slots) {
+  return queueNote(input, state, handleEvent(input, state, slots));
+}
+
+const QUEUED = /^R[1-9]\d* is queued, place \d+ /m;
+const outText = (input) => String((typeof input.tool_response === "string" ? input.tool_response : input.tool_response?.stdout) ?? "");
+function queueNote(input, state, out) {
+  const event = input.hook_event_name;
+  if (agentEvent(input) || !state.sage || !["UserPromptSubmit", "PostToolUse", "Stop"].includes(event) || stateTool.error) return out;
+  if (event === "PostToolUse" && input.tool_name === "Bash" && QUEUED.test(outText(input))) state.queue = true;
+  if (!state.queue || out?.decision === "block") return out;
+  let q;
+  try { q = stateTool.chiefQueue(realpathSync.native(input.cwd ?? process.cwd()), input.session_id); } catch { return out; }
+  const told = new Set(state.admitted ?? []), fresh = q.admitted.filter((r) => !told.has(r.id));
+  if (!q.queued.length && !q.admitted.length) delete state.queue;
+  const notes = fresh.map((r) => `sage: ${r.id} (${r.role} on ${r.task}) is admitted from the queue: ${r.lead ? `if lead-${r.task} added it, the lead starts it; otherwise start` : "start"} its agent now, by ${r.until}, or the run ends as failed and loses its place.`);
+  const waits = q.queued.map((r) => r.id), wait = waits.join(",");
+  if (event === "Stop" && !notes.length && waits.length && state.waited !== wait) {
+    state.waited = wait;
+    notes.push(`sage: ${waits.join(", ")} ${waits.length === 1 ? "is" : "are"} queued (place ${q.queued.map((r) => r.place).join(", ")}). Before you stop, run ${slotStep(waits)}, in the background (run_in_background true): it ends when ${waits.length === 1 ? "it is" : "one of them is"} admitted, and its end wakes you to start the agent.`);
+  }
+  if (!notes.length) return out;
+  state.admitted = [...told, ...fresh.map((r) => r.id)].slice(-50);
+  if (event === "Stop") return out ?? { decision: "block", reason: notes.join("\n") };
+  const given = out?.hookSpecificOutput?.additionalContext;
+  return context(event, [given, ...notes].filter(Boolean).join("\n\n---\n\n"));
+}
+
+function handleEvent(input, state, slots) {
   const event = input.hook_event_name;
   if (modePolicy.error) state.autopilot = false;
   if (event === "PreToolUse" && SHELL_TOOLS.test(input.tool_name ?? "") && (commandReader.error || commandPolicy.error)) {
@@ -183,7 +212,7 @@ export function handle(input, state, slots) {
   if (["PostToolUse", "PostToolUseFailure"].includes(event) && AGENT_TOOLS.test(input.tool_name ?? "") && !main && (typeof input.agent_id !== "string" || !input.agent_id)) return undefined;
   if (event === "PostToolUse" && input.tool_name === "Bash" && input.agent_type === "sage:lead") return void leadWrote(input, slots);
   if (event === "PostToolUse" && input.tool_name === "Bash" && main) return void chiefEnded(input, slots);
-  if (event === "PostToolUse" && AGENT_TOOLS.test(input.tool_name ?? "")) return void slots.result(input.tool_use_id, main ? undefined : input.agent_id, input.tool_response);
+  if (event === "PostToolUse" && AGENT_TOOLS.test(input.tool_name ?? "")) return void (noteStart(input), slots.result(input.tool_use_id, main ? undefined : input.agent_id, input.tool_response));
   if (event === "PostToolUseFailure" && AGENT_TOOLS.test(input.tool_name ?? "")) return void slots.drop(input.tool_use_id, main ? undefined : input.agent_id);
   if (event === "PreToolUse" && input.tool_name === "TaskStop") {
     const { task_id, shell_id } = input.tool_input ?? {}, id = task_id ?? shell_id;
@@ -233,6 +262,12 @@ export function handle(input, state, slots) {
   const spawnName = String(ti.name ?? "").trim() ? String(ti.name) : String(ti.description ?? "").trim().split(/\s+/)[0];
   if (event === "PreToolUse" && !main && (state.sage || ours) && AGENT_TOOLS.test(tool) && reservedName(spawnName)) {
     return deny(event, 'an agent never names a spawn "main" or "lead-T<n>", because those names must reach only the main session and its leads. Give it another name.');
+  }
+  const spawnChecked = event === "PreToolUse" && AGENT_TOOLS.test(tool) && OURS.test(spawned) && (main ? state.sage : state.sage || ours);
+  const queued = spawnChecked ? queueRefusal(input, ti, spawnName, main) : undefined;
+  if (queued) {
+    if (main) state.queue = true;
+    return deny(event, queued);
   }
   let helperKey;
   const nestedSpawn = event === "PreToolUse" && !main && AGENT_TOOLS.test(tool) && (state.sage || ours || OURS.test(spawned));
@@ -577,9 +612,9 @@ function leadWrote(input, slots) {
     const out = String((typeof input.tool_response === "string" ? input.tool_response : input.tool_response?.stdout) ?? "").trim();
     const view = logbookOf(input.cwd);
     if (digest(view.dir) !== lead.logbook) return;
-    const [, id, role] = /^(R[1-9]\d*) running · (\S+) on (T[1-9]\d*)(?: |$)/.exec(out) ?? [];
+    const [, id, role] = /^(R[1-9]\d*) (?:running|is queued, place [1-9]\d*) · (\S+) on (T[1-9]\d*)(?: |$)/.exec(out) ?? [];
     const run = id && view.row(id), roles = asked("role");
-    if (roles.length === 1 && roles[0] === role && run?.task === lead.task && run.role === role && TEAM.includes(role) && run.status === "running") slots.own(helperOf(lead, id));
+    if (roles.length === 1 && roles[0] === role && run?.task === lead.task && run.role === role && TEAM.includes(role) && ["running", "queued"].includes(run.status)) slots.own(helperOf(lead, id));
   } catch {}
 }
 function leadProblem(input, cmd, pos, opt, slots) {
@@ -665,6 +700,24 @@ function chiefEnded(input, slots) {
     const leads = [view.leadRun(run.task), ...view.endedLeadRuns().filter((r) => r.task === run.task)].filter(Boolean);
     slots.endHelpers(leads.map((lead) => helperOf({ logbook: digest(view.dir), run: lead.id }, run.id)));
   } catch {}
+}
+export async function waitForSlot(runs, cwd, { ms = WAIT_MS } = {}) {
+  if (!runs.length || !runs.every((run) => /^R[1-9]\d*$/.test(run))) return "usage: node wait.mjs --slot <R> [<R> ...], in the project's folder, for example node wait.mjs --slot R12";
+  const started = Date.now(), project = realpathSync.native(cwd);
+  for (;;) {
+    const q = stateTool.queueOf(project), view = logbookOf(project), out = runs.filter((id) => !q.queued.some((r) => r.id === id));
+    if (out.length) return out.map((id) => {
+      const row = view.row(id), open = q.admitted.find((r) => r.id === id);
+      return open ? `${id} is admitted: start its agent now, by ${open.until}, or the run ends as failed.` : `${id} is ${row ? row.status : "not in the logbook"}, not queued.`;
+    }).join("\n");
+    if (Date.now() - started >= ms) return `${q.queued.filter((r) => runs.includes(r.id)).map((r) => `${r.id} place ${r.place}`).join(", ")} still queued after ${Math.round(ms / 60_000)} minutes: run this command again.`;
+    await new Promise((done) => {
+      let watcher;
+      const end = () => { watcher?.close(); clearTimeout(timer); done(); };
+      const timer = setTimeout(end, Math.min(5_000, Math.max(0, ms - (Date.now() - started))));
+      try { watcher = watch(q.dir, end); } catch {}
+    });
+  }
 }
 export async function waitForHelpers(task, cwd, { ms = WAIT_MS, dir = stateDir() } = {}) {
   if (!TASK.test(String(task ?? ""))) return "usage: node wait.mjs <T>, in the project's folder, for example node wait.mjs T12";
@@ -917,6 +970,18 @@ function briefMark(prompt, role, cwd) {
   }
 }
 const briefRun = (prompt) => BRIEF_LINE.exec(String(prompt ?? "").split("\n", 1)[0])?.[1];
+const spawnRun = (ti, given) => briefRun(ti.prompt) ?? (/^R[1-9]\d*$/.test(String(given ?? "")) ? given : undefined);
+function queueRefusal(input, ti, given, main) {
+  const run = spawnRun(ti, given);
+  let why;
+  try { why = run && !stateTool.error && stateTool.queueProblem(realpathSync.native(input.cwd), run); } catch { return undefined; }
+  if (!why || !/ is queued, /.test(why)) return why || undefined;
+  return `${why} ${main ? `The hook tells you when it is admitted. To wait, run ${slotStep([run])}, in the background (run_in_background true): it ends when ${run} is admitted.` : `Run ${slotStep([run])}: it returns when ${run} is admitted. Then start this helper again.`}`;
+}
+function noteStart(input) {
+  const ti = input.tool_input ?? {}, run = OURS.test(String(ti.subagent_type ?? "")) && spawnRun(ti, String(ti.name ?? "").trim() || String(ti.description ?? "").trim().split(/\s+/)[0]);
+  try { if (run && !stateTool.error) stateTool.markStart(realpathSync.native(input.cwd), run); } catch {}
+}
 
 export function slotsFor(dir, session, now = Date.now(), rawSession = session, leadRuns = liveLeadRun) {
   const STALE = { pending: 10 * 60_000, agent: 60 * 60_000 };

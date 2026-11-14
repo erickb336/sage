@@ -18,6 +18,8 @@ export function agentCaps(config) {
   const max = countOf(c.max_agents) ?? AGENT_CAPS.max_agents;
   return { total: countOf(c.cap_total) ?? AGENT_CAPS.cap_total, cap: project => countOf(c[`cap.${project}`]) ?? max };
 }
+export const ADMIT_LEASE_MS = 10 * 60_000;
+export const queueOrder = runs => runs.filter(run => run.status === "queued").sort((a, b) => Number(a.id.slice(1)) - Number(b.id.slice(1)));
 
 export const HIDDEN = /[\0-\x08\x0b-\x1f\x7f-\x9f\u061c\u200b\u200e\u200f\u2060\ufeff\ufe00-\ufe0e\u202a-\u202e\u2066-\u2069\u{e0000}-\u{e007f}\u{e0100}-\u{e01ef}]|(?<![\p{Extended_Pictographic}0-9#*])\ufe0f|(?<![\p{L}\p{M}](?=[\u200c\u200d]\p{L})|[\p{Extended_Pictographic}\p{Emoji_Modifier}]\ufe0f?(?=\u200d\p{Extended_Pictographic}))[\u200c\u200d]/gu;
 export const LINE = "\u2028";
@@ -57,14 +59,14 @@ export const TABLES = {
 export const START_SAGE_MODE = "sage-mode";
 
 export function logbookSettings(config) {
-  if (!config || typeof config !== "object" || Array.isArray(config)) return { name: null, archived: false, sageModeStart: false, warnings: ["config: config is not an object"] };
+  if (!config || typeof config !== "object" || Array.isArray(config)) return { name: null, archived: false, sageModeStart: false, limit: null, warnings: ["config: config is not an object"] };
   const why = config.name === undefined ? null : nameProblem(config.name);
   const warnings = [
     ...(why ? [`config: the name ${why}`] : []),
     ...(config.archived !== undefined && typeof config.archived !== "boolean" ? ["config: archived is not true or false"] : []),
     ...(config.start !== undefined && config.start !== START_SAGE_MODE ? [`config: start is not "${START_SAGE_MODE}"`] : []),
   ];
-  return { name: config.name === undefined || why ? null : config.name, archived: config.archived === true, sageModeStart: config.start === START_SAGE_MODE, warnings };
+  return { name: config.name === undefined || why ? null : config.name, archived: config.archived === true, sageModeStart: config.start === START_SAGE_MODE, limit: countOf(config.max_agents) ?? null, warnings };
 }
 
 export function startsInSageMode(logbook) {

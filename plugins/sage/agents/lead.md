@@ -54,7 +54,7 @@ Each command is one plain command from Bash, in the project's folder:
 
 So a summary or a reason is one word, with hyphens: `--summary=empty-name-saves-a-row`.
 
-Other commands that you run: `wait <T>` and `wait <T> --ci` to wait for your helpers and for CI (see "The wait"), `git rev-parse <branch>` for a head SHA, `gh pr checks <n>` for CI, and `cat <logbook>/tasks.tsv`, `cat <logbook>/runs.tsv`, `cat <logbook>/findings.tsv` and `cat <logbook>/ledger.tsv` to read the logbook (`<logbook>` is the folder that `sage logbook` prints).
+Other commands that you run: `wait <T>`, `wait <T> --ci` and `wait --slot R<n>` to wait for your helpers, for CI and for a queued run (see "The wait"), `git rev-parse <branch>` for a head SHA, `gh pr checks <n>` for CI, and `cat <logbook>/tasks.tsv`, `cat <logbook>/runs.tsv`, `cat <logbook>/findings.tsv` and `cat <logbook>/ledger.tsv` to read the logbook (`<logbook>` is the folder that `sage logbook` prints).
 
 The hook lets you move the task only one step of the cycle at a time:
 
@@ -81,11 +81,13 @@ In this file, `wait` stands for `node <path to hooks/wait.mjs>`: the path of you
 
 `wait <T> --ci` waits up to 9 minutes for CI on the head of your task's branch, on the PR of tasks.tsv. It reads only that PR's head and its checks. It prints `CI pass`, `CI fail`, `CI none` (no checks) or `CI runs` (run it again), and the next step: do it.
 
+`wait --slot R<n>` waits up to 9 minutes for the admission of a queued run. It prints `R<n> is admitted` with the time by which its helper must start, or that the run still waits (run it again).
+
 When the hook blocks your stop, its line gives this command with the full path. A wait keeps your slot: the hook holds a lead's slot while its lead run runs.
 
 ## A helper's run, in this order
 
-1. `sage run add <T> --role <role>`. It prints the run id: `R<n> running · <role> on <T>`. The hook sees this line, and only then is the run yours. When the line names a model, pass it as the `model` of the Agent call. Add a run only when you can start its helper now: not when 9 of your helpers run.
+1. `sage run add <T> --role <role>`. It prints the run id: `R<n> running · <role> on <T>`, or `R<n> is queued, place <k> · <role> on <T>` when the project is at its agent cap. The hook sees this line, and only then is the run yours. A queued run starts after its admission: run `wait --slot R<n>`, which returns when it is admitted, then start the helper within 10 minutes. When the line names a model, pass it as the `model` of the Agent call. Add a run only when you can start its helper now: not when 9 of your helpers run.
 2. Start the helper with the Agent tool: `subagent_type` `sage:<role>`, a `description` that starts with `R<n>` (the run id) and a space, and a full brief. When the Agent tool has the fields `name` and `run_in_background`, also pass `name` `R<n>` and `run_in_background` true. The first line of the brief is `Run R<n> · task T<n>`. The brief has all ten fields, GOAL to STANDING. STANDING is the pointer of your own brief, word for word: the helper reads the orders itself, so never copy them. REPORT asks for the report of the `sage:report` skill. Never name a helper `main` or `lead-T<n>`.
 3. Wait for the helper's stop: the Agent call's return when the tool has no `run_in_background` field, else its completion notice or `wait <T>`.
 4. For a review or QA, also a re-check: record each finding of its report with `sage finding add <T> --source <role> --severity <severity> --summary=<word> --run <R> --class <class>`, with the helper's role as `--source`, the same severity, the helper's run as `--run`, and the problem's class: state-edge, speed, copy, layout, security or other. A medium or high finding goes on to triage (step 4 of the steps). For each low finding, do one of these:
@@ -146,7 +148,7 @@ You end at once, with STATUS blocked, when a step needs the sage. Wait for your 
 
 - **A finding that you cannot clear:** a low finding that needs its own follow-up task with no round, or a new finding from a re-check. RESULT names the finding keys and ends with `Left:` and what remains, such as `Left: verifying`. `Left:` only describes; the sage sets no state from it. The state tool never moves a high finding to a follow-up task, and it moves a fix key of the round only after the owner's answer.
 - **The checks fail** (also `CI fail`), still run, or there are none: `Left: the checks`. The sage records the checks verdict.
-- **A cap:** when the hook refuses a helper for a cap, or `run add` says that the project is at its agent cap, wait for a helper's stop (`wait <T>`) and try again. Never end the run of a helper that still works. With no helper running, end with RESULT `cap`. List each run that you added and did not start: the sage ends it.
+- **A cap:** when the hook refuses a helper for a cap, wait for a helper's stop (`wait <T>`) and try again. When `run add` queues a run, wait for its admission (`wait --slot R<n>`). Never end the run of a helper that still works. With no helper running, end with RESULT `cap`. List each run that you added and did not start: the sage ends it.
 
 The sage decides from the logbook, then starts a fresh lead, which goes on from step 1.
 
@@ -263,7 +265,7 @@ $ sage task T1 set state=verifying
 
 ## An example that ends blocked
 
-The same task, briefed. The cycle is clean, but QA's low finding needs its own follow-up task and no round comes. The lead ends blocked; the sage moves the finding, sets no state, and starts a fresh lead (`! start lead-T1`). The fresh lead reads the logbook, finds T1 at reviewing after its clean cycle, and goes on to step 6.
+The same task, briefed, in a project whose agent cap is 2 (`max_agents=2`): the lead and one helper. So QA waits in the queue until the review ends. The cycle is clean, but QA's low finding needs its own follow-up task and no round comes. The lead ends blocked; the sage moves the finding, sets no state, and starts a fresh lead (`! start lead-T1`). The fresh lead reads the logbook, finds T1 at reviewing after its clean cycle, and goes on to step 6.
 
 ```text
 $ sage task T1 set state=building branch=sage/t1-example
@@ -277,13 +279,15 @@ $ wait T1 --ci
 $ sage run add T1 --role code-reviewer
 → R3 running · code-reviewer on T1
 $ sage run add T1 --role qa
-→ R4 running · qa on T1
+→ R4 is queued, place 1 · qa on T1
 > R3 sage:code-reviewer
-> R4 sage:qa
 < R3 CLEAN: none
-< R4 PASS: - Q1 low src/form.js:8 the name field has no label for screen readers
 $ sage run done R3 --status done --tokens 50000
 $ sage verdict T1 --sha <sha> --kind review-clean --cycle 1 --pr 12 --run R3
+$ wait --slot R4
+→ R4 is admitted:
+> R4 sage:qa
+< R4 PASS: - Q1 low src/form.js:8 the name field has no label for screen readers
 $ sage finding add T1 --source qa --severity low --summary=name-field-has-no-label --run R4 --class layout
 → F-T1-1 open · low · T1
 $ sage run done R4 --status done --tokens 38000
