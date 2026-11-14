@@ -181,6 +181,7 @@ export function handle(input, state, slots) {
     return void slots.release(input.agent_id, { result: core.readReport(input.last_assistant_message).result, severities: [], sha: head || "" });
   }
   if (["PostToolUse", "PostToolUseFailure"].includes(event) && AGENT_TOOLS.test(input.tool_name ?? "") && !main && (typeof input.agent_id !== "string" || !input.agent_id)) return undefined;
+  if (event === "PostToolUse" && input.tool_name === "Bash") try { stateTool.observePush(input.tool_input?.command, input.cwd); } catch {}
   if (event === "PostToolUse" && input.tool_name === "Bash" && input.agent_type === "sage:lead") return void leadWrote(input, slots);
   if (event === "PostToolUse" && input.tool_name === "Bash" && main) return void chiefEnded(input, slots);
   if (event === "PostToolUse" && AGENT_TOOLS.test(input.tool_name ?? "")) return void slots.result(input.tool_use_id, main ? undefined : input.agent_id, input.tool_response);

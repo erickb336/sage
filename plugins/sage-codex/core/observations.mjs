@@ -1,5 +1,6 @@
 export const OBSERVATIONS_MAX_BYTES = 4 * 1024 * 1024;
 export const OBSERVATION_DATA_MAX_BYTES = 64 * 1024;
+export const FILES_MAX = 500, FILE_PATH_MAX_BYTES = 4096;
 const fail = reason => { throw new TypeError(`observation ${reason}`); };
 const shapes = {
   pr: [["repository", "number", "state", "head"], []],
@@ -7,6 +8,7 @@ const shapes = {
   completion: [["state", "at"], []],
   mode: [["session", "autopilot"], []],
   artifact: [["type", "label"], ["run", "url", "path", "sha256"]],
+  files: [["head", "paths", "truncated"], []],
 };
 const object = (value, required, optional = []) => {
   if (!value || typeof value !== "object" || Array.isArray(value)) fail("must be an object");
@@ -64,6 +66,12 @@ export function validateObservation(value, { now = Date.now() } = {}) {
     case "mode":
       text(data.session, "session", 200);
       if (typeof data.autopilot !== "boolean") fail("autopilot must be true or false");
+      break;
+    case "files":
+      data.head = digest(data.head, 40, "head");
+      if (!Array.isArray(data.paths) || data.paths.length > FILES_MAX || !data.paths.every(path => typeof path === "string" && path && !path.includes("\0") && Buffer.byteLength(path) <= FILE_PATH_MAX_BYTES)) fail(`paths must be at most ${FILES_MAX} paths of 1 to ${FILE_PATH_MAX_BYTES} bytes without a NUL`);
+      if (typeof data.truncated !== "boolean") fail("truncated must be true or false");
+      data.paths = [...data.paths];
       break;
     case "artifact": {
       choice(data.type, ["brief", "report", "proof", "issue", "artifact"], "artifact type");
