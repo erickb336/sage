@@ -19,7 +19,7 @@ export function writerClass(cmd, [sub, id] = []) {
     case "finding": return onTask(id);
     case "milestone": case "program": return id === "set" ? ANY : { kind: "milestone" };
     case "run": return sub === "add" ? onTask(id) : sub === "done" ? { kind: "task", run: id } : sub === "usage" ? ANY : READ;
-    case "gate": return sub === "answer" ? OWNER : sub === "replace" ? ANY : sub === "add" ? (id === undefined ? ANY : onTask(id)) : READ;
+    case "gate": return ["answer", "undo", "give"].includes(sub) ? OWNER : sub === "replace" ? ANY : sub === "add" ? (id === undefined ? ANY : onTask(id)) : READ;
     case "log": return TASK.test(sub ?? "") ? onTask(sub) : ANY;
     case "observe": return { ...ANY, task: sub };
     case "pages": return id === "record" ? { ...ANY, task: sub } : READ;
