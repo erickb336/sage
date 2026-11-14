@@ -76,6 +76,9 @@ A ux review of a board page checks each line. A line that fails is a finding.
 - Each row shows the PR number, which links to the PR on GitHub, the title, which opens the task's side panel, the chief tag, the task, the milestone, "may conflict", the state word, the clean cycles and the CI state. The CI state is the checks verdict on the PR's current head in the ledger: "CI passes", "CI fails" or "CI not known". The board never asks GitHub.
 - A PR number links to GitHub only when it is a whole number and a PR record names the repository.
 - The Graph view shows each item that waits for another item on the page, or may conflict with one, in columns by "waits for": an arrow from A to B means that B waits for A. It is React Flow (`@xyflow/react`, MIT) in its own graph file, which the page loads only when the graph opens. The graph file has its own size budget.
+- A link of the graph never passes through a box. It runs only in the gaps between the boxes: a curve inside one column gap, a straight line along a row with no box, or a lane in the gap between two rows. A lane keeps out of a gap that holds a "may conflict" label when it can.
+- Two boxes in one column that may conflict get a dashed link that leaves and comes back on their right side.
+- A loop in the "waits for" links shows one link that goes back, under the boxes, with the mark "loop". A task that waits for itself shows a link around its box, with the mark "waits for itself".
 
 ## The classic board (T205)
 

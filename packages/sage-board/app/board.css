@@ -241,8 +241,6 @@ header.top { position: sticky; top: 0; z-index: 20; height: 52px; display: flex;
 .react-flow__handle { position: absolute; width: 1px; height: 1px; opacity: 0; pointer-events: none; }
 .react-flow__handle-left { top: 50%; left: 0; }
 .react-flow__handle-right { top: 50%; right: 0; }
-.react-flow__handle-top { left: 50%; top: 0; }
-.react-flow__handle-bottom { left: 50%; bottom: 0; }
 .react-flow__panel { position: absolute; z-index: 5; margin: 12px; }
 .react-flow__panel.top { top: 0; }
 .react-flow__panel.bottom { bottom: 0; }

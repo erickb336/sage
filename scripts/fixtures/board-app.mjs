@@ -88,7 +88,7 @@ function addPullRequests(tables, records, at, hostile) {
   }
 }
 
-export function writeTasksLogbook(root, worktrees, now, { hostile = false, many = 0, edge = false, chiefCases = false, stuck = false, prs = false } = {}) {
+export function writeTasksLogbook(root, worktrees, now, { hostile = false, many = 0, edge = false, chiefCases = false, stuck = false, prs = false, waits = {} } = {}) {
   const at = hours => new Date(Date.parse(now) - hours * HOUR).toISOString();
   const tables = appTables(now), dir = join(root, "sample-app-abc123");
   const chiefs = { T1: "C1", T2: "C1", T3: "C2", T4: "C1", T10: "C1", T11: "C2", T20: "C1", T21: "C1", T30: "C2" };
@@ -121,6 +121,7 @@ export function writeTasksLogbook(root, worktrees, now, { hostile = false, many 
       { id: "O6", task: "T50", kind: "artifact", source: "chief", basis: "reported", observedAt: at(1), recordedAt: at(1), data: { type: "artifact", label: `<img src=x onerror="window.hacked=6">label`, url: "https://example.com/a?b=%22%3E%3Cscript%3E" } });
   }
   if (prs) addPullRequests(tables, records, at, hostile);
+  tables.tasks = tables.tasks.map(task => task.id in waits ? { ...task, waits: waits[task.id] } : task);
   if (chiefCases) for (const [id, title, chief] of [["T70", "Sample stopped chief", "C3"], ["T71", "Sample unlisted chief", "C9"], ["T72", "Sample task with no chief", ""]]) tables.tasks.push({ ...tables.tasks[1], id, title, state: "building", milestone: "", priority: "P3", kind: "", chief, branch: "", waits: "" });
   if (stuck) {
     tables.tasks = tables.tasks.map(task => task.id === "T20" ? { ...task, state: "abandoned" } : task);

@@ -77,6 +77,36 @@ test("T1063: J5 is within two clicks of the Overview, and the graph's file loads
   assert.deepEqual(problems, [], "no script error and no CSP refusal");
 });
 
+const linksThroughBoxes = page => page.evaluate(() => {
+  const boxes = [...document.querySelectorAll(".react-flow__node")].map(node => ({ id: node.dataset.id.split("/").pop(), rect: node.getBoundingClientRect() }));
+  return [...document.querySelectorAll(".react-flow__edge")].map(edge => {
+    const path = edge.querySelector(".react-flow__edge-path"), length = path.getTotalLength(), through = new Set();
+    for (let at = 0; at <= length; at += 2) {
+      const point = new DOMPoint(path.getPointAtLength(at).x, path.getPointAtLength(at).y).matrixTransform(path.getScreenCTM());
+      for (const { id, rect } of boxes) if (point.x > rect.left + 2 && point.x < rect.right - 2 && point.y > rect.top + 2 && point.y < rect.bottom - 2) through.add(id);
+    }
+    return { link: edge.getAttribute("aria-label").replace(/shared\/sample-app-abc123\//g, ""), label: edge.querySelector(".react-flow__edge-text")?.textContent ?? "", through: [...through] };
+  });
+});
+
+test("T1063: no link of the graph passes through a box, and a loop or a task that waits for itself shows its way back with a mark", async t => {
+  const cases = [
+    ["T3 to T13 skips a column, and T6 is in T3's row there", { waits: { T6: "T5", T7: "T5", T13: "T3,T7" } }, null],
+    ["T3 and T8 may conflict, with T50 between them in one column", { hostile: true }, null],
+    ["T6 and T13 wait for each other", { waits: { T6: "T13", T13: "T6" } }, ["Edge from T13 to T6", "loop"]],
+    ["T6 waits for itself", { waits: { T6: "T6" } }, ["Edge from T6 to T6", "waits for itself"]],
+  ];
+  for (const [name, options, mark] of cases) {
+    const { page, problems } = await open(t, options, "/app/#pull-requests");
+    await page.getByRole("button", { name: "Graph" }).click();
+    await page.locator(".react-flow__edge-path").first().waitFor({ state: "attached" });
+    const links = await linksThroughBoxes(page);
+    assert.deepEqual(links.filter(link => link.through.length), [], name);
+    if (mark) assert.deepEqual(links.filter(link => link.label === mark[1]).map(link => link.link), [mark[0]], `${name}: the link that goes back carries the mark`);
+    assert.deepEqual(problems, [], name);
+  }
+});
+
 test("T1063: the list groups each PR by its next action and shows its task, chief, state, clean cycles, CI state and may-conflict flag", async t => {
   const { page } = await open(t, {}, "/app/#pull-requests");
   assert.deepEqual(await ids(page, "need"), ["T8"]);
