@@ -1,7 +1,7 @@
 import "./test-env.mjs";
 import assert from "node:assert/strict";
-import { execFileSync } from "node:child_process";
-import { chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, realpathSync, rmSync, writeFileSync } from "node:fs";
+import { execFileSync, spawn } from "node:child_process";
+import { appendFileSync, chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, realpathSync, renameSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import { request } from "node:http";
 import { createServer } from "node:net";
 import { hostname, tmpdir, uptime } from "node:os";
@@ -12,6 +12,7 @@ import { runBoardCli } from "../plugins/sage/board/cli.mjs";
 import { createBoardServer, loadBoardApp } from "../plugins/sage/board/server.mjs";
 
 const APP = loadBoardApp(new URL("../plugins/sage/board/app/", import.meta.url).pathname);
+const CLI = new URL("../plugins/sage/board/cli.mjs", import.meta.url).pathname, TEST_CHILD = new URL("./board-test-child.mjs", import.meta.url).pathname;
 const gitEnv = { ...process.env, GIT_AUTHOR_NAME: "t", GIT_AUTHOR_EMAIL: "t@example.com", GIT_COMMITTER_NAME: "t", GIT_COMMITTER_EMAIL: "t@example.com" };
 
 async function freePort() {
@@ -278,4 +279,68 @@ test("the state tool's lock never runs on the server's event thread: a read answ
   assert.match(result.json.text, /the logbook is busy/);
   assert.ok(readAt < wrote, `the read (${readAt - started} ms) answered before the write that waited for the lock (${wrote - started} ms)`);
   rmSync(lock, { recursive: true, force: true });
+});
+
+test("F-T1059-52, F-T1059-28: the real board process answers a clear 500 and stays up when its state folder cannot be written or paired.json is a symlink", async t => {
+  const w = await board(t);
+  const config = join(w.base, "serve", "board.json"), stateDir = join(w.base, "serve", "state"), port = await freePort();
+  await runBoardCli(["board", "--setup", "--config", config, "--port", String(port), "--sources", JSON.stringify([{ id: "shared", path: w.env.SAGE_SHARED_HOME }])], { output: () => {}, env: w.env });
+  const child = spawn(process.execPath, [TEST_CHILD, CLI, "board", "--serve", "--config", config], { env: w.env, stdio: ["ignore", "ignore", "pipe", "ipc"] });
+  let exited = null;
+  const closed = new Promise(done => child.once("exit", code => { exited = { code }; done(); }));
+  try {
+    await waitFor(async () => (await call(port, "/app/", { method: "GET" }).catch(() => null))?.status === 200, "the board process listens");
+    const lines = [];
+    await runBoardCli(["board", "--pair", "--config", config], { output: line => lines.push(line), env: w.env, input: { isTTY: true } });
+    const own = { ...w.own, Origin: `http://127.0.0.1:${port}` };
+    const paired = await call(port, "/api/pair", { headers: own, body: { code: /Pairing code: (\S+)/.exec(lines.join("\n"))[1] } });
+    const headers = { ...own, Cookie: paired.headers["set-cookie"][0].split(";")[0], "X-Sage-Token": paired.json.token };
+    assert.equal((await call(port, "/api/seen", { headers, body: {} })).status, 200);
+    const broken = async (what, code) => {
+      const seen = await call(port, "/api/seen", { headers, body: {} });
+      assert.equal(seen.status, 500, `${what}: ${seen.text}`);
+      assert.match(seen.json.problem, new RegExp(`^The board could not do this on this Mac \\(${code}\\), so nothing changed\\.`), what);
+      assert.equal((await call(port, "/app/", { method: "GET" })).status, 200, `${what}: the board still serves pages`);
+      assert.equal(exited, null, `${what}: the board process still runs`);
+    };
+    const rootWritesAnyFolder = process.getuid?.() === 0;
+    if (!rootWritesAnyFolder) {
+      chmodSync(stateDir, 0o500);
+      await broken("a state folder that cannot be written", "EACCES");
+      chmodSync(stateDir, 0o700);
+    }
+    renameSync(join(stateDir, "paired.json"), join(stateDir, "kept.json"));
+    symlinkSync("kept.json", join(stateDir, "paired.json"));
+    await broken("a paired.json that is a symlink", "ELOOP");
+  } finally {
+    chmodSync(stateDir, 0o700);
+    if (child.connected) child.send({ kind: "close-tree" }, () => {});
+    await closed;
+  }
+});
+
+test("F-T1059-46: a shadow sage_board cookie that comes first does not hide the paired cookie after it", async t => {
+  const w = await board(t), p = await pair(w);
+  const shadow = `sage_board=${"B".repeat(43)}`;
+  const seen = await call(w.port, "/api/seen", { headers: { ...p.headers, Cookie: `${shadow}; ${p.cookie}` }, body: {} });
+  assert.equal(seen.status, 200, seen.text);
+  assert.equal((await call(w.port, "/api/seen", { headers: { ...p.headers, Cookie: shadow }, body: {} })).status, 401, "the shadow cookie alone is still not paired");
+});
+
+test("F-T1059-47: while a takeover question for a task is open, to any chief, a give of that task to another chief is refused; after the answer, it opens", async t => {
+  const w = await board(t), p = await pair(w);
+  appendFileSync(join(w.dir, "chiefs.tsv"), `C3\tclaude\tclaude-3\t${new Date().toISOString()}\n`);
+  const give = to => call(w.port, "/api/give", { headers: p.headers, body: { logbook: w.logbook, task: "T1", to } });
+  assert.match((await give("C2")).json.text, /^G2 open · Hand T1 from C1/);
+  const before = w.gates();
+  const second = await give("C3");
+  assert.equal(second.status, 409, second.text);
+  assert.equal(second.json.text, "G2 is open already: it asks to hand T1 to C2 (codex). A task has one open takeover question at a time: answer G2 first (or undo your board answer to it), then give T1 again. Nothing changed.");
+  assert.equal(w.gates(), before, "no second takeover question");
+  assert.match((await give("C2")).json.text, /^G2 is open already · /, "the same give names the same question");
+  claude.sage(["gate", "answer", "G2", "--option", "1", "--via", "board", "--project", w.project], w.env);
+  assert.equal((await give("C3")).status, 409, "a board answer that waits for pickup still holds the task");
+  claude.sage(["gate", "undo", "G2", "--project", w.project], w.env);
+  claude.sage(["gate", "answer", "G2", "--option", "2", "--via", "chat", "--project", w.project], w.env);
+  assert.match((await give("C3")).json.text, /^G3 open · Hand T1 from C1 \(claude\) to C3 \(claude\)\?/, "after the decline, the task can be given again");
 });

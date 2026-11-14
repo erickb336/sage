@@ -89,6 +89,13 @@ const JOBS = {
 };
 const jsonCell = text => { try { const value = JSON.parse(text || "null"); return value && typeof value === "object" && !Array.isArray(value) ? value : null; } catch { return null; } };
 
+function json(response, status, body, headers = {}) {
+  const text = Buffer.from(JSON.stringify(body));
+  response.writeHead(status, { "Content-Type": "application/json; charset=utf-8", "Content-Length": text.length, ...headers });
+  response.end(text);
+}
+const broken = error => `The board could not do this on this Mac (${/^E[A-Z]+$/.test(error?.code ?? "") ? error.code : "an error"}), so nothing changed. Check that the board's state folder, beside its board.json, is an ordinary folder that can be written, and that the disk has space.`;
+
 function jsonBody(request) {
   return new Promise((accept, reject) => {
     const parts = []; let size = 0;
@@ -280,7 +287,7 @@ export function createBoardServer({ sources, port = BOARD_PORT, id, clock = () =
     const fail = (status, text) => { response.writeHead(status, { "Content-Type": "text/plain; charset=utf-8" }); response.end(request.method === "HEAD" ? undefined : `${text}\n`); };
     if (!browserBoundary(request) || !onMac(request)) return fail(403, "This request is not permitted.");
     if (boardHeader) response.setHeader("X-Sage-Board", boardHeader);
-    if (request.url.startsWith("/api/")) return serveApi(request, response, fail);
+    if (request.url.startsWith("/api/")) return serveApi(request, response, fail).catch(error => response.headersSent ? response.destroy() : json(response, 500, { problem: broken(error) }));
     if (!["GET", "HEAD"].includes(request.method)) { response.setHeader("Allow", "GET, HEAD"); return fail(405, "This method is not permitted."); }
     if (request.url === "/app" || request.url.startsWith("/app/")) return serveApp(request, response, fail);
     let selected = route(request.url);
@@ -312,11 +319,7 @@ export function createBoardServer({ sources, port = BOARD_PORT, id, clock = () =
     } catch { fail(503, "The board snapshot is unavailable."); }
   });
   async function serveApi(request, response, fail) {
-    const reply = (status, body, headers = {}) => {
-      const text = Buffer.from(JSON.stringify(body));
-      response.writeHead(status, { "Content-Type": "application/json; charset=utf-8", "Content-Length": text.length, ...headers });
-      response.end(text);
-    };
+    const reply = (status, body, headers) => json(response, status, body, headers);
     if (request.method !== "POST") { response.setHeader("Allow", "POST"); return fail(405, "This method is not permitted."); }
     const host = oneHeader(request, "host").toLowerCase();
     if (oneHeader(request, "origin") !== origins.get(host) || oneHeader(request, "sec-fetch-site") !== "same-origin") return fail(403, "This write is not permitted: only the board's own page, in a browser on this Mac, writes.");
@@ -338,7 +341,7 @@ export function createBoardServer({ sources, port = BOARD_PORT, id, clock = () =
     const argv = Object.hasOwn(JOBS, name) && JOBS[name](body);
     if (!argv || !source || !model?.sources.some(item => item.id === source.id && item.shared)) return reply(400, { problem: "The board cannot send this write: it names no question, task or chief of a shared logbook." });
     const done = await write({ shared: source.path, folder: book[2], argv });
-    return reply(done.code ? 409 : 200, { ok: !done.code, text: String(done.text).replace(/^sage: /, "") });
+    return reply(done.pending ? 202 : done.code ? 409 : 200, { ok: !done.code, ...(done.pending && { pending: true }), text: String(done.text).replace(/^sage: /, "") });
   }
 
   function gateDetail(key) {

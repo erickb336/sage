@@ -41,10 +41,11 @@ export function startPairing(dir, now = Date.now()) {
 
 export function boardAccess(dir) {
   const browserOf = header => {
-    const value = String(header ?? "").split(";").map(part => part.trim()).find(part => part.startsWith(`${COOKIE}=`))?.slice(COOKIE.length + 1);
-    if (!value || !/^[A-Za-z0-9_-]{43}$/.test(value)) return null;
-    const paired = readJson(dir, "paired.json");
-    return (Array.isArray(paired?.browsers) ? paired.browsers : []).find(item => same(item?.hash, sha(value))) ?? null;
+    const values = String(header ?? "").split(";").map(part => part.trim()).filter(part => part.startsWith(`${COOKIE}=`)).map(part => part.slice(COOKIE.length + 1)).filter(value => /^[A-Za-z0-9_-]{43}$/.test(value));
+    if (!values.length) return null;
+    const paired = readJson(dir, "paired.json"), browsers = Array.isArray(paired?.browsers) ? paired.browsers : [];
+    for (const value of values) { const browser = browsers.find(item => same(item?.hash, sha(value))); if (browser) return browser; }
+    return null;
   };
   return {
     browserOf,

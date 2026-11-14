@@ -263,7 +263,7 @@ function card(source, project, group, task, now, graph, landing) {
     return { kind: "gate", ...(replace && { replace: true }), key: `${project.key}/${gate.id}`, text, recommendation, gateId: gate.id, options, digest: gateDigest(gate), owner: shared ? gateOwner(gate) : null, logbook: project.key,
       breakdown: breakdown ? { key: `${project.key}/${breakdown}`, id: breakdown, name: graph.milestones.get(breakdown).name } : null };
   });
-  const boardAnswers = allGates.filter(boardAnswer).map(gate => ({ key: `${project.key}/${gate.id}`, gateId: gate.id, logbook: project.key, question: String(gate.question ?? "").split(LINE)[0], answer: boardAnswer(gate).answer, at: boardAnswer(gate).at, owner: shared ? gateOwner(gate) : null }));
+  const boardAnswers = allGates.filter(boardAnswer).map(gate => ({ key: `${project.key}/${gate.id}`, gateId: gate.id, logbook: project.key, question: String(gate.question ?? "").split(LINE)[0], answer: boardAnswer(gate).answer, at: boardAnswer(gate).at, owner: shared ? gateOwner(gate) : null, takeover: gate.kind === "replace" }));
   if (task.state === "awaiting-you" && !gates.length && !allGates.at(-1)?.answer && !boardAnswer(allGates.at(-1))) reasons.push({ kind: "design", text: "The design waits for your answer." });
   const unknown = shared && !reasons.some(reason => reason.replace) ? unknownChief(task, runs, label) : null;
   if (unknown) reasons.push(unknown);

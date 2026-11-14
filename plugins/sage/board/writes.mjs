@@ -29,7 +29,7 @@ export function ownerWrite({ shared, folder, argv }, env = process.env) {
 export function writeInWorker(job, { timeout = WRITE_MS } = {}) {
   return new Promise(done => {
     const worker = new Worker(new URL(import.meta.url), { workerData: { write: job } });
-    const timer = setTimeout(() => done({ code: 2, text: "The logbook write takes too long. It may still finish: look at the board again before you retry." }), timeout);
+    const timer = setTimeout(() => done({ code: 2, pending: true, text: "Not confirmed yet: the logbook was busy. The write may still finish: reload the board to see it before you try again." }), timeout);
     worker.once("message", result => { clearTimeout(timer); done(result); });
     worker.once("error", error => { clearTimeout(timer); done({ code: 2, text: `The logbook write failed: ${error.message}` }); });
     worker.once("exit", () => { clearTimeout(timer); done({ code: 2, text: "The logbook write stopped before it answered." }); });

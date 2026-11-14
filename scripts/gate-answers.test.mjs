@@ -236,6 +236,20 @@ for (const [from, to] of [["claude", "codex"], ["codex", "claude"]]) {
   });
 }
 
+for (const provider of ["claude", "codex"]) {
+  test(`F-T1059-47: in ${provider}, gate give refuses a second takeover question for a task while one is open to another chief`, (t) => {
+    const w = shared(t);
+    w.as("claude", "task", "add", "--title", "a", ...ADD);
+    writeFileSync(join(w.dir, "chiefs.tsv"), `${readFileSync(join(w.dir, "chiefs.tsv"), "utf8")}C3\tclaude\tclaude-3\t2026-01-01T00:00:00Z\n`);
+    assert.match(w.owner(provider, "gate", "give", "T1", "--to", "C2"), /^G1 open · /);
+    const before = readFileSync(join(w.dir, "gates.tsv"), "utf8");
+    assert.equal(w.refused(provider, "gate", "give", "T1", "--to", "C3"), "G1 is open already: it asks to hand T1 to C2 (codex). A task has one open takeover question at a time: answer G1 first (or undo your board answer to it), then give T1 again. Nothing changed.");
+    assert.equal(readFileSync(join(w.dir, "gates.tsv"), "utf8"), before, "no second takeover question");
+    w.owner(provider, "gate", "answer", "G1", "--option", "2", "--via", "chat");
+    assert.match(w.owner(provider, "gate", "give", "T1", "--to", "C3"), /^G2 open · Hand T1 from C1 \(claude\) to C3 \(claude\)\?/);
+  });
+}
+
 test("a board answer that cannot act at the pickup is cleared, the gate opens again, and the chief hears why", (t) => {
   const w = shared(t);
   w.as("claude", "task", "add", "--title", "a", ...ADD);

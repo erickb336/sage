@@ -3534,6 +3534,8 @@ function act(cmd, pos, opt, dir, env, skip, project) {
         if (sub === "give" && more.length) refuse("gate give takes one task id and --to <C id>: sage gate give <T> --to C<n>. Nothing changed.");
         const { task } = taskOf(dir, need(id, "the task id")), to = chiefNamed(dir, opt.to);
         if (task.chief === to) refuse(`${task.id} already belongs to ${to}. Nothing changed.`);
+        const other = sub === "give" && gates.find((g) => g.kind === "replace" && !g.answer && g.task === task.id && ((p) => p && p.from === task.chief && p.to !== to)(replaceOf(g)));
+        if (other) refuse(`${other.id} is open already: it asks to hand ${task.id} to ${chiefLabel(dir, replaceOf(other).to)}. A task has one open takeover question at a time: answer ${other.id} first (or undo your board answer to it), then give ${task.id} again. Nothing changed.`);
         return takeoverGate(dir, task, to);
       }
       if (sub === "answer" || sub === "undo") {
