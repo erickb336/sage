@@ -128,7 +128,7 @@ for (const owning of ["claude", "codex"]) {
     let g = w.gate("G1");
     assert.equal(g.answer, "", "the answer does not act before the pickup");
     assert.deepEqual([g.answered.via, g.answered.answer, g.picked], ["board", "no", ""]);
-    assert.match(w.owner("claude", "status"), /gates {3}1 open · G1 .*\(board answer: no, not picked up yet\)/);
+    assert.match(w.owner("claude", "status"), /gates {3}0 open · 1 answered on the board, not picked up yet · G1 .*\(board answer: no\)/, "F-T1059-9: a pending board answer is not an open question");
     assert.ok(!w.decisions().some((d) => d.endsWith("→ no")), "no decision before the pickup");
 
     assert.equal(contextOf(HOOKS[other(owning)].step(w)), "", "the other chief does not pick up a gate that is not its own");

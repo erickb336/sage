@@ -1,14 +1,15 @@
-import { LINE, PRIORITIES } from "./logbook-fields.mjs";
+import { LINE, PRIORITIES, boardAnswer } from "./logbook-fields.mjs";
 import { milestoneName } from "./milestone-rules.mjs";
 import { STOPPED_MS } from "./chief-live.mjs";
 
-const DAY = 86_400_000, DONE_DAYS = 7;
+const DAY = 86_400_000, DONE_DAYS = 7, EVENT_DAYS = 30;
 const ENDED = ["merged", "concluded", "abandoned"];
 const MOVING = ["design", "building", "review", "ready"];
 const time = value => {
   const at = typeof value === "number" ? value : Date.parse(value);
   return Number.isFinite(at) ? at : null;
 };
+const iso = value => { const at = time(value); return at === null ? null : new Date(at).toISOString(); };
 const title = text => text ? `${String(text).charAt(0).toUpperCase()}${String(text).slice(1)}` : text;
 const rank = priority => priority ? PRIORITIES.indexOf(priority) : PRIORITIES.length;
 const STATE_ORDER = ["stuck", "lost", "active", "changing", "proposed", "done"];
@@ -35,6 +36,7 @@ function gateNeeds(task) {
       gate: reason.gateId ?? null,
       task: { key: task.key, id: task.id, title: task.title },
       chief: task.holder ?? title(task.sourceLabel) ?? null,
+      ...(reason.gateId && { logbook: reason.logbook, options: reason.options, digest: reason.digest, owner: reason.owner, takeover: !!reason.replace }),
       project: task.projectName,
       askedAt: gate && time(gate.at) !== null ? new Date(time(gate.at)).toISOString() : null,
     };
@@ -69,6 +71,7 @@ function taskRow(task, chiefs) {
     chief: chiefTag(task, chiefs), needsYou: task.reasons.length > 0, waits: task.waitLine?.text ?? null,
     conflicts: task.mayConflict.map(other => ({ key: other.key, id: other.id, chief: other.chief })),
     step: step ? { label: step.label, status: step.status } : null, lastActivity: task.lastActivity,
+    addedAt: iso(task.addedAt), completedAt: iso(task.completedAt),
   };
 }
 
@@ -111,9 +114,9 @@ export function boardOverview(model) {
 
   const merged = tasks.filter(task => task.state === "merged" && recent(task.completedAt));
   const failed = tasks.flatMap(task => task.runs).filter(run => run.status === "failed" && recent(run.ended));
-  const chiefs = (model.projects ?? []).filter(project => !project.archived).flatMap(project => (project.chiefs ?? []).map(chief => ({ ...chief, project: project.name })));
+  const chiefs = (model.projects ?? []).filter(project => !project.archived).flatMap(project => (project.chiefs ?? []).map(chief => ({ ...chief, project: project.name, logbook: chief.key.slice(0, chief.key.lastIndexOf("/")) })));
   const leaving = [...merged.map(task => time(task.completedAt)), ...failed.map(run => time(run.ended))].map(when => when + DAY + 1)
-    .concat(chiefs.filter(chief => chief.stopped === false && !chief.running).map(chief => time(chief.heartbeat) + STOPPED_MS + 1));
+    .concat(chiefs.filter(chief => chief.stopped === false && !chief.agents).map(chief => time(chief.heartbeat) + STOPPED_MS + 1));
 
   return {
     at: model.at,
@@ -122,17 +125,18 @@ export function boardOverview(model) {
     projects: (model.projects ?? []).filter(project => !project.archived).map(project => project.name),
     chiefs,
     needs,
+    answered: tasks.flatMap(task => task.boardAnswers.map(item => ({ ...item, task: { key: task.key, id: task.id, title: task.title }, project: task.projectName }))).sort((a, b) => (time(a.at) ?? 0) - (time(b.at) ?? 0)),
     tasks: tasks.map(task => taskRow(task, chiefs)),
+    failedAt: tasks.flatMap(task => task.runs).filter(run => run.status === "failed" && time(run.ended) > at - EVENT_DAYS * DAY).map(run => iso(run.ended)),
     milestones,
     hiddenDone,
-    counts: { merged: merged.length, stuck: failed.length + stuckAgents(model.agents), added: null },
+    counts: { merged: merged.length, stuck: failed.length + stuckAgents(model.agents), stuckNow: stuckAgents(model.agents), added: tasks.some(task => task.addedAt) ? tasks.filter(task => recent(task.addedAt)).length : null },
     next: leaving.length ? Math.min(...leaving) : null,
   };
 }
 
 const LOG_MAX = 200;
 const firstLine = text => String(text ?? "").split(LINE)[0].trim();
-const iso = value => { const at = time(value); return at === null ? null : new Date(at).toISOString(); };
 
 function logOf(task) {
   const events = [
@@ -165,7 +169,7 @@ export function taskPanel(model, key) {
     cycles: { required: task.requiredCycles, clean: reviews && known ? task.cycles.filter(cycle => cycle.steps.every(step => step.status === "done")).length : null, reviews },
     lastEvent: log[0] ?? null,
     log: log.slice(0, LOG_MAX), logMore: Math.max(0, log.length - LOG_MAX),
-    decisions: [...(task.gateRows ?? [])].reverse().map(gate => ({ id: gate.id, question: firstLine(gate.question), answer: gate.answer || null, recommendation: gate.recommendation || null, at: iso(gate.at) })),
+    decisions: [...(task.gateRows ?? [])].reverse().map(gate => ({ id: gate.id, question: firstLine(gate.question), answer: gate.answer || null, pending: boardAnswer(gate)?.answer ?? null, recommendation: gate.recommendation || null, at: iso(gate.at) })),
     artifacts: task.artifacts.map(record => ({ id: record.id, type: record.data.type, label: record.data.label, run: record.data.run ?? null, at: iso(record.observedAt),
       url: /^https:\/\//.test(record.data.url ?? "") ? record.data.url : null, path: record.data.path ?? null, verified: !!record.content?.verified })),
     runs: task.runs.map(run => ({ id: run.id, role: run.role })),

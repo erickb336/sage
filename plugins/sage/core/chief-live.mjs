@@ -34,7 +34,8 @@ const flag = (value) => (typeof value === "boolean" ? value : null);
 export function liveRecord(data) {
   if (!data || typeof data !== "object" || Array.isArray(data)) return null;
   const at = typeof data.at === "string" && /^\d{4}-\d\d-\d\dT\d\d:\d\d:\d\d(?:\.\d+)?Z$/.test(data.at) ? Date.parse(data.at) : NaN;
-  return { checkout: typeof data.checkout === "string" && isAbsolute(data.checkout) ? data.checkout : null, sageMode: flag(data.sageMode), autopilot: flag(data.autopilot), at: Number.isFinite(at) ? at : null };
+  const checkout = typeof data.checkout === "string" && data.checkout.length <= 4096 && isAbsolute(data.checkout) && !/[\p{Cc}\p{Cf}\p{Zl}\p{Zp}]/u.test(data.checkout) ? data.checkout : null;
+  return { checkout, sageMode: flag(data.sageMode), autopilot: flag(data.autopilot), at: Number.isFinite(at) ? at : null };
 }
 
 export function chiefNames(data) {
@@ -49,18 +50,28 @@ export function chiefNames(data) {
 
 const title = (text) => `${text.charAt(0).toUpperCase()}${text.slice(1)}`;
 const utc = (at) => (Number.isFinite(Date.parse(at)) ? `${new Date(at).toISOString().slice(0, 16).replace("T", " ")} UTC` : null);
+const FOLDER_MAX = 30;
+const folderPart = (checkout) => {
+  const name = plainName(basename(checkout)).replace(/\s+/gu, " ").trim();
+  return [...name].length > FOLDER_MAX ? `${[...name].slice(0, FOLDER_MAX - 1).join("").trimEnd()}…` : name;
+};
 export function defaultChiefName(row, live) {
-  return [title(row.provider), live?.checkout && plainName(basename(live.checkout)), utc(row.at)].filter(Boolean).join(" · ");
+  return [title(plainName(row.provider)), live?.checkout && folderPart(live.checkout), utc(row.at)].filter(Boolean).join(" · ");
 }
 
-export function boardChiefs({ rows, live = {}, names = {}, runs = [], now }) {
-  return rows.map((row) => {
+export function boardChiefs({ rows, live = {}, names = {}, runs = [], waits = [], now }) {
+  const chiefs = rows.map((row) => {
     const record = live[row.id] ?? null, beat = record?.at != null && record.at - now > SKEW_MS ? null : record, heartbeat = beat?.at ?? null;
-    const running = runs.filter((run) => run.chief === row.id && run.status === "running" && !run.clock?.stale).length;
+    const agents = runs.filter((run) => run.chief === row.id && run.status === "running" && !run.clock?.stale).length;
+    const waiting = waits.filter((chief) => chief === row.id).length;
+    const silent = heartbeat === null ? null : now - heartbeat > STOPPED_MS;
+    const stopped = agents ? false : silent && waiting ? false : silent;
     return {
       id: row.id, provider: row.provider, name: names[row.id] ?? defaultChiefName(row, beat), named: Object.hasOwn(names, row.id), startedAt: utc(row.at) ? new Date(row.at).toISOString() : null,
-      checkout: beat?.checkout ?? null, sageMode: beat?.sageMode ?? null, autopilot: beat?.autopilot ?? null, heartbeat: heartbeat === null ? null : new Date(heartbeat).toISOString(), running,
-      stopped: running ? false : heartbeat === null ? null : now - heartbeat > STOPPED_MS,
+      checkout: beat?.checkout ?? null, sageMode: stopped ? null : beat?.sageMode ?? null, autopilot: stopped ? null : beat?.autopilot ?? null,
+      heartbeat: heartbeat === null ? null : new Date(heartbeat).toISOString(), agents, waitsForOwner: !!(silent && !agents && waiting), stopped,
     };
   });
+  const fold = (name) => name.normalize("NFKC").toLowerCase();
+  return chiefs.map((chief) => chiefs.some((other) => other !== chief && fold(other.name) === fold(chief.name)) ? { ...chief, name: `${chief.name} · ${chief.id}` } : chief);
 }

@@ -54,7 +54,8 @@ export function agentCommandProblem(command, cwd, path = process.env.PATH ?? "")
   return undefined;
 }
 
-const BOARD_CONFIG = "the board config rule (T229): no agent reads, copies or replaces the board config (~/.config/sage-board/board.json), or lists, searches, copies or moves the board's folder or a folder that holds it, because only the owner and the board command change the board's state. The board command's own output (board --ensure, the chat board) says what you need.";
+const BOARD_CONFIG = "the board config rule (T229): no agent reads, copies or replaces the board config (~/.config/sage-board/board.json), or lists, searches, copies or moves the board's folder or a folder that holds it, because only the owner and the board command change the board's state. The board command's own output (board --ensure, the chat board) says what you need. The rule covers the board's state folder (~/.config/sage-board/state) too, because it holds the browser pairing (T1059).";
+const BOARD_PAIR = "the board pairing rule (T1059): no agent runs board --pair. It pairs the owner's browser with the board, so that the browser can answer questions and rename chiefs, and it prints a one-time code for the owner's eyes only. The owner runs it in Terminal; give the owner the command, and do not run it.";
 const VARIABLE = /[$`]/;
 function boardFolders(home) {
   const folder = join(home, ".config", "sage-board");
@@ -81,7 +82,7 @@ function boardReach(word, dir, folders, home) {
   const is = (p) => p === path;
   const temporary = (f) => dirname(path) === f && /^\.board-.*\.json$/.test(basename(path));
   return {
-    config: folders.some((f) => is(f) || is(`${f}/board.json`) || is(`${f}/.board-000000000000.json`) || temporary(f)),
+    config: folders.some((f) => is(f) || is(`${f}/board.json`) || is(`${f}/.board-000000000000.json`) || temporary(f) || is(`${f}/state`) || path.startsWith(`${f}/state/`)),
     above: folders.some((f) => f.split("/").some((_, k, all) => is(all.slice(0, k + 1).join("/") || "/"))),
   };
 }
@@ -110,6 +111,7 @@ export function boardCommandProblem(text, cwd, { home = process.env.HOME || home
   };
   for (const { run, uncertainDirectory } of read.programs) {
     const name = programName(run.word), board = BOARD_RUN(run);
+    if (board && run.args.some((a) => /^--pair(?:=|$)/.test(a))) return BOARD_PAIR;
     const whole = WHOLE(name, run.args);
     const start = uncertainDirectory ? undefined : run.dir;
     let dir = start;

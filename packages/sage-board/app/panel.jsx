@@ -113,7 +113,7 @@ function Decisions({ task }) {
     <ul className="decs">{task.decisions.map(gate => (
       <li key={gate.id}>
         <p>{gate.question}</p>
-        <p className={gate.answer ? "by" : "by need"}>{gate.answer ? `You answered: ${gate.answer}` : "Open: it waits for your answer in the chief's chat."}{gate.recommendation && !gate.answer && ` Recommended: ${gate.recommendation}.`}</p>
+        <p className={gate.answer || gate.pending ? "by" : "by need"}>{gate.answer ? `You answered: ${gate.answer}` : gate.pending ? `You answered on the board: ${gate.pending}. It waits for the chief to pick it up.` : "Open: it waits for your answer."}{gate.recommendation && !gate.answer && !gate.pending && ` Recommended: ${gate.recommendation}.`}</p>
         <p className="faint">{gate.id} · {when(gate.at, task.at)}</p>
       </li>
     ))}</ul>

@@ -43,9 +43,9 @@ test("T1054: milestones come by the top priority of their open tasks, with progr
 
 test("T1054: the counts cover the last 24 hours: a merge 2 h ago counts and one 30 h ago does not; a failed run counts as stuck", () => {
   const { counts, next } = overview();
-  assert.deepEqual(counts, { merged: 1, stuck: 1, added: null });
+  assert.deepEqual(counts, { merged: 1, stuck: 1, stuckNow: 0, added: null });
   assert.equal(next, Date.parse("2026-11-14T10:00:00.000Z") + 1, "T1's merge leaves the window first");
-  assert.deepEqual(overview(undefined, "2026-11-14T13:00:00.000Z").counts, { merged: 0, stuck: 0, added: null });
+  assert.deepEqual(overview(undefined, "2026-11-14T13:00:00.000Z").counts, { merged: 0, stuck: 0, stuckNow: 0, added: null });
 });
 
 test("T1054: a stale model says so, with its problems", () => {

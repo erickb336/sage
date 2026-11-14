@@ -4,7 +4,9 @@ import { createServer } from "node:http";
 import { dirname, isAbsolute, join, resolve, sep } from "node:path";
 import { fileURLToPath } from "node:url";
 import { readBoardSources, buildBoardModel, boardOverview, taskPanel, landingRule, renderBoardHtml, renderAgentsHtml, renderMilestonesHtml, renderReleasesHtml, BOARD_PORT } from "../core/index.mjs";
+import { COOKIE, boardAccess, readJson } from "./access.mjs";
 import { pagesRequest, servePages, taskFiles } from "./pages.mjs";
+import { writeInWorker } from "./writes.mjs";
 
 const MAX_HTML = 8 * 1024 * 1024;
 const MAX_CLIENTS = 16;
@@ -67,7 +69,7 @@ export function loadBoardApp(dir = APP_DIR) {
   const names = [manifest?.script, manifest?.style, manifest?.vendor];
   if (!names.every(name => typeof name === "string" && APP_FILE.test(name)) || !manifest.script.endsWith(".js") || !manifest.style.endsWith(".css") || !manifest.vendor.endsWith(".js")) return null;
   const files = new Map(names.map(name => [name, { type: APP_TYPES[name.split(".").pop()], body: readFileSync(join(dir, name)) }]));
-  const shell = `<!doctype html><html lang="en" data-theme="dark"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>Sage board</title><link rel="stylesheet" href="/app/${manifest.style}"><link rel="modulepreload" href="/app/${manifest.vendor}"><script type="module" src="/app/${manifest.script}"></script></head><body><div id="root"></div><noscript><p>This board needs scripts. The board in the chat needs none: send a message that starts with "show board".</p></noscript></body></html>`;
+  const shell = (writes = "off", token = "") => `<!doctype html><html lang="en" data-theme="dark"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><meta name="sage-writes" content="${writes}"><meta name="sage-token" content="${token}"><title>Sage board</title><link rel="stylesheet" href="/app/${manifest.style}"><link rel="modulepreload" href="/app/${manifest.vendor}"><script type="module" src="/app/${manifest.script}"></script></head><body><div id="root"></div><noscript><p>This board needs scripts. The board in the chat needs none: send a message that starts with "show board".</p></noscript></body></html>`;
   return { files, shell };
 }
 
@@ -77,7 +79,26 @@ function appPolicy(origin) {
 
 const forwarded = name => name === "forwarded" || name.startsWith("x-forwarded-");
 
-export function createBoardServer({ sources, port = BOARD_PORT, id, clock = () => new Date().toISOString(), settleReads = SETTLE_READS, duringRead = null, providerRoots = [], app = loadBoardApp() } = {}) {
+const BODY_MAX = 16 * 1024;
+const GATE = /^G[1-9]\d*$/, TASK = /^T[1-9]\d*$/, CHIEF = /^C[1-9]\d*$/, LOGBOOK = /^([A-Za-z0-9_-]{1,80})\/([a-z0-9-]+-[0-9a-f]{6})$/;
+const JOBS = {
+  answer: body => GATE.test(body.gate) && Number.isInteger(body.option) && body.option >= 1 && body.option <= 99 && /^[0-9a-f]{16}$/.test(body.digest ?? "") && ["gate", "answer", body.gate, "--via", "board", "--option", String(body.option), "--seen", body.digest],
+  undo: body => GATE.test(body.gate) && ["gate", "undo", body.gate],
+  give: body => TASK.test(body.task) && CHIEF.test(body.to) && ["gate", "give", body.task, "--to", body.to],
+  name: body => CHIEF.test(body.chief) && typeof body.name === "string" && body.name.length <= 240 && !body.name.trim().startsWith("-") && ["chief", "name", body.chief, ...(body.name.trim() ? [body.name.trim()] : [])],
+};
+const jsonCell = text => { try { const value = JSON.parse(text || "null"); return value && typeof value === "object" && !Array.isArray(value) ? value : null; } catch { return null; } };
+
+function jsonBody(request) {
+  return new Promise((accept, reject) => {
+    const parts = []; let size = 0;
+    request.on("data", part => { size += part.length; if (size > BODY_MAX) { reject(new Error("too large")); request.destroy(); } else parts.push(part); });
+    request.on("end", () => { try { const value = JSON.parse(Buffer.concat(parts).toString("utf8")); value && typeof value === "object" && !Array.isArray(value) ? accept(value) : reject(new Error("not an object")); } catch (error) { reject(error); } });
+    request.on("error", reject);
+  });
+}
+
+export function createBoardServer({ sources, port = BOARD_PORT, id, clock = () => new Date().toISOString(), settleReads = SETTLE_READS, duringRead = null, providerRoots = [], app = loadBoardApp(), stateDir = null, write = writeInWorker } = {}) {
   if (!Number.isSafeInteger(port) || port < 1024 || port > 65535) throw new TypeError("board port must be an integer from 1024 through 65535");
   if (typeof clock !== "function") throw new TypeError("the board clock must be a function that gives an ISO time");
   if (!Array.isArray(sources) || !sources.length || sources.length > 32) throw new TypeError("board needs 1 to 32 explicit sources");
@@ -93,6 +114,7 @@ export function createBoardServer({ sources, port = BOARD_PORT, id, clock = () =
   const local = new Set([`127.0.0.1:${port}`, `localhost:${port}`, `[::1]:${port}`]);
   const origins = new Map([...local].map(host => [host, `http://${host}`]));
   let boardHeader = null;
+  const access = stateDir ? boardAccess(stateDir) : null;
   const watchers = new Map(), watchErrors = new Map(), clients = new Set();
   let model, overview, lastGood, revision = 0, refreshTimer, boundaryTimer, settleTimer, startTimer, startPromise, closePromise, closed = false;
 
@@ -258,6 +280,7 @@ export function createBoardServer({ sources, port = BOARD_PORT, id, clock = () =
     const fail = (status, text) => { response.writeHead(status, { "Content-Type": "text/plain; charset=utf-8" }); response.end(request.method === "HEAD" ? undefined : `${text}\n`); };
     if (!browserBoundary(request) || !onMac(request)) return fail(403, "This request is not permitted.");
     if (boardHeader) response.setHeader("X-Sage-Board", boardHeader);
+    if (request.url.startsWith("/api/")) return serveApi(request, response, fail);
     if (!["GET", "HEAD"].includes(request.method)) { response.setHeader("Allow", "GET, HEAD"); return fail(405, "This method is not permitted."); }
     if (request.url === "/app" || request.url.startsWith("/app/")) return serveApp(request, response, fail);
     let selected = route(request.url);
@@ -288,6 +311,48 @@ export function createBoardServer({ sources, port = BOARD_PORT, id, clock = () =
       response.end(request.method === "HEAD" ? undefined : html);
     } catch { fail(503, "The board snapshot is unavailable."); }
   });
+  async function serveApi(request, response, fail) {
+    const reply = (status, body, headers = {}) => {
+      const text = Buffer.from(JSON.stringify(body));
+      response.writeHead(status, { "Content-Type": "application/json; charset=utf-8", "Content-Length": text.length, ...headers });
+      response.end(text);
+    };
+    if (request.method !== "POST") { response.setHeader("Allow", "POST"); return fail(405, "This method is not permitted."); }
+    const host = oneHeader(request, "host").toLowerCase();
+    if (oneHeader(request, "origin") !== origins.get(host) || oneHeader(request, "sec-fetch-site") !== "same-origin") return fail(403, "This write is not permitted: only the board's own page, in a browser on this Mac, writes.");
+    if (!/^application\/json(?:;\s*charset=utf-8)?$/i.test(oneHeader(request, "content-type") ?? "")) return fail(415, "A write sends JSON.");
+    if (!access) return fail(503, "This board writes nothing: it started without its config folder.");
+    let body;
+    try { body = await jsonBody(request); } catch { return response.destroyed ? undefined : fail(400, "A write is one JSON object of at most 16 KiB."); }
+    const name = request.url.slice("/api/".length);
+    if (name === "pair") {
+      const paired = access.pair(body.code);
+      return paired.problem ? reply(403, { problem: paired.problem }) : reply(200, { token: access.token(paired.cookie) }, { "Set-Cookie": `${COOKIE}=${paired.cookie.value}; HttpOnly; SameSite=Strict; Path=/; Max-Age=31536000` });
+    }
+    const cookie = access.cookieOf(oneHeader(request, "cookie"));
+    if (!cookie) return reply(401, { problem: "This browser is not paired with the board. Run board --pair in Terminal, then type its code on the board." });
+    if (!access.tokenFits(cookie, oneHeader(request, "x-sage-token"))) return reply(403, { problem: "This write has no valid token. Reload the board, then try again." });
+    if (name === "seen") return reply(200, { previous: access.seen() });
+    const book = LOGBOOK.exec(body.logbook ?? ""), source = book && configured.find(item => item.id === book[1]);
+    const argv = Object.hasOwn(JOBS, name) && JOBS[name](body);
+    if (!argv || !source || !model?.sources.some(item => item.id === source.id && item.shared)) return reply(400, { problem: "The board cannot send this write: it names no question, task or chief of a shared logbook." });
+    const done = await write({ shared: source.path, folder: book[2], argv });
+    return reply(done.code ? 409 : 200, { ok: !done.code, text: String(done.text).replace(/^sage: /, "") });
+  }
+
+  function gateDetail(key) {
+    const at = key.lastIndexOf("/"), logbook = key.slice(0, at), id = key.slice(at + 1);
+    const task = GATE.test(id) && model?.tasks.find(item => item.project === logbook && item.gateRows?.some(gate => gate.id === id));
+    if (!task) return null;
+    const gate = task.gateRows.find(row => row.id === id), source = configured.find(item => item.id === task.source);
+    const kept = source && LOGBOOK.test(logbook) ? readJson(join(source.path, logbook.slice(logbook.indexOf("/") + 1), "gates"), `${id}.json`, 1 << 20) : null;
+    const answered = jsonCell(gate.answered), picked = jsonCell(gate.picked), need = model.needsOwner.flatMap(item => item.reasons).find(reason => reason.key === key);
+    return { key, id, logbook, task: { key: task.key, id: task.id, title: task.title }, project: task.projectName, question: String(gate.question ?? ""), options: String(gate.options ?? "").split("|").map(option => option.trim()).filter(Boolean),
+      recommendation: gate.recommendation || null, default: gate.default || null, at: gate.at || null, answer: gate.answer || null, answered: answered && { at: String(answered.at ?? ""), via: String(answered.via ?? ""), answer: answered.answer == null ? null : String(answered.answer) },
+      picked: picked && { at: String(picked.at ?? ""), chief: String(picked.chief ?? "") }, digest: need?.digest ?? null, owner: need?.owner ?? null, takeover: !!need?.replace, text: need?.text ?? null,
+      message: kept?.message?.kind === "question" ? kept.message : null };
+  }
+
   function serveApp(request, response, fail) {
     if (request.url === "/app") { response.writeHead(301, { Location: "/app/" }); return response.end(); }
     if (!app) return fail(503, NO_APP);
@@ -312,7 +377,15 @@ export function createBoardServer({ sources, port = BOARD_PORT, id, clock = () =
         return response.end(request.method === "HEAD" ? undefined : body);
       } catch { return fail(503, "The board snapshot is unavailable."); }
     }
-    const body = name === "" ? Buffer.from(app.shell) : app.files.get(name)?.body;
+    if (name.startsWith("gate/")) {
+      const key = taskKey(name.slice("gate/".length)), detail = key && model && gateDetail(key);
+      if (!detail) return fail(404, "This question is not on the board.");
+      const body = Buffer.from(JSON.stringify(detail));
+      response.writeHead(200, { "Content-Type": "application/json; charset=utf-8", "Content-Length": body.length });
+      return response.end(request.method === "HEAD" ? undefined : body);
+    }
+    const cookie = name === "" && access ? access.cookieOf(oneHeader(request, "cookie")) : null;
+    const body = name === "" ? Buffer.from(app.shell(access ? cookie ? "paired" : "unpaired" : "off", cookie ? access.token(cookie) : "")) : app.files.get(name)?.body;
     if (!body) return fail(404, "This board page does not exist.");
     if (name === "") response.setHeader("Content-Security-Policy", appPolicy(origins.get(oneHeader(request, "host").toLowerCase())));
     response.writeHead(200, { "Content-Type": name === "" ? "text/html; charset=utf-8" : app.files.get(name).type, "Content-Length": body.length });
