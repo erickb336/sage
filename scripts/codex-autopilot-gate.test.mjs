@@ -1,7 +1,8 @@
 import "./test-env.mjs";
+import { appendSyntheticHistory } from "./fixtures/codex-history-padding.mjs";
 import assert from "node:assert/strict";
 import { spawnSync } from "node:child_process";
-import { chmodSync, cpSync, existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, realpathSync, rmSync, symlinkSync, utimesSync, writeFileSync } from "node:fs";
+import { appendFileSync, chmodSync, cpSync, existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, realpathSync, rmSync, symlinkSync, utimesSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { test } from "node:test";
@@ -91,6 +92,24 @@ const clearPermits = () => permitFolder && rmSync(permitFolder, { recursive: tru
 const ALLOW = { hookSpecificOutput: { hookEventName: "PermissionRequest", decision: { behavior: "allow" } } };
 const READY = "Report the pull request as ready: the owner merges it in GitHub";
 const OFF = 'sage: autopilot is off, so the owner merges. Report the pull request as ready. To turn autopilot on while sage mode is on, the owner sends "autopilot on" alone, as a new message while Codex is idle (press Esc first if Codex is busy)';
+
+test("T1069: long-history admission keeps the final reread for a later off or cancellation", async () => {
+  for (const stopped of ["off", "cancel"]) {
+    clearPermits();
+    const w = world();
+    appendSyntheticHistory(w.transcript);
+    assert.equal(await w.run(w.input()), undefined);
+    assert.equal(w.checks.length, 1);
+    rmSync(GH_LOG, { force: true });
+    const entry = stopped === "cancel" ? { type: "event_msg", payload: { type: "turn_aborted", turn_id: TURN } }
+      : { type: "response_item", payload: { type: "message", role: "user", content: [{ type: "input_text", text: "autopilot off" }] } };
+    appendFileSync(w.transcript, JSON.stringify(entry) + "\n");
+    const result = spawnSync(process.execPath, [MERGE, "41", SHA], { cwd: w.project, encoding: "utf8", env: { ...w.env, CODEX_SESSION_ID: SESSION, CODEX_THREAD_ID: SESSION, CODEX_TOOL_CALL_ID: CALL } });
+    assert.equal(result.status, 1, result.stderr);
+    assert.match(result.stderr, stopped === "off" ? /latest autopilot switch is off/ : /stopped the turn/);
+    assert.deepEqual(ghCalls(), []);
+  }
+});
 
 test("admission: with the mode file on, the owner's on, the call in the record and a passing merge check, the gate saves one permit, the escalation is allowed, and the merge command merges", async () => {
   clearPermits();

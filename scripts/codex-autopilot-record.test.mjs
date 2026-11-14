@@ -1,14 +1,15 @@
 import "./test-env.mjs";
+import "./fixtures/codex-long-record.mjs";
 import assert from "node:assert/strict";
 import { spawnSync } from "node:child_process";
-import { appendFileSync, chmodSync, cpSync, existsSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, truncateSync, writeFileSync } from "node:fs";
+import { appendFileSync, chmodSync, cpSync, existsSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { test } from "node:test";
 import { fileURLToPath } from "node:url";
 
 const PLUGIN = fileURLToPath(new URL("../plugins/sage-codex", import.meta.url));
-const { readRecord, autopilotSwitch, onCanCount, turnAborted, RECORD_LIMIT } = await import(join(PLUGIN, "hooks/owner-record.mjs"));
+const { readRecord, autopilotSwitch, onCanCount, turnAborted } = await import(join(PLUGIN, "hooks/owner-record.mjs"));
 const { exactPhrase, switchModes } = await import(join(PLUGIN, "core/index.mjs"));
 const { markFile } = await import(join(PLUGIN, "hooks/start-mark.mjs"));
 const { modeDirectory } = await import(join(PLUGIN, "hooks/sage-codex-hook.mjs"));
@@ -28,9 +29,7 @@ function recordFile(lines, end = "\n") {
   return file;
 }
 const read = (lines, options) => readRecord(recordFile(lines), options);
-const lastOn = (lines) => lines.findLast((o) => o?.payload?.type === "message" && o.payload.role === "user" && o.payload.internal_chat_message_metadata_passthrough?.turn_id
-  && exactPhrase(o.payload.content.map((item) => item.text ?? "").join("")) === "autopilot on")?.payload.internal_chat_message_metadata_passthrough.turn_id;
-const sw = (record, mark, onTurn = lastOn(record.entries)) => autopilotSwitch(record, mark, onTurn);
+const sw = (record, mark, onTurn = record.switches.findLast((s) => s.phrase === "autopilot on")?.turn) => autopilotSwitch(record, mark, onTurn);
 const decide = (lines, from = 0, onTurn) => {
   const record = read(lines);
   return record.refused ? { refused: record.refused } : sw(record, { lines: from }, onTurn);
@@ -200,7 +199,7 @@ test("the switches agree with core's mode rules: an on counts only while sage mo
     const lines = [META, ...turn("user", ...sequence)];
     const core = {};
     for (const text of sequence) switchModes({ owner: true, text, all: text }, core, { autopilotOn: () => "" });
-    const result = sw({ entries: lines, lines: lines.length }, { lines: 0 });
+    const result = sw(read(lines), { lines: 0 });
     assert.equal(result.on, core.autopilot === true, JSON.stringify(sequence));
     if (result.on) on++;
   }
@@ -387,16 +386,6 @@ test("a partial last line is re-read up to 3 times, then refuses", () => {
   assert.equal(pause, 2);
   assert.equal(record.lines, lines.length);
   assert.deepEqual(sw(record,{ lines: 0 }), ON);
-});
-
-test("a record over 64 MiB refuses before it is read", () => {
-  const file = recordFile(RECORDS["exec-on"]);
-  truncateSync(file, RECORD_LIMIT + 1);
-  const long = { refused: "Codex's record of this session is too long for sage to read. Start a new session for autopilot, or the owner merges the pull request in GitHub (over 64 MiB)" };
-  assertPlain(long.refused);
-  assert.deepEqual(readRecord(file), long);
-  truncateSync(file, RECORD_LIMIT);
-  assert.match(readRecord(file).refused, /\(the last line is incomplete\)$/, "at the limit it reads (and finds no newline at the end)");
 });
 
 test("turnAborted finds Codex's turn_aborted event of that turn only (Esc)", () => {
