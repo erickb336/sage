@@ -29,6 +29,14 @@ export const agentPath = (path) => agentPathOf(sessionMeta(path));
 
 export const childTask = (path) => agentPath(path).at(-1) ?? "";
 
+const RUN_NAME = /_t([1-9]\d*)(?:_r([1-9]\d*))?$/;
+export function keepRunText(project, kind, name, text, env = process.env) {
+  const [, task, run] = RUN_NAME.exec(String(name)) ?? [], [, said, saidTask] = /^Run (R[1-9]\d*) · task (T[1-9]\d*)(?![\w/])/.exec(String(text ?? "").split("\n", 1)[0]) ?? [];
+  const named = run ? { run: `R${run}`, task: `T${task}` } : said && (!task || saidTask === `T${task}`) && { run: said, task: saidTask };
+  if (!named || typeof text !== "string" || typeof project !== "string") return;
+  try { tool.keepRunText(project, { kind, ...named, text }, env); } catch {}
+}
+
 const REPORT_ROLES = { implementer: "implementer", arena_judge: "arena-judge", pe: "pe", designer: "designer", investigate: "investigate", evidence_review: "evidence-review", code_reviewer: "code-reviewer", security_reviewer: "security-reviewer", ux_reviewer: "ux-reviewer", qa: "qa" };
 export function reviewChild(meta, roles = REPORT_ROLES) {
   const path = agentPathOf(meta), [, role, number, run] = /^sage_([a-z_]+)_t([1-9]\d*)_(r[1-9]\d*)$/.exec(path.at(-1) ?? "") ?? [];
@@ -115,6 +123,7 @@ export function reportGate(input, env = process.env) {
   const reason = !missing.length && !input.stop_hook_active && REVIEW_NAME.test(task) ? stopReason(message, typeof input.cwd === "string" ? input.cwd : process.cwd(), { who: "the report check" }) : undefined;
   if (reason) return { decision: "block", reason };
   const unkept = !missing.length || input.stop_hook_active ? keep(meta, message, input.cwd, env) : undefined;
+  if (sageName(task) && (!missing.length || input.stop_hook_active)) keepRunText(input.cwd, "reports", task, message, env);
   if (!missing.length || input.stop_hook_active) keepTokens(meta, input.agent_transcript_path, input.cwd, env);
   if (!missing.length) return unkept ? { systemMessage: unkept } : {};
   if (input.stop_hook_active) return { systemMessage: [`sage: the agent ${task} ended without a full report (no ${missing.join(", ")}). The chief reads it as it is.`, unkept].filter(Boolean).join(" ") };

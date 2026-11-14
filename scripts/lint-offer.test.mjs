@@ -107,7 +107,7 @@ test("not now keeps the offer quiet for 30 days, then the offer comes back; an o
   assert.equal(answer(p, "G1", 2), "G1 answered · not now");
   assert.match(p.lint(), / Nothing changed\.$/);
   assert.equal(p.offers().length, 1);
-  assert.match(p.sage("gate", "answer", "G1", "--option", "1").stderr, /G1 is the lint offer, and the owner answered it already \(not now\): it answers once\. Nothing changed\./);
+  assert.match(p.sage("gate", "answer", "G1", "--option", "1").stderr, /G1 has the answer "not now" already, from the chat at \S+: the first answer wins, so this answer is not recorded\. Nothing changed\./);
   assert.equal(p.table("tasks").length, 1, "a refused second answer frames no task");
   p.backdate("G1");
   assert.match(p.lint(), /\nG2 open · /);
