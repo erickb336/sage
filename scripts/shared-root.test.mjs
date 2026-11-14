@@ -1017,6 +1017,44 @@ test("T1056: a config write of a limit before any other write moves the provider
   assert.equal(limitRows(w).length, 1, "the move of the emptied config wrote one row");
 });
 
+test("T1056: the move counts only the provider roots that set a limit, and the default only when no root sets one", (t) => {
+  const moved = (claude, codex) => {
+    const w = world(t);
+    if (claude.length) claudeSage(["config", ...claude, "--project", w.base], w.env);
+    if (codex.length) codexSage(["config", ...codex, "--project", w.base], w.env);
+    w.claude("link", "--separate");
+    const logbook = counts(join(w.shared, w.name()));
+    return [logbook.max_agents, logbook.max_leads];
+  };
+  assert.deepEqual(moved(["cap.project=3", "max_leads=2"], []), [3, 2], "a limit lowered in one root stays low when the other root has no value");
+  assert.deepEqual(moved([], ["max_agents=4"]), [4, 5], "the Codex value alone, and the default lead limit");
+  assert.deepEqual(moved([], []), [10, 5], "no root sets a limit: the defaults of 10 agents and 5 leads");
+  assert.deepEqual(moved(["max_agents=15", "cap.project=15", "max_leads=5"], []), [15, 5], "the values of the sage project");
+});
+
+for (const bad of ["{bad", "[]"]) test(`T1056: a damaged logbook config.json (${bad}) stops no ordinary write and leaves no write half done; a config write of a limit refuses and names the file`, (t) => {
+  const w = world(t);
+  w.claude("link", "--separate");
+  const file = join(w.shared, w.name(), "config.json");
+  writeFileSync(file, bad);
+  claudeSage(["config", "max_agents=12", "--project", w.base], w.env);
+  codexSage(["config", "max_agents=8", "max_leads=4", "--project", w.base], w.env);
+  const rowsOf = (table) => readFileSync(join(w.shared, w.name(), `${table}.tsv`), "utf8").trim().split("\n").slice(1);
+  w.claude("task", "add", "--title", "x", "--size", "tiny", "--priority", "P2");
+  assert.equal(rowsOf("tasks").length, 1);
+  assert.match(w.claude("run", "add", "T1", "--role", "qa"), /^R1 /);
+  assert.equal(rowsOf("runs").length, 1, "one run, so a retry adds no second one");
+  w.claude("run", "done", "R1", "--status", "failed");
+  assert.deepEqual(rowsOf("runs").map((row) => row.includes("\tfailed\t")), [true], "a running run still ends");
+  assert.deepEqual([readFileSync(file, "utf8"), limitRows(w).length], [bad, 0], "nothing moves into a damaged file");
+  assert.deepEqual(limitsOf(w.claude("config")), [12, 4], "the limits stay the larger values of the provider roots");
+  assert.deepEqual(limitsOf(w.codex("config")), [12, 4]);
+  const refusal = refusalOf(() => w.claude("config", "cycles.small=3", "max_agents=5"));
+  assert.ok(refusal.includes(file), refusal);
+  assert.equal(readFileSync(file, "utf8"), bad);
+  assert.notEqual(existsSync(join(w.shared, "config.json")) ? counts(w.shared)["cycles.small"] : undefined, 3, "the refused config write sets no other key either");
+});
+
 test("T1056: a Claude chief and a Codex chief of one project fill one agent limit and one lead limit, and the next run of either is refused", (t) => {
   const w = world(t);
   w.claude("link", "--separate");

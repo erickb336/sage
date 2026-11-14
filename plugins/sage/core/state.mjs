@@ -290,12 +290,7 @@ function readRegular(path, { link = true, max = Infinity, encoding = "utf8" } = 
 }
 
 function savedIn(root) {
-  try {
-    const value = JSON.parse(readRegular(join(root, "config.json")));
-    return value && typeof value === "object" && !Array.isArray(value) ? value : {};
-  } catch {
-    return {};
-  }
+  return jsonObject(join(root, "config.json")) ?? {};
 }
 const SHARED_KEYS = ["cycles.small", "cycles.large", "cycles.risk", "max_rounds"];
 const LIMIT_KEYS = ["max_agents", "max_leads"];
@@ -311,16 +306,19 @@ function limitsOf(dir, env) {
   const held = pick(savedIn(dir), LIMIT_KEYS);
   if (LIMIT_KEYS.every((k) => Object.hasOwn(held, k))) return { values: held, moved: true };
   const folder = basename(dir), names = new Set([folder.replace(/-[0-9a-f]{6}$/, ""), ...bindings(dirname(dir)).filter((r) => r.folder === folder).map((r) => slug(basename(r.root)))]);
-  const roots = [...new Set([sageRoot(env), ...legacyRoots(env)])].map((root) => config({ ...env, SAGE_HOME: root }));
-  const largest = (of) => Math.max(...roots.map(of));
-  const cap = (c) => Math.max(...[...names].map((n) => c[`cap.${n}`] ?? c.max_agents));
-  return { values: { max_agents: largest(cap), max_leads: largest((c) => c.max_leads), ...held }, moved: false };
+  const roots = [...new Set([sageRoot(env), ...legacyRoots(env)])].map(savedIn), own = (s, k) => valid(k, s[k]);
+  const largest = (key, of) => {
+    const set = roots.flatMap(of).filter((v) => v !== undefined);
+    return set.length ? Math.max(...set) : DEFAULTS[key];
+  };
+  const agents = (s) => [...names].map((n) => own(s, `cap.${n}`) ?? own(s, "max_agents"));
+  return { values: { max_agents: largest("max_agents", agents), max_leads: largest("max_leads", (s) => [own(s, "max_leads")]), ...held }, moved: false };
 }
 
 function moveLimits(dir, env, fresh = false) {
-  const { values, moved } = limitsOf(dir, env);
-  if (moved) return;
-  swap(join(dir, "config.json"), JSON.stringify({ ...logbookJson(dir), ...values }, null, 2) + "\n");
+  const { values, moved } = limitsOf(dir, env), old = !moved && jsonObject(join(dir, "config.json"));
+  if (!old) return;
+  swap(join(dir, "config.json"), JSON.stringify({ ...old, ...values }, null, 2) + "\n");
   if (!fresh) write(dir, "decisions", [...read(dir, "decisions"), { at: now(), task: "", decision: `limits max_agents=${values.max_agents} max_leads=${values.max_leads}`, why: "one limit for each project: the largest value of the provider roots moved into the logbook's config" }]);
 }
 
@@ -2293,15 +2291,18 @@ function fileOrNone(file) {
 }
 const ownKey = (kv) => /^(name|archived|start|lint_offer)(=|$)/.test(kv);
 
+function jsonObject(file) {
+  try {
+    const value = JSON.parse(readRegular(file) ?? "{}");
+    return value && typeof value === "object" && !Array.isArray(value) ? value : undefined;
+  } catch {
+    return undefined;
+  }
+}
 function logbookJson(dir) {
   const file = join(dir, "config.json");
   fileOrNone(file);
-  let old;
-  try {
-    old = JSON.parse(readRegular(file) ?? "{}");
-  } catch {}
-  if (!old || typeof old !== "object" || Array.isArray(old)) refuse(`${file} is not a JSON object, so config writes nothing. Ask the user to fix or remove it.`);
-  return old;
+  return jsonObject(file) ?? refuse(`${file} is not a JSON object, so config writes nothing. Ask the user to fix or remove it.`);
 }
 
 function logbookConfig(dir, pairs) {
@@ -2402,13 +2403,13 @@ function sageCommand(argv, env) {
       notePlugin(env);
       const common = shared ? pick(set, SHARED_KEYS) : {}, own = Object.fromEntries(Object.entries(set).filter(([k]) => !Object.hasOwn(common, k) && !limit(k)));
       const limits = Object.fromEntries(Object.entries(set).filter(([k]) => limit(k)).map(([k, v]) => [k === mine ? "max_agents" : k, v]));
-      if (Object.keys(common).length) writeConfig(sharedRoot(env), common);
-      if (Object.keys(own).length) writeConfig(sageRoot(env), own);
       if (Object.keys(limits).length) withLock(home, () => {
         ready(home, env);
         moveLimits(home, env);
         swap(join(home, "config.json"), JSON.stringify({ ...logbookJson(home), ...limits }, null, 2) + "\n");
       });
+      if (Object.keys(common).length) writeConfig(sharedRoot(env), common);
+      if (Object.keys(own).length) writeConfig(sageRoot(env), own);
     }
     const c = { ...config(env, home), ...set };
     const models = Object.keys(c).filter((k) => MODEL.test(k));
@@ -2476,8 +2477,8 @@ function change(cmd, pos, opt, dir, env, skip, project, guarded) {
   return withLock(dir, () => {
     if (!changeLoss) ready(dir, env, skip);
     if (guarded) opt.chief = guard(dir, cmd, pos, opt, project, env);
+    if (!changeLoss && !skip.length && isShared(dir, env)) moveLimits(dir, env, cmd === "init");
     const out = act(cmd, pos, opt, dir, env, skip, project);
-    if (!changeLoss && isShared(dir, env)) moveLimits(dir, env, cmd === "init");
     if (!changeLoss) status(dir, true);
     return out;
   });
