@@ -3,6 +3,7 @@ import { lstatSync, mkdirSync, renameSync, rmSync, writeFileSync } from "node:fs
 import { basename, isAbsolute, join } from "node:path";
 import { CHIEF } from "./chiefs.mjs";
 import { nameProblem } from "./logbook-fields.mjs";
+import { plainName } from "./shared-root.mjs";
 
 export const BEAT_MS = 60_000;
 export const STOPPED_MS = 30 * 60_000;
@@ -11,8 +12,8 @@ export const NAMES_FILE = "chief-names.json";
 export const LIVE_FOLDER = "live";
 
 export function chiefBeat({ last, mode, now, project, native, provider, tool, env }) {
-  const changed = last ? last.sageMode !== mode.sageMode || last.autopilot !== mode.autopilot : mode.sageMode;
-  if (!changed && !(last && !(now - last.at < BEAT_MS))) return last;
+  const changed = last ? last.sageMode !== mode.sageMode || last.autopilot !== mode.autopilot : mode.sageMode, age = now - last?.at;
+  if (!changed && (!last || (age >= 0 && age < BEAT_MS))) return last;
   try {
     const { dir, shared, row } = tool.locate(project, env);
     if (shared) {
@@ -49,12 +50,12 @@ export function chiefNames(data) {
 const title = (text) => `${text.charAt(0).toUpperCase()}${text.slice(1)}`;
 const utc = (at) => (Number.isFinite(Date.parse(at)) ? `${new Date(at).toISOString().slice(0, 16).replace("T", " ")} UTC` : null);
 export function defaultChiefName(row, live) {
-  return [title(row.provider), live?.checkout && basename(live.checkout), utc(row.at)].filter(Boolean).join(" · ");
+  return [title(row.provider), live?.checkout && plainName(basename(live.checkout)), utc(row.at)].filter(Boolean).join(" · ");
 }
 
 export function boardChiefs({ rows, live = {}, names = {}, runs = [], now }) {
   return rows.map((row) => {
-    const beat = live[row.id] ?? null, heartbeat = beat?.at != null && beat.at - now <= SKEW_MS ? beat.at : null;
+    const record = live[row.id] ?? null, beat = record?.at != null && record.at - now > SKEW_MS ? null : record, heartbeat = beat?.at ?? null;
     const running = runs.filter((run) => run.chief === row.id && run.status === "running" && !run.clock?.stale).length;
     return {
       id: row.id, provider: row.provider, name: names[row.id] ?? defaultChiefName(row, beat), named: Object.hasOwn(names, row.id), startedAt: utc(row.at) ? new Date(row.at).toISOString() : null,

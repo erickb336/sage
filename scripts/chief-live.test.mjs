@@ -1,9 +1,9 @@
 import "./test-env.mjs";
 import assert from "node:assert/strict";
 import { execFileSync, spawnSync } from "node:child_process";
-import { chmodSync, existsSync, lstatSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, realpathSync, rmSync, statSync, symlinkSync, writeFileSync } from "node:fs";
+import { chmodSync, cpSync, existsSync, lstatSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, realpathSync, rmSync, statSync, symlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
-import { basename, join } from "node:path";
+import { basename, dirname, join } from "node:path";
 import { test } from "node:test";
 import { fileURLToPath, pathToFileURL } from "node:url";
 import * as claude from "../plugins/sage/skills/sage/sage.mjs";
@@ -226,18 +226,68 @@ test("the board model: a run that the board shows as stale keeps no chief from s
   assert.ok(card("T1").reasons.some((reason) => reason.kind === "chief-unknown"), "the card says that C1 may have stopped, and the chief line agrees");
 });
 
-test("the board model: a heartbeat more than 5 minutes in the future is unknown, never fresh", (t) => {
+test("the board model: a live file more than 5 minutes in the future is not trusted: all its values are unknown, as with no live file", (t) => {
   const w = linked(t);
-  for (const session of ["a", "b"]) claude.chiefFor(w.project, session, w.env);
-  const now = Date.parse("2026-11-13T12:00:00.000Z");
+  for (const session of ["a", "b", "c"]) claude.chiefFor(w.project, session, w.env);
+  const now = Date.parse("2026-11-13T12:00:00.000Z"), iso = (ms) => new Date(ms).toISOString();
+  const rows = w.chiefs().trim().split("\n");
+  writeFileSync(join(w.dir, "chiefs.tsv"), `${[rows[0], ...rows.slice(1).map((row) => row.split("\t").with(3, "2026-11-13T08:30:00.000Z").join("\t"))].join("\n")}\n`);
   mkdirSync(join(w.dir, "live"));
-  const live = (id, at) => writeFileSync(w.live(id), JSON.stringify({ provider: "claude", checkout: w.project, sageMode: true, autopilot: false, at }));
+  const live = (id, at) => writeFileSync(w.live(id), JSON.stringify({ provider: "claude", checkout: w.project, sageMode: true, autopilot: true, at }));
   live("C1", "2099-01-01T00:00:00.000Z");
-  live("C2", new Date(now + 2 * MINUTE).toISOString());
-  assert.deepEqual(boardOf(w, now).project.chiefs.map(({ id, heartbeat, stopped }) => ({ id, heartbeat, stopped })), [
-    { id: "C1", heartbeat: null, stopped: null },
-    { id: "C2", heartbeat: new Date(now + 2 * MINUTE).toISOString(), stopped: false },
+  live("C2", iso(now + 5 * MINUTE + 1));
+  live("C3", iso(now + 5 * MINUTE));
+  const folder = basename(realpathSync(w.project)), unknown = { name: "Claude · 2026-11-13 08:30 UTC", checkout: null, sageMode: null, autopilot: null, heartbeat: null, stopped: null };
+  assert.deepEqual(boardOf(w, now).project.chiefs.map(({ id, name, checkout, sageMode, autopilot, heartbeat, stopped }) => ({ id, name, checkout, sageMode, autopilot, heartbeat, stopped })), [
+    { id: "C1", ...unknown },
+    { id: "C2", ...unknown },
+    { id: "C3", name: `Claude · ${folder} · 2026-11-13 08:30 UTC`, checkout: realpathSync(w.project), sageMode: true, autopilot: true, heartbeat: iso(now + 5 * MINUTE), stopped: false },
   ]);
+});
+
+test("the board model: the default chief name drops control and direction characters from the folder name", (t) => {
+  const w = linked(t);
+  claude.chiefFor(w.project, "a", w.env);
+  const now = Date.parse("2026-11-13T12:00:00.000Z"), rows = w.chiefs().trim().split("\n");
+  writeFileSync(join(w.dir, "chiefs.tsv"), `${rows[0]}\n${rows[1].split("\t").with(3, "2026-11-13T08:30:00.000Z").join("\t")}\n`);
+  mkdirSync(join(w.dir, "live"));
+  writeFileSync(w.live("C1"), JSON.stringify({ provider: "claude", checkout: "/work/app‮txt.exe\u001b[2Jdone​", sageMode: true, autopilot: false, at: new Date(now - MINUTE).toISOString() }));
+  assert.equal(boardOf(w, now).project.chiefs[0].name, "Claude · apptxt.exe[2Jdone · 2026-11-13 08:30 UTC");
+});
+
+test("chiefBeat: a beat time later than the clock (the clock moved back) makes a beat due at once", (t) => {
+  const w = linked(t);
+  const t0 = Date.parse("2026-11-13T10:00:00.000Z"), on = { sageMode: true, autopilot: false };
+  const beat = (last, now) => chiefBeat({ last, mode: on, now, project: w.project, native: "s", provider: "claude", tool: claude, env: w.env });
+  const ahead = beat(undefined, t0 + 10 * MINUTE);
+  assert.equal(json(w.live("C1")).at, "2026-11-13T10:10:00.000Z");
+  const back = beat(ahead, t0);
+  assert.equal(json(w.live("C1")).at, "2026-11-13T10:00:00.000Z", "the beat after the clock moved back writes the true time");
+  assert.equal(back.at, t0);
+  assert.equal(beat(back, t0 + 1), back, "and then the minute counts again from the true time");
+});
+
+test("the Codex launcher prints the hook's answer before the beat, so a beat that never returns loses no answer", (t) => {
+  const w = linked(t);
+  const cache = join(w.env.CODEX_HOME, "plugins/cache/sage/sage/local"), launcher = join(w.env.CODEX_HOME, "sage-hooks/launch.mjs");
+  cpSync(at("../plugins/sage-codex"), cache, { recursive: true });
+  mkdirSync(dirname(launcher), { recursive: true });
+  cpSync(at("../plugins/sage-codex/hooks/launch.mjs"), launcher);
+  const preload = join(w.base, "beat-never-returns.mjs");
+  writeFileSync(preload, [
+    'import fs from "node:fs"; import { syncBuiltinESMExports } from "node:module";',
+    "const write = fs.writeFileSync;",
+    'fs.writeFileSync = function (path, ...rest) { if (String(path).includes("/live/C")) process.exit(0); return write.call(this, path, ...rest); };',
+    "syncBuiltinESMExports();",
+  ].join("\n"));
+  const transcript = join(w.base, "rollout.jsonl");
+  writeFileSync(transcript, `${JSON.stringify({ type: "session_meta", payload: { id: "codex-1", session_id: "codex-1", cli_version: "0.164.0", source: "cli" } })}\n`);
+  const input = { hook_event_name: "UserPromptSubmit", session_id: "codex-1", turn_id: "turn-1", transcript_path: transcript, cwd: w.project, model: "fixture", permission_mode: "default", prompt: "sage mode" };
+  const r = spawnSync(process.execPath, [launcher, "UserPromptSubmit"], { input: JSON.stringify(input), env: { ...w.env, NODE_OPTIONS: `--import=${pathToFileURL(preload).href}` }, encoding: "utf8", timeout: 60_000 });
+  assert.equal(r.status, 0, r.stderr);
+  assert.equal(w.chiefs().trim().split("\n").length, 2, "the phrase registered the chief, so the beat was due");
+  assert.equal(existsSync(w.live("C1")), false, "the beat never finished");
+  assert.match(JSON.parse(r.stdout).hookSpecificOutput.additionalContext, /sage mode/i, "the answer is out before the beat");
 });
 
 test("the board model: one bad entry in chief-names.json hides only that name, with a warning for it", (t) => {

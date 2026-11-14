@@ -48,6 +48,6 @@ function beat(input, env = process.env) {
 
 export async function dispatch(event, input, context) {
   const output = await routed(event, input, context);
-  beat(input);
+  setImmediate(() => beat(input));
   return output;
 }
