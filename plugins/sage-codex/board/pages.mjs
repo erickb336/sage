@@ -119,7 +119,8 @@ export function servePages(request, response, { onMac, model }) {
 }
 
 const KEPT_MAX = 1 << 20, NAMES_MAX = 100;
-const folderNames = dir => { try { return lstatSync(dir).isDirectory() ? readdirSync(dir) : []; } catch { return []; } };
+const realFolder = dir => { try { return lstatSync(dir).isDirectory(); } catch { return false; } };
+const folderNames = dir => { try { return realFolder(dir) ? readdirSync(dir) : []; } catch { return []; } };
 function keptReport(file) {
   try { const stat = lstatSync(file); return stat.isFile() && stat.size <= KEPT_MAX ? JSON.parse(readFileSync(file, "utf8")) : null; } catch { return null; }
 }
@@ -128,8 +129,8 @@ const RUN = /(?:^|[^a-z0-9])(r[1-9]\d*)(?![0-9])/gi;
 export function taskFiles({ dir, logbook, task, runs }) {
   const folder = pageTaskFolder(logbook, task), ids = new Set(runs.map(run => run.id));
   const { pages, more } = folder ? listPages(folder) : { pages: [], more: false };
-  const kept = dir ? runs.flatMap(run => {
-    const data = keptReport(join(dir, "kept", `${run.id}.json`));
+  const kept = dir && realFolder(join(dir, "kept")) ? runs.flatMap(run => {
+    const data = /^R[1-9]\d*$/.test(run.id) ? keptReport(join(dir, "kept", `${run.id}.json`)) : null;
     if (data?.task !== task || data.run !== run.id || typeof data.text !== "string") return [];
     const fields = fieldsOf(data.text, REPORT_FIELDS), field = name => fields.find(item => item.name === name)?.rest.slice(0, 300) || null;
     return [{ run: run.id, role: run.role, sha: /^[0-9a-f]{40}$/.test(data.sha) ? data.sha : null, at: typeof data.at === "string" ? data.at : null, status: field("STATUS"), result: field("RESULT") }];

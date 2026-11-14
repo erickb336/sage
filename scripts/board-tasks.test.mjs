@@ -1,6 +1,6 @@
 import "./test-env.mjs";
 import assert from "node:assert/strict";
-import { mkdtempSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
+import { appendFileSync, mkdirSync, mkdtempSync, readFileSync, renameSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import { request } from "node:http";
 import { createServer } from "node:net";
 import { tmpdir } from "node:os";
@@ -114,4 +114,21 @@ test("T1061: the task route refuses a bad key, an unknown task, another site and
   assert.equal(await status({ Origin: "http://evil.test" }), 403);
   assert.equal(await status({ "Sec-Fetch-Site": "cross-site" }), 403);
   assert.equal(await status({ "X-Forwarded-For": "10.0.0.1" }), 403);
+});
+
+test("T1061 (F-T1061-4, F-T1061-5): the kept-report reader reads no run id that leaves kept/, and no kept/ that is a link", async t => {
+  const w = world(t), outside = join(w.dir, "outside");
+  mkdirSync(outside);
+  const report = run => JSON.stringify({ task: "T3", run, role: "qa", sha: "", text: "STATUS done\nRESULT read from outside the logbook", at: NOW });
+  writeFileSync(join(outside, "R9.json"), report("../../../outside/R9"));
+  const runs = join(w.logbook, "runs.tsv"), columns = readFileSync(runs, "utf8").split("\n")[0].split("\t");
+  const values = { id: "../../../outside/R9", task: "T3", role: "qa", round: "0", status: "done", chief: "C2" };
+  appendFileSync(runs, `${columns.map(column => values[column] ?? "").join("\t")}\n`);
+  const base = await serve(t, w.sources), kept = async () => (await (await fetch(`${base}/app/task/${b64(KEY("T3"))}`)).json()).files.kept.map(item => item.run);
+  assert.deepEqual(await kept(), ["R5"], "a run id with a path in it is not read");
+
+  writeFileSync(join(outside, "R5.json"), report("R5"));
+  renameSync(join(w.logbook, "kept"), join(w.dir, "kept-real"));
+  symlinkSync(outside, join(w.logbook, "kept"));
+  assert.deepEqual(await kept(), [], "a kept/ that is a link is not followed");
 });
