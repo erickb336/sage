@@ -1,3 +1,4 @@
+import { realpathSync } from "node:fs";
 import { join } from "node:path";
 import { chiefBeat } from "sage-core";
 import { readMode, tool } from "../skills/sage/sage.mjs";
@@ -46,8 +47,22 @@ function beat(input, env = process.env) {
   } catch {}
 }
 
+const PICKUPS = ["UserPromptSubmit", "PostToolUse"];
+export function pickup(event, input, output, env = process.env) {
+  if (env.SAGE_HOOKS === "off" || !PICKUPS.includes(event) || !input || "agent_id" in input || typeof input.cwd !== "string" || typeof input.session_id !== "string") return output;
+  let lines;
+  try {
+    if (!readMode({ session: input.session_id }, env).sage) return output;
+    lines = tool.pickupAnswers(realpathSync.native(input.cwd), input.session_id, env);
+  } catch { return output; }
+  if (!lines.length) return output;
+  const note = [`sage: the owner answered on the board, and this hook applied ${lines.length === 1 ? "that answer" : "those answers"} for you at this turn. Tell the owner what each one did, and go on from it:`, ...lines.map((line) => `- ${line}`)].join("\n");
+  const given = output?.hookSpecificOutput?.additionalContext;
+  return { ...output, hookSpecificOutput: { hookEventName: event, additionalContext: given ? `${given}\n\n---\n\n${note}` : note } };
+}
+
 export async function dispatch(event, input, context) {
-  const output = await routed(event, input, context);
+  const output = pickup(event, input, await routed(event, input, context));
   setImmediate(() => beat(input));
   return output;
 }

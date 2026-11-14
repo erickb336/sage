@@ -740,7 +740,7 @@ for (const [name, own, other] of pairs) {
     assert.throws(() => w.owner("task", "T1", "set", "title=x"), /^Error: T1 belongs to chief C2 \(.*\), not to C1\. Nothing changed/, "a replaced chief gets a refusal that names the new owning chief");
     assert.throws(() => w.lead("R1", "task", "T1", "set", "title=x"), /R1 is not a running lead run, so this lead writes nothing/, "the replaced chief's lead writes nothing");
     assert.match(w.intruder("task", "T1", "set", "title=x"), /^T1 framed/);
-    assert.throws(() => w.answer("G1", "--option", "2"), /a takeover gate answers once/);
+    assert.throws(() => w.answer("G1", "--option", "2"), /^Error: G1 has the answer "approve" already, from the chat at \S+: the first answer wins, so this answer is not recorded\. To change the chief, open a new takeover gate\. Nothing changed\.$/);
   });
 
   test(`F-T656-11 ${name}: a takeover gate of T618 to T656, with replace|keep, still answers: replace moves the task, and keep changes nothing`, (t) => {
@@ -804,7 +804,7 @@ for (const [name, own, other] of pairs) {
     assert.equal(w.answer("G3", "--option", "2"), "G3 answered · b", "a plain gate's line stays as it was");
     assert.equal(row(w.cells("tasks"), "T1").chief, "C1");
     assert.equal(w.cells("runs"), runs);
-    assert.throws(() => w.answer("G1", "--option", "1"), /a takeover gate answers once/, "no second answer undoes the owner's decline");
+    assert.throws(() => w.answer("G1", "--option", "1"), /^Error: G1 has the answer "decline" already, from the chat at \S+: the first answer wins/, "no second answer undoes the owner's decline");
   });
 
   test(`${name}: a takeover gate that is out of date refuses and changes nothing: a new run, or a new owning chief`, (t) => {

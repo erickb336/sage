@@ -96,7 +96,7 @@ Use the tool only for a choice that is the owner's: product direction, or an act
 1. Park each question with `sage gate add` first.
 2. Send a short chat message: the kind's parts, except the title and the answers, which go on the card, and the Ref line last. The card can hide the chat, so the message has no head line: the card is the question.
 3. Call the tool. Put the whole batch in one call, the most important question first.
-4. Record the answer with `gate answer`: the gate's own option number, or the owner's own words (the tool's Other) as `--other-hex`. Find the number by the option's label in the gate, never by its place on the card or in the text form: both put your pick first, and the gate keeps its own order.
+4. Record the answer with `gate answer`: the gate's own option number, or the owner's own words (the tool's Other) as `--other-hex`. Find the number by the option's label in the gate, never by its place on the card or in the text form: both put your pick first, and the gate keeps its own order. Add `--via` with the place of the answer: your provider's card (`claude-card` or `codex-card`) or `chat`. When the gate refuses because the owner answered first elsewhere, such as on the board, tell the owner which answer counts.
 
 The owner's rules for the chat message and the text form (12 Nov 2026), because the parts ran together and a table made long answers hard to read. Then the owner asked for clearer labels, because a bold label looked like one more progress line, so each label is now a heading:
 
