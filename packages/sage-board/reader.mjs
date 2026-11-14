@@ -1,7 +1,7 @@
 import { createHash } from "node:crypto";
-import { lstatSync, readFileSync, readdirSync } from "node:fs";
+import { lstatSync, readFileSync, readdirSync, realpathSync } from "node:fs";
 import { dirname, join, posix } from "node:path";
-import { BRIEF_FIELDS, REPORT_FIELDS, briefSections, fieldsOf, pageFile, pageTaskFolder, pageType, readReport, taskPanel } from "../sage-core/index.mjs";
+import { BRIEF_FIELDS, PAGE_MAX, REPORT_FIELDS, briefSections, fieldsOf, pageFile, pageTaskFolder, pageType, readReport, taskPanel } from "../sage-core/index.mjs";
 
 const marksShown = text => String(text ?? "").replace(/\p{Cf}/gu, c => `[U+${c.codePointAt(0).toString(16).toUpperCase().padStart(4, "0")}]`);
 const TEXT_MAX = 1 << 20, MD_MAX = 2 << 20, VERSIONS_MAX = 30, SHOTS_MAX = 8;
@@ -22,11 +22,20 @@ export function logbookDir(configured, task) {
   return source && !task.old && task.project.startsWith(`${source.id}/`) ? join(source.path, task.project.slice(task.project.indexOf("/") + 1)) : null;
 }
 
+const LINK = "The file is a link, and the board does not open links.";
+const unread = why => Object.assign(new Error(why), { why });
+const whyUnread = error => error.why ?? (error instanceof SyntaxError ? "The file is not valid JSON." : "The board cannot read the file now. Reload this page to read it again.");
 function readText(file, max = TEXT_MAX) {
   let stat;
   try { stat = lstatSync(file); } catch (error) { if (["ENOENT", "ENOTDIR"].includes(error.code)) return undefined; throw error; }
-  if (!stat.isFile() || stat.size > max) throw new Error("not a regular file that the reader takes");
+  if (stat.isSymbolicLink()) throw unread(LINK);
+  if (stat.isDirectory()) throw unread("It is a folder, not a file.");
+  if (!stat.isFile()) throw unread("It is not a regular file.");
+  if (stat.size > max) throw unread(`The file is over ${max >> 20} MiB, so the reader does not show it.`);
   return readFileSync(file, "utf8");
+}
+function notOpened(file) {
+  try { return lstatSync(file).isSymbolicLink() || realpathSync(file) !== file ? LINK : `The board opens only a regular file of at most ${PAGE_MAX >> 20} MiB, with one name.`; } catch { return null; }
 }
 function readJson(file, max = TEXT_MAX) {
   try { const text = readText(file, max); return text === undefined ? undefined : JSON.parse(text); } catch { return null; }
@@ -209,18 +218,23 @@ export function readerPage({ model, configured, url, origin, render }) {
   const pages = {
     brief() {
       if (!run) return runMissing();
-      let text, problem;
-      try { text = dir ? readText(join(dir, "briefs", `${run.id}.md`)) : undefined; } catch { problem = true; }
+      const codex = /^[a-z-]+$/.test(run.role) ? `sage_${run.role.replaceAll("-", "_")}_${task.id.toLowerCase()}_${run.id.toLowerCase()}.json` : null;
+      let text, problem, from = `${run.id}.md`;
+      try {
+        text = dir ? readText(join(dir, "briefs", from)) : undefined;
+        const kept = text === undefined && dir && codex ? readText(join(dir, "briefs", codex)) : undefined;
+        if (kept !== undefined) { text = JSON.parse(kept)?.text; from = codex; if (typeof text !== "string") throw unread("The file has no brief text."); }
+      } catch (error) { problem = whyUnread(error); }
       const head = [["Run", esc(run.id)], ["Role", esc(run.role)], ["Task", taskLink], ["Chief", chief(run)], ["Model", esc(run.model || "not recorded")], ["Started", esc(when(run.started, model.at))]];
       const side = `<aside class="side"><h2>This run</h2><ul><li><a href="${esc(link("report", run.id))}">Report of ${esc(run.id)}</a></li><li>${taskA(`Task ${task.id}`)}</li></ul><p>GOAL and ACCEPTANCE open first: what the agent must do, and how the chief checks it. A closed field shows its first line.</p></aside>`;
-      if (problem) return { crumb: run.id, title: `Brief of ${run.id}`, head, body: note("<b>The board cannot read this brief now.</b> The file is not a regular file of at most 1 MiB. It reads again when you reload.", "fail") };
-      if (text === undefined) return { crumb: run.id, title: `Brief of ${run.id}`, head, body: note(`<b>Not kept.</b> The logbook keeps no brief of ${esc(run.id)}. sage keeps the brief of each run from T1058 on; this run is older, or its brief was not kept.`) };
+      if (problem) return { crumb: run.id, title: `Brief of ${run.id}`, head, body: note(`<b>The board cannot read this brief.</b> ${esc(problem)}`, "fail") };
+      if (text === undefined) return { crumb: run.id, title: `Brief of ${run.id}`, head, body: note(`<b>Not kept.</b> The logbook keeps no brief of ${esc(run.id)}. sage keeps briefs only for newer runs; this run is older, or its brief was not kept.`) };
       const sections = briefSections(text);
       const body = `${openBar}${BRIEF_FIELDS.map(name => {
         const value = dedent(sections[name]), count = value.split(/\r?\n/).filter(line => line.trim()).length;
         return field(name, value, isOpen(name, ["GOAL", "ACCEPTANCE"]), count > 1 ? ` <span class="faint">(+${count - 1})</span>` : "");
       }).join("")}`;
-      return { crumb: run.id, title: `Brief of ${run.id} · ${run.role}`, head, body, side, file: `<span class="faint mono">briefs/${esc(run.id)}.md in the logbook</span>` };
+      return { crumb: run.id, title: `Brief of ${run.id} · ${run.role}`, head, body, side, file: `<span class="faint mono">briefs/${esc(from)} in the logbook</span>` };
     },
     report() {
       if (!run) return runMissing();
@@ -229,16 +243,16 @@ export function readerPage({ model, configured, url, origin, render }) {
         text = dir ? readText(join(dir, "reports", `${run.id}.md`)) : undefined; from = `reports/${run.id}.md in the logbook`;
         if (text === undefined && folder && pageFile(folder, `${run.id}-report.md`)) { text = pageFile(folder, `${run.id}-report.md`, true).bytes.toString("utf8"); from = `<a href="${esc(pagesBase)}${esc(run.id)}-report.md">Open the file</a>`; }
         if (text === undefined && dir) { const kept = readJson(join(dir, "kept", `${run.id}.json`)); if (kept?.task === task.id && kept.run === run.id && typeof kept.text === "string") { text = kept.text; from = `kept/${run.id}.json in the logbook (a review's kept report)`; } }
-      } catch { problem = true; }
+      } catch (error) { problem = whyUnread(error); }
       const ran = run.ended ? `${when(run.started, model.at)}–${when(run.ended, model.at)}` : `${when(run.started, model.at)}–`;
       const fields = text === undefined ? [] : fieldsOf(text, REPORT_FIELDS), of = name => { const item = fields.find(entry => entry.name === name); return item ? dedent([item.rest, ...item.lines].join("\n")) : ""; };
       const status = /^(done|blocked|question)\b/i.exec(of("STATUS"))?.[1].toLowerCase() ?? null;
       const head = [["Status", status ? `<span class="pill ${status}">${status}</span>` : run.status === "running" ? `<span class="pill">running</span>` : "not given"], ["Run", esc(run.id)], ["Role", esc(run.role)], ["Chief", chief(run)], ["Model", esc(run.model || "not recorded")], ["Ran", esc(ran)]];
       const side = `<aside class="side"><h2>Links</h2><ul>${panel.prUrl ? `<li><a href="${esc(panel.prUrl)}">PR #${esc(panel.pr)}</a></li>` : ""}<li><a href="${esc(link("brief", run.id))}">Brief of ${esc(run.id)}</a></li><li>${taskA(`Task ${task.id}`)}</li></ul></aside>`;
-      if (problem) return { crumb: run.id, title: `Report of ${run.id}`, head, body: note("<b>The board cannot read this report now.</b> The file is not a regular file of at most 1 MiB. It reads again when you reload.", "fail") };
+      if (problem) return { crumb: run.id, title: `Report of ${run.id}`, head, body: note(`<b>The board cannot read this report.</b> ${esc(problem)}`, "fail") };
       if (text === undefined) return run.status === "running"
         ? { crumb: run.id, title: `Report of ${run.id}`, head, body: note(`<b>Not written yet.</b> ${esc(run.role)} ${esc(run.id)} runs (${minutes(run.started, model.at)} min). The board shows the report when the run ends; reload this page then.`, "need") }
-        : { crumb: run.id, title: `Report of ${run.id}`, head, body: note(`<b>Not kept.</b> The logbook keeps no report of ${esc(run.id)}. sage keeps the report of each run from T1058 on, and the report of each review before that; this run has neither.`) };
+        : { crumb: run.id, title: `Report of ${run.id}`, head, body: note(`<b>Not kept.</b> The logbook keeps no report of ${esc(run.id)}. sage keeps reports only for newer runs and for reviews; this run is older, or its report was not kept.`) };
       const result = of("RESULT"), findings = readReport(text).findings;
       // The lead records a report's findings in report order, each with --run and a new F-T<n>-<n> key: so the n-th row of this run is the n-th finding.
       const rows = (task.findings ?? []).filter(entry => entry.run === run.id || String(entry.key).startsWith(`${run.id}-`));
@@ -256,6 +270,8 @@ export function readerPage({ model, configured, url, origin, render }) {
       const file = view.arg, recorded = recordedPages(task, folder).filter(item => item.file === file).at(-1);
       const head = [["Task", taskLink], ["File", `<span class="mono">${esc(file)}</span>`], recorded && ["Recorded", esc(`${when(recorded.at, model.at)} · ${recorded.state === "same" ? "the same as recorded" : recorded.state === "changed" ? "changed since it was recorded" : "gone"}`)]];
       const got = folder ? pageFile(folder, file, true) : null;
+      const why = !got && folder ? notOpened(join(folder, file)) : null;
+      if (why) return { crumb: file, title: file, head, body: note(`<b>The board does not open this page.</b> ${esc(why)}`, "need") };
       if (!got) return { crumb: file, title: file, head, body: note(recorded
         ? `<b>The file is gone from the pages folder.</b> The logbook still has its record: <span class="mono">${esc(file)}</span>, sha256 <span class="mono">${esc(recorded.sha.slice(0, 16))}…</span>, recorded ${esc(when(recorded.at, model.at))}.`
         : `<b>This page is not in the task's pages folder.</b> It may be gone, or not written yet. The logbook has no record of it.`, "need") };
@@ -348,7 +364,7 @@ ${decisions.length ? decisions.map(gate => `<div class="decision"><p><b>${esc(ga
       if (summary.versions) readMore.push(`<li><a href="${esc(link("design", null, { back: `q-${gate.id}` }))}">Design · ${summary.versions} ${summary.versions === 1 ? "version" : "versions"}</a></li>`);
       const status = gate.answer ? note(`<b>Answered: ${esc(gate.answer)}.</b> The first answer wins; to change it, tell the chief in its chat.`) : "";
       const head = `<p class="muted">${esc(owner)} · <span class="mono">${esc(gate.id)}</span> · asked ${esc(when(gate.at, model.at) + ago(gate.at, model.at))} · ${taskLink} · ${esc(task.title)}</p>`;
-      const body = `${status}${message ? "" : note(`<b>Not kept.</b> The logbook keeps no full message of ${esc(gate.id)} (sage keeps one from T1058 on, when the chief asks with a message). The board shows its question and options only.`)}
+      const body = `${status}${message ? "" : note(`<b>Not kept.</b> The logbook keeps no full message of ${esc(gate.id)} (sage keeps the full message only for newer questions that the chief asks with a message). The board shows its question and options only.`)}
 <div class="two"><div class="note"><h2 class="sec">Needed by</h2><p>${text(labelled["Needed by"] ?? "not recorded")}</p></div><div class="note"><h2 class="sec">If you do not answer</h2><p>${text(labelled["If you do not answer"] ?? (gate.default ? `The chief takes ${gate.default}.` : "not recorded"))}</p></div></div>
 ${blocks.map(render).join("")}<h2 class="sec">The answers</h2>${answerCards}<h2 class="sec">Read more</h2><ul>${readMore.join("")}</ul>${gate.answer ? "" : note(`This page only reads. Answer in ${esc(ownerId)}'s chat.`)}`;
       return { crumb: gate.id, title: message?.title ?? firstLine(gate.question), head, body, raw: true };

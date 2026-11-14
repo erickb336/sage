@@ -1,6 +1,6 @@
 import "./test-env.mjs";
 import assert from "node:assert/strict";
-import { mkdtempSync, readFileSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
+import { mkdirSync, mkdtempSync, readFileSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import { request } from "node:http";
 import { createServer } from "node:net";
 import { tmpdir } from "node:os";
@@ -96,8 +96,33 @@ test("T1064: the reader states: a running run's report is not written yet, an ol
   const stale = read(w, "T3", "brief", "R7", {}, { ...w.model(), stale: true });
   assert.match(stale.text, /The board cannot read the logbook now\. This is the copy that it read at \d\d:\d\d\./);
   assert.match(stale.text, /GOAL/, "the copy still shows");
+  for (const page of [read(w, "T3", "report", "R7"), read(w, "T3", "brief", "R5"), read(w, "T30", "question", "G5")]) assert.doesNotMatch(page.text, /\bT1058\b/, "the copy names no internal task");
+  assert.match(read(w, "T3", "brief", "R5").text, /sage keeps briefs only for newer runs/);
   symlinkSync(join(w.logbook, "briefs", "R7.md"), join(w.logbook, "briefs", "R5.md"));
-  assert.match(read(w, "T3", "brief", "R5").text, /The board cannot read this brief now\. The file is not a regular file/, "a link is not followed");
+  assert.match(read(w, "T3", "brief", "R5").text, /The board cannot read this brief\. The file is a link, and the board does not open links\./, "a link is not followed");
+  rmSync(join(w.logbook, "briefs", "R5.md"));
+  mkdirSync(join(w.logbook, "briefs", "R5.md"));
+  assert.match(read(w, "T3", "brief", "R5").text, /The board cannot read this brief\. It is a folder, not a file\./);
+  writeFileSync(join(w.logbook, "reports", "R5.md"), "x".repeat((1 << 20) + 1));
+  assert.match(read(w, "T3", "report", "R5").text, /The board cannot read this report\. The file is over 1 MiB, so the reader does not show it\./);
+  for (const page of [read(w, "T3", "brief", "R5"), read(w, "T3", "report", "R5")]) assert.doesNotMatch(/<div class="note fail" role="alert">([\s\S]*?)<\/div>/.exec(page.html)[1], /reload/i, "the note does not say that a reload fixes these");
+  symlinkSync(join(w.pages, "T3", "notes.md"), join(w.pages, "T3", "linked.md"));
+  const linked = read(w, "T3", "page", "linked.md").text;
+  assert.match(linked, /The board does not open this page\. The file is a link, and the board does not open links\./);
+  assert.doesNotMatch(linked, /not written yet/);
+});
+
+test("T1064: an older Codex run's brief comes from its kept file briefs/sage_<role>_t<n>_r<n>.json", t => {
+  const w = world(t);
+  writeFileSync(join(w.logbook, "briefs", "sage_qa_t3_r6.json"), JSON.stringify({ task: "sage_qa_t3_r6", text: "Run R6 · task T3 (qa)\n\nGOAL        Check the limits change as a user would.\n\nACCEPTANCE  PASS or FAIL, with evidence.\n", checked: true }));
+  writeFileSync(join(w.logbook, "briefs", "sage_code_reviewer_t3_r5.json"), JSON.stringify({ task: "sage_code_reviewer_t3_r5", text: "Run R5 · task T3 (code-reviewer)\n\nGOAL        Review the limits change.\n" }));
+  const qa = read(w, "T3", "brief", "R6");
+  assert.match(qa.text, /GOAL Check the limits change as a user would\./);
+  assert.match(qa.text, /ACCEPTANCE PASS or FAIL, with evidence\./);
+  assert.match(qa.text, /briefs\/sage_qa_t3_r6\.json in the logbook/);
+  assert.match(read(w, "T3", "brief", "R5").text, /GOAL Review the limits change\./, "a role with a dash has an underscore in the file name");
+  writeFileSync(join(w.logbook, "briefs", "sage_qa_t3_r6.json"), "{ not json");
+  assert.match(read(w, "T3", "brief", "R6").text, /The board cannot read this brief\. The file is not valid JSON\./);
 });
 
 test("T1064: a Markdown page has a contents list and its pictures from the task's pages folder; a recorded page that is gone says so with the logbook's record", t => {
