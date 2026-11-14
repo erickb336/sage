@@ -252,7 +252,7 @@ test("F-T995-11: an answered old breakdown gate answers once, also when the logb
   const s = oldLogbook();
   s.ok("log", "-", "a note", "--why", "the first write of this version");
   writeFileSync(join(s.dir, "decisions.tsv"), text(TABLES.decisions, rowsOf(s.dir, "decisions").filter((d) => d.why !== RENAME_WHY)));
-  assert.match(s.no("gate", "answer", "G140", "--option", "3"), /G140 is a breakdown gate, and the owner answered it already \(approve\): a breakdown gate answers once/);
+  assert.match(s.no("gate", "answer", "G140", "--option", "3"), /G140 has the answer "approve" already, .*G140 is a breakdown gate, and a breakdown gate answers once/);
   assert.equal(rowsOf(s.dir, "gates").find((g) => g.id === "G140").answer, "approve");
 });
 

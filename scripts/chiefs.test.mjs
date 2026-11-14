@@ -302,7 +302,8 @@ for (const [name, own, other] of pairs) {
       try { w.nobody(...args); } catch (e) { assert.doesNotMatch(e.message, /no chief|belongs to/, args.join(" ")); }
     }
     assert.match(other.sage(["gate", "answer", "G1", "--option", "1", "--project", w.project], w.env), /^G1 answered/);
-    assert.deepEqual(own.actorOptions(w.project, ["gate", "answer", "G1"], { native: "session-a" }, w.env), [], "no chief goes on a gate answer");
+    assert.deepEqual(own.actorOptions(w.project, ["gate", "answer", "G1"], { native: "session-a" }, w.env), [`--chief=${w.chief}`], "a gate answer names the chief that applies it");
+    assert.deepEqual(own.actorOptions(w.project, ["gate", "answer", "G1"], { native: "session-new" }, w.env), [], "a session that is no chief here answers as the owner");
     assert.deepEqual(own.actorOptions(w.project, ["status"], { native: "session-new" }, w.env), [], "a read makes no chief");
     assert.equal(readFileSync(join(w.dir, "chiefs.tsv"), "utf8").includes("session-new"), false);
   });
@@ -740,7 +741,7 @@ for (const [name, own, other] of pairs) {
     assert.throws(() => w.owner("task", "T1", "set", "title=x"), /^Error: T1 belongs to chief C2 \(.*\), not to C1\. Nothing changed/, "a replaced chief gets a refusal that names the new owning chief");
     assert.throws(() => w.lead("R1", "task", "T1", "set", "title=x"), /R1 is not a running lead run, so this lead writes nothing/, "the replaced chief's lead writes nothing");
     assert.match(w.intruder("task", "T1", "set", "title=x"), /^T1 framed/);
-    assert.throws(() => w.answer("G1", "--option", "2"), /a takeover gate answers once/);
+    assert.throws(() => w.answer("G1", "--option", "2"), /^Error: G1 has the answer "approve" already, from the chat at \S+: the first answer wins, so this answer is not recorded\. To change the chief, open a new takeover gate\. Nothing changed\.$/);
   });
 
   test(`F-T656-11 ${name}: a takeover gate of T618 to T656, with replace|keep, still answers: replace moves the task, and keep changes nothing`, (t) => {
@@ -804,7 +805,7 @@ for (const [name, own, other] of pairs) {
     assert.equal(w.answer("G3", "--option", "2"), "G3 answered · b", "a plain gate's line stays as it was");
     assert.equal(row(w.cells("tasks"), "T1").chief, "C1");
     assert.equal(w.cells("runs"), runs);
-    assert.throws(() => w.answer("G1", "--option", "1"), /a takeover gate answers once/, "no second answer undoes the owner's decline");
+    assert.throws(() => w.answer("G1", "--option", "1"), /^Error: G1 has the answer "decline" already, from the chat at \S+: the first answer wins/, "no second answer undoes the owner's decline");
   });
 
   test(`${name}: a takeover gate that is out of date refuses and changes nothing: a new run, or a new owning chief`, (t) => {
@@ -1068,7 +1069,11 @@ test("the Claude hook adds the session's row at its first write, names its id, a
   assert.match(w.bash("task add --title a --size small --priority P2", "s2"), /add --chief C2/, "a new session id is a new chief");
   assert.match(w.bash("task add --title a --size small --priority P2", "s1"), /add --chief C1/, "a resume keeps the id, so it is the same chief");
   assert.equal(w.bash("status"), undefined);
-  assert.equal(w.bash("gate answer G1 --option 1"), undefined);
+  assert.match(w.bash("gate answer G1 --option 1"), /add --chief C1 to this command/, "a gate answer names the chief that applies it");
+  assert.equal(w.bash("gate answer G1 --option 1 --chief C1"), undefined);
+  const rows = readFileSync(join(claude.storeDir(w.project, w.env), "chiefs.tsv"), "utf8");
+  assert.equal(w.bash("gate answer G1 --option 1", "s9"), undefined, "a session that is no chief here answers as the owner");
+  assert.equal(readFileSync(join(claude.storeDir(w.project, w.env), "chiefs.tsv"), "utf8"), rows, "and the answer makes it no chief");
   assert.equal(w.bash("logbook repair --accept-change-loss yes"), undefined, "F-T604-20: this repair is the owner's, so it names no chief");
   assert.equal(w.bash("logbook repair --accept-loss milestones"), undefined, "F-T604-23: so is this one");
   assert.equal(w.bash("projects rebuild --accept-listing yes"), undefined, "F-T617-1: and so is the rebuild of the known project list");
@@ -1112,7 +1117,7 @@ test("the Claude hook reads the shell's forms of one write, leaves a read and a 
   assert.match(w.bash('log T1 "a decision" \\\n  --why "a reason" 2>&1'), NAMED);
   assert.equal(w.bash('status "--project" .'), undefined);
   assert.equal(w.bash('task "T1"'), undefined);
-  assert.equal(w.bash('gate answer "G1" --option 1'), undefined);
+  assert.match(w.bash('gate answer "G1" --option 1'), NAMED);
   const raw = (command) => w.denied(w.send({ hook_event_name: "PreToolUse", tool_name: "Bash", tool_input: { command } }));
   assert.match(raw(`node "${TOOL}" task add --title "two words" --size small --priority P2`), NAMED, "a quoted path is the tool too");
   assert.equal(raw(`cd /tmp && node ${TOOL} task add --title "two words" --size small --priority P2`), undefined, "not one command: the state tool refuses it");

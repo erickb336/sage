@@ -1518,7 +1518,7 @@ test("a move gate whose plan no longer matches the logbooks moves nothing and sa
   assert.equal(existsSync(join(w.shared, w.folder())), false);
   assert.equal(existsSync(join(w.claudeDir, "moved.json")) || existsSync(join(w.codexDir, "moved.json")), false);
   assert.equal(existsSync(join(w.shared, "moves", `${w.folder()}.json`)), false, "no plan is saved");
-  assert.throws(() => w.claude("gate", "answer", id, "--option", "2"), /G2 is a move gate, and the owner answered it already \(move\): a move gate answers once\. To move later, run the preview again: sage move --preview\. Nothing changed\./);
+  assert.throws(() => w.claude("gate", "answer", id, "--option", "2"), /G2 has the answer "move" already, from the chat at \S+: the first answer wins, so this answer is not recorded\. To move later, run the preview again: sage move --preview\. Nothing changed\./);
   assert.throws(() => w.claude("gate", "add", "--question", "move · plan 1234abcd", "--options", "a|b", "--recommend", "a"), /a question that starts with "move · plan" is a move gate, and only sage move --plan opens one/);
   assert.throws(() => w.claude("move", "--plan", plan), new RegExp(`refused: plan ${plan} is not the plan of the logbooks now: the preview now gives plan [0-9a-f]{8}\\n  If plan ${plan} was typed by hand, check its 8 hex\\. If not, a logbook changed after the preview\\.\\nNothing changed\\. Show the owner the preview again`), "a gate opens only for the plan that the owner saw");
   const again = w.ask();
