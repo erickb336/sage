@@ -88,7 +88,31 @@ function addPullRequests(tables, records, at, hostile) {
   }
 }
 
-export function writeTasksLogbook(root, worktrees, now, { hostile = false, many = 0, edge = false, chiefCases = false, stuck = false, prs = false, waits = {}, crowd = 0, documents = false } = {}) {
+const MIN = 60_000;
+function addAgentRuns(tables, now, { atLimit, hostile, ended }) {
+  const at = minutes => new Date(Date.parse(now) - minutes * MIN).toISOString();
+  const run = (id, task, role, chief, status, started, extra = {}) => ({ id, task, role, round: "0", candidate: "", branch: "", status, tokens: "", report: "", started: at(started), ended: "", chief, model: "", ...extra });
+  tables.runs.push(
+    run("R20", "T2", "lead", "C1", "running", 73, { model: "opus" }),
+    run("R21", "T2", "implementer", "C1", "done", 70, { ended: at(32), tokens: "210000", model: "sonnet" }),
+    run("R22", "T2", "code-reviewer", "C1", "running", 12, { model: "opus" }),
+    run("R23", "T2", "security-reviewer", "C1", "running", 9, { model: "opus" }),
+    run("R24", "T2", "qa", "C1", "queued", 4),
+    run("R25", "T40", "lead", "C1", "running", 82, { model: "opus" }),
+    run("R26", "T40", "implementer", "C1", "done", 80, { ended: at(29), tokens: "288000" }),
+    run("R27", "T40", "ux-reviewer", "C1", "failed", 20, { ended: at(14), tokens: "22000" }),
+    run("R30", "T3", "lead", "C2", "running", 49, { model: "gpt-5.1-codex" }),
+    run("R31", "T11", "designer", "C2", "running", 6, { model: "gpt-5.1-codex" }),
+    run("R32", "T30", "lead", "C2", "queued", 1),
+    run("R33", "T41", "implementer", "C1", "queued", 2),
+  );
+  tables.tasks.push({ ...tables.tasks.find(task => task.id === "T40"), id: "T41", title: "Sample queued build", priority: "P2", kind: "", branch: "sage/t41-queued" });
+  for (let i = 0; i < ended; i++) tables.runs.push(run(`R${200 + i}`, "T21", "implementer", "C1", "done", 6000 + i * 30, { ended: at(5990 + i * 30) }));
+  if (hostile) tables.runs.push(run("R40", "T50", "implementer", "C2", "running", 3, { model: `<img src=x onerror="window.hacked=12">model` }));
+  return { max_agents: atLimit ? 7 + (hostile ? 1 : 0) : 20, max_leads: atLimit ? 4 : 5 };
+}
+
+export function writeTasksLogbook(root, worktrees, now, { hostile = false, many = 0, edge = false, chiefCases = false, stuck = false, prs = false, waits = {}, crowd = 0, documents = false, agents = false, atLimit = false, endedRuns = 0 } = {}) {
   const at = hours => new Date(Date.parse(now) - hours * HOUR).toISOString();
   const tables = appTables(now), dir = join(root, "sample-app-abc123");
   const chiefs = { T1: "C1", T2: "C1", T3: "C2", T4: "C1", T10: "C1", T11: "C2", T20: "C1", T21: "C1", T30: "C2" };
@@ -121,6 +145,7 @@ export function writeTasksLogbook(root, worktrees, now, { hostile = false, many 
       { id: "O6", task: "T50", kind: "artifact", source: "chief", basis: "reported", observedAt: at(1), recordedAt: at(1), data: { type: "artifact", label: `<img src=x onerror="window.hacked=6">label`, url: "https://example.com/a?b=%22%3E%3Cscript%3E" } });
   }
   if (prs) addPullRequests(tables, records, at, hostile);
+  const limits = agents ? addAgentRuns(tables, now, { atLimit, hostile, ended: endedRuns }) : null;
   if (documents) addDocumentRows(tables, at, join(worktrees, "sample-app-abc123", "pages"));
   tables.tasks = tables.tasks.map(task => task.id in waits ? { ...task, waits: waits[task.id] } : task);
   for (let i = 0; i < crowd; i++) {
@@ -138,12 +163,17 @@ export function writeTasksLogbook(root, worktrees, now, { hostile = false, many 
   for (let i = 0; tables.tasks.length < many; i++) tables.tasks.push({ ...tables.tasks[0], id: `T${1000 + i}`, title: `Sample ended task ${i}`, milestone: "", state: i % 7 ? "merged" : "abandoned", chief: i % 2 ? "C1" : "C2", priority: ["P1", "P2", "P3"][i % 3] });
   mkdirSync(dir, { recursive: true });
   for (const [name, rows] of Object.entries(tables)) {
-    const columns = [...TABLES[name], ...(["tasks", "runs"].includes(name) ? ["chief"] : [])];
+    const columns = [...TABLES[name], ...(["tasks", "runs"].includes(name) ? ["chief"] : []), ...(name === "runs" && agents ? ["admitted"] : [])];
     writeFileSync(join(dir, `${name}.tsv`), [columns.join("\t"), ...rows.map(row => columns.map(column => row[column] ?? "").join("\t"))].join("\n") + "\n");
   }
   if (prs) writeFileSync(join(root, "projects.tsv"), `logbook\tat\thow\nsample-app-abc123\t${at(100)}\tinit\n`);
   writeFileSync(join(dir, "chiefs.tsv"), `id\tprovider\tnative\tat\nC1\tclaude\tsession-a\t${at(48)}\nC2\tcodex\tsession-b\t${at(48)}\n${chiefCases ? `C3\tclaude\tsession-c\t${at(48)}\n` : ""}`);
   writeFileSync(join(dir, "observations.json"), JSON.stringify({ version: 1, records }));
+  if (limits) {
+    writeFileSync(join(dir, "config.json"), JSON.stringify(limits));
+    mkdirSync(join(dir, "live"), { recursive: true });
+    for (const [id, autopilot] of [["C1", true], ["C2", false]]) writeFileSync(join(dir, "live", `${id}.json`), JSON.stringify({ at: new Date(Date.parse(now) - MIN).toISOString().slice(0, 19) + "Z", sageMode: true, autopilot }));
+  }
   if (edge) { mkdirSync(join(dir, "live")); writeFileSync(join(dir, "live", "C1.json"), JSON.stringify({ at: at(2) })); }
   if (chiefCases) { mkdirSync(join(dir, "live"), { recursive: true }); writeFileSync(join(dir, "live", "C3.json"), JSON.stringify({ at: at(2) })); }
   mkdirSync(join(dir, "kept"), { recursive: true });

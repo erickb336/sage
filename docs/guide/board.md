@@ -140,7 +140,18 @@ The board server has a page **Agents** (`/agents`). The header of the pages has 
 
 The Releases tab shows only when a logbook has releases.
 
-The page shows every agent that runs now, in all projects, for Claude and Codex. It has one box for each project, with the project's Claude agent cap. A lead's helpers sit under it, indented.
+The page shows every agent that runs now, in all projects, for Claude and Codex. It has one box for each project, with the project's cap: for a shared project, the agent limit in its logbook's `config.json` against the running runs of every chief. A lead's helpers sit under it, indented.
+
+The new board has its own Agents page at `/app/#agents` (T1062), which only reads. The top bar of every page shows the counts against the logbook's limits, for example "Agents 7 of 20 · C1 4 · C2 3 · 2 queued" and "Leads 3 of 5".
+
+A count turns amber at its limit, and a click on it opens the page. The page shows:
+
+- each chief, Claude and Codex alike, and a stopped chief as stopped, with the open tasks that it owns;
+- each running lead with its helpers: role, run, state, model and age, with the ended helpers collapsed;
+- the chief's own runs with no lead, and its queued runs with their place in the queue;
+- a timeline with one lane for each agent.
+
+A click on a row opens its task's side panel.
 
 The projects and the rows that need a look come first. Each row gives the provider, role, run, task (with a link to its task page), model, time running, last activity and a state.
 

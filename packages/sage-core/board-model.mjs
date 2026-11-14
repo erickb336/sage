@@ -1,7 +1,7 @@
 import { createHash } from "node:crypto";
 import { basename } from "node:path";
 import { githubRepository, hookProvider } from "./board-reader.mjs";
-import { LINE, PRIORITIES, TASK_ADDED, TASK_KINDS, agentCaps, agentLimit, boardAnswer, gateDigest, proposalOf, queueOrder } from "./logbook-fields.mjs";
+import { LINE, PRIORITIES, TASK_ADDED, TASK_KINDS, agentCaps, boardAnswer, gateDigest, projectLimits, proposalOf, queueOrder } from "./logbook-fields.mjs";
 import { ENDED, MET, breakdownGate, dead, gateLines, lostWhy, milestoneName, milestoneWordOf, namedText, progressOf, progressText, releasesOf, shownGraph, shownMilestoneState, shownWaits, waitGraph, waitsOf } from "./milestone-rules.mjs";
 import { taskWord } from "./state-words.mjs";
 import { offerOf, replaceOf } from "./chiefs.mjs";
@@ -24,6 +24,7 @@ const once = fn => { let cache, at = -1; return list => { if (at !== build) [cac
 const byTask = once(list => { const index = new Map(); for (const row of list) (index.get(row.task) ?? index.set(row.task, []).get(row.task)).push(row); return index; });
 const NONE = [];
 const rows = (project, name, task) => byTask(project.tables[name] ?? NONE).get(task.id) ?? NONE;
+const queuePlaces = once(list => new Map(queueOrder(list.filter(run => /^R[1-9]\d*$/.test(run.id))).map((run, i) => [run.id, i + 1])));
 const runRecords = once(records => new Map(records.filter(record => record.kind === "run").map(record => [record.data.run, record])));
 const movesOf = once(decisions => {
   const from = new Map(), to = new Map();
@@ -87,7 +88,7 @@ const PHASE = {
 function stepLine({ task, route, cycles, required, head, judged, reasons, merge, gates, runs, ledger, rounds, autopilot }) {
   const state = PHASE[task.state] ? task.state : "abandoned", build = route.includes("build"), sha = head ? head.slice(0, 7) : null;
   const gate = gates.find(row => !row.answer && !boardAnswer(row)), answered = !gate && gates.length && (gates.at(-1).answer || boardAnswer(gates.at(-1))) ? gates.at(-1) : null;
-  const running = runs.filter(run => run.status === "running"), live = running.filter(run => !run.clock.stale), stale = running.filter(run => run.clock.stale);
+  const running = runs.filter(run => run.status === "running"), live = running.filter(run => !run.clock.stale), stale = running.filter(run => run.clock.stale), queued = runs.filter(run => run.place);
   const round = Number(task.round) || 1;
   const reviewing = task.state === "reviewing";
   const clean = cycle => cycle.steps.every(step => step.status === "done");
@@ -106,9 +107,10 @@ function stepLine({ task, route, cycles, required, head, judged, reasons, merge,
   const ago = run => { const clock = run.clock.text; return /^\d/.test(clock) ? `${clock} ago` : clock.startsWith("since ") ? `on ${clock.slice(6)}` : "at a time that is not recorded"; };
   const runText = run => run.clock.stale ? `No news from the ${AGENT_WORD[run.role] ?? run.role} (run ${run.id}) since ${run.clock.since}. The run may have stopped, so ask the chief to check it.`
     : `The ${AGENT_WORD[run.role] ?? run.role} (${run.evidence?.data.provider ? `${run.evidence.data.provider}, ` : ""}run ${run.id}) is at work. It started ${ago(run)}.`;
+  const queueText = run => `The ${AGENT_WORD[run.role] ?? run.role} (run ${run.id}) waits for an agent slot: place ${run.place} in the project's queue. It starts when a running agent ends.`;
   const heldAt = gate ? `Held at gate ${gate.id} (the question above).` : null;
   const status = who === "owner" ? "need" : failed.length ? "fail" : who === "agent" ? live.length ? "run" : stale.length ? "stale" : started ? "idle" : "wait" : who === "chief" ? "idle" : "done";
-  const agentDetail = idle => live.length ? runText(live[0]) : stale.length ? runText(stale[0]) : idle;
+  const agentDetail = idle => live.length ? runText(live[0]) : stale.length ? runText(stale[0]) : queued.length ? queueText(queued[0]) : idle;
 
   const steps = [];
   const order = s => ["plan", "build", "review", "repair", "merge"].indexOf(s);
@@ -176,6 +178,7 @@ function stepLine({ task, route, cycles, required, head, judged, reasons, merge,
     : who === "chief" ? CHIEF[state]()
     : live.length ? `${cap(actor(live))} ${new Set(live.map(run => run.role)).size > 1 ? "are" : "is"} at work on ${name}.${noHead}`
     : stale.length ? `No news from ${actor(stale)} since ${stale[0].clock.since}. The run may have stopped, so ask the chief to check it.`
+    : queued.length ? queueText(queued[0])
     : `${IDLE[state] ?? `No agent works on ${name} now.`}${noHead}`;
 
   const pending = reviewing && judged ? cycles[at].steps.find(item => item.status === "pending") : null;
@@ -245,7 +248,7 @@ function card(source, project, group, task, now, graph, landing) {
   const shared = !!project.shared, chiefs = project.chiefs ?? NONE, chiefOf = id => chiefs.find(chief => chief.id === id);
   const goneCheckouts = project.goneCheckouts ?? NONE, unchecked = project.uncheckedCheckouts ?? NONE;
   const where = checkout => shared && checkout?.startsWith("/") ? { checkoutName: checkoutLabel(project.checkouts ?? NONE, checkout), checkoutGone: unchecked.includes(checkout) ? null : goneCheckouts.includes(checkout) } : {};
-  const runs = rows(project, "runs", task).map(({ checkout, ...run }) => { const evidence = latest(records, "run", data => data.run === run.id); const chief = shared ? chiefOf(run.chief) : null; return { ...run, ...where(checkout), evidence, provider: evidence?.data.provider ?? (chief ? title(chief.provider) : null), clock: runClock(run.started, now, lastActivity) }; });
+  const runs = rows(project, "runs", task).map(({ checkout, ...run }) => { const evidence = latest(records, "run", data => data.run === run.id); const chief = shared ? chiefOf(run.chief) : null; return { ...run, ...where(checkout), evidence, provider: evidence?.data.provider ?? (chief ? title(chief.provider) : null), clock: runClock(run.started, now, lastActivity), place: queuePlaces(project.tables.runs ?? NONE).get(run.id) ?? null }; });
   const writer = runs.filter(run => WRITERS.includes(run.role) && String(run.branch ?? "").toLowerCase() === String(task.branch ?? "").toLowerCase() && /^R[1-9]\d*$/.test(run.id)).sort((a, b) => Number(a.id.slice(1)) - Number(b.id.slice(1))).at(-1);
   const agents = runs.filter(run => run.status === "running").map(run => ({ id: run.id, role: run.role, provider: run.provider, evidence: run.evidence, recordedStatus: run.status, stale: run.clock.stale }));
   const label = id => chiefOf(id) ? `${title(chiefOf(id).provider)} · ${id}` : id;
@@ -533,31 +536,32 @@ function agentsOf(sources, groups, groupOf, cards, at) {
   const order = agent => AGENT_STATES.indexOf(agent.state);
   const sort = list => list.sort((a, b) => order(a) - order(b) || (b.running ?? 0) - (a.running ?? 0));
   for (const agent of rows) sort(agent.children);
-  const byGroup = new Map();
+  const byGroup = new Map(), limits = limitsOf(sources, groups);
   for (const agent of rows) byGroup.set(agent.group, [...(byGroup.get(agent.group) ?? []), agent]);
   const projects = [...byGroup.entries()].map(([key, list]) => {
     const name = list[0].groupName, group = groups.find(item => item.key === key);
     const hooked = caps.find(entry => list.some(agent => agent.source === entry.source && agent.how !== "logbook"));
-    const cap = hooked ? { label: hooked.label, ...hooked.of(group ? bare(group.books[0].project.name) : key.slice(5)) } : null;
+    const book = limits.find(item => item.group === key && item.shared);
+    const cap = book ? { label: "Project", used: book.running, cap: book.limit } : hooked ? { label: hooked.label, ...hooked.of(group ? bare(group.books[0].project.name) : key.slice(5)) } : null;
     return { key, name, sub: group?.sub ?? "", pathSub: group?.pathSub ?? null, agents: sort(list.filter(agent => !agent.lead)), count: list.length, look: list.filter(agent => LOOK.includes(agent.state)).length, worst: Math.min(...list.map(order)), cap };
   }).sort((a, b) => a.worst - b.worst || b.count - a.count || a.name.localeCompare(b.name));
   const providers = [...new Set(rows.map(agent => title(agent.provider.toLowerCase())))].map(name => ({ name, count: rows.filter(agent => title(agent.provider.toLowerCase()) === name).length }));
-  return { count: rows.length, queues: queuesOf(sources, groups), look: rows.filter(agent => LOOK.includes(agent.state)).length, providers, projects,
+  return { count: rows.length, limits, queues: limits.filter(queue => queue.running || queue.queued.length), look: rows.filter(agent => LOOK.includes(agent.state)).length, providers, projects,
     caps: caps.map(entry => ({ label: entry.label, total: entry.total, projects: projects.filter(project => project.cap?.label === entry.label).map(project => ({ name: project.name, used: project.cap.used, cap: project.cap.cap })) })),
     problems, unmatched: rows.filter(agent => agent.how === "noslot").map(agent => ({ run: agent.runId, project: agent.groupName })), next: Number.isFinite(next) ? next : null,
     rules: { quiet: AGENT_QUIET_MS / 60_000, factor: LONG_FACTOR, basis: LONG_BASIS } };
 }
 
-function queuesOf(sources, groups) {
+function limitsOf(sources, groups) {
   const roots = sources.filter(source => !source.shared).map(source => source.config);
   return groups.flatMap(group => group.books.filter(({ project }) => !project.old).map(({ source, project }) => {
     const runs = project.tables.runs ?? [], running = runs.filter(run => run.status === "running").length;
+    const leads = runs.filter(run => run.role === "lead" && ["running", "queued"].includes(run.status)).length;
     const chiefOf = run => (project.chiefs ?? NONE).find(chief => chief.id === run.chief);
     const queued = queueOrder(runs.filter(run => /^R[1-9]\d*$/.test(run.id))).map((run, i) => ({ run: run.id, task: run.task, role: run.role, chief: run.chief || null, chiefProvider: chiefOf(run)?.provider ?? null, place: i + 1, since: run.started || null }));
-    const names = [project.name.replace(/-[0-9a-f]{6}$/, "")];
-    const limit = project.shared ? agentLimit({ max_agents: project.limit }, roots, names) : agentLimit({}, [source.config], names);
-    return { key: project.key, group: group.key, running, limit, queued, text: `${running} of ${limit} agents${queued.length ? ` · ${queued.length} queued` : ""}` };
-  })).filter(queue => queue.running || queue.queued.length);
+    const limits = project.shared ? projectLimits(project.limits, roots, project.capNames ?? [project.name.replace(/-[0-9a-f]{6}$/, "")]) : projectLimits({}, [source.config], [project.name.replace(/-[0-9a-f]{6}$/, "")]);
+    return { key: project.key, group: group.key, shared: !!project.shared, running, limit: limits.max_agents, leads, leadLimit: limits.max_leads, queued, text: `${running} of ${limits.max_agents} agents${queued.length ? ` · ${queued.length} queued` : ""}` };
+  }));
 }
 
 function milestoneOrder(milestone, own) {

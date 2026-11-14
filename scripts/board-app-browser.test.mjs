@@ -55,10 +55,11 @@ test("T1054: the Overview answers J1 and J2 with no click, from the logbook, and
   assert.deepEqual(await texts(page.locator(".ms .of")), ["0 of 2 merged", "1 of 4 merged", "2 of 2 merged"]);
   assert.deepEqual(await texts(page.locator(".kpi .n")), ["1", "1", "–"]);
   assert.equal(await page.locator(".counts h2").textContent(), "In the last 24 hours");
-  await page.getByRole("link", { name: "Agents" }).click();
-  await page.getByText("This page comes next").waitFor();
-  assert.equal(await page.locator(".needs").count(), 0, "a page that comes next shows no data");
-  assert.equal(await page.getByRole("link", { name: "classic board" }).getAttribute("href"), "/agents");
+  assert.equal(await page.locator("header.top a.limit").first().textContent(), "Agents 1 of 10 · no chief 1", "a logbook with no limit in its config has the default limit");
+  await page.getByRole("navigation", { name: "Pages" }).getByRole("link", { name: /^Agents/ }).click();
+  await page.locator("main h1", { hasText: "Agents" }).waitFor();
+  assert.deepEqual(await texts(page.locator(".chief-box h2")), ["No chief recorded"], "a logbook with no chief records shows its runs all the same");
+  assert.equal(await page.locator(".needs").count(), 0, "the Agents page shows no questions");
   await page.getByRole("link", { name: /^Overview/ }).click();
   await page.getByRole("heading", { name: "Milestones" }).waitFor();
   assert.ok(requests.length >= 4);
@@ -103,14 +104,14 @@ test("T1054: text and controls meet AA contrast in the dark and the light theme,
 test("T1054: the keyboard reaches each page link and the theme switch in order, with a visible focus ring", async t => {
   const { page } = await open(t);
   const reached = [];
-  for (let i = 0; i < 5; i++) {
+  for (let i = 0; i < 7; i++) {
     await page.keyboard.press("Tab");
     reached.push(await page.evaluate(() => {
       const element = document.activeElement, style = getComputedStyle(element);
       return { name: element.getAttribute("aria-label") ?? element.textContent.trim(), ring: `${style.outlineStyle} ${style.outlineWidth}` };
     }));
   }
-  assert.deepEqual(reached.map(item => item.name), ["Overview2", "Tasks6", "Agents", "Pull requests1", "Switch to the light theme"]);
+  assert.deepEqual(reached.map(item => item.name), ["Overview2", "Tasks6", "Agents1", "Pull requests1", "Agents 1 of 10 · no chief 1", "Leads 0 of 5", "Switch to the light theme"]);
   for (const item of reached) assert.equal(item.ring, "solid 2px", item.name);
   await page.keyboard.press("Enter");
   assert.equal(await page.evaluate(() => document.documentElement.dataset.theme), "light", "Enter on the theme switch flips it");

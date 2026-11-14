@@ -63,7 +63,7 @@ export function parseReaderUrl(url) {
   if ((kind === "brief" || kind === "report") && !RUN.test(arg ?? "") || kind === "question" && !GATE.test(arg ?? "") || ["design", "arena"].includes(kind) && arg !== null) return null;
   if (kind === "page" && !(/^[\w./-]+$/.test(arg ?? "") && /\.md$/.test(arg) && pageType(arg))) return null;
   const params = new URLSearchParams(query), pick = (name, test) => test.test(params.get(name) ?? "") ? params.get(name) : null;
-  return { key, kind, arg, theme: pick("theme", /^light$/) ?? "dark", back: pick("back", /^(?:pull-requests|q-G[1-9]\d*)$/) ?? "tasks",
+  return { key, kind, arg, theme: pick("theme", /^light$/) ?? "dark", back: pick("back", /^(?:pull-requests|agents|q-G[1-9]\d*)$/) ?? "tasks",
     open: pick("open", /^(?:all|none)$/), view: pick("view", /^compare$/) ?? "today", v: pick("v", NAME), a: pick("a", NAME), b: pick("b", NAME) };
 }
 
@@ -158,7 +158,7 @@ export function readerPolicy(origin, logbook, taskId) {
   return `sandbox allow-same-origin; default-src 'none'; script-src 'none'; style-src ${STYLE_HASH}; img-src ${pictures}; base-uri 'none'; form-action 'none'; frame-ancestors 'none'`;
 }
 
-const BACK = { tasks: "#tasks?task=", "pull-requests": "#pull-requests?task=" };
+const BACK = { tasks: "#tasks?task=", "pull-requests": "#pull-requests?task=", agents: "#agents?task=" };
 
 function frame(view, { project, title, crumb, back, file, state }) {
   const flip = { ...view, theme: view.theme === "light" ? "dark" : "light" };

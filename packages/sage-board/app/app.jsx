@@ -1,5 +1,6 @@
 import { useEffect, useState } from "react";
 import { ChiefChips, QuestionView } from "./actions.jsx";
+import { Agents, LimitCounts } from "./agents.jsx";
 import { AgentsIcon, AlertIcon, LeafIcon, MoonIcon, OverviewIcon, PullsIcon, SunIcon, TasksIcon } from "./icons.jsx";
 import { Overview } from "./overview.jsx";
 import { Pulls } from "./pulls.jsx";
@@ -10,7 +11,7 @@ const THEME_KEY = "board-theme";
 const PAGES = [
   { hash: "", name: "Overview", Icon: OverviewIcon },
   { hash: "tasks", name: "Tasks", Icon: TasksIcon },
-  { hash: "agents", name: "Agents", Icon: AgentsIcon, classic: "/agents", what: "each running agent, for each chief, against the limit" },
+  { hash: "agents", name: "Agents", Icon: AgentsIcon },
   { hash: "pull-requests", name: "Pull requests", Icon: PullsIcon },
 ];
 const QUESTION = { hash: "question", name: "Question", hidden: true };
@@ -78,15 +79,6 @@ function NoData({ link }) {
   );
 }
 
-function ComesNext({ page }) {
-  return (
-    <div className="next">
-      <div className="page-h"><h1>{page.name}</h1></div>
-      <p>This page comes next: it will show {page.what}. Until then, the <a href={page.classic}>classic board</a> shows it.</p>
-    </div>
-  );
-}
-
 function useChiefFilter() {
   const [filter, setFilter] = useState(() => { try { return sessionStorage.getItem(FILTER_KEY); } catch { return null; } });
   const set = value => { setFilter(value); try { value ? sessionStorage.setItem(FILTER_KEY, value) : sessionStorage.removeItem(FILTER_KEY); } catch {} };
@@ -105,8 +97,10 @@ export function App() {
   const next = theme === "dark" ? "light" : "dark";
   const open = model ? model.tasks.filter(task => !task.ended).length : 0;
   const prs = model ? model.tasks.filter(task => task.pr && !task.ended).length : 0;
+  const running = model ? model.agents.reduce((n, book) => n + book.running, 0) : 0;
   const body = page.hash === "" ? <Overview model={model} shown={shown} /> : page.hash === "tasks" ? <Tasks model={model} params={page.params} chief={picked} />
     : page.hash === "pull-requests" ? <Pulls model={model} params={page.params} chief={picked} />
+    : page.hash === "agents" ? <Agents model={model} params={page.params} chief={picked} />
     : page.hash === "question" ? <QuestionView needKey={page.params.get("key") ?? ""} model={model} theme={theme} /> : null;
   return (
     <div className="app">
@@ -121,6 +115,7 @@ export function App() {
                   {!item.hash && model && model.needs.length > 0 && <span className="count need" aria-label={`${model.needs.length} need you`}>{model.needs.length}</span>}
                   {item.hash === "tasks" && model && <span className="count" aria-label={`${open} open`}>{open}</span>}
                   {item.hash === "pull-requests" && model && <span className="count" aria-label={`${prs} open`}>{prs}</span>}
+                  {item.hash === "agents" && model && <span className="count" aria-label={`${running} running`}>{running}</span>}
                 </a>
               </li>
             ))}
@@ -132,6 +127,7 @@ export function App() {
         <header className="top">
           <span className="crumb">{crumb}<span aria-hidden="true">/</span><b>{page.name}</b></span>
           <span className="grow" />
+          {model && <LimitCounts agents={model.agents} />}
           <Status model={model} link={link} receivedAt={receivedAt} />
           <button type="button" className="theme" onClick={flip} aria-label={`Switch to the ${next} theme`} title={`Switch to the ${next} theme`}>
             {theme === "dark" ? <SunIcon /> : <MoonIcon />}
@@ -139,9 +135,7 @@ export function App() {
         </header>
         {model && <ChiefChips chiefs={model.chiefs} filter={filter} setFilter={setFilter} many={model.projects.length > 1} />}
         <main className="main">
-          {!body ? <ComesNext page={page} /> : model
-            ? <><Banner model={model} link={link} receivedAt={receivedAt} />{body}</>
-            : <NoData link={link} />}
+          {model ? <><Banner model={model} link={link} receivedAt={receivedAt} />{body}</> : <NoData link={link} />}
         </main>
       </div>
     </div>

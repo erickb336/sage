@@ -2,7 +2,7 @@ import { closeSync, constants, fstatSync, lstatSync, openSync, readSync, readdir
 import { basename, dirname, isAbsolute, join, resolve } from "node:path";
 import { createHash } from "node:crypto";
 import { validateObservations } from "./observations.mjs";
-import { logbookSettings } from "./logbook-fields.mjs";
+import { capNames, logbookSettings } from "./logbook-fields.mjs";
 import { MILESTONE_ID, TASK_ID, checkMilestones, renameRows } from "./milestone-rules.mjs";
 import { BINDING_COLUMNS, bindingRow, checkoutGone, githubRemote, linkedRows, ownerOf, plainName } from "./shared-root.mjs";
 import { chiefsWhole } from "./chiefs.mjs";
@@ -99,7 +99,7 @@ export function logbookIdentity(directory, budget = null, into = { diagnostics: 
     const settings = logbookSettings(parseJson(regular(join(directory, "config.json"), budget)));
     if (settings.name !== null) found.displayName = settings.name;
     found.archived = settings.archived;
-    if (settings.limit !== null) found.limit = settings.limit;
+    found.limits = settings.limits;
     into.warnings.push(...settings.warnings);
   } catch (error) { if (error.code !== "ENOENT") into.warnings.push(`config: ${error.code ?? error.message}`); }
   if (found.checkout === undefined) delete found.checkout;
@@ -326,7 +326,7 @@ export function readBoardSources(sources, { now = Date.now(), logbookKey = null,
         const owner = shared ? ownerOf(bindings.rows, entry.name) : undefined;
         const project = consistentRead(directory, base, budget, { now, bound: shared ? owner?.root ?? null : undefined, duringRead });
         if (bindings?.problem) project.diagnostics.push(bindings.problem);
-        if (shared) Object.assign(project, linkedCheckouts(bindings.rows, entry.name));
+        if (shared) Object.assign(project, linkedCheckouts(bindings.rows, entry.name), { capNames: capNames(entry.name, bindings.rows) });
         result.projects.push(project);
         if (!shared) continue;
         project.notes = [];
