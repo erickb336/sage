@@ -392,8 +392,9 @@ test("T931: a sage child, and every child in sage mode, runs no git stash and no
   assert.match(denied(await fixed({ sage: true }).run(pre("Bash", "git stash 'pop", sageChild))) ?? "", /^sage: the hook cannot read this command .*Its text names git stash\. An agent never runs git stash/);
 });
 
-test("T931, T1059: the board config rule and the pairing rule hold every thread in every mode, for a shell command and a patch", async (t) => {
+test("T931, T1059, T1079: the board config rule and the pairing rule hold every thread in every mode, for a shell command and a patch; the port rule holds every agent", async (t) => {
   const CONFIG = "sage: the board config rule (T229): no agent reads, copies or replaces the board config (~/.config/sage-board/board.json), or lists, searches, copies or moves the board's folder or a folder that holds it, because only the owner and the board command change the board's state. The board command's own output (board --ensure, the chat board) says what you need. The rule covers the board's state folder (~/.config/sage-board/state) too, because it holds the browser pairing (T1059)";
+  const MOVE = "sage: the board port rule (T1079): no agent runs board --port. It moves the owner's board to another port: it stops the board, changes the board config and starts the board again. The owner runs it in Terminal, or asks the chief to run it; give the owner the command, and do not run it";
   const PAIR = "sage: the board pairing rule (T1059): no agent runs board --pair. It pairs the owner's browser with the board, so that the browser can answer questions and rename chiefs, and it prints a one-time code for the owner's eyes only. The owner runs it in Terminal; give the owner the command, and do not run it";
   const child = { ...CHILD, transcript_path: record(t, { id: "child", session_id: base.session_id, agent_path: "/root/sage_implementer_t1_r1", source: { subagent: { thread_spawn: { depth: 1 } } } }) };
   for (const sage of [true, false]) for (const extra of [{}, child]) {
@@ -411,6 +412,11 @@ test("T931, T1059: the board config rule and the pairing rule hold every thread 
     }
     for (const command of ["node /opt/sage/board/cli.mjs board --set-password", "node /opt/sage/board/cli.mjs board --ensure --config ~/.config/sage-board/board.json", "ls packages/sage-board", "grep -n pair packages/sage-board/cli.mjs"]) {
       assert.equal(await g.run(pre("Bash", command, extra)), undefined, `${who}: ${command}`);
+    }
+    for (const command of ["node /opt/sage/board/cli.mjs board --port 43124", "npm run board -- --port 43124 --config /tmp/x/board.json"]) {
+      const out = await g.run(pre("Bash", command, extra));
+      if (extra.agent_id) assert.equal(denied(out), MOVE, `${who}: ${command}`);
+      else assert.equal(out, undefined, `${who}: ${command}`);
     }
   }
 });

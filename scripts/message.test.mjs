@@ -612,7 +612,7 @@ test("the message command prints the text, writes the page of a pictured message
 });
 
 test("the message command resolves a Page block in a task's pages folder, and refuses a page that is not there, a path, and a wrong shape", () => {
-  const { sage, file } = sandbox();
+  const { base, sage, file } = sandbox();
   const question = fixture("02-question.json");
   assert.match(sage("message", "T1", "--file", file("q.json", question)).out, /the page block "Showing visuals in every app" names .*\/pages\/T1000\/research\.html, and it does not exist\. Save the page there first\. Nothing written\./);
   const folder = sage("pages", "T1").out;
@@ -626,6 +626,13 @@ test("the message command resolves a Page block in a task's pages folder, and re
   const logbook = basename(dirname(dirname(folder)));
   assert.ok(ok.out.endsWith(`Page · Showing visuals in every app\n  http://127.0.0.1:43123/pages/${logbook}/T1/research.html\n  ${join(folder, "research.html")}`), ok.out);
   assert.deepEqual(textProblems(ok.out), [], "the link line is part of the Page block, not the message's own words");
+  const boardFolder = join(base, "home", ".config", "sage-board");
+  mkdirSync(boardFolder, { recursive: true });
+  writeFileSync(join(boardFolder, "board.port"), "43999\n");
+  const moved = sage("message", "T1", "--file", file("q.json", local));
+  assert.ok(moved.out.endsWith(`\n  http://127.0.0.1:43999/pages/${logbook}/T1/research.html\n  ${join(folder, "research.html")}`), `T1079: the link names the port of the board that started last: ${moved.out}`);
+  writeFileSync(join(boardFolder, "board.port"), "80\n");
+  assert.ok(sage("message", "T1", "--file", file("q.json", local)).out.includes("\n  http://127.0.0.1:43123/pages/"), "T1079: a port out of 1024 to 65535 gives the default port");
   for (const page of [{ task: "T1", file: "../T2/x.html" }, { task: "T1", file: "/etc/passwd" }, { task: "../T1", file: "x.html" }, { path: "/etc/passwd" },
     { task: "T1", file: ".research.html" }, { task: "T1", file: "a/.b/x.html" }, { task: "T1", file: "state.json" }, { task: "T1", file: "run.log" }, { task: "T1", file: "a/b/c/x.html" },
     { task: "T1", file: "v1..v2.html" }, { task: "T1", file: "notes..md" }, { task: "T1", file: "a..b/x.html" }])

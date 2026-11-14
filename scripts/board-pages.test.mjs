@@ -12,7 +12,7 @@ import { fileURLToPath } from "node:url";
 import { createBoardServer } from "../packages/sage-board/server.mjs";
 import { SWITCH_SCRIPT } from "../packages/sage-core/message-page.mjs";
 import { renderMessage } from "../packages/sage-core/message-checks.mjs";
-import { pageUrl } from "../packages/sage-core/message.mjs";
+import { pagePath } from "../packages/sage-core/message.mjs";
 
 const HERE = dirname(fileURLToPath(import.meta.url));
 const TOOL = join(HERE, "..", "plugins", "sage", "skills", "sage", "sage.mjs");
@@ -289,14 +289,14 @@ test("a page whose folder flips between a link and a folder while the board chec
   assert.equal((await get(f, `/pages/${LOGBOOK}/T1/flip/notes.md`)).body, "decoy", "a real folder in the path");
 });
 
-test("T1010: a task page links the task's pages index with core's URL, and only when the route serves the task's folder", async (t) => {
+test("T1010, T1079: a task page links the task's pages index on the board's own address, and only when the route serves the task's folder", async (t) => {
   const f = await fixture(t);
   const taskPage = (id, options) => get(f, `/task/${Buffer.from(`sample/${LOGBOOK}/${id}`).toString("base64url")}`, options);
   const pagesHref = (body) => [...body.matchAll(/<a href="([^"]+)"[^>]*>Pages<\/a>/g)].map((m) => m[1]);
   const mac = await taskPage("T1");
   assert.equal(mac.status, 200);
-  assert.deepEqual(pagesHref(mac.body), [pageUrl(LOGBOOK, "T1", "")]);
-  const index = await get(f, new URL(pageUrl(LOGBOOK, "T1", "")).pathname);
+  assert.deepEqual(pagesHref(mac.body), [`/pages/${LOGBOOK}/T1/`], "T1079: a path on the board's own address, so the link follows the board to any port");
+  const index = await get(f, pagePath(LOGBOOK, "T1", ""));
   assert.equal(index.status, 200);
   assert.match(index.body, /<h1>Pages of T1<\/h1>/);
   for (const options of [{ headers: { "X-Forwarded-For": "203.0.113.9" } }, { raw: { Host: "board.example.test" } }]) {
@@ -308,7 +308,7 @@ test("T1010: a task page links the task's pages index with core's URL, and only 
     const r = await taskPage(id);
     assert.equal(r.status, 200, id);
     assert.deepEqual(pagesHref(r.body), [], id);
-    assert.equal((await get(f, new URL(pageUrl(LOGBOOK, id, "")).pathname)).status, 404, `${id}: the route serves no index either`);
+    assert.equal((await get(f, pagePath(LOGBOOK, id, ""))).status, 404, `${id}: the route serves no index either`);
   }
 });
 

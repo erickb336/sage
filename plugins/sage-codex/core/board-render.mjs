@@ -2,7 +2,7 @@ import { LINE, PRIORITIES, TASK_KINDS, proposalOf } from "./logbook-fields.mjs";
 import { ENDED, lostClause, lostWhy, MILESTONE_ID, milestoneName } from "./milestone-rules.mjs";
 import { releaseWord, taskWord } from "./state-words.mjs";
 import { box, columns } from "./picture.mjs";
-import { pageUrl } from "./message.mjs";
+import { pagePath } from "./message.mjs";
 import { pageTaskFolder } from "./page-files.mjs";
 const esc = value => String(value ?? "").replace(/[&<>"']/g, c => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]));
 const md = value => String(value ?? "").replace(/[\x00-\x1f\x7f-\x9f\u2028\u2029]/g, " ").replace(/\p{Cf}/gu, "").replace(/[\\`*_{}\[\]()<>#+.!|&~:@]/g, c => String.fromCharCode(92) + c);
@@ -214,7 +214,7 @@ const milestoneLink = (ctx, task) => {
 
 function pagesLink(task) {
   const logbook = task.project.slice(task.project.indexOf("/") + 1);
-  return pageTaskFolder(logbook, task.id) ? ` · <a href="${esc(pageUrl(logbook, task.id, ""))}" title="The pages of ${esc(task.id)}, on this Mac">Pages</a>` : "";
+  return pageTaskFolder(logbook, task.id) ? ` · <a href="${esc(pagePath(logbook, task.id, ""))}" title="The pages of ${esc(task.id)}, on this Mac">Pages</a>` : "";
 }
 
 function page(ctx, task, { routed = false, mac = false } = {}) {

@@ -3095,6 +3095,24 @@ test("T229, T1059: the board config rule refuses the ordinary shapes, the board'
   for (const name of ["Read", "Grep", "Glob", "Write", "Edit", "MultiEdit", "NotebookEdit", "Bash"]) assert.match(name, new RegExp(`^(?:${matcher})$`), `Claude Code sends ${name} to the hook`);
 });
 
+test("T1079: the board port rule refuses board --port from an agent, and lets the chief and a session outside sage mode run it", async () => {
+  const { handle } = await import("../plugins/sage/hooks/sage-hook.mjs");
+  const slots = { bind() {}, release() {}, drop() {}, touch() {}, reconcile() {} };
+  const BOARD = fileURLToPath(new URL("../plugins/sage/board/cli.mjs", import.meta.url));
+  const MOVE = "the board port rule (T1079): no agent runs board --port. It moves the owner's board to another port: it stops the board, changes the board config and starts the board again. The owner runs it in Terminal, or asks the chief to run it; give the owner the command, and do not run it.";
+  const moves = [`node ${BOARD} board --port 43124`, `node ${BOARD} board --port 43124 --config /tmp/x/board.json`, "npm run board -- --port 43124", `cd /tmp && node ${BOARD} board --port=43124`];
+  const others = [`node ${BOARD} board --ensure --port 43124`, `node ${BOARD} board --setup --port 43124 --config /tmp/x/board.json`, `node ${BOARD} board --stop`, "grep -n -- --port packages/sage-board/cli.mjs"];
+  const agent = { agent_id: "a1", agent_type: "sage:implementer" };
+  for (const command of moves) {
+    assert.equal(denied(handle(bash(command, FEATURE, agent), { sage: true }, slots)), `sage: ${MOVE}`, `an agent: ${command}`);
+    assert.equal(denied(handle(bash(command, FEATURE, agent), { sage: false }, slots)), `sage: ${MOVE}`, `an agent outside sage mode: ${command}`);
+    for (const [who, state] of [["the chief", { sage: true, given: true }], ["a session outside sage mode", { sage: false }]]) {
+      assert.doesNotMatch(denied(handle(bash(command, FEATURE), state, slots)) ?? "", /board port rule/, `${who}: ${command}`);
+    }
+  }
+  for (const command of others) assert.doesNotMatch(denied(handle(bash(command, FEATURE, agent), { sage: true }, slots)) ?? "", /board port rule/, `an agent: ${command}`);
+});
+
 test("F-T229-17: the board rule is fast on a word of many variable and ? pieces", async () => {
   const s = session();
   const home = join(s.dir, "fake-home");
