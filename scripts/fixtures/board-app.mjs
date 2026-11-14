@@ -88,7 +88,7 @@ function addPullRequests(tables, records, at, hostile) {
   }
 }
 
-export function writeTasksLogbook(root, worktrees, now, { hostile = false, many = 0, edge = false, chiefCases = false, stuck = false, prs = false, waits = {}, crowd = 0 } = {}) {
+export function writeTasksLogbook(root, worktrees, now, { hostile = false, many = 0, edge = false, chiefCases = false, stuck = false, prs = false, waits = {}, crowd = 0, documents = false } = {}) {
   const at = hours => new Date(Date.parse(now) - hours * HOUR).toISOString();
   const tables = appTables(now), dir = join(root, "sample-app-abc123");
   const chiefs = { T1: "C1", T2: "C1", T3: "C2", T4: "C1", T10: "C1", T11: "C2", T20: "C1", T21: "C1", T30: "C2" };
@@ -121,6 +121,7 @@ export function writeTasksLogbook(root, worktrees, now, { hostile = false, many 
       { id: "O6", task: "T50", kind: "artifact", source: "chief", basis: "reported", observedAt: at(1), recordedAt: at(1), data: { type: "artifact", label: `<img src=x onerror="window.hacked=6">label`, url: "https://example.com/a?b=%22%3E%3Cscript%3E" } });
   }
   if (prs) addPullRequests(tables, records, at, hostile);
+  if (documents) addDocumentRows(tables, at, join(worktrees, "sample-app-abc123", "pages"));
   tables.tasks = tables.tasks.map(task => task.id in waits ? { ...task, waits: waits[task.id] } : task);
   for (let i = 0; i < crowd; i++) {
     const id = `T${80 + i}`;
@@ -156,5 +157,104 @@ export function writeTasksLogbook(root, worktrees, now, { hostile = false, many 
   mkdirSync(pages, { recursive: true });
   writeFileSync(join(pages, "limits-design.html"), "<!doctype html><title>Limits</title><p>Sample page.</p>\n");
   writeFileSync(join(pages, "notes.md"), "# Notes\n\nSample notes.\n");
+  if (documents) writeDocumentFiles(dir, join(worktrees, "sample-app-abc123", "pages"), at, hostile);
   return dir;
+}
+
+const sketch = (title, rows, accent) => `<svg xmlns="http://www.w3.org/2000/svg" width="360" height="240" viewBox="0 0 360 240"><rect width="360" height="240" rx="14" fill="#17171b"/><rect x="20" y="18" width="150" height="14" rx="7" fill="#3a3a44"/><text x="20" y="62" fill="#ededf0" font-family="sans-serif" font-size="15">${title}</text>${rows.map((row, i) => `<rect x="20" y="${80 + i * 34}" width="320" height="26" rx="6" fill="#222228"/><text x="32" y="${98 + i * 34}" fill="#a3a3ad" font-family="sans-serif" font-size="12">${row}</text>`).join("")}<rect x="250" y="200" width="90" height="26" rx="8" fill="${accent}"/></svg>\n`;
+export const DOCUMENT_PAGE = "retry-design.md";
+export const HOSTILE_MARKDOWN = ["# Hostile sample", "", "<script>window.hacked=1</script>", "", "<img src=x onerror=\"window.hacked=2\">", "",
+  "[run it](javascript:window.hacked=3) [up](../../../../etc/passwd) [to the api](/api/answer) [other host](//evil.invalid/x) [data](data:text/html,<b>x</b>)", "",
+  "![outside](https://evil.invalid/x.png) ![traversal](../T10/designs/A/screen.svg) ![data picture](data:image/svg+xml;base64,PHN2Zz48L3N2Zz4=)", "",
+  "Right-to-left: abc\u202edcba and isolate \u2066x\u2069 end.", "", "<form action=\"/api/answer\" method=\"post\"><button>go</button></form>", "", "<iframe src=\"/app/\"></iframe>", "",
+  "[a safe page](notes.md) and [a safe site](https://example.com/docs).", ""].join("\n");
+
+function addDocumentRows(tables, at, pagesRoot) {
+  tables.runs = tables.runs.map(run => ({ ...run, model: run.id === "R5" ? "opus" : run.id === "R7" ? "sonnet" : "" }));
+  tables.runs.push({ id: "R8", task: "T10", role: "designer", round: "0", status: "done", started: at(30), ended: at(29), chief: "C1", model: "opus" },
+    { id: "R9", task: "T10", role: "arena-judge", round: "0", status: "done", started: at(26), ended: at(25), chief: "C1", model: "opus" });
+  tables.runs.push({ id: "R4", task: "T3", role: "code-reviewer", round: "0", status: "done", started: at(3), ended: at(2.5), chief: "C2" });
+  tables.findings.push({ task: "T3", key: "F1", round: "0", source: "code-reviewer", severity: "medium", summary: "An older finding of R4 with the key F1.", triage: "fix", reason: "", status: "closed", run: "R4", class: "other" },
+    { task: "T3", key: "F-T3-1", round: "0", source: "code-reviewer", severity: "medium", summary: "revoked-limit-applies-10-min", triage: "fix", reason: "", status: "open", run: "R5", class: "state-edge" },
+    { task: "T3", key: "F-T3-2", round: "0", source: "code-reviewer", severity: "low", summary: "limit-field-no-label", triage: "follow-up", reason: "", status: "follow-up", run: "R5", class: "copy" });
+  tables.decisions.push({ at: at(7), task: "T3", decision: `page ${pagesRoot}/T3/gone-plan.md sha256 ${"ab".repeat(32)}`, why: "the chief recorded a page" },
+    { at: at(6.5), task: "T3", decision: `page ${pagesRoot}/T3/notes.md sha256 ${"cd".repeat(32)}`, why: "the chief recorded a page" });
+  tables.gates.push({ id: "G7", task: "T10", question: "Which design for the share sheet?", options: "v2|v1", recommendation: "v2", default: "", answer: "v2", at: at(28) },
+    { id: "G12", task: "T10", question: "Base the unsynced count on candidate A or B?", options: "A|B", recommendation: "A", default: "", answer: "A", at: at(24) });
+}
+
+function writeDocumentFiles(dir, pagesRoot, at, hostile) {
+  const hostileLine = hostile ? "\n- Hostile text: <script>window.hacked=11</script> \u202eevil\n" : "";
+  mkdirSync(join(dir, "reports"), { recursive: true });
+  mkdirSync(join(dir, "gates"), { recursive: true });
+  writeFileSync(join(dir, "briefs", "R7.md"), `Run R7 · task T3 (implementer)
+
+GOAL        Keep one agent limit for both providers, so that a Codex chief and a Claude chief share it.
+
+SCOPE       Task T3 only. Branch sage/t3-limits, in your own worktree.
+            - Change the limit reader.
+            - Keep the old keys readable.
+
+CONTEXT     The limits are read from each provider root today.${hostileLine}
+
+DECISIONS   Owner, gate G6: one limit for both providers.
+
+ACCEPTANCE  - The board shows one limit.
+            - npm run check passes.
+            - The two changed test files pass, each run alone.
+
+VERIFY      npm run build, npm run check and the changed test files.
+
+BUDGET      45 minutes of agent time and 200 k tokens.
+
+FORBIDDEN   No merge, no force-push, no push to main.
+
+REPORT      The report of the sage:report skill.
+
+STANDING    Read the standing orders first.
+`);
+  writeFileSync(join(dir, "reports", "R5.md"), `STATUS        done
+RESULT        FINDINGS · 1 medium, 1 low
+              The limit change works and its tests pass. One medium finding blocks the cycle.${hostile ? " <img src=x onerror=window.hacked=12>" : ""}
+EVIDENCE      - npm test -- scripts/limits.test.mjs: 14 pass
+              - npm run check: pass
+FINDINGS
+- F1 medium A revoked limit still applies for 10 minutes.
+    src/limits.js:42
+    proof: npm test -- scripts/limits-probe.test.mjs
+    saw: the limit 5 after revoke
+- F2 low The limit field has no label.
+    src/limits-view.js:88
+QUESTIONS     none
+NOT VERIFIED  - A Codex chief on another Mac.
+              - A limit of 0.
+BRANCH        sage/t3-limits, head ${"b".repeat(40)}, PR 12
+`);
+  writeFileSync(join(dir, "gates", "G4.json"), JSON.stringify({ gate: "G4", task: "T10", at: at(3), message: { kind: "question", title: "Can a viewer copy a shared list into their own lists?", blocks: [
+    { t: "field", label: "Where this is", text: "Milestone Offline sync · task T10 · step Plan. The share sheet design (v2) is approved." },
+    { t: "field", label: "What you approve", text: "The rule for viewers. It goes into the permission table of the design and into the tests." },
+    { t: "field", label: "The one real choice in it", text: "Does a viewer get a \"Copy to my lists\" action?" },
+    { t: "table", head: ["Answer", "What happens next", "Cost"], rows: [["B: no", "C1 builds now with view only.", "No extra cost now."], ["A: yes, as a new private list", "C1 adds \"Copy to my lists\" and builds after T3 merges.", "About 1 to 2 h more agent time. Basis: the build of T3."]], pick: 1 },
+    { t: "field", label: "If you do not answer", text: "C1 takes A at 20:00 today." },
+    { t: "field", label: "Needed by", text: "20:00 today, so that T11 can build tonight." },
+    { t: "field", label: "After you answer", text: hostile ? "C1 records it. <script>window.hacked=13</script> \u202eevil" : "C1 records your answer and starts T11." },
+    { t: "page", title: "Design notes of v2", task: "T10", file: "designs/v2/notes.md" }] }, text: "QUESTION" }));
+  const pages = join(pagesRoot, "T3"), design = join(pagesRoot, "T10");
+  writeFileSync(join(pages, DOCUMENT_PAGE), `# Retry with backoff\n\nThe design for retries after a reconnect.\n\n## The rule\n\n| Try | Wait |\n| --- | --- |\n| 1 | 1 s |\n| 2 | 4 s |\n\n![The retry screen](retry.svg)\n\n## The code\n\n\`\`\`js\nretry({ times: 5 });\n\`\`\`\n\nSee [the notes](notes.md).\n`);
+  writeFileSync(join(pages, "retry.svg"), sketch("Retry with backoff", ["Try 1 · 1 s", "Try 2 · 4 s", "Try 3 · 16 s"], "#9aa2ff"));
+  writeFileSync(join(pages, "hostile.md"), HOSTILE_MARKDOWN);
+  const version = (name, meta, shots) => {
+    mkdirSync(join(design, "designs", name), { recursive: true });
+    writeFileSync(join(design, "designs", name, "version.json"), JSON.stringify(meta));
+    writeFileSync(join(design, "designs", name, "index.html"), `<!doctype html><title>${name}</title><p>Sample prototype ${name}.</p>\n`);
+    writeFileSync(join(design, "designs", name, "notes.md"), `# Notes of ${name}\n\nSample design notes.\n`);
+    for (const [file, title, rows, accent] of shots) writeFileSync(join(design, "designs", name, file), sketch(title, rows, accent));
+  };
+  version("v1", { title: "v1", about: "A sheet from the bottom, with the link at once.", at: at(30), run: "R8", gates: ["G7"] }, [["sheet.svg", "Share list", ["list.example/L-77", "Anyone with the link · view"], "#ededf0"]]);
+  version("v2", { title: "v2", about: "Create link first; then the link, the permission row and Revoke.", at: at(28), run: "R8", today: true, screenshots: [{ file: "first.svg", caption: "Before a link exists" }, { file: "after.svg", caption: "After Create link" }] },
+    [["first.svg", "Share list", ["No link yet. Only you see this list."], "#ededf0"], ["after.svg", "Share list", ["list.example/L-77", "Anyone with the link · view", "Expires in 7 days"], "#fb7f7f"]]);
+  version("A", { title: "Candidate A", candidate: "A", run: "R8", angle: "Precision: a count on each list", strong: "People see which list holds unsent edits.", weak: "Many badges when many lists have edits." }, [["screen.svg", "Lists", ["Groceries · 3", "Work · 1", "Trip · 12"], "#fbbf24"]]);
+  version("B", { title: "Candidate B", candidate: "B", run: "R8", angle: "Calm: one total in the header", strong: "One place, little noise.", weak: "It does not say which list waits." }, [["screen.svg", "Lists · 16 unsent", ["Groceries", "Work", "Trip"], "#fbbf24"]]);
+  version("final", { title: "The judge's final", run: "R9", at: at(25), final: { base: "A", why: "It scored highest and fits the brief best.", grafted: [], grafts: ["From B: the total in the tooltip."], unused: ["B's header total: it hides which list waits."], gate: "G12",
+    scores: { rubric: ["Fits the brief", "Clear at a glance", "Every state", "Access", "Cost to build"], max: 5, candidates: { A: [5, 4, 4, 4, 4], B: [3, 4, 3, 4, 3] } } } }, [["screen.svg", "Lists", ["Groceries · 3", "Work · 1 · 3 edits not sent", "Trip · 12"], "#4ade80"]]);
 }

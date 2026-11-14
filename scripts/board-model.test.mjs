@@ -171,6 +171,17 @@ test("T218 N8: a moved finding shows on its old task as moved to the new task, a
   assert.deepEqual(t2.findings.map(f => [f.key, f.status, f.movedFrom]), [["F-T2-1", "open", "T1"]]);
 });
 
+test("T1064: a moved row takes its run and severity only from the trail at the start of the move's reason, never from the task title after it", t => {
+  const model = logbook(t, {
+    tasks: [task("T1", "repairing"), task("T2", "framed"), task("T3", "framed")],
+    decisions: [
+      { at: at(10), task: "T1", decision: "F-T1-3 moved to T2 as F-T2-1: Sample: cap the list", why: "the follow-up task (from R12, low): Sample" },
+      { at: at(11), task: "T1", decision: "F-T1-4 moved to T3 as F-T3-1: Sample: name the field", why: "the open task: Fix the reader (from R77, high)" },
+    ],
+  });
+  assert.deepEqual(model.tasks.find(x => x.id === "T1").findings.map(f => [f.key, f.run, f.severity, f.movedTo]), [["F-T1-3", "R12", "low", "T2"], ["F-T1-4", "", "", "T3"]]);
+});
+
 test("T218 N1 and N4: the provider stand-in is the logbook's source, and the PR link base is the checkout's GitHub origin", t => {
   const tables = { tasks: [task("T1", "reviewing", { pr: "7" })], runs: [{ id: "R1", task: "T1", role: "qa", status: "running", started: at(3) }] };
   const linked = logbook(t, tables, { remote: "git@github.com:acme/sage.git" }).tasks[0];
