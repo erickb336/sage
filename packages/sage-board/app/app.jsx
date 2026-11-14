@@ -2,6 +2,7 @@ import { useEffect, useState } from "react";
 import { ChiefChips, QuestionView } from "./actions.jsx";
 import { AgentsIcon, AlertIcon, LeafIcon, MoonIcon, OverviewIcon, PullsIcon, SunIcon, TasksIcon } from "./icons.jsx";
 import { Overview } from "./overview.jsx";
+import { Pulls } from "./pulls.jsx";
 import { Tasks } from "./tasks.jsx";
 import { useModel } from "./use-model.js";
 
@@ -10,7 +11,7 @@ const PAGES = [
   { hash: "", name: "Overview", Icon: OverviewIcon },
   { hash: "tasks", name: "Tasks", Icon: TasksIcon },
   { hash: "agents", name: "Agents", Icon: AgentsIcon, classic: "/agents", what: "each running agent, for each chief, against the limit" },
-  { hash: "pull-requests", name: "Pull requests", Icon: PullsIcon, classic: "/", what: "each open, merged or waiting pull request, and what depends on what" },
+  { hash: "pull-requests", name: "Pull requests", Icon: PullsIcon },
 ];
 const QUESTION = { hash: "question", name: "Question", hidden: true };
 const FILTER_KEY = "board-chief";
@@ -103,7 +104,9 @@ export function App() {
   const crumb = model?.projects.length === 1 ? model.projects[0] : "All projects";
   const next = theme === "dark" ? "light" : "dark";
   const open = model ? model.tasks.filter(task => !task.ended).length : 0;
+  const prs = model ? model.tasks.filter(task => task.pr && !task.ended).length : 0;
   const body = page.hash === "" ? <Overview model={model} shown={shown} /> : page.hash === "tasks" ? <Tasks model={model} params={page.params} chief={picked} />
+    : page.hash === "pull-requests" ? <Pulls model={model} params={page.params} chief={picked} />
     : page.hash === "question" ? <QuestionView needKey={page.params.get("key") ?? ""} model={model} /> : null;
   return (
     <div className="app">
@@ -117,6 +120,7 @@ export function App() {
                   <item.Icon />{item.name}
                   {!item.hash && model && model.needs.length > 0 && <span className="count need" aria-label={`${model.needs.length} need you`}>{model.needs.length}</span>}
                   {item.hash === "tasks" && model && <span className="count" aria-label={`${open} open`}>{open}</span>}
+                  {item.hash === "pull-requests" && model && <span className="count" aria-label={`${prs} open`}>{prs}</span>}
                 </a>
               </li>
             ))}

@@ -20,7 +20,7 @@ function Counts({ model, previous }) {
   const since = previous ? Date.parse(previous) : Date.parse(model.at) - DAY;
   const known = model.tasks.some(task => task.addedAt), unknown = model.tasks.some(task => !task.addedAt);
   const items = [
-    ["merged", after(model.tasks.filter(task => task.state === "merged").map(task => task.completedAt), since), "Merged", "tasks merged into main"],
+    ["merged", after(model.tasks.filter(task => task.state === "merged").map(task => task.doneAt), since), "Merged", "tasks merged into main"],
     ["stuck", after(model.failedAt, since) + model.counts.stuckNow, "Stuck", "runs that failed, or agents silent for 30 min"],
     ["added", known ? after(model.tasks.map(task => task.addedAt), since) : null, "New tasks", !known ? "not known: no task in the logbook has a time when it was added" : unknown ? "tasks added to the logbook; older tasks have no time" : "tasks added to the logbook"],
   ];

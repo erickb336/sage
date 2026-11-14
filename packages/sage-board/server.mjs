@@ -59,15 +59,15 @@ function securityHeaders(response, html = null) {
 }
 
 const APP_DIR = fileURLToPath(new URL("./app/", import.meta.url));
-const APP_FILE = /^(?:app|vendor)-[A-Z0-9]{8}\.(?:js|css)$/;
+const APP_FILE = /^(?:app|vendor|graph)-[A-Z0-9]{8}\.(?:js|css)$/;
 const APP_TYPES = { js: "text/javascript; charset=utf-8", css: "text/css; charset=utf-8" };
 const NO_APP = "The board app is not built in this copy of the board. Run the board from the sage plugin, or run npm run build.";
 
 export function loadBoardApp(dir = APP_DIR) {
   let manifest;
   try { manifest = JSON.parse(readFileSync(join(dir, "manifest.json"), "utf8")); } catch { return null; }
-  const names = [manifest?.script, manifest?.style, manifest?.vendor];
-  if (!names.every(name => typeof name === "string" && APP_FILE.test(name)) || !manifest.script.endsWith(".js") || !manifest.style.endsWith(".css") || !manifest.vendor.endsWith(".js")) return null;
+  const names = [manifest?.script, manifest?.style, manifest?.vendor, manifest?.graph];
+  if (!names.every(name => typeof name === "string" && APP_FILE.test(name)) || !manifest.script.endsWith(".js") || !manifest.style.endsWith(".css") || !manifest.vendor.endsWith(".js") || !manifest.graph.endsWith(".js")) return null;
   const files = new Map(names.map(name => [name, { type: APP_TYPES[name.split(".").pop()], body: readFileSync(join(dir, name)) }]));
   const shell = (writes = "off", token = "") => `<!doctype html><html lang="en" data-theme="dark"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><meta name="sage-writes" content="${writes}"><meta name="sage-token" content="${token}"><title>Sage board</title><link rel="stylesheet" href="/app/${manifest.style}"><link rel="modulepreload" href="/app/${manifest.vendor}"><script type="module" src="/app/${manifest.script}"></script></head><body><div id="root"></div><noscript><p>This board needs scripts. The board in the chat needs none: send a message that starts with "show board".</p></noscript></body></html>`;
   return { files, shell };

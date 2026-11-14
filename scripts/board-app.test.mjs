@@ -53,19 +53,22 @@ async function models(url, count, change = () => {}) {
   return seen;
 }
 
-test("T1054: each plugin carries one script, one style and one vendor file under the size budget", () => {
+test("T1054, T1063: each plugin carries one script, one style, one vendor file and one graph file, each under its own size budget", () => {
   for (const plugin of PLUGINS) {
     const dir = join(ROOT, plugin, "board/app"), manifest = JSON.parse(readFileSync(join(dir, "manifest.json"), "utf8"));
-    assert.deepEqual(readdirSync(dir).sort(), [manifest.script, manifest.style, "manifest.json", manifest.vendor].sort());
-    const sizes = Object.fromEntries(["script", "style", "vendor"].map(part => [part, statSync(join(dir, manifest[part])).size]));
+    assert.deepEqual(readdirSync(dir).sort(), [manifest.script, manifest.style, "manifest.json", manifest.vendor, manifest.graph].sort());
+    const sizes = Object.fromEntries(["script", "style", "vendor", "graph"].map(part => [part, statSync(join(dir, manifest[part])).size]));
+    assert.ok(sizes.graph > 100_000, "the graph file holds React Flow, so the app script does not");
     assert.deepEqual(budgetProblems(sizes), [], `${plugin}: ${JSON.stringify(sizes)}`);
   }
 });
 
-test("T1054: the size budget refuses a file one byte over it, and names the part", () => {
-  const problems = budgetProblems({ vendor: BUDGET.vendor + 1, script: BUDGET.script, style: BUDGET.style });
-  assert.equal(problems.length, 1);
-  assert.match(problems[0], new RegExp(`vendor file is ${BUDGET.vendor + 1} bytes, over its budget of ${BUDGET.vendor} bytes`));
+test("T1054, T1063: the size budget refuses a file one byte over it, and names the part", () => {
+  for (const part of ["vendor", "graph"]) {
+    const problems = budgetProblems({ vendor: BUDGET.vendor, script: BUDGET.script, style: BUDGET.style, graph: BUDGET.graph, [part]: BUDGET[part] + 1 });
+    assert.equal(problems.length, 1);
+    assert.match(problems[0], new RegExp(`${part} file is ${BUDGET[part] + 1} bytes, over its budget of ${BUDGET[part]} bytes`));
+  }
 });
 
 test("T1054: the app source never sets raw HTML, so React escapes every agent text", () => {
@@ -81,14 +84,14 @@ test("T1054: /app/ serves the shell under a CSP with no inline code, no eval and
   assert.equal(policy, `default-src 'none'; script-src ${base}/app/; style-src ${base}/app/; connect-src 'self'; img-src 'self'; base-uri 'none'; object-src 'none'; frame-ancestors 'none'; form-action 'none'`);
   assert.doesNotMatch(html, /<script>|<style>|\son[a-z]+=/i, "no inline script, style or handler");
   const manifest = JSON.parse(readFileSync(join(ROOT, "plugins/sage/board/app/manifest.json"), "utf8"));
-  for (const [part, type] of [["script", "text/javascript"], ["style", "text/css"], ["vendor", "text/javascript"]]) {
+  for (const [part, type] of [["script", "text/javascript"], ["style", "text/css"], ["vendor", "text/javascript"], ["graph", "text/javascript"]]) {
     const file = await fetch(`${base}/app/${manifest[part]}`);
     assert.equal(file.status, 200);
     assert.equal(file.headers.get("content-type"), `${type}; charset=utf-8`);
     assert.equal(file.headers.get("x-content-type-options"), "nosniff");
     assert.equal(await file.text(), readFileSync(join(ROOT, "plugins/sage/board/app", manifest[part]), "utf8"));
   }
-  for (const path of ["/app/manifest.json", "/app/../server.mjs", "/app/app.jsx", "/app/vendor-AAAAAAAA.js"]) assert.equal((await fetch(`${base}${path}`)).status, 404, path);
+  for (const path of ["/app/manifest.json", "/app/../server.mjs", "/app/app.jsx", "/app/graph.jsx", "/app/vendor-AAAAAAAA.js", "/app/graph-AAAAAAAA.js"]) assert.equal((await fetch(`${base}${path}`)).status, 404, path);
   const bare = await fetch(`${base}/app`, { redirect: "manual" });
   assert.equal(bare.status, 301);
   assert.equal(bare.headers.get("location"), "/app/");

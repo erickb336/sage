@@ -23,7 +23,7 @@ const FILTERS = [
 ];
 
 const UNKNOWN = "Chief liveness not known";
-const ChiefDot = ({ stopped }) => stopped === false ? <span className="dot live" aria-hidden="true" />
+export const ChiefDot = ({ stopped }) => stopped === false ? <span className="dot live" aria-hidden="true" />
   : stopped ? <span className="dot" aria-hidden="true" /> : <span className="dot unknown" role="img" aria-label={UNKNOWN} title={UNKNOWN} />;
 
 function Row({ task, at, selected }) {
@@ -72,6 +72,8 @@ function Group({ group, milestone, at, selected, focus, open, toggle }) {
   );
 }
 
+export const ofChief = (task, chief) => !chief || task.project === chief.project && task.chief?.id === chief.id;
+
 export function Tasks({ model, params, chief = null }) {
   const [group, setGroup] = useState("milestone");
   const [filters, setFilters] = useState({});
@@ -84,7 +86,7 @@ export function Tasks({ model, params, chief = null }) {
   }, [focus]);
 
   const options = useMemo(() => Object.fromEntries(FILTERS.map(([key, , value]) => [key, [...new Set(model.tasks.map(value))].sort((a, b) => key === "word" ? order(WORDS, a) - order(WORDS, b) : a.localeCompare(b))])), [model.tasks]);
-  const shown = useMemo(() => model.tasks.filter(task => (!chief || task.project === chief.project && task.chief?.id === chief.id) && FILTERS.every(([key, , value]) => !filters[key] || value(task) === filters[key])), [model.tasks, filters, chief]);
+  const shown = useMemo(() => model.tasks.filter(task => ofChief(task, chief) && FILTERS.every(([key, , value]) => !filters[key] || value(task) === filters[key])), [model.tasks, filters, chief]);
   const groups = useMemo(() => {
     const how = GROUPS[group], rank = new Map(model.milestones.map((milestone, i) => [milestone.key, i])), map = new Map();
     for (const task of shown) { const key = how.of(task); if (!map.has(key)) map.set(key, { key: key || "none", title: how.title(task), tasks: [] }); map.get(key).tasks.push(task); }
