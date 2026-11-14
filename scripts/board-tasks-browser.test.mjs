@@ -8,6 +8,7 @@ import { dirname, join } from "node:path";
 import { after, before, test } from "node:test";
 import { fileURLToPath } from "node:url";
 import { createBoardServer, loadBoardApp } from "../packages/sage-board/server.mjs";
+import { readerUrl } from "../packages/sage-board/reader.mjs";
 import { HOSTILE_TEXT, writeTasksLogbook } from "./fixtures/board-app.mjs";
 import { measureContrast } from "./fixtures/contrast.mjs";
 
@@ -51,7 +52,7 @@ const row = (page, id) => page.locator(`a.row[data-task="${KEY(id)}"]`);
 const panelTitle = page => page.locator("#panel-h");
 const groupTitles = page => page.locator(".group h2").allTextContents();
 
-test("T1061: J2 and J3 are within two clicks of the Overview, and a Needs you row opens its task in one", async t => {
+test("T1061, T1064: J2 and J3 are within two clicks of the Overview, and a Needs you row opens its full question in one", async t => {
   const { page, base, requests, problems } = await open(t);
   let clicks = 0;
   const click = async locator => { clicks++; await locator.click(); };
@@ -64,8 +65,11 @@ test("T1061: J2 and J3 are within two clicks of the Overview, and a Needs you ro
   assert.equal(await page.locator(".steps li[aria-current=step] .lbl").textContent(), "Review 1 of 1running", "the current step");
   assert.equal(await page.locator(".sec-h .hint").textContent(), "Clean cycles: 0 of 1");
   assert.match(await page.locator(".last").textContent(), /R6 · qa started$/);
-  assert.deepEqual(await page.locator("#tab-panel .files a").allTextContents(), ["limits-design.html", "notes.md", "Limits design note"], "J3: what its agents made");
-  assert.equal(await page.locator("#tab-panel .files a").first().getAttribute("href"), "/pages/sample-app-abc123/T3/limits-design.html");
+  const made = await page.locator("#tab-panel .files a").allTextContents();
+  assert.deepEqual(made.filter(text => !["Brief", "Report"].includes(text)), ["limits-design.html", "notes.md", "Limits design note", "R5 · code-reviewer · done"], "J3: what its agents made");
+  assert.equal(made.filter(text => text === "Brief").length, 3, "a brief and a report link for each of T3's three runs");
+  assert.equal(await page.getByRole("link", { name: "limits-design.html" }).getAttribute("href"), "/pages/sample-app-abc123/T3/limits-design.html");
+  assert.match(await page.getByRole("link", { name: "notes.md" }).getAttribute("href"), /^\/read\/[\w-]+\/page\/notes\.md$/, "a Markdown page opens in the reader");
   assert.match(await page.locator("#tab-panel").textContent(), /R5 · code-reviewer · done.*CLEAN\. The limits change is correct\..*sage_qa_t3_r6\.json/);
 
   clicks = 0;
@@ -78,8 +82,13 @@ test("T1061: J2 and J3 are within two clicks of the Overview, and a Needs you ro
   clicks = 0;
   await page.goto(`${base}/app/`);
   await click(page.getByRole("link", { name: "Can a viewer copy a shared list into their own lists?" }));
+  await page.locator("main h1").filter({ hasText: "Can a viewer copy a shared list into their own lists?" }).waitFor();
+  assert.equal(clicks, 1, "J1: the full question in one click");
+  assert.match(await page.locator("main").textContent(), /The answers.*A: yes, as a new private list.*C1's pick.*B: no/s, "the chief's pick first");
+  await page.getByRole("link", { name: /Back to Needs you/ }).click();
+  await page.getByRole("heading", { name: "Needs you" }).waitFor();
+  await page.goto(`${base}/app/#tasks?task=${encodeURIComponent(KEY("T10"))}`);
   await panelTitle(page).filter({ hasText: "Sample sync design" }).waitFor();
-  assert.equal(clicks, 1);
   await page.getByRole("tab", { name: /Decisions/ }).click();
   assert.match(await page.locator("#tab-panel").textContent(), /Can a viewer copy a shared list.*Open: it waits for your answer/);
   assert.deepEqual(requests.filter(url => !url.startsWith(`${base}/`)), [], "no request outside 127.0.0.1");
@@ -283,4 +292,30 @@ test("T1061 (F-T1061-26): a milestone problem in Needs you links to the Tasks pa
   assert.equal(await link.getAttribute("href"), `#tasks?milestone=${encodeURIComponent(KEY("M3"))}`);
   await link.click();
   await page.locator(`.group.focus[data-group="${KEY("M3")}"]`).waitFor();
+});
+
+test("T1064 (F-T1064-64, F-T1064-65, F-T1064-66): at 390 px each reader page shows one text column at nearly full width and scrolls only up and down; at 1280 px the side column stays", async t => {
+  const { page, base, problems, logbook } = await open(t, { documents: true }, readerUrl(KEY("T3"), "brief", "R7"));
+  const gate = join(logbook, "gates", "G4.json"), kept = JSON.parse(readFileSync(gate, "utf8"));
+  kept.message.blocks.push({ t: "picture", title: "Where the work is", key: "The double box is the task that runs now.", frame: { box: "milestone", name: "Offline sync", state: "active", items: [{ box: "task", name: "T10 Share sheet", state: "building", here: true }] } });
+  writeFileSync(gate, JSON.stringify(kept));
+  const pages = { brief: [readerUrl(KEY("T3"), "brief", "R7"), "details[open] .body"], report: [readerUrl(KEY("T3"), "report", "R5"), ".result"], markdown: [readerUrl(KEY("T3"), "page", "retry-design.md"), ".doc .md"],
+    compare: [readerUrl(KEY("T10"), "design", null, { view: "compare" }), ".pair .version"], question: [readerUrl(KEY("T10"), "question", "G4"), "main pre.md"] };
+  const measure = text => page.evaluate(selector => ({ scroll: document.documentElement.scrollWidth, view: innerWidth, pre: document.querySelectorAll("main pre.md").length,
+    text: [...document.querySelectorAll(selector)].map(e => { const s = getComputedStyle(e); return Math.round(e.getBoundingClientRect().width - parseFloat(s.paddingLeft) - parseFloat(s.paddingRight)); }) }), text);
+  for (const [name, [path, text]] of Object.entries(pages)) {
+    await page.setViewportSize({ width: 390, height: 900 });
+    await page.goto(`${base}${path}`);
+    const narrow = await measure(text);
+    assert.ok(narrow.scroll <= narrow.view, `${name} at 390 px scrolls sideways: ${narrow.scroll} px wide`);
+    assert.ok(narrow.text.length > 0 && narrow.text.every(width => width >= 300), `${name} at 390 px: each text column is at least 300 px wide, saw ${narrow.text}`);
+    if (name === "question") assert.ok(narrow.pre > 0, "the question shows its frame");
+    if (name === "compare") assert.ok(await page.evaluate(() => { const [a, b] = document.querySelectorAll(".pair .version"); return b.getBoundingClientRect().top >= a.getBoundingClientRect().bottom; }), "the two versions stack");
+    await page.setViewportSize({ width: 1280, height: 900 });
+    const wide = await measure(text);
+    assert.ok(wide.scroll <= wide.view, `${name} at 1280 px scrolls sideways`);
+    if (name === "brief" || name === "report") assert.equal(await page.locator(".cols > .side").evaluate(e => Math.round(e.getBoundingClientRect().width)), 260, `${name}: the side column stays at 1280 px`);
+    if (name === "compare") assert.ok(await page.evaluate(() => { const [a, b] = document.querySelectorAll(".pair .version"); return a.getBoundingClientRect().top === b.getBoundingClientRect().top; }), "the two versions stand side by side at 1280 px");
+  }
+  assert.deepEqual(problems, []);
 });

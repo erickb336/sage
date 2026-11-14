@@ -60,6 +60,35 @@ The new board is at `/app/` on the same server: open `http://127.0.0.1:43123/app
 
 The pages Tasks, Agents and Pull requests come next; until then, they link to the classic board at `/`. The new board loads only its own files from the board server, under a content security policy with no inline code and no outside source. Its data comes from one stream, `/app/events`. The classic board keeps working beside it.
 
+### The reader for agent documents (T1064)
+
+The reader shows what the agents made, as pages of the board at `/read/<task>/<kind>`, where `<task>` is the base64url of the task's key. Open it from a task's Artifacts tab, or from a question in Needs you. Each page has a back link to where you came from.
+
+| Kind | Route | What it shows |
+| --- | --- | --- |
+| Brief | `brief/R<n>` | The ten fields of `briefs/R<n>.md`. GOAL and ACCEPTANCE open first; a closed field shows its first line. |
+| Report | `report/R<n>` | STATUS, RESULT first, each finding as a row with its state from the logbook, then the other fields. It reads `reports/R<n>.md`, then `<R>-report.md` in the pages folder, then a review's `kept/R<n>.json`. |
+| Markdown page | `page/<file>.md` | The page with a contents list and its pictures, from the task's pages folder. |
+| Design | `design` | One version (today), or two side by side, from `designs/<version>/`. |
+| Arena | `arena` | The candidates, the judge's scores and the judge's final. |
+| Question | `question/G<n>` | The full question from `gates/G<n>.json`: Needed by and If you do not answer first, every part, then the answers with the chief's pick first. It only reads: answer in the chief's chat. |
+
+A page says "not written yet" while its run runs, "not kept" for a run or question older than T1058, and "gone" for a recorded page that is no longer in the pages folder.
+
+**Safety.** The server renders each page; the page has no scripts. Its content security policy is `sandbox allow-same-origin` with `script-src 'none'` and `form-action 'none'`, so the page cannot run code or send a form to the board. Pictures load only from the task's own pages folder (`img-src` names that folder). Markdown renders with the pinned `markdown-it` with raw HTML off. A link opens only when it is `https:` or a file of the task's pages folder. Bidi control characters show as visible marks, such as `[U+202E]`.
+
+**Design versions.** A version is a folder `designs/<version>/` in the task's pages folder. Without more, the reader shows its pictures, its first web page as the prototype and its first Markdown file as the notes. A `version.json` in the folder adds the rest (a later task, T1074, makes sage write it); every key is optional:
+
+```json
+{ "title": "v2", "about": "One line about the version.", "at": "2026-11-12T14:00:00Z", "run": "R3684", "today": true,
+  "prototype": "index.html", "notes": "notes.md", "screenshots": [{ "file": "after.png", "caption": "After Create link" }], "gates": ["G8"],
+  "candidate": "A", "angle": "Precision: a count on each list", "strong": "…", "weak": "…",
+  "final": { "base": "A", "why": "…", "grafted": ["C"], "grafts": ["From C: …"], "unused": ["…"], "gate": "G12",
+    "scores": { "rubric": ["Fits the brief", "Access"], "max": 5, "candidates": { "A": [5, 4], "C": [4, 5] } } } }
+```
+
+A version with `candidate` or `final` belongs to the arena, not to the design's versions.
+
 ## Other views
 
 Use the same command with `--status` for short text, or without a format option for the chat board. A project name selects that project. `T197` selects a task in the current checkout. If two sources contain that task, add `--scope <source/project-key>` from the choices in the error.

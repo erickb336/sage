@@ -13,7 +13,11 @@ function when(at, now) {
 }
 const hex = c => c.codePointAt(0).toString(16).padStart(4, "0");
 export const controlsShown = text => String(text ?? "").replace(/[\p{Cc}\p{Cf}\p{Zl}\p{Zp}]/gu, c => ({ "\n": "\\n", "\r": "\\r", "\t": "\\t" })[c] ?? (c.length > 1 ? `\\u{${hex(c)}}` : `\\u${hex(c)}`));
-const encodeKey = key => btoa(String.fromCharCode(...new TextEncoder().encode(key))).replace(/\+/g, "-").replace(/\//g, "_").replace(/=+$/, "");
+export const encodeKey = key => btoa(String.fromCharCode(...new TextEncoder().encode(key))).replace(/\+/g, "-").replace(/\//g, "_").replace(/=+$/, "");
+export function readLink(key, kind, arg, back = "tasks") {
+  const query = new URLSearchParams({ ...(document.documentElement.dataset.theme === "light" && { theme: "light" }), ...(back !== "tasks" && { back }) }).toString();
+  return `/read/${encodeKey(key)}/${kind}${arg ? `/${arg}` : ""}${query ? `?${query}` : ""}`;
+}
 const STATUS = { done: "done", run: "running", stale: "no news", need: "needs you", fail: "failed", idle: "no agent at work", wait: "", unknown: "not known" };
 const TABS = ["Artifacts", "Log", "Decisions"];
 
@@ -54,17 +58,33 @@ function Cycle({ task }) {
   );
 }
 
-function Artifacts({ task }) {
-  const { files } = task, base = `/pages/${task.logbook}/${task.id}/`;
-  const empty = !task.artifacts.length && !files.pages?.length && !files.kept.length && !files.briefs.length && !files.reports.length;
+function Artifacts({ task, back }) {
+  const { files } = task, base = `/pages/${task.logbook}/${task.id}/`, read = (kind, arg) => readLink(task.key, kind, arg, back);
+  const empty = !task.runs.length && !task.artifacts.length && !files.pages?.length && !files.kept.length && !files.briefs.length && !files.reports.length && !files.designs.versions && !files.recorded.length;
+  const fileLink = name => /\.md$/.test(name) ? <a href={read("page", name)}>{name}</a> : <a href={`${base}${name}`} target="_blank" rel="noopener noreferrer">{name}</a>;
   return (
     <div>
       {empty && <p className="none">No artifact is recorded for this task yet.</p>}
+      {files.designs.versions > 0 && <>
+        <h4>Design</h4>
+        <ul className="files">
+          <li><a href={read("design")}>Design · {files.designs.versions} {files.designs.versions === 1 ? "version" : "versions"}</a><span className="faint">today, or two side by side</span></li>
+          {files.designs.arena && <li><a href={read("arena")}>Arena · candidates, scores and the judge's final</a></li>}
+        </ul>
+      </>}
+      {task.runs.length > 0 && <>
+        <h4>Briefs and reports</h4>
+        <ul className="files">{task.runs.map(run => <li key={run.id}><span>{run.id} · {run.role}</span><span><a href={read("brief", run.id)}>Brief</a> · <a href={read("report", run.id)}>Report</a></span></li>)}</ul>
+      </>}
       {files.pages?.length > 0 && <>
         <h4>Pages folder</h4>
-        <ul className="files">{files.pages.map(page => <li key={page.name}><a href={`${base}${page.name}`} target="_blank" rel="noopener noreferrer">{page.name}</a><span className="faint">{Math.max(1, Math.round(page.size / 1024))} KB</span></li>)}</ul>
+        <ul className="files">{files.pages.map(page => <li key={page.name}>{fileLink(page.name)}<span className="faint">{Math.max(1, Math.round(page.size / 1024))} KB</span></li>)}</ul>
         {files.more && <p className="none">The list stops here: the folder holds more files.</p>}
         <p><a href={base} target="_blank" rel="noopener noreferrer">Open the pages index</a></p>
+      </>}
+      {files.recorded.length > 0 && <>
+        <h4>Recorded pages</h4>
+        <ul className="files">{files.recorded.map((page, i) => <li key={i}>{page.state !== "gone" ? fileLink(page.file) : /\.md$/.test(page.file) ? <a href={read("page", page.file)}>{page.file}</a> : <span>{page.file}</span>}<span className={page.state === "same" ? "faint" : "need"}>{{ same: "the same as recorded", changed: "changed since it was recorded", gone: "gone from the pages folder" }[page.state]} · {when(page.at, task.at)}</span></li>)}</ul>
       </>}
       {task.artifacts.length > 0 && <>
         <h4>Recorded artifacts</h4>
@@ -80,19 +100,18 @@ function Artifacts({ task }) {
         <h4>Kept reports</h4>
         <ul className="files">{files.kept.map(item => (
           <li key={item.run}>
-            <span>{item.run} · {item.role}{item.status && ` · ${item.status}`}</span>
+            <a href={read("report", item.run)}>{item.run} · {item.role}{item.status && ` · ${item.status}`}</a>
             {item.result && <span className="detail">{item.result}</span>}
             <span className="faint">{[when(item.at, task.at), item.sha && `on ${item.sha.slice(0, 7)}`].filter(Boolean).join(" · ")}</span>
           </li>
         ))}</ul>
       </>}
-      {[["Briefs", files.briefs], ["Reports", files.reports]].map(([name, list]) => list.length > 0 && (
+      {[["Brief files", files.briefs], ["Report files", files.reports]].map(([name, list]) => list.length > 0 && (
         <div key={name}>
           <h4>{name}</h4>
           <ul className="files">{list.map(item => <li key={item.name}><code>{controlsShown(item.name)}</code>{item.run && <span className="faint">{item.run}</span>}</li>)}</ul>
         </div>
       ))}
-      {(files.kept.length > 0 || files.briefs.length > 0 || files.reports.length > 0) && <p className="none">Kept reports, briefs and reports are in the logbook. The board's reader for them comes later.</p>}
     </div>
   );
 }
@@ -140,7 +159,7 @@ export function Panel({ taskKey, at, back = "tasks" }) {
     const next = TABS[(TABS.indexOf(tab) + step + TABS.length) % TABS.length];
     setTab(next); tabs.current[TABS.indexOf(next)]?.focus();
   };
-  const counts = task && { Artifacts: task.artifacts.length + (task.files.pages?.length ?? 0) + task.files.kept.length + task.files.briefs.length + task.files.reports.length, Log: task.log.length + task.logMore, Decisions: task.decisions.length };
+  const counts = task && { Artifacts: task.runs.length + (task.files.designs.versions ? 1 : 0) + task.files.recorded.length + task.artifacts.length + (task.files.pages?.length ?? 0) + task.files.kept.length, Log: task.log.length + task.logMore, Decisions: task.decisions.length };
   return (
     <aside className="panel" role="dialog" aria-labelledby="panel-h">
       <div className="panel-top">
@@ -180,7 +199,7 @@ export function Panel({ taskKey, at, back = "tasks" }) {
             {TABS.map((name, i) => <button type="button" role="tab" key={name} id={`tab-${name}`} ref={el => { tabs.current[i] = el; }} aria-selected={tab === name} aria-controls="tab-panel" tabIndex={tab === name ? 0 : -1} onClick={() => setTab(name)}>{name} <span className="faint">{counts[name]}</span></button>)}
           </div>
           <div id="tab-panel" role="tabpanel" aria-labelledby={`tab-${tab}`}>
-            {tab === "Artifacts" ? <Artifacts task={task} /> : tab === "Log" ? <Log task={task} /> : <Decisions task={task} />}
+            {tab === "Artifacts" ? <Artifacts task={task} back={back} /> : tab === "Log" ? <Log task={task} /> : <Decisions task={task} />}
           </div>
         </>}
       </div>

@@ -182,6 +182,7 @@ test("T1063: the keyboard reaches each link of the list and the graph, and Enter
   await page.keyboard.press("Enter");
   await page.locator("#panel-h", { hasText: "Sample search highlight" }).waitFor();
   await page.keyboard.press("Escape");
+  await page.waitForFunction(() => document.activeElement?.textContent === "Sample search highlight");
   await page.getByRole("button", { name: "Graph" }).focus();
   await page.keyboard.press("Enter");
   await page.locator(".gnode").first().waitFor();

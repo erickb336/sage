@@ -53,7 +53,8 @@ function lineOf(text) {
   const item = /^(?:[-*+]|\d+[.)])[ \t]+/.exec(text);
   const [key, ...rest] = (item ? text.slice(item[0].length) : text).split(/[ \t]+/);
   const at = rest.findIndex((w) => !/^[-–—:|]+$/.test(w)), word = unmarked(rest[at]);
-  if (item && /\d/.test(unmarked(key)) && !SEVERE.test(unmarked(key)) && /^(?:high|medium|low)$/i.test(word) && !LABEL.test(rest.slice(at + 1).join(" "))) return { severity: word.toLowerCase(), key: unmarked(key) };
+  const summary = rest.slice(at + 1).join(" ");
+  if (item && /\d/.test(unmarked(key)) && !SEVERE.test(unmarked(key)) && /^(?:high|medium|low)$/i.test(word) && !LABEL.test(summary)) return { severity: word.toLowerCase(), key: unmarked(key), summary: summary.replace(/^[-–—:|]+[ \t]*/, "") };
   return { severe: SEVERE.test(unmarked(key)) || SEVERE.test(word) || LABEL.test(text) };
 }
 const LEVELS = ["none", "low", "medium", "high"];
@@ -82,9 +83,10 @@ export function readReport(text, { requireComplete = false } = {}) {
   let none = false, long = false, odd;
   for (const line of f ? [f.rest, ...f.lines] : []) {
     if (line.length > LINE_MAX) { long = true; continue; }
-    const text = line.trim(), indented = /^\s/.test(line), { severity, severe, key } = lineOf(text);
+    const text = line.trim(), indented = /^\s/.test(line), { severity, severe, key, summary } = lineOf(text);
     if (!text) continue;
-    if (severity) severities.push(severity), findings.push({ key, severity });
+    if (!severity && findings.length && !NONE_LINE.test(text)) findings.at(-1).details.push(text);
+    if (severity) severities.push(severity), findings.push({ key, severity, summary, details: [] });
     else if (NONE_LINE.test(text)) none = true;
     else if (!(indented && severities.length && !severe)) odd ??= text;
     else proofLine(findings.at(-1), text);

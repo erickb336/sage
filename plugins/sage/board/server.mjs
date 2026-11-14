@@ -3,8 +3,12 @@ import { lstatSync, readFileSync, readdirSync, watch } from "node:fs";
 import { createServer } from "node:http";
 import { dirname, isAbsolute, join, resolve, sep } from "node:path";
 import { fileURLToPath } from "node:url";
-import { readBoardSources, buildBoardModel, boardOverview, taskPanel, landingRule, renderBoardHtml, renderAgentsHtml, renderMilestonesHtml, renderReleasesHtml, BOARD_PORT } from "../core/index.mjs";
+import { readBoardSources, buildBoardModel, boardOverview, taskPanel, landingRule, pageTaskFolder, renderBoardHtml, renderAgentsHtml, renderMilestonesHtml, renderReleasesHtml, BOARD_PORT } from "../core/index.mjs";
 import { pagesRequest, servePages, taskFiles } from "./pages.mjs";
+import { designSummary, logbookDir, readerPage, recordedPages } from "./reader.mjs";
+
+const MARKDOWN = await import("./markdown.mjs").then(module => module.renderMarkdown, () => null);
+const NO_READER = "The reader's Markdown renderer is not in this copy of the board. Run the board from the sage plugin, or run npm ci and npm run build.";
 
 const MAX_HTML = 8 * 1024 * 1024;
 const MAX_CLIENTS = 16;
@@ -77,7 +81,7 @@ function appPolicy(origin) {
 
 const forwarded = name => name === "forwarded" || name.startsWith("x-forwarded-");
 
-export function createBoardServer({ sources, port = BOARD_PORT, id, clock = () => new Date().toISOString(), settleReads = SETTLE_READS, duringRead = null, providerRoots = [], app = loadBoardApp() } = {}) {
+export function createBoardServer({ sources, port = BOARD_PORT, id, clock = () => new Date().toISOString(), settleReads = SETTLE_READS, duringRead = null, providerRoots = [], app = loadBoardApp(), markdown = MARKDOWN } = {}) {
   if (!Number.isSafeInteger(port) || port < 1024 || port > 65535) throw new TypeError("board port must be an integer from 1024 through 65535");
   if (typeof clock !== "function") throw new TypeError("the board clock must be a function that gives an ISO time");
   if (!Array.isArray(sources) || !sources.length || sources.length > 32) throw new TypeError("board needs 1 to 32 explicit sources");
@@ -260,6 +264,7 @@ export function createBoardServer({ sources, port = BOARD_PORT, id, clock = () =
     if (boardHeader) response.setHeader("X-Sage-Board", boardHeader);
     if (!["GET", "HEAD"].includes(request.method)) { response.setHeader("Allow", "GET, HEAD"); return fail(405, "This method is not permitted."); }
     if (request.url === "/app" || request.url.startsWith("/app/")) return serveApp(request, response, fail);
+    if (request.url.startsWith("/read/")) return serveReader(request, response, fail);
     let selected = route(request.url);
     if (selected?.renamed !== undefined) {
       const key = selected.renamed && (model.milestones.find(milestone => milestone.was && `${milestone.project}/${milestone.was}` === selected.renamed)?.key ?? selected.renamed);
@@ -305,9 +310,9 @@ export function createBoardServer({ sources, port = BOARD_PORT, id, clock = () =
       try {
         const key = taskKey(name.slice("task/".length)), panel = key && model && taskPanel(model, key);
         if (!panel) return fail(404, "This task is not on the board.");
-        const task = model.tasks.find(item => item.key === key), source = configured.find(item => item.id === task.source);
-        const dir = source && !task.old && task.project.startsWith(`${source.id}/`) ? join(source.path, panel.logbook) : null;
-        const body = Buffer.from(JSON.stringify({ ...panel, files: taskFiles({ dir, logbook: panel.logbook, task: task.id, runs: panel.runs }) }));
+        const task = model.tasks.find(item => item.key === key), dir = logbookDir(configured, task);
+        const files = { ...taskFiles({ dir, logbook: panel.logbook, task: task.id, runs: panel.runs }), designs: designSummary(panel.logbook, task.id), recorded: recordedPages(task, pageTaskFolder(panel.logbook, task.id)) };
+        const body = Buffer.from(JSON.stringify({ ...panel, files }));
         response.writeHead(200, { "Content-Type": "application/json; charset=utf-8", "Content-Length": body.length });
         return response.end(request.method === "HEAD" ? undefined : body);
       } catch { return fail(503, "The board snapshot is unavailable."); }
@@ -317,6 +322,18 @@ export function createBoardServer({ sources, port = BOARD_PORT, id, clock = () =
     if (name === "") response.setHeader("Content-Security-Policy", appPolicy(origins.get(oneHeader(request, "host").toLowerCase())));
     response.writeHead(200, { "Content-Type": name === "" ? "text/html; charset=utf-8" : app.files.get(name).type, "Content-Length": body.length });
     response.end(request.method === "HEAD" ? undefined : body);
+  }
+
+  function serveReader(request, response, fail) {
+    if (!markdown) return fail(503, NO_READER);
+    let page;
+    try { page = readerPage({ model, configured, url: request.url, origin: origins.get(oneHeader(request, "host").toLowerCase()), render: markdown }); } catch { return fail(503, "The board cannot read this document now. Reload the page to try again."); }
+    if (!page) return fail(404, "This document is not on the board.");
+    response.setHeader("Content-Security-Policy", page.policy);
+    response.writeHead(200, { "Content-Type": "text/html; charset=utf-8" });
+    if (request.method === "HEAD") return response.end();
+    response.write(page.top);
+    response.end(page.rest);
   }
 
   server.headersTimeout = 10_000;

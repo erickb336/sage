@@ -1,5 +1,5 @@
 import { StateIcon } from "./icons.jsx";
-import { milestoneLink, taskLink } from "./panel.jsx";
+import { milestoneLink, readLink, taskLink } from "./panel.jsx";
 
 const plural = (count, one, many = `${one}s`) => `${count} ${count === 1 ? one : many}`;
 
@@ -40,7 +40,7 @@ function NeedRow({ need, at, many }) {
     <li data-need={need.key}>
       <span className="bullet" aria-hidden="true" />
       <div>
-        <p className="q">{need.task || need.milestone ? <a href={need.task ? taskLink(need.task.key) : milestoneLink(need.milestone)}>{need.question}</a> : need.question}</p>
+        <p className="q">{need.task || need.milestone ? <a href={need.task && need.gate ? readLink(need.task.key, "question", need.gate) : need.task ? taskLink(need.task.key) : milestoneLink(need.milestone)}>{need.question}</a> : need.question}</p>
         {need.more.length > 0 && <p className="more">{need.more.join(" ")}</p>}
         {need.recommendation && <p className="pick">Recommended: <b>{need.recommendation}</b></p>}
         <p className="meta">
@@ -62,7 +62,7 @@ function NeedsYou({ needs, at, many }) {
         <h2 id="needs-h">Needs you</h2>
         {needs.length > 0 && <span className="badge need" aria-label={`${needs.length} open`}>{needs.length}</span>}
         <span className="grow" />
-        <span className="hint">Oldest first · answer in the chief's chat</span>
+        <span className="hint">Oldest first · open one for its full context · answer in the chief's chat</span>
       </div>
       {needs.length
         ? <ul className="needs">{needs.map(need => <NeedRow key={need.key} need={need} at={at} many={many} />)}</ul>
