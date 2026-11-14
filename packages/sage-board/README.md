@@ -77,7 +77,7 @@ A page says "not written yet" while its run runs, "not kept" for a run or questi
 
 **Safety.** The server renders each page; the page has no scripts. Its content security policy is `sandbox allow-same-origin` with `script-src 'none'` and `form-action 'none'`, so the page cannot run code or send a form to the board. Pictures load only from the task's own pages folder (`img-src` names that folder). Markdown renders with the pinned `markdown-it` with raw HTML off. A link opens only when it is `https:` or a file of the task's pages folder. Bidi control characters show as visible marks, such as `[U+202E]`.
 
-**Design versions.** A version is a folder `designs/<version>/` in the task's pages folder. Without more, the reader shows its pictures, its first web page as the prototype and its first Markdown file as the notes. A `version.json` in the folder adds the rest; every key is optional:
+**Design versions.** A version is a folder `designs/<version>/` in the task's pages folder. Without more, the reader shows its pictures, its first web page as the prototype and its first Markdown file as the notes. A `version.json` in the folder adds the rest (a later task, T1074, makes sage write it); every key is optional:
 
 ```json
 { "title": "v2", "about": "One line about the version.", "at": "2026-11-12T14:00:00Z", "run": "R3684", "today": true,
