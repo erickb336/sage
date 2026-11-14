@@ -944,7 +944,8 @@ test("the first shared write takes the larger of the provider values, and a shar
   w.claude("config", "cycles.small=2", "arena=4", "max_agents=7", "cap_total=9");
   assert.equal(counts(w.shared)["cycles.small"], 2);
   assert.deepEqual(Object.keys(counts(w.shared)).sort(), ["cycles.large", "cycles.risk", "cycles.small", "max_rounds"]);
-  assert.deepEqual([counts(w.claudeRoot).arena, counts(w.claudeRoot).max_agents, counts(w.claudeRoot).cap_total, counts(w.claudeRoot)["cycles.small"]], [4, 7, 9, undefined]);
+  assert.deepEqual([counts(w.claudeRoot).arena, counts(w.claudeRoot).max_agents, counts(w.claudeRoot).cap_total, counts(w.claudeRoot)["cycles.small"]], [4, undefined, 9, undefined]);
+  assert.equal(counts(join(w.shared, w.name())).max_agents, 7, "the agent limit is the logbook's own");
   assert.equal(counts(w.codexRoot).arena, undefined);
 });
 
@@ -968,6 +969,69 @@ test("an invalid provider count refuses the first shared write with no row and n
   assert.throws(() => w.claude("link", "--separate"), /cycles\.large in .*config\.json is not a number/);
   assert.equal(existsSync(join(w.shared, "bindings.tsv")), false);
   assert.equal(existsSync(join(w.shared, w.name())), false, "a refusal here leaves no half-made logbook behind");
+});
+
+const limitRows = (w) => readFileSync(join(w.shared, w.name(), "decisions.tsv"), "utf8").split("\n").filter((line) => line.includes("\tlimits "));
+const limitsOf = (out) => [/(?:^| )max_agents=(\d+)/.exec(out)?.[1], /(?:^| )max_leads=(\d+)/.exec(out)?.[1]].map(Number);
+
+test("T1056: a shared project keeps one agent limit and one lead limit in its logbook; the first write moves the largest value of the provider roots, once, with a decision row", (t) => {
+  const w = world(t);
+  claudeSage(["config", "max_agents=4", "cap.project=15", "max_leads=3", "--project", w.base], w.env);
+  codexSage(["config", "max_agents=12", "max_leads=6", "cap.other=40", "--project", w.base], w.env);
+  w.claude("link", "--separate");
+  const logbook = () => counts(join(w.shared, w.name()));
+  assert.deepEqual([logbook().max_agents, logbook().max_leads], [15, 6], "the larger of 15 (Claude's cap.project) and 12, and of 3 and 6; another project's cap counts for nothing");
+  assert.equal(limitRows(w).length, 0, "a new logbook takes the values with no decision row");
+  writeFileSync(join(w.shared, w.name(), "config.json"), JSON.stringify({ name: "Older" }));
+  assert.deepEqual(limitsOf(w.codex("config")), [15, 6], "a logbook of an older version reads the same pair before its move");
+  w.claude("task", "add", "--title", "x", "--size", "tiny", "--priority", "P2");
+  assert.deepEqual([logbook().max_agents, logbook().max_leads, logbook().name], [15, 6, "Older"], "the first write moves the pair and keeps the other keys");
+  assert.equal(limitRows(w).length, 1);
+  assert.match(limitRows(w)[0], /\tlimits max_agents=15 max_leads=6\t/);
+  assert.deepEqual(limitsOf(w.claude("config")), [15, 6]);
+  assert.deepEqual(limitsOf(w.codex("config")), [15, 6], "the Codex chief reads the same pair");
+  codexSage(["config", "max_agents=30", "--project", w.base], w.env);
+  w.claude("task", "add", "--title", "y", "--size", "tiny", "--priority", "P2");
+  w.codex("config", "name=Shared");
+  assert.deepEqual([logbook().max_agents, logbook().name, limitRows(w).length], [15, "Shared", 1], "a later write moves nothing and writes no second row");
+  w.codex("config", "max_leads=2");
+  w.claude("config", "cap.project=7");
+  assert.deepEqual([logbook().max_agents, logbook().max_leads, logbook().name], [7, 2, "Shared"], "config writes the limits into the logbook and keeps its other keys");
+  assert.deepEqual([counts(w.claudeRoot).max_agents, counts(w.claudeRoot)["cap.project"], counts(w.codexRoot).max_leads], [4, 15, 6], "the provider roots keep their values");
+  assert.deepEqual(limitsOf(w.claude("config")), [7, 2]);
+  assert.deepEqual(limitsOf(w.codex("config")), [7, 2]);
+  assert.equal(limitRows(w).length, 1);
+});
+
+test("T1056: a config write of a limit before any other write moves the provider values first, then sets the key", (t) => {
+  const w = world(t);
+  w.claude("link", "--separate");
+  const file = join(w.shared, w.name(), "config.json");
+  writeFileSync(file, "{}\n");
+  codexSage(["config", "max_leads=7", "--project", w.base], w.env);
+  claudeSage(["config", "max_agents=11", "--project", w.base], w.env);
+  assert.deepEqual(limitsOf(w.codex("config")), [11, 7], "before the move, a read takes the largest value of the provider roots");
+  assert.equal(limitRows(w).length, 0, "a new logbook takes the values with no decision row");
+  w.codex("config", "max_agents=9");
+  assert.deepEqual([counts(join(w.shared, w.name())).max_agents, counts(join(w.shared, w.name())).max_leads], [9, 7]);
+  assert.equal(limitRows(w).length, 1, "the move of the emptied config wrote one row");
+});
+
+test("T1056: a Claude chief and a Codex chief of one project fill one agent limit and one lead limit, and the next run of either is refused", (t) => {
+  const w = world(t);
+  w.claude("link", "--separate");
+  w.claude("config", "max_agents=3", "max_leads=1");
+  w.claude("task", "add", "--title", "claude task", "--size", "tiny", "--priority", "P2");
+  w.codex("task", "add", "--title", "codex task", "--size", "tiny", "--priority", "P2");
+  assert.match(w.claude("run", "add", "T1", "--role", "lead"), /^R1 /);
+  assert.match(refusalOf(() => w.codex("run", "add", "T2", "--role", "lead")), /^the project has 1 running lead runs, the most it holds: R1 on T1\./, "the Claude lead fills the lead limit for the Codex chief");
+  assert.match(w.codex("run", "add", "T2", "--role", "qa"), /^R2 /);
+  assert.match(w.claude("run", "add", "T1", "--role", "qa"), /^R3 /);
+  const full = /^the project has 3 running runs, its agent cap \(max_agents, or cap\.<project>\): R1 lead on T1, R2 qa on T2, R3 qa on T1\./;
+  assert.match(refusalOf(() => w.codex("run", "add", "T2", "--role", "qa")), full);
+  assert.match(refusalOf(() => w.claude("run", "add", "T1", "--role", "qa")), full);
+  w.codex("run", "done", "R2", "--status", "failed");
+  assert.match(w.claude("run", "add", "T1", "--role", "qa"), /^R4 /, "a run that ended frees a place for the other chief");
 });
 
 test("the merge check of a shared project reads its verdicts from the shared root, its list and its counts", (t) => {

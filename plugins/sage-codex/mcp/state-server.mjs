@@ -77,7 +77,7 @@ export const TOOLS = {
   },
   config: {
     describe: "Set config keys, only when the owner asks, and print the values. name (the project's name on the board; an empty value removes it), archived (yes or no) and start (sage-mode: each new session of the project starts in sage mode, also in Claude when the two share the logbook; normal: it starts off) and lint_offer (never: the lint offer does not come back; ask: it may) are keys of this project's logbook: set them in a call of their own. "
-      + "cycles.small, cycles.large, cycles.risk, max_rounds, max_leads, max_agents, arena, cap_total, cap.<project> and the model keys are for all projects.",
+      + "cycles.small, cycles.large, cycles.risk, max_rounds, arena, cap_total and the model keys are for all projects; max_agents, max_leads and this project's cap.<project> go into a shared project's logbook, for every chief of the project.",
     input: { settings: z.record(z.string().regex(/^[a-z][a-z0-9_.-]*$/), z.string()).describe('the keys and values to set, for example {"cycles.large": "3", "max_leads": "4"} or {"name": "Council Record"}') },
     pos: ["settings"], argv: (i) => ["config", ...Object.entries(i.settings).map(([k, v]) => `${k}=${v}`)],
   },

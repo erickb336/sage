@@ -298,12 +298,30 @@ function savedIn(root) {
   }
 }
 const SHARED_KEYS = ["cycles.small", "cycles.large", "cycles.risk", "max_rounds"];
+const LIMIT_KEYS = ["max_agents", "max_leads"];
 const pick = (object, keys) => Object.fromEntries(Object.entries(object).filter(([k]) => keys.includes(k)));
 function saved(env, dir) {
   const own = savedIn(sageRoot(env));
   if (!isShared(dir, env)) return own;
-  const { "cycles.small": _s, "cycles.large": _l, "cycles.risk": _r, max_rounds: _m, autopilot_cycles: _a, ...rest } = own;
-  return { ...rest, ...pick(savedIn(sharedRoot(env)), SHARED_KEYS) };
+  const rest = Object.fromEntries(Object.entries(own).filter(([k]) => ![...SHARED_KEYS, ...LIMIT_KEYS, "autopilot_cycles"].includes(k) && !CAP.test(k)));
+  return { ...rest, ...pick(savedIn(sharedRoot(env)), SHARED_KEYS), ...limitsOf(dir, env).values };
+}
+
+function limitsOf(dir, env) {
+  const held = pick(savedIn(dir), LIMIT_KEYS);
+  if (LIMIT_KEYS.every((k) => Object.hasOwn(held, k))) return { values: held, moved: true };
+  const folder = basename(dir), names = new Set([folder.replace(/-[0-9a-f]{6}$/, ""), ...bindings(dirname(dir)).filter((r) => r.folder === folder).map((r) => slug(basename(r.root)))]);
+  const roots = [...new Set([sageRoot(env), ...legacyRoots(env)])].map((root) => config({ ...env, SAGE_HOME: root }));
+  const largest = (of) => Math.max(...roots.map(of));
+  const cap = (c) => Math.max(...[...names].map((n) => c[`cap.${n}`] ?? c.max_agents));
+  return { values: { max_agents: largest(cap), max_leads: largest((c) => c.max_leads), ...held }, moved: false };
+}
+
+function moveLimits(dir, env, fresh = false) {
+  const { values, moved } = limitsOf(dir, env);
+  if (moved) return;
+  swap(join(dir, "config.json"), JSON.stringify({ ...logbookJson(dir), ...values }, null, 2) + "\n");
+  if (!fresh) write(dir, "decisions", [...read(dir, "decisions"), { at: now(), task: "", decision: `limits max_agents=${values.max_agents} max_leads=${values.max_leads}`, why: "one limit for each project: the largest value of the provider roots moved into the logbook's config" }]);
 }
 
 function config(env = process.env, dir) {
@@ -2275,6 +2293,17 @@ function fileOrNone(file) {
 }
 const ownKey = (kv) => /^(name|archived|start|lint_offer)(=|$)/.test(kv);
 
+function logbookJson(dir) {
+  const file = join(dir, "config.json");
+  fileOrNone(file);
+  let old;
+  try {
+    old = JSON.parse(readRegular(file) ?? "{}");
+  } catch {}
+  if (!old || typeof old !== "object" || Array.isArray(old)) refuse(`${file} is not a JSON object, so config writes nothing. Ask the user to fix or remove it.`);
+  return old;
+}
+
 function logbookConfig(dir, pairs) {
   const set = {};
   for (const kv of pairs) {
@@ -2289,16 +2318,9 @@ function logbookConfig(dir, pairs) {
     else if (k === "start") set.start = v === START_SAGE_MODE ? v : v === "normal" ? undefined : refuse(`start is ${START_SAGE_MODE} or normal, not "${visible(v)}". Nothing changed.`);
     else set.archived = v === "yes" ? true : v === "no" ? undefined : refuse(`archived is yes or no, not "${visible(v)}". Nothing changed.`);
   }
-  const file = join(dir, "config.json");
-  fileOrNone(file);
-  let old;
-  try {
-    old = JSON.parse(readRegular(file) ?? "{}");
-  } catch {}
-  if (!old || typeof old !== "object" || Array.isArray(old)) refuse(`${file} is not a JSON object, so config writes nothing. Ask the user to fix or remove it.`);
-  const next = { ...old, ...set };
+  const next = { ...logbookJson(dir), ...set };
   for (const k of Object.keys(set)) if (set[k] === undefined) delete next[k];
-  swap(file, JSON.stringify(next, null, 2) + "\n");
+  swap(join(dir, "config.json"), JSON.stringify(next, null, 2) + "\n");
   return `name=${visible(typeof next.name === "string" ? next.name : "")} archived=${next.archived === true ? "yes" : "no"} start=${next.start === START_SAGE_MODE ? START_SAGE_MODE : "normal"}${next.lint_offer === "never" ? " lint_offer=never" : ""}`;
 }
 
@@ -2375,11 +2397,18 @@ function sageCommand(argv, env) {
       set[k] = (count ? typed(k, v) : valid(k, v)) ?? refuse(`config takes ${KEYS}, and arena_models as a list of ${MODELS.join(", ")}`);
     }
     if (pos.length) {
-      if (isShared(home, env)) guard(home, cmd, pos, opt, project, env);
+      const shared = isShared(home, env), mine = `cap.${projectName(project)}`, limit = (k) => shared && (LIMIT_KEYS.includes(k) || k === mine);
+      if (shared) guard(home, cmd, pos, opt, project, env);
       notePlugin(env);
-      const common = isShared(home, env) ? pick(set, SHARED_KEYS) : {}, own = Object.fromEntries(Object.entries(set).filter(([k]) => !Object.hasOwn(common, k)));
+      const common = shared ? pick(set, SHARED_KEYS) : {}, own = Object.fromEntries(Object.entries(set).filter(([k]) => !Object.hasOwn(common, k) && !limit(k)));
+      const limits = Object.fromEntries(Object.entries(set).filter(([k]) => limit(k)).map(([k, v]) => [k === mine ? "max_agents" : k, v]));
       if (Object.keys(common).length) writeConfig(sharedRoot(env), common);
       if (Object.keys(own).length) writeConfig(sageRoot(env), own);
+      if (Object.keys(limits).length) withLock(home, () => {
+        ready(home, env);
+        moveLimits(home, env);
+        swap(join(home, "config.json"), JSON.stringify({ ...logbookJson(home), ...limits }, null, 2) + "\n");
+      });
     }
     const c = { ...config(env, home), ...set };
     const models = Object.keys(c).filter((k) => MODEL.test(k));
@@ -2448,6 +2477,7 @@ function change(cmd, pos, opt, dir, env, skip, project, guarded) {
     if (!changeLoss) ready(dir, env, skip);
     if (guarded) opt.chief = guard(dir, cmd, pos, opt, project, env);
     const out = act(cmd, pos, opt, dir, env, skip, project);
+    if (!changeLoss && isShared(dir, env)) moveLimits(dir, env, cmd === "init");
     if (!changeLoss) status(dir, true);
     return out;
   });
