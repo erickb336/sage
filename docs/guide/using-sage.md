@@ -633,7 +633,7 @@ After a restore, the old move gate moves nothing: to move again, ask the chief f
 - **The shared root**: `~/.sage/`, or `SAGE_SHARED_HOME`. It holds the logbooks that Claude and Codex share, `bindings.tsv` (which checkout uses which logbook), `plugins.tsv` (which providers ran) and the cycle counts of the shared logbooks. See [Shared logbooks](#shared-logbooks).
 - **The hook's state**: `~/.claude/sage/.hooks/`. It keeps the mode, autopilot and the agent slots.
 - **The pages** of each task: `~/sage-worktrees/<project>-<hash>/pages/<task>/`, outside the logbook. Agents save their research pages and designs there. The chief makes the folder and prints its path.
-- **The board's config**: `~/.config/sage-board/`, when you use the board server. It holds `board.json` (with your board password's hash), `board.log` and `board.pid`.
+- **The board's config**: `~/.config/sage-board/`, when you use the board server. It holds `board.json`, `board.log` and `board.pid`.
 - **The board's login service**, when you install it ([Optional login startup](../../packages/sage-board/README.md#optional-login-startup)): the login file `~/Library/LaunchAgents/dev.sage.board.plist`, and the installed copy of the board in `~/.local/share/sage-board/service/`.
 - **The board's pages folder**: `~/.local/share/sage-board/pages/`, when the board's setup names it. The board saves its offline HTML pages there.
 
@@ -652,6 +652,5 @@ After a restore, the old move gate moves nothing: to move again, ask the chief f
 | A pull request does not merge | A merge needs its clean cycles on the exact head commit. A new commit starts again from cycle 1, except a clean merge of main that keeps the pull request's own change the same and passes CI. |
 | The board line says that the server is not running | The line says why: for example a busy port, or an older board server on the port. See the [board service guide](../../packages/sage-board/README.md). |
 | `board --install --login-file` refuses | It needs a `node` command on PATH that does not change at an upgrade. Put a `node` link to your Node in a folder that you own and that is on PATH (for example `~/.local/bin/node`), then run the install again. |
-| The board asks for a password on the phone | Set it once in Terminal on the Mac, with the `board --set-password` command that the board line gives. |
 
 For a question that this page does not answer, send `/sage:sage-help` and your question, for example `/sage:sage-help how do I see the board?`.

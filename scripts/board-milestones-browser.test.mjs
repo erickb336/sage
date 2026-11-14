@@ -33,7 +33,7 @@ const TWO = {
   [`/milestone/${key("M1")}`]: () => renderMilestonesHtml(two, { milestoneKey: `claude/sage-ff5ee2/M1` }),
 };
 async function open(t, path = "/", { width = 1280, height = 900, theme = "dark", hash = "", pages = PAGES, project = null } = {}) {
-  const context = await browser.newContext({ viewport: { width, height }, colorScheme: "light", reducedMotion: "reduce", ...(width < 700 ? { isMobile: true, hasTouch: true } : {}) });
+  const context = await browser.newContext({ viewport: { width, height }, colorScheme: "light", reducedMotion: "reduce" });
   t.after(() => context.close());
   await context.route("**/*", route => route.abort());
   for (const [at, html] of Object.entries(pages)) await context.route(`http://board.test${at}`, route => route.fulfill({ status: 200, contentType: "text/html; charset=utf-8", body: html() }));
@@ -113,8 +113,8 @@ test("R1324-5: the milestones list's picker keeps one project's milestones with 
   assert.ok((await shownIds(page)).length > 0 && (await page.locator(".card[data-key]:not([hidden])").evaluateAll(cards => cards.every(card => card.dataset.needs === "true"))));
 });
 
-for (const [width, height] of [[375, 812], [1280, 900]]) for (const theme of ["light", "dark"]) {
-  test(`T368, T349, R1347-1: no sideways scroll at ${width} px, ${theme}: the board, the milestones list, a milestone page, a task page and the snapshot's pages; the page shell is edge to edge below 700 px`, async t => {
+for (const [width, height] of [[1024, 768], [1280, 900]]) for (const theme of ["light", "dark"]) {
+  test(`T368, T349, R1347-1: no sideways scroll at ${width} px, ${theme}: the board, the milestones list, a milestone page, a task page and the snapshot's pages`, async t => {
     for (const [path, hash] of [...Object.keys(PAGES).map(path => [path, ""]), ...SNAPSHOT_PAGES.map(hash => ["/snapshot", hash])]) {
       const at = path + hash, page = await open(t, path, { width, height, theme });
       if (hash) await page.evaluate(value => { location.hash = value; }, hash);
@@ -125,8 +125,7 @@ for (const [width, height] of [[375, 812], [1280, 900]]) for (const theme of ["l
       assert.equal(await shells.count(), 1, `${at}: one shell shows`);
       const [left, right, radius, back] = await shells.evaluate(element => { const box = element.getBoundingClientRect(), style = getComputedStyle(element); return [Math.round(box.left), Math.round(box.right), style.borderTopLeftRadius, style.backgroundColor]; });
       assert.equal(back, await page.evaluate(() => { const probe = document.body.appendChild(document.createElement("i")); probe.style.color = "var(--shell)"; const color = getComputedStyle(probe).color; probe.remove(); return color; }), `${at}: the shell colour`);
-      if (width === 375) assert.deepEqual([left, right, radius], [0, 375, "0px"], at);
-      else assert.ok(left >= 8 && right <= client - 8 && radius === "20px", `${at}: ${left} to ${right}, radius ${radius}`);
+      assert.ok(left >= 8 && right <= client - 8 && radius === "20px", `${at}: ${left} to ${right}, radius ${radius}`);
     }
   });
 }
@@ -140,11 +139,11 @@ const LONG_PAGES = {
   [`/task/${key("T13")}`]: () => renderBoardHtml(long, { snapshot: false, taskKey: "claude/sage-ff5ee2/T13" }),
   [`/task/${key("T22")}`]: () => renderBoardHtml(long, { snapshot: false, taskKey: "claude/sage-ff5ee2/T22" }),
 };
-test("R1334-1, R1334-2: at 375 px, a 41- and a 108-character milestone name make no sideways scroll, and the theme switch stays on screen", async t => {
+test("R1334-1, R1334-2: at 1024 px, a 41- and a 108-character milestone name make no sideways scroll, and the theme switch stays on screen", async t => {
   assert.deepEqual([MID.length, LONG.length], [41, 108]);
   const full = { [`/task/${key("T13")}`]: MID, [`/task/${key("T22")}`]: LONG };
   for (const path of Object.keys(LONG_PAGES)) {
-    const page = await open(t, path, { width: 375, height: 812, pages: LONG_PAGES });
+    const page = await open(t, path, { width: 1024, height: 768, pages: LONG_PAGES });
     const { scroll, client } = await page.evaluate(() => ({ scroll: document.documentElement.scrollWidth, client: document.documentElement.clientWidth }));
     assert.ok(scroll <= client, `${path}: ${scroll} > ${client}`);
     const theme = await page.locator("label.theme").boundingBox();
@@ -162,7 +161,7 @@ test("T996: the project picker keeps the chosen project's frame on the board and
   const shown = page => page.locator("[data-rproject]:not([hidden])").evaluateAll(list => list.map(e => e.dataset.rproject));
   for (const path of Object.keys(RELEASED)) {
     assert.deepEqual(await shown(await open(t, path, { pages: RELEASED })), ["sage-ff5ee2", "other-abc123"], `${path}: all projects`);
-    const page = await open(t, path, { pages: RELEASED, project: "other-abc123", width: 375, height: 812 });
+    const page = await open(t, path, { pages: RELEASED, project: "other-abc123", width: 1024, height: 768 });
     assert.deepEqual(await shown(page), ["other-abc123"], `${path}: one project`);
     const { scroll, client } = await page.evaluate(() => ({ scroll: document.documentElement.scrollWidth, client: document.documentElement.clientWidth }));
     assert.ok(scroll <= client, `${path}: ${scroll} > ${client}`);

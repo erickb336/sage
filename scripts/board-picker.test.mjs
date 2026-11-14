@@ -28,7 +28,7 @@ function sample(change = () => {}) {
 const rename = (id, title) => read => { for (const project of read.flatMap(source => source.projects)) for (const task of project.tables.tasks ?? []) if (task.id === id && project.key.startsWith("claude/sage-")) task.title = title; };
 
 async function open(t, { width = 1440, height = 1000, theme = "dark", system = "light", live = false, html = null, init = null } = {}) {
-  const context = await browser.newContext({ viewport: { width, height }, colorScheme: system, reducedMotion: "reduce", ...(width < 700 ? { isMobile: true, hasTouch: true } : {}) });
+  const context = await browser.newContext({ viewport: { width, height }, colorScheme: system, reducedMotion: "reduce" });
   t.after(() => context.close());
   await context.route("**/*", route => route.abort());
   const page = await context.newPage();
@@ -242,16 +242,7 @@ test("T349: storage that throws still shows the dark theme, and so does the offl
   await expectTheme(offline, "light", "the switch works with scripts off");
 });
 
-test("T305 F-T305-8: at 375 px a tap on Close closes the sheet and gives focus back; the button says Close, not Esc", async t => {
-  const phone = await open(t, { width: 375, height: 812, theme: "light" });
-  await phone.locator("#pick-trig").tap();
-  const close = phone.getByRole("button", { name: "Close the project list" });
-  assert.equal(await close.innerText(), "Close");
-  const box = await close.boundingBox();
-  assert.ok(box.width >= 44 && box.height >= 44, JSON.stringify(box));
-  await close.tap();
-  assert.equal(await phone.locator("#pick-pop").isVisible(), false);
-  assert.equal(await focused(phone), "pick-trig");
+test("T305 F-T305-8: the Close button shows the Esc hint, and a click on it closes the list", async t => {
   const desk = await open(t);
   await desk.locator("#pick-trig").click();
   assert.equal(await desk.getByRole("button", { name: "Close the project list" }).innerText(), "Esc", "a mouse and keyboard screen keeps the Esc hint, and a click on it closes too");
@@ -281,15 +272,8 @@ test("T305 F-T305-9 and F-T305-6: under each filter the project chips add up to 
   assert.deepEqual(await name.locator(".pn").evaluate(span => [getComputedStyle(span).textOverflow, span.scrollWidth > span.clientWidth]), ["ellipsis", true]);
 });
 
-test("T305: at 375 px the list is a bottom sheet and the chips wrap; at 1024 px no column is cut off; in both themes", async t => {
+test("T305: at 1024 px no column is cut off, in both themes", async t => {
   for (const theme of ["light", "dark"]) {
-    const phone = await open(t, { width: 375, height: 812, theme });
-    assert.equal(await phone.evaluate(() => document.documentElement.scrollWidth), 375, "no sideways page scroll");
-    const chips = await phone.locator("#pick-chips .chip").evaluateAll(list => list.map(chip => chip.getBoundingClientRect()).map(box => [Math.round(box.left), Math.round(box.right)]));
-    assert.ok(chips.length >= 3 && chips.every(([left, right]) => left >= 0 && right <= 375), JSON.stringify(chips));
-    await phone.locator("#pick-trig").click();
-    const sheet = await phone.locator("#pick-pop").boundingBox();
-    assert.deepEqual([Math.round(sheet.x), Math.round(sheet.width), Math.round(sheet.y + sheet.height)], [0, 375, 812], "a sheet at the bottom, as wide as the screen");
     const laptop = await open(t, { width: 1024, height: 768, theme });
     const columns = await laptop.locator("[data-col]").evaluateAll(list => list.map(column => column.getBoundingClientRect().right));
     assert.equal(columns.length, 6);
@@ -367,47 +351,20 @@ test("R1075-5, R1071-4, R1075-6: the list closes when the focus leaves it; only 
   assert.equal(await page.locator("#pick-trig").getAttribute("aria-expanded"), "false");
 });
 
-test("R1075-7: at 375 px each chip, filter, the picker button and the Archived summary are 44 px high; a stand-in's reason shows on focus", async t => {
-  const phone = await open(t, { width: 375, height: 812, theme: "light" });
-  const heights = await phone.evaluate(() => [".pick .chip:not([hidden])", "#pick-trig", ".fbar select", ".fbar .seg button", "#sum-archived"].map(selector => [selector, Math.min(...[...document.querySelectorAll(selector)].filter(e => e.getClientRects().length).map(e => e.getBoundingClientRect().height))]));
-  for (const [selector, height] of heights) assert.ok(height >= 44, `${selector}: ${height} px`);
+test("R1075-7: a stand-in's reason shows on focus", async t => {
   const model = sample(), task = model.tasks.find(item => item.agents.some(agent => !agent.provider));
   assert.ok(task, "the sample has a run with no recorded provider");
-  const page = await open(t, { width: 375, height: 812, html: renderBoardHtml(model, { snapshot: false, taskKey: task.key }) });
+  const page = await open(t, { html: renderBoardHtml(model, { snapshot: false, taskKey: task.key }) });
   const standIn = page.locator(".standin[tabindex]").first();
   await standIn.focus();
   assert.match(await standIn.evaluate(element => getComputedStyle(element, "::after").content), /Stand-in: the logbook's source/);
-  await standIn.tap();
-  assert.equal(await page.evaluate(() => document.activeElement.classList.contains("standin")), true, "a tap focuses it, so the reason shows");
 });
 
-test("R1080-1: at 375 px every touch target on the board and on each task page takes a tap in a 44 by 44 px square", async t => {
-  const model = sample(), phone = await open(t, { width: 375, height: 812, theme: "light" });
-  const small = [];
-  for (const key of [null, ...model.tasks.map(task => task.key)]) {
-    await reload(phone, renderBoardHtml(model, { snapshot: false, taskKey: key }));
-    small.push(...await phone.evaluate(page => [...document.querySelectorAll("a[href],button,select,input:not(.vh),label[for],summary,[tabindex]:not([tabindex='-1'])")]
-      .filter(control => control.checkVisibility({ visibilityProperty: true })).flatMap(control => {
-        control.scrollIntoView({ block: "center", inline: "center" });
-        const box = control.getBoundingClientRect(), x = box.left + box.width / 2, y = box.top + box.height / 2;
-        const name = `${page} ${control.tagName.toLowerCase()} ${JSON.stringify(control.textContent.trim().slice(0, 30))}`;
-        if (box.width < 44 || box.height < 44) return [`${name}: ${Math.round(box.width)} x ${Math.round(box.height)} px`];
-        const missed = [[0, 0], [-21, 0], [21, 0], [0, -21], [0, 21], [-18, -18], [18, -18], [-18, 18], [18, 18]].filter(([dx, dy]) => !control.contains(document.elementFromPoint(x + dx, y + dy)));
-        return missed.length ? [`${name}: a tap at ${JSON.stringify(missed)} from the centre misses it ${JSON.stringify([box.left, box.top, box.width, box.height])} ${missed.map(([dx, dy]) => document.elementFromPoint(x + dx, y + dy)?.outerHTML.slice(0, 60)).join(" | ")}`] : [];
-      }), key ?? "board"));
-  }
-  assert.deepEqual(small, []);
-});
-
-test("R1093-1: at 375 px no tall header stays on screen, and at every width a card that Shift+Tab focuses is not under a part that stays on screen", async t => {
+test("R1093-1: at every width a card that Shift+Tab focuses is not under a part that stays on screen", async t => {
   const stuck = page => page.evaluate(() => Math.max(0, ...[...document.querySelectorAll("body *")].filter(e => ["sticky", "fixed"].includes(getComputedStyle(e).position) && e.getClientRects().length).map(e => e.getBoundingClientRect().bottom)));
-  for (const [width, theme] of [[375, "light"], [375, "dark"], [800, "light"], [1440, "dark"]]) {
+  for (const [width, theme] of [[800, "light"], [1024, "dark"], [1440, "dark"]]) {
     const page = await open(t, { width, height: 812, theme });
     const label = `${width} px ${theme}`;
-    if (width === 375) {
-      assert.ok(await page.locator("#pick-chips .chip:not([hidden])").count() >= 4, "4 or more need-you chips");
-      assert.ok(await stuck(page) < 120, `${label}: the sticky part is ${await stuck(page)} px high`);
-    }
     const below = await page.locator(".card[data-key]:visible").evaluateAll(cards => cards.findIndex(card => card.getBoundingClientRect().top > innerHeight));
     assert.ok(below >= 0,`${label}: a card below the first screen`);
     const target = page.locator(".card[data-key]:visible").nth(below);
@@ -476,15 +433,15 @@ test("R1103-1: scrolled, Shift+Tab onto a card whose top is 20 px below the top 
   assert.deepEqual(wrong, []);
 });
 
-test("R1103-1: no element stays on screen when the page scrolls, except the phone picker sheet while it is open", async t => {
+test("R1103-1: no element stays on screen when the page scrolls, also while the picker is open", async t => {
   const stays = page => page.evaluate(() => [...document.querySelectorAll("*")].filter(e => ["sticky", "fixed"].includes(getComputedStyle(e).position) && e.getClientRects().length).map(e => e.className || e.tagName.toLowerCase()));
-  for (const width of [375, 800, 1440]) {
+  for (const width of [800, 1440]) {
     const page = await open(t, { width, height: 800 });
     await page.evaluate(() => scrollTo(0, 400));
     assert.deepEqual(await stays(page), [], `${width} px: the page with the picker closed`);
     await page.locator("#pick-trig").click();
     assert.equal(await page.locator("#pick-trig").getAttribute("aria-expanded"), "true", `${width} px: the picker is open`);
-    assert.deepEqual(await stays(page), width === 375 ? ["pop"] : [], `${width} px: the page with the picker open`);
+    assert.deepEqual(await stays(page), [], `${width} px: the page with the picker open`);
   }
 });
 
