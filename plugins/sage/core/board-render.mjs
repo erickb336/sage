@@ -116,7 +116,7 @@ function column(ctx, col) {
   const head = `<h2>${esc(name)} <span class="n">${col.tasks.length}</span></h2>`;
   const archived = (col.archivedTasks ?? []).map((task, i) => card(ctx, task, { archived: true, i: col.tasks.length + i })).join("");
   const attrs = `aria-label="${esc(name)}" data-col="${esc(col.key)}" data-scroll="col-${esc(col.key)}"`;
-  if (!col.tasks.length) return `<section class="col empty-col" ${attrs}>${head}<div class="empty">No tasks.</div>${archived}</section>`;
+  if (!col.tasks.length) return `<section class="col" ${attrs}>${head}<div class="empty">No tasks.</div>${archived}</section>`;
   const fold = col.key === "backlog" ? col.tasks.slice(BACKLOG_SHOWN) : [];
   const shown = col.tasks.slice(0, col.tasks.length - fold.length);
   return `<section class="col" ${attrs}>${head}${shown.map((task, i) => card(ctx, task, { i })).join("")}`
@@ -517,7 +517,7 @@ function filter(){
   items.forEach(i=>{i.hidden=!itemFits(i.dataset,S)||!!S.project&&i.dataset.project!==S.project});const strip=$('needstrip');if(strip){const n=items.filter(i=>!i.hidden).length;strip.hidden=!n;const c=$('needstrip-n');if(c)c.textContent=String(n)}
   cards.forEach(c=>{const base=(S.project?c.dataset.project===S.project:!c.hasAttribute('data-archived'))&&cardFits(c.dataset,S);c.hidden=!(base&&(!S.needs||c.dataset.needs==='true'))});
   const shown=cards.filter(c=>!c.hidden),sum=key=>shown.reduce((n,c)=>n+Number(c.dataset[key]),0);
-  all('[data-col]').forEach(col=>{const visible=all('.card',col).filter(c=>!c.hidden);const count=col.querySelector('.n');if(count)count.textContent=String(visible.length);col.classList.toggle('empty-col',!visible.length);const empty=col.querySelector('.empty');if(empty)empty.hidden=visible.length>0;const rest=col.querySelector('.rest');if(rest){const order=all('.card',col).sort((a,b)=>a.dataset.i-b.dataset.i),seen=order.filter(c=>!c.hidden);order.forEach(c=>{const at=seen.indexOf(c);if(at>-1&&at<SHOWN)rest.before(c);else rest.append(c)});const more=Math.max(0,seen.length-SHOWN);rest.hidden=!more;const m=rest.querySelector('[data-more]');if(m)m.textContent=foldText(more)}});
+  all('[data-col]').forEach(col=>{const visible=all('.card',col).filter(c=>!c.hidden);const count=col.querySelector('.n');if(count)count.textContent=String(visible.length);const empty=col.querySelector('.empty');if(empty)empty.hidden=visible.length>0;const rest=col.querySelector('.rest');if(rest){const order=all('.card',col).sort((a,b)=>a.dataset.i-b.dataset.i),seen=order.filter(c=>!c.hidden);order.forEach(c=>{const at=seen.indexOf(c);if(at>-1&&at<SHOWN)rest.before(c);else rest.append(c)});const more=Math.max(0,seen.length-SHOWN);rest.hidden=!more;const m=rest.querySelector('[data-more]');if(m)m.textContent=foldText(more)}});
   const set=(id,value)=>{const e=$(id);if(e)e.textContent=String(value)};
   if(list&&$('board-summary')){set('s-needs',shown.filter(c=>c.dataset.needs==='true').length+need.milestones);set('s-agents',sum('agents'));set('s-inferred',sum('inferred'));set('s-review',sum('review'));set('s-tasks',shown.length);set('needs-count',need.all)}
   all('[data-filter=needs]').forEach(b=>b.setAttribute('aria-pressed',String(S.needs)));
