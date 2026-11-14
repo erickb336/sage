@@ -1,7 +1,8 @@
 import "./test-env.mjs";
+import { appendSyntheticHistory } from "./fixtures/codex-history-padding.mjs";
 import assert from "node:assert/strict";
 import { spawnSync } from "node:child_process";
-import { cpSync, existsSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, renameSync, rmSync, statSync, symlinkSync, writeFileSync } from "node:fs";
+import { appendFileSync, cpSync, existsSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, renameSync, rmSync, statSync, symlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { test } from "node:test";
@@ -9,6 +10,8 @@ import { ROOT } from "./build.mjs";
 import { entries, EVENTS } from "../plugins/sage-codex/hooks/entries.mjs";
 import { dispatch, ROUTES } from "../plugins/sage-codex/hooks/dispatch.mjs";
 import { planHooks } from "../plugins/sage-codex/hooks/launch.mjs";
+import { markFile } from "../plugins/sage-codex/hooks/start-mark.mjs";
+import { modeDirectory } from "../plugins/sage-codex/hooks/hook-state.mjs";
 
 const PLUGIN = join(ROOT, "plugins/sage-codex");
 const MERGE = `gh pr merge 41 --squash --match-head-commit ${"a".repeat(40)}`;
@@ -34,6 +37,34 @@ function marker(s, name) {
 }
 
 const USER = { hooks: { PreToolUse: [{ matcher: "Bash", hooks: [{ type: "command", command: "echo mine" }] }], Stop: [{ hooks: [{ type: "command", command: "echo stop" }] }] }, other: { kept: true } };
+
+test("T1069: the scratch launcher starts and activates with a 190 MB history, including a partial startup line", (t) => {
+  const s = scratch(t);
+  s.version("0.1.0");
+  assert.equal(s.hooks("install").status, 0);
+  const session = "019a0000-0000-7000-8000-00000000beef";
+  const transcript = join(s.dir, `rollout-${session}.jsonl`);
+  writeFileSync(transcript, JSON.stringify({ type: "session_meta", payload: { id: session, cli_version: "0.167.0", source: "cli" } }) + "\n");
+  appendSyntheticHistory(transcript, 117, 64 * 1024 * 1024);
+  appendFileSync(transcript, '{"type":"event_msg","payload":');
+  const input = { session_id: session, transcript_path: transcript, cwd: s.dir };
+  const start = s.launch("SessionStart", { ...input, hook_event_name: "SessionStart", source: "startup" });
+  assert.equal(start.status, 0, start.stderr);
+  assert.equal(JSON.parse(readFileSync(markFile(modeDirectory(s.env), session), "utf8")).lines, 120);
+  appendFileSync(transcript, '{} }\n');
+  const prompt = (text, turn) => s.launch("UserPromptSubmit", { ...input, hook_event_name: "UserPromptSubmit", prompt: text, turn_id: turn });
+  assert.equal(prompt("sage mode", "mode").status, 0);
+  const times = [];
+  for (let i = 0; i < 3; i++) {
+    if (i) assert.equal(prompt("autopilot off", `off-${i}`).status, 0);
+    const began = performance.now();
+    const result = prompt("autopilot on", `new-${i}`);
+    times.push(performance.now() - began);
+    assert.equal(result.status, 0, result.stderr);
+    assert.match(result.stdout, /autopilot is on/);
+  }
+  console.log(JSON.stringify({ launcherBytes: statSync(transcript).size, runs: 3, elapsedMs: times }));
+});
 
 test("the fixed list: 8 events, one group each with no matcher, each running the launcher with its event; the dispatcher routes the same events", () => {
   const list = entries("/h/.codex");
