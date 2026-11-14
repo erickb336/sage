@@ -9,6 +9,7 @@ import { after, before, test } from "node:test";
 import { fileURLToPath } from "node:url";
 import { createBoardServer, loadBoardApp } from "../packages/sage-board/server.mjs";
 import { HOSTILE_TEXT, writeTasksLogbook } from "./fixtures/board-app.mjs";
+import { graphProblems } from "./fixtures/graph-geometry.mjs";
 import { measureContrast } from "./fixtures/contrast.mjs";
 
 const require = createRequire(import.meta.url);
@@ -103,6 +104,30 @@ test("T1063: no link of the graph passes through a box, and a loop or a task tha
     const links = await linksThroughBoxes(page);
     assert.deepEqual(links.filter(link => link.through.length), [], name);
     if (mark) assert.deepEqual(links.filter(link => link.label === mark[1]).map(link => link.link), [mark[0]], `${name}: the link that goes back carries the mark`);
+    assert.deepEqual(problems, [], name);
+  }
+});
+
+const drawnProblems = async page => graphProblems(await page.evaluate(() => ({
+  boxes: [...document.querySelectorAll(".react-flow__node")].map(node => { const [x, y] = node.style.transform.match(/-?[\d.]+/g).map(Number); return { id: node.dataset.id.split("/").pop(), x, y, w: node.offsetWidth, h: node.offsetHeight }; }),
+  links: [...document.querySelectorAll(".react-flow__edge")].map(edge => ({ id: edge.dataset.id.replace(/shared\/sample-app-abc123\//g, ""), d: edge.querySelector(".react-flow__edge-path").getAttribute("d") })),
+})));
+
+test("T1063: each link of the graph keeps its own line: two links never share a track, and a wait and a conflict of one pair both show", async t => {
+  const cases = [
+    ["F-T1063-15: T7 waits for T5; T6 for T5, T3 and T7; T13 for T5 and T7", { waits: { T7: "T5", T6: "T5,T3,T7", T13: "T5,T7" } }, "T5>T7 T5>T6 T3>T6 T7>T6 T5>T13 T7>T13 T3|T8"],
+    ["F-T1063-17: T6 waits for T5, T13 for T7, T4 for T7 and T6, T2 for T3 and T13", { waits: { T6: "T5", T13: "T7", T4: "T7,T6", T2: "T3,T13" } }, "T5>T6 T7>T13 T7>T4 T6>T4 T3>T2 T13>T2 T3|T8"],
+    ["F-T1063-19: T8 waits for T3, and the two may conflict", { waits: { T8: "T3" } }, "T5>T6 T6>T13 T3>T8 T3|T8"],
+    ["F-T1063-20: ten tasks in one column all may conflict", { crowd: 10 }, `T5>T6 T6>T13 T3|T8 ${Array.from({ length: 10 }, (_, a) => Array.from({ length: 9 - a }, (_, k) => `T${80 + a}|T${81 + a + k}`)).flat().join(" ")}`],
+  ];
+  const sorted = text => text.split(" ").map(link => link.includes("|") ? link.split("|").sort().join("|") : link).sort();
+  for (const [name, options, expected] of cases) {
+    const { page, problems } = await open(t, options, "/app/#pull-requests");
+    await page.getByRole("button", { name: "Graph" }).click();
+    await page.locator(".react-flow__edge-path").first().waitFor({ state: "attached" });
+    const drawn = await page.locator(".react-flow__edge").evaluateAll(edges => edges.map(edge => edge.dataset.id.replace(/^\w+:|shared\/sample-app-abc123\//g, "")));
+    assert.deepEqual(sorted(drawn.join(" ")), sorted(expected), `${name}: the graph draws each link of the logbook, and no other`);
+    assert.deepEqual(await drawnProblems(page), { through: [], shared: [] }, name);
     assert.deepEqual(problems, [], name);
   }
 });

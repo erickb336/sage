@@ -88,7 +88,7 @@ function addPullRequests(tables, records, at, hostile) {
   }
 }
 
-export function writeTasksLogbook(root, worktrees, now, { hostile = false, many = 0, edge = false, chiefCases = false, stuck = false, prs = false, waits = {} } = {}) {
+export function writeTasksLogbook(root, worktrees, now, { hostile = false, many = 0, edge = false, chiefCases = false, stuck = false, prs = false, waits = {}, crowd = 0 } = {}) {
   const at = hours => new Date(Date.parse(now) - hours * HOUR).toISOString();
   const tables = appTables(now), dir = join(root, "sample-app-abc123");
   const chiefs = { T1: "C1", T2: "C1", T3: "C2", T4: "C1", T10: "C1", T11: "C2", T20: "C1", T21: "C1", T30: "C2" };
@@ -122,6 +122,11 @@ export function writeTasksLogbook(root, worktrees, now, { hostile = false, many 
   }
   if (prs) addPullRequests(tables, records, at, hostile);
   tables.tasks = tables.tasks.map(task => task.id in waits ? { ...task, waits: waits[task.id] } : task);
+  for (let i = 0; i < crowd; i++) {
+    const id = `T${80 + i}`;
+    tables.tasks.push({ ...tables.tasks.find(task => task.id === "T3"), id, title: `Sample crowded change ${i + 1}`, milestone: "", priority: "P2", kind: "", chief: `C${i + 1}`, branch: `sage/t${80 + i}-crowd`, pr: `${80 + i}` });
+    records.push({ id: `O${records.length + 1}`, task: id, kind: "files", source: "git diff", basis: "observed", observedAt: at(2), recordedAt: at(2), data: { head: "a".repeat(40), paths: ["src/crowd.js"], truncated: false } });
+  }
   if (chiefCases) for (const [id, title, chief] of [["T70", "Sample stopped chief", "C3"], ["T71", "Sample unlisted chief", "C9"], ["T72", "Sample task with no chief", ""]]) tables.tasks.push({ ...tables.tasks[1], id, title, state: "building", milestone: "", priority: "P3", kind: "", chief, branch: "", waits: "" });
   if (stuck) {
     tables.tasks = tables.tasks.map(task => task.id === "T20" ? { ...task, state: "abandoned" } : task);
