@@ -35,7 +35,7 @@ const PAGES = {
   "/snapshot": () => renderBoardHtml(model),
 };
 async function context(t, { width = 1280, height = 900 } = {}) {
-  const ctx = await browser.newContext({ viewport: { width, height }, colorScheme: "light", reducedMotion: "reduce", ...(width < 700 ? { isMobile: true, hasTouch: true } : {}) });
+  const ctx = await browser.newContext({ viewport: { width, height }, colorScheme: "light", reducedMotion: "reduce" });
   t.after(() => ctx.close());
   await ctx.route("**/*", route => route.abort());
   for (const [at, html] of Object.entries(PAGES)) await ctx.route(`http://board.test${at}`, route => route.fulfill({ status: 200, contentType: "text/html; charset=utf-8", body: html() }));
@@ -90,8 +90,8 @@ test("R1371-2 (reopened): with needs=1 also in the address, in any order, the Mi
   }
 });
 
-test("R1371-1: at 375 px the not-found page of a very long milestone id has no sideways scroll", async t => {
-  const page = await open(t, "/milestone/long", { width: 375, height: 812 });
+test("R1371-1: at 1024 px the not-found page of a very long milestone id has no sideways scroll", async t => {
+  const page = await open(t, "/milestone/long", { width: 1024, height: 768 });
   assert.ok(await noSideways(page), `${await page.evaluate(() => document.documentElement.scrollWidth)} px wide`);
 });
 
@@ -108,15 +108,13 @@ test("T374-5: a live refresh updates the Needs you count on /milestones and /mil
   }
 });
 
-test("T374-11: at 375 px the task page bar shows the milestone id; a wide screen keeps the name", async t => {
-  const page = await open(t, `/task/${key("T13")}`, { width: 375, height: 812 });
-  assert.deepEqual([await page.locator(".plink .pid").isVisible(), await page.locator(".plink .cn").isVisible(), await page.locator(".plink .pid").textContent()], [true, false, "M1"]);
+test("T374-11: the task page bar shows the milestone name", async t => {
   const wide = await open(t, `/task/${key("T13")}`);
-  assert.deepEqual([await wide.locator(".plink .pid").isVisible(), await wide.locator(".plink .cn").textContent()], [false, "Codex support"], "a wide screen keeps the name");
+  assert.deepEqual([await wide.locator(".plink .cn").isVisible(), await wide.locator(".plink .cn").textContent()], [true, "Codex support"]);
 });
 
-test("T374-12: at 375 px a milestone name with no space wraps on its card: no sideways scroll", async t => {
-  const board = await open(t, "/long", { width: 375, height: 812 });
+test("T374-12: at 1024 px a milestone name with no space wraps on its card: no sideways scroll", async t => {
+  const board = await open(t, "/long", { width: 1024, height: 768 });
   assert.ok(await noSideways(board), "no sideways scroll");
   const out = await board.locator(".tag.prog").evaluateAll(tags => tags.filter(tag => tag.getBoundingClientRect().right > tag.closest(".card").getBoundingClientRect().right).length);
   assert.equal(out, 0, "each milestone tag stays in its card");
@@ -214,11 +212,11 @@ test("T378-19: the milestone approval band spans its section edge to edge", asyn
   assert.deepEqual(band, section);
 });
 
-test("T378-21: no sideways scroll at 320 px on task pages, and the theme switch stays on screen", async t => {
+test("T378-21: no sideways scroll at 1024 px on task pages, and the theme switch stays on screen", async t => {
   for (const id of ["T13", "T22", "T41"]) {
-    const page = await open(t, `/task/${key(id)}`, { width: 320, height: 700 });
+    const page = await open(t, `/task/${key(id)}`, { width: 1024, height: 768 });
     assert.ok(await noSideways(page), `${id}: ${await page.evaluate(() => document.documentElement.scrollWidth)} px wide`);
     const box = await page.locator("label.theme").boundingBox();
-    assert.ok(box.x >= 0 && box.x + box.width <= 320, `${id}: the switch ends at ${box.x + box.width}`);
+    assert.ok(box.x >= 0 && box.x + box.width <= 1024, `${id}: the switch ends at ${box.x + box.width}`);
   }
 });

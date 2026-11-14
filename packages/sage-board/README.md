@@ -2,7 +2,7 @@
 
 The Sage board shows recorded tasks from explicit Claude and Codex logbook roots, and from the shared root that both providers use for a shared project. It reads them without changing them.
 
-The service runs independently of a chat session. On the Mac itself, browser pages need no sign-in. Through a private HTTPS tunnel, they need one password that you set once in a terminal. Until you set it, access from outside the Mac is off. The board has no random secret. Chat and offline views use the same task model.
+The service runs independently of a chat session. It is for a desktop browser on this Mac only: it listens on 127.0.0.1, needs no sign-in, and refuses every request that does not come from the Mac itself. Chat and offline views use the same task model.
 
 ## Start locally
 
@@ -12,7 +12,7 @@ A config from before the shared root names only the Claude and Codex roots. The 
 
 The board reads a logbook again when it changed during the read: at most 3 times, each with its own share of the read limit. After the third change, the server keeps its last good read under the note "The logbook is changing", which is not a diagnostic, so the page is not stale. It reads again soon, and the next read with no change removes the note.
 
-Each server sends a non-secret id of its config on the Mac, so `board --ensure` tells this config's board from an older board server or a board of another config on the same port, and says which. A server reads its config once, when it starts. After you change the config or the password, or update sage, `board --ensure` says that a restart is needed. A server keeps the code that it started with: after you update sage to the version that shows shared projects, stop the board with the command below, then ask for the board again. To restart, run:
+Each server sends a non-secret id of its config on the Mac, so `board --ensure` tells this config's board from an older board server or a board of another config on the same port, and says which. A server reads its config once, when it starts. After you change the config, or update sage, `board --ensure` says that a restart is needed. A server keeps the code that it started with: after you update sage to the version that shows shared projects, stop the board with the command below, then ask for the board again. To restart, run:
 
 ```sh
 node <path to board/cli.mjs> board --stop
@@ -32,19 +32,11 @@ node "$HOME/.local/share/sage-board/service/packages/board/cli.mjs" board --serv
 
 The last line runs the installed copy: use the path that the install step prints after "Installed board command". From the Sage checkout, run the same commands in `packages/sage-board/`; the installed copy is then `service/packages/sage-board/cli.mjs`.
 
-Open the printed localhost URL. On the Mac itself (Host `127.0.0.1`, `localhost` or `[::1]` at the board's port, and no proxy header) the board needs no sign-in. Every other request signs in as `sage` with your board password.
+Open the printed localhost URL in a desktop browser on the Mac. The board answers a request only when it comes from loopback, names a loopback host (`127.0.0.1`, `localhost` or `[::1]` at the board's port), and has no header that a proxy adds (`X-Forwarded-*` or `Forwarded`). Every other request is refused: status 403, or 404 on the pages route. The read routes take only GET and HEAD.
 
-Set the password yourself, in Terminal on the Mac:
+A config from an earlier version can still hold the keys `allowedHosts`, `password` or `secret`. It still loads, and the board ignores those keys. To remove them, edit the file, then restart the board.
 
-```sh
-node <path to board/cli.mjs> board --set-password
-```
-
-`board --ensure` and `board --setup` print this command with its full path. `board --setup` adds the `--config` that you gave it, so the command sets the password of that config. It asks twice with the echo off and needs 12 characters or more. The configuration file keeps only a salted scrypt hash. The command refuses when its input is not a terminal. Restart a running server after a change.
-
-The terminal check accepts any pseudo-terminal, so it alone does not stop an agent. The sage hook in Claude Code adds a second barrier: it refuses the ordinary command shapes by which a session or an agent runs `--set-password`, or reads, copies or replaces the configuration file. An agent runs as your own user, so a script that builds the command or the path while it runs can still pass the hook. Full protection needs the sandbox (tasks T97 to T99).
-
-Until you set a password, every request that is not from the Mac itself gets status 403 and the text "Access from outside this Mac is off until the owner sets a board password on the Mac." The text names no path; the exact command is only in the output of `board --ensure` on the Mac. A configuration from before this change can still have a random `secret`. It still loads, and a server of this version ignores it; `--set-password` removes it from the file. A server that started before the update can still take the secret, so `board --ensure` says that a restart is needed until you stop that server.
+The sage hook, in Claude Code and in Codex, refuses the ordinary command shapes by which a session or an agent reads, copies or replaces the configuration file, or lists, searches, copies or moves its folder. An agent runs as your own user, so a script that builds the path while it runs can still pass the hook. Full protection needs the sandbox (tasks T97 to T99).
 
 The default port is 43123. Setup accepts `--port` from 1024 to 65535. A busy port causes an error; the service does not choose another port.
 
@@ -54,7 +46,7 @@ Setup never changes a config that exists: it stops with an error that names the 
 2. Edit `"port"` in the file.
 3. Ask for the board again, or run `board --ensure --config <file>`.
 
-If you edit the port first, `--stop` finds no board on the new port, and the old server runs on. To set the board up again from the start, remove the file first; this also removes the board password.
+If you edit the port first, `--stop` finds no board on the new port, and the old server runs on. To set the board up again from the start, remove the file first.
 
 The stable installation copies only board and core sources. It does not depend on a provider plugin cache. Stop the foreground service with Ctrl+C.
 
@@ -82,22 +74,9 @@ Inspect it with `launchctl print "gui/$(id -u)/dev.sage.board"`. Stop it with `l
 
 After a Node upgrade, inspect the login service with `launchctl print "gui/$(id -u)/dev.sage.board"`. Check its Node path, then open the board’s configured address. An older login file that names a Cellar version needs a new file with a stable Node path.
 
-## Private phone access
+## This Mac only
 
-The phone reaches the board only through a private HTTPS tunnel that forwards to `http://127.0.0.1:43123` and adds an `X-Forwarded-For` header. The board does not depend on one tunnel tool. One example is Tailscale Serve: `tailscale serve --bg --https=443 http://127.0.0.1:43123`. Another is a reverse proxy, such as Caddy or nginx, that you reach over a private network and that adds `X-Forwarded-For`.
-
-1. Set the board password in a terminal (above).
-2. Add the tunnel's exact host name to `allowedHosts` in the board configuration.
-3. Restart the service with `board --stop` and `board --ensure`.
-4. Open the tunnel's HTTPS address on the phone and sign in as `sage` with your board password.
-
-Until `allowedHosts` names a host, the `board --ensure` line says that phone access is off. Until you set a password, it says that phone access is off and gives the set-password command.
-
-A request that comes through the tunnel always needs the sign-in, also when it names a loopback host. The server treats a request as from the Mac only when it comes from loopback, names a loopback host, and has no header that a proxy adds (`X-Forwarded-*` or `Forwarded`). The server checks one password at a time and waits one second after a wrong one.
-
-A raw TCP forward is not supported: it bypasses the sign-in. Such a forward (`ssh -L`, `socat`, `tailscale serve --tcp` or a similar tool) connects from loopback and adds no proxy header. So a request through it with a loopback Host gets the board with no sign-in. An SSH tunnel is a raw TCP forward of this kind.
-
-Do not expose the tunnel to the public internet (for example Tailscale Funnel), and do not bind the board to a LAN address.
+Do not forward the board's port to another computer (for example with `ssh -L`, `socat` or a reverse proxy), and do not bind the board to a LAN address. A raw TCP forward connects from loopback and adds no proxy header, so it passes the access check.
 
 ## Limits and verification
 
@@ -105,9 +84,9 @@ The board displays recorded facts. Missing provider, head, completion, or budget
 
 Claude owner phrases can request the board and task views. Codex uses the manual skill commands until native owner phrase delivery is verified. The service does not start agent orchestration or autopilot.
 
-The server has four pages: the task board (`/`, with a page for each task at `/task/<id>`), the Releases tab (`/releases`, T996), the milestones list (`/milestones`, with a page for each milestone at `/milestone/<id>`) and the Agents page (`/agents`). Each page has its live stream (`/?events=1`, `/releases?events=1`, `/milestones?events=1`, `/milestone/<id>?events=1` and `/agents?events=1`), with the same sign-in. A task or milestone id in a route is the base64url of its key; an unknown milestone gives a not-found page with status 404. The Agents page also reads the hook's agent slots and helper notes under each logbook root (`.hooks/slots` and `.hooks/helpers`), by name and change time only. It refreshes by itself when an agent's state changes with time (30 min with no activity, or running long), as no file changes then.
+The server has four pages: the task board (`/`, with a page for each task at `/task/<id>`), the Releases tab (`/releases`, T996), the milestones list (`/milestones`, with a page for each milestone at `/milestone/<id>`) and the Agents page (`/agents`). Each page has its live stream (`/?events=1`, `/releases?events=1`, `/milestones?events=1`, `/milestone/<id>?events=1` and `/agents?events=1`), with the same access check. A task or milestone id in a route is the base64url of its key; an unknown milestone gives a not-found page with status 404. The Agents page also reads the hook's agent slots and helper notes under each logbook root (`.hooks/slots` and `.hooks/helpers`), by name and change time only. It refreshes by itself when an agent's state changes with time (30 min with no activity, or running long), as no file changes then.
 
-The server also shows each task's pages folder, read-only, at `/pages/<logbook>/<task>/` (an index) and `/pages/<logbook>/<task>/<file>` (T1001). It serves these only to a request from the Mac itself, never through a tunnel.
+The server also shows each task's pages folder, read-only, at `/pages/<logbook>/<task>/` (an index) and `/pages/<logbook>/<task>/<file>` (T1001). It serves these only to a request from the Mac itself.
 
 It reads the raw path and never joins it onto a folder: it refuses `%`, `..`, a part that starts with a dot, any query but `?scripts=1`, a logbook that the board does not show, and a link or a file with a second name anywhere in the path. It serves only web pages, PDFs, pictures, and Markdown and text as plain text, at most 3 parts deep and 16 MiB.
 
@@ -121,4 +100,4 @@ Limits of the pages route:
 - The Page link always names port 43123. A board on another port shows the pages there, but the link in a message does not reach them.
 - The folder of the pages comes from `SAGE_WORKTREES`, or else `~/sage-worktrees`. A board that launchd starts gets no `SAGE_WORKTREES` from your shell, so it shows the pages under `~/sage-worktrees` only.
 
-Local tests exercise the sign-in, file updates, task routes, the Agents page, reconnects, offline export, and stable installation. Phone access, login startup, and browser appearance still need direct checks.
+Local tests exercise the access check, file updates, task routes, the Agents page, reconnects, offline export, and stable installation. Login startup and browser appearance still need direct checks.

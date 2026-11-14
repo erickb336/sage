@@ -733,7 +733,7 @@ function agentCheck(input, file, slots) {
 }
 function boardProblem(input) {
   const tool = input.tool_name ?? "", ti = input.tool_input ?? {}, home = process.env.HOME || homedir();
-  if (core.error) return /sage-board|--set-password/i.test(fields(ti).join("\n")) ? `the board password rule (T229) could not load (${core.error?.message ?? core.error}), so a call that names the board config or --set-password is refused.` : undefined;
+  if (core.error) return /sage-board/i.test(fields(ti).join("\n")) ? `the board config rule (T229) could not load (${core.error?.message ?? core.error}), so a call that names the board config is refused.` : undefined;
   let cwd = typeof input.cwd === "string" && input.cwd ? input.cwd : process.cwd();
   if (/^(?:Read|Write|Edit|MultiEdit|NotebookEdit)$/.test(tool)) {
     const path = [ti.file_path, ti.notebook_path].find((p) => typeof p === "string" && p);

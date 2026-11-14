@@ -54,9 +54,7 @@ export function agentCommandProblem(command, cwd, path = process.env.PATH ?? "")
   return undefined;
 }
 
-const BOARD_RULE = "the board password rule (T229)";
-const SET_PASSWORD = `${BOARD_RULE}: only the owner sets the board password, in Terminal on the Mac. Never run board --set-password: give the owner the command to run there, and never ask for the password in the chat.`;
-const BOARD_CONFIG = `${BOARD_RULE}: no agent reads, copies or replaces the board config (~/.config/sage-board/board.json), or searches, copies or moves a folder that holds it, because it holds the owner's password hash. The board command's own output (board --ensure, the chat board) says what you need.`;
+const BOARD_CONFIG = "the board config rule (T229): no agent reads, copies or replaces the board config (~/.config/sage-board/board.json), or lists, searches, copies or moves the board's folder or a folder that holds it, because only the owner and the board command change the board's state. The board command's own output (board --ensure, the chat board) says what you need.";
 const VARIABLE = /[$`]/;
 function boardFolders(home) {
   const folder = join(home, ".config", "sage-board");
@@ -102,7 +100,7 @@ export function boardCommandProblem(text, cwd, { home = process.env.HOME || home
   try {
     read = programsRun(text, cwd, undefined, { contextEvidence: true, uncertainDirectory: uncertain, home });
   } catch {
-    return /--set-password/.test(text.replace(/['"\\]/g, "")) ? SET_PASSWORD : undefined;
+    return undefined;
   }
   const folders = boardFolders(home), seen = new Map();
   const reachOf = (word, dir) => {
@@ -112,7 +110,6 @@ export function boardCommandProblem(text, cwd, { home = process.env.HOME || home
   };
   for (const { run, uncertainDirectory } of read.programs) {
     const name = programName(run.word), board = BOARD_RUN(run);
-    if (!/^(?:e|f)?grep$|^rg$/.test(name) && run.args.some((a) => /^--set-password(?:=|$)/.test(a))) return SET_PASSWORD;
     const whole = WHOLE(name, run.args);
     const start = uncertainDirectory ? undefined : run.dir;
     let dir = start;

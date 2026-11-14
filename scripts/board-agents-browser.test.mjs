@@ -27,7 +27,7 @@ function sample(change = () => {}, now = NOW) {
 }
 
 async function open(t, { width = 1440, height = 900, theme = "dark" } = {}) {
-  const context = await browser.newContext({ viewport: { width, height }, colorScheme: "light", reducedMotion: "reduce", ...(width < 700 ? { isMobile: true, hasTouch: true } : {}) });
+  const context = await browser.newContext({ viewport: { width, height }, colorScheme: "light", reducedMotion: "reduce" });
   t.after(() => context.close());
   await context.route("**/*", route => route.abort());
   await context.route("http://board.test/agents", route => route.fulfill({ status: 200, contentType: "text/html; charset=utf-8", body: renderAgentsHtml(sample(), { live: true }) }));
@@ -46,7 +46,7 @@ async function push(page, model) {
   await page.evaluate(html => window.sampleBoardStream.dispatchEvent(new MessageEvent("board", { data: JSON.stringify({ html, stale: false }) })), renderAgentsHtml(model, { live: true }));
 }
 
-for (const width of [375, 1440]) for (const theme of ["light", "dark"]) {
+for (const width of [1024, 1440]) for (const theme of ["light", "dark"]) {
   test(`T308: the Agents page at ${width} px, ${theme}: no sideways scroll, each state with its mark and word, the theme`, async t => {
     const page = await open(t, { width, theme });
     assert.equal(await page.evaluate(() => document.documentElement.scrollWidth), width, "no sideways scroll");
@@ -79,7 +79,7 @@ test("T308: the keyboard reaches the page tabs and every task link in order, and
 });
 
 test("T308: a live refresh replaces the page and keeps the scroll and the focus", async t => {
-  const page = await open(t, { width: 375, height: 700 });
+  const page = await open(t, { width: 1024, height: 400 });
   const link = page.locator("a.t").nth(8), id = await link.getAttribute("id");
   await link.scrollIntoViewIfNeeded();
   await page.evaluate(() => scrollBy(0, 37));

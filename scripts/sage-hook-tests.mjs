@@ -2988,14 +2988,14 @@ test("T216: the board note's two commands pass the hook for the chief, as the no
     assert.ok(chat?.startsWith(`node ${TOOL} board `), note);
     for (const command of [ensure, chat]) assert.equal(denied(handle(bash(command), { sage: true, given: true }, slots)), undefined, command);
     assert.ok(denied(handle(bash("git push origin main"), { sage: true, given: true }, slots)), "the same check refuses a chief's command that the hook forbids");
-    assert.match(note, /On this Mac the board needs no sign-in\. On the phone, the user is sage and the password is the owner's own board password\. Until the owner sets one, access from outside this Mac is off\./);
-    assert.match(note, /When the line gives a set-password command, give the owner that command to run in Terminal on the Mac themselves: never run it, and never ask for the password in the chat\. Never read the board config file\./);
+    assert.match(note, /The board is for a desktop browser on this Mac only\. Never read the board config file\./);
+    assert.doesNotMatch(note, /password|phone|sign-in/i, "T1053: the board is for this Mac only");
     assert.match(note, /When the line says that a restart is needed, give the owner its stop command; run it only when the owner asks\./, "F-T229-32: no restart by itself");
     assert.doesNotMatch(note, /secret/, "T229: the board has no random secret");
   }
 });
 
-test("T229: the board password rule refuses the ordinary shapes, and allows repository paths and searches (table)", async () => {
+test("T229: the board config rule refuses the ordinary shapes, and allows repository paths and searches (table)", async () => {
   const { handle } = await import("../plugins/sage/hooks/sage-hook.mjs");
   const slots = { bind() {}, release() {}, drop() {}, touch() {}, reconcile() {} };
   const BOARD = fileURLToPath(new URL("../plugins/sage/board/cli.mjs", import.meta.url));
@@ -3004,15 +3004,11 @@ test("T229: the board password rule refuses the ordinary shapes, and allows repo
   mkdirSync(join(dir, "other", "sage-board"), { recursive: true }); writeFileSync(join(dir, "other", "sage-board", "board.json"), "{}\n");
   symlinkSync(config, join(dir, "plain-name.txt"));
   symlinkSync(join(home, ".config"), join(dir, "linked-config"));
-  const SET = /^sage: the board password rule \(T229\): only the owner sets the board password, in Terminal on the Mac\. Never run board --set-password/;
-  const CONFIG = /^sage: the board password rule \(T229\): no agent reads, copies or replaces the board config \(~\/\.config\/sage-board\/board\.json\), or searches, copies or moves a folder that holds it/;
+  const CONFIG = /^sage: the board config rule \(T229\): no agent reads, copies or replaces the board config \(~\/\.config\/sage-board\/board\.json\), or lists, searches, copies or moves the board's folder or a folder that holds it/;
   const OK = null, REPO = FEATURE;
   const rows = [
-    [`node ${BOARD} board --set-password`, SET], [`cd /tmp && node ${BOARD} board --set-password`, SET], [`env node ${BOARD} board "--set-password"`, SET],
-    [`node ${BOARD} board --set-pass''word`, SET], [`node ${BOARD} board --set-pass\\word`, SET], [`node ${BOARD} board "--set-"password`, SET],
-    [`sh -c 'node ${BOARD} board --set-password'`, SET], [`node packages/sage-board/cli.mjs board --set-password`, SET],
-    ["grep -n -- --set-password packages/sage-board/README.md", OK], ["rg -n -- --set-password packages", OK], ["git log --grep=set-password", OK], [`node ${BOARD} board --ensure`, OK],
-    [`expect -c "spawn node ${BOARD} board --set-password"`, OK], [`git -c alias.x="!node ${BOARD} board --set-password" x`, OK],
+    [`node ${BOARD} board --ensure`, OK], [`node ${BOARD} board --stop`, OK],
+    ["ls ~/.config/sage-board", CONFIG], [`ls ${folder}/`, CONFIG], ["cp -R ~/.config/sage-board /tmp/copy", CONFIG], ["rg -n hash ~/.config/sage-board", CONFIG],
     [`A=x; node ${BOARD} board $A`, OK], [`node ${BOARD} board --ensure --config $C`, OK], [`node ${BOARD} board $(printf x)`, OK],
     [`node ${BOARD} board --ensure *.json`, OK], [`printf x | xargs node ${BOARD} board`, OK],
     ["cat ~/.config/sage-board/board.json", CONFIG], [`cat "${config}"`, CONFIG],
@@ -3025,7 +3021,7 @@ test("T229: the board password rule refuses the ordinary shapes, and allows repo
     [`pushd ${home}/.config && popd && cat sage-board/board.json`, OK], ["pushd ~/.config && popd && cat sage-board/board.json", OK],
     [`cat ${dir}/plain-name.txt`, OK], [`cat ${dir}/linked-config/sage-board/board.json`, OK], ["head < ~/.config/sage-board/board.json", CONFIG],
     ["cat ~/.config/sage-board/board.json \"", OK], ["cat board.json \"", OK], ["cd ~/.config && cat sage-board/board.json \"", OK], ["cp -R .config /tmp/copy \"", OK],
-    [`cat ~/.config/sage-b*/board.json "`, OK], [`tar -cf /tmp/x.tar ${home}/.config "`, OK], [`node ${BOARD} board --set-password "`, SET],
+    [`cat ~/.config/sage-b*/board.json "`, OK], [`tar -cf /tmp/x.tar ${home}/.config "`, OK],
     [`node ${dir}/board-wt/plugins/sage/skills/sage/sage.mjs task add --title "open`, OK], [`cat ${dir}/my-config/sage-board-notes/README.md "`, OK],
     [`cd /tmp/dashboard && node ${REPO}/scripts/x.mjs "`, OK],
     ["cp /tmp/x.json ~/.config/sage-board/board.json", CONFIG], ["printf x > ~/.config/sage-board/board.json", CONFIG], ["mv /tmp/x ~/.config/sage-board", CONFIG],
@@ -3071,7 +3067,7 @@ test("T229: the board password rule refuses the ordinary shapes, and allows repo
   try {
     const check = (label, event, state, expected) => {
       const reason = denied(handle(event, { ...state }, slots)) ?? "";
-      const ok = expected ? expected.test(reason) || (event.agent_id !== undefined && reason !== "") : !/board password rule/.test(reason);
+      const ok = expected ? expected.test(reason) || (event.agent_id !== undefined && reason !== "") : !/board config rule/.test(reason);
       if (!ok) wrong.push(`${label}: got ${reason || "allowed"}`);
     };
     for (const [name, state, extra] of who) {
@@ -3117,7 +3113,7 @@ test("F-T229-17: the board rule is fast on a word of many variable and ? pieces"
       const reason = denied(handle(bash(`cat ${word}`), { sage: false }, slots)) ?? "";
       const ms = performance.now() - start;
       assert.ok(ms < 1000, `one call took ${Math.round(ms)} ms for a word of ${word.length} characters (timing-ok: 200 times the 5 ms a call needs; the old code took over 10 s)`);
-      assert.equal(/board password rule/.test(reason), config, `${word}: ${reason || "allowed"}`);
+      assert.equal(/board config rule/.test(reason), config, `${word}: ${reason || "allowed"}`);
     }
   } finally {
     process.env.HOME = saved;

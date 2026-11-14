@@ -1,8 +1,6 @@
 #!/usr/bin/env node
 import { spawn } from "node:child_process";
 import { closeSync, constants, fstatSync, mkdirSync, lstatSync, statSync, openSync, readSync, realpathSync, renameSync, rmSync, writeFileSync } from "node:fs";
-import { createInterface } from "node:readline";
-import { Writable } from "node:stream";
 import { createHash, randomBytes } from "node:crypto";
 import { request } from "node:http";
 import { homedir } from "node:os";
@@ -10,7 +8,7 @@ import { dirname, isAbsolute, join, relative, resolve, sep } from "node:path";
 import { fileURLToPath } from "node:url";
 import { BOARD_PORT, boardView, sharedRoot } from "../core/index.mjs";
 import { installBoard, stableNodePath, writeLoginFile } from "./install.mjs";
-import { createBoardServer, hashPassword, validPasswordRecord } from "./server.mjs";
+import { createBoardServer } from "./server.mjs";
 
 const parseJson = text => { try { return JSON.parse(text); } catch { throw new TypeError("board JSON is invalid"); } };
 const boundedPath = path => { if (typeof path !== "string" || !isAbsolute(path) || path.length > 4096 || /[\p{Cc}\p{Cf}]/u.test(path)) throw new TypeError("use a bounded absolute path without control characters"); return resolve(path); };
@@ -48,8 +46,9 @@ export function readBoardConfig(path) {
     return validateBoardConfig(parseJson(new TextDecoder("utf-8", { fatal: true }).decode(buffer.subarray(0, count))), path);
   } finally { closeSync(fd); }
 }
+const RETIRED_KEYS = ["allowedHosts", "secret", "password"];
 export function validateBoardConfig(config, configPath = null) {
-  const allowed = ["version", "sources", "port", "allowedHosts", "secret", "password", "pagesDir"];
+  const allowed = ["version", "sources", "port", "pagesDir", ...RETIRED_KEYS];
   if (!config || config.version !== 1 || Object.keys(config).some(key => !allowed.includes(key)) || !Array.isArray(config.sources) || !config.sources.length) throw new TypeError("board config needs version 1 and explicit sources");
   const ids = new Set();
   const sources = config.sources.map(source => {
@@ -58,15 +57,13 @@ export function validateBoardConfig(config, configPath = null) {
   });
   const port = config.port ?? BOARD_PORT;
   if (!Number.isInteger(port) || port < 1024 || port > 65535) throw new TypeError("board port must be from 1024 to 65535");
-  if (config.password !== undefined && !validPasswordRecord(config.password)) throw new TypeError("the board password in the config is not a valid record: set it again with board --set-password");
-  if (!Array.isArray(config.allowedHosts ?? []) || (config.allowedHosts ?? []).some(host => typeof host !== "string" || host.length > 255)) throw new TypeError("allowedHosts must be a bounded list of exact host names");
   const pagesDir = config.pagesDir ? boundedPath(config.pagesDir) : null;
   if (configPath && !outsideRoots(resolve(configPath), sources) || pagesDir && !outsideRoots(pagesDir, sources)) throw new TypeError("board config and exported pages must stay outside logbook roots");
-  return { version: 1, sources, port, allowedHosts: config.allowedHosts ?? [], ...(config.password ? { password: config.password } : {}), ...(pagesDir ? { pagesDir } : {}) };
+  return { version: 1, sources, port, ...(pagesDir ? { pagesDir } : {}) };
 }
-export function createBoardConfig(path, { sources, port = BOARD_PORT, allowedHosts = [], pagesDir } = {}) {
+export function createBoardConfig(path, { sources, port = BOARD_PORT, pagesDir } = {}) {
   path = boundedPath(path);
-  const config = validateBoardConfig({ version: 1, sources, port, allowedHosts, ...(pagesDir ? { pagesDir } : {}) }, path);
+  const config = validateBoardConfig({ version: 1, sources, port, ...(pagesDir ? { pagesDir } : {}) }, path);
   noLinkedParents(path);
   mkdirSync(dirname(path), { recursive: true, mode: 0o700 });
   try { writeFileSync(path, `${JSON.stringify(config, null, 2)}\n`, { flag: "wx", mode: 0o600 }); }
@@ -87,33 +84,6 @@ export const readSources = (sources, env = process.env) => {
 };
 export const defaultConfigPath = (env = process.env) => join(env.HOME ?? homedir(), ".config", "sage-board", "board.json");
 
-async function setPassword(configPath, input, prompt, terminal) {
-  if (!terminal) throw new TypeError("board --set-password needs a terminal: open Terminal on this Mac and run the command there yourself. It does not read a password from a pipe, a file or an agent.");
-  const config = readBoardConfig(configPath);
-  let muted = false;
-  const echo = new Writable({ write(chunk, _encoding, done) { if (!muted) prompt.write(chunk); done(); } });
-  const lines = createInterface({ input, output: echo, terminal: Boolean(input.isTTY) });
-  lines.on("SIGINT", () => lines.close());
-  const entries = lines[Symbol.asyncIterator]();
-  const ask = async question => {
-    prompt.write(question); muted = true;
-    try { const { value, done } = await entries.next(); return done ? null : value; }
-    finally { muted = false; if (input.isTTY) prompt.write("\n"); }
-  };
-  let first, second;
-  try { first = await ask("New board password (12 characters or more): "); second = first ? await ask("The same password again: ") : null; }
-  finally { lines.close(); }
-  if (!first) throw new TypeError("no password entered; the board password did not change");
-  if ([...first].length < 12) throw new TypeError("the password needs 12 characters or more; the board password did not change");
-  if (Buffer.byteLength(first) > 1024) throw new TypeError("the password is longer than 1024 bytes; the board password did not change");
-  if (first !== second) throw new TypeError("the two entries differ; the board password did not change");
-  const next = validateBoardConfig({ ...config, password: await hashPassword(first) }, configPath);
-  const temporary = join(dirname(configPath), `.board-${randomBytes(6).toString("hex")}.json`);
-  writeFileSync(temporary, `${JSON.stringify(next, null, 2)}\n`, { flag: "wx", mode: 0o600 });
-  try { renameSync(temporary, configPath); } catch (error) { rmSync(temporary, { force: true }); throw error; }
-  return `Board password set in ${configPath}. A board server that is already running keeps the old sign-in until it starts again.`;
-}
-
 export const configId = configPath => createHash("sha256").update(`sage-board-config:${realpathSync(configPath)}`).digest("hex").slice(0, 16);
 function boardCommand(option, configPath, env, explicit = false) {
   const quote = text => /[^\w@%+=:,./-]/.test(text) ? `"${text.replace(/(["\\$`])/g, "\\$1")}"` : text;
@@ -123,11 +93,11 @@ function boardCommand(option, configPath, env, explicit = false) {
 const probe = ({ port }) => new Promise(done => {
   const req = request({ host: "127.0.0.1", port, path: "/", method: "HEAD", agent: false, timeout: 2000, headers: { Host: `127.0.0.1:${port}` } }, response => {
     response.resume();
-    const { "content-type": type = "", "content-security-policy": policy = "", "cross-origin-resource-policy": resource, "www-authenticate": realm = "", "x-sage-board": named = "" } = response.headers;
+    const { "content-type": type = "", "content-security-policy": policy = "", "cross-origin-resource-policy": resource, "x-sage-board": named = "" } = response.headers;
     const boardHeaders = policy.startsWith("default-src 'none'") && resource === "same-origin";
     const own = /^id=([a-f0-9]{16,64}); pid=([1-9]\d{0,9}); started=(\d{1,16})$/.exec(named);
     if (boardHeaders && response.statusCode === 200 && type.startsWith("text/html")) done(own ? { kind: "board", id: own[1], pid: Number(own[2]), started: Number(own[3]) } : { kind: "older" });
-    else done({ kind: boardHeaders && response.statusCode === 401 && realm.startsWith('Basic realm="Sage board"') ? "older" : "other" });
+    else done({ kind: "other" });
   });
   req.once("timeout", () => req.destroy(Object.assign(new Error("timeout"), { code: "TIMEOUT" })));
   req.once("error", error => done({ kind: { ECONNREFUSED: "none", TIMEOUT: "timeout", EPERM: "blocked" }[error.code] ?? "other" }));
@@ -147,11 +117,7 @@ function notOurs(found, configPath, config, env) {
 
 async function ensureBoard(configPath, config, env) {
   const url = `http://127.0.0.1:${config.port}/`;
-  const set = boardCommand("--set-password", configPath, env);
-  const phone = !config.allowedHosts.length ? `Phone access is off: no allowedHosts in ${configPath}. To turn it on, add the host name of your private HTTPS tunnel to allowedHosts in that file.`
-    : !config.password ? `Phone access is off until you set a board password: run in a terminal on this Mac: ${set}`
-    : `On the phone, open https://${config.allowedHosts[0]}/ and sign in as sage with your board password. To set a new password, run in a terminal: ${set}`;
-  const ready = how => `Sage board ${how}: ${url} · no sign-in needed on this Mac. ${phone}`;
+  const ready = how => `Sage board ${how}: ${url} · only on this Mac.`;
   const found = await probe(config), refused = notOurs(found, configPath, config, env);
   if (refused) throw new Error(refused);
   if (found.kind === "board") {
@@ -212,24 +178,24 @@ function parse(argv) {
     const value = argv[i];
     if (!value.startsWith("--")) { values.push(value); continue; }
     const key = value.slice(2);
-    if (!["config", "out", "project", "scope", "serve", "html", "status", "setup", "ensure", "stop", "set-password", "sources", "pages", "port", "allowed-hosts", "install", "install-dir", "login-file"].includes(key) || Object.hasOwn(options, key)) throw new TypeError("unknown or repeated board option");
-    if (["serve", "html", "status", "setup", "ensure", "stop", "set-password", "install"].includes(key)) options[key] = true;
+    if (!["config", "out", "project", "scope", "serve", "html", "status", "setup", "ensure", "stop", "sources", "pages", "port", "install", "install-dir", "login-file"].includes(key) || Object.hasOwn(options, key)) throw new TypeError("unknown or repeated board option");
+    if (["serve", "html", "status", "setup", "ensure", "stop", "install"].includes(key)) options[key] = true;
     else { if (!argv[i + 1] || argv[i + 1].startsWith("--")) throw new TypeError(`--${key} needs a value`); options[key] = argv[++i]; }
   }
-  if (values.length > 1 || [options.serve, options.html, options.status, options.setup, options.ensure, options.stop, options["set-password"], options.install].filter(Boolean).length > 1) throw new TypeError("board needs one scope and one format");
+  if (values.length > 1 || [options.serve, options.html, options.status, options.setup, options.ensure, options.stop, options.install].filter(Boolean).length > 1) throw new TypeError("board needs one scope and one format");
   return { options, value: values[0] ?? "all" };
 }
-export async function runBoardCli(argv, { output = line => process.stdout.write(`${line}\n`), env = process.env, input = process.stdin, terminal = Boolean(input.isTTY), prompt = process.stderr, kill = (pid, signal) => process.kill(pid, signal) } = {}) {
+export async function runBoardCli(argv, { output = line => process.stdout.write(`${line}\n`), env = process.env, kill = (pid, signal) => process.kill(pid, signal) } = {}) {
   const { options, value } = parse(argv), explicit = options.config !== undefined;
   options.config ??= defaultConfigPath(env);
-  if (options.scope && (options.serve || options.setup || options.ensure || options.stop || options["set-password"] || options.install)) throw new TypeError("--scope is only for a task lookup");
+  if (options.scope && (options.serve || options.setup || options.ensure || options.stop || options.install)) throw new TypeError("--scope is only for a task lookup");
   const missing = options.ensure && !lstatSync(boundedPath(options.config), { throwIfNoEntry: false });
   if (options.setup || missing) {
-    if (value !== "all" || options.sources?.length > 65536 || options.project || options.out || options["install-dir"] || options["login-file"]) throw new TypeError("setup takes --config, with optional sources, port, pages and allowed-hosts");
+    if (value !== "all" || options.sources?.length > 65536 || options.project || options.out || options["install-dir"] || options["login-file"]) throw new TypeError("setup takes --config, with optional sources, port and pages");
     if (options.port && !/^[1-9]\d*$/.test(options.port)) throw new TypeError("port must be a positive integer");
-    createBoardConfig(options.config, { sources: options.sources ? parseJson(options.sources) : standardSources(env), port: options.port ? Number(options.port) : BOARD_PORT, pagesDir: options.pages, allowedHosts: options["allowed-hosts"] ? parseJson(options["allowed-hosts"]) : [] });
-    if (options.setup) { output(`Board config created: ${boundedPath(options.config)}. Access from outside this Mac stays off until you set a board password: run in a terminal ${boardCommand("--set-password", boundedPath(options.config), env, explicit)}`); return null; }
-  } else if (options.sources || options.pages || options.port || options["allowed-hosts"]) throw new TypeError(options.ensure ? existingConfig(boundedPath(options.config)) : "source and service settings require --setup");
+    createBoardConfig(options.config, { sources: options.sources ? parseJson(options.sources) : standardSources(env), port: options.port ? Number(options.port) : BOARD_PORT, pagesDir: options.pages });
+    if (options.setup) { output(`Board config created: ${boundedPath(options.config)}. Start the board with ${boardCommand("--ensure", boundedPath(options.config), env, explicit)}`); return null; }
+  } else if (options.sources || options.pages || options.port) throw new TypeError(options.ensure ? existingConfig(boundedPath(options.config)) : "source and service settings require --setup");
   if (options.ensure) {
     if (value !== "all" || options.project || options.out || options["install-dir"] || options["login-file"]) throw new TypeError("ensure takes --config, and the setup settings for a new config");
     output(await ensureBoard(boundedPath(options.config), readBoardConfig(options.config), env)); return null;
@@ -237,10 +203,6 @@ export async function runBoardCli(argv, { output = line => process.stdout.write(
   if (options.stop) {
     if (value !== "all" || options.project || options.out || options["install-dir"] || options["login-file"]) throw new TypeError("stop takes only --config");
     output(await stopBoard(boundedPath(options.config), readBoardConfig(options.config), env, kill)); return null;
-  }
-  if (options["set-password"]) {
-    if (value !== "all" || options.project || options.out || options["install-dir"] || options["login-file"]) throw new TypeError("set-password takes only --config; it asks for the password");
-    output(await setPassword(boundedPath(options.config), input, prompt, terminal)); return null;
   }
   const config = readBoardConfig(options.config);
   if (options.install) {
@@ -265,7 +227,7 @@ export async function runBoardCli(argv, { output = line => process.stdout.write(
     const configPath = boundedPath(options.config), server = createBoardServer({ ...config, sources: readSources(config.sources, env), providerRoots: providerRoots(env), id: configId(configPath) });
     await server.start();
     try { writePid(configPath, process.pid); } catch (error) { await server.close(); throw error; }
-    output(`Sage board: http://127.0.0.1:${config.port}/ · no sign-in needed on this Mac.`);
+    output(`Sage board: http://127.0.0.1:${config.port}/ · only on this Mac.`);
     return { ...server, close: () => server.close().finally(() => { if (readPid(configPath) === process.pid) rmSync(pidPath(configPath), { force: true }); }) };
   }
   const taskId = /^T[1-9]\d*$/.test(value) ? value : null;
