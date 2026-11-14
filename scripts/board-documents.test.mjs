@@ -1,6 +1,6 @@
 import "./test-env.mjs";
 import assert from "node:assert/strict";
-import { mkdtempSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
+import { mkdtempSync, readFileSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import { request } from "node:http";
 import { createServer } from "node:net";
 import { tmpdir } from "node:os";
@@ -9,6 +9,7 @@ import test from "node:test";
 import { fileURLToPath } from "node:url";
 import { buildBoardModel } from "../packages/sage-core/board-model.mjs";
 import { readBoardSources } from "../packages/sage-core/board-reader.mjs";
+import { readReport } from "../packages/sage-core/index.mjs";
 import { renderMarkdown } from "../packages/sage-board/markdown.mjs";
 import { readerPage, readerUrl } from "../packages/sage-board/reader.mjs";
 import { createBoardServer, loadBoardApp } from "../packages/sage-board/server.mjs";
@@ -62,6 +63,20 @@ test("T1064: a report shows the STATUS pill, RESULT first, each finding as a row
   assert.deepEqual(fieldsOpen(page.html), ["FINDINGS open", "QUESTIONS", "EVIDENCE", "NOT VERIFIED open", "BRANCH open"], "QUESTIONS none stays closed");
   assert.match(page.html, /<a href="https:\/\/github\.com\/sample-owner\/sample-app\/pull\/12">PR #12<\/a>/);
   assert.match(page.html, /head b{40}, PR 12/);
+});
+
+test("T1064: a report shows each finding that the hook reads, with the hook's severity: the dash, numbered, long-dash and indented forms", t => {
+  const w = world(t), file = join(w.logbook, "reports", "R5.md"), text = readFileSync(file, "utf8");
+  writeFileSync(file, text.replace(/^FINDINGS\n[\s\S]*?(?=^QUESTIONS)/m, ["FINDINGS", "- F1 - high - the dash form: a save loses data", "    src/save.js:3", "    proof: npm test", "    saw: `lost`",
+    "1. F2 high the numbered form: a crash on start", "- F3 — medium the long-dash form", "  - F4 low an indented finding", ""].join("\n")));
+  assert.deepEqual(readReport(readFileSync(file, "utf8")).findings.map(item => `${item.key} ${item.severity}`), ["F1 high", "F2 high", "F3 medium", "F4 low"], "the hook reads four findings");
+  const rows = [...read(w, "T3", "report", "R5").html.matchAll(/<div class="finding"><span><span class="pill (\w+)">\w+<\/span><\/span><span class="mono">(\w+)<\/span><span>([^<]+)<\/span><span>(?:<span class="pill[^"]*">[^<]+<\/span>)?<\/span>(?:<span class="det">([^<]*)<\/span>)?/g)].map(match => match.slice(1));
+  assert.deepEqual(rows, [
+    ["high", "F1", "the dash form: a save loses data", "src/save.js:3\nproof: npm test\nsaw: `lost`"],
+    ["high", "F2", "the numbered form: a crash on start", undefined],
+    ["medium", "F3", "the long-dash form", undefined],
+    ["low", "F4", "an indented finding", undefined],
+  ]);
 });
 
 test("T1064: the reader states: a running run's report is not written yet, an older run's report or brief is not kept, a review's kept report is the fallback, a stale logbook names the copy's time", t => {

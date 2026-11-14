@@ -272,5 +272,5 @@ test("F-T947-1: a proof check that gives its first outcome on the EVIDENCE line,
 
 test("F-T947-5: one pair of backticks around a proof or saw value is a Markdown mark, so the proof check runs the command itself", () => {
   const text = reportFor("findings", { findings: "\n- K1 medium a\n  proof: `npm test`\n  saw: `not ok 1 a`\n- K2 medium b\n  proof: `a` and `b`\n  saw: x" });
-  assert.deepEqual(readReport(text).findings, [{ key: "K1", severity: "medium", proof: "npm test", saw: "not ok 1 a" }, { key: "K2", severity: "medium", proof: "`a` and `b`", saw: "x" }]);
+  assert.deepEqual(readReport(text).findings.map(({ key, severity, proof, saw }) => ({ key, severity, proof, saw })), [{ key: "K1", severity: "medium", proof: "npm test", saw: "not ok 1 a" }, { key: "K2", severity: "medium", proof: "`a` and `b`", saw: "x" }]);
 });

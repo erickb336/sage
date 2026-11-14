@@ -1,7 +1,7 @@
 import { createHash } from "node:crypto";
 import { lstatSync, readFileSync, readdirSync } from "node:fs";
 import { dirname, join, posix } from "node:path";
-import { BRIEF_FIELDS, REPORT_FIELDS, briefSections, fieldsOf, pageFile, pageTaskFolder, pageType, taskPanel } from "../core/index.mjs";
+import { BRIEF_FIELDS, REPORT_FIELDS, briefSections, fieldsOf, pageFile, pageTaskFolder, pageType, readReport, taskPanel } from "../core/index.mjs";
 
 const marksShown = text => String(text ?? "").replace(/\p{Cf}/gu, c => `[U+${c.codePointAt(0).toString(16).toUpperCase().padStart(4, "0")}]`);
 const TEXT_MAX = 1 << 20, MD_MAX = 2 << 20, VERSIONS_MAX = 30, SHOTS_MAX = 8;
@@ -63,16 +63,6 @@ export function readerUrl(key, kind, arg, view = {}) {
   for (const name of ["theme", "back", "open", "view", "v", "a", "b"]) if (view[name] && !(name === "theme" && view[name] === "dark") && !(name === "back" && view[name] === "tasks") && !(name === "view" && view[name] === "today")) params.set(name, view[name]);
   const query = params.toString();
   return `/read/${b64(key)}/${kind}${arg ? `/${arg}` : ""}${query ? `?${query}` : ""}`;
-}
-
-function findingsOf(text) {
-  const rows = [];
-  for (const line of String(text).split(/\r?\n/)) {
-    const head = /^\s{0,1}[-*+]\s+(\S*\d\S*)\s+[*_[(]*(high|medium|low)[*_\])]*:?\s*(.*)$/i.exec(line);
-    if (head) rows.push({ key: head[1].replace(/[*_`]/g, ""), severity: head[2].toLowerCase(), summary: head[3], details: [] });
-    else if (rows.length && line.trim()) rows.at(-1).details.push(line.trim());
-  }
-  return rows;
 }
 
 function designVersions(folder) {
@@ -249,7 +239,7 @@ export function readerPage({ model, configured, url, origin, render }) {
       if (text === undefined) return run.status === "running"
         ? { crumb: run.id, title: `Report of ${run.id}`, head, body: note(`<b>Not written yet.</b> ${esc(run.role)} ${esc(run.id)} runs (${minutes(run.started, model.at)} min). The board shows the report when the run ends; reload this page then.`, "need") }
         : { crumb: run.id, title: `Report of ${run.id}`, head, body: note(`<b>Not kept.</b> The logbook keeps no report of ${esc(run.id)}. sage keeps the report of each run from T1058 on, and the report of each review before that; this run has neither.`) };
-      const result = of("RESULT"), findings = findingsOf(of("FINDINGS")), rows = task.findings ?? [];
+      const result = of("RESULT"), findings = readReport(text).findings, rows = task.findings ?? [];
       const lead = firstLine(result);
       const findingRows = findings.length ? findings.map(item => {
         const row = rows.find(entry => entry.key === item.key), stateWord = row?.status || row?.triage || null;
