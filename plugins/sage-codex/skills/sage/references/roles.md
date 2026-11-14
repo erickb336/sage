@@ -91,4 +91,10 @@ Each candidate and the judge write on their own branch, in their own worktree, s
 
 ## Before installed acceptance
 
+T1069 ([PR #557](https://github.com/erickb336/sage-stack/pull/557)) ran a real task in the normal Codex desktop app with the Sage plugin. Its lead directed an implementer, code reviewers, security reviewers and QA, and recorded the task. CI and two code/security/QA cycles passed on the reviewed head; the owner merged the PR.
+
+The chief confirmed exact retention for all six review and QA reports. The lead's own report had no retained copy and backed no verdict. The tests in those reports used generated packages and synthetic fixtures; their results do not prove installed behavior.
+
+This is bounded desktop evidence, not full Codex acceptance. PE, designer and arena runs, terminal CLI execution, broader frontend coverage, cancellation, recovery and automatic landing still need separate live evidence.
+
 Generated-package tests establish source support only. Before installed acceptance, verify the package version, the public role texts, actual child and lead runs, permission refusals, exact retention and the saved prototype. Synthetic hook events do not prove installed execution. Stop at a refusal; do not try another path.
