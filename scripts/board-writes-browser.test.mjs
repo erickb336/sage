@@ -174,9 +174,14 @@ test("T1059: a question answered first in the chief's chat shows who answered fi
   await page.getByRole("heading", { name: "Pair this browser to act from the board" }).waitFor({ state: "detached" });
   await page.getByRole("link", { name: "Crash reports: send them on their own, or ask each time?" }).click();
   await page.getByRole("radio", { name: /^ask each time/ }).check();
+  let holdGateReads = true;
+  const held = [];
+  await page.route("**/app/gate/**", route => holdGateReads ? held.push(route) : route.fallback().catch(() => {}));
   claude.sage(["gate", "answer", "G2", "--option", "2", "--via", "chat", "--project", w.project], w.env);
   await page.getByRole("button", { name: "Send answer" }).click();
   await page.getByText(/^Not recorded\. G2 has the answer "send them" already, from the chat at /).waitFor();
+  holdGateReads = false;
+  for (const route of held) await route.fallback().catch(() => {});
   await page.getByText(/^Answered first in C2's chat at \d\d:\d\d: send them\./).waitFor();
   await w.shot("t1059-answered-elsewhere");
   assert.equal(w.gate("G2").answer, "send them");
