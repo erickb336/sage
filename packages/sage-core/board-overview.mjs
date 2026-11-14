@@ -128,7 +128,7 @@ export function boardOverview(model) {
   const failed = tasks.flatMap(task => task.runs).filter(run => run.status === "failed" && recent(run.ended));
   const chiefs = (model.projects ?? []).filter(project => !project.archived).flatMap(project => (project.chiefs ?? []).map(chief => ({ ...chief, project: project.name, logbook: chief.key.slice(0, chief.key.lastIndexOf("/")) })));
   const leaving = [...merged.map(task => time(task.completedAt)), ...failed.map(run => time(run.ended))].map(when => when + DAY + 1)
-    .concat(chiefs.filter(chief => chief.stopped === false && !chief.agents).map(chief => time(chief.heartbeat) + STOPPED_MS + 1));
+    .concat(chiefs.filter(chief => chief.stopped === false && !chief.agents && !chief.waitsForOwner).map(chief => time(chief.heartbeat) + STOPPED_MS + 1));
 
   return {
     at: model.at,
