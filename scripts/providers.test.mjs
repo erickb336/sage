@@ -423,13 +423,13 @@ test("T216, T1054, T1063, T1064: each plugin's board is a cross-provider reader:
     const { dir, plugin } = isolated(t, provider);
     const files = filesUnder(join(plugin, "board")), app = join(plugin, "board/app");
     const manifest = JSON.parse(readFileSync(join(app, "manifest.json"), "utf8")), built = [manifest.script, manifest.style, manifest.vendor, manifest.graph];
-    assert.deepEqual(files.map((file) => relative(join(plugin, "board"), file)).sort(), ["cli.mjs", "install.mjs", "markdown.mjs", "pages.mjs", "reader.mjs", "server.mjs", ...["manifest.json", ...built].map((name) => `app/${name}`)].sort());
+    assert.deepEqual(files.map((file) => relative(join(plugin, "board"), file)).sort(), ["access.mjs", "cli.mjs", "install.mjs", "markdown.mjs", "pages.mjs", "reader.mjs", "server.mjs", "writes.mjs", ...["manifest.json", ...built].map((name) => `app/${name}`)].sort());
     for (const name of built) assert.match(name, /^(?:app|vendor|graph)-[A-Z0-9]{8}\.(?:js|css)$/);
     const { parse } = await import("es-module-lexer/minimal");
     for (const file of files.filter((path) => path.endsWith(".mjs"))) {
       const [imports] = parse(readFileSync(file, "utf8"));
       for (const { n: name } of imports.filter((item) => item.d !== -2)) {
-        const allowed = name?.startsWith("node:") || name === "../core/index.mjs" || /^\.\/(?:cli|install|markdown|pages|reader|server)\.mjs$/.test(name ?? "");
+        const allowed = name?.startsWith("node:") || name === "../core/index.mjs" || /^\.\/(?:access|cli|install|markdown|pages|reader|server|writes)\.mjs$/.test(name ?? "");
         assert.ok(allowed, `${provider} ${relative(plugin, file)} imports ${name}`);
       }
     }

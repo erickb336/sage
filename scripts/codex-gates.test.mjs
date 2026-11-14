@@ -392,8 +392,9 @@ test("T931: a sage child, and every child in sage mode, runs no git stash and no
   assert.match(denied(await fixed({ sage: true }).run(pre("Bash", "git stash 'pop", sageChild))) ?? "", /^sage: the hook cannot read this command .*Its text names git stash\. An agent never runs git stash/);
 });
 
-test("T931: the board config rule holds every thread in every mode, for a shell command and a patch", async (t) => {
-  const CONFIG = "sage: the board config rule (T229): no agent reads, copies or replaces the board config (~/.config/sage-board/board.json), or lists, searches, copies or moves the board's folder or a folder that holds it, because only the owner and the board command change the board's state. The board command's own output (board --ensure, the chat board) says what you need";
+test("T931, T1059: the board config rule and the pairing rule hold every thread in every mode, for a shell command and a patch", async (t) => {
+  const CONFIG = "sage: the board config rule (T229): no agent reads, copies or replaces the board config (~/.config/sage-board/board.json), or lists, searches, copies or moves the board's folder or a folder that holds it, because only the owner and the board command change the board's state. The board command's own output (board --ensure, the chat board) says what you need. The rule covers the board's state folder (~/.config/sage-board/state) too, because it holds the browser pairing (T1059)";
+  const PAIR = "sage: the board pairing rule (T1059): no agent runs board --pair. It pairs the owner's browser with the board, so that the browser can answer questions and rename chiefs, and it prints a one-time code for the owner's eyes only. The owner runs it in Terminal; give the owner the command, and do not run it";
   const child = { ...CHILD, transcript_path: record(t, { id: "child", session_id: base.session_id, agent_path: "/root/sage_implementer_t1_r1", source: { subagent: { thread_spawn: { depth: 1 } } } }) };
   for (const sage of [true, false]) for (const extra of [{}, child]) {
     const g = fixed({ sage }), who = `sage mode ${sage}, ${extra.agent_id ? "a child" : "the chief"}`;
@@ -401,7 +402,14 @@ test("T931: the board config rule holds every thread in every mode, for a shell 
       assert.equal(denied(await g.run(pre("Bash", command, extra))), CONFIG, `${who}: ${command}`);
     }
     assert.equal(denied(await g.run(pre("apply_patch", patch(`*** Update File: ${SCRATCH_HOME}/.config/sage-board/board.json`, "@@", "-a", "+b"), extra))), CONFIG, `${who}: a patch`);
-    for (const command of ["node /opt/sage/board/cli.mjs board --set-password", "node /opt/sage/board/cli.mjs board --ensure --config ~/.config/sage-board/board.json", "ls packages/sage-board"]) {
+    for (const command of ["cat ~/.config/sage-board/state/paired.json", `head -c 10 ${SCRATCH_HOME}/.config/sage-board/state/pair-code.json`, "ls ~/.config/sage-board/state", "cp ~/.config/sage-board/state/seen.json /tmp/x"]) {
+      assert.equal(denied(await g.run(pre("Bash", command, extra))), CONFIG, `${who}: ${command}`);
+    }
+    assert.equal(denied(await g.run(pre("apply_patch", patch(`*** Update File: ${SCRATCH_HOME}/.config/sage-board/state/paired.json`, "@@", "-a", "+b"), extra))), CONFIG, `${who}: a patch of the state folder`);
+    for (const command of ["node /opt/sage/board/cli.mjs board --pair", "node /opt/sage/board/cli.mjs board --pair --config ~/.config/sage-board/board.json", "npm run board -- --pair"]) {
+      assert.equal(denied(await g.run(pre("Bash", command, extra))), PAIR, `${who}: ${command}`);
+    }
+    for (const command of ["node /opt/sage/board/cli.mjs board --set-password", "node /opt/sage/board/cli.mjs board --ensure --config ~/.config/sage-board/board.json", "ls packages/sage-board", "grep -n pair packages/sage-board/cli.mjs"]) {
       assert.equal(await g.run(pre("Bash", command, extra)), undefined, `${who}: ${command}`);
     }
   }

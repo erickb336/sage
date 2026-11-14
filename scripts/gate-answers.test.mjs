@@ -128,7 +128,7 @@ for (const owning of ["claude", "codex"]) {
     let g = w.gate("G1");
     assert.equal(g.answer, "", "the answer does not act before the pickup");
     assert.deepEqual([g.answered.via, g.answered.answer, g.picked], ["board", "no", ""]);
-    assert.match(w.owner("claude", "status"), /gates {3}1 open · G1 .*\(board answer: no, not picked up yet\)/);
+    assert.match(w.owner("claude", "status"), /gates {3}0 open · 1 answered on the board, not picked up yet · G1 .*\(board answer: no\)/, "F-T1059-9: a pending board answer is not an open question");
     assert.ok(!w.decisions().some((d) => d.endsWith("→ no")), "no decision before the pickup");
 
     assert.equal(contextOf(HOOKS[other(owning)].step(w)), "", "the other chief does not pick up a gate that is not its own");
@@ -233,6 +233,20 @@ for (const [from, to] of [["claude", "codex"], ["codex", "claude"]]) {
     assert.equal(w.task("T1").chief, receiver);
     assert.equal(w.gate("G1").picked.chief, receiver);
     assert.ok(w.decisions().some((d) => d.startsWith("Hand T1 from") && d.endsWith("→ approve")));
+  });
+}
+
+for (const provider of ["claude", "codex"]) {
+  test(`F-T1059-47: in ${provider}, gate give refuses a second takeover question for a task while one is open to another chief`, (t) => {
+    const w = shared(t);
+    w.as("claude", "task", "add", "--title", "a", ...ADD);
+    writeFileSync(join(w.dir, "chiefs.tsv"), `${readFileSync(join(w.dir, "chiefs.tsv"), "utf8")}C3\tclaude\tclaude-3\t2026-01-01T00:00:00Z\n`);
+    assert.match(w.owner(provider, "gate", "give", "T1", "--to", "C2"), /^G1 open · /);
+    const before = readFileSync(join(w.dir, "gates.tsv"), "utf8");
+    assert.equal(w.refused(provider, "gate", "give", "T1", "--to", "C3"), "G1 is open already: it asks to hand T1 to C2 (codex). A task has one open takeover question at a time: answer G1 first (or undo your board answer to it), then give T1 again. Nothing changed.");
+    assert.equal(readFileSync(join(w.dir, "gates.tsv"), "utf8"), before, "no second takeover question");
+    w.owner(provider, "gate", "answer", "G1", "--option", "2", "--via", "chat");
+    assert.match(w.owner(provider, "gate", "give", "T1", "--to", "C3"), /^G2 open · Hand T1 from C1 \(claude\) to C3 \(claude\)\?/);
   });
 }
 

@@ -2141,7 +2141,7 @@ test("after a restore by hand, a new task or gate takes a number above the move'
   assert.match(w.claude("task", "add", "--title", "after the restore", "--size", "tiny", "--priority", "P2"), /^T7 /);
   assert.match(w.codex("task", "add", "--title", "after the restore", "--size", "tiny", "--priority", "P2"), /^T7 /);
   assert.match(w.claude("gate", "add", "--question", "Go?", "--options", "yes|no", "--recommend", "yes"), /^G4 /);
-  assert.deepEqual(rowsIn(join(w.codexDir, "decisions.tsv")).map((d) => d.decision), [`T6 is the task floor of the move to the shared logbook ${w.folder()}`, `G3 is the gate floor of the move to the shared logbook ${w.folder()}`]);
+  assert.deepEqual(rowsIn(join(w.codexDir, "decisions.tsv")).map((d) => d.decision).filter((d) => d !== "task added"), [`T6 is the task floor of the move to the shared logbook ${w.folder()}`, `G3 is the gate floor of the move to the shared logbook ${w.folder()}`]);
 });
 
 test("a chain of adoptions gives every old row the number of the task that moves, and the end check matches (F-T640-49)", (t) => {

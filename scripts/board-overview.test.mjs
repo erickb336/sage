@@ -3,6 +3,7 @@ import assert from "node:assert/strict";
 import test from "node:test";
 import { buildBoardModel } from "../packages/sage-core/board-model.mjs";
 import { boardOverview } from "../packages/sage-core/board-overview.mjs";
+import { boardChiefs } from "../packages/sage-core/chief-live.mjs";
 import { appTables } from "./fixtures/board-app.mjs";
 
 const NOW = "2026-11-13T12:00:00.000Z";
@@ -43,9 +44,9 @@ test("T1054: milestones come by the top priority of their open tasks, with progr
 
 test("T1054: the counts cover the last 24 hours: a merge 2 h ago counts and one 30 h ago does not; a failed run counts as stuck", () => {
   const { counts, next } = overview();
-  assert.deepEqual(counts, { merged: 1, stuck: 1, added: null });
+  assert.deepEqual(counts, { merged: 1, stuck: 1, stuckNow: 0, added: null });
   assert.equal(next, Date.parse("2026-11-14T10:00:00.000Z") + 1, "T1's merge leaves the window first");
-  assert.deepEqual(overview(undefined, "2026-11-14T13:00:00.000Z").counts, { merged: 0, stuck: 0, added: null });
+  assert.deepEqual(overview(undefined, "2026-11-14T13:00:00.000Z").counts, { merged: 0, stuck: 0, stuckNow: 0, added: null });
 });
 
 test("T1054: a stale model says so, with its problems", () => {
@@ -54,4 +55,14 @@ test("T1054: a stale model says so, with its problems", () => {
   assert.equal(result.stale, true);
   assert.deepEqual(result.problems, ["tasks: the file cannot be read"]);
   assert.equal(result.milestones.length, 3, "the last good data stays");
+});
+
+test("F-T1059-10: a chief that waits for the owner sets no refresh time, so the board still refreshes when another live chief stops", () => {
+  const now = Date.parse(NOW), iso = ms => new Date(ms).toISOString();
+  const rows = [{ id: "C1", provider: "claude", at: iso(now - 5 * 3600_000) }, { id: "C2", provider: "codex", at: iso(now - 5 * 3600_000) }];
+  const live = { C1: { checkout: "/sample/a", sageMode: true, autopilot: false, at: now - 2 * 3600_000 }, C2: { checkout: "/sample/b", sageMode: true, autopilot: false, at: now - 60_000 } };
+  const chiefs = boardChiefs({ rows, live, runs: [], waits: ["C1"], now }).map(chief => ({ key: `claude/sample-app-abc123/${chief.id}`, ...chief }));
+  assert.deepEqual(chiefs.map(chief => [chief.id, chief.waitsForOwner, chief.stopped]), [["C1", true, false], ["C2", false, false]]);
+  const { next } = boardOverview({ at: NOW, tasks: [], needsOwner: [], milestones: [], projects: [{ name: "sample-app", chiefs }], agents: { projects: [] } });
+  assert.equal(next, now - 60_000 + 30 * 60_000 + 1, "the next refresh is when C2 stops: 30 minutes after its last event");
 });

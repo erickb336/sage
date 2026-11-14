@@ -1,3 +1,4 @@
+import { createHash } from "node:crypto";
 import { closeSync, constants, fstatSync, openSync, readSync } from "node:fs";
 import { join } from "node:path";
 
@@ -6,6 +7,15 @@ export const PRIORITY_SCALE = "A task needs a priority: P0 the owner's current f
 export const TASK_KINDS = ["design", "ui", "orchestration", "optimization", "bug-fix", "logbook", "docs", "security", "providers", "checks"];
 export const FINDING_CLASSES = ["state-edge", "speed", "copy", "layout", "security", "other"];
 export const NAME_MAX = 60;
+export const TASK_ADDED = "task added";
+export function boardAnswer(gate) {
+  if (!gate || gate.answer) return null;
+  try {
+    const a = JSON.parse(gate.answered || "null");
+    return a && typeof a === "object" && a.via === "board" && typeof a.at === "string" && typeof a.answer === "string" && a.answer ? a : null;
+  } catch { return null; }
+}
+export const gateDigest = (gate) => createHash("sha256").update(JSON.stringify([gate.id, gate.task, gate.question, gate.options])).digest("hex").slice(0, 16);
 
 const NUMERIC = /^\s*[+-]?(\d+(\.\d*)?|\.\d+)(e[+-]?\d+)?\s*$/i;
 export function countOf(value, { floor = 1, limit = 50, up = false } = {}) {

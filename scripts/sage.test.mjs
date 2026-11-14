@@ -75,6 +75,8 @@ function rows(dir, table) {
   return lines.map((line) => Object.fromEntries(line.split("\t").map((v, i) => [head.split("\t")[i], v])));
 }
 
+const trail = (dir) => rows(dir, "decisions").filter((d) => d.decision !== "task added");
+
 function finding(s, task, ...args) {
   const role = args[args.indexOf("--source") + 1];
   const added = () => { const id = s.ok("run", "add", task, "--role", role).split(" ")[0]; s.ok("run", "done", id, "--status", "done", "--tokens", "1"); return id; };
@@ -124,6 +126,9 @@ test("a task's size gives its least route, and a risk adds the security review",
   assert.match(s.no("task", "add", "--priority", "P2", "--title", "x", "--size", "small", "--add", "pe"), /missing --why/, "an added block needs its reason");
   assert.match(s.ok("task", "add", "--priority", "P2", "--title", "Migrate", "--size", "small", "--add", "pe", "--why", "touches the schema"), /route pe,build,code-review,qa/);
   assert.match(readFileSync(join(s.dir, "decisions.tsv"), "utf8"), /T3\tadded pe\ttouches the schema/);
+  const added = rows(s.dir, "decisions").filter((d) => d.decision === "task added");
+  assert.deepEqual(added.map((d) => [d.task, d.why]), [["T1", "framed"], ["T2", "framed"], ["T3", "framed"]], "T1059: each task add keeps one row with the time, and a refused add keeps none");
+  assert.ok(added.every((d) => /^\d{4}-\d\d-\d\dT\d\d:\d\d:\d\dZ$/.test(d.at)));
 });
 
 test("a task moves only along the design's states", () => {
@@ -1123,7 +1128,7 @@ test("T1045: a finding moved --into a verified or pr-ready task puts it back to 
     const reopened = state === "verified" || state === "pr-ready";
     assert.equal(s.ok("finding", "move", "T1", "F-T1-1", "--into", "T2"), reopened ? `F-T1-1 moved to T2 as F-T2-1 · T2 was ${state}, now reviewing` : `F-T1-1 moved to T2 as F-T2-1 · T2 ${state}`, state);
     assert.equal(rows(s.dir, "tasks").find((t) => t.id === "T2").state, reopened ? "reviewing" : state, state);
-    assert.deepEqual(rows(s.dir, "decisions").filter((d) => d.decision.includes("→ reviewing")).map(({ task, decision, why }) => ({ task, decision, why })), reopened ? [{ task: "T2", decision: `${state} → reviewing`, why: "F-T2-1 moved in from T1" }] : [], state);
+    assert.deepEqual(trail(s.dir).filter((d) => d.decision.includes("→ reviewing")).map(({ task, decision, why }) => ({ task, decision, why })), reopened ? [{ task: "T2", decision: `${state} → reviewing`, why: "F-T2-1 moved in from T1" }] : [], state);
   }
 });
 
@@ -1502,7 +1507,7 @@ for (const [blocking, clean] of [["findings", "review-clean"], ["qa-fail", "qa-p
 
     assert.equal(s.ok("verdict", "T1", "--sha", SHA, "--kind", clean), `T1 ${clean} · a1b2c3d · cycle 1`);
     assert.equal(rows(s.dir, "tasks")[0].state, "verified");
-    assert.deepEqual(rows(s.dir, "decisions"), [], "a clean verdict adds no state decision");
+    assert.deepEqual(trail(s.dir), [], "a clean verdict adds no state decision");
     if (blocking !== "checks-fail") {
       assert.match(s.no("verdict", "T1", "--sha", SHA, "--kind", blocking), /no open medium or high finding/);
       assert.equal(rows(s.dir, "tasks")[0].state, "verified", "a refused verdict does not change the state");
@@ -1512,7 +1517,7 @@ for (const [blocking, clean] of [["findings", "review-clean"], ["qa-fail", "qa-p
     assert.equal(s.ok("verdict", "T1", "--sha", SHA, "--kind", blocking), `T1 ${blocking} · a1b2c3d · cycle 1 · reviewing`);
     assert.equal(rows(s.dir, "tasks")[0].state, "reviewing");
     assert.match(s.ok("task", "T1"), /^T1 reviewing/);
-    assert.deepEqual(rows(s.dir, "decisions").map(({ task, decision, why }) => ({ task, decision, why })), [
+    assert.deepEqual(trail(s.dir).map(({ task, decision, why }) => ({ task, decision, why })), [
       { task: "T1", decision: "verified → reviewing", why: `${blocking} verdict on ${SHA}` },
     ]);
     assert.equal(rows(s.dir, "ledger").at(-1).kind, blocking, "the blocking verdict stays in the ledger");
@@ -1538,7 +1543,7 @@ test("T180 follow-up: blocking verdicts return a pr-ready task to reviewing with
     assert.equal(s.ok("verdict", "T1", "--sha", SHA, "--kind", blocking), `T1 ${blocking} · a1b2c3d · cycle 1 · reviewing`);
     assert.equal(rows(s.dir, "tasks")[0].state, "reviewing");
     assert.match(s.ok("task", "T1"), /^T1 reviewing/);
-    assert.deepEqual(rows(s.dir, "decisions").map(({ task, decision, why }) => ({ task, decision, why })), [
+    assert.deepEqual(trail(s.dir).map(({ task, decision, why }) => ({ task, decision, why })), [
       { task: "T1", decision: "pr-ready → reviewing", why: `${blocking} verdict on ${SHA}` },
     ]);
     assert.equal(rows(s.dir, "ledger").at(-1).kind, blocking);
@@ -2351,13 +2356,13 @@ test("S1: each change of a task's pr= writes a decision row; the same value, and
   s.ok("task", "T1", "set", "pr=4");
   s.ok("verdict", "T1", "--sha", SHA, "--kind", "checks-pass", "--pr", "5");
   s.ok("task", "T1", "set", "pr=");
-  assert.deepEqual(rows(s.dir, "decisions").map((d) => [d.task, d.decision, d.why]), [
+  assert.deepEqual(trail(s.dir).map((d) => [d.task, d.decision, d.why]), [
     ["T1", "PR none → 4", "task set"],
     ["T1", "PR 4 → 5", "verdict --pr"],
     ["T1", "PR 5 → none", "task set"],
   ]);
   assert.equal(s.no("task", "T1", "set", "pr=6", "state=bogus").startsWith("sage: "), true);
-  assert.equal(rows(s.dir, "decisions").length, 3, "a refused command writes no decision");
+  assert.equal(trail(s.dir).length, 3, "a refused command writes no decision");
 });
 
 test("QA-3: a bad count gives the reason for its value, and a SHA in capitals names the same commit", () => {
@@ -2435,7 +2440,7 @@ test("F-R49-1: an empty --summary is refused, so a finding opened again never lo
   const findings = () => rows(s.dir, "findings").map((f) => `${f.key} ${f.source} ${f.severity} ${f.status} ${f.summary}`);
   assert.deepEqual(findings(), ["F-T1-1 qa low open the first summary"]);
   assert.equal(s.ok("finding", "add", "T1", "--key", "F-T1-1", "--source", "code", "--severity", "medium"), "F-T1-1 open again · medium · T1");
-  assert.deepEqual([findings(), rows(s.dir, "decisions")], [["F-T1-1 code medium open the first summary"], []], "the summary stays, so the trail has nothing to keep");
+  assert.deepEqual([findings(), trail(s.dir)], [["F-T1-1 code medium open the first summary"], []], "the summary stays, so the trail has nothing to keep");
 });
 
 const snapshot = (dir) => Object.fromEntries(readdirSync(dir, { recursive: true }).sort().map((f) => [f, lstatSync(join(dir, f)).isFile() ? readFileSync(join(dir, f), "utf8") : "(folder)"]));
@@ -2567,7 +2572,7 @@ test("F-R50-1: a table that is not a regular file refuses with its path, never h
   rmSync(status);
   symlinkSync(join(elsewhere, "fdir"), status);
   assert.equal(s.no("log", "-", "x", "--why", "y"), `sage: ${status} is not a regular file. Ask the user to fix or remove it.`);
-  assert.deepEqual([readdirSync(elsewhere), rows(s.dir, "decisions")], [["fdir"], []], "refused before any change");
+  assert.deepEqual([readdirSync(elsewhere), trail(s.dir)], [["fdir"], []], "refused before any change");
 });
 
 test("F-R50-2: the merge check reads a logbook that is a link to a folder, as the writes do", () => {
@@ -2769,7 +2774,7 @@ test("T72-S6-OPTIONSHELL: gate answer takes an option by its number and records 
   const before = snapshot(s.dir);
   const how = "sage: gate answer G1 takes --option <n>, the number of one of its options (1 to 3), or --other-hex <hex>, the owner's own words as the hex of their UTF-8 bytes (0-9 and a-f). Nothing changed.";
   for (const args of [["yes"], ["--option", "4"], ["--option", "0"], ["--option", "yes"], ["--option", "1", "--other-hex", "6f6b"], []]) assert.equal(s.no("gate", "answer", "G1", ...args), how, args.join(" "));
-  assert.equal(s.no("gate", "answer", "G1", "--other"), "sage: gate answer takes no --other. Its options: --option, --other-hex, --via, --project.");
+  assert.equal(s.no("gate", "answer", "G1", "--other"), "sage: gate answer takes no --other. Its options: --option, --other-hex, --via, --seen, --project.");
   assert.deepEqual(snapshot(s.dir), before, "no file changed");
   assert.equal(s.ok("gate", "answer", "G1", "--option", "3"), "G1 answered · No access / later");
   assert.equal(rows(s.dir, "gates")[0].answer, "No access / later");
@@ -2899,7 +2904,7 @@ test("F-R78-1: no write makes a lost table again, so neither init nor a new find
   assert.deepEqual(snapshot(s.dir), before, "no write changed a file");
   assert.equal(s.no("logbook", "repair", "--accept-loss", "toString"), "sage: logbook repair needs --accept-loss with the tables whose rows the user accepts to lose, joined by a comma: tasks, runs, findings, ledger, gates, decisions, milestones, releases. Not toString.");
   assert.equal(s.ok("logbook", "repair", "--accept-loss", "findings"), "findings.tsv started again without rows. The decision is in decisions.tsv.");
-  assert.deepEqual([rows(s.dir, "findings"), rows(s.dir, "decisions").map((d) => `${d.decision} · ${d.why}`)], [[], ["findings.tsv started again without rows · the user accepts the loss of its rows"]]);
+  assert.deepEqual([rows(s.dir, "findings"), trail(s.dir).map((d) => `${d.decision} · ${d.why}`)], [[], ["findings.tsv started again without rows · the user accepts the loss of its rows"]]);
   assert.equal(s.ok("merge-check", "--sha", SHA, "--cycles", "1"), "T1 may merge: 1 clean cycle on this SHA", "the loss is the user's decision now");
   assert.equal(s.no("logbook", "repair", "--accept-loss", "ledger"), `sage: ${join(s.dir, "ledger.tsv")} passes the logbook check, so it has nothing to repair. Nothing changed.`);
 });
@@ -2980,7 +2985,7 @@ test("F-R87-1: one repair starts two damaged tables again, and a repair that ano
   assert.equal(s.no("logbook", "repair", "--accept-loss", "findings,ledger,runs"), `sage: ${join(s.dir, "runs.tsv")} passes the logbook check, so it has nothing to repair. Nothing changed.`);
   assert.deepEqual(snapshot(s.dir), before, "a refused repair changes no table");
   assert.match(s.ok("logbook", "repair", "--accept-loss", "findings,ledger"), /^findings\.tsv and ledger\.tsv started again without rows; the old file of ledger\.tsv is \S+ledger\.tsv\.lost-\d+\. The decisions are in decisions\.tsv\.$/);
-  assert.deepEqual(rows(s.dir, "decisions").map((d) => d.decision.replace(/\S+\.lost-\d+/, "<kept>")), ["findings.tsv started again without rows", "ledger.tsv started again without rows; its old file is <kept>"]);
+  assert.deepEqual(trail(s.dir).map((d) => d.decision.replace(/\S+\.lost-\d+/, "<kept>")), ["findings.tsv started again without rows", "ledger.tsv started again without rows; its old file is <kept>"]);
   assert.equal(s.no("merge-check", "--sha", SHA, "--cycles", "1"), `sage: no verdicts recorded for ${SHA}. Record the reviews and QA with sage verdict first.`, "the logbook works again");
   for (const kind of ["checks-pass", "review-clean", "qa-pass"]) s.ok("verdict", "T1", "--sha", SHA, "--kind", kind);
   assert.equal(s.ok("merge-check", "--sha", SHA, "--cycles", "1"), "T1 may merge: 1 clean cycle on this SHA");
@@ -3345,7 +3350,7 @@ test("T346: sage stats sorts by review tokens, counts a tokens cell of 1 to 12 d
 });
 
 const stateIs = (s, id, state) => byHand(s.dir, "tasks", 0, id, (cells) => cells.with(5, state));
-const lastDecision = (s) => rows(s.dir, "decisions").at(-1);
+const lastDecision = (s) => trail(s.dir).at(-1);
 const UNMET = (task, waits, what) => `sage: ${task} waits for ${waits}, so it takes no ${what}: it starts after each of them is merged or concluded. Its design and PE may run.`;
 
 test("T336: task add --waits and task set waits= keep a list of task ids, show each with its state, and leave a decisions row; waits= and none clear it", () => {
@@ -3359,9 +3364,9 @@ test("T336: task add --waits and task set waits= keep a list of task ids, show e
   assert.equal(s.ok("task", "T3"), "T3 framed · small · round 0 · route build,code-review,qa · P2 · waits T1 (merged), T2 (framed) · unmet T2");
   assert.equal(s.ok("task", "T3", "set", "waits=T2,T1"), "T3 framed · small · round 0 · route build,code-review,qa · P2 · waits T2 (framed), T1 (merged) · unmet T2");
   assert.equal(lastDecision(s).decision, "waits T1,T2 → T2,T1", "a replaced list leaves its old and new values");
-  const count = rows(s.dir, "decisions").length;
+  const count = trail(s.dir).length;
   s.ok("task", "T3", "set", "waits=T2, T1");
-  assert.equal(rows(s.dir, "decisions").length, count, "the same list again changes nothing, so it writes no row");
+  assert.equal(trail(s.dir).length, count, "the same list again changes nothing, so it writes no row");
   stateIs(s, "T2", "concluded");
   assert.match(s.ok("task", "T3"), / · waits T2 \(concluded\), T1 \(merged\) · all met$/);
   assert.equal(s.ok("task", "T3", "set", "waits="), "T3 framed · small · round 0 · route build,code-review,qa · P2", "waits= clears it");
@@ -3739,7 +3744,7 @@ test("T337: a milestone's state comes from its breakdown gate's answer: proposed
   const { at, ...gate } = rows(s.dir, "gates")[0];
   assert.deepEqual(gate, { id: "G1", task: "T1", question: Q("Approve milestone M1? No task builds before you approve.", "Name: Codex support", "Goal: Sage runs in Codex as well as in Claude Code", "Pilot, runs first:", "  T1: Read the Codex hooks", "Then, each after T1:", "  T2: Port the state tool", "  T3 [waits for T2]: Show it on the board"), options: "approve|change|drop", recommendation: "approve", default: "", answer: "" });
   assert.deepEqual(rows(s.dir, "tasks").map((t) => t.milestone), ["M1", "M1", "M1"]);
-  assert.deepEqual(rows(s.dir, "decisions").slice(-3).map((d) => [d.task, d.decision, d.why]), [["T2", "milestone none → M1", "milestone propose"], ["T3", "milestone none → M1", "milestone propose"], ["T1", "M1 proposed with gate G1, pilot T1, tasks T2,T3, name: Codex support", "milestone propose"]]);
+  assert.deepEqual(trail(s.dir).slice(-3).map((d) => [d.task, d.decision, d.why]), [["T2", "milestone none → M1", "milestone propose"], ["T3", "milestone none → M1", "milestone propose"], ["T1", "M1 proposed with gate G1, pilot T1, tasks T2,T3, name: Codex support", "milestone propose"]]);
   assert.equal(milestonesLine(s), "milestone M1 · needs you · pilot T1: 0 of 3 merged · breakdown waits for you (G1) · name: Codex support");
   s.ok("gate", "answer", "G1", "--option", "2");
   s.ok("task", "add", "--priority", "P2", "--title", "Four", "--size", "small", "--milestone", "M1");
@@ -3752,7 +3757,7 @@ test("T337: a milestone's state comes from its breakdown gate's answer: proposed
   s.ok("gate", "answer", "G2", "--other-hex", Buffer.from("leave out the board", "utf8").toString("hex"));
   assert.equal(milestonesLine(s), "milestone M1 · in progress · pilot T1: 0 of 4 merged · you asked for changes (G2): the chief revises the breakdown · name: Codex support");
   assert.match(s.ok("milestone", "propose", "M1", "--tasks", "T2 T4"), /^M1 proposed \(round 3\) · pilot T1 · tasks T2, T4 · G3 open/);
-  assert.deepEqual(rows(s.dir, "decisions").slice(-2).map((d) => [d.task, d.decision]), [["T3", "milestone M1 → none"], ["T1", "M1 proposed again with gate G3, round 3"]]);
+  assert.deepEqual(trail(s.dir).slice(-2).map((d) => [d.task, d.decision]), [["T3", "milestone M1 → none"], ["T1", "M1 proposed again with gate G3, round 3"]]);
   s.ok("gate", "answer", "G3", "--option", "1");
   assert.equal(milestonesLine(s), "milestone M1 · not started · pilot T1: 0 of 3 merged · name: Codex support", "active, with nothing started");
   stateIs(s, "T1", "merged");
@@ -5251,7 +5256,7 @@ test("F-T284-14: an approved move out of held gives the task exactly one more re
   fix("two");
   assert.match(s.ok("round", "T1"), /^T1 held: 1 repair rounds did not make it clean/);
   s.ok("task", "T1", "set", "state=building", approveRound(s));
-  assert.match(rows(s.dir, "decisions").at(-1).decision, /^held → building: one more repair round \(G1\)$/);
+  assert.match(trail(s.dir).at(-1).decision, /^held → building: one more repair round \(G1\)$/);
   s.ok("task", "T1", "set", "state=reviewing");
   fix("three");
   assert.match(s.ok("round", "T1"), /^T1 repairing · round 2/, "one more round after the hold");
@@ -5382,7 +5387,7 @@ test("F-T289-9: a re-plan back to briefed ends the task's running lead run, with
     byHand(s.dir, "tasks", 0, "T1", (cells) => Object.assign(cells, { 5: from }));
     s.ok("task", "T1", "set", "state=briefed");
     assert.deepEqual(rows(s.dir, "runs").map((r) => `${r.id} ${r.status}`), ["R1 blocked", "R2 running"], from);
-    assert.match(rows(s.dir, "decisions").at(-1).decision, /^R1 blocked: T1 went back to briefed$/, from);
+    assert.match(trail(s.dir).at(-1).decision, /^R1 blocked: T1 went back to briefed$/, from);
     s.ok("run", "add", "T1", "--role", "lead");
   }
   const s = store();
@@ -5403,7 +5408,7 @@ test("F-T286-2 and F-T286-3: a non-whole extra counts as 0; a move from a round 
   assert.match(s.ok("round", "T1"), /^T1 held: /, "a NaN limit never held");
   s.ok("task", "T1", "set", "state=abandoned");
   assert.equal(rows(s.dir, "tasks")[0].extra, "x", "no extra round for an abandoned task");
-  assert.doesNotMatch(rows(s.dir, "decisions").map((d) => d.decision).join("\n"), /one more repair round/);
+  assert.doesNotMatch(trail(s.dir).map((d) => d.decision).join("\n"), /one more repair round/);
 });
 
 function stopAt(s, table, ...args) {
@@ -5613,11 +5618,11 @@ test("R1255-2, R1248-3: a propose that finishes after a stop writes the decision
   const args = ["milestone", "propose", "--name", "Codex support", "--goal", "Codex runs sage too.", "--pilot", "T1", "--tasks", "T2"];
   stopAt(s, "gates", ...args);
   s.ok(...args);
-  assert.deepEqual(rows(s.dir, "decisions").filter((d) => d.why === "milestone propose").map((d) => [d.task, d.decision]), [["T2", "milestone none → M1"], ["T1", "M1 proposed with gate G2, pilot T1, tasks T2, name: Codex support"]]);
+  assert.deepEqual(trail(s.dir).filter((d) => d.why === "milestone propose").map((d) => [d.task, d.decision]), [["T2", "milestone none → M1"], ["T1", "M1 proposed with gate G2, pilot T1, tasks T2, name: Codex support"]]);
   s.ok("gate", "answer", "G2", "--option", "2");
   stopAt(s, "gates", "milestone", "propose", "M1", "--tasks", "T2,T3");
   s.ok("milestone", "propose", "M1", "--tasks", "T2,T3");
-  assert.deepEqual(rows(s.dir, "decisions").slice(-2).map((d) => [d.task, d.decision, d.why]), [["T3", "milestone none → M1", "milestone propose"], ["T1", "M1 proposed again with gate G4, round 2", "milestone propose"]]);
+  assert.deepEqual(trail(s.dir).slice(-2).map((d) => [d.task, d.decision, d.why]), [["T3", "milestone none → M1", "milestone propose"], ["T1", "M1 proposed again with gate G4, round 2", "milestone propose"]]);
 });
 
 test("R1248-1: milestone propose with an ended task of another milestone names the ended state, not milestone=none", () => {
@@ -5636,17 +5641,17 @@ const changing = () => {
   return s;
 };
 const reproposal = ["milestone", "propose", "M1", "--pilot", "T3", "--tasks", "T1,T4"];
-const newRows = (s, from) => rows(s.dir, "decisions").slice(from).map((d) => [d.task, d.decision]);
+const newRows = (s, from) => trail(s.dir).slice(from).map((d) => [d.task, d.decision]);
 
 test("R1269-3: a new proposal with a new pilot writes a row only for a real change of a task's milestone: none for the old pilot, one for a task that joins and one for a task that leaves", () => {
-  const s = changing(), from = rows(s.dir, "decisions").length;
+  const s = changing(), from = trail(s.dir).length;
   s.ok(...reproposal);
   assert.deepEqual(newRows(s, from), [["T2", "milestone M1 → none"], ["T4", "milestone none → M1"], ["T3", "M1 proposed again with gate G2, round 2"]]);
   assert.deepEqual(rows(s.dir, "tasks").map((t) => t.milestone), ["M1", "", "M1", "M1"]);
 });
 
 test("R1266-2: a new proposal that finishes after a stop writes the row of each task that the stopped write put in or took out of the milestone, and none for the old pilot", () => {
-  const s = changing(), from = rows(s.dir, "decisions").length;
+  const s = changing(), from = trail(s.dir).length;
   stopAt(s, "gates", ...reproposal);
   assert.deepEqual(rows(s.dir, "tasks").map((t) => t.milestone), ["M1", "", "M1", "M1"], "the stopped write moved the cells");
   s.ok(...reproposal);
@@ -5773,7 +5778,7 @@ test("R1279-2: a new proposal takes each move row's from from the task's cell wh
   s.ok("gate", "answer", "G1", "--option", "2");
   writeFileSync(join(s.dir, "decisions.tsv"), "");
   s.ok("logbook", "repair", "--accept-loss", "decisions");
-  const from = rows(s.dir, "decisions").length;
+  const from = trail(s.dir).length;
   s.ok("milestone", "propose", "M1", "--tasks", "none");
   assert.deepEqual(newRows(s, from), [["T2", "milestone M1 → none"], ["T1", "M1 proposed again with gate G2, round 2"]]);
 });

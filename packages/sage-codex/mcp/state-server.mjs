@@ -214,6 +214,10 @@ export const TOOLS = {
     describe: "Only when the owner asks: open the takeover gate that gives a task to a chief (to), the same one-recipient gate as gate_replace, as the owner's act. The receiving chief applies the owner's answer.",
     input: { task, to: chief }, pos: ["task"], argv: (i) => ["gate", "give", i.task],
   },
+  chief_name: {
+    describe: "Only when the owner asks: give a chief (chief) the owner's name for it on the board (name), as the owner's act. With no name, it clears the name, and the board shows the default name: provider · folder · start time.",
+    input: { chief, name: optional("the name: 1 to 60 characters, with no space at its start or end and no two spaces together") }, pos: ["chief", "name"], argv: (i) => ["chief", "name", i.chief, ...(i.name ? [i.name] : [])],
+  },
 };
 
 export function argvFor(name, input) {

@@ -40,7 +40,7 @@ function Row({ task, at, selected }) {
           {task.waits && !task.ended && <span className="badge" title={task.waits}>waits</span>}
         </span>
         <span className={`badge word ${(task.word ?? "unknown").replace(" ", "-")}`}>{task.word ?? "unknown"}</span>
-        <span className="chief">{task.chief && <ChiefDot stopped={task.chief.stopped} />}{chiefName(task.chief)}{task.chief?.stopped && " (stopped)"}</span>
+        <span className="chief">{task.chief && <ChiefDot stopped={task.chief.stopped} />}{chiefName(task.chief)}{task.chief?.stopped && " (stopped)"}{task.chief?.waits && " (waits for you)"}</span>
         <span className={`step ${task.step?.status ?? ""}`}>{task.step?.label ?? (task.ended ? "" : NONE)}</span>
         <span className="mono pr">{task.pr ? `#${task.pr}` : NONE}</span>
         <span className="age">{age ?? NONE}</span>
@@ -72,7 +72,9 @@ function Group({ group, milestone, at, selected, focus, open, toggle }) {
   );
 }
 
-export function Tasks({ model, params }) {
+export const ofChief = (task, chief) => !chief || task.project === chief.project && task.chief?.id === chief.id;
+
+export function Tasks({ model, params, chief = null }) {
   const [group, setGroup] = useState("milestone");
   const [filters, setFilters] = useState({});
   const [opened, setOpened] = useState(() => new Set());
@@ -84,7 +86,7 @@ export function Tasks({ model, params }) {
   }, [focus]);
 
   const options = useMemo(() => Object.fromEntries(FILTERS.map(([key, , value]) => [key, [...new Set(model.tasks.map(value))].sort((a, b) => key === "word" ? order(WORDS, a) - order(WORDS, b) : a.localeCompare(b))])), [model.tasks]);
-  const shown = useMemo(() => model.tasks.filter(task => FILTERS.every(([key, , value]) => !filters[key] || value(task) === filters[key])), [model.tasks, filters]);
+  const shown = useMemo(() => model.tasks.filter(task => ofChief(task, chief) && FILTERS.every(([key, , value]) => !filters[key] || value(task) === filters[key])), [model.tasks, filters, chief]);
   const groups = useMemo(() => {
     const how = GROUPS[group], rank = new Map(model.milestones.map((milestone, i) => [milestone.key, i])), map = new Map();
     for (const task of shown) { const key = how.of(task); if (!map.has(key)) map.set(key, { key: key || "none", title: how.title(task), tasks: [] }); map.get(key).tasks.push(task); }
@@ -117,7 +119,7 @@ export function Tasks({ model, params }) {
           </label>
         ))}
         <span className="grow" />
-        <span className="hint" role="status">{open} open · {shown.length - open} ended</span>
+        <span className="hint" role="status">{chief && `${chief.id}'s work · `}{open} open · {shown.length - open} ended</span>
       </div>
       {groups.length
         ? groups.map(item => <Group key={item.key} group={item} milestone={group === "milestone" ? milestones.get(item.key) : null} at={model.at} selected={selected} focus={group === "milestone" && item.key === focus} open={opened.has(`${group}:${item.key}`)} toggle={() => toggle(item.key)} />)

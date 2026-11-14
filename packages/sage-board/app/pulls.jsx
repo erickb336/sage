@@ -1,7 +1,7 @@
 import { Suspense, lazy, useMemo, useState } from "react";
 import { ago } from "./overview.jsx";
 import { Panel, chiefName, taskLink } from "./panel.jsx";
-import { ChiefDot } from "./tasks.jsx";
+import { ChiefDot, ofChief } from "./tasks.jsx";
 
 const PAGE = "pull-requests", RECENT_DAYS = 7, DAY = 86_400_000;
 const GROUPS = [
@@ -74,16 +74,16 @@ function graphData(groups) {
   return { nodes, waits, conflicts, alone: shown.size - nodes.length };
 }
 
-export function Pulls({ model, params }) {
+export function Pulls({ model, params, chief = null }) {
   const [view, setView] = useState("list");
   const selected = params.get("task");
   const prs = useMemo(() => new Map(model.tasks.filter(task => task.pr).map(task => [task.key, task.pr])), [model.tasks]);
   const groups = useMemo(() => {
     const map = new Map(GROUPS.map(([key]) => [key, []]));
-    for (const task of model.tasks) map.get(groupOf(task, model.at))?.push(task);
+    for (const task of model.tasks) if (ofChief(task, chief)) map.get(groupOf(task, model.at))?.push(task);
     const newest = (a, b) => (Date.parse(b.doneAt ?? b.lastActivity) || 0) - (Date.parse(a.doneAt ?? a.lastActivity) || 0);
     return GROUPS.map(([key, title, hint]) => ({ key, title, hint, tasks: map.get(key).sort(newest) })).filter(group => group.tasks.length);
-  }, [model.tasks, model.at]);
+  }, [model.tasks, model.at, chief]);
   const open = groups.filter(group => group.key !== "merged").reduce((n, group) => n + group.tasks.filter(task => task.pr).length, 0);
   return (
     <>

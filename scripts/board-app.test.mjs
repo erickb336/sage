@@ -121,7 +121,7 @@ test("T1054: the event stream sends the Overview model as JSON, and again when t
   });
   assert.deepEqual(first.needs.map(need => need.gate), ["G4", "G5"]);
   assert.deepEqual(first.milestones.map(milestone => milestone.id), ["M2", "M1", "M3"]);
-  assert.deepEqual(first.counts, { merged: 1, stuck: 1, added: null });
+  assert.deepEqual(first.counts, { merged: 1, stuck: 1, stuckNow: 0, added: null });
   assert.equal(first.stale, false);
   assert.equal(second.needs[1].question, "Crash reports: <b>send</b> them?", "the model carries text, never HTML");
 });

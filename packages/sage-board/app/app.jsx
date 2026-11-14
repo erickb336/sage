@@ -1,4 +1,5 @@
 import { useEffect, useState } from "react";
+import { ChiefChips, QuestionView } from "./actions.jsx";
 import { AgentsIcon, AlertIcon, LeafIcon, MoonIcon, OverviewIcon, PullsIcon, SunIcon, TasksIcon } from "./icons.jsx";
 import { Overview } from "./overview.jsx";
 import { Pulls } from "./pulls.jsx";
@@ -12,11 +13,13 @@ const PAGES = [
   { hash: "agents", name: "Agents", Icon: AgentsIcon, classic: "/agents", what: "each running agent, for each chief, against the limit" },
   { hash: "pull-requests", name: "Pull requests", Icon: PullsIcon },
 ];
+const QUESTION = { hash: "question", name: "Question", hidden: true };
+const FILTER_KEY = "board-chief";
 
 const clock = at => new Date(at).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit", hourCycle: "h23" });
 function pageOf(hash) {
   const [path, query = ""] = hash.replace(/^#\/?/, "").split("?");
-  return { ...(PAGES.find(page => page.hash === path) ?? PAGES[0]), params: new URLSearchParams(query) };
+  return { ...([...PAGES, QUESTION].find(page => page.hash === path) ?? PAGES[0]), params: new URLSearchParams(query) };
 }
 
 function useHashPage() {
@@ -84,16 +87,27 @@ function ComesNext({ page }) {
   );
 }
 
+function useChiefFilter() {
+  const [filter, setFilter] = useState(() => { try { return sessionStorage.getItem(FILTER_KEY); } catch { return null; } });
+  const set = value => { setFilter(value); try { value ? sessionStorage.setItem(FILTER_KEY, value) : sessionStorage.removeItem(FILTER_KEY); } catch {} };
+  return [filter, set];
+}
+
 export function App() {
   const { model, link, receivedAt } = useModel("/app/events");
   const page = useHashPage();
   const [theme, flip] = useTheme();
+  const [chosen, setFilter] = useChiefFilter();
+  const filter = model?.chiefs.some(chief => chief.key === chosen) ? chosen : null;
+  const picked = model?.chiefs.find(chief => chief.key === filter);
+  const shown = (logbook, id) => !filter || `${logbook}/${id}` === filter;
   const crumb = model?.projects.length === 1 ? model.projects[0] : "All projects";
   const next = theme === "dark" ? "light" : "dark";
   const open = model ? model.tasks.filter(task => !task.ended).length : 0;
   const prs = model ? model.tasks.filter(task => task.pr && !task.ended).length : 0;
-  const body = page.hash === "" ? <Overview model={model} /> : page.hash === "tasks" ? <Tasks model={model} params={page.params} />
-    : page.hash === "pull-requests" ? <Pulls model={model} params={page.params} /> : null;
+  const body = page.hash === "" ? <Overview model={model} shown={shown} /> : page.hash === "tasks" ? <Tasks model={model} params={page.params} chief={picked} />
+    : page.hash === "pull-requests" ? <Pulls model={model} params={page.params} chief={picked} />
+    : page.hash === "question" ? <QuestionView needKey={page.params.get("key") ?? ""} model={model} theme={theme} /> : null;
   return (
     <div className="app">
       <aside className="side">
@@ -112,7 +126,7 @@ export function App() {
             ))}
           </ul>
         </nav>
-        <p className="foot">Read-only. The logbook on this Mac is the source of each line.</p>
+        <p className="foot">The logbook on this Mac is the source of each line. Your answers and names write to it.</p>
       </aside>
       <div className="col">
         <header className="top">
@@ -123,6 +137,7 @@ export function App() {
             {theme === "dark" ? <SunIcon /> : <MoonIcon />}
           </button>
         </header>
+        {model && <ChiefChips chiefs={model.chiefs} filter={filter} setFilter={setFilter} many={model.projects.length > 1} />}
         <main className="main">
           {!body ? <ComesNext page={page} /> : model
             ? <><Banner model={model} link={link} receivedAt={receivedAt} />{body}</>

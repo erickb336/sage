@@ -564,7 +564,7 @@ test("T984: the message tool gives the chief the same text and page as the CLI's
 test("the state server lists one tool for each state-tool command, and marks only the reads read-only", async (t) => {
   const s = await connect(t);
   const tools = await s.tools();
-  assert.deepEqual(tools.map((tool) => tool.name).sort(), ["accept", "brief", "cancel", "claim", "config", "finding_add", "finding_close", "finding_move", "finding_triage", "gate_add", "gate_answer", "gate_give", "gate_replace", "gate_undo",
+  assert.deepEqual(tools.map((tool) => tool.name).sort(), ["accept", "brief", "cancel", "chief_name", "claim", "config", "finding_add", "finding_close", "finding_move", "finding_triage", "gate_add", "gate_answer", "gate_give", "gate_replace", "gate_undo",
     "init", "link", "lint", "log", "merge_check", "message", "milestone_propose", "milestone_set", "move", "offer", "pages", "release_add", "report_compare", "round", "run_add", "run_done", "standing", "standing_add", "status", "task_add", "task_adopt", "task_set", "unclaim", "verdict", "worktrees"]);
   assert.deepEqual(tools.filter((tool) => tool.annotations.readOnlyHint).map((tool) => tool.name).sort(), ["merge_check", "report_compare", "standing", "status"]);
   assert.ok(tools.every((tool) => tool.inputSchema.required.includes("project") && tool.inputSchema.additionalProperties === false));

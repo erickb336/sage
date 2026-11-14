@@ -9,6 +9,7 @@ import { fileURLToPath } from "node:url";
 import { BOARD_PORT, boardView, sharedRoot } from "../sage-core/index.mjs";
 import { installBoard, stableNodePath, writeLoginFile } from "./install.mjs";
 import { createBoardServer } from "./server.mjs";
+import { startPairing, stateFolder } from "./access.mjs";
 
 const parseJson = text => { try { return JSON.parse(text); } catch { throw new TypeError("board JSON is invalid"); } };
 const boundedPath = path => { if (typeof path !== "string" || !isAbsolute(path) || path.length > 4096 || /[\p{Cc}\p{Cf}]/u.test(path)) throw new TypeError("use a bounded absolute path without control characters"); return resolve(path); };
@@ -172,23 +173,30 @@ async function stopBoard(configPath, config, env, kill) {
 }
 
 function parse(argv) {
-  if (argv[0] !== "board") throw new TypeError("use: sage board [this|all|project|Tn] --config <absolute path> [--serve|--html --out <absolute path>|--status]");
+  if (argv[0] !== "board") throw new TypeError("use: sage board [this|all|project|Tn] --config <absolute path> [--serve|--pair|--html --out <absolute path>|--status]");
   const options = {}, values = [];
   for (let i = 1; i < argv.length; i++) {
     const value = argv[i];
     if (!value.startsWith("--")) { values.push(value); continue; }
     const key = value.slice(2);
-    if (!["config", "out", "project", "scope", "serve", "html", "status", "setup", "ensure", "stop", "sources", "pages", "port", "install", "install-dir", "login-file"].includes(key) || Object.hasOwn(options, key)) throw new TypeError("unknown or repeated board option");
-    if (["serve", "html", "status", "setup", "ensure", "stop", "install"].includes(key)) options[key] = true;
+    if (!["config", "out", "project", "scope", "serve", "html", "status", "setup", "ensure", "stop", "pair", "sources", "pages", "port", "install", "install-dir", "login-file"].includes(key) || Object.hasOwn(options, key)) throw new TypeError("unknown or repeated board option");
+    if (["serve", "html", "status", "setup", "ensure", "stop", "pair", "install"].includes(key)) options[key] = true;
     else { if (!argv[i + 1] || argv[i + 1].startsWith("--")) throw new TypeError(`--${key} needs a value`); options[key] = argv[++i]; }
   }
-  if (values.length > 1 || [options.serve, options.html, options.status, options.setup, options.ensure, options.stop, options.install].filter(Boolean).length > 1) throw new TypeError("board needs one scope and one format");
+  if (values.length > 1 || [options.serve, options.html, options.status, options.setup, options.ensure, options.stop, options.pair, options.install].filter(Boolean).length > 1) throw new TypeError("board needs one scope and one format");
   return { options, value: values[0] ?? "all" };
 }
-export async function runBoardCli(argv, { output = line => process.stdout.write(`${line}\n`), env = process.env, kill = (pid, signal) => process.kill(pid, signal) } = {}) {
+export async function runBoardCli(argv, { output = line => process.stdout.write(`${line}\n`), env = process.env, kill = (pid, signal) => process.kill(pid, signal), input = process.stdin } = {}) {
   const { options, value } = parse(argv), explicit = options.config !== undefined;
   options.config ??= defaultConfigPath(env);
-  if (options.scope && (options.serve || options.setup || options.ensure || options.stop || options.install)) throw new TypeError("--scope is only for a task lookup");
+  if (options.scope && (options.serve || options.setup || options.ensure || options.stop || options.pair || options.install)) throw new TypeError("--scope is only for a task lookup");
+  if (options.pair) {
+    if (value !== "all" || options.project || options.out || options.sources || options.pages || options.port || options["install-dir"] || options["login-file"]) throw new TypeError("pair takes only --config");
+    if (!input?.isTTY) throw new TypeError("board --pair runs only in Terminal, with your keyboard as its input, because it prints a one-time code for your eyes only. Open Terminal on this Mac and run it there.");
+    const configPath = boundedPath(options.config), config = readBoardConfig(configPath), code = startPairing(stateFolder(configPath));
+    output(`Pairing code: ${code}\nOpen http://127.0.0.1:${config.port}/app/ in your browser. In the card "Pair this browser to act from the board", type the code in the "Pairing code" field, then choose Pair. The code works once, within 10 minutes. After that, this browser can answer questions, undo an answer, rename chiefs and give tasks to another chief.\nIf the page shows no pairing card and this browser is not paired yet, the board that runs is older than this one: run ${boardCommand("--stop", configPath, env, explicit)}, ask for the board again, and reload the page.`);
+    return null;
+  }
   const missing = options.ensure && !lstatSync(boundedPath(options.config), { throwIfNoEntry: false });
   if (options.setup || missing) {
     if (value !== "all" || options.sources?.length > 65536 || options.project || options.out || options["install-dir"] || options["login-file"]) throw new TypeError("setup takes --config, with optional sources, port and pages");
@@ -224,7 +232,7 @@ export async function runBoardCli(argv, { output = line => process.stdout.write(
   if (options["install-dir"] || options["login-file"]) throw new TypeError("installation paths require --install");
   if (options.serve) {
     if (value !== "all" || options.out || options.project) throw new TypeError("server uses all configured sources; no output or project option");
-    const configPath = boundedPath(options.config), server = createBoardServer({ ...config, sources: readSources(config.sources, env), providerRoots: providerRoots(env), id: configId(configPath) });
+    const configPath = boundedPath(options.config), server = createBoardServer({ ...config, sources: readSources(config.sources, env), providerRoots: providerRoots(env), id: configId(configPath), stateDir: stateFolder(configPath) });
     await server.start();
     try { writePid(configPath, process.pid); } catch (error) { await server.close(); throw error; }
     output(`Sage board: http://127.0.0.1:${config.port}/ · only on this Mac.`);

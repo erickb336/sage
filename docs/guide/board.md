@@ -239,13 +239,53 @@ A link in a page to another page of the board, or to the index, opens when you c
 
 A site that moves you to a page by itself gets "not permitted", and so does a link to "open with its scripts" in a page or on another site: open it from the index. When another site opens the index in a new tab, the index cuts that site's hold on the tab, so the site cannot move the tab or read what a page sends to it.
 
+## Act from the board
+
+The new board page at `/app/` shows the chiefs of each project under the top bar: a green dot for a live chief, a yellow dot for a chief that waits for your answer, a ring for a stopped chief, and the autopilot state. With a paired browser, you act from the Overview:
+
+| Action | Clicks from the Overview | What it writes |
+| --- | --- | --- |
+| Answer a question in Needs you | 1 to open it with its full context (the question message that the chief kept), then pick and Send | `gate answer --via board`. The chief that owns the question applies the answer at its next step. |
+| Undo a board answer | 1: Undo, under "Answered · waits for the chief" | `gate undo`, until the chief picks the answer up. |
+| Rename a chief | 2: the chief's menu (▾), then Rename | `chief name`. An empty name clears your name. |
+| Show only one chief's work | 1: the chief's chip. "All chiefs" shows all again | Nothing: the filter holds on each page, in this browser tab. |
+| Give a task of a stopped chief to another chief | 2: Give to another chief, then Open the takeover question | `gate give`. Nothing moves until you answer the takeover question. |
+| See what changed since you looked | 0 | The time of your last visit, in the board's state folder. |
+
+The first answer wins. When you answer in a chat or on a card first, the board shows where and when, for example "Answered first in C2's chat at 14:51", and a later board answer is not recorded.
+
+**Pair a browser once.** Until you pair, the board only reads. Do these steps:
+
+1. In Terminal on the Mac, run `node <board folder>/cli.mjs board --pair` (the board folder of the installed plugin, or the installed copy). It prints a one-time code that works for 10 minutes.
+2. Open the board. In the card "Pair this browser to act from the board", type the code in the "Pairing code" field, and choose Pair.
+
+If the page shows no pairing card, the board that runs is older than your sage: run the `board --stop` command that `board --pair` prints, ask for the board again, and reload the page. When a browser loses its site data, it pairs again.
+
+The command refuses to run when its input is not a terminal, and the hooks refuse it from an agent.
+
+**What the board checks.** Each write is a POST to `/api/...`, and the server refuses it unless all of these hold:
+
+1. The `Origin` is the board's own address, `Sec-Fetch-Site` is `same-origin`, and the body is JSON. The server answers no CORS preflight, so a page on another site or port cannot send one. A `/pages` page with scripts has the origin `null`, and the server refuses it.
+2. The browser has the pairing cookie (`HttpOnly; SameSite=Strict`). The board keeps only its hash, in the board's state folder (`~/.config/sage-board/state`).
+3. The request carries the pairing token of the same browser. The server gives it to the page once, when you pair, and keeps only its hash. The page keeps it in `localStorage`, which belongs to the board's own address and port, and a `/pages` page runs in a sandbox without it.
+4. An answer names the digest of the question and the options that you saw. When the question changed, the state tool refuses the answer.
+5. The board runs only your commands: `gate answer --via board`, `gate undo`, `gate give` and `chief name`, through the state tool, in its own thread. It never claims, accepts or writes a task.
+
+A browser sends the cookie to every server on `127.0.0.1`, also on another port. That server never gets the token, so the cookie alone writes nothing.
+
+The board writes only a shared logbook. A logbook with no checkout on this Mac refuses, and you answer in the chief's chat.
+
+An agent runs as your user, so a script that builds the state folder's path while it runs can still read the cookie's hash file. The sandbox is the full protection.
+
 ## The board server
 
-The board server only reads your logbooks. It does not make or change a logbook, fetch from GitHub, or decide whether a pull request may merge. The state tool still records each change and applies the merge rules.
+The board server reads your logbooks. It writes only the owner's actions of a paired browser, through the state tool ([Act from the board](#act-from-the-board)).
+
+It does not fetch from GitHub or decide whether a pull request may merge. The state tool still records each change and applies the merge rules.
 
 In Claude and in Codex, `show board` also starts the local board server on the Mac when it is not running (the first time, it sets it up from the standard Claude and Codex roots and the shared root), and the chief shows its address, or why it is not running, next to the chat board. In Codex, this start runs outside Codex's sandbox, so Codex asks you to approve it ([The board in Codex](codex.md#the-board-in-codex)). The board is for a desktop browser on this Mac only, and it needs no sign-in.
 
-The sage hook refuses the ordinary command shapes by which an agent reads, copies or replaces the board config, or lists, searches, copies or moves the board's folder (`~/.config/sage-board/`). It does not stop a script that builds them while it runs; full protection needs the sandbox.
+The sage hook refuses the ordinary command shapes by which an agent reads, copies or replaces the board config or a file of the board's state folder, lists, searches, copies or moves the board's folder (`~/.config/sage-board/`), or runs `board --pair`. It does not stop a script that builds them while it runs; full protection needs the sandbox.
 
 After you change a setting of the config, or update sage, the line says that a restart is needed: run the `board --stop` command that it gives, then ask for the board again.
 

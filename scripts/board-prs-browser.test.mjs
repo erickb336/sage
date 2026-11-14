@@ -152,6 +152,18 @@ test("T1063: the list groups each PR by its next action and shows its task, chie
   assert.equal(await page.locator(".nav a", { hasText: "Pull requests" }).locator(".count").textContent(), "5");
 });
 
+test("T1059, T1063: the chief filter holds on the Pull requests page: it lists only that chief's tasks, and All chiefs lists each again", async t => {
+  const { page } = await open(t, {}, "/app/#pull-requests");
+  await row(page, "T8").waitFor();
+  await page.locator('.chip[data-chief$="/C2"]').click();
+  await row(page, "T8").waitFor({ state: "detached" });
+  const shown = async () => (await page.locator("li.prow .meta .mono").allTextContents()).sort();
+  assert.deepEqual(await shown(), ["T11", "T3", "T7"], "C2's tasks with a PR or a wait");
+  await page.getByRole("button", { name: "All chiefs" }).click();
+  await row(page, "T8").waitFor();
+  assert.deepEqual(await shown(), ["T11", "T13", "T3", "T4", "T5", "T6", "T7", "T8", "T9"]);
+});
+
 test("T1063: each PR number links to GitHub, each title opens the task's side panel, and the panel closes back to the page", async t => {
   const { page, requests, base } = await open(t, {}, "/app/#pull-requests");
   const pr = row(page, "T5").getByRole("link", { name: "Pull request 14 on GitHub" });

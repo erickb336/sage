@@ -52,11 +52,15 @@ The stable installation copies only board and core sources. It does not depend o
 
 ## The new board (preview)
 
-The new board is at `/app/` on the same server: open `http://127.0.0.1:43123/app/` (or your configured port) in a desktop browser. It needs scripts. In this first version it has one page, the Overview, and it only reads the logbook:
+The new board is at `/app/` on the same server: open `http://127.0.0.1:43123/app/` (or your configured port) in a desktop browser. It needs scripts. Its Overview has:
 
-- **Needs you:** each open question, oldest first, with its chief, its task, its recommendation and when it was asked. Answer each question in its chief's chat.
+- **The chiefs:** a chip for each chief of each shared project, with live, waits for you, stopped or not known, and the autopilot state. A click shows only that chief's work, on each page.
+- **Needs you:** each open question, oldest first, with its chief, its task, its recommendation and when it was asked. A click opens the question with the message that the chief kept for it (`gates/G<n>.json`).
+- **Answered · waits for the chief**, with Undo, and **Stopped chiefs**, with "Give to another chief" for each open task.
 - **Milestones:** each milestone by the top priority of its open tasks, with its progress.
-- **In the last 24 hours:** the tasks merged, and the runs that failed or whose agent is silent for 30 minutes. "New tasks" shows as not known, because the logbook keeps no time when a task is added.
+- **Since you looked** (or **In the last 24 hours** before your first visit): the tasks merged, the runs that failed or whose agent is silent for 30 minutes, and the tasks added. A task gets its added time from its `task added` decision row; a task from before this row shows no time.
+
+**Writes.** A browser acts only after you pair it once: run `node cli.mjs board --pair` in Terminal (it refuses input that is not a terminal), and type the one-time code on the board. The server then sets the cookie `sage_board` (`HttpOnly; SameSite=Strict; Path=/`) and gives the page a second random secret, the token, which the page keeps in `localStorage`. The server keeps only the hashes of both in the board's state folder, `state/` next to the config, with `seen.json`, the time of your last visit. A browser sends its cookies to every port of `127.0.0.1`, but `localStorage` belongs to the board's own origin (its port too), so a server on another port that gets the cookie still has no token. Each `POST /api/...` must have the board's exact `Origin`, `Sec-Fetch-Site: same-origin`, a JSON body, the cookie and the token of the same browser in `X-Sage-Token`; an answer also carries the digest of the question that you saw. The server runs only `gate answer --via board`, `gate undo`, `gate give` and `chief name`, through the state tool in its own thread (Node's `worker_threads`), so the logbook lock never holds the server's event thread. It writes only a shared logbook, through a checkout of it on this Mac.
 
 The pages Tasks, Agents and Pull requests come next; until then, they link to the classic board at `/`. The new board loads only its own files from the board server, under a content security policy with no inline code and no outside source. Its data comes from one stream, `/app/events`. The classic board keeps working beside it.
 

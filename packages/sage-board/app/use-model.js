@@ -2,6 +2,9 @@ import { useEffect, useState } from "react";
 
 const RETRY_MS = 5000;
 
+export const when = at => new Date(at).toLocaleString([], { day: "numeric", month: "short", hour: "2-digit", minute: "2-digit", hourCycle: "h23" });
+const localName = chief => chief.named || !chief.startedAt ? chief : { ...chief, name: chief.name.replace(/\d{4}-\d\d-\d\d \d\d:\d\d UTC/, when(chief.startedAt)) };
+
 export function useModel(url) {
   const [state, setState] = useState({ model: null, link: "connecting", receivedAt: null });
   useEffect(() => {
@@ -10,7 +13,7 @@ export function useModel(url) {
       source = new EventSource(url);
       source.addEventListener("model", event => {
         let model;
-        try { model = JSON.parse(event.data); } catch { return; }
+        try { model = JSON.parse(event.data); model.chiefs = (model.chiefs ?? []).map(localName); } catch { return; }
         setState({ model, link: "live", receivedAt: Date.now() });
       });
       source.addEventListener("error", () => {

@@ -16,7 +16,7 @@ import { REPORT_FIELDS } from "./report.mjs";
 import { cleanReport, fieldsOf, proofResults, readReport } from "./report-reader.mjs";
 import { ROLES } from "./roles.mjs";
 import { TEAM } from "./role-policy.mjs";
-import { AGENT_CAPS, BREAKS, FINDING_CLASSES, HIDDEN, LINE, NAME_MAX, PRIORITIES, PRIORITY_SCALE, START_SAGE_MODE, TABLES as PLAIN_TABLES, TASK_KINDS, breakdownLine, countOf, nameProblem, proposalOf } from "./logbook-fields.mjs";
+import { AGENT_CAPS, BREAKS, FINDING_CLASSES, HIDDEN, LINE, NAME_MAX, PRIORITIES, PRIORITY_SCALE, START_SAGE_MODE, TABLES as PLAIN_TABLES, TASK_ADDED, TASK_KINDS, boardAnswer, breakdownLine, countOf, gateDigest, nameProblem, proposalOf } from "./logbook-fields.mjs";
 import { BREAKDOWN, ENDED, GATE_ID, MET, MILESTONE_ID, TASK_ID, breakdownGate, renameRows, renamedIds, byIds, dead, droppedBy, gateLines, lostClause, milestoneState, milestoneWordOf, progressOf, progressText, releaseKey, releaseNameProblem, releasesOf, shownGraph, shownMilestoneState, shownWaits, unmetWaits, waitGraph, waitWords, waitsOf, waitsWithState } from "./milestone-rules.mjs";
 import { FILES_MAX, FILE_PATH_MAX_BYTES, OBSERVATIONS_MAX_BYTES, OBSERVATION_DATA_MAX_BYTES, validateObservation, validateObservations } from "./observations.mjs";
 import { pushedBranches } from "./push-policy.mjs";
@@ -136,7 +136,7 @@ const OPTIONS = {
   verdict: ["sha", "kind", "cycle", "pr", "run"],
   lint: ["sha"],
   "gate add": ["question", "options", "recommend", "default", "message"],
-  "gate answer": ["option", "other-hex", "via"],
+  "gate answer": ["option", "other-hex", "via", "seen"],
   log: ["why"],
   "merge-check": ["sha", "pr", "cycles", "head"],
   board: ["name-hex", "view"],
@@ -1889,6 +1889,7 @@ function taskFrame(id, title, size, risk, add) {
 function frame(dir, title, size, risk, add, tags = {}) {
   const task = { ...taskFrame(nextId(dir, "T"), title, size, risk, add), ...tags };
   write(dir, "tasks", [...read(dir, "tasks"), task]);
+  write(dir, "decisions", [...read(dir, "decisions"), { at: now(), task: task.id, decision: TASK_ADDED, why: "framed" }]);
   return task;
 }
 const tagsOf = (task) => `${task.priority ? ` · ${task.priority}` : ""}${task.kind ? ` · kind ${task.kind}` : ""}${task.milestone ? ` · milestone ${task.milestone}` : task.release ? ` · release ${oneLine(task.release)}` : ""}${task.chief ? ` · chief ${task.chief}` : ""}${offerOf(task) ? ` · offer ${offerOf(task).id} to ${offerOf(task).to} · version ${taskVersion(task)}` : ""}`;
@@ -2316,7 +2317,7 @@ function status(dir, save) {
   assertNoPendingWrite(dir);
   const tasks = read(dir, "tasks");
   const runs = read(dir, "runs");
-  const all = read(dir, "gates"), gates = all.filter((g) => !g.answer);
+  const all = read(dir, "gates"), gates = all.filter((g) => !g.answer && !pendingOf(g)), board = all.filter(pendingOf);
   const graph = shownGraph(waitGraph(tasks, read(dir, "milestones"), all, read(dir, "decisions")), all);
   const count = {};
   for (const t of tasks) count[t.state] = (count[t.state] ?? 0) + 1;
@@ -2324,7 +2325,7 @@ function status(dir, save) {
   const lines = [
     `sage · ${shownName({ name: basename(dir), ...logbookIdentity(dir) })} · ${now().slice(11, 16)} UTC`,
     `tasks   ${tasks.length}${Object.entries(count).map(([s, n]) => ` · ${s} ${n}`).join("")}`,
-    `gates   ${gates.length} open${gates.map((g) => ` · ${g.id} ${gateShort(g, graph)} (${pendingOf(g) ? `board answer: ${visible(pendingOf(g).answer)}, not picked up yet` : `default: ${g.default || "none"}`})`).join("")}`,
+    `gates   ${gates.length} open${gates.map((g) => ` · ${g.id} ${gateShort(g, graph)} (default: ${g.default || "none"})`).join("")}${board.length ? ` · ${board.length} answered on the board, not picked up yet${board.map((g) => ` · ${g.id} ${gateShort(g, graph)} (board answer: ${visible(pendingOf(g).answer)})`).join("")}` : ""}`,
     `agents  ${runs.length} runs · ${runs.filter((r) => r.status === "running").length} running${queueOrder(runs).length ? ` · ${queueOrder(runs).length} queued` : ""} · about ${Math.round(tokens / 1000)}k tokens · ${usageSummary(runs)}`,
   ];
   const waiting = tasks.filter((t) => !ENDED.includes(t.state)).map((t) => [t, shownOpen(t, graph)]).filter(([, open]) => open.length);
@@ -2673,7 +2674,7 @@ const jsonCell = (text) => {
 };
 const answeredOf = (g) => ((a) => (a && typeof a.at === "string" && Object.hasOwn(VIA, a.via) ? a : undefined))(jsonCell(g.answered));
 const pickedOf = (g) => ((p) => (p && typeof p.at === "string" ? p : undefined))(jsonCell(g.picked));
-const pendingOf = (g) => ((a) => (!g.answer && a?.via === "board" && typeof a.answer === "string" && a.answer ? a : undefined))(answeredOf(g));
+const pendingOf = (g) => boardAnswer(g) ?? undefined;
 const gateChief = (dir, g, tasks, task = tasks.find((t) => t.id === g.task)) => (g.kind === "replace" && (g.chief || replaceOf(g)?.to)) || task?.chief || (task && heldLast(dir, task).released) || g.chief || "";
 const placeOf = (a) => (a ? `from ${VIA[a.via]} at ${a.at}` : "from a place and at a time that sage did not record");
 function pickerText(dir, g) {
@@ -3533,6 +3534,8 @@ function act(cmd, pos, opt, dir, env, skip, project) {
         if (sub === "give" && more.length) refuse("gate give takes one task id and --to <C id>: sage gate give <T> --to C<n>. Nothing changed.");
         const { task } = taskOf(dir, need(id, "the task id")), to = chiefNamed(dir, opt.to);
         if (task.chief === to) refuse(`${task.id} already belongs to ${to}. Nothing changed.`);
+        const other = sub === "give" && gates.find((g) => g.kind === "replace" && !g.answer && g.task === task.id && ((p) => p && p.from === task.chief && p.to !== to)(replaceOf(g)));
+        if (other) refuse(`${other.id} is open already: it asks to hand ${task.id} to ${chiefLabel(dir, replaceOf(other).to)}. A task has one open takeover question at a time: answer ${other.id} first (or undo your board answer to it), then give ${task.id} again. Nothing changed.`);
         return takeoverGate(dir, task, to);
       }
       if (sub === "answer" || sub === "undo") {
@@ -3545,6 +3548,7 @@ function act(cmd, pos, opt, dir, env, skip, project) {
         if (!Object.hasOwn(VIA, via)) refuse(`--via is the place of the owner's answer: ${Object.keys(VIA).join(", ")}. Nothing changed.`);
         const first = firstAnswer(g);
         if (first) refuse(first);
+        if (opt.seen !== undefined && opt.seen !== gateDigest(g)) refuse(`${g.id} changed after the owner read it: its question or its options are not the ones that --seen ${visible(String(opt.seen))} names. Read ${g.id} again, and answer what it asks now. Nothing changed.`);
         const options = optionsOf(g);
         const how = `gate answer ${g.id} takes --option <n>, the number of one of its options (1 to ${options.length}), or --other-hex <hex>, the owner's own words as the hex of their UTF-8 bytes (0-9 and a-f). Nothing changed.`;
         if (more.length || (opt.option === undefined) === (own === undefined) || (own !== undefined && unhex(own) === undefined)) refuse(how);

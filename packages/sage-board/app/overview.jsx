@@ -1,5 +1,8 @@
+import { useState } from "react";
+import { GiveBox, PairBox, UndoButton, chiefLabel, questionLink, useAccess, useSeen } from "./actions.jsx";
+import { when } from "./use-model.js";
 import { StateIcon } from "./icons.jsx";
-import { milestoneLink, readLink, taskLink } from "./panel.jsx";
+import { milestoneLink, taskLink } from "./panel.jsx";
 
 const plural = (count, one, many = `${one}s`) => `${count} ${count === 1 ? one : many}`;
 
@@ -12,15 +15,19 @@ export function ago(from, to) {
   return `${Math.round(minutes / 1440)} days ago`;
 }
 
-function Counts({ counts }) {
+const DAY = 86_400_000;
+const after = (list, since) => list.filter(at => at && Date.parse(at) > since).length;
+function Counts({ model, previous }) {
+  const since = previous ? Date.parse(previous) : Date.parse(model.at) - DAY;
+  const known = model.tasks.some(task => task.addedAt), unknown = model.tasks.some(task => !task.addedAt);
   const items = [
-    ["merged", counts.merged, "Merged", "tasks merged into main"],
-    ["stuck", counts.stuck, "Stuck", "runs that failed, or agents silent for 30 min"],
-    ["added", counts.added, "New tasks", counts.added === null ? "not known: the logbook keeps no time when a task is added" : "tasks added to the logbook"],
+    ["merged", after(model.tasks.filter(task => task.state === "merged").map(task => task.doneAt), since), "Merged", "tasks merged into main"],
+    ["stuck", after(model.failedAt, since) + model.counts.stuckNow, "Stuck", "runs that failed, or agents silent for 30 min"],
+    ["added", known ? after(model.tasks.map(task => task.addedAt), since) : null, "New tasks", !known ? "not known: no task in the logbook has a time when it was added" : unknown ? "tasks added to the logbook; older tasks have no time" : "tasks added to the logbook"],
   ];
   return (
     <section className="counts" aria-labelledby="counts-h">
-      <h2 id="counts-h">In the last 24 hours</h2>
+      <h2 id="counts-h">{previous ? <>Since you looked <span className="hint">· you last opened the board at {when(previous)}, {ago(previous, model.at)}</span></> : "In the last 24 hours"}</h2>
       <div className="kpis">
         {items.map(([kind, count, label, hint]) => (
           <div className={`kpi ${kind}`} key={kind} data-count={kind}>
@@ -40,13 +47,13 @@ function NeedRow({ need, at, many }) {
     <li data-need={need.key}>
       <span className="bullet" aria-hidden="true" />
       <div>
-        <p className="q">{need.task || need.milestone ? <a href={need.task && need.gate ? readLink(need.task.key, "question", need.gate) : need.task ? taskLink(need.task.key) : milestoneLink(need.milestone)}>{need.question}</a> : need.question}</p>
+        <p className="q">{need.gate && need.logbook ? <a href={questionLink(need.key)}>{need.question}</a> : need.task || need.milestone ? <a href={need.task ? taskLink(need.task.key) : milestoneLink(need.milestone)}>{need.question}</a> : need.question}</p>
         {need.more.length > 0 && <p className="more">{need.more.join(" ")}</p>}
         {need.recommendation && <p className="pick">Recommended: <b>{need.recommendation}</b></p>}
         <p className="meta">
           {need.chief && <span>{need.chief}</span>}
           {need.gate && <span className="mono">{need.gate}</span>}
-          {need.task && <span>{need.task.id} · {need.task.title}</span>}
+          {need.task && <a href={taskLink(need.task.key)}>{need.task.id} · {need.task.title}</a>}
           {many && need.project && <span>{need.project}</span>}
           <span>{asked ? `asked ${asked}` : "time not recorded"}</span>
         </p>
@@ -55,18 +62,77 @@ function NeedRow({ need, at, many }) {
   );
 }
 
-function NeedsYou({ needs, at, many }) {
+function Waits({ answered, chiefs, at }) {
+  if (!answered.length) return null;
+  return (
+    <div className="sub-list" aria-labelledby="waits-h">
+      <h3 id="waits-h" className="lbl">Answered · waits for the chief</h3>
+      <ul className="needs">{answered.map(item => (
+        <li key={item.key} data-answered={item.key}>
+          <span className="bullet done" aria-hidden="true" />
+          <div>
+            <p className="q"><a href={questionLink(item.key)}>{item.question}</a></p>
+            <p className="meta"><span>You answered <b>{item.answer}</b> {ago(item.at, at)}</span><span>waits for {chiefLabel(chiefs, item.logbook, item.owner)} to pick it up</span></p>
+          </div>
+          <UndoButton logbook={item.logbook} gate={item.gateId} />
+        </li>
+      ))}</ul>
+    </div>
+  );
+}
+
+function Stopped({ model, shown }) {
+  const [giving, setGiving] = useState(null);
+  const stopped = model.chiefs.filter(chief => chief.stopped && shown(chief.logbook, chief.id));
+  if (!stopped.length) return null;
+  return (
+    <div className="sub-list" aria-labelledby="stopped-h">
+      <h3 id="stopped-h" className="lbl">Stopped chiefs</h3>
+      <ul className="needs">{stopped.map(chief => {
+        const tasks = model.tasks.filter(task => !task.ended && task.chief?.id === chief.id && task.project === chief.project);
+        return (
+          <li key={chief.key} data-stopped={chief.key}>
+            <span className="bullet stopped" aria-hidden="true" />
+            <div>
+              <p className="q">{chief.id} · {chief.provider} · {chief.name}</p>
+              <p className="meta"><span>stopped: no event since {chief.heartbeat ? new Date(chief.heartbeat).toLocaleString([], { hour: "2-digit", minute: "2-digit", day: "numeric", month: "short", hourCycle: "h23" }) : "a time not recorded"} and no running agent</span><span>nothing moves on its own</span></p>
+              {tasks.length ? <ul className="owned">{tasks.map(task => {
+                const need = model.needs.find(item => item.takeover && item.task?.key === task.key), answered = model.answered.find(item => item.takeover && item.task.key === task.key);
+                return (
+                  <li key={task.key}>
+                    <a href={taskLink(task.key)}>{task.id} · {task.title}</a>
+                    {giving === task.key ? <GiveBox task={task} logbook={chief.logbook} from={chief.id} chiefs={model.chiefs} close={() => setGiving(null)} />
+                      : need ? <a href={questionLink(need.key)} className="btn">{need.gate} open</a>
+                      : answered ? <a href={questionLink(answered.key)} className="btn">{answered.gateId} answered</a>
+                      : <button type="button" className="btn" onClick={() => setGiving(task.key)}>Give to another chief</button>}
+                  </li>
+                );
+              })}</ul> : <p className="hint">It owns no open task.</p>}
+            </div>
+          </li>
+        );
+      })}</ul>
+    </div>
+  );
+}
+
+function NeedsYou({ model, shown, many }) {
+  const writes = useAccess();
+  const needs = model.needs.filter(need => shown(need.logbook, need.owner));
+  const answered = model.answered.filter(item => shown(item.logbook, item.owner));
   return (
     <section className="card" aria-labelledby="needs-h">
       <div className="card-h">
         <h2 id="needs-h">Needs you</h2>
         {needs.length > 0 && <span className="badge need" aria-label={`${needs.length} open`}>{needs.length}</span>}
         <span className="grow" />
-        <span className="hint">Oldest first · open one for its full context · answer in the chief's chat</span>
+        <span className="hint">Oldest first · {writes === "paired" ? "open a question to answer it here" : "answer in the chief's chat, or pair this browser"}</span>
       </div>
       {needs.length
-        ? <ul className="needs">{needs.map(need => <NeedRow key={need.key} need={need} at={at} many={many} />)}</ul>
+        ? <ul className="needs">{needs.map(need => <NeedRow key={need.key} need={need} at={model.at} many={many} />)}</ul>
         : <p className="empty">Nothing needs you now.</p>}
+      <Waits answered={answered} chiefs={model.chiefs} at={model.at} />
+      <Stopped model={model} shown={shown} />
     </section>
   );
 }
@@ -124,17 +190,18 @@ function Milestones({ milestones, hiddenDone, many }) {
   );
 }
 
-export function Overview({ model }) {
-  const many = model.projects.length > 1;
+export function Overview({ model, shown }) {
+  const many = model.projects.length > 1, writes = useAccess(), previous = useSeen(writes);
   return (
     <>
       <div className="page-h">
         <h1>Overview</h1>
-        <p>What needs you, and where each milestone stands. This page only reads the logbook.</p>
+        <p>What changed, what needs you, and where each milestone stands.</p>
       </div>
-      <Counts counts={model.counts} />
+      <PairBox />
+      <Counts model={model} previous={previous} />
       <div className="grid">
-        <NeedsYou needs={model.needs} at={model.at} many={many} />
+        <NeedsYou model={model} shown={shown} many={many} />
         <Milestones milestones={model.milestones} hiddenDone={model.hiddenDone} many={many} />
       </div>
     </>

@@ -204,6 +204,20 @@ test("boardChiefs: a chief stops when its heartbeat is over 30 minutes old: at 3
   assert.equal(stopped(beat + 30 * MINUTE + 1), true);
 });
 
+test("boardChiefs, F-T1059-1, -2, -4, -7, -8: names stay apart, a silent chief that waits for the owner is not stopped, a long folder is cut, a stopped chief shows no mode, and agents is a count", () => {
+  const now = Date.parse("2026-11-13T12:00:00.000Z"), at = "2026-11-13T08:30:00.000Z", old = now - 40 * MINUTE;
+  const rows = [{ id: "C1", provider: "claude", at }, { id: "C2", provider: "claude", at }, { id: "C3", provider: "codex", at }, { id: "C4", provider: "codex", at }];
+  const live = { C1: { checkout: "/w/app", sageMode: true, autopilot: true, at: old }, C2: { checkout: "/w/app", sageMode: true, autopilot: true, at: old }, C3: { checkout: `/w/${"long  folder ".repeat(6)}`, sageMode: true, autopilot: true, at: now }, C4: { checkout: "/w/app", sageMode: true, autopilot: false, at: old } };
+  const chiefs = boardChiefs({ rows, live, names: { C4: "Claude · app · 2026-11-13 08:30 UTC" }, waits: ["C2"], runs: [{ chief: "C3", status: "running" }, { chief: "C3", status: "running" }], now });
+  const [c1, c2, c3, c4] = chiefs;
+  assert.deepEqual([c1.name, c2.name, c4.name], ["Claude · app · 2026-11-13 08:30 UTC · C1", "Claude · app · 2026-11-13 08:30 UTC · C2", "Claude · app · 2026-11-13 08:30 UTC · C4"], "F-T1059-1: equal names get their ids, also against a set name");
+  assert.deepEqual([c1.stopped, c1.sageMode, c1.autopilot], [true, null, null], "F-T1059-7: a stopped chief shows no mode");
+  assert.deepEqual([c2.stopped, c2.waitsForOwner, c2.autopilot], [false, true, true], "F-T1059-2: a silent chief with the owner's open question waits; it is not stopped");
+  assert.equal(c3.name, "Codex · long folder long folder long… · 2026-11-13 08:30 UTC", "F-T1059-4: spaces fold, and a long folder is cut at 30 characters");
+  assert.equal(c3.agents, 2, "F-T1059-8: agents counts the chief's running runs");
+  assert.equal("running" in c3, false);
+});
+
 test("the board model: a run that the board shows as stale keeps no chief from stopped, and a fresh run does", (t) => {
   const w = linked(t);
   for (const session of ["a", "b", "c"]) claude.chiefFor(w.project, session, w.env);
@@ -216,10 +230,10 @@ test("the board model: a run that the board shows as stale keeps no chief from s
   table(w, "tasks", [task("T1", "C1"), task("T2", "C2"), task("T3", "C3")]);
   table(w, "runs", [run("R1", "T1", "C1", iso(now - 10 * DAY)), run("R2", "T2", "C2", iso(now - 3 * DAY)), run("R3", "T3", "C3", iso(now - 10 * MINUTE))]);
   const { model, project } = boardOf(w, now);
-  assert.deepEqual(project.chiefs.map(({ id, running, stopped }) => ({ id, running, stopped })), [
-    { id: "C1", running: 0, stopped: true },
-    { id: "C2", running: 0, stopped: true },
-    { id: "C3", running: 1, stopped: false },
+  assert.deepEqual(project.chiefs.map(({ id, agents, stopped }) => ({ id, agents, stopped })), [
+    { id: "C1", agents: 0, stopped: true },
+    { id: "C2", agents: 0, stopped: true },
+    { id: "C3", agents: 1, stopped: false },
   ]);
   const card = (id) => model.tasks.find((one) => one.id === id);
   assert.deepEqual(["T1", "T2", "T3"].map((id) => card(id).agents.map((agent) => agent.stale)), [[true], [true], [false]], "the board's own clock agrees");
@@ -237,22 +251,23 @@ test("the board model: a live file more than 5 minutes in the future is not trus
   live("C1", "2099-01-01T00:00:00.000Z");
   live("C2", iso(now + 5 * MINUTE + 1));
   live("C3", iso(now + 5 * MINUTE));
-  const folder = basename(realpathSync(w.project)), unknown = { name: "Claude · 2026-11-13 08:30 UTC", checkout: null, sageMode: null, autopilot: null, heartbeat: null, stopped: null };
+  const folder = basename(realpathSync(w.project)), unknown = { checkout: null, sageMode: null, autopilot: null, heartbeat: null, stopped: null };
   assert.deepEqual(boardOf(w, now).project.chiefs.map(({ id, name, checkout, sageMode, autopilot, heartbeat, stopped }) => ({ id, name, checkout, sageMode, autopilot, heartbeat, stopped })), [
-    { id: "C1", ...unknown },
-    { id: "C2", ...unknown },
+    { id: "C1", name: "Claude · 2026-11-13 08:30 UTC · C1", ...unknown },
+    { id: "C2", name: "Claude · 2026-11-13 08:30 UTC · C2", ...unknown },
     { id: "C3", name: `Claude · ${folder} · 2026-11-13 08:30 UTC`, checkout: realpathSync(w.project), sageMode: true, autopilot: true, heartbeat: iso(now + 5 * MINUTE), stopped: false },
   ]);
 });
 
-test("the board model: the default chief name drops control and direction characters from the folder name", (t) => {
+test("F-T1059-3: a live checkout with control or direction characters never reaches the board model: the chief's checkout is unknown, and its default name has no folder", (t) => {
   const w = linked(t);
   claude.chiefFor(w.project, "a", w.env);
   const now = Date.parse("2026-11-13T12:00:00.000Z"), rows = w.chiefs().trim().split("\n");
   writeFileSync(join(w.dir, "chiefs.tsv"), `${rows[0]}\n${rows[1].split("\t").with(3, "2026-11-13T08:30:00.000Z").join("\t")}\n`);
   mkdirSync(join(w.dir, "live"));
   writeFileSync(w.live("C1"), JSON.stringify({ provider: "claude", checkout: "/work/app‮txt.exe\u001b[2Jdone​", sageMode: true, autopilot: false, at: new Date(now - MINUTE).toISOString() }));
-  assert.equal(boardOf(w, now).project.chiefs[0].name, "Claude · apptxt.exe[2Jdone · 2026-11-13 08:30 UTC");
+  const [chief] = boardOf(w, now).project.chiefs;
+  assert.deepEqual([chief.name, chief.checkout], ["Claude · 2026-11-13 08:30 UTC", null]);
 });
 
 test("chiefBeat: a beat time later than the clock (the clock moved back) makes a beat due at once", (t) => {
@@ -345,7 +360,7 @@ test("the board model lists each chief with provider, name, sage mode, autopilot
   const folder = basename(realpathSync(w.project));
   assert.deepEqual(project.chiefs.map(pick), [
     { id: "C1", provider: "claude", name: "Main", named: true, sageMode: true, autopilot: true, heartbeat: iso(now - MINUTE), stopped: false },
-    { id: "C2", provider: "codex", name: `Codex · ${folder} · 2026-11-13 08:30 UTC`, named: false, sageMode: true, autopilot: false, heartbeat: iso(now - 40 * MINUTE), stopped: true },
+    { id: "C2", provider: "codex", name: `Codex · ${folder} · 2026-11-13 08:30 UTC`, named: false, sageMode: null, autopilot: null, heartbeat: iso(now - 40 * MINUTE), stopped: true },
     { id: "C3", provider: "claude", name: `Claude · ${folder} · 2026-11-13 08:30 UTC`, named: false, sageMode: true, autopilot: false, heartbeat: iso(now - 40 * MINUTE), stopped: false },
     { id: "C4", provider: "codex", name: "Codex · 2026-11-13 08:30 UTC", named: false, sageMode: null, autopilot: null, heartbeat: null, stopped: null },
     { id: "C5", provider: "claude", name: "Claude · 2026-11-13 08:30 UTC", named: false, sageMode: null, autopilot: null, heartbeat: null, stopped: null },

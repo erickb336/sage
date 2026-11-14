@@ -321,7 +321,7 @@ for (const [name, own, other] of pairs) {
     assert.match(repair.stdout, /^tasks\.tsv started again without rows; its old file is \S+tasks\.tsv\.lost-1\./);
     assert.match(w.cells("decisions"), /the user accepts the loss of its rows/);
     assert.equal(readFileSync(join(w.dir, "chiefs.tsv"), "utf8"), people, "the repair names no chief, so it adds none");
-    assert.match(w.owner("task", "add", "--title", "c", ...ADD), /^T1 framed .* · chief C1$/);
+    assert.match(w.owner("task", "add", "--title", "c", ...ADD), /^T2 framed .* · chief C1$/, "the lost T1 keeps its id: its task-added decision row holds it");
   });
 
   test(`F-T617-1 ${name}: the projects rebuild line that a refusal prints works in the owner's terminal on a shared logbook`, (t) => {

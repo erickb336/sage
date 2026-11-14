@@ -26,7 +26,7 @@ The owner approved these tenets (G156). Each page and each element of the board 
 
 | Job | The owner wants to know | Served by |
 | --- | --- | --- |
-| J1 | What needs me, with full context | Overview, "Needs you" (read-only in T1054; answers come in T1059) |
+| J1 | What needs me, with full context | Overview, "Needs you": one click opens the question with its kept message; answer and Undo there (T1059) |
 | J2 | Where each milestone and task stands, by priority | Overview, "Milestones" (T1054); the Tasks page, grouped by priority (T1061) |
 | J3 | Where a task is in its dev cycle, and what its agents made | A milestone on the Overview, then a task: the side panel (T1061); the artifact viewer |
 | J4 | Which agents run, for which chief, against the limit | The Agents page |
@@ -68,6 +68,13 @@ A ux review of a board page checks each line. A line that fails is a finding.
 - The side panel of one task: the steps of its route with the current step, the clean-cycle count ("not known" when the board does not know the PR's last commit), the last event, and the tabs Artifacts, Log and Decisions.
 - The stream carries one short row for each task. The panel reads `/app/task/<key>` when it opens, and again when the logbook changes. That route also lists the task's pages folder, the kept reports of its runs, and the brief and report files that name the task or one of its runs. A pages file opens through `/pages`; the reader for the other files comes later.
 - A "Needs you" row opens its task's panel, and a milestone row opens the Tasks page at that milestone.
+
+### What T1059 built
+
+- Writes from a paired browser only: `board --pair` in Terminal (it refuses input that is not a terminal) prints a one-time code; the server sets an `HttpOnly; SameSite=Strict` cookie, gives the page a random token that it keeps in `localStorage` (scoped to the board's origin, so a server on another port that gets the cookie has no token), and keeps only the hashes of both in the board's state folder, `state/` next to the config. Each `POST /api/...` needs the exact `Origin`, `Sec-Fetch-Site: same-origin`, JSON, the cookie and the token of the same browser; an answer carries the digest of the question that the owner saw (`gate answer --seen`).
+- The reader core stays pure. The server runs only the owner's commands `gate answer --via board`, `gate undo`, `gate give` and `chief name`, through the state tool in a worker thread, so the logbook lock never holds the server's event thread.
+- The Overview: the chief chips (live, waits for you, stopped, not known; autopilot; rename; a chief filter that holds on each page), the question view at `#question?key=<gate key>` with the kept message, Send and Undo, "Answered first in <chief>'s chat at <time>" when another place won, "Answered · waits for the chief" with Undo, "Stopped chiefs" with "Give to another chief", and "Since you looked" from `seen.json`.
+- `task add` keeps a `task added` decision row, so the model has `addedAt` for new tasks; older tasks show no time.
 - A path or a branch name is data: the panel shows each control character in it as a visible escape, such as `\n`.
 
 ### What T1063 built
@@ -115,7 +122,7 @@ Alternative: keep existing fields and show unknown or inferred values. This pres
 
 | Requirements | Evidence required |
 | --- | --- |
-| 1–2 | Provider-neutral multi-root data; no logbook writes, locks or provider calls; escaped agent text. |
+| 1–2 | Provider-neutral multi-root data; the reader takes no lock and writes no logbook (the server's owner writes go through the state tool in a worker thread, T1059); no provider calls; escaped agent text. |
 | 3–4 | One self-contained script-free export; exact six-column mapping; backlog PRs visible; seven-day Done window. |
 | 5–6 | Complete cards and evidence-backed cycles, agents and owner reasons; matching project filters and counts. |
 | 7–9 | Dark and light themes, AA contrast, reduced motion, numbered text board from the same data. |

@@ -1,9 +1,9 @@
-import { LINE, PRIORITIES } from "./logbook-fields.mjs";
+import { LINE, PRIORITIES, boardAnswer } from "./logbook-fields.mjs";
 import { milestoneName } from "./milestone-rules.mjs";
 import { STOPPED_MS } from "./chief-live.mjs";
 import { taskWord } from "./state-words.mjs";
 
-const DAY = 86_400_000, DONE_DAYS = 7;
+const DAY = 86_400_000, DONE_DAYS = 7, EVENT_DAYS = 30;
 const ENDED = ["merged", "concluded", "abandoned"];
 const MOVING = ["design", "building", "review", "ready"];
 const time = value => {
@@ -37,6 +37,7 @@ function gateNeeds(task) {
       gate: reason.gateId ?? null,
       task: { key: task.key, id: task.id, title: task.title },
       chief: task.holder ?? title(task.sourceLabel) ?? null,
+      ...(reason.gateId && { logbook: reason.logbook, options: reason.options, digest: reason.digest, owner: reason.owner, takeover: !!reason.replace }),
       project: task.projectName,
       askedAt: gate && time(gate.at) !== null ? new Date(time(gate.at)).toISOString() : null,
     };
@@ -57,7 +58,7 @@ const milestoneNeed = need => ({
   askedAt: null,
 });
 
-const chiefTag = (task, chiefs) => task.owner ? { id: task.owner.id, provider: title(task.owner.provider) || null, stopped: chiefs.find(chief => chief.key === `${task.project}/${task.owner.id}`)?.stopped ?? null }
+const chiefTag = (task, chiefs, chief = task.owner && chiefs.find(item => item.key === `${task.project}/${task.owner.id}`)) => task.owner ? { id: task.owner.id, provider: title(task.owner.provider) || null, stopped: chief?.stopped ?? null, waits: !!chief?.waitsForOwner }
   : task.old ? { id: null, provider: title(task.old.provider), stopped: null } : task.shared ? null : { id: null, provider: title(task.providerStandIn), stopped: null };
 const QUIET = ["done", "wait"];
 const stepOf = task => task.loop?.steps.find(step => !QUIET.includes(step.status)) ?? null;
@@ -79,7 +80,8 @@ function taskRow(task, chiefs) {
     waitsFor: task.waits.filter(wait => wait.id).map(wait => ({ key: `${task.project}/${wait.id}`, id: wait.id, met: wait.met })),
     why: task.reasons.length ? taskWord(task).reason : null,
     conflicts: task.mayConflict.map(other => ({ key: other.key, id: other.id, chief: other.chief })),
-    step: step ? { label: step.label, status: step.status } : null, lastActivity: task.lastActivity, doneAt: iso(task.completedAt),
+    step: step ? { label: step.label, status: step.status } : null, lastActivity: task.lastActivity,
+    addedAt: iso(task.addedAt), doneAt: iso(task.completedAt),
     prUrl: /^[1-9]\d*$/.test(task.pr) && task.repository ? `${task.repository}/pull/${task.pr}` : null, cycles: cyclesOf(task),
     ci: CI[task.cycles[0]?.steps.find(item => item.role === "checks")?.status] ?? null,
   };
@@ -124,9 +126,9 @@ export function boardOverview(model) {
 
   const merged = tasks.filter(task => task.state === "merged" && recent(task.completedAt));
   const failed = tasks.flatMap(task => task.runs).filter(run => run.status === "failed" && recent(run.ended));
-  const chiefs = (model.projects ?? []).filter(project => !project.archived).flatMap(project => (project.chiefs ?? []).map(chief => ({ ...chief, project: project.name })));
+  const chiefs = (model.projects ?? []).filter(project => !project.archived).flatMap(project => (project.chiefs ?? []).map(chief => ({ ...chief, project: project.name, logbook: chief.key.slice(0, chief.key.lastIndexOf("/")) })));
   const leaving = [...merged.map(task => time(task.completedAt)), ...failed.map(run => time(run.ended))].map(when => when + DAY + 1)
-    .concat(chiefs.filter(chief => chief.stopped === false && !chief.running).map(chief => time(chief.heartbeat) + STOPPED_MS + 1));
+    .concat(chiefs.filter(chief => chief.stopped === false && !chief.agents && !chief.waitsForOwner).map(chief => time(chief.heartbeat) + STOPPED_MS + 1));
 
   return {
     at: model.at,
@@ -135,10 +137,12 @@ export function boardOverview(model) {
     projects: (model.projects ?? []).filter(project => !project.archived).map(project => project.name),
     chiefs,
     needs,
+    answered: tasks.flatMap(task => task.boardAnswers.map(item => ({ ...item, task: { key: task.key, id: task.id, title: task.title }, project: task.projectName }))).sort((a, b) => (time(a.at) ?? 0) - (time(b.at) ?? 0)),
     tasks: tasks.map(task => taskRow(task, chiefs)),
+    failedAt: tasks.flatMap(task => task.runs).filter(run => run.status === "failed" && time(run.ended) > at - EVENT_DAYS * DAY).map(run => iso(run.ended)),
     milestones,
     hiddenDone,
-    counts: { merged: merged.length, stuck: failed.length + stuckAgents(model.agents), added: null },
+    counts: { merged: merged.length, stuck: failed.length + stuckAgents(model.agents), stuckNow: stuckAgents(model.agents), added: tasks.some(task => task.addedAt) ? tasks.filter(task => recent(task.addedAt)).length : null },
     next: leaving.length ? Math.min(...leaving) : null,
   };
 }
@@ -173,7 +177,7 @@ export function taskPanel(model, key) {
     now: task.route ? task.loop.now.text : "The logbook records no route for this task, so the board shows no steps.", next: task.route ? task.loop.next : null,
     lastEvent: log[0] ?? null,
     log: log.slice(0, LOG_MAX), logMore: Math.max(0, log.length - LOG_MAX),
-    decisions: [...(task.gateRows ?? [])].reverse().map(gate => ({ id: gate.id, question: firstLine(gate.question), answer: gate.answer || null, recommendation: gate.recommendation || null, at: iso(gate.at) })),
+    decisions: [...(task.gateRows ?? [])].reverse().map(gate => ({ id: gate.id, question: firstLine(gate.question), answer: gate.answer || null, pending: boardAnswer(gate)?.answer ?? null, recommendation: gate.recommendation || null, at: iso(gate.at) })),
     artifacts: task.artifacts.map(record => ({ id: record.id, type: record.data.type, label: record.data.label, run: record.data.run ?? null, at: iso(record.observedAt),
       url: /^https:\/\//.test(record.data.url ?? "") ? record.data.url : null, path: record.data.path ?? null, verified: !!record.content?.verified })),
     runs: task.runs.map(run => ({ id: run.id, role: run.role })),

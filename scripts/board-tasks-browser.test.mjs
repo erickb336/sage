@@ -52,7 +52,7 @@ const row = (page, id) => page.locator(`a.row[data-task="${KEY(id)}"]`);
 const panelTitle = page => page.locator("#panel-h");
 const groupTitles = page => page.locator(".group h2").allTextContents();
 
-test("T1061, T1064: J2 and J3 are within two clicks of the Overview, and a Needs you row opens its full question in one", async t => {
+test("T1061, T1064, T1059: J2 and J3 are within two clicks of the Overview, and a Needs you row opens its question view in one and the full question in two", async t => {
   const { page, base, requests, problems } = await open(t);
   let clicks = 0;
   const click = async locator => { clicks++; await locator.click(); };
@@ -82,8 +82,13 @@ test("T1061, T1064: J2 and J3 are within two clicks of the Overview, and a Needs
   clicks = 0;
   await page.goto(`${base}/app/`);
   await click(page.getByRole("link", { name: "Can a viewer copy a shared list into their own lists?" }));
+  await page.locator("#question-h").filter({ hasText: "Can a viewer copy a shared list into their own lists?" }).waitFor();
+  assert.equal(clicks, 1, "J1: the question view, the place to answer, in one click");
+  await click(page.getByRole("link", { name: "Read the full question" }));
+  await page.waitForURL(new RegExp(`/read/${Buffer.from(KEY("T10")).toString("base64url")}/question/G\\d+$`));
   await page.locator("main h1").filter({ hasText: "Can a viewer copy a shared list into their own lists?" }).waitFor();
-  assert.equal(clicks, 1, "J1: the full question in one click");
+  assert.equal((await page.request.get(page.url())).status(), 200, "the reader's question page answers 200");
+  assert.equal(clicks, 2, "J1: the full question in two clicks");
   assert.match(await page.locator("main").textContent(), /The answers.*A: yes, as a new private list.*C1's pick.*B: no/s, "the chief's pick first");
   await page.getByRole("link", { name: /Back to Needs you/ }).click();
   await page.getByRole("heading", { name: "Needs you" }).waitFor();
@@ -108,7 +113,7 @@ test("T1061: the groups and filters work, and ended tasks stay collapsed until a
   assert.match(await row(page, "T40").textContent(), /may conflict · T3/);
   assert.match(await row(page, "T3").textContent(), /may conflict · T40/);
 
-  await page.getByRole("button", { name: "Chief" }).click();
+  await page.getByRole("button", { name: "Chief", exact: true }).click();
   assert.deepEqual(await groupTitles(page), ["C1 · Claude", "C2 · Codex"]);
   await page.getByRole("combobox", { name: "Provider", exact: true }).selectOption("Codex");
   assert.deepEqual(await groupTitles(page), ["C2 · Codex"]);
@@ -216,7 +221,7 @@ function insideItsCellAndLeftOfThePanel(element) {
 
 test("T1061 (F-T1061-7, F-T1061-10): the may-conflict flag and the chief tag show in full, with the panel closed and open, at 1440 and 1280 px", async t => {
   const { page, base } = await open(t, { edge: true }, "/app/#tasks");
-  const cells = [["T3", ".badge.warn", "may conflict · T40"], ["T40", ".badge.warn", "may conflict · T3"], ["T3", ".chief", "C2 · Codex"], ["T40", ".chief", "C1 · Claude (stopped)"]];
+  const cells = [["T3", ".badge.warn", "may conflict · T40"], ["T40", ".badge.warn", "may conflict · T3"], ["T3", ".chief", "C2 · Codex"], ["T40", ".chief", "C1 · Claude (waits for you)"]];
   for (const width of [1440, 1280]) {
     await page.setViewportSize({ width, height: 1000 });
     for (const panel of [false, true]) {
