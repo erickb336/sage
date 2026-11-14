@@ -254,11 +254,10 @@ export function readerPage({ model, configured, url, origin, render }) {
         ? { crumb: run.id, title: `Report of ${run.id}`, head, body: note(`<b>Not written yet.</b> ${esc(run.role)} ${esc(run.id)} runs (${minutes(run.started, model.at)} min). The board shows the report when the run ends; reload this page then.`, "need") }
         : { crumb: run.id, title: `Report of ${run.id}`, head, body: note(`<b>Not kept.</b> The logbook keeps no report of ${esc(run.id)}. sage keeps reports only for newer runs and for reviews; this run is older, or its report was not kept.`) };
       const result = of("RESULT"), findings = readReport(text).findings;
-      // The lead records a report's findings in report order, each with --run and a new F-T<n>-<n> key: so the n-th row of this run is the n-th finding.
-      const rows = (task.findings ?? []).filter(entry => entry.run === run.id || String(entry.key).startsWith(`${run.id}-`));
+      const rowsInReportOrder = (task.findings ?? []).filter(entry => entry.run === run.id || String(entry.key).startsWith(`${run.id}-`));
       const lead = firstLine(result);
       const findingRows = findings.length ? findings.map((item, i) => {
-        const row = rows[i]?.severity === item.severity ? rows[i] : null, stateWord = row?.status || row?.triage || null;
+        const row = rowsInReportOrder[i]?.severity === item.severity ? rowsInReportOrder[i] : null, stateWord = row?.status || row?.triage || null;
         return `<div class="finding"><span><span class="pill ${item.severity}">${item.severity}</span></span><span class="mono">${esc(item.key)}</span><span>${esc(item.summary)}</span><span>${stateWord ? `<span class="pill ${stateWord === "open" ? "open" : ""}">${esc(stateWord)}</span>` : ""}</span>${item.details.length ? `<span class="det">${esc(item.details.join("\n"))}</span>` : ""}</div>`;
       }).join("") : "";
       const body = `<section class="result" aria-label="RESULT"><span class="fname">RESULT</span><p class="lead">${esc(lead || "No RESULT")}</p><div class="md">${markdown(result.split(/\r?\n/).slice(1).join("\n")).html}</div></section>${openBar}${
