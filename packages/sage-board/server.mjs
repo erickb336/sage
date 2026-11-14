@@ -302,13 +302,15 @@ export function createBoardServer({ sources, port = BOARD_PORT, id, clock = () =
       return;
     }
     if (name.startsWith("task/")) {
-      const key = taskKey(name.slice("task/".length)), panel = key && model && taskPanel(model, key);
-      if (!panel) return fail(404, "This task is not on the board.");
-      const task = model.tasks.find(item => item.key === key), source = configured.find(item => item.id === task.source);
-      const dir = source && !task.old && task.project.startsWith(`${source.id}/`) ? join(source.path, panel.logbook) : null;
-      const body = Buffer.from(JSON.stringify({ ...panel, files: taskFiles({ dir, logbook: panel.logbook, task: task.id, runs: panel.runs }) }));
-      response.writeHead(200, { "Content-Type": "application/json; charset=utf-8", "Content-Length": body.length });
-      return response.end(request.method === "HEAD" ? undefined : body);
+      try {
+        const key = taskKey(name.slice("task/".length)), panel = key && model && taskPanel(model, key);
+        if (!panel) return fail(404, "This task is not on the board.");
+        const task = model.tasks.find(item => item.key === key), source = configured.find(item => item.id === task.source);
+        const dir = source && !task.old && task.project.startsWith(`${source.id}/`) ? join(source.path, panel.logbook) : null;
+        const body = Buffer.from(JSON.stringify({ ...panel, files: taskFiles({ dir, logbook: panel.logbook, task: task.id, runs: panel.runs }) }));
+        response.writeHead(200, { "Content-Type": "application/json; charset=utf-8", "Content-Length": body.length });
+        return response.end(request.method === "HEAD" ? undefined : body);
+      } catch { return fail(503, "The board snapshot is unavailable."); }
     }
     const body = name === "" ? Buffer.from(app.shell) : app.files.get(name)?.body;
     if (!body) return fail(404, "This board page does not exist.");

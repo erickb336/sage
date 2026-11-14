@@ -40,7 +40,7 @@ function NeedRow({ need, at, many }) {
     <li data-need={need.key}>
       <span className="bullet" aria-hidden="true" />
       <div>
-        <p className="q">{need.task ? <a href={taskLink(need.task.key)}>{need.question}</a> : need.question}</p>
+        <p className="q">{need.task || need.milestone ? <a href={need.task ? taskLink(need.task.key) : milestoneLink(need.milestone)}>{need.question}</a> : need.question}</p>
         {need.more.length > 0 && <p className="more">{need.more.join(" ")}</p>}
         {need.recommendation && <p className="pick">Recommended: <b>{need.recommendation}</b></p>}
         <p className="meta">

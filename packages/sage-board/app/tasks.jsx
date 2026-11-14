@@ -22,6 +22,10 @@ const FILTERS = [
   ["word", "State", task => task.word ?? NONE],
 ];
 
+const UNKNOWN = "Chief liveness not known";
+const ChiefDot = ({ stopped }) => stopped === false ? <span className="dot live" aria-hidden="true" />
+  : stopped ? <span className="dot" aria-hidden="true" /> : <span className="dot unknown" role="img" aria-label={UNKNOWN} title={UNKNOWN} />;
+
 function Row({ task, at, selected }) {
   const age = task.lastActivity ? ago(task.lastActivity, at) : null;
   return (
@@ -36,7 +40,7 @@ function Row({ task, at, selected }) {
           {task.waits && !task.ended && <span className="badge" title={task.waits}>waits</span>}
         </span>
         <span className={`badge word ${(task.word ?? "unknown").replace(" ", "-")}`}>{task.word ?? "unknown"}</span>
-        <span className="chief"><span className={`dot${task.chief?.stopped ? " off" : ""}`} aria-hidden="true" />{chiefName(task.chief)}{task.chief?.stopped && " (stopped)"}</span>
+        <span className="chief">{task.chief && <ChiefDot stopped={task.chief.stopped} />}{chiefName(task.chief)}{task.chief?.stopped && " (stopped)"}</span>
         <span className={`step ${task.step?.status ?? ""}`}>{task.step?.label ?? (task.ended ? "" : NONE)}</span>
         <span className="mono pr">{task.pr ? `#${task.pr}` : NONE}</span>
         <span className="age">{age ?? NONE}</span>

@@ -49,6 +49,7 @@ const milestoneNeed = need => ({
   recommendation: null,
   gate: null,
   task: null,
+  milestone: need.milestone ? need.key : null,
   chief: null,
   project: need.projectName ?? null,
   askedAt: null,

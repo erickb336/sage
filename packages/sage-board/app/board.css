@@ -147,8 +147,8 @@ h1, h2 { font-weight: 600; letter-spacing: -.01em; }
 .main:has(.panel) .row :is(.step, .pr, .age) { display: none; }
 @media (min-width: 1280px) { .main:has(.panel) { padding-right: calc(min(500px, 42vw) + 24px); } }
 .row .chief { display: flex; align-items: center; gap: 6px; color: var(--muted); overflow-wrap: anywhere; }
-.row .chief .dot, .row .chief .dot.off { background: var(--done); }
-.row .chief .dot.off { background: var(--faint); }
+.row .chief .dot.live { background: var(--done); }
+.row .chief .dot.unknown { background: none; box-shadow: inset 0 0 0 1.5px var(--faint); }
 .row .step, .row .age { color: var(--muted); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 .row .age { text-align: right; }
 .row.ended .text { color: var(--muted); }

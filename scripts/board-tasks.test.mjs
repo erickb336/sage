@@ -143,3 +143,17 @@ test("T1061 (F-T1061-4, F-T1061-5): the kept-report reader reads no run id that 
   symlinkSync(outside, join(w.logbook, "kept"));
   assert.deepEqual(await kept(), [], "a kept/ that is a link is not followed");
 });
+
+test("T1061 (F-T1061-29): a throw while the task route builds its answer is a 503 with the board's headers, and the board answers the next request", async t => {
+  const w = world(t), base = await serve(t, w.sources), url = `${base}/app/task/${b64(KEY("T3"))}`, stringify = JSON.stringify;
+  JSON.stringify = (value, ...rest) => { if (value?.files) throw new Error("a fault while the panel is built"); return stringify(value, ...rest); };
+  let broken;
+  try { broken = await fetch(url); } finally { JSON.stringify = stringify; }
+  assert.equal(broken.status, 503);
+  assert.equal(broken.headers.get("content-type"), "text/plain; charset=utf-8");
+  assert.equal(broken.headers.get("x-content-type-options"), "nosniff");
+  assert.equal(await broken.text(), "The board snapshot is unavailable.\n");
+  const next = await fetch(url);
+  assert.equal(next.status, 200);
+  assert.equal((await next.json()).id, "T3");
+});

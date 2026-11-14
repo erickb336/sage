@@ -257,3 +257,30 @@ test("T1061 (F-T1061-13): a task with no route shows the route as not known and 
   assert.equal(await page.locator(".steps li").count(), 0);
   assert.equal(await page.locator(".now").textContent(), "The logbook records no route for this task, so the board shows no steps.");
 });
+
+test("T1061 (F-T1061-33): a row's chief dot is green only for a live chief; a stopped chief is grey, a chief of unknown liveness has a hollow dot named so, and no chief has no dot", async t => {
+  const { page } = await open(t, { chiefCases: true }, "/app/#tasks");
+  const colour = name => page.evaluate(name => getComputedStyle(document.documentElement).getPropertyValue(name).trim(), name);
+  const rgb = hex => `rgb(${hex.slice(1).match(/../g).map(part => parseInt(part, 16)).join(", ")})`;
+  const [live, grey] = [rgb(await colour("--done")), rgb(await colour("--faint"))];
+  const dot = id => row(page, id).locator(".chief").evaluate(cell => {
+    const element = cell.querySelector(".dot"), style = element && getComputedStyle(element);
+    return { text: cell.textContent, fill: style?.backgroundColor ?? null, ring: style ? style.boxShadow !== "none" || style.borderStyle !== "none" : null };
+  });
+  const unknown = async id => assert.equal(await row(page, id).getByRole("img", { name: "Chief liveness not known" }).count(), 1, `${id}: the hollow dot has a text alternative`);
+  assert.deepEqual(await dot("T3"), { text: "C2 · Codex", fill: live, ring: false }, "a live chief (a run is running)");
+  assert.deepEqual(await dot("T70"), { text: "C3 · Claude (stopped)", fill: grey, ring: false }, "a stopped chief (no heartbeat for 2 h)");
+  assert.deepEqual(await dot("T40"), { text: "C1 · Claude", fill: "rgba(0, 0, 0, 0)", ring: true }, "a listed chief with no heartbeat: liveness not known");
+  await unknown("T40");
+  assert.deepEqual(await dot("T71"), { text: "C9", fill: "rgba(0, 0, 0, 0)", ring: true }, "a chief that chiefs.tsv does not list");
+  await unknown("T71");
+  assert.deepEqual(await dot("T72"), { text: "No chief", fill: null, ring: null }, "no chief, so no dot");
+});
+
+test("T1061 (F-T1061-26): a milestone problem in Needs you links to the Tasks page at its milestone", async t => {
+  const { page } = await open(t, { stuck: true });
+  const link = page.getByRole("link", { name: "Milestone 3: Sign-in rework is stuck" });
+  assert.equal(await link.getAttribute("href"), `#tasks?milestone=${encodeURIComponent(KEY("M3"))}`);
+  await link.click();
+  await page.locator(`.group.focus[data-group="${KEY("M3")}"]`).waitFor();
+});
