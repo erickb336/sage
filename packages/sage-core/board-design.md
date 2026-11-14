@@ -70,6 +70,16 @@ A ux review of a board page checks each line. A line that fails is a finding.
 - A "Needs you" row opens its task's panel, and a milestone row opens the Tasks page at that milestone.
 - A path or a branch name is data: the panel shows each control character in it as a visible escape, such as `\n`.
 
+### What T1063 built
+
+- The Pull requests page at `/app/#pull-requests`. It groups the tasks with a PR by the next action: Needs you, In review, Repairing, Ready to merge, Waiting for another task, and Merged recently (the last 7 days). A task with no PR that waits for another task is in the Waiting group too.
+- Each row shows the PR number, which links to the PR on GitHub, the title, which opens the task's side panel, the chief tag, the task, the milestone, "may conflict", the state word, the clean cycles and the CI state. The CI state is the checks verdict on the PR's current head in the ledger: "CI passes", "CI fails" or "CI not known". The board never asks GitHub.
+- A PR number links to GitHub only when it is a whole number and a PR record names the repository.
+- The Graph view shows each item that waits for another item on the page, or may conflict with one, in columns by "waits for": an arrow from A to B means that B waits for A. It is React Flow (`@xyflow/react`, MIT) in its own graph file, which the page loads only when the graph opens. The graph file has its own size budget.
+- A link of the graph never passes through a box, and no two links share a line. A link runs only in the gaps between the boxes, on lines that only it uses: its own point on each box side, its own track in each column gap, and its own lane in a gap between two rows when it skips a column or goes back. A gap grows to hold all its tracks. A wait and a "may conflict" link between the same two tasks are two separate lines.
+- Two boxes in one column that may conflict get a dashed link that leaves and comes back on their right side.
+- A loop in the "waits for" links shows one link that goes back, under the boxes, with the mark "loop". A task that waits for itself shows a link around its box, with the mark "waits for itself".
+
 ## The classic board (T205)
 
 This is the approved design for issue #74. The implementation is under review. All 17 requirements remain in scope. The owner approved the recommended sample layout and recorded-data extension on 2026-10-08. Backend work may proceed; all runtime acceptance remains required.

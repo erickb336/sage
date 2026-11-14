@@ -23,7 +23,7 @@ const FILTERS = [
 ];
 
 const UNKNOWN = "Chief liveness not known";
-const ChiefDot = ({ stopped }) => stopped === false ? <span className="dot live" aria-hidden="true" />
+export const ChiefDot = ({ stopped }) => stopped === false ? <span className="dot live" aria-hidden="true" />
   : stopped ? <span className="dot" aria-hidden="true" /> : <span className="dot unknown" role="img" aria-label={UNKNOWN} title={UNKNOWN} />;
 
 function Row({ task, at, selected }) {
