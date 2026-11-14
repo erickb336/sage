@@ -17,7 +17,8 @@ export function readMode({ session }, env = process.env) {
 }
 
 export const EFFORTS = { opus: "high", sonnet: "medium", haiku: "low" };
-export const tool = createStateTool({ provider: "codex", claimStep, replaceStep, legacyRoots, autopilot: (session, env) => readMode({ session }, env).autopilot,
+export const tool = createStateTool({ provider: "codex", claimStep, replaceStep, legacyRoots,
+  queueWait: () => "Codex has no wait for a place: after a run ends, call spawn_agent again with the same task name. The gate names the run's place again, or lets it start.", autopilot: (session, env) => readMode({ session }, env).autopilot,
   models: ["opus", "sonnet", "haiku", "fable", "inherit"], modelDefaults: balancedModels("opus", "sonnet"),
   spawnFields: (model) => (Object.hasOwn(EFFORTS, model) ? { reasoning_effort: EFFORTS[model] } : {}), usageInterfaces: [
   { provider: "codex", interface: "collaboration-tools", capability: "unavailable", reason: "The collaboration tools expose no authoritative per-run token count; the report gate reads the agent's own count from its session record at its stop, when the record has one.", source: "Codex collaboration tool schema; chief-declared execution interface, not host attestation" },

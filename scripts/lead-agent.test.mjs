@@ -68,8 +68,8 @@ function leadSays(form, within, values = {}) {
 }
 const shellWords = (text) => [...text.matchAll(/"([^"]*)"|(\S+)/g)].map((m) => m[1] ?? m[2]);
 const RUN_ADD = (() => {
-  const form = /It prints the run id: `([^`]+)`/.exec(TEXT)?.[1] ?? assert.fail("agents/lead.md states what run add prints");
-  return new RegExp(`^${form.split(/(<[^>]+>)/).map((part) => (/^<[^>]+>$/.test(part) ? "\\S+" : part.replace(/[.*+?^${}()|[\]\\]/g, "\\$&"))).join("")}(?: · .*)?$`);
+  const forms = /It prints the run id: `([^`]+)`, or `([^`]+)` when/.exec(TEXT)?.slice(1) ?? assert.fail("agents/lead.md states what run add prints, running or queued");
+  return new RegExp(`^(?:${forms.map((form) => form.split(/(<[^>]+>)/).map((part) => (/^<[^>]+>$/.test(part) ? "\\S+" : part.replace(/[.*+?^${}()|[\]\\]/g, "\\$&"))).join("")).join("|")})(?: · .*)?$`, "s");
 })();
 
 function block(heading) {
@@ -227,12 +227,12 @@ function play(lines, p) {
   return { ran, sage, moves, printed: last };
 }
 
-const EXAMPLES = ["A worked example", "An example that ends blocked"];
+const EXAMPLES = [["A worked example", { framed: true }], ["An example that ends blocked", { config: ["max_agents=2"] }]];
 
 test("T301: each example of the lead file runs through the hook, from lead-T1's start to a passing merge check, and the examples run every command that the file teaches", () => {
   const ran = [];
-  for (const heading of EXAMPLES) {
-    const { ran: here, sage, printed } = play(block(heading), project({ framed: heading === "A worked example" }));
+  for (const [heading, options] of EXAMPLES) {
+    const { ran: here, sage, printed } = play(block(heading), project(options));
     assert.match(sage.at(-1), /^sage merge-check --sha [0-9a-f]{40} --pr 12$/, `"${heading}" ends with the merge check`);
     assert.match(printed, /^T1 may merge/, `and the merge check of "${heading}" passes`);
     ran.push(...here);
@@ -636,14 +636,25 @@ test("T301: the lead file's helper cap is the hook's, and with the default agent
   const p = project({ size: "large" });
   play(BUILD, p);
   play(Array.from({ length: DEFAULT_CAP - 1 }, (_, i) => [`$ sage run add T1 --role ${ROLES[i % ROLES.length]}`, `> R${i + 3} sage:${ROLES[i % ROLES.length]}`]).flat(), p);
-  const full = new RegExp(`^sage: the project has ${DEFAULT_CAP} running runs, its agent cap`);
-  const refused = p.run("sage", ["run", "add", "T1", "--role", "qa"]).stderr.toString();
-  assert.match(refused, full, "the lead's next run waits for room under the default cap");
-  assert.match(refused, /Wait for one of them to end, or end a run whose agent has stopped /);
-  assert.ok(TEXT.includes(/its (agent cap)/.exec(refused)[1]), "the lead file names the refusal");
+  const id = `R${DEFAULT_CAP + 2}`, command = `node ${TOOL} run add T1 --role qa`;
+  assert.equal(p.ask(command), undefined);
+  const added = p.run("sage", ["run", "add", "T1", "--role", "qa"]), out = added.stdout.toString();
+  assert.equal(added.status, 0, added.stderr.toString());
+  assert.match(out, new RegExp(`^${id} is queued, place 1 · qa on T1 · .*the project runs ${DEFAULT_CAP} of its ${DEFAULT_CAP} agents\\.`), "the lead's next run waits in the queue under the default cap");
+  assert.ok(TEXT.includes("`R<n> is queued, place <k> · <role> on <T>`"), "the lead file names the queue line");
+  p.send({ hook_event_name: "PostToolUse", tool_name: "Bash", tool_input: { command }, tool_response: { stdout: out, stderr: "", interrupted: false }, ...p.lead });
+  const spawn = () => denied(p.send({ hook_event_name: "PreToolUse", tool_name: "Agent", tool_input: { subagent_type: "sage:qa", name: id, description: `${id} qa`, prompt: BRIEF, run_in_background: true }, tool_use_id: `spawn-${id}`, ...p.lead }));
+  assert.match(spawn() ?? "", new RegExp(`^sage: ${id} is queued, place 1 of 1: the project runs ${DEFAULT_CAP} of its ${DEFAULT_CAP} agents, .* Run node \\S+wait\\.mjs --slot ${id} .*Then start this helper again\\.$`));
   p.chief("task", "add", "--priority", "P2", "--title", "second", "--size", "small");
   p.chief("task", "T2", "set", "state=briefed");
-  assert.throws(() => p.chief("run", "add", "T2", "--role", "lead"), (e) => full.test(e.message.split(": ").slice(1).join(": ")), "a second lead waits for room under the default cap");
+  const second = p.chief("run", "add", "T2", "--role", "lead");
+  assert.match(second, new RegExp(`^R${DEFAULT_CAP + 3} is queued, place 2 · lead on T2`), "a second lead waits behind it");
+  p.send({ hook_event_name: "PostToolUse", tool_name: "Bash", tool_input: { command: `node ${TOOL} run add T2 --role lead` }, tool_response: { stdout: second, stderr: "", interrupted: false } });
+  const done = `node ${TOOL} run done R3 --status failed`, ended = p.run("sage", ["run", "done", "R3", "--status", "failed"]);
+  assert.match(ended.stdout.toString(), new RegExp(`^R3 failed\\n${id} admitted · qa on T1: `), "the chief's end of a helper run admits the lead's queued run");
+  const told = p.send({ hook_event_name: "PostToolUse", tool_name: "Bash", tool_input: { command: done }, tool_response: { stdout: ended.stdout.toString(), stderr: "", interrupted: false } })?.hookSpecificOutput?.additionalContext ?? "";
+  assert.ok(told.includes(`sage: ${id} (qa on T1) is admitted from the queue. lead-T1 added it, so the lead starts its agent: you do nothing.`), `the chief hears that its lead added ${id}, so it starts no second agent (F-T1057-16): ${told}`);
+  assert.match(spawn() ?? "", /^sage: this lead already has 9 children\./, "the queue no longer holds the admitted run, which the lead owns from its queued line: only the lead's own helper cap does, until R3's child stops");
 });
 
 test("T301: the hook refuses what the lead file says is the sage's, so the examples' passes are real", () => {
