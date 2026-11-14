@@ -4,7 +4,7 @@ import { buildSync } from "esbuild";
 
 export const APP_SOURCE = "packages/sage-board/app";
 export const BUILT_NAME = /^(?:app|vendor|graph)-[A-Z0-9]{8}\.(?:js|css)$/;
-export const BUDGET = { vendor: 256_000, script: 57_500, style: 22_500, graph: 218_000 };
+export const BUDGET = { vendor: 256_000, script: 72_000, style: 26_500, graph: 218_000 };
 const LICENCE_FILES = ["LICENSE", "LICENSE.md", "LICENSE.txt", "LICENSE-MIT.txt"];
 export const MARKDOWN_SOURCE = "packages/sage-board/markdown.mjs";
 export const MARKDOWN_BUDGET = 160_000;

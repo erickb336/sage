@@ -168,3 +168,16 @@ test("T1062 F-T1062-5, F-T1062-6: a queued run shows once in the task's log, as 
   assert.deepEqual(taskPanel(model, KEY("T2")).log.filter(event => event.who === "R24").map(event => event.text), ["qa queued for an agent slot, place 1"]);
   assert.match(taskPanel(model, KEY("T2")).now, /at work/, "a running agent of the task still comes first");
 });
+
+test("T1062: the stream's agents hold running and queued runs and the ended helpers of running leads only, with each chief's count against the logbook's limits", t => {
+  const { sources } = world(t, { agents: true, endedRuns: 1300 });
+  const model = modelOf(sources), [book] = boardOverview(model).agents;
+  assert.deepEqual([book.running, book.limit, book.leads, book.leadLimit, book.queued], [7, 20, 4, 5, 3]);
+  assert.deepEqual(book.byChief, [{ chief: "C1", count: 4 }, { chief: "C2", count: 3 }]);
+  const byId = Object.fromEntries(book.runs.map(run => [run.id, run]));
+  assert.deepEqual(Object.keys(byId).sort(), ["R20", "R21", "R22", "R23", "R24", "R25", "R26", "R27", "R30", "R31", "R32", "R33", "R6"].sort(), "the 1,300 ended runs of no running lead stay out");
+  assert.deepEqual([byId.R22.lead, byId.R24.lead, byId.R6.lead, byId.R31.lead, byId.R5], ["R20", "R20", "R30", null, undefined], "a helper belongs to its task's running lead when it started after the lead");
+  assert.deepEqual([byId.R24.status, byId.R24.place, byId.R32.place, byId.R33.place], ["queued", 1, 2, 3]);
+  assert.deepEqual([byId.R21.tokens, byId.R21.model, byId.R20.model, byId.R6.model], [210000, "sonnet", "opus", null]);
+  assert.ok(JSON.stringify(book).length < 8000, "the agents part of the stream stays small");
+});
