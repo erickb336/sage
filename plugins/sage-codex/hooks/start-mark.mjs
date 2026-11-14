@@ -1,15 +1,27 @@
-import { existsSync, readFileSync, unlinkSync } from "node:fs";
+import { closeSync, existsSync, fstatSync, openSync, readSync, unlinkSync } from "node:fs";
 import { basename, join } from "node:path";
 import { threadOf } from "./gate-hook.mjs";
 import { privateDirectory, readState, saveState, stateKey } from "./hook-state.mjs";
+import { RECORD_BUDGET } from "./owner-record.mjs";
 
 export const markFile = (dir, sessionId) => join(dir, "marks", `${stateKey({ session_id: sessionId })}.json`);
 
 function recordLines(path) {
-  const bytes = readFileSync(path);
-  let lines = bytes.length && bytes.at(-1) !== 10 ? 1 : 0;
-  for (let i = bytes.indexOf(10); i >= 0; i = bytes.indexOf(10, i + 1)) lines++;
-  return lines;
+  const fd = openSync(path, "r");
+  try {
+    const size = fstatSync(fd).size, bytes = Buffer.alloc(RECORD_BUDGET.chunk);
+    const deadline = performance.now() + RECORD_BUDGET.milliseconds;
+    let lines = 0, offset = 0, last;
+    while (offset < size) {
+      if (performance.now() >= deadline) throw Object.assign(new Error("scan deadline"), { code: "scan deadline" });
+      const n = readSync(fd, bytes, 0, Math.min(bytes.length, size - offset), offset);
+      if (n <= 0) throw Object.assign(new Error("short read"), { code: "short read" });
+      for (let i = bytes.indexOf(10); i >= 0 && i < n; i = bytes.indexOf(10, i + 1)) lines++;
+      last = bytes[n - 1];
+      offset += n;
+    }
+    return lines + (size && last !== 10 ? 1 : 0);
+  } finally { closeSync(fd); }
 }
 
 const limit = (cause, step) => `sage: the sage hook could not ${cause}, so autopilot merges nothing in this session for now. ${step}, then send "autopilot on" again.`;

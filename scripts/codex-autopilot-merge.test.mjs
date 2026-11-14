@@ -1,4 +1,5 @@
 import "./test-env.mjs";
+import { appendSyntheticHistory } from "./fixtures/codex-history-padding.mjs";
 import assert from "node:assert/strict";
 import { spawnSync } from "node:child_process";
 import { createHash } from "node:crypto";
@@ -98,6 +99,7 @@ function assertRefused(result, reason, label) {
 
 test("with a valid merge permit and the owner's on switch, it runs gh pr merge once, for the permit's repository and the reviewed head only", () => {
   const s = session();
+  appendSyntheticHistory(s.transcript);
   const file = permit(s);
   assert.deepEqual(merge(s), { status: 0, stdout: `${MARKER}\n`, stderr: "" });
   const folder = ghFolder();
