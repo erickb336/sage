@@ -280,7 +280,7 @@ function handleEvent(input, state, slots) {
     return deny(event, 'an agent never names a spawn "main" or "lead-T<n>", because those names must reach only the main session and its leads. Give it another name.');
   }
   const spawnChecked = event === "PreToolUse" && AGENT_TOOLS.test(tool) && OURS.test(spawned) && (main ? state.sage : state.sage || ours);
-  const queued = spawnChecked ? queueRefusal(input, ti, spawnName, main) : undefined;
+  const queued = spawnChecked ? queueRefusal(input, ti, main) : undefined;
   if (queued) {
     if (main) state.queue = true;
     return deny(event, queued);
@@ -1028,17 +1028,28 @@ function briefMark(prompt, role, cwd) {
   }
 }
 const briefRun = (prompt) => BRIEF_LINE.exec(String(prompt ?? "").split("\n", 1)[0])?.[1];
-const spawnRun = (ti, given) => briefRun(ti.prompt) ?? (/^R[1-9]\d*$/.test(String(given ?? "")) ? given : undefined);
-function queueRefusal(input, ti, given, main) {
-  const run = spawnRun(ti, given);
-  let why;
-  try { why = run && !stateTool.error && stateTool.queueProblem(realpathSync.native(input.cwd), run); } catch { return undefined; }
+const spawnRun = (input, ti, given) => briefRun(ti.prompt) ?? (/^R[1-9]\d*$/.test(given) ? given : pendingSpawn(input, ti, given));
+function pendingSpawn(input, ti, given) {
+  const role = String(ti.subagent_type ?? "").toLowerCase().replace(/^sage:/, "");
+  const tasks = role === "lead" ? [/^lead-(T[1-9]\d*)$/.exec(given)?.[1]] : [...new Set(`${given} ${ti.description ?? ""} ${String(ti.prompt ?? "").split("\n", 1)[0]}`.match(/\bT[1-9]\d*\b/g))];
+  return tasks.length === 1 && tasks[0] && !stateTool.error ? stateTool.pendingRun(realpathSync.native(input.cwd), tasks[0], role) : undefined;
+}
+const spawnGiven = (ti) => String(ti.name ?? "").trim() || String(ti.description ?? "").trim().split(/\s+/)[0];
+function queueRefusal(input, ti, main) {
+  let run, why;
+  try {
+    run = spawnRun(input, ti, spawnGiven(ti));
+    why = run && !stateTool.error && stateTool.queueProblem(realpathSync.native(input.cwd), run);
+  } catch { return undefined; }
   if (!why || !/ is queued, /.test(why)) return why || undefined;
   return `${why} ${main ? `The hook tells you when it is admitted. To wait, run ${slotStep([run], true)}. It ends when ${run} is admitted.` : `Run ${slotStep([run])}: it returns when ${run} is admitted. Then start this helper again.`}`;
 }
 function noteStart(input) {
-  const ti = input.tool_input ?? {}, run = OURS.test(String(ti.subagent_type ?? "")) && spawnRun(ti, String(ti.name ?? "").trim() || String(ti.description ?? "").trim().split(/\s+/)[0]);
-  try { if (run && !stateTool.error) stateTool.markStart(realpathSync.native(input.cwd), run); } catch {}
+  const ti = input.tool_input ?? {};
+  try {
+    const run = OURS.test(String(ti.subagent_type ?? "")) && spawnRun(input, ti, spawnGiven(ti));
+    if (run && !stateTool.error) stateTool.markStart(realpathSync.native(input.cwd), run);
+  } catch {}
 }
 
 export function slotsFor(dir, session, now = Date.now(), rawSession = session, leadRuns = liveLeadRun) {

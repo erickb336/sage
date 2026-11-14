@@ -341,3 +341,70 @@ test("T1057 F-T1057-23: when the spawn's PreToolUse wrote no start mark (the hoo
   assert.match(w.claude("run", "done", "R2", "--status", "failed"), /^R2 failed$/, "the sweep keeps the working run");
   assert.equal(status(w, "R4"), "running");
 });
+
+const leadTask = (w) => {
+  shared(w);
+  w.claude("task", "add", "--title", "lead task", "--size", "small", "--priority", "P2");
+  w.claude("task", "T3", "set", "state=briefed");
+  w.hook({ hook_event_name: "UserPromptSubmit", prompt: "sage mode" });
+  w.claude("run", "add", "T1", "--role", "qa");
+  w.codex("run", "add", "T2", "--role", "qa");
+  w.codex("run", "add", "T2", "--role", "qa");
+};
+const chiefSpawn = (role, name, description) => ({ hook_event_name: "PreToolUse", tool_name: "Agent", tool_use_id: `tu-${name}`, tool_input: { subagent_type: `sage:${role}`, name, description, prompt: BRIEF, run_in_background: true } });
+
+test("T1057 F-T1057-53, F-T1057-48, F-T1057-54: a lead started as the chief's file teaches (lead-T<n>, no Run line) is refused with its place while queued; once admitted, its start marks the run, so a run add 12 minutes later neither fails it nor admits past the limit", (t) => {
+  const w = world(t);
+  leadTask(w);
+  assert.match(w.claude("run", "add", "T3", "--role", "lead"), /^R4 is queued, place 1 · lead on T3/);
+  const lead = chiefSpawn("lead", "lead-T3", "lead-T3 build the form");
+  assert.match(denied(w.hook(lead)) ?? "", /^sage: R4 is queued, place 1 of 1: the project runs 3 of its 3 agents, so its agent does not start yet\. A run that ends admits the oldest queued run\. The hook tells you when it is admitted\. To wait, run node \S+\/hooks\/wait\.mjs --slot R4 in the project's folder, as a Bash command of its own in the background \(run_in_background true\)\. It ends when R4 is admitted\.$/, "the queued refusal with its place, not a refusal that says to record the lead run (F-T1057-54)");
+  assert.match(w.codex("run", "done", "R2", "--status", "failed"), /\nR4 admitted · lead on T3 · chief C1: /);
+  assert.equal(denied(w.hook(lead)), undefined, "the admitted lead starts");
+  assert.ok(readFileSync(join(storeDir(w.project, w.env), "kept", "R4.start.json"), "utf8").includes('"run":"R4"'), "its allow wrote the start mark");
+  assert.deepEqual(queueOf(w.project, w.env).admitted, []);
+  backdate(w, "R4", 12 * 60_000);
+  assert.match(w.codex("run", "add", "T2", "--role", "qa"), /^R5 is queued, place 1 · qa on T2 · .*the project runs 3 of its 3 agents\./, "the working lead still holds its place");
+  assert.deepEqual(w.runs().rows.map((r) => [r.id, r.status]), [["R1", "running"], ["R2", "failed"], ["R3", "running"], ["R4", "running"], ["R5", "queued"]]);
+});
+
+test("T1057 F-T1057-53: a chief's PE with no Run line is tied to its task's one queued or admitted PE run by the task in its description; a spawn that fits two runs marks neither", (t) => {
+  const w = world(t);
+  leadTask(w);
+  assert.match(w.claude("run", "add", "T3", "--role", "pe"), /^R4 is queued, place 1 · pe on T3/);
+  const pe = chiefSpawn("pe", "pe-T3", "T3 check the plan");
+  assert.match(denied(w.hook(pe)) ?? "", /^sage: R4 is queued, place 1 of 1: /);
+  w.codex("run", "done", "R2", "--status", "failed");
+  assert.equal(denied(w.hook(pe)), undefined);
+  assert.deepEqual(queueOf(w.project, w.env).admitted, [], "the PE's start marked R4");
+
+  assert.match(w.claude("run", "add", "T3", "--role", "designer", "--branch", "a/1", "--candidate", "1"), /^R5 is queued, place 1 /);
+  assert.match(w.claude("run", "add", "T3", "--role", "designer", "--branch", "a/2", "--candidate", "2"), /^R6 is queued, place 2 /);
+  w.claude("run", "done", "R1", "--status", "failed");
+  w.codex("run", "done", "R3", "--status", "failed");
+  assert.deepEqual(queueOf(w.project, w.env).admitted.map((r) => r.id), ["R5", "R6"]);
+  assert.equal(denied(w.hook(chiefSpawn("designer", "design-T3", "T3 design the form"))), undefined);
+  assert.deepEqual(queueOf(w.project, w.env).admitted.map((r) => r.id), ["R5", "R6"], "two designer runs fit, so the hook does not guess");
+});
+
+test("T1057 F-T1057-41: a queued review or QA run of the task holds the merge, as a running one does", (t) => {
+  const w = world(t);
+  shared(w);
+  const sha = "a1b2c3d4e5f60718293a4b5c6d7e8f9012345678";
+  for (let i = 0; i < 3; i++) w.codex("run", "add", "T2", "--role", "qa");
+  assert.match(w.claude("run", "add", "T1", "--role", "qa"), /^R4 is queued, place 1 · qa on T1/);
+  w.claude("verdict", "T1", "--sha", sha, "--kind", "checks-pass");
+  assert.throws(() => w.claude("merge-check", "--sha", sha), /T1 has a review or QA run that still runs: R4 \(qa, queued\)/);
+  w.claude("run", "done", "R4", "--status", "failed");
+  assert.match(w.claude("merge-check", "--sha", sha), /may merge/);
+});
+
+test("T1057 F-T1057-47: a task with a queued lead run joins no milestone before its approval, as with a running one", (t) => {
+  const w = world(t);
+  leadTask(w);
+  w.claude("task", "add", "--title", "pilot", "--size", "small", "--priority", "P2");
+  assert.match(w.claude("run", "add", "T3", "--role", "lead"), /^R4 is queued, place 1 · lead on T3/);
+  assert.throws(() => w.claude("milestone", "propose", "--name", "Queue", "--goal", "g", "--pilot", "T4", "--tasks", "T3"), /T3 has R4 \(lead\) queued, so it joins M1 only after the owner approves its breakdown/);
+  w.claude("run", "done", "R4", "--status", "failed");
+  assert.match(w.claude("milestone", "propose", "--name", "Queue", "--goal", "g", "--pilot", "T4", "--tasks", "T3"), /M1/);
+});
