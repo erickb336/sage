@@ -5,7 +5,9 @@ import { buildSync } from "esbuild";
 export const APP_SOURCE = "packages/sage-board/app";
 export const BUILT_NAME = /^(?:app|vendor|graph)-[A-Z0-9]{8}\.(?:js|css)$/;
 export const BUDGET = { vendor: 256_000, script: 40_000, style: 20_000, graph: 218_000 };
-const LICENCE_FILES = ["LICENSE", "LICENSE.md", "LICENSE.txt"];
+const LICENCE_FILES = ["LICENSE", "LICENSE.md", "LICENSE.txt", "LICENSE-MIT.txt"];
+export const MARKDOWN_SOURCE = "packages/sage-board/markdown.mjs";
+export const MARKDOWN_BUDGET = 160_000;
 
 export function budgetProblems(sizes, budget = BUDGET) {
   return Object.entries(sizes).filter(([part, bytes]) => bytes > budget[part])
@@ -38,16 +40,32 @@ export function buildBoardApp(root) {
   const problems = budgetProblems({ vendor: Buffer.byteLength(vendor.text), script: Buffer.byteLength(script.text), style: Buffer.byteLength(style.text), graph: Buffer.byteLength(graph.text) });
   if (problems.length) throw new Error(problems.join("; "));
 
-  const pins = JSON.parse(readFileSync(join(root, "package.json"), "utf8")).devDependencies;
-  const names = [...new Set([vendor, graph].flatMap(item => Object.keys(item.meta.inputs)).map(packageOf).filter(Boolean))].sort();
-  const licences = new Map(names.map(name => {
-    const dir = join(root, "node_modules", name), installed = JSON.parse(readFileSync(join(dir, "package.json"), "utf8")).version;
-    if (pins[name] !== installed) throw new Error(`${name} ${installed} is in the board app, so package.json must pin it at exactly that version`);
-    const file = LICENCE_FILES.map(entry => join(dir, entry)).find(existsSync);
-    if (!file) throw new Error(`${name} has no licence file to ship with the board app`);
-    return [`${name.replaceAll("/", "-")}.txt`, `${name} ${installed}\n\n${readFileSync(file, "utf8")}`];
-  }));
+  const licences = licencesOf(root, [vendor, graph].flatMap(item => Object.keys(item.meta.inputs)), "the board app");
   const manifest = { script: script.name, style: style.name, vendor: vendor.name, graph: graph.name };
   const files = new Map([[script.name, script.text], [style.name, style.text], [vendor.name, vendor.text], [graph.name, graph.text], ["manifest.json", `${JSON.stringify(manifest, null, 2)}\n`]]);
   return { files, licences, manifest };
+}
+
+export function buildBoardMarkdown(root) {
+  const result = buildSync({
+    absWorkingDir: root, entryPoints: [MARKDOWN_SOURCE], bundle: true, preserveSymlinks: true, platform: "node", target: "node20", format: "esm",
+    minify: true, legalComments: "none", charset: "utf8", write: false, metafile: true, logLevel: "silent",
+  });
+  const [output] = Object.values(result.metafile.outputs);
+  if (output.imports.length) throw new Error(`the board's Markdown renderer must bundle everything it imports, not ${output.imports.map(entry => entry.path).join(", ")}`);
+  const text = result.outputFiles[0].text;
+  if (Buffer.byteLength(text) > MARKDOWN_BUDGET) throw new Error(`the board's Markdown renderer is ${Buffer.byteLength(text)} bytes, over its budget of ${MARKDOWN_BUDGET} bytes (scripts/board-app.mjs)`);
+  return { text, licences: licencesOf(root, Object.keys(output.inputs), "the board's Markdown renderer") };
+}
+
+function licencesOf(root, inputs, what) {
+  const pins = JSON.parse(readFileSync(join(root, "package.json"), "utf8")).devDependencies;
+  const names = [...new Set(inputs.map(packageOf).filter(Boolean))].sort();
+  return new Map(names.map(name => {
+    const dir = join(root, "node_modules", name), installed = JSON.parse(readFileSync(join(dir, "package.json"), "utf8")).version;
+    if (pins[name] !== installed) throw new Error(`${name} ${installed} is in ${what}, so package.json must pin it at exactly that version`);
+    const file = LICENCE_FILES.map(entry => join(dir, entry)).find(existsSync);
+    if (!file) throw new Error(`${name} has no licence file to ship with ${what}`);
+    return [`${name.replaceAll("/", "-")}.txt`, `${name} ${installed}\n\n${readFileSync(file, "utf8")}`];
+  }));
 }

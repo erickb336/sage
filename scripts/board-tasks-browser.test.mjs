@@ -51,7 +51,7 @@ const row = (page, id) => page.locator(`a.row[data-task="${KEY(id)}"]`);
 const panelTitle = page => page.locator("#panel-h");
 const groupTitles = page => page.locator(".group h2").allTextContents();
 
-test("T1061: J2 and J3 are within two clicks of the Overview, and a Needs you row opens its task in one", async t => {
+test("T1061, T1064: J2 and J3 are within two clicks of the Overview, and a Needs you row opens its full question in one", async t => {
   const { page, base, requests, problems } = await open(t);
   let clicks = 0;
   const click = async locator => { clicks++; await locator.click(); };
@@ -64,8 +64,11 @@ test("T1061: J2 and J3 are within two clicks of the Overview, and a Needs you ro
   assert.equal(await page.locator(".steps li[aria-current=step] .lbl").textContent(), "Review 1 of 1running", "the current step");
   assert.equal(await page.locator(".sec-h .hint").textContent(), "Clean cycles: 0 of 1");
   assert.match(await page.locator(".last").textContent(), /R6 · qa started$/);
-  assert.deepEqual(await page.locator("#tab-panel .files a").allTextContents(), ["limits-design.html", "notes.md", "Limits design note"], "J3: what its agents made");
-  assert.equal(await page.locator("#tab-panel .files a").first().getAttribute("href"), "/pages/sample-app-abc123/T3/limits-design.html");
+  const made = await page.locator("#tab-panel .files a").allTextContents();
+  assert.deepEqual(made.filter(text => !["Brief", "Report"].includes(text)), ["limits-design.html", "notes.md", "Limits design note", "R5 · code-reviewer · done"], "J3: what its agents made");
+  assert.equal(made.filter(text => text === "Brief").length, 3, "a brief and a report link for each of T3's three runs");
+  assert.equal(await page.getByRole("link", { name: "limits-design.html" }).getAttribute("href"), "/pages/sample-app-abc123/T3/limits-design.html");
+  assert.match(await page.getByRole("link", { name: "notes.md" }).getAttribute("href"), /^\/read\/[\w-]+\/page\/notes\.md$/, "a Markdown page opens in the reader");
   assert.match(await page.locator("#tab-panel").textContent(), /R5 · code-reviewer · done.*CLEAN\. The limits change is correct\..*sage_qa_t3_r6\.json/);
 
   clicks = 0;
@@ -78,8 +81,13 @@ test("T1061: J2 and J3 are within two clicks of the Overview, and a Needs you ro
   clicks = 0;
   await page.goto(`${base}/app/`);
   await click(page.getByRole("link", { name: "Can a viewer copy a shared list into their own lists?" }));
+  await page.locator("main h1").filter({ hasText: "Can a viewer copy a shared list into their own lists?" }).waitFor();
+  assert.equal(clicks, 1, "J1: the full question in one click");
+  assert.match(await page.locator("main").textContent(), /The answers.*A: yes, as a new private list.*C1's pick.*B: no/s, "the chief's pick first");
+  await page.getByRole("link", { name: /Back to Needs you/ }).click();
+  await page.getByRole("heading", { name: "Needs you" }).waitFor();
+  await page.goto(`${base}/app/#tasks?task=${encodeURIComponent(KEY("T10"))}`);
   await panelTitle(page).filter({ hasText: "Sample sync design" }).waitFor();
-  assert.equal(clicks, 1);
   await page.getByRole("tab", { name: /Decisions/ }).click();
   assert.match(await page.locator("#tab-panel").textContent(), /Can a viewer copy a shared list.*Open: it waits for your answer/);
   assert.deepEqual(requests.filter(url => !url.startsWith(`${base}/`)), [], "no request outside 127.0.0.1");

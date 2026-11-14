@@ -418,25 +418,27 @@ test("provider packages are complete outside the checkout, with no opposite adap
   }
 });
 
-test("T216, T1054, T1063: each plugin's board is a cross-provider reader: its server modules import only Node built-ins and the bundled core, its app holds only built files, and it installs from the plugin", async (t) => {
+test("T216, T1054, T1063, T1064: each plugin's board is a cross-provider reader: its server modules import only Node built-ins, the bundled core and the bundled Markdown renderer, its app holds only built files, and it installs from the plugin", async (t) => {
   for (const provider of ["claude", "codex"]) {
     const { dir, plugin } = isolated(t, provider);
     const files = filesUnder(join(plugin, "board")), app = join(plugin, "board/app");
     const manifest = JSON.parse(readFileSync(join(app, "manifest.json"), "utf8")), built = [manifest.script, manifest.style, manifest.vendor, manifest.graph];
-    assert.deepEqual(files.map((file) => relative(join(plugin, "board"), file)).sort(), ["cli.mjs", "install.mjs", "pages.mjs", "server.mjs", ...["manifest.json", ...built].map((name) => `app/${name}`)].sort());
+    assert.deepEqual(files.map((file) => relative(join(plugin, "board"), file)).sort(), ["cli.mjs", "install.mjs", "markdown.mjs", "pages.mjs", "reader.mjs", "server.mjs", ...["manifest.json", ...built].map((name) => `app/${name}`)].sort());
     for (const name of built) assert.match(name, /^(?:app|vendor|graph)-[A-Z0-9]{8}\.(?:js|css)$/);
     const { parse } = await import("es-module-lexer/minimal");
     for (const file of files.filter((path) => path.endsWith(".mjs"))) {
       const [imports] = parse(readFileSync(file, "utf8"));
       for (const { n: name } of imports.filter((item) => item.d !== -2)) {
-        const allowed = name?.startsWith("node:") || name === "../core/index.mjs" || /^\.\/(?:cli|install|pages|server)\.mjs$/.test(name ?? "");
+        const allowed = name?.startsWith("node:") || name === "../core/index.mjs" || /^\.\/(?:cli|install|markdown|pages|reader|server)\.mjs$/.test(name ?? "");
         assert.ok(allowed, `${provider} ${relative(plugin, file)} imports ${name}`);
       }
     }
+    assert.deepEqual(parse(readFileSync(join(plugin, "board/markdown.mjs"), "utf8"))[0].filter((item) => item.d !== -2).map((item) => item.n), [], `${provider}: the Markdown renderer is one bundled file that imports nothing`);
     const importsOf = (name) => parse(readFileSync(join(app, name), "utf8"))[0].filter((item) => item.d !== -2).map((item) => item.n);
     assert.deepEqual(importsOf(manifest.script), [`./${manifest.vendor}`, `./${manifest.graph}`], `${provider}: the app script imports only the vendor file, and loads the graph file on demand`);
     assert.deepEqual(importsOf(manifest.graph), [`./${manifest.vendor}`], `${provider}: the graph file imports only the vendor file`);
     assert.deepEqual(importsOf(manifest.vendor), [], `${provider}: the vendor file imports nothing`);
+    for (const name of ["markdown-it", "mdurl", "linkify-it", "uc.micro", "punycode.js", "entities"]) assert.match(readFileSync(join(plugin, "licenses", `${name}.txt`), "utf8"), /^\S+ \d+\.\d+\.\d+\n\nCopyright /, `${provider}: ${name}'s licence ships with the plugin`);
     for (const name of ["react", "react-dom", "scheduler", "@xyflow-react", "zustand"]) assert.match(readFileSync(join(plugin, "licenses", `${name}.txt`), "utf8"), /^\S+ \d+\.\d+\.\d+\n\nMIT License/, `${provider}: ${name}'s licence ships with the plugin`);
     const env = { ...process.env, HOME: join(dir, "home") };
     delete env.SAGE_HOME; delete env.CODEX_HOME;
