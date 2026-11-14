@@ -34,6 +34,8 @@ function read(w, task, kind, arg = null, view = {}, model = w.model()) {
   const page = readerPage({ model, configured: w.sources, url: readerUrl(KEY(task), kind, arg, view), origin: ORIGIN, render: renderMarkdown });
   return page && { ...page, html: page.top + page.rest, text: (page.top + page.rest).replace(/<style>[\s\S]*?<\/style>/, "").replace(/<[^>]+>/g, " ").replace(/&#(\d+);/g, (_, n) => String.fromCharCode(n)).replace(/&quot;/g, "\"").replace(/&lt;/g, "<").replace(/&gt;/g, ">").replace(/&amp;/g, "&").replace(/\s+/g, " ") };
 }
+const findingRowsOrRawHtml = html => [...(/<span class="fname">FINDINGS<\/span>[\s\S]*?<div class="body">([\s\S]*?)<\/div><\/details>/.exec(html)?.[1] ?? "").matchAll(/<div class="finding">([\s\S]*?)<\/div>/g)]
+  .map(([, row]) => /^<span><span class="pill (high|medium|low)">\1<\/span><\/span><span class="mono">([^<]+)<\/span><span>([^<]*)<\/span>(?:<span class="det">([^<]*)<\/span>)?$/.exec(row)?.slice(1) ?? row);
 const fieldsOpen = html => [...html.matchAll(/<details( open)?><summary><span class="fname">([A-Z ]+)<\/span>/g)].map(match => `${match[2]}${match[1] ? " open" : ""}`);
 
 test("T1064: a brief shows its ten fields in order, GOAL and ACCEPTANCE open, a closed field with its first line; Open all and Close all open and close every field", t => {
@@ -50,20 +52,17 @@ test("T1064: a brief shows its ten fields in order, GOAL and ACCEPTANCE open, a 
   assert.match(read(w, "T3", "brief", "R7", { back: "pull-requests" }).html, /href="\/app\/#pull-requests\?task=shared%2Fsample-app-abc123%2FT3">&#8592; Back to T3/, "the back link returns to the page that opened the panel");
 });
 
-test("T1064: a report shows the STATUS pill, RESULT first, each finding as a row with severity, key, summary, location and its state, then the other fields and the PR link", t => {
+test("T1064: a report shows the STATUS pill, RESULT first, each finding as a row with severity, key, summary and location, the logbook's rows with their states, then the other fields and the PR link", t => {
   const w = world(t), page = read(w, "T3", "report", "R5");
   assert.match(page.html, /<dt>Status<\/dt><dd><span class="pill done">done<\/span>/);
   const result = page.html.indexOf("RESULT</span><p class=\"lead\">FINDINGS · 1 medium, 1 low</p>"), findings = page.html.indexOf(">FINDINGS</span>");
   assert.ok(result > 0 && result < findings, "RESULT comes first, in its box");
-  const rows = [...page.html.matchAll(/<div class="finding"><span><span class="pill (\w+)">\w+<\/span><\/span><span class="mono">(\w+)<\/span><span>([^<]+)<\/span><span>(?:<span class="pill[^"]*">([^<]+)<\/span>)?<\/span>(?:<span class="det">([^<]*)<\/span>)?/g)].map(match => match.slice(1));
-  assert.deepEqual(rows, [
-    ["medium", "F1", "A revoked limit still applies for 10 minutes.", "open", "src/limits.js:42\nproof: npm test -- scripts/limits-probe.test.mjs\nsaw: the limit 5 after revoke"],
-    ["low", "F2", "The limit field has no label.", "follow-up", "src/limits-view.js:88"],
-  ], "each finding has the state of R5's own logbook row, in report order (F-T3-1, F-T3-2), not of R4's row with the key F1");
-  const file = join(w.logbook, "findings.tsv");
-  writeFileSync(file, readFileSync(file, "utf8").split("\n").filter(line => !line.includes("\tF-T3-2\t")).join("\n"));
-  assert.deepEqual([...read(w, "T3", "report", "R5").html.matchAll(/<span class="mono">(\w+)<\/span><span>[^<]*<\/span><span>(?:<span class="pill[^"]*">([^<]+)<\/span>)?/g)].map(match => [match[1], match[2] ?? "no state"]),
-    [["F1", "open"], ["F2", "no state"]], "a finding with no logbook row of its run shows no state");
+  assert.deepEqual(findingRowsOrRawHtml(page.html), [
+    ["medium", "F1", "A revoked limit still applies for 10 minutes.", "src/limits.js:42\nproof: npm test -- scripts/limits-probe.test.mjs\nsaw: the limit 5 after revoke"],
+    ["low", "F2", "The limit field has no label.", "src/limits-view.js:88"],
+  ], "each finding row has no logbook state: no key joins a report finding to its logbook row");
+  assert.deepEqual(logbookRows(page.html), ["F-T3-1 medium revoked-limit-applies-10-min open", "F-T3-2 low limit-field-no-label follow-up"], "R5's own rows, not R4's row with the key F1");
+  assert.match(page.html, /<h2 class="sec">In the logbook<\/h2><p class="muted">The logbook's own record of these findings, with their states:<\/p><table/);
   assert.deepEqual(fieldsOpen(page.html), ["FINDINGS open", "QUESTIONS", "EVIDENCE", "NOT VERIFIED open", "BRANCH open"], "QUESTIONS none stays closed");
   assert.match(page.html, /<a href="https:\/\/github\.com\/sample-owner\/sample-app\/pull\/12">PR #12<\/a>/);
   assert.match(page.html, /head b{40}, PR 12/);
@@ -77,33 +76,35 @@ function reviewOf(w, lines, rows, decisions = []) {
   writeFileSync(join(w.logbook, "reports", "R31.md"), ["STATUS        done", "RESULT        FINDINGS · see below", "EVIDENCE      npm test: pass", "FINDINGS", ...lines, "QUESTIONS     none", "NOT VERIFIED  none", `BRANCH        b, head ${"d".repeat(40)}`].join("\n"));
   const page = read(w, "T3", "report", "R31");
   return {
-    shown: [...page.html.matchAll(/<span class="mono">(F\d+)<\/span><span>[^<]*<\/span><span>(?:<span class="pill[^"]*">([^<]+)<\/span>)?/g)].map(match => `${match[1]} ${match[2] ?? "no state"}`),
-    logbook: [...(/<h2 class="sec">In the logbook<\/h2>([\s\S]*?)(?:<details|<\/div><aside)/.exec(page.html)?.[1] ?? "").matchAll(/<tr><td class="mono">([^<]+)<\/td><td>([^<]+)<\/td><td>([^<]+)<\/td><td>([^<]+)<\/td><\/tr>/g)].map(match => match.slice(1).join(" ")),
+    shown: findingRowsOrRawHtml(page.html).map(row => Array.isArray(row) ? `${row[1]} ${row[0]}` : row),
+    logbook: logbookRows(page.html),
   };
+}
+function logbookRows(html) {
+  return [...(/<h2 class="sec">In the logbook<\/h2>([\s\S]*?)(?:<details|<\/div><aside)/.exec(html)?.[1] ?? "").matchAll(/<tr><td class="mono">([^<]+)<\/td><td>([^<]+)<\/td><td>([^<]+)<\/td><td>([^<]+)<\/td><\/tr>/g)].map(match => match.slice(1).join(" "));
 }
 const MEDIUM = ["    a.js:1", "    proof: npm test", "    saw: `x`"];
 
-test("T1064: a finding that the lead moved to a follow-up task (its row loses its run) gives no later finding a wrong state, and In the logbook lists each row of the run with its true state", t => {
-  const w = world(t);
-  const { shown, logbook } = reviewOf(w, ["- F1 medium a.js:1 closed", ...MEDIUM.slice(1), "- F2 low b.js:2 moved to T9", "- F3 low c.js:3 open", "- F4 low d.js:4 dismissed"],
-    [["F-T3-13", "medium", "closed"], ["F-T9-1", "low", "open", "T9"], ["F-T3-15", "low", "open"], ["F-T3-16", "low", "dismissed"]],
-    [{ decision: "F-T3-14 moved to T9 as F-T9-1: F-T3-14-summary", why: "the follow-up task (from R31, low): Later polish" }]);
-  assert.deepEqual(shown, ["F1 closed", "F2 no state", "F3 no state", "F4 no state"], "the three low rows have three states, so no low finding shows one; the one medium row is F1's");
-  assert.deepEqual(logbook, ["F-T3-13 medium F-T3-13-summary closed", "F-T3-15 low F-T3-15-summary open", "F-T3-16 low F-T3-16-summary dismissed", "F-T3-14 low F-T9-1-summary moved to T9"]);
-});
-
-test("T1064: a low finding with no logbook row (allowed) gives no other finding a wrong state", t => {
-  const w = world(t);
-  const { shown, logbook } = reviewOf(w, ["- F1 low a.js:1 not recorded", "- F2 medium b.js:2 open", ...MEDIUM.slice(1)], [["F-T3-17", "medium", "open"]]);
-  assert.deepEqual(shown, ["F1 no state", "F2 open"]);
-  assert.deepEqual(logbook, ["F-T3-17 medium F-T3-17-summary open"]);
-});
-
-test("T1064: two findings of one severity that the lead records in the other order show a state only when both rows have the same state", t => {
-  const w = world(t), lines = ["- F1 low a.js:1 first", "- F2 low b.js:2 second"];
-  assert.deepEqual(reviewOf(w, lines, [["F-T3-17", "low", "dismissed"], ["F-T3-18", "low", "open"]]).shown, ["F1 no state", "F2 no state"], "two states, and no key joins a row to its finding");
-  const v = world(t);
-  assert.deepEqual(reviewOf(v, lines, [["F-T3-17", "low", "closed"], ["F-T3-18", "low", "closed"]]).shown, ["F1 closed", "F2 closed"], "one state for both rows is certain for both findings");
+test("T1064: no FINDINGS row shows a logbook state, whatever the lead recorded, and In the logbook lists each row of the run with its true state", t => {
+  const cases = [
+    { name: "severity-raised: the lead records F1 as high and F2 as medium, F3 has no row", lines: ["- F1 medium a.js:1 first", ...MEDIUM.slice(1), "- F2 low b.js:2 second", "- F3 low c.js:3 third"],
+      rows: [["F-T3-17", "high", "open"], ["F-T3-18", "medium", "closed"]], shown: ["F1 medium", "F2 low", "F3 low"], logbook: ["F-T3-17 high F-T3-17-summary open", "F-T3-18 medium F-T3-18-summary closed"] },
+    { name: "cross: one finding recorded one severity up, the other one down", lines: ["- F1 low a.js:1 dismissed in truth", "- F2 medium b.js:2 open in truth", ...MEDIUM.slice(1)],
+      rows: [["F-T3-17", "medium", "dismissed"], ["F-T3-18", "low", "open"]], shown: ["F1 low", "F2 medium"], logbook: ["F-T3-17 medium F-T3-17-summary dismissed", "F-T3-18 low F-T3-18-summary open"] },
+    { name: "moved: the lead moved F2 to a follow-up task, so its row lost its run", lines: ["- F1 medium a.js:1 closed", ...MEDIUM.slice(1), "- F2 low b.js:2 moved to T9", "- F3 low c.js:3 open", "- F4 low d.js:4 dismissed"],
+      rows: [["F-T3-13", "medium", "closed"], ["F-T9-1", "low", "open", "T9"], ["F-T3-15", "low", "open"], ["F-T3-16", "low", "dismissed"]],
+      decisions: [{ decision: "F-T3-14 moved to T9 as F-T9-1: F-T3-14-summary", why: "the follow-up task (from R31, low): Later polish" }],
+      shown: ["F1 medium", "F2 low", "F3 low", "F4 low"], logbook: ["F-T3-13 medium F-T3-13-summary closed", "F-T3-15 low F-T3-15-summary open", "F-T3-16 low F-T3-16-summary dismissed", "F-T3-14 low F-T9-1-summary moved to T9"] },
+    { name: "skipped: a low finding has no row (allowed)", lines: ["- F1 low a.js:1 not recorded", "- F2 medium b.js:2 open", ...MEDIUM.slice(1)],
+      rows: [["F-T3-17", "medium", "open"]], shown: ["F1 low", "F2 medium"], logbook: ["F-T3-17 medium F-T3-17-summary open"] },
+    { name: "reversed: two findings of one severity, both rows closed", lines: ["- F1 low a.js:1 first", "- F2 low b.js:2 second"],
+      rows: [["F-T3-17", "low", "closed"], ["F-T3-18", "low", "closed"]], shown: ["F1 low", "F2 low"], logbook: ["F-T3-17 low F-T3-17-summary closed", "F-T3-18 low F-T3-18-summary closed"] },
+  ];
+  for (const { name, lines, rows, decisions, shown, logbook } of cases) {
+    const result = reviewOf(world(t), lines, rows, decisions);
+    assert.deepEqual(result.shown, shown, `${name}: each row has severity, key and summary only`);
+    assert.deepEqual(result.logbook, logbook, `${name}: the table has each row's true state`);
+  }
 });
 
 test("T1064: a report shows each finding that the hook reads, with the hook's severity: the dash, numbered, long-dash and indented forms", t => {
@@ -111,8 +112,7 @@ test("T1064: a report shows each finding that the hook reads, with the hook's se
   writeFileSync(file, text.replace(/^FINDINGS\n[\s\S]*?(?=^QUESTIONS)/m, ["FINDINGS", "- F1 - high - the dash form: a save loses data", "    src/save.js:3", "    proof: npm test", "    saw: `lost`",
     "1. F2 high the numbered form: a crash on start", "- F3 — medium the long-dash form", "  - F4 low an indented finding", ""].join("\n")));
   assert.deepEqual(readReport(readFileSync(file, "utf8")).findings.map(item => `${item.key} ${item.severity}`), ["F1 high", "F2 high", "F3 medium", "F4 low"], "the hook reads four findings");
-  const rows = [...read(w, "T3", "report", "R5").html.matchAll(/<div class="finding"><span><span class="pill (\w+)">\w+<\/span><\/span><span class="mono">(\w+)<\/span><span>([^<]+)<\/span><span>(?:<span class="pill[^"]*">[^<]+<\/span>)?<\/span>(?:<span class="det">([^<]*)<\/span>)?/g)].map(match => match.slice(1));
-  assert.deepEqual(rows, [
+  assert.deepEqual(findingRowsOrRawHtml(read(w, "T3", "report", "R5").html), [
     ["high", "F1", "the dash form: a save loses data", "src/save.js:3\nproof: npm test\nsaw: `lost`"],
     ["high", "F2", "the numbered form: a crash on start", undefined],
     ["medium", "F3", "the long-dash form", undefined],
