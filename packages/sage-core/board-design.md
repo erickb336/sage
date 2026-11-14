@@ -27,8 +27,8 @@ The owner approved these tenets (G156). Each page and each element of the board 
 | Job | The owner wants to know | Served by |
 | --- | --- | --- |
 | J1 | What needs me, with full context | Overview, "Needs you" (read-only in T1054; answers come in T1059) |
-| J2 | Where each milestone and task stands, by priority | Overview, "Milestones" (T1054); the Tasks page |
-| J3 | Where a task is in its dev cycle, and what its agents made | The Tasks page and its side panel; the artifact viewer |
+| J2 | Where each milestone and task stands, by priority | Overview, "Milestones" (T1054); the Tasks page, grouped by priority (T1061) |
+| J3 | Where a task is in its dev cycle, and what its agents made | A milestone on the Overview, then a task: the side panel (T1061); the artifact viewer |
 | J4 | Which agents run, for which chief, against the limit | The Agents page |
 | J5 | Which PRs are open, merged or waiting, and what depends on what | The Pull requests page |
 | J6 | What changed since I looked | Overview, the counts (the last 24 hours until T1059 adds "since you looked") |
@@ -61,6 +61,14 @@ A ux review of a board page checks each line. A line that fails is a finding.
 - The `/app/` route, its HTML shell and its content security policy; the `/app/events` stream.
 - The Overview, read-only: "Needs you", the milestones by priority with their progress, and the counts of the last 24 hours. The pages Tasks, Agents and Pull requests say that they come next, and link to the classic board.
 - The logbook keeps no time when a task is added, so "New tasks" shows as not known (tenet 3).
+
+### What T1061 built
+
+- The Tasks page at `/app/#tasks`: every task, grouped by milestone, priority, chief or state, with filters for chief, provider, priority, kind and state. Each row shows the priority, the state word, the kind, the chief tag (id and provider) and "may conflict" when another chief's open branch changes the same file. Ended tasks (merged, concluded, abandoned) are collapsed in each group.
+- The side panel of one task: the steps of its route with the current step, the clean-cycle count ("not known" when the board does not know the PR's last commit), the last event, and the tabs Artifacts, Log and Decisions.
+- The stream carries one short row for each task. The panel reads `/app/task/<key>` when it opens, and again when the logbook changes. That route also lists the task's pages folder, the kept reports of its runs, and the brief and report files that name the task or one of its runs. A pages file opens through `/pages`; the reader for the other files comes later.
+- A "Needs you" row opens its task's panel, and a milestone row opens the Tasks page at that milestone.
+- A path or a branch name is data: the panel shows each control character in it as a visible escape, such as `\n`.
 
 ## The classic board (T205)
 

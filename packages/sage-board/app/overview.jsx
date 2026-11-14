@@ -1,4 +1,5 @@
 import { StateIcon } from "./icons.jsx";
+import { milestoneLink, taskLink } from "./panel.jsx";
 
 const plural = (count, one, many = `${one}s`) => `${count} ${count === 1 ? one : many}`;
 
@@ -39,7 +40,7 @@ function NeedRow({ need, at, many }) {
     <li data-need={need.key}>
       <span className="bullet" aria-hidden="true" />
       <div>
-        <p className="q">{need.question}</p>
+        <p className="q">{need.task ? <a href={taskLink(need.task.key)}>{need.question}</a> : need.question}</p>
         {need.more.length > 0 && <p className="more">{need.more.join(" ")}</p>}
         {need.recommendation && <p className="pick">Recommended: <b>{need.recommendation}</b></p>}
         <p className="meta">
@@ -94,7 +95,7 @@ function MilestoneRow({ milestone, many }) {
       <StateIcon state={milestone.state} />
       <div>
         <div className="name">
-          {milestone.title}
+          <a href={milestoneLink(milestone.key)}>{milestone.title}</a>
           {milestone.priority && <span className={`badge prio ${milestone.priority.toLowerCase()}`}>{milestone.priority}</span>}
           <span className="badge">{milestone.word}</span>
         </div>
