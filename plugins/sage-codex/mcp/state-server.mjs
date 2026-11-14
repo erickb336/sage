@@ -191,9 +191,9 @@ export const TOOLS = {
     pos: ["task", "message"], argv: (i) => ["message", i.task, `--json=${JSON.stringify(i.message)}`],
   },
   gate_add: {
-    describe: "Park a question for the owner, with options, a recommendation and a default.",
+    describe: "Park a question for the owner, with options, a recommendation and a default. With message, the gate keeps the whole question message for the board, after the message check.",
     input: { task, question: z.string(), options: z.string().describe("the options joined by |, for example yes|no"), recommend: z.string().describe("the recommended option"),
-      default: optional("the default option") },
+      default: optional("the default option"), message: z.string().refine(isAbsolute, "an absolute path").optional().describe("the absolute path of the question message's JSON file ({ kind: \"question\", title, blocks })") },
     pos: ["task"], argv: (i) => ["gate", "add", i.task],
   },
   gate_replace: {
@@ -201,9 +201,18 @@ export const TOOLS = {
     input: { task, to: chief }, pos: ["task"], argv: (i) => ["gate", "replace", i.task],
   },
   gate_answer: {
-    describe: "Record the owner's answer to a gate: the option's number, or the owner's own words as the hex of their UTF-8 bytes.",
-    input: { gate: id("G", "the gate id"), option: count("the number of the option"), "other-hex": optional("the owner's own words, as lower-case hex of their UTF-8 bytes") },
+    describe: "Record the owner's answer to a gate: the option's number, or the owner's own words as the hex of their UTF-8 bytes, and via, where the owner answered: codex-card for your choice card, chat for the chat. board only records the owner's board answer as pending: it acts when the owning chief's hook picks it up, and gate_undo takes it back before that. The first answer wins: a gate with an answer refuses, and names that answer, its place and its time.",
+    input: { gate: id("G", "the gate id"), option: count("the number of the option"), "other-hex": optional("the owner's own words, as lower-case hex of their UTF-8 bytes"),
+      via: z.enum(["codex-card", "chat", "claude-card", "board"]).optional().describe("where the owner answered; chat when left out") },
     pos: ["gate"], argv: (i) => ["gate", "answer", i.gate],
+  },
+  gate_undo: {
+    describe: "Only when the owner asks: take back the owner's board answer to a gate before a chief picks it up. After the pickup, or for an answer from a card or the chat, it refuses and says why.",
+    input: { gate: id("G", "the gate id") }, pos: ["gate"], argv: (i) => ["gate", "undo", i.gate],
+  },
+  gate_give: {
+    describe: "Only when the owner asks: open the takeover gate that gives a task to a chief (to), the same one-recipient gate as gate_replace, as the owner's act. The receiving chief applies the owner's answer.",
+    input: { task, to: chief }, pos: ["task"], argv: (i) => ["gate", "give", i.task],
   },
 };
 

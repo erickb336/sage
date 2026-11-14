@@ -143,6 +143,9 @@ test("the transfer commands through the server: offer, accept, cancel, unclaim a
   assert.match(await s.call("accept", { task: "T1", offer, version }, as), /^G1 open · Hand T1 from C1 \(codex\) to C2 \(codex\)\? Runs that end as failed: none\. Approve: C2 owns T1\. C1 can no longer write T1\. .* Decline: C1 stays the owning chief, and the offer to C2 ends\. Title of T1: first\nAsk the owner to answer G1, in either chat\. Nothing changes until then\.$/);
   assert.match((await s.call("task_set", { task: "T1", fields: { title: "x" } }, as)).error, /^sage: T1 belongs to chief C1 \(codex\), not to C2\./, "the gate alone gives nothing");
   assert.equal(await s.call("gate_answer", { gate: "G1", option: 1 }), "G1 answered · approve · T1 chief C2");
+  const { tool } = await import(pathToFileURL(join(s.dir, "plugin/skills/sage/sage.mjs")).href);
+  const picked = JSON.parse(tool.read(tool.storeDir(s.project, s.env), "gates").find((g) => g.id === "G1").picked);
+  assert.equal(picked.chief, "C1", "the gate records the chief whose tool applied the answer, not the receiving chief C2");
   assert.equal(await s.call("unclaim", { task: "T2" }, as), "T2 unclaimed · no owning chief. Only C2 claims it back; another chief needs the owner's takeover gate.");
   assert.match(await s.call("run_add", { task: "T1", role: "qa" }, as), /^R1 running/);
   assert.match(await s.call("gate_replace", { task: "T1", to: "C1" }), /^G2 open · Hand T1 from C2 \(codex\) to C1 \(codex\)\? Runs that end as failed: R1 \(qa\)\. Approve: C1 owns T1\. Each of those runs ends as failed, and work that it did not report may be lost\. .* Decline: nothing changes, and C2 stays the owning chief\. Title of T1: first\nAsk the owner to answer G2, in either chat\. Nothing changes until then\.$/);
@@ -561,7 +564,7 @@ test("T984: the message tool gives the chief the same text and page as the CLI's
 test("the state server lists one tool for each state-tool command, and marks only the reads read-only", async (t) => {
   const s = await connect(t);
   const tools = await s.tools();
-  assert.deepEqual(tools.map((tool) => tool.name).sort(), ["accept", "brief", "cancel", "claim", "config", "finding_add", "finding_close", "finding_move", "finding_triage", "gate_add", "gate_answer", "gate_replace",
+  assert.deepEqual(tools.map((tool) => tool.name).sort(), ["accept", "brief", "cancel", "claim", "config", "finding_add", "finding_close", "finding_move", "finding_triage", "gate_add", "gate_answer", "gate_give", "gate_replace", "gate_undo",
     "init", "link", "lint", "log", "merge_check", "message", "milestone_propose", "milestone_set", "move", "offer", "pages", "release_add", "report_compare", "round", "run_add", "run_done", "standing", "standing_add", "status", "task_add", "task_adopt", "task_set", "unclaim", "verdict", "worktrees"]);
   assert.deepEqual(tools.filter((tool) => tool.annotations.readOnlyHint).map((tool) => tool.name).sort(), ["merge_check", "report_compare", "standing", "status"]);
   assert.ok(tools.every((tool) => tool.inputSchema.required.includes("project") && tool.inputSchema.additionalProperties === false));

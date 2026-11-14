@@ -166,6 +166,8 @@ function handleEvent(input, state, slots) {
     }
     if (state.sage && state.shapeNote) notes.push(state.shapeNote);
     delete state.shapeNote;
+    const picked = main ? pickupNote(input, state) : "";
+    if (picked) notes.push(picked);
     return notes.length ? context(event, notes.join("\n\n---\n\n")) : undefined;
   }
   if (event === "PostCompact") {
@@ -200,7 +202,10 @@ function handleEvent(input, state, slots) {
         appendFileSync(join(stateDir(), "shape-misses.jsonl"), `${JSON.stringify({ at: new Date().toISOString(), kind: miss.kind, problems: miss.names })}\n`);
       } catch {}
     }
+    const gates = pickupNote(input, state) || (!input.stop_hook_active && gatesWaitNote(input, state));
+    if (gates) return { decision: "block", reason: gates };
   }
+  if (event === "SubagentStop" && ours) keepRunText(input.cwd, "reports", () => slots.runOf(input.agent_id)?.run, input.last_assistant_message);
   if (event === "SubagentStop") {
     const helper = slots.helperFor(input.agent_id), head = helper && headOf(helper.folder, helper.task);
     if (!helper || REVIEWERS.includes(helper.role)) {
@@ -218,7 +223,11 @@ function handleEvent(input, state, slots) {
   if (["PostToolUse", "PostToolUseFailure"].includes(event) && AGENT_TOOLS.test(input.tool_name ?? "") && !main && (typeof input.agent_id !== "string" || !input.agent_id)) return undefined;
   if (event === "PostToolUse" && input.tool_name === "Bash") try { stateTool.observePush(input.tool_input?.command, input.cwd); } catch {}
   if (event === "PostToolUse" && input.tool_name === "Bash" && input.agent_type === "sage:lead") return void leadWrote(input, slots);
-  if (event === "PostToolUse" && input.tool_name === "Bash" && main) return void chiefEnded(input, slots);
+  if (event === "PostToolUse" && input.tool_name === "Bash" && main) {
+    chiefEnded(input, slots);
+    const picked = pickupNote(input, state);
+    return picked ? context(event, picked) : undefined;
+  }
   if (event === "PostToolUse" && AGENT_TOOLS.test(input.tool_name ?? "")) return void slots.result(input.tool_use_id, main ? undefined : input.agent_id, input.tool_response);
   if (event === "PostToolUseFailure" && AGENT_TOOLS.test(input.tool_name ?? "")) return void slots.drop(input.tool_use_id, main ? undefined : input.agent_id);
   if (event === "PreToolUse" && input.tool_name === "TaskStop") {
@@ -341,6 +350,8 @@ function handleEvent(input, state, slots) {
       if (r.refused === "mark") return deny(event, `the agent cap could not mark its slot (${r.error}), so it refuses this spawn. Tell the user.`);
       return deny(event, `${running(r.total)} across all projects, and the total cap is ${caps.cap_total} (${project} has ${r.project}). ${raise("cap_total", caps.cap_total)}`);
     }
+    const [, run, task] = BRIEF_LINE.exec(String(ti.prompt ?? "").split("\n", 1)[0]) ?? [];
+    keepRunText(input.cwd, "briefs", leadMark?.run ?? helperKey?.run ?? run, ti.prompt, leadMark?.task ?? helperKey?.task ?? task);
   }
   if (SHELL_TOOLS.test(tool)) {
     const cwd = /^mcp__terminal__/.test(tool) && ti.cwd !== undefined ? ti.cwd : input.cwd ?? process.cwd();
@@ -685,11 +696,11 @@ function chiefIdProblem(input) {
   if (input.tool_name !== "Bash") return undefined;
   const { words, env } = chiefWriteWords(input) ?? {};
   if (!words?.length) return undefined;
-  const [cmd, ...args] = words, { pos, opt } = optionsOf(args);
-  if (["read", "owner"].includes(core.writerClass(cmd, pos).kind)) return undefined;
+  const [cmd, ...args] = words, { pos, opt } = optionsOf(args), kind = core.writerClass(cmd, pos).kind, answers = cmd === "gate" && pos[0] === "answer";
+  if (kind === "read" || (kind === "owner" && !answers)) return undefined;
   let id;
   try {
-    id = stateTool.chiefFor(realpathSync.native(resolve(input.cwd ?? process.cwd(), opt.project ?? env.SAGE_PROJECT ?? ".")), input.session_id, env);
+    id = stateTool.chiefFor(realpathSync.native(resolve(input.cwd ?? process.cwd(), opt.project ?? env.SAGE_PROJECT ?? ".")), input.session_id, env, answers);
   } catch {
     return undefined;
   }
@@ -707,6 +718,45 @@ function chiefEnded(input, slots) {
     const leads = [view.leadRun(run.task), ...view.endedLeadRuns().filter((r) => r.task === run.task)].filter(Boolean);
     slots.endHelpers(leads.map((lead) => helperOf({ logbook: digest(view.dir), run: lead.id }, run.id)));
   } catch {}
+}
+function keepRunText(cwd, kind, runOf, text, task) {
+  if (typeof text !== "string" || stateTool.error) return;
+  try {
+    const run = typeof runOf === "function" ? runOf() : runOf;
+    if (run) stateTool.keepRunText(realpathSync.native(cwd), { kind, run, task, text });
+  } catch {}
+}
+function pickupNote(input, state) {
+  if (!state.sage || stateTool.error || typeof input.cwd !== "string" || typeof input.session_id !== "string") return "";
+  let lines;
+  try { lines = stateTool.pickupAnswers(realpathSync.native(input.cwd), input.session_id, process.env); } catch { return ""; }
+  return lines.length ? [`sage: the owner answered on the board, and this hook applied ${lines.length === 1 ? "that answer" : "those answers"} for you. Tell the owner what each one did, and go on from it:`, ...lines.map((line) => `- ${line}`)].join("\n") : "";
+}
+const busy = (task) => task?.status === undefined || ["running", "pending"].includes(task.status);
+function gatesWaitNote(input, state) {
+  if (!Array.isArray(input.background_tasks) || input.background_tasks.some(busy) || stateTool.error || typeof input.cwd !== "string") return "";
+  let own;
+  try { own = stateTool.ownGates(realpathSync.native(input.cwd), { native: input.session_id }, process.env); } catch { return ""; }
+  const key = own.open.join(",");
+  if (!key) delete state.gatesTold;
+  if (!key || state.gatesTold === key) return "";
+  state.gatesTold = key;
+  return `sage: ${own.open.join(", ")} ${own.open.length === 1 ? "waits" : "wait"} for the owner, and no agent or command of yours runs, so nothing wakes you when the owner answers on the board. Before you end the turn, start the gates wait, as a Bash command of its own with run_in_background true, in the project's folder: ${nodeCommand(WAIT, `--gates${own.me ? ` ${own.me}` : ""}`)}. It ends when an answer comes, and then this hook applies a board answer at your next step.`;
+}
+export async function waitForGates(chief, cwd, { ms = WAIT_MS, every = 5_000 } = {}) {
+  const usage = "usage: node wait.mjs --gates [C<n>], in the project's folder; a shared logbook needs your chief id, for example node wait.mjs --gates C1";
+  if (chief !== undefined && !/^C[1-9]\d*$/.test(chief)) return usage;
+  const folder = realpathSync.native(cwd), look = () => stateTool.ownGates(folder, chief === undefined ? {} : { chief }, process.env);
+  const first = look(), started = Date.now();
+  if (first.me === undefined) return usage;
+  for (;;) {
+    const now = look(), gone = first.open.filter((id) => !now.open.includes(id) && !now.pending.some((p) => p.id === id));
+    if (now.pending.length) return [...now.pending.map((p) => `${p.id}${p.task ? ` (${p.task})` : ""} has the owner's answer "${p.answer}" from the board, at ${p.at}.`), `Run ${stateCommand("status")} now, as a command of its own: this hook applies the answer then, and tells you what it did.`].join("\n");
+    if (gone.length) return `${gone.join(", ")} ${gone.length === 1 ? "has" : "have"} an answer now. Go on with your work.`;
+    if (!now.open.length) return "No gate of yours waits for the owner, so there is nothing to wait for.";
+    if (Date.now() - started >= ms) return `No answer yet to ${now.open.join(", ")} after ${Math.round(ms / 60_000)} minutes: run this command again, in the background.`;
+    await new Promise((done) => setTimeout(done, Math.min(every, Math.max(0, ms - (Date.now() - started)))));
+  }
 }
 export async function waitForSlot(runs, cwd, { ms = WAIT_MS } = {}) {
   if (!runs.length || !runs.every((run) => /^R[1-9]\d*$/.test(run))) return "usage: node wait.mjs --slot <R> [<R> ...], in the project's folder, for example node wait.mjs --slot R12";

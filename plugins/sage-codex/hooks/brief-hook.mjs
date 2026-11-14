@@ -5,7 +5,7 @@ import { dirname, isAbsolute, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { BRIEF_FIELDS, briefSections, missingBriefFields } from "../core/index.mjs";
 import { tool } from "../skills/sage/sage.mjs";
-import { bindChild, childTask, sageName, TASK_NAME } from "./report-gate.mjs";
+import { bindChild, childTask, keepRunText, sageName, TASK_NAME } from "./report-gate.mjs";
 import { TESTED_CODEX } from "./sage-codex-hook.mjs";
 import { modeDirectory } from "./hook-state.mjs";
 
@@ -63,6 +63,7 @@ function startNote(input, env) {
   const standing = tool.command(["standing", `--project=${project}`], env);
   const brief = readBrief(project, task, env);
   const parts = standing.code === 0 ? [`sage: the standing orders of this project, from its logbook. Follow each one.\n\n${standing.text}`] : [];
+  if (brief && !brief.missing.length) keepRunText(project, "briefs", task, brief.text, env);
   if (brief && !brief.missing.length) parts.push(`FORBIDDEN, from your checked brief. Never do these:\n${briefSections(brief.text).FORBIDDEN}`, `Your checked brief (${task}), as it was recorded:\n\n${brief.text}`);
   else parts.push("sage: no checked brief for this task.");
   return { hookSpecificOutput: { hookEventName: "SubagentStart", additionalContext: parts.join("\n\n") } };
