@@ -245,6 +245,8 @@ The board server only reads your logbooks. It does not make or change a logbook,
 
 In Claude and in Codex, `show board` also starts the local board server on the Mac when it is not running (the first time, it sets it up from the standard Claude and Codex roots and the shared root), and the chief shows its address, or why it is not running, next to the chat board. In Codex, this start runs outside Codex's sandbox, so Codex asks you to approve it ([The board in Codex](codex.md#the-board-in-codex)). The board is for a desktop browser on this Mac only, and it needs no sign-in.
 
+The sage hook refuses the ordinary command shapes by which an agent reads, copies or replaces the board config, or lists, searches, copies or moves the board's folder (`~/.config/sage-board/`). It does not stop a script that builds them while it runs; full protection needs the sandbox.
+
 After you change a setting of the config, or update sage, the line says that a restart is needed: run the `board --stop` command that it gives, then ask for the board again.
 
 Setup never changes a board config that exists. To move the board to another port (1024 to 65535), do these steps in this order:

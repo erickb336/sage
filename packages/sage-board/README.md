@@ -36,6 +36,8 @@ Open the printed localhost URL in a desktop browser on the Mac. The board answer
 
 A config from an earlier version can still hold the keys `allowedHosts`, `password` or `secret`. It still loads, and the board ignores those keys. To remove them, edit the file, then restart the board.
 
+The sage hook, in Claude Code and in Codex, refuses the ordinary command shapes by which a session or an agent reads, copies or replaces the configuration file, or lists, searches, copies or moves its folder. An agent runs as your own user, so a script that builds the path while it runs can still pass the hook. Full protection needs the sandbox (tasks T97 to T99).
+
 The default port is 43123. Setup accepts `--port` from 1024 to 65535. A busy port causes an error; the service does not choose another port.
 
 Setup never changes a config that exists: it stops with an error that names the file. To change the port of an existing config, do these steps in this order:

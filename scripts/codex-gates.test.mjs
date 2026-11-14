@@ -392,11 +392,16 @@ test("T931: a sage child, and every child in sage mode, runs no git stash and no
   assert.match(denied(await fixed({ sage: true }).run(pre("Bash", "git stash 'pop", sageChild))) ?? "", /^sage: the hook cannot read this command .*Its text names git stash\. An agent never runs git stash/);
 });
 
-test("T1053: no board password rule is left: the board commands and a read of the board config pass in every thread and mode", async (t) => {
+test("T931: the board config rule holds every thread in every mode, for a shell command and a patch", async (t) => {
+  const CONFIG = "sage: the board config rule (T229): no agent reads, copies or replaces the board config (~/.config/sage-board/board.json), or lists, searches, copies or moves the board's folder or a folder that holds it, because only the owner and the board command change the board's state. The board command's own output (board --ensure, the chat board) says what you need";
   const child = { ...CHILD, transcript_path: record(t, { id: "child", session_id: base.session_id, agent_path: "/root/sage_implementer_t1_r1", source: { subagent: { thread_spawn: { depth: 1 } } } }) };
   for (const sage of [true, false]) for (const extra of [{}, child]) {
     const g = fixed({ sage }), who = `sage mode ${sage}, ${extra.agent_id ? "a child" : "the chief"}`;
-    for (const command of ["node /opt/sage/board/cli.mjs board --set-password", "cat ~/.config/sage-board/board.json", "node /opt/sage/board/cli.mjs board --ensure --config ~/.config/sage-board/board.json", "ls packages/sage-board"]) {
+    for (const command of ["cat ~/.config/sage-board/board.json", `cat ${SCRATCH_HOME}/.config/sage-board/board.json`, "echo '{}' > ~/.config/sage-board/board.json", "ls ~/.config/sage-board", "grep -r hash ~/.config", "cp -R ~/.config /work/x"]) {
+      assert.equal(denied(await g.run(pre("Bash", command, extra))), CONFIG, `${who}: ${command}`);
+    }
+    assert.equal(denied(await g.run(pre("apply_patch", patch(`*** Update File: ${SCRATCH_HOME}/.config/sage-board/board.json`, "@@", "-a", "+b"), extra))), CONFIG, `${who}: a patch`);
+    for (const command of ["node /opt/sage/board/cli.mjs board --set-password", "node /opt/sage/board/cli.mjs board --ensure --config ~/.config/sage-board/board.json", "ls packages/sage-board"]) {
       assert.equal(await g.run(pre("Bash", command, extra)), undefined, `${who}: ${command}`);
     }
   }

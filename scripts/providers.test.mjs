@@ -943,6 +943,7 @@ test("shared file and mode extraction refuses active edits when the file policy 
       assert.equal(output?.hookSpecificOutput?.permissionDecision, "deny");
       assert.match(output.hookSpecificOutput.permissionDecisionReason, /command modules could not load/);
       const read = (file_path) => hook.handle({ hook_event_name: "PreToolUse", tool_name: "Read", cwd: f.dir, tool_input: { file_path } }, { sage: false }, {});
+      assert.match(read("~/.config/sage-board/board.json")?.hookSpecificOutput?.permissionDecisionReason ?? "passed", /^sage: the board config rule \(T229\) could not load/);
       assert.equal(read(join(f.dir, "sample.txt")), undefined);
     }
   }
