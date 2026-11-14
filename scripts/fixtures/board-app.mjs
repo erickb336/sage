@@ -57,10 +57,10 @@ export function writeAppLogbook(root, now) {
 }
 
 const HEAD = "b".repeat(40);
-const HOSTILE = { title: `<img src=x onerror="window.hacked=1">Hostile "quotes" & 'apostrophes'`, path: "<script>window.hacked=3</script>\nsrc/evil.js", link: `<a href="javascript:window.hacked=5">click</a>` };
+const HOSTILE = { title: `<img src=x onerror="window.hacked=1">Hostile "quotes" & 'apostrophes'`, path: "<script>window.hacked=3</script>\nsrc/evil\u202egnp\u009b.js", link: `<a href="javascript:window.hacked=5">click</a>` };
 export const HOSTILE_TEXT = HOSTILE;
 
-export function writeTasksLogbook(root, worktrees, now, { hostile = false, many = 0 } = {}) {
+export function writeTasksLogbook(root, worktrees, now, { hostile = false, many = 0, edge = false } = {}) {
   const at = hours => new Date(Date.parse(now) - hours * HOUR).toISOString();
   const tables = appTables(now), dir = join(root, "sample-app-abc123");
   const chiefs = { T1: "C1", T2: "C1", T3: "C2", T4: "C1", T10: "C1", T11: "C2", T20: "C1", T21: "C1", T30: "C2" };
@@ -92,6 +92,7 @@ export function writeTasksLogbook(root, worktrees, now, { hostile = false, many 
     records.push({ id: "O5", task: "T50", kind: "files", source: "git diff", basis: "observed", observedAt: at(1), recordedAt: at(1), data: { head: "d".repeat(40), paths: [HOSTILE.path, "javascript:window.hacked=4", "src/shared.js"], truncated: false } },
       { id: "O6", task: "T50", kind: "artifact", source: "chief", basis: "reported", observedAt: at(1), recordedAt: at(1), data: { type: "artifact", label: `<img src=x onerror="window.hacked=6">label`, url: "https://example.com/a?b=%22%3E%3Cscript%3E" } });
   }
+  if (edge) tables.tasks.push({ ...tables.tasks[1], id: "T60", title: "Sample".repeat(500), state: "building", milestone: "", priority: "P3", kind: "", chief: "C1", branch: "" });
   for (let i = 0; tables.tasks.length < many; i++) tables.tasks.push({ ...tables.tasks[0], id: `T${1000 + i}`, title: `Sample ended task ${i}`, milestone: "", state: i % 7 ? "merged" : "abandoned", chief: i % 2 ? "C1" : "C2", priority: ["P1", "P2", "P3"][i % 3] });
   mkdirSync(dir, { recursive: true });
   for (const [name, rows] of Object.entries(tables)) {
@@ -100,6 +101,7 @@ export function writeTasksLogbook(root, worktrees, now, { hostile = false, many 
   }
   writeFileSync(join(dir, "chiefs.tsv"), `id\tprovider\tnative\tat\nC1\tclaude\tsession-a\t${at(48)}\nC2\tcodex\tsession-b\t${at(48)}\n`);
   writeFileSync(join(dir, "observations.json"), JSON.stringify({ version: 1, records }));
+  if (edge) { mkdirSync(join(dir, "live")); writeFileSync(join(dir, "live", "C1.json"), JSON.stringify({ at: at(2) })); }
   mkdirSync(join(dir, "kept"), { recursive: true });
   writeFileSync(join(dir, "kept", "R5.json"), JSON.stringify({ task: "T3", run: "R5", role: "code-reviewer", sha: HEAD, text: `STATUS        done\nRESULT        CLEAN. The limits change is correct.${hostile ? " <img src=x onerror=window.hacked=8>" : ""}\nEVIDENCE      ran the tests\n`, at: at(1) }));
   writeFileSync(join(dir, "kept", "R7.json"), JSON.stringify({ task: "T2", run: "R7", role: "implementer", sha: "", text: "STATUS done\nRESULT a report that names another task", at: at(1) }));

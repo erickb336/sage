@@ -1,6 +1,6 @@
 import "./test-env.mjs";
 import assert from "node:assert/strict";
-import { appendFileSync, mkdtempSync, rmSync } from "node:fs";
+import { appendFileSync, mkdtempSync, readFileSync, renameSync, rmSync, writeFileSync } from "node:fs";
 import { createRequire } from "node:module";
 import { createServer } from "node:net";
 import { tmpdir } from "node:os";
@@ -146,7 +146,7 @@ test("T1061 (F-T1061-1): markup, quotes, newlines and javascript: links in agent
   await panelTitle(page).filter({ hasText: HOSTILE_TEXT.title }).waitFor();
   const panel = page.locator(".panel");
   assert.match(await panel.textContent(), /sage\/t50-<b>bold<\/b>/, "the branch name is text");
-  assert.deepEqual(await panel.locator(".callout code").allTextContents(), ["<script>window.hacked=3</script>\\nsrc/evil.js", "javascript:window.hacked=4", "src/shared.js"], "a path shows its newline as \\n");
+  assert.deepEqual(await panel.locator(".callout code").allTextContents(), ["<script>window.hacked=3</script>\\nsrc/evil\\u202egnp\\u009b.js", "javascript:window.hacked=4", "src/shared.js"], "a path shows its newline, its right-to-left override and its C1 control as escapes");
   assert.match(await panel.locator("#tab-panel").textContent(), /sage_x_t50_r9 <img src=x onerror=window\.hacked=9>\.json/);
   assert.match(await panel.locator("#tab-panel").textContent(), /<img src=x onerror="window\.hacked=6">label/);
   await page.getByRole("tab", { name: /Log/ }).click();
@@ -185,4 +185,75 @@ test("T1061: an open panel reads the task again when the logbook changes", async
   appendFileSync(join(logbook, "decisions.tsv"), `${new Date().toISOString()}\tT3\tsample decision after the panel opened\t\n`);
   await page.locator(".last").filter({ hasText: "chief · sample decision after the panel opened" }).waitFor();
   assert.equal(await page.evaluate(() => document.activeElement.id), "panel-h", "a live update does not move the focus");
+});
+
+function editTasks(logbook, edit) {
+  const file = join(logbook, "tasks.tsv"), [head, ...lines] = readFileSync(file, "utf8").trimEnd().split("\n"), columns = head.split("\t");
+  const rows = lines.map(line => Object.fromEntries(line.split("\t").map((value, i) => [columns[i], value]))).flatMap(edit);
+  writeFileSync(`${file}.new`, [head, ...rows.map(task => columns.map(column => task[column]).join("\t"))].join("\n") + "\n");
+  renameSync(`${file}.new`, file);
+}
+
+function insideItsCellAndLeftOfThePanel(element) {
+  const range = document.createRange();
+  range.selectNodeContents(element);
+  const lines = [...range.getClientRects()].filter(box => box.width > 0), panel = document.querySelector(".panel")?.getBoundingClientRect(), boxes = [];
+  for (let node = element; node && !node.matches("a.row"); node = node.parentElement) {
+    const style = getComputedStyle(node);
+    if (style.overflowX !== "visible" || style.overflowY !== "visible" || node.parentElement.matches("a.row")) boxes.push(node.getBoundingClientRect());
+  }
+  return lines.length > 0 && lines.every(line => boxes.every(box => line.left >= box.left - 0.5 && line.right <= box.right + 0.5 && line.top >= box.top - 0.5 && line.bottom <= box.bottom + 0.5) && (!panel || line.right <= panel.left));
+}
+
+test("T1061 (F-T1061-7, F-T1061-10): the may-conflict flag and the chief tag show in full, with the panel closed and open, at 1440 and 1280 px", async t => {
+  const { page, base } = await open(t, { edge: true }, "/app/#tasks");
+  const cells = [["T3", ".badge.warn", "may conflict · T40"], ["T40", ".badge.warn", "may conflict · T3"], ["T3", ".chief", "C2 · Codex"], ["T40", ".chief", "C1 · Claude (stopped)"]];
+  for (const width of [1440, 1280]) {
+    await page.setViewportSize({ width, height: 1000 });
+    for (const panel of [false, true]) {
+      await page.goto(`${base}/app/#tasks${panel ? `?task=${encodeURIComponent(KEY("T3"))}` : ""}`);
+      await row(page, "T3").waitFor();
+      if (panel) await panelTitle(page).filter({ hasText: "Sample shared limits" }).waitFor();
+      for (const [id, cell, text] of cells) {
+        const element = row(page, id).locator(cell);
+        assert.equal(await element.textContent(), text);
+        assert.equal(await element.evaluate(insideItsCellAndLeftOfThePanel), true, `${width} px, panel ${panel ? "open" : "closed"}: ${id}'s "${text}" shows in full`);
+      }
+    }
+  }
+});
+
+test("T1061 (F-T1061-12): a title of 3,000 characters with no space wraps in the panel heading", async t => {
+  const { page } = await open(t, { edge: true }, `/app/#tasks?task=${encodeURIComponent(KEY("T60"))}`);
+  const heading = panelTitle(page).filter({ hasText: "SampleSample" });
+  await heading.waitFor();
+  assert.equal((await heading.textContent()).length, 3000);
+  const box = await heading.evaluate(element => ({ scroll: element.scrollWidth, client: element.clientWidth, body: element.closest(".panel-body").scrollWidth - element.closest(".panel-body").clientWidth }));
+  assert.deepEqual(box, { scroll: box.client, client: box.client, body: 0 }, "the whole title is inside the panel");
+});
+
+test("T1061 (F-T1061-3, F-T1061-11): an open panel says so when its task leaves the board, or when it cannot refresh", async t => {
+  const { page, logbook } = await open(t, {}, `/app/#tasks?task=${encodeURIComponent(KEY("T30"))}`);
+  await panelTitle(page).filter({ hasText: "Sample crash reports" }).waitFor();
+  assert.equal(await page.locator(".stale").count(), 0, "no notice while the panel is current");
+  editTasks(logbook, task => task.id === "T30" ? [] : [task]);
+  await row(page, "T30").waitFor({ state: "detached" });
+  await page.locator(".stale").filter({ hasText: "This task is no longer on the board. The panel shows what it read last." }).waitFor();
+  assert.equal(await panelTitle(page).textContent(), "Sample crash reports", "the panel keeps what it read, under the notice");
+
+  await page.goto(page.url().replace(/T30$/, "T3"));
+  await panelTitle(page).filter({ hasText: "Sample shared limits" }).waitFor();
+  await page.route("**/app/task/**", route => route.fulfill({ status: 500, body: "" }));
+  appendFileSync(join(logbook, "decisions.tsv"), `${new Date().toISOString()}\tT3\tsample decision after the panel opened\t\n`);
+  await page.locator(".stale").filter({ hasText: "The panel could not refresh. It shows what it read last, and tries again when the logbook changes." }).waitFor();
+});
+
+test("T1061 (F-T1061-13): a task with no route shows the route as not known and no steps", async t => {
+  const { page, logbook } = await open(t, {}, "/app/#tasks");
+  editTasks(logbook, task => [task.id === "T40" ? { ...task, route: "" } : task]);
+  await page.goto(`${page.url().split("#")[0]}#tasks?task=${encodeURIComponent(KEY("T40"))}`);
+  await panelTitle(page).filter({ hasText: "Sample crash fix" }).waitFor();
+  await page.locator(".sec-h .hint").filter({ hasText: /^Route not known$/ }).waitFor();
+  assert.equal(await page.locator(".steps li").count(), 0);
+  assert.equal(await page.locator(".now").textContent(), "The logbook records no route for this task, so the board shows no steps.");
 });

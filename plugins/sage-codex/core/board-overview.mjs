@@ -60,7 +60,7 @@ const QUIET = ["done", "wait"];
 const stepOf = task => task.loop?.steps.find(step => !QUIET.includes(step.status)) ?? null;
 
 function taskRow(task, chiefs) {
-  const step = stepOf(task);
+  const step = task.route ? stepOf(task) : null;
   return {
     key: task.key, id: task.id, title: task.title, project: task.projectName, state: task.state, word: task.word ?? null, ended: ENDED.includes(task.state),
     priority: task.priority || null, kind: task.kind || null, size: task.size || null, pr: task.pr || null,
@@ -159,8 +159,8 @@ export function taskPanel(model, key) {
     prUrl: task.pr && task.repository ? `${task.repository}/pull/${task.pr}` : null,
     logbook: task.project.slice(task.project.indexOf("/") + 1),
     conflicts: task.mayConflict.map(other => ({ key: other.key, id: other.id, chief: other.chief, paths: other.paths })),
-    steps: task.loop.steps.map(step => ({ key: step.key, label: step.label, status: step.status, detail: step.detail, parts: (step.parts ?? []).map(([name, status]) => ({ name, status })) })),
-    now: task.loop.now.text, next: task.loop.next,
+    steps: task.route ? task.loop.steps.map(step => ({ key: step.key, label: step.label, status: step.status, detail: step.detail, parts: (step.parts ?? []).map(([name, status]) => ({ name, status })) })) : [],
+    now: task.route ? task.loop.now.text : "The logbook records no route for this task, so the board shows no steps.", next: task.route ? task.loop.next : null,
     cycles: { required: task.requiredCycles, clean: reviews && known ? task.cycles.filter(cycle => cycle.steps.every(step => step.status === "done")).length : null, reviews },
     lastEvent: log[0] ?? null,
     log: log.slice(0, LOG_MAX), logMore: Math.max(0, log.length - LOG_MAX),

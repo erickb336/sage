@@ -82,6 +82,17 @@ test("T1061: unknown shows as unknown: no clean-cycle count without the PR's las
   assert.equal(boardOverview(model).tasks.find(task => task.id === "T4").chief.id, null, "a logbook with no chiefs names only the provider");
 });
 
+test("T1061 (F-T1061-13): a task with no route has no steps in its row or its panel, and says why", () => {
+  const tables = appTables(NOW);
+  tables.tasks.find(task => task.id === "T2").route = "";
+  const source = { id: "claude", label: "claude", provider: null, config: {}, diagnostics: [], hooks: { present: false, slots: [], helpers: [], problem: null },
+    projects: [{ key: "claude/sample-app-abc123", source: "claude", name: "sample-app-abc123", checkout: "/sample/app", diagnostics: [], warnings: [], tables, observations: { version: 1, records: [] } }] };
+  const model = buildBoardModel([source], { now: NOW }), panel = taskPanel(model, "claude/sample-app-abc123/T2");
+  assert.deepEqual([panel.route, panel.steps, panel.now, panel.next], [[], [], "The logbook records no route for this task, so the board shows no steps.", null]);
+  assert.equal(boardOverview(model).tasks.find(task => task.id === "T2").step, null);
+  assert.equal(boardOverview(model).tasks.find(task => task.id === "T3").step.label, "Review 1 of 1", "a task with a route keeps its step");
+});
+
 test("T1061: /app/task/<key> sends one task's panel with its pages, its own kept reports and briefs, and nothing of another task", async t => {
   const w = world(t), base = await serve(t, w.sources);
   const response = await fetch(`${base}/app/task/${b64(KEY("T3"))}`);

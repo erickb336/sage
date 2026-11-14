@@ -11,7 +11,7 @@ function when(at, now) {
   const clock = `${pad(date.getHours())}:${pad(date.getMinutes())}`;
   return date.toDateString() === today.toDateString() ? clock : `${date.getDate()} ${MONTHS[date.getMonth()]} ${clock}`;
 }
-export const controlsShown = text => String(text ?? "").replace(/[\x00-\x1f\x7f\u2028\u2029]/g, c => ({ "\n": "\\n", "\r": "\\r", "\t": "\\t" })[c] ?? `\\u${c.charCodeAt(0).toString(16).padStart(4, "0")}`);
+export const controlsShown = text => String(text ?? "").replace(/[\x00-\x1f\x7f-\x9f\u200b-\u200f\u2028-\u202e\u2066-\u2069\ufeff]/g, c => ({ "\n": "\\n", "\r": "\\r", "\t": "\\t" })[c] ?? `\\u${c.charCodeAt(0).toString(16).padStart(4, "0")}`);
 const encodeKey = key => btoa(String.fromCharCode(...new TextEncoder().encode(key))).replace(/\+/g, "-").replace(/\//g, "_").replace(/=+$/, "");
 const STATUS = { done: "done", run: "running", stale: "no news", need: "needs you", fail: "failed", idle: "no agent at work", wait: "", unknown: "not known" };
 const TABS = ["Artifacts", "Log", "Decisions"];
@@ -34,7 +34,7 @@ function Cycle({ task }) {
   return (
     <section aria-labelledby="cycle-h">
       <div className="sec-h"><h3 id="cycle-h">Dev cycle</h3>
-        <span className="hint">{!reviews ? "This route has no review step." : clean === null ? `Clean cycles: not known · ${required} needed` : `Clean cycles: ${clean} of ${required}`}</span>
+        <span className="hint">{!task.route.length ? "Route not known" : !reviews ? "This route has no review step." : clean === null ? `Clean cycles: not known · ${required} needed` : `Clean cycles: ${clean} of ${required}`}</span>
       </div>
       <ol className="steps">
         {task.steps.map(step => (
@@ -151,6 +151,7 @@ export function Panel({ taskKey, at }) {
       <div className="panel-body">
         <h2 id="panel-h" ref={heading} tabIndex={-1}>{task ? task.title : problem === "gone" ? "This task is not on the board" : problem ? "The board cannot read this task now" : "Reading the task"}</h2>
         {problem && !task && <p className="none" role="alert">{problem === "gone" ? "The logbook has no task with this name. Close the panel and pick a task from the list." : "It tries again when the logbook changes."}</p>}
+        {problem && task && <p className="stale" role="status">{problem === "gone" ? "This task is no longer on the board. The panel shows what it read last." : "The panel could not refresh. It shows what it read last, and tries again when the logbook changes."}</p>}
         {task && <>
           {task.conflicts.map(other => (
             <div className="callout" key={other.key}>
