@@ -1,6 +1,6 @@
 import "./test-env.mjs";
 import assert from "node:assert/strict";
-import { mkdtempSync, rmSync } from "node:fs";
+import { appendFileSync, mkdtempSync, rmSync } from "node:fs";
 import { createRequire } from "node:module";
 import { createServer } from "node:net";
 import { tmpdir } from "node:os";
@@ -43,7 +43,7 @@ async function openBoard(t, options = {}, path = "/app/") {
   page.on("console", message => { if (message.type() === "error" || /Content Security Policy|Refused to/.test(message.text())) problems.push(message.text()); });
   await page.goto(`${base}${path}`);
   await page.locator("main h1").waitFor();
-  return { page, base, requests, problems };
+  return { page, base, requests, problems, logbook: join(dir, "logbooks", "sample-app-abc123") };
 }
 
 const KEY = id => `shared/sample-app-abc123/${id}`;
@@ -177,4 +177,12 @@ test("T1061: with 370 tasks the page shows the open ones and collapses the ended
   assert.match(await page.locator(".toolbar [role=status]").textContent(), /^7 open · 363 ended$/);
   await page.locator('[data-group="none"] .more-ended').click();
   assert.equal(await page.locator('[data-group="none"] a.row').count(), 2 + 360, "T30, T40 and the 360 ended tasks with no milestone");
+});
+
+test("T1061: an open panel reads the task again when the logbook changes", async t => {
+  const { page, logbook } = await open(t, {}, `/app/#tasks?task=${encodeURIComponent(KEY("T3"))}`);
+  await page.locator(".last").filter({ hasText: "qa started" }).waitFor();
+  appendFileSync(join(logbook, "decisions.tsv"), `${new Date().toISOString()}\tT3\tsample decision after the panel opened\t\n`);
+  await page.locator(".last").filter({ hasText: "chief · sample decision after the panel opened" }).waitFor();
+  assert.equal(await page.evaluate(() => document.activeElement.id), "panel-h", "a live update does not move the focus");
 });

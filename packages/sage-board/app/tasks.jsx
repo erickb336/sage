@@ -32,7 +32,7 @@ function Row({ task, at, selected }) {
         <span className="title">
           <span className="text">{task.title}</span>
           {task.kind && <span className="kind">{task.kind}</span>}
-          {task.conflicts.map(other => <span className="badge warn" key={other.key}>may conflict · {other.id}</span>)}
+          {task.conflicts.length > 0 && <span className="badge warn">may conflict · {task.conflicts.map(other => other.id).join(", ")}</span>}
           {task.waits && !task.ended && <span className="badge" title={task.waits}>waits</span>}
         </span>
         <span className={`badge word ${(task.word ?? "unknown").replace(" ", "-")}`}>{task.word ?? "unknown"}</span>

@@ -34,7 +34,7 @@ function Cycle({ task }) {
   return (
     <section aria-labelledby="cycle-h">
       <div className="sec-h"><h3 id="cycle-h">Dev cycle</h3>
-        <span className="hint">{!reviews ? "This route has no review step." : clean === null ? `Clean cycles: not known, of ${required}` : `Clean cycles: ${clean} of ${required}`}</span>
+        <span className="hint">{!reviews ? "This route has no review step." : clean === null ? `Clean cycles: not known · ${required} needed` : `Clean cycles: ${clean} of ${required}`}</span>
       </div>
       <ol className="steps">
         {task.steps.map(step => (
