@@ -113,6 +113,27 @@ Engineering choices, such as file formats and names, are the chief's. It decides
 
 You answer in your own words, or pick an option. When you do not answer, the work behind the question waits; the rest goes on.
 
+### Each question takes one answer
+
+You can answer a question in the chat, on a choice card in Claude or in Codex, or on the board. The first answer counts, wherever you give it.
+
+A later answer to the same question is refused, and the refusal names the first answer, where you gave it and when. The chief then tells you which answer counts.
+
+An answer on the board only records your choice. The chief that owns the question applies it at its next step, and then the answer acts: for example, it hands a task to another chief.
+
+Until then, you can take a board answer back. An answer in the chat or on a card acts at once.
+
+| Command (the state tool) | Who and when | Result |
+| --- | --- | --- |
+| `sage gate answer <G> --option <n> --via <place>` | The chief records your answer. The place is `chat`, `claude-card`, `codex-card` or `board`; with no `--via`, it is `chat`. | A gate with an answer refuses, and names that answer, its place and its time. A board answer waits for its chief; any other answer acts at once. A breakdown gate keeps its own rule: it answers once, and a change of mind proposes the milestone again. |
+| `sage gate undo <G>` | You, or the chief when you ask. Only for a board answer that no chief has picked up yet. | The answer goes, and the question is open again. After the pickup, or for an answer from the chat or a card, it refuses and says why. |
+| `sage gate add <T> ... --message <file>` | The chief, when it parks a question. The file is the JSON of the question's message. | The gate keeps the whole message as `gates/G<n>.json` in the logbook, after the message check, so that the board can show the full question. |
+
+- **Who picks up a board answer.** The chief that opened the question, or the receiving chief of a takeover gate. Its hook reads your answer at its next step, applies it, records the pickup and tells the chief what it did.
+- **A Claude chief** that is idle, with open questions and nothing else running, starts a wait in the background first (`wait.mjs --gates`), so that your board answer wakes it.
+- **A Codex chief** sees a board answer at its next turn: your next message in its chat, or its next tool call. Send any message there to make it act now.
+- **An answer that cannot act** at the pickup, for example a takeover gate that a new run made out of date, goes away. The question is open again, and the chief tells you why.
+
 ## Sage's messages
 
 Each message from the chief has one kind, and its first line names it: for example `QUESTION`, `REPORT`, `CATCH-UP` or `INCIDENT · Resolved`. Each kind has a fixed shape, so you find the same part in the same place each time. Each part starts with a heading. The chief's short progress lines between its steps stay plain, and a line (a rule) separates them from the message:
@@ -494,7 +515,7 @@ A moved folder with no Git commits, or that is no Git repository, has no first c
 | The owning chief | Its own task: `task <T> set`, `round`, `run add`, `run done`, `finding add`, `triage`, `close`, `move`, `verdict`, `gate add <T>`, `milestone propose` for its pilot and each of its tasks, `log <T>`, `offer`, `cancel` and `unclaim`. |
 | A lead | What the chief of its lead run may write, on the task of that run only, while that run runs. |
 | Any chief | `task add`, `claim`, `accept` or `cancel` (a decline) of an offer that names it, `gate add` with no task, `gate replace`, `init`, `standing add`, `config`, `log -`, `pages <T> record`, `observe`, `run usage`, `release add` and `milestone <M> set release=`. |
-| You | `gate answer`, in your own words, from either provider, each form of `logbook repair` (`--accept-loss`, `--accept-change-loss`, or both), `projects rebuild` and `chief name`: each is your act and names no chief, so the line that sage prints works in your terminal. |
+| You | `gate answer`, in your own words, from either provider, `gate undo`, `gate give`, each form of `logbook repair` (`--accept-loss`, `--accept-change-loss`, or both), `projects rebuild` and `chief name`: each is your act and names no chief, so the line that sage prints works in your terminal. |
 | A stop hook | The report and the end of the run of its own slot, so no report is lost. |
 | A helper, or a command with no chief | Nothing. It only reads. |
 
@@ -523,6 +544,7 @@ A Claude chief adds `--chief C<n>` to each command below. A Codex chief calls th
 | `sage cancel <T> --offer <id>` | The owning chief, with the exact open offer. The chief that the offer names runs the same command to decline it. Active runs do not stop it. | The offer clears, and it never becomes valid again. After a decline, the line says that the recipient declined, and the owning chief keeps the task. |
 | `sage accept <T> --offer <id> --version <version>` | The chief that the offer names, with the exact open offer and the current version. The task has no active or unknown run. | A takeover gate for you, from the owning chief to that chief. Approve gives that chief the task, and decline ends the offer. A second accept prints the open gate and opens no other. |
 | `sage unclaim <T>` | The owning chief. The task has no open offer and no active or unknown run. | The task has no owning chief. Only that chief claims it back; another chief takes it through a takeover gate. Its work and reports stay. |
+| `sage gate give <T> --to C<n>` | You, or the chief when you ask: your act, so it names no chief. | The same takeover gate as `gate replace`, to the one chief that you name. The receiving chief applies your answer. In Codex, the `gate_give` tool. |
 | `sage gate replace <T> --to C<n>` | Any chief: for a task of another chief, for a task with no owning chief that it may not claim, or for an owning chief that stopped. | The takeover gate for you, with the options approve and decline, or the gate that is open already for the same task and chiefs. It asks "Hand T331 and PR 92 from C2 (codex) to C1 (claude)?", names each run that will end as failed, with its role, and the task's title. It says what each answer does, and that the branch keeps its name, the PR its number and the verdicts stay. |
 
 - `offer` and `task <T>` print the offer's id and the version that `accept` needs. A Codex chief runs that read in its shell, with the CLI of the installed plugin: `node ~/.codex/plugins/cache/sage/sage/<version>/skills/sage/sage.mjs task <T> --project <project>`. It only reads the logbook, so it runs in Codex's sandbox.

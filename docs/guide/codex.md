@@ -338,7 +338,7 @@ The plugin starts a local MCP server, `sage`, in the desktop app and in the CLI.
 | `lint` | `lint <T> --sha <sha>`: [the lint check](using-sage.md#the-lint-check) on a head, before the merge check. On a repository with no rules, it opens [the lint offer](using-sage.md#the-lint-offer) once |
 | `standing`, `standing_add`, `pages` | `standing`, `standing add`, `pages` |
 | `worktrees` | `worktrees`, `worktrees prune --yes`: [clean up worktrees](using-sage.md#clean-up-worktrees). Only the chief calls it |
-| `gate_add`, `gate_replace`, `gate_answer` | `gate add`, `gate replace`, `gate answer` |
+| `gate_add`, `gate_replace`, `gate_answer`, `gate_undo`, `gate_give` | `gate add` (`message`: `--message`), `gate replace`, `gate answer` (`via`: `--via`), `gate undo`, `gate give` |
 | `brief` | None: the brief check ([next section](#the-brief-check)) |
 
 - Each tool takes `project`, the absolute path of the project's checkout, and the command's options by their names.
