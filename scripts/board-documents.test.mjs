@@ -18,7 +18,7 @@ const ROOT = join(dirname(fileURLToPath(import.meta.url)), "..");
 const NOW = "2026-11-13T12:00:00.000Z";
 const KEY = id => `shared/sample-app-abc123/${id}`;
 const ORIGIN = "http://127.0.0.1:5000";
-const BIDI = /[\u202a-\u202e\u2066-\u2069]/;
+const FORMAT = /\p{Cf}/u;
 
 function world(t, options = {}) {
   const dir = mkdtempSync(join(tmpdir(), "sage-board-documents-")), before = process.env.SAGE_WORKTREES;
@@ -134,7 +134,7 @@ test("T1064 security: hostile Markdown and hostile logbook text render harmless:
     assert.doesNotMatch(body, /(?:href|src)="\s*(?:javascript|data|vbscript):/i);
     assert.doesNotMatch(body, /(?:href|src)="(?:\/\/|\/api|https?:\/\/(?!github\.com\/sample-owner|example\.com))/i, "no link to another host, other than the PR, and none to the write API");
     for (const [, src] of body.matchAll(/<img src="([^"]+)"/g)) assert.match(src, /^\/pages\/sample-app-abc123\/T(?:3|10)\/(?!.*\.\.)/, `a picture only from the task's own pages folder: ${src}`);
-    assert.doesNotMatch(body, BIDI, "no raw bidi control");
+    assert.doesNotMatch(body, FORMAT, "no raw format mark (bidi control, zero-width mark)");
   }
   const md = pages[0].html;
   assert.match(md, /&lt;script&gt;window\.hacked=1&lt;\/script&gt;/, "raw HTML shows as text");
@@ -143,6 +143,15 @@ test("T1064 security: hostile Markdown and hostile logbook text render harmless:
   assert.match(md, /abc\[U\+202E\]dcba and isolate \[U\+2066\]x\[U\+2069\] end\./, "bidi controls show as visible marks");
   assert.match(pages[1].html, /&lt;script&gt;window\.hacked=11&lt;\/script&gt; \[U\+202E\]evil/, "the brief's raw HTML and bidi override show as text");
   assert.equal(read(w, "T3", "page", "../T10/designs/v2/notes.md"), null, "a path out of the task folder is no reader page");
+  writeFileSync(join(w.pages, "T3", "entity.md"), ["# Entity &#x202E;gnirts", "", "## Isolate &#8295;x&#8297;", "",
+    "Text: abc&#x202E;gpj.exe, zero width a&#x200B;b, mark a&#x200F;1, Arabic mark a&#x61C;1, BOM a&#xFEFF;b, raw a\u200eb.", "",
+    "Code: `x&#x202E;y` and `x\u202ey`.", "", "```", "fence \u202e end", "```", "",
+    "[a title](https://example.com/a \"t&#x202E;x\") ![alt a&#x202E;b](retry.svg) ![gone c&#x202E;d](nothing.png)", ""].join("\n"));
+  const entity = read(w, "T3", "page", "entity.md");
+  assert.doesNotMatch(entity.html.replace(/<style>[\s\S]*?<\/style>/, ""), FORMAT, "a mark written as an HTML entity, in code, in a fence, in a title or in an alt is no raw mark");
+  for (const mark of ["202E", "2067", "2069", "200B", "200F", "061C", "FEFF", "200E"]) assert.match(entity.html, new RegExp(`\\[U\\+${mark}\\]`), `U+${mark} shows as a visible mark`);
+  assert.match(entity.html, /<h1>Entity \[U\+202E\]gnirts<\/h1>/);
+  assert.match(entity.html, /<code>x\[U\+202E\]y<\/code>/, "a raw mark in a code span shows as a visible mark");
   assert.equal(read(w, "T3", "page", "retry.svg"), null, "the reader opens Markdown only");
 });
 

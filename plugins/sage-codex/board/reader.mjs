@@ -3,14 +3,13 @@ import { lstatSync, readFileSync, readdirSync } from "node:fs";
 import { dirname, join, posix } from "node:path";
 import { BRIEF_FIELDS, REPORT_FIELDS, briefSections, fieldsOf, pageFile, pageTaskFolder, pageType, taskPanel } from "../core/index.mjs";
 
-const BIDI = /[\u202a-\u202e\u2066-\u2069]/g;
-const bidiShown = text => String(text ?? "").replace(BIDI, c => `[U+${c.codePointAt(0).toString(16).toUpperCase()}]`);
+const marksShown = text => String(text ?? "").replace(/\p{Cf}/gu, c => `[U+${c.codePointAt(0).toString(16).toUpperCase().padStart(4, "0")}]`);
 const TEXT_MAX = 1 << 20, MD_MAX = 2 << 20, VERSIONS_MAX = 30, SHOTS_MAX = 8;
 const RUN = /^R[1-9]\d*$/, GATE = /^G[1-9]\d*$/, NAME = /^[A-Za-z0-9][A-Za-z0-9._-]{0,79}$/;
 const PICTURE = /\.(?:png|jpe?g|gif|webp|svg)$/i;
 const MONTHS = "Jan Feb Mar Apr May Jun Jul Aug Sep Oct Nov Dec".split(" ");
 const pad = n => String(n).padStart(2, "0");
-const esc = text => bidiShown(text).replace(/[&<>"']/g, c => `&#${c.charCodeAt(0)};`);
+const esc = text => marksShown(text).replace(/[&<>"']/g, c => `&#${c.charCodeAt(0)};`);
 const b64 = key => Buffer.from(key).toString("base64url");
 function dedent(text) {
   const [first, ...rest] = String(text ?? "").split(/\r?\n/), indent = Math.min(...rest.filter(line => line.trim()).map(line => /^[ \t]*/.exec(line)[0].length));
@@ -192,7 +191,7 @@ export function readerPage({ model, configured, url, origin, render }) {
   const taskHref = `/app/${BACK[view.back] ?? BACK.tasks}${encodeURIComponent(view.key)}`, taskA = (label = task.id) => `<a href="${esc(taskHref)}">${esc(label)}</a>`, taskLink = taskA();
   const picture = (file, alt, n) => `<span class="zoom" id="p${n}"><a href="#p${n}" aria-label="Enlarge the picture ${esc(alt || file)}"><img src="${esc(pagesBase + file)}" alt="${esc(alt)}" loading="lazy"></a><a class="x" href="#_">Close the picture</a></span>`;
   let pictures = 0;
-  const markdown = (text, base = "") => render(bidiShown(text), {
+  const markdown = (text, base = "") => { const out = render(text, {
     href: raw => {
       let url;
       try { url = decodeURIComponent(raw); } catch { return null; }
@@ -211,7 +210,7 @@ export function readerPage({ model, configured, url, origin, render }) {
       if (/^[a-z][a-z0-9+.-]*:|^\/\//i.test(path) || target.startsWith("..") || target.startsWith("/") || !PICTURE.test(target) || !folder || !pageFile(folder, target)) return null;
       return picture(target, alt, ++pictures);
     },
-  });
+  }); return { ...out, html: marksShown(out.html) }; };
   const field = (name, body, open, more = "") => `<details${open ? " open" : ""}><summary><span class="fname">${esc(name)}</span><span class="first">${esc(firstLine(body).replace(/^(?:[-*+]|\d+[.)])\s+/, ""))}${more}</span></summary><div class="body md">${body ? markdown(body).html : `<p class="muted">This field is empty.</p>`}</div></details>`;
   const openBar = `<div class="bar"><a href="${esc(link(view.kind, view.arg, { open: "all" }))}">Open all</a><a href="${esc(link(view.kind, view.arg, { open: "none" }))}">Close all</a></div>`;
   const isOpen = (name, first) => view.open === "all" || view.open !== "none" && first.includes(name);
