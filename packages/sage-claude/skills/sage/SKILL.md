@@ -73,7 +73,7 @@ Read `skills/sage/references/merge-check-and-config.md` before a merge check of 
 | Command | Does |
 | --- | --- |
 | `merge-check --sha <sha> [--pr <n> [--head <branch>]] [--cycles <n>] [--chief C<n>]` | Says if the full SHA may merge. |
-| `config [key=n ...]` | Prints or sets max_agents, max_leads, cycles.small, cycles.large, cycles.risk, max_rounds, arena and cap_total for all projects, and `cap.<project>=n` for one project's agent cap. In a shared logbook, max_agents, max_leads and the project's own `cap.<project>` go into the logbook, for every chief of the project. |
+| `config [key=n ...]` | Prints or sets max_agents, max_leads, cycles.small, cycles.large, cycles.risk, max_rounds, arena and cap_total for all projects, and `cap.<project>=n` for one project's agent cap. |
 
 ### A shared logbook
 
