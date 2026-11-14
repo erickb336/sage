@@ -154,13 +154,16 @@ The lead does these things:
 - It records each finding of its helpers.
 - It leaves the task at verifying and gives the chief one report. So the chat shows a few lines for each pull request, not every report.
 
-The lead and each helper take a slot of the project's agent cap (`max_agents`, 10 by default), and all agents together take slots of the total cap (`cap_total`, 20 by default). One lead with its 9 helpers fills the default cap of a project.
+The lead and each helper take a place of the project's agent cap (`max_agents`, 10 by default). One lead with its 9 helpers fills the default cap of a project. In Claude Code, all agents together also take slots of the total cap (`cap_total`, 20 by default).
 
-- The state tool also refuses a new run while the project has as many running runs as its cap, in Claude Code and in Codex. The refusal names the running runs.
+- The project's agent cap and lead limit (`max_agents` and `max_leads`) are one pair for each project, in its logbook's `config.json`. Every chief of the project, in Claude Code and in Codex, reads the same pair, and a chief does not count toward it.
+- The state tool refuses a new run while the project has as many running runs as its cap. The refusal names the running runs.
 - To free a place, the chief ends a run that is stuck.
 - In Codex, set Codex's thread limit to the cap too ([What you need](codex.md#what-you-need)).
 
-At most 5 leads run for a project by default. To change this, ask the chief in the chat, and it runs `sage config max_leads=<n>` with a whole number from 1. A value below the running count ends no lead: it only refuses the next lead.
+At most 5 leads run for a project by default. To change this, ask the chief in the chat, and it runs `sage config max_leads=<n>` with a whole number from 1.
+
+The value goes into the project's logbook, so it holds for every chief of the project. A value below the running count ends no lead: it only refuses the next lead.
 
 A lead runs up to 9 helpers, but never more than the project's cap allows: with a lower cap, or a second lead in the project, it runs fewer. The chief starts a second lead only when the cap has room for it and its helpers.
 
